@@ -54,6 +54,6 @@ By crate: `cortex-tui` +1.8 s in tier 1 and +0.3 s in tier 2; `cortex-term` noth
 ## Other runs
 
 - **Windows tests** (`try`, run 43634619626, at `95d568d`): `test -p cortex-tui` passed, 201 tests.
-- **Stress on the desktop:** `cargo xtask stress -p cortex-tui --count 50`, 202 tests, every one passed every time. An earlier run found the colours test failing 4 times in 50: a quick worker could have the line's colours before the commit looked, so the test holds the worker until it has looked.
+- **Stress on the desktop:** `cargo xtask stress -p cortex-tui --count 50` at `99f3307`, 201 tests, every one passed every time. An earlier run found the colours test failing 4 times in 50: a quick worker could have the line's colours before the commit looked, so the test holds the worker until it has looked.
 - **Breaks:** `cargo xtask mutate step-22 --jobs 4`, 46 breaks, every one caught by the tests it names.
 - **Frame cost and size:** in [performance-budgets.md](../../performance-budgets.md), the frame-cost and binary-size rows.
