@@ -137,6 +137,9 @@ pub struct Markdown {
     /// Bytes given to the inline parser, for the test that nothing finished
     /// is parsed again.
     parsed: usize,
+    /// The text kept before a break is forced ([`KEPT`] and [`LIMIT`]): the
+    /// tests of the bounds give smaller ones, to test them on less text.
+    bounds: (usize, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -291,6 +294,7 @@ impl Markdown {
             scratch: false,
             forced: 0,
             parsed: 0,
+            bounds: (KEPT, LIMIT),
         }
     }
 
@@ -368,6 +372,7 @@ impl Markdown {
             scratch: true,
             forced: self.forced,
             parsed: self.parsed,
+            bounds: self.bounds,
         };
         scratch.commit(width, look)
     }
@@ -404,6 +409,14 @@ impl Markdown {
     #[cfg(test)]
     pub(crate) fn whole(mut self) -> Self {
         self.early = false;
+        self
+    }
+
+    /// The stream with other bounds on the text kept than [`KEPT`] and
+    /// [`LIMIT`].
+    #[cfg(test)]
+    pub(crate) fn with_bounds(mut self, kept: usize, limit: usize) -> Self {
+        self.bounds = (kept, limit);
         self
     }
 
@@ -842,7 +855,7 @@ impl Markdown {
                 at >= paragraph.due && settled_inside_word(&paragraph.src, at, &paragraph.frozen)
             };
             // With much text kept, each decision parses much: they are spaced.
-            let decide = decide && (at <= KEPT || at >= paragraph.last + LONG_RUN);
+            let decide = decide && (at <= self.bounds.0 || at >= paragraph.last + LONG_RUN);
             if decide {
                 if !space {
                     paragraph.due = at + LONG_RUN;
@@ -924,12 +937,13 @@ impl Markdown {
             // parsed alone, which may differ from this parse: nothing more is
             // committed from this one.
             let kept = |split: usize| split.saturating_sub(cut.0);
+            let (kept_most, limit) = self.bounds;
             let forced = laid
                 .forced_break(row, false)
-                .filter(|&split| kept(split) > KEPT && settled(split))
+                .filter(|&split| kept(split) > kept_most && settled(split))
                 .or_else(|| {
                     laid.forced_break(row, true)
-                        .filter(|&split| kept(split) > LIMIT && settled(split))
+                        .filter(|&split| kept(split) > limit && settled(split))
                 });
             if let Some(split) = forced {
                 self.forced += 1;
