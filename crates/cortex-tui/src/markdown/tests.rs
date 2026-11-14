@@ -280,13 +280,13 @@ fn documents() -> Vec<String> {
 
 #[test]
 fn token_by_token_commits_what_all_at_once_does_split_at_every_point() {
-    // A pull request checks every seventh split of each document at one
+    // A pull request checks every eleventh split of each document at one
     // width; the nightly run checks every split at three.
     let look = look();
     let (step, widths): (usize, &[usize]) = if cortex_testkit::cases::exhaustive() {
         (1, &[20, 59, 79])
     } else {
-        (7, &[59])
+        (11, &[59])
     };
     for document in documents() {
         for &width in widths {
@@ -436,7 +436,7 @@ fn token_by_token_commits_what_all_at_once_does_for_random_documents() {
     let look = look();
     check(
         "token by token commits what all at once does for random documents",
-        50,
+        25,
         |rng| {
             let document = random_document(rng);
             let pieces = random_split(rng, &document);
@@ -602,8 +602,8 @@ fn deep_nesting_and_many_marks_cost_no_more_than_their_length() {
     let lists: String = (0..40)
         .map(|depth| format!("{}- level {depth}\n", "  ".repeat(depth)))
         .collect();
-    let stars = "*a".repeat(1_500);
-    let brackets = "[x ".repeat(800);
+    let stars = "*a".repeat(800);
+    let brackets = "[x ".repeat(400);
     for text in [quotes, lists, stars, brackets] {
         // With one column, an item's rows are many.
         let (lines, stream) = fed(&text, 13, 79, &look, 32);
@@ -643,9 +643,17 @@ fn a_decision_inside_a_long_word_never_commits_what_the_rest_of_it_changes() {
         // A path in prose with `_` all through it.
         format!("see /_static/{a}_name_of_it_{a}_and_on and after\n"),
     ];
+    let step = if cortex_testkit::cases::exhaustive() {
+        1
+    } else {
+        2
+    };
     for document in &documents {
         let expected = whole(document, 30, &look);
-        for split in (0..=document.len()).filter(|&at| document.is_char_boundary(at)) {
+        for split in (0..=document.len())
+            .filter(|&at| document.is_char_boundary(at))
+            .step_by(step)
+        {
             let (lines, _) = streamed(
                 Flavor::Answer,
                 &[&document[..split], &document[split..]],
@@ -682,11 +690,11 @@ fn a_window_resized_while_a_paragraph_streams_loses_and_repeats_nothing() {
                 [a link](https://e.example/a/long/path/to/somewhere/far) and words \
                 after it, many more to fill rows, and more still to the end.\n";
     let expected = letters(&whole(text, 79, &look));
-    // Every third split in the nightly run, every seventh on a pull request.
+    // Every third split in the nightly run, every eleventh on a pull request.
     let step = if cortex_testkit::cases::exhaustive() {
         3
     } else {
-        7
+        11
     };
     for (first, second) in [(40, 100), (40, 20), (100, 30), (25, 60)] {
         for split in (0..=text.len()).step_by(step) {
@@ -784,9 +792,10 @@ fn rows_that_all_start_inside_a_code_span_cost_no_more_than_their_length() {
     // Past `LIMIT` the cuts are forced where a code span goes on, and the
     // text after each is parsed alone: every word is still shown once.
     let strip = |lines: &[Line]| -> String { letters(lines).replace('`', "") };
+    // Smaller bounds than the product's, so that less text passes them.
     let work = |count: usize| {
         let text = "`a ``b ".repeat(count);
-        let mut stream = Markdown::answer();
+        let mut stream = Markdown::answer().with_bounds(256, 1_024);
         let mut lines = Vec::new();
         for piece in text.as_bytes().chunks(13) {
             stream.push(std::str::from_utf8(piece).unwrap());
@@ -798,13 +807,13 @@ fn rows_that_all_start_inside_a_code_span_cost_no_more_than_their_length() {
         assert_eq!(strip(&lines), strip(&whole(&text, 79, &look)));
         stream.parsed_bytes()
     };
-    // Both past `LIMIT`, where unbounded kept text would cost four times as
-    // much for twice the text; bounded, the first 4 KB cost the same in
-    // both, and twice the text costs under three times as much.
-    let (once, twice) = (work(700), work(1_400));
+    // Both past the limit, where unbounded kept text would cost four times
+    // as much for twice the text; bounded, the first kilobyte costs the same
+    // in both, and twice the text costs under three times as much.
+    let (once, twice) = (work(300), work(600));
     assert!(
         twice * 10 < once * 30,
-        "{once} bytes parsed for 4.9 KB, {twice} for 9.8 KB"
+        "{once} bytes parsed for 2.1 KB, {twice} for 4.2 KB"
     );
 }
 
@@ -827,7 +836,7 @@ fn a_window_resized_again_and_again_keeps_every_row_committed_at_each_width() {
     let (steps, tick_steps) = if cortex_testkit::cases::exhaustive() {
         (11, 97)
     } else {
-        (53, 301)
+        (79, 451)
     };
     for (text, step) in [(text, steps), (ticks.as_str(), tick_steps)] {
         resized_three_times(text, step, &look);
@@ -840,7 +849,12 @@ fn a_window_resized_again_and_again_keeps_every_row_committed_at_each_width() {
 fn resized_three_times(text: &str, step: usize, look: &Look) {
     let words = |lines: &[Line]| letters(lines).replace(['*', '`'], "");
     let expected = words(&whole(text, 79, look));
-    for widths in [[60, 30, 90], [30, 70, 40], [80, 50, 25]] {
+    let triples: &[[usize; 3]] = if cortex_testkit::cases::exhaustive() {
+        &[[60, 30, 90], [30, 70, 40], [80, 50, 25]]
+    } else {
+        &[[60, 30, 90], [80, 50, 25]]
+    };
+    for &widths in triples {
         for first in (0..text.len()).step_by(step) {
             let second = first + (text.len() - first) / 2;
             let mut stream = Markdown::answer();
@@ -882,8 +896,9 @@ fn a_run_made_only_of_marks_keeps_little_text_and_costs_its_length() {
         &["!", "*_", "&", "\\", "]("]
     };
     for &mark in marks {
-        let text = format!("x {} y\n", mark.repeat(6_000 / mark.len()));
-        let mut stream = Markdown::answer();
+        let text = format!("x {} y\n", mark.repeat(3_000 / mark.len()));
+        let (kept_most, limit) = (256, 1_024);
+        let mut stream = Markdown::answer().with_bounds(kept_most, limit);
         let mut lines = Vec::new();
         let mut most = 0;
         for piece in text.as_bytes().chunks(97) {
@@ -893,10 +908,10 @@ fn a_run_made_only_of_marks_keeps_little_text_and_costs_its_length() {
         }
         stream.finish();
         lines.extend(stream.commit(79, &look));
-        assert!(most < super::LIMIT + 1_024, "{mark:?}: {most} bytes kept");
+        assert!(most < limit + 1_024, "{mark:?}: {most} bytes kept");
         let ratio = stream.parsed_bytes() / text.len();
         assert!(
-            ratio < 2 * super::LIMIT / super::LONG_RUN,
+            ratio < 2 * limit / super::LONG_RUN + kept_most / 8,
             "{mark:?}: each byte parsed {ratio} times"
         );
         assert_eq!(

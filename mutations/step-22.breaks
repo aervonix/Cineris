@@ -296,7 +296,7 @@ caught-by:
 rule: A paragraph keeps at most LIMIT bytes of committed text: past it a break is forced where any row starts, so its rows starting inside constructs cost no more than their length.
 file: crates/cortex-tui/src/markdown/mod.rs
 in: Markdown::decide
-find: .filter(|&split| kept(split) > LIMIT && settled(split))
+find: .filter(|&split| kept(split) > limit && settled(split))
 replace: .filter(|_| false)
 caught-by:
     markdown::tests::rows_that_all_start_inside_a_code_span_cost_no_more_than_their_length
