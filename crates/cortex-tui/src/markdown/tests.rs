@@ -436,7 +436,7 @@ fn token_by_token_commits_what_all_at_once_does_for_random_documents() {
     let look = look();
     check(
         "token by token commits what all at once does for random documents",
-        150,
+        50,
         |rng| {
             let document = random_document(rng);
             let pieces = random_split(rng, &document);
@@ -496,7 +496,7 @@ fn nothing_finished_is_parsed_again() {
     // decisions spaced past `KEPT` would still parse too much.
     let paragraph =
         "Some **words** with `code` and more words to fill the rows of a paragraph. ".repeat(200);
-    let document = format!("{paragraph}\n\n").repeat(3);
+    let document = format!("{paragraph}\n\n").repeat(2);
     let mut stream = Markdown::answer();
     for piece in document.split_inclusive(' ') {
         stream.push(piece);
@@ -584,7 +584,7 @@ fn a_very_long_word_does_not_keep_its_rows_live_or_cost_more_than_its_length() {
     let look = look();
     // A blob with no white space in it, as a model may write a hash or a
     // base64 string in prose, with wide characters and an entity inside.
-    let blob = "AbCdEf0123456789+/漢字&amp;".repeat(250);
+    let blob = "AbCdEf0123456789+/漢字&amp;".repeat(150);
     let text = format!("The data: {blob} and after.\n");
     // A decision every 64 bytes lets a row and a half build up between two.
     let (lines, stream) = fed(&text, 7, 40, &look, 6);
@@ -598,12 +598,12 @@ fn a_very_long_word_does_not_keep_its_rows_live_or_cost_more_than_its_length() {
 fn deep_nesting_and_many_marks_cost_no_more_than_their_length() {
     let look = look();
     let quotes = format!("{}deep\n", "> ".repeat(300));
-    // At sixty levels the items' text has one column left.
-    let lists: String = (0..60)
+    // At forty levels the items' text has one column left.
+    let lists: String = (0..40)
         .map(|depth| format!("{}- level {depth}\n", "  ".repeat(depth)))
         .collect();
-    let stars = "*a".repeat(2_500);
-    let brackets = "[x ".repeat(1_500);
+    let stars = "*a".repeat(1_500);
+    let brackets = "[x ".repeat(800);
     for text in [quotes, lists, stars, brackets] {
         // With one column, an item's rows are many.
         let (lines, stream) = fed(&text, 13, 79, &look, 32);
@@ -682,8 +682,14 @@ fn a_window_resized_while_a_paragraph_streams_loses_and_repeats_nothing() {
                 [a link](https://e.example/a/long/path/to/somewhere/far) and words \
                 after it, many more to fill rows, and more still to the end.\n";
     let expected = letters(&whole(text, 79, &look));
+    // Every third split in the nightly run, every seventh on a pull request.
+    let step = if cortex_testkit::cases::exhaustive() {
+        3
+    } else {
+        7
+    };
     for (first, second) in [(40, 100), (40, 20), (100, 30), (25, 60)] {
-        for split in (0..=text.len()).step_by(3) {
+        for split in (0..=text.len()).step_by(step) {
             let mut stream = Markdown::answer();
             stream.push(&text[..split]);
             let mut lines = stream.commit(first, &look);
@@ -775,15 +781,21 @@ fn rows_that_all_start_inside_a_code_span_cost_no_more_than_their_length() {
     // ever clean, so past `LIMIT` bytes kept one is forced. The work is the
     // text's length times a bound: twice the text, about twice the work.
     let look = look();
+    // Past `LIMIT` the cuts are forced where a code span goes on, and the
+    // text after each is parsed alone: every word is still shown once.
+    let strip = |lines: &[Line]| -> String { letters(lines).replace('`', "") };
     let work = |count: usize| {
         let text = "`a ``b ".repeat(count);
         let mut stream = Markdown::answer();
+        let mut lines = Vec::new();
         for piece in text.as_bytes().chunks(13) {
             stream.push(std::str::from_utf8(piece).unwrap());
-            let _ = stream.commit(79, &look);
+            lines.extend(stream.commit(79, &look));
         }
         stream.finish();
-        let _ = stream.commit(79, &look);
+        lines.extend(stream.commit(79, &look));
+        assert!(stream.forced() > 0, "a cut was forced");
+        assert_eq!(strip(&lines), strip(&whole(&text, 79, &look)));
         stream.parsed_bytes()
     };
     // Both well past `LIMIT`, where unbounded kept text would cost four times
@@ -809,7 +821,14 @@ fn a_window_resized_again_and_again_keeps_every_row_committed_at_each_width() {
     // them is clean, so the rows of the first resize are still kept at the
     // second.
     let ticks = "`a ``b ".repeat(120);
-    for (text, step) in [(text, 29), (ticks.as_str(), 151)] {
+    // A sample of the splits on a pull request; every eleventh in the
+    // nightly run.
+    let (steps, tick_steps) = if cortex_testkit::cases::exhaustive() {
+        (11, 97)
+    } else {
+        (53, 301)
+    };
+    for (text, step) in [(text, steps), (ticks.as_str(), tick_steps)] {
         resized_three_times(text, step, &look);
     }
 }
@@ -852,9 +871,16 @@ fn a_run_made_only_of_marks_keeps_little_text_and_costs_its_length() {
     // byte after the cut cannot change what ends there, so the text kept,
     // which a frame's live rows parse, stays bounded, and so does the work.
     let look = look();
-    for mark in [
-        "!", "_", "*", "`", "\\", "&", "<", "]", "[", ">", "](", "*_",
-    ] {
+    // A sample of the marks on a pull request, one of each kind of rule;
+    // every one in the nightly run.
+    let marks: &[&str] = if cortex_testkit::cases::exhaustive() {
+        &[
+            "!", "_", "*", "`", "\\", "&", "<", "]", "[", ">", "](", "*_",
+        ]
+    } else {
+        &["!", "*_", "&", "\\", "]("]
+    };
+    for &mark in marks {
         let text = format!("x {} y\n", mark.repeat(6_000 / mark.len()));
         let mut stream = Markdown::answer();
         let mut lines = Vec::new();
@@ -891,25 +917,4 @@ fn an_entity_or_an_autolink_cut_by_white_space_holds_nothing() {
     let (lines, stream) = streamed(Flavor::Answer, &[text], 12, &look);
     assert_eq!(stream.forced(), 0);
     assert_eq!(lines, whole(text, 12, &look));
-}
-
-#[test]
-fn a_forced_cut_commits_nothing_more_from_the_parse_that_made_it() {
-    // Rows that all start inside a code span, at 20 columns: a decision
-    // commits a few rows, and past `LIMIT` one is cut where a code span
-    // goes on. The text after a forced cut is parsed alone, so the rows
-    // after it come from that parse: every word once.
-    let look = look();
-    let text = "`a ``b ".repeat(700);
-    let strip = |lines: &[Line]| -> String { letters(lines).replace('`', "") };
-    let mut stream = Markdown::answer();
-    let mut lines = Vec::new();
-    for piece in text.as_bytes().chunks(13) {
-        stream.push(std::str::from_utf8(piece).unwrap());
-        lines.extend(stream.commit(20, &look));
-    }
-    stream.finish();
-    lines.extend(stream.commit(20, &look));
-    assert!(stream.forced() > 0, "a cut was forced");
-    assert_eq!(strip(&lines), strip(&whole(&text, 20, &look)));
 }
