@@ -260,9 +260,10 @@ pub(crate) fn check(
     // hold is there already. A push to a URL names no remote, and another
     // remote's branches may be private: it is held against what git says
     // the URL has, and nothing else.
-    let named_remote =
-        !remote.is_empty() && git(&["config", "--get", &format!("remote.{remote}.url")]).is_ok();
-    let remotes = named_remote.then(|| format!("--remotes={remote}"));
+    let remotes: Vec<String> = remotes_for(dir, remote)
+        .iter()
+        .map(|name| format!("--remotes={name}"))
+        .collect();
 
     let mut found = Vec::new();
     let mut seen = HashSet::new();
@@ -295,9 +296,7 @@ pub(crate) fn check(
         }
 
         let mut range: Vec<&str> = vec![&update.local, "--not"];
-        if let Some(remotes) = &remotes {
-            range.push(remotes);
-        }
+        range.extend(remotes.iter().map(String::as_str));
         if !is_zero(&update.remote)
             && git(&["cat-file", "-e", &format!("{}^{{commit}}", update.remote)]).is_ok()
         {
@@ -546,9 +545,64 @@ pub(crate) fn verdict(
 pub(crate) const REQUIRED: &str = "cortex.ownerTermsRequired";
 
 /// Whether the repository at `dir` requires the terms file.
+///
+/// Only a setting that is not there, or is a plain false, means no: a
+/// value git cannot read as a boolean, or a git that fails, means yes,
+/// so that a mistake in the setting refuses a push and does not wave it
+/// through.
 pub(crate) fn required(dir: &Path) -> bool {
-    git(dir, &["config", "--type=bool", "--get", REQUIRED])
-        .is_ok_and(|value| value.trim() == "true")
+    let mut command = std::process::Command::new("git");
+    for variable in super::GIT_LOCATION {
+        command.env_remove(variable);
+    }
+    let Ok(output) = command
+        .args(["config", "--get", REQUIRED])
+        .current_dir(dir)
+        .output()
+    else {
+        return true;
+    };
+    match output.status.code() {
+        // Not set.
+        Some(1) => false,
+        Some(0) => {
+            let value = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_lowercase();
+            !matches!(value.as_str(), "false" | "no" | "off" | "0")
+        }
+        _ => true,
+    }
+}
+
+/// The remotes whose branches a push to `remote` is held against: the
+/// remote of that name, or each remote whose URL or push URL is the URL a
+/// push names. None for a URL no remote has.
+fn remotes_for(dir: &Path, remote: &str) -> Vec<String> {
+    if remote.is_empty() {
+        return Vec::new();
+    }
+    let named = |key: &str| git(dir, &["config", "--get", &format!("remote.{remote}.{key}")]);
+    if named("url").is_ok() || named("pushurl").is_ok() {
+        return vec![remote.to_owned()];
+    }
+    let Ok(listed) = git(
+        dir,
+        &["config", "--get-regexp", r"^remote\..*\.(url|pushurl)$"],
+    ) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = listed
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(' ')?;
+            let name = key.strip_prefix("remote.")?.rsplit_once('.')?.0;
+            (value == remote).then(|| name.to_owned())
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// What a push does when there is no terms file: goes, with a warning,

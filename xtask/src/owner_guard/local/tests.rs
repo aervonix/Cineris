@@ -456,10 +456,14 @@ fn sys_what_the_machine_or_another_remote_could_hide_is_still_read() {
     repo.git("Someone", &["remote", "add", "backup", "../backup.git"]);
     let private = repo.commit("Someone", "Notes for Quentin", &[]);
     repo.git("Someone", &["push", "-q", "backup", "main"]);
+    // A URL a remote has is that remote: its branches count.
+    let update = repo.update("refs/heads/main", &private, "refs/heads/main");
+    let (_, commits) = check(&repo.dir, "../backup.git", &[update], &terms()).unwrap();
+    assert_eq!(commits, 0, "the backup remote has it");
     let update = repo.update("refs/heads/main", &private, "refs/heads/main");
     let (found, commits) = check(&repo.dir, "../remote.git", &[update], &terms()).unwrap();
-    // The first commit too: by URL, nothing says the remote has it.
-    assert_eq!(commits, 2, "{found:?}");
+    // The URL is origin's, so origin's branches count; the backup's do not.
+    assert_eq!(commits, 1, "{found:?}");
     assert!(found.contains(&Found::Commit(Finding::Commit {
         commit: short(&private),
         field: "message",
@@ -469,7 +473,11 @@ fn sys_what_the_machine_or_another_remote_could_hide_is_still_read() {
     // configuration: its tree is still read.
     repo.git("Someone", &["config", "log.showRoot", "false"]);
     repo.git("Someone", &["switch", "-q", "--orphan", "fresh"]);
-    let root = repo.commit("Someone", "Start again", &[("x.txt", "by Quentin\n")]);
+    let root = repo.commit(
+        "Someone",
+        "Start again",
+        &[("x.txt", "by Quentin\n"), ("quentin/y.txt", "y\n")],
+    );
     let update = repo.update("refs/heads/fresh", &root, "refs/heads/fresh");
     let (found, _) = check(&repo.dir, "origin", &[update], &terms()).unwrap();
     assert!(
@@ -479,6 +487,14 @@ fn sys_what_the_machine_or_another_remote_could_hide_is_still_read() {
                 path: Some("x.txt".to_owned()),
                 line: 1,
             },
+        }),
+        "{found:?}"
+    );
+    // And its paths.
+    assert!(
+        found.contains(&Found::InCommit {
+            commit: short(&root),
+            finding: Finding::Path { file: 1 },
         }),
         "{found:?}"
     );
@@ -511,6 +527,11 @@ fn sys_a_repository_that_requires_the_file_refuses_a_push_without_it() {
     assert_eq!(missing("there is no file", false), Ok(()));
     repo.git("Someone", &["config", "cortex.ownerTermsRequired", "true"]);
     assert!(required(&repo.dir));
+    // A value git cannot read as a boolean requires it too.
+    repo.git("Someone", &["config", "cortex.ownerTermsRequired", "ture"]);
+    assert!(required(&repo.dir));
+    repo.git("Someone", &["config", "cortex.ownerTermsRequired", "false"]);
+    assert!(!required(&repo.dir));
     let refused = missing("there is no file", true).unwrap_err();
     assert!(refused.contains("The push is refused"), "{refused}");
     // The folders a terms file may not be in: the worktree, and the

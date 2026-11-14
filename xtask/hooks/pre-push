@@ -6,10 +6,13 @@
 # `cargo xtask owner-guard --pre-push`, which reads the owner's terms from
 # ~/.config/cortex-harness/owner-terms (or the file CORTEX_OWNER_TERMS_FILE
 # names), checks every commit the push sends, and refuses the push when one
-# carries a term. Without the file it warns and lets the push go.
+# carries a term. Without the file it warns and lets the push go, unless
+# the repository requires the file (cortex.ownerTermsRequired).
 #
-# Install it once for every worktree of the repository, outside any branch:
+# Install it once for every worktree of the repository, outside any branch,
+# once the change that adds --pre-push is on the main branch:
 #   cp xtask/hooks/pre-push "$(git rev-parse --git-common-dir)/hooks/pre-push"
+#   git config cortex.ownerTermsRequired true
 # Never push with --no-verify: that skips it.
 
 # cargo: the one that started this push, the one on PATH, or rustup's.

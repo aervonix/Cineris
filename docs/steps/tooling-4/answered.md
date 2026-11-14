@@ -78,3 +78,14 @@ A reviewer on Opus 5.5, which had not seen the session's reasoning, read the who
 | The adversarial fixture misses a process that clears its environment, and spins a core while the turn runs. | Both stated in the docs. The kill's sweep is what holds the first. |
 
 The step's own stress run found one more: the fixture's own test failed 20 times in 100, because a `sh -c` child had not yet become `sleep` when `/proc` was read. It starts `sleep` directly now, and passed 200 of 200.
+
+A second review, of the fixes alone, found no way to print a term and no new fail-open where the terms file is there. What it found:
+
+| Finding | Done |
+|---|---|
+| `cortex.ownerTermsRequired` with a value git cannot read as a boolean, or a git that fails reading it, counted as not required. | Fixed: only a missing setting or a plain false means not required. Test and break. |
+| A push by URL with no ref there yet read the whole history, also when a named remote has that URL (or only a push URL). | Fixed: a URL that a remote has, as its URL or its push URL, is that remote. Test and break. A URL no remote has is still read from its root: slow, and closed. |
+| The hook script's own text said nothing of the setting. | Fixed, with the install note. |
+| Invisible characters the check missed (bidirectional controls, the soft hyphen, variation selectors and others), and a byte-order mark after white space. | Fixed, with tests. |
+| `--root` for a root commit's paths, and the path helper's `/` and relative `..` rules, had no test or break. | A path in the root commit is tested; breaks for both path rules. |
+| Pre-existing, on Windows only: the protected-path watch joins git's `commondir` onto the extended-length form. | Added to [outstanding/path-forms-on-windows-the-helper-does-not-reach.md](../../outstanding/path-forms-on-windows-the-helper-does-not-reach.md). |
