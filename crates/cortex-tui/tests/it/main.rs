@@ -13,8 +13,10 @@
 )]
 
 mod bindings;
+mod children;
 mod decoder;
 mod editing;
+mod external;
 mod input;
 
 use cortex_term::{Event, Key};
@@ -72,4 +74,11 @@ pub(crate) fn type_text(input: &mut Input, text: &str) {
 /// Presses the key `binding` names.
 pub(crate) fn press(input: &mut Input, binding: &str) -> Outcome {
     input.handle(&Event::Key(parse(binding).unwrap()))
+}
+
+/// Becomes one of the external editor tests' children when the arguments
+/// say so ([`children`]), and passes at once otherwise.
+#[test]
+fn child_entry() {
+    children::enter();
 }
