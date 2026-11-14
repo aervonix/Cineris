@@ -13,9 +13,7 @@ use cortex_agent::{
     RoleModel, SUMMARY_INSTRUCTIONS, check_prefix,
 };
 use cortex_base::{CancelToken, ContentHash};
-use cortex_llm::{
-    Catalog, ModelClient, ModelEntry, ModelRequest, ModelStream, Protocol, ProviderInfo,
-};
+use cortex_llm::{Catalog, ModelClient, ModelRequest, ModelStream};
 use cortex_protocol::event::{Notice, TurnOutcome};
 use cortex_protocol::item::{NoticeSource, PlanItem, PlanStatus, UserMessageItem};
 use cortex_protocol::model::ModelRole;
@@ -23,7 +21,7 @@ use cortex_protocol::usage::TokenUsage;
 use cortex_protocol::{
     Item, ItemId, Message, ModelId, Part, Plan, ProviderId, Role, StopReason, TurnId,
 };
-use cortex_testkit::{Gate, Response, ScriptedProvider, fixtures};
+use cortex_testkit::{Built, Gate, Response, ScriptedProvider, fixtures};
 use serde_json::json;
 
 use crate::{
@@ -69,69 +67,44 @@ fn root_file(rig: &Rig, name: &str) -> cortex_base::AbsPath {
 
 // ---------------------------------------------------------------- prefix
 
-/// The scripted provider, whose stable prefix is what a real protocol
-/// would write: the loop's debug-build check then runs on real bytes.
-struct Rendered {
-    inner: ScriptedProvider,
-    protocol: Box<dyn Protocol>,
-    provider: ProviderInfo,
-    model: Arc<ModelEntry>,
-}
-
-impl Rendered {
-    fn render(&self, request: &ModelRequest) -> Vec<u8> {
-        let mut request = request.clone();
-        request.model = Arc::clone(&self.model);
-        self.protocol
-            .stable_prefix(&request, &self.provider)
-            .expect("the request renders")
-    }
-}
-
-impl ModelClient for Rendered {
-    fn stream(&self, request: ModelRequest, cancel: CancelToken) -> ModelStream {
-        self.inner.stream(request, cancel)
-    }
-
-    fn stable_prefix(&self, request: &ModelRequest) -> Option<Vec<u8>> {
-        Some(self.render(request))
-    }
-}
-
-fn anthropic(inner: &ScriptedProvider) -> Rendered {
+/// The scripted provider behind Anthropic's request builder: a request it
+/// cannot build fails, and its stable prefix is real bytes, which the
+/// loop's debug-build check then runs on.
+fn anthropic(inner: &ScriptedProvider) -> Built {
     let catalog = Catalog::builtin().unwrap();
-    Rendered {
-        inner: inner.clone(),
-        protocol: Box::new(cortex_llm::anthropic::AnthropicMessages),
-        provider: cortex_llm::anthropic::provider(),
-        model: Arc::clone(
+    inner
+        .built_as(
+            Arc::new(cortex_llm::anthropic::AnthropicMessages),
+            cortex_llm::anthropic::provider(),
+        )
+        .with_model(Arc::clone(
             catalog
                 .get(
                     &ProviderId::new("anthropic"),
                     &ModelId::new("claude-haiku-5-5"),
                 )
                 .unwrap(),
-        ),
-    }
+        ))
 }
 
-fn openai_chat(inner: &ScriptedProvider) -> Rendered {
+/// The same behind DeepSeek's, on `openai-chat`.
+fn openai_chat(inner: &ScriptedProvider) -> Built {
     let catalog = Catalog::builtin().unwrap();
-    Rendered {
-        inner: inner.clone(),
-        protocol: Box::new(cortex_llm::openai_chat::OpenAiChat),
-        provider: cortex_llm::openai_chat::providers::builtin("deepseek")
-            .unwrap()
-            .info,
-        model: Arc::clone(
+    inner
+        .built_as(
+            Arc::new(cortex_llm::openai_chat::OpenAiChat),
+            cortex_llm::openai_chat::providers::builtin("deepseek")
+                .unwrap()
+                .info,
+        )
+        .with_model(Arc::clone(
             catalog
                 .get(
                     &ProviderId::new("deepseek"),
                     &ModelId::new("deepseek-flash"),
                 )
                 .unwrap(),
-        ),
-    }
+        ))
 }
 
 #[test]
@@ -219,7 +192,7 @@ fn the_prefix_holds_over_a_long_session_and_breaks_when_history_is_edited() {
                 check_prefix(&pair[0], &pair[1]),
                 Ok(()),
                 "{}: request {} does not begin with request {index}",
-                client.protocol.name(),
+                client.protocol(),
                 index + 1
             );
         }
@@ -690,7 +663,8 @@ fn a_summary_over_history_a_rewind_took_away_is_not_used() {
     let first = all_text(&second.messages[0]);
     assert!(
         first.contains("FRESH") && !first.contains("STALE"),
-        "{first}"
+        "{}",
+        cortex_testkit::brief(&first)
     );
     assert_eq!(fast.requests().len(), 2);
 }
@@ -1708,7 +1682,11 @@ fn an_interrupt_keeps_a_summary_whose_request_had_finished() {
     });
     assert_eq!(fast.requests().len(), 1, "no second summary");
     let first = all_text(&world.provider.requests()[2].messages[0]);
-    assert!(first.contains("PREPARED"), "{first}");
+    assert!(
+        first.contains("PREPARED"),
+        "{}",
+        cortex_testkit::brief(&first)
+    );
     assert_eq!(rig.events.ends()[1].outcome, TurnOutcome::Completed);
 }
 
