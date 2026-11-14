@@ -350,11 +350,12 @@ impl Input {
         Outcome::Changed
     }
 
-    /// A paste: text, never keys.
+    /// A paste: text, never keys. With a box or a panel focused, the input
+    /// takes the focus back and the paste with it.
     fn paste(&mut self, text: &str) -> Outcome {
         self.quit_armed = false;
         if !self.focus.on_input() {
-            return Outcome::Nothing;
+            self.focus.to_input();
         }
         if let Some(search) = &mut self.search {
             for c in text.chars().map(|c| if c.is_control() { ' ' } else { c }) {
@@ -621,7 +622,13 @@ impl Input {
             return Outcome::Interrupt;
         }
         self.search = None;
-        self.menu = None;
+        if let Some(Menu {
+            kind: Kind::Picker(name),
+            ..
+        }) = self.menu.take()
+        {
+            return Outcome::PickerClosed(name);
+        }
         if !self.editor.is_empty() {
             self.quit_armed = false;
             self.editor.clear();

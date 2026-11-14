@@ -70,6 +70,11 @@ pub struct Env {
     pub system_root: Option<PathBuf>,
     /// Whether to go by Windows's rules.
     pub windows: bool,
+    /// Folders an editor found by its name is never taken from: the
+    /// session's write roots, where a command the agent ran could have put
+    /// a program (`cortex_base::program::find_outside`). An absolute path the
+    /// user gave is taken wherever it is.
+    pub avoid: Vec<PathBuf>,
 }
 
 impl Env {
@@ -82,6 +87,7 @@ impl Env {
             path: program::path_directories(),
             system_root: std::env::var_os("SystemRoot").map(PathBuf::from),
             windows: cfg!(windows),
+            avoid: Vec::new(),
         }
     }
 }
@@ -301,10 +307,11 @@ fn locate(name: &str, env: &Env) -> Result<Option<PathBuf>, EditorError> {
         // PATH wins over a program later in it.
         for folder in &env.path {
             for extension in ["exe", "com", "cmd", "bat"] {
-                let found = program::find(
+                let found = program::find_outside(
                     std::slice::from_ref(folder),
                     &format!("{name}.{extension}"),
                     true,
+                    &env.avoid,
                 );
                 if found.is_some() {
                     return Ok(found);
@@ -313,7 +320,12 @@ fn locate(name: &str, env: &Env) -> Result<Option<PathBuf>, EditorError> {
         }
         return Ok(None);
     }
-    Ok(program::find(&env.path, name, env.windows))
+    Ok(program::find_outside(
+        &env.path,
+        name,
+        env.windows,
+        &env.avoid,
+    ))
 }
 
 /// `name` as an absolute path to a program, if it is one. On Windows a path
@@ -324,12 +336,15 @@ fn absolute_program(name: &str, env: &Env) -> Option<PathBuf> {
     if !(path.is_absolute() || (env.windows && is_windows_absolute(name))) {
         return None;
     }
-    let path = if env.windows && path.extension().is_none() {
-        path.with_extension("exe")
-    } else {
-        path.to_path_buf()
-    };
-    program::is_program(&path, env.windows).then_some(path)
+    if env.windows && path.extension().is_none() {
+        // What starting it would run: `.exe`; and a wrapper beside it, as
+        // VS Code's `bin\code` is `code.cmd`.
+        return ["exe", "com", "cmd", "bat"]
+            .into_iter()
+            .map(|extension| path.with_extension(extension))
+            .find(|candidate| program::is_program(candidate, true));
+    }
+    program::is_program(path, env.windows).then(|| path.to_path_buf())
 }
 
 /// `C:\…` or `\\server\…`: absolute by Windows's rules, whatever system
@@ -363,7 +378,7 @@ fn default(env: &Env) -> Result<Program, EditorError> {
         )));
     }
     for name in ["vi", "nano"] {
-        if let Some(path) = program::find(&env.path, name, false) {
+        if let Some(path) = program::find_outside(&env.path, name, false, &env.avoid) {
             return Ok(Program {
                 path,
                 args: Vec::new(),
@@ -625,10 +640,16 @@ pub fn edit(
     write_private(&file, &text).map_err(EditorError::File)?;
 
     let released = handoff.release();
+    // A key that interrupts reaches the editor, and leaves the interface,
+    // and the prompt, alone: from the terminal's leaving to its taking back,
+    // so that no key falls in between. The editor keeps its own Ctrl+C (see
+    // the guard).
+    let ignored = cortex_term::ignore_interrupts();
     let status = released.is_ok().then(|| run(editor, &file, &folder.path));
     // Taken back whatever the editor did, and even when handing it over
     // failed partway: part of it may have been put back.
     let reclaimed = handoff.reclaim();
+    drop(ignored);
     reclaimed.map_err(EditorError::Terminal)?;
     released.map_err(EditorError::Release)?;
 
@@ -690,14 +711,7 @@ fn run(editor: &Program, file: &Path, folder: &Path) -> io::Result<std::process:
     if cfg!(windows) {
         command.env("NoDefaultCurrentDirectoryInExePath", "1");
     }
-    let mut child = command.spawn()?;
-    // Taken after the start, so that the editor's own Ctrl+C still works: a
-    // key that interrupts reaches the editor and leaves the interface, and
-    // the prompt, alone.
-    let ignored = cortex_term::ignore_interrupts();
-    let status = child.wait();
-    drop(ignored);
-    status
+    command.spawn().and_then(|mut child| child.wait())
 }
 
 /// The file's text, or `None` when it is not UTF-8.
@@ -852,6 +866,37 @@ mod tests {
         for dir in [first, second, only_bare] {
             std::fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    #[test]
+    fn an_editor_in_a_write_root_is_passed_over() {
+        let planted = folder("planted", &["vim", "vi"]);
+        let real = folder("real", &["vim"]);
+        let env = Env {
+            editor: Some("vim -n".into()),
+            path: vec![planted.clone(), real.clone()],
+            avoid: vec![planted.clone()],
+            ..Env::default()
+        };
+        assert_eq!(find(&env).unwrap().path, real.join("vim"));
+        // The default too: `vi` only in the write root is no `vi`.
+        let env = Env {
+            path: vec![planted.clone()],
+            avoid: vec![planted.clone()],
+            ..Env::default()
+        };
+        assert!(matches!(find(&env), Err(EditorError::NotFound(_))));
+        let windows = Env {
+            editor: Some("vim".into()),
+            path: vec![planted.clone()],
+            avoid: vec![planted.clone()],
+            windows: true,
+            ..Env::default()
+        };
+        std::fs::write(planted.join("vim.exe"), b"").unwrap();
+        assert!(matches!(find(&windows), Err(EditorError::NotFound(_))));
+        std::fs::remove_dir_all(planted).unwrap();
+        std::fs::remove_dir_all(real).unwrap();
     }
 
     #[test]

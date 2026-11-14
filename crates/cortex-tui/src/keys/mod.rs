@@ -527,7 +527,8 @@ impl KeyMap {
     /// The defaults with `table` over them: each entry names an action
     /// (`editor.submit`) and the keys it takes instead of its defaults (an
     /// empty list unbinds it). A key given to an action is taken from any
-    /// other action of the same context. An entry that cannot be used is
+    /// other action of the same context, and a key given to a global action
+    /// from every context. An entry that cannot be used is
     /// reported and its action keeps its defaults.
     #[must_use]
     pub fn with_table<'a>(
@@ -557,6 +558,11 @@ impl KeyMap {
             };
             let context = action.context();
             keymap.map.retain(|_, bound| *bound != action);
+            // A key bound to a global action is taken from every context:
+            // `global.suspend = ["ctrl+z"]` must not stay `editor.undo`.
+            if context == Context::Global {
+                keymap.map.retain(|(_, key), _| !parsed.contains(key));
+            }
             for key in parsed {
                 keymap.map.insert((context, key), action);
             }
@@ -667,6 +673,23 @@ mod tests {
             Some(Action::Undo)
         );
         assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn a_key_bound_to_a_global_action_is_taken_from_every_context() {
+        let keys = vec!["ctrl+z".to_owned()];
+        let (map, errors) = KeyMap::with_table([("global.suspend", keys.as_slice())]);
+        assert!(errors.is_empty());
+        let ctrl_z = Key::with(KeyCode::Char('z'), Mods::CTRL);
+        assert_eq!(
+            map.lookup(&[Context::Editor], ctrl_z),
+            Some(Action::Suspend)
+        );
+        let underscore = Key::with(KeyCode::Char('_'), Mods::CTRL);
+        assert_eq!(
+            map.lookup(&[Context::Editor], underscore),
+            Some(Action::Undo)
+        );
     }
 
     #[test]
