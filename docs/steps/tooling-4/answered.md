@@ -77,7 +77,7 @@ A reviewer on Opus 5.5, which had not seen the session's reasoning, read the who
 | Docs: the number of git commands, the `try.yml` comment, `--features` passed twice to `partial-landlock`, `ci.md` missing. | Fixed the first two; the third is harmless and kept (the job's own check names the feature); `ci.md` is written with the pull request's runs. |
 | The adversarial fixture misses a process that clears its environment, and spins a core while the turn runs. | Both stated in the docs. The kill's sweep is what holds the first. |
 
-The step's own stress run found one more: the fixture's own test failed 20 times in 100, because a `sh -c` child had not yet become `sleep` when `/proc` was read. It starts `sleep` directly now, and passed 200 of 200.
+The step's own stress runs found one more, twice: the fixture's own test failed 20 times in 100, then, with `sleep` started directly, once in 100 with the crate's other tests beside it (and never alone, in 600). The JUnit report showed the child alive and unseen: `spawn` returns once the child has begun its exec, which may not yet have set up its environment, so `/proc/<pid>/environ` reads empty for a moment. The test waits for the child's environment before it looks; a command under the harness has run for its whole turn by the time the fixture looks. `cortex-core`'s tests then passed 300 of 300.
 
 A second review, of the fixes alone, found no way to print a term and no new fail-open where the terms file is there. What it found:
 
