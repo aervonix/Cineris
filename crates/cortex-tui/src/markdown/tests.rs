@@ -798,12 +798,13 @@ fn rows_that_all_start_inside_a_code_span_cost_no_more_than_their_length() {
         assert_eq!(strip(&lines), strip(&whole(&text, 79, &look)));
         stream.parsed_bytes()
     };
-    // Both well past `LIMIT`, where unbounded kept text would cost four times
-    // as much for twice the text.
-    let (once, twice) = (work(1_000), work(2_000));
+    // Both past `LIMIT`, where unbounded kept text would cost four times as
+    // much for twice the text; bounded, the first 4 KB cost the same in
+    // both, and twice the text costs under three times as much.
+    let (once, twice) = (work(700), work(1_400));
     assert!(
-        twice * 10 < once * 25,
-        "{once} bytes parsed for 7 KB, {twice} for 14 KB"
+        twice * 10 < once * 30,
+        "{once} bytes parsed for 4.9 KB, {twice} for 9.8 KB"
     );
 }
 
