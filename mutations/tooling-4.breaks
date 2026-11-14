@@ -1,0 +1,222 @@
+# The fourth tooling step: the owner guard before a push, the comparison of
+# paths by place, try's named jobs, the time profile, the pressure helper,
+# the backends trap, scratch-test, the live headless entry and replace
+# --text. Written with the code, and run with `cargo xtask mutate tooling-4`.
+
+# --------------------------------------------------- the guard before a push
+
+[break] the-terms-file-is-named-by-its-path
+rule: A message about the terms file never spells out its path, which holds the home folder, a term.
+file: xtask/src/owner_guard/local.rs
+in: TermsFile::shown
+find: Self::Default(_) | Self::Nowhere => DEFAULT_SHOWN.to_owned()
+replace: Self::Default(path) => path.display().to_string(), Self::Nowhere => DEFAULT_SHOWN.to_owned()
+caught-by:
+    owner_guard::local::tests::a_file_that_is_there_and_cannot_be_used_refuses_the_push
+
+[break] a-message-that-holds-a-term-is-printed
+rule: Every line the local guard prints is held against the terms first.
+file: xtask/src/owner_guard/local.rs
+in: screened
+find: Some(terms) if terms.matches(&text)
+replace: Some(terms) if terms.matches(&text) && false
+caught-by:
+    owner_guard::local::tests::what_is_printed_never_holds_a_term
+    owner_guard::local::tests::a_check_that_could_not_run_refuses_the_push_and_prints_no_term
+
+[break] a-check-that-cannot-run-lets-the-push-go
+rule: When the terms file is there and the check cannot run, the push is refused.
+file: xtask/src/owner_guard/local.rs
+in: verdict
+find: Ok(checked) => checked,
+replace: Ok(checked) => checked, Err(_) => (Vec::new(), 0),
+caught-by:
+    owner_guard::local::tests::a_check_that_could_not_run_refuses_the_push_and_prints_no_term
+
+[break] an-unreadable-terms-file-is-taken-for-none
+rule: A terms file that is there and cannot be read refuses the push; only a missing default file passes.
+file: xtask/src/owner_guard/local.rs
+in: load
+find: && matches!(file, TermsFile::Default(_))
+replace: || true
+caught-by:
+    owner_guard::local::tests::a_file_that_is_there_and_cannot_be_used_refuses_the_push
+    owner_guard::local::tests::without_the_default_file_the_push_goes_on_and_a_named_file_must_be_there
+
+[break] an-empty-terms-file-passes
+rule: A terms file that holds no term refuses the push.
+file: xtask/src/owner_guard/local.rs
+in: load
+find: if terms.is_empty() {
+replace: if terms.is_empty() && false {
+caught-by:
+    owner_guard::local::tests::a_file_that_is_there_and_cannot_be_used_refuses_the_push
+
+[break] a-commits-own-lines-are-not-read
+rule: Each commit a push sends is read for its own added lines, so a term a later commit removes is still found.
+file: xtask/src/owner_guard/local.rs
+in: check
+find: for finding in scan_diff(terms, &diff) {
+replace: for finding in scan_diff(terms, "") {
+caught-by:
+    owner_guard::local::tests::sys_a_push_is_searched_in_every_place_it_can_carry_a_term
+
+[break] a-ref-name-is-not-read
+rule: The names of the refs a push writes are read.
+file: xtask/src/owner_guard/local.rs
+in: check
+find: if terms.matches(&update.remote_ref) {
+replace: if false {
+caught-by:
+    owner_guard::local::tests::sys_a_push_is_searched_in_every_place_it_can_carry_a_term
+
+[break] what-the-remote-has-is-read-again
+rule: What the remote's branches have already is not what a push adds.
+file: xtask/src/owner_guard/local.rs
+in: check
+find: let mut range: Vec<&str> = vec![&update.local, "--not", &remotes];
+replace: let mut range: Vec<&str> = vec![&update.local];
+caught-by:
+    owner_guard::local::tests::sys_a_clean_push_and_what_the_remote_has_find_nothing
+
+# ------------------------------------------------------- paths by place
+
+[break] two-different-paths-are-one-place
+rule: Two Windows paths whose names differ are two places.
+file: crates/cortex-base/src/path/location.rs
+in: PathStyle::same_location
+find: .all(|(one, other)| self.same_name(one, other))
+replace: .all(|_| true)
+caught-by:
+    cortex-base path::location::tests::a_path_that_differs_by_one_character_is_another_place
+
+[break] the-unc-form-is-not-read
+rule: The extended-length form of a share, \\?\UNC\server\share, is read as \\server\share.
+file: crates/cortex-base/src/path/location.rs
+in: Place::read
+find: let (root, rest) = if let Some(rest) = strip_verbatim(text, "UNC\\") {
+replace: let (root, rest) = if let Some(rest) = strip_verbatim(text, "UNC\\").filter(|_| false) {
+caught-by:
+    cortex-base path::location::tests::windows_reads_the_extended_length_forms_as_the_plain_ones
+
+[break] case-is-not-folded
+rule: On Windows names are compared with case folded.
+file: crates/cortex-base/src/path/location.rs
+in: PathStyle::location_within
+find: .all(|(one, other)| self.same_name(one, other))
+replace: .all(|(one, other)| one == other)
+caught-by:
+    cortex-base path::location::tests::within_is_by_whole_names_and_by_place
+
+[break] the-home-folder-is-stripped-by-text
+rule: A resolved path under the home folder is shown with ~ on Windows, whatever its form and case.
+file: crates/cortex-config/src/env.rs
+in: Env::display_path
+find: && let Some(inside) = style.strip_location_prefix(path, &home)
+replace: && let Some(inside) = path.strip_prefix(&home).ok().map(Path::to_path_buf).filter(|_| style == style)
+caught-by:
+    cortex-config env::tests::a_path_under_the_home_directory_is_shown_with_a_tilde
+
+# ------------------------------------------------------------------ try
+
+[break] a-nightly-job-takes-words
+rule: A nightly job runs through try as the nightly runs it, with nothing added.
+file: xtask/src/try_run.rs
+in: Inputs::nightly_job
+find: if added {
+replace: if false {
+caught-by:
+    try_run::tests::the_nightlys_jobs_run_as_the_nightly_runs_them
+
+# --------------------------------------------------------- the profile
+
+[break] the-profile-reads-the-clock-when-off
+rule: With CORTEX_TESTKIT_PROFILE unset, a mark describes nothing and reads no clock.
+file: crates/cortex-testkit/src/profile.rs
+in: Mark::start
+find: open: recorder().map(|_| (kind, what(), Instant::now()))
+replace: open: Some((kind, what(), Instant::now()))
+caught-by:
+    cortex-testkit profile::tests::off_it_reads_no_clock_and_keeps_nothing
+
+[break] a-phase-is-counted-twice
+rule: The time in phases counts each stretch once, however phases nest.
+file: crates/cortex-testkit/src/profile.rs
+in: union
+find: let (start, end) = (start.max(reached), end.min(to));
+replace: let (start, end) = (start, end.min(to));
+caught-by:
+    cortex-testkit profile::tests::a_report_lists_the_phases_and_waits_in_order_with_the_start
+
+# ------------------------------------------------------ the pressure helper
+
+[break] preparing-is-sized-past-the-trigger
+rule: Fill::Preparing puts the estimate between the background threshold and the trigger.
+file: crates/cortex-agent/tests/it/main.rs
+in: Rig::fill
+find: Fill::Preparing => (prepare, compact),
+replace: Fill::Preparing => (compact, limit as f64),
+caught-by:
+    cortex-agent::it pressure::preparing_starts_a_summary_in_the_background
+
+[break] the-twin-ignores-the-instructions
+rule: The twin reads the session's instruction files, so they are counted in the request's size.
+file: crates/cortex-agent/tests/it/main.rs
+in: Rig::measure
+find: setup.instructions = Arc::clone(&self.twin.instructions);
+replace:
+caught-by:
+    cortex-agent::it pressure::the_twin_counts_the_tools_and_the_instructions
+
+# ------------------------------------------------------ a crate alone
+
+[break] the-sandbox-alone-without-its-backends
+rule: A build of cortex-sandbox alone on Linux turns its backends on.
+file: xtask/src/workspace.rs
+in: implied_features
+find: if cfg!(target_os = "linux") && packages.iter().any(|package| package == "cortex-sandbox") {
+replace: if false {
+caught-by:
+    checks::tests::the_sandbox_alone_is_built_with_its_backends_on_linux
+
+# ------------------------------------------------------------ scratch-test
+
+[break] scratch-test-leaves-its-module-in-the-copy
+rule: The copy is the worktree again after a scratch test, pass or fail.
+file: xtask/src/scratch_test.rs
+in: scratch_test
+find: let tidied = crate::mutate::sync(root, &copy, &files);
+replace: let tidied: Result<()> = Ok(());
+caught-by:
+    scratch_test::tests::the_file_runs_in_a_copy_and_nothing_is_left_behind
+
+[break] scratch-test-writes-in-the-worktree
+rule: A scratch test is placed in the copy, never in the worktree.
+file: xtask/src/scratch_test.rs
+in: scratch_test
+find: let copy = scratch.join("tree");
+replace: let copy = root.to_path_buf();
+caught-by:
+    scratch_test::tests::the_file_runs_in_a_copy_and_nothing_is_left_behind
+
+# -------------------------------------------------------------- live
+
+[break] a-headless-run-goes-on-without-its-key
+rule: live --headless stops, saying so, when the provider's key file is not named.
+file: xtask/src/outside.rs
+in: headless_tests
+find: require_key_file_in(provider, var)?;
+replace:
+caught-by:
+    outside::tests::a_headless_run_without_its_key_says_so_and_stops
+
+# ---------------------------------------------------------- replace --text
+
+[break] text-found-twice-is-replaced
+rule: replace --text refuses a text that is there more than once.
+file: xtask/src/replace.rs
+in: edit_text
+find: [at] => *at..*at + request.from.len(),
+replace: [at, ..] => *at..*at + request.from.len(),
+caught-by:
+    replace::tests::text_is_replaced_exactly_once_or_not_at_all

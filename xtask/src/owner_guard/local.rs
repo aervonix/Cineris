@@ -485,25 +485,53 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         };
         check(&dir, &remote, &updates, &terms)
     })();
-    let (found, commits) = outcome.map_err(|error| {
-        screened(
-            Some(&terms),
-            format!("owner guard: {error}\nThe push is refused: the check could not run."),
-        )
-    })?;
+    let (printed, verdict) = verdict(&terms, outcome);
+    for line in printed {
+        eprintln!("{line}");
+    }
+    verdict
+}
+
+/// What the check came to: the lines to print, each held against the
+/// terms, and whether the push may go. A check that could not run refuses
+/// it, as a term found does.
+pub(crate) fn verdict(
+    terms: &Terms,
+    outcome: Result<(Vec<Found>, usize)>,
+) -> (Vec<String>, Result<()>) {
+    let (found, commits) = match outcome {
+        Ok(checked) => checked,
+        Err(error) => {
+            return (
+                Vec::new(),
+                Err(screened(
+                    Some(terms),
+                    format!("owner guard: {error}\nThe push is refused: the check could not run."),
+                )),
+            );
+        }
+    };
     if found.is_empty() {
-        eprintln!("owner guard: no protected term in the {commits} commit(s) this push adds");
-        return Ok(());
+        return (
+            vec![format!(
+                "owner guard: no protected term in the {commits} commit(s) this push adds"
+            )],
+            Ok(()),
+        );
     }
-    for finding in &found {
-        eprintln!("{}", screened(Some(&terms), finding.to_string()));
-    }
-    Err(format!(
-        "owner guard: {} place(s) in this push match a protected term: the owner's personal \
-         details (rule 3). The push is refused. Take them out and rewrite the commits that \
-         carry them; never push with --no-verify.",
-        found.len()
-    ))
+    let printed = found
+        .iter()
+        .map(|finding| screened(Some(terms), finding.to_string()))
+        .collect();
+    (
+        printed,
+        Err(format!(
+            "owner guard: {} place(s) in this push match a protected term: the owner's personal \
+             details (rule 3). The push is refused. Take them out and rewrite the commits that \
+             carry them; never push with --no-verify.",
+            found.len()
+        )),
+    )
 }
 
 fn usage() -> String {

@@ -399,6 +399,8 @@ mod tests {
             },
             span(Kind::Phase, "set-up", 0, 20),
             span(Kind::Phase, "run the binary", 25, 90),
+            // Inside the one before: counted once.
+            span(Kind::Phase, "nested", 40, 60),
         ];
         let text = render(&Rendering {
             test: "agent::x",
@@ -423,19 +425,23 @@ mod tests {
         assert!(lines[6].contains("42.0 ms") && lines[6].contains("  wait: waits for the gate"));
         assert!(lines[6].ends_with("a.rs:1:2 [scripted-server-1]"), "{text}");
         assert!(
-            lines[7].ends_with("tear-down") && lines[7].contains("10.0 ms"),
+            lines[7].contains("52.0 ms") && lines[7].ends_with("phase: nested"),
+            "{text}"
+        );
+        assert!(
+            lines[8].ends_with("tear-down") && lines[8].contains("10.0 ms"),
             "{text}"
         );
         // Set-up 0..20, the binary 25..90 and tear-down 90..100: 95 ms,
         // and 5 ms in none of them.
         assert!(
-            lines[8].contains("95.0 ms  in phases and tear-down"),
+            lines[9].contains("95.0 ms  in phases and tear-down"),
             "{text}"
         );
         assert!(
-            lines[8].contains("40.0 ms in the test kit's waits"),
+            lines[9].contains("40.0 ms in the test kit's waits"),
             "{text}"
         );
-        assert!(lines[8].contains("5.0 ms in none of them"), "{text}");
+        assert!(lines[9].contains("5.0 ms in none of them"), "{text}");
     }
 }
