@@ -7,9 +7,9 @@
 //! code runs as a child of `cortex-tui`'s own test binary in `cargo xtask
 //! perf`.
 //!
-//! **The input box here is the demo's own**, until step 22's box and theme
-//! are in: a rounded border and `◆`, drawn plainly. Everything under it,
-//! the key map, the editor, the menu and its filter, is the interface's.
+//! The input box and the menus are the interface's own views
+//! (`view::input`, `view::menu`), over its key map, editor and filter; the
+//! streamed text and the status row are the demo's.
 //!
 //! # Options
 //!
@@ -44,17 +44,18 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use cortex_term::{
-    Cursor, Event, Frame, Inline, Line, Overrides, Scheduler, Span, Style, Terminal, Wake,
+    Cursor, Event, Frame, Inline, Line, Overrides, Scheduler, Style, Terminal, Wake,
 };
+use cortex_tui::glyphs::Glyphs;
 use cortex_tui::history::MemoryHistory;
 use cortex_tui::input::{Input, Outcome};
 use cortex_tui::keys::KeyMap;
+use cortex_tui::theme::Theme;
+use cortex_tui::view::{self, Look};
 
 /// The first word of the demo's status row: what the measurement looks for
 /// to know a frame is complete.
 pub const STATUS_MARK: &str = "editor-demo:";
-/// What starts the input box's text row, after its border.
-pub const PROMPT: &str = "\u{2502} \u{25C6} ";
 
 const WORDS: &[&str] = &[
     "the",
@@ -207,64 +208,32 @@ fn workspace(count: usize) -> Vec<String> {
         .collect()
 }
 
-/// The live region: the streaming line, the input box, a menu's rows, the
+/// The live region: the streaming line, the input box, a menu or the
 /// status row; and where the cursor goes.
-fn live(input: &Input, text: &Text, streaming: bool, width: usize) -> (Vec<Line>, Cursor) {
-    let dim = Style::PLAIN.dim();
+fn live(
+    input: &Input,
+    look: &Look,
+    text: &Text,
+    streaming: bool,
+    width: usize,
+) -> (Vec<Line>, Cursor) {
     let mut lines = vec![Line::plain(text.current.clone()), Line::new()];
-    let inner = width.saturating_sub(2);
-    lines.push(Line::styled(
-        format!("\u{256D}{}\u{256E}", "\u{2500}".repeat(inner)),
-        dim,
-    ));
-    let editor = input.editor();
-    let layout = editor.layout(input.width());
     let top = lines.len();
-    let shown = layout
-        .rows
-        .iter()
-        .skip(input.scroll())
-        .take(cortex_tui::input::MAX_ROWS);
-    for (index, row) in shown.enumerate() {
-        let lead = if index == 0 && input.scroll() == 0 {
-            PROMPT
-        } else {
-            "\u{2502}   "
-        };
-        let body = cortex_term::sanitize(&editor.text()[row.range.clone()]).into_owned();
-        let used = 4 + cortex_base::text::width(&body);
-        let pad = width.saturating_sub(used + 1);
-        lines.push(
-            Line::new()
-                .with(Span::plain(lead.to_owned()))
-                .with(Span::plain(body))
-                .with(Span::plain(" ".repeat(pad)))
-                .with(Span::new("\u{2502}", dim)),
-        );
-    }
-    lines.push(Line::styled(
-        format!("\u{2570}{}\u{256F}", "\u{2500}".repeat(inner)),
-        dim,
-    ));
-    if let Some(menu) = input.menu() {
-        for at in menu.visible() {
-            let mark = if menu.selected() == Some(at) {
-                "  \u{25C6} "
-            } else {
-                "    "
-            };
-            lines.push(Line::plain(format!("{mark}{}", menu.rows[at].label)));
+    let drawn = view::input::input(input, look, width);
+    lines.extend(drawn.lines);
+    match view::menu::menu(input, look, width) {
+        Some(menu) => lines.extend(menu),
+        None => {
+            let state = if streaming { "streaming" } else { "ready" };
+            lines.push(Line::styled(
+                format!("  {STATUS_MARK} {state}, {} tokens", text.tokens),
+                Style::PLAIN.dim(),
+            ));
         }
-    } else {
-        let state = if streaming { "streaming" } else { "ready" };
-        lines.push(Line::styled(
-            format!("  {STATUS_MARK} {state}, {} tokens", text.tokens),
-            dim,
-        ));
     }
     let cursor = Cursor {
-        row: top + layout.cursor_row - input.scroll(),
-        col: 4 + layout.cursor_col,
+        row: top + drawn.cursor.row,
+        col: drawn.cursor.col,
     };
     (lines, cursor)
 }
@@ -280,7 +249,9 @@ pub fn run(options: &Options) -> io::Result<()> {
     let mut presenter = Inline::new(cols, rows);
     let mut scheduler = Scheduler::new();
     let mut input = Input::new(KeyMap::defaults(), Box::new(MemoryHistory::new()));
-    input.set_width(usize::from(presenter.width()).saturating_sub(6));
+    input.set_width(view::input::text_width(usize::from(presenter.width())));
+    let caps = *terminal.caps();
+    let mut look = Look::new(Theme::for_terminal(&caps), Glyphs::for_terminal(&caps));
     if options.files > 0 {
         input.set_files(workspace(options.files));
     }
@@ -323,8 +294,13 @@ pub fn run(options: &Options) -> io::Result<()> {
         let timeout = match scheduler.wake(now) {
             Wake::Now => {
                 let started = Instant::now();
-                let (lines, cursor) =
-                    live(&input, &text, streaming, usize::from(presenter.width()));
+                let (lines, cursor) = live(
+                    &input,
+                    &look,
+                    &text,
+                    streaming,
+                    usize::from(presenter.width()),
+                );
                 let commit = std::mem::take(&mut text.commit);
                 let caps = *terminal.caps();
                 let drawn = presenter.draw(
@@ -378,14 +354,20 @@ pub fn run(options: &Options) -> io::Result<()> {
             } => {
                 cols = *new_cols;
                 presenter.resize(cols, *rows);
-                input.set_width(usize::from(presenter.width()).saturating_sub(6));
+                input.set_width(view::input::text_width(usize::from(presenter.width())));
                 scheduler.input();
             }
             Event::Resumed => {
                 presenter.restart();
                 scheduler.input();
             }
-            Event::Focus(_) | Event::Reply(_) => {}
+            Event::Reply(_) => {
+                // The terminal's answers can change the colours and glyphs.
+                let caps = *terminal.caps();
+                look = Look::new(Theme::for_terminal(&caps), Glyphs::for_terminal(&caps));
+                scheduler.input();
+            }
+            Event::Focus(_) => {}
         }
     }
     let caps = *terminal.caps();

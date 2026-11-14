@@ -43,13 +43,18 @@ pub struct Layout {
 /// the row, and is drawn cut to the same width.
 pub(crate) fn cluster_width(buffer: &Buffer, at: usize, cluster: &str, width: usize) -> usize {
     if cluster.starts_with(CHIP) {
-        let label = buffer
+        buffer
             .chip_at(at)
-            .map_or(1, |chip| text::width(chip.label()));
-        label.clamp(1, width.max(1))
+            .map_or(1, |chip| chip_width(chip.label(), width))
     } else {
         cluster::width(cluster)
     }
+}
+
+/// The columns a chip labelled `label` takes in rows of `width`: its
+/// label's, cut to the row.
+pub(crate) fn chip_width(label: &str, width: usize) -> usize {
+    text::width(label).clamp(1, width.max(1))
 }
 
 /// Lays `buffer` out in rows of `width` columns, with the cursor at byte

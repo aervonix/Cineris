@@ -17,8 +17,9 @@
 use crate::glyphs::Glyphs;
 use crate::theme::Theme;
 
-// Step 21's views, the input box and the menus, are `view::input` and
-// `view::menu`.
+// Step 21's views: the input box and the menus.
+pub mod input;
+pub mod menu;
 
 /// How a view draws, beside its state: the theme, the glyph set and the
 /// `tui` settings that shape the transcript. Step 23 fills it from the
