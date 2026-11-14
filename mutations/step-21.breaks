@@ -1,0 +1,351 @@
+# Step 21, the editor: its rules broken one at a time, with the tests that
+# must fail. Written with the code.
+
+[break] right-splits-a-cluster
+rule: Moving right goes over a whole grapheme cluster, never into one.
+file: crates/cortex-tui/src/editor/cluster.rs
+find: let end = start + offset + cluster.len();
+replace: let end = start + offset + cluster.chars().next().map_or(1, char::len_utf8);
+caught-by:
+    editing::left_and_right_step_one_whole_cluster
+    editor::cluster::tests::next_and_prev_step_over_whole_clusters
+
+[break] left-and-backspace-split-a-cluster
+rule: Moving left and deleting backwards take a whole grapheme cluster.
+file: crates/cortex-tui/src/editor/cluster.rs
+in: prev
+find: if begin + cluster.len() >= at { return begin; }
+replace: if begin + cluster.len() >= at { return at - cluster.chars().last().map_or(1, char::len_utf8); }
+caught-by:
+    editing::left_and_right_step_one_whole_cluster
+    editing::backspace_and_delete_take_one_whole_cluster
+
+[break] a-chip-mark-joins-the-accent-after-it
+rule: A chip's mark is a cluster of its own, so an accent typed after it never takes the chip with it.
+file: crates/cortex-tui/src/editor/cluster.rs
+in: Split::next
+find: Some(0) => CHIP.len_utf8(),
+replace: Some(0) => self.rest.len(),
+caught-by:
+    editor::cluster::tests::a_chip_mark_is_a_cluster_of_its_own_even_with_an_accent_after_it
+    editing::a_chip_is_one_cluster_sends_its_text_and_expands_in_place_undoably
+
+[break] an-edit-leaves-the-cursor-inside-a-cluster
+rule: An edit that joins two clusters leaves the cursor at a cluster boundary.
+file: crates/cortex-tui/src/editor/mod.rs
+in: Editor::change
+find: self.cursor = cluster::snap(self.buffer.text(), at + length);
+replace: self.cursor = at + length;
+caught-by:
+    editing::an_edit_that_joins_two_clusters_leaves_the_cursor_outside_them
+    input::a_paste_that_ends_mid_cluster_joins_what_follows
+
+[break] enter-tested-directly
+rule: No key is tested for in the interface's code: every key goes through the key map.
+file: crates/cortex-tui/src/input.rs
+in: Input::key
+find: let contexts = self.contexts();
+replace:
+    if key == Key::plain(cortex_term::KeyCode::Enter) {
+        return self.act(Action::Submit);
+    }
+    let contexts = self.contexts();
+caught-by:
+    input::a_rebound_key_is_the_only_way_to_its_action
+    bindings::every_default_binding_does_its_action
+
+[break] ctrl-j-dropped-from-the-map
+rule: Every default binding of 09-tui is in the map: Ctrl+J makes a new line.
+file: crates/cortex-tui/src/keys/mod.rs
+find: &["shift+enter", "alt+enter", "ctrl+j"]
+replace: &["shift+enter", "alt+enter"]
+caught-by:
+    bindings::the_three_new_line_keys_and_the_redo_keys_are_bound
+    decoder::a_new_line_always_has_a_key_plain_input_sends_as_itself
+
+[break] alt-z-dropped-from-the-map
+rule: Redo has a key that plain input sends as itself.
+file: crates/cortex-tui/src/keys/mod.rs
+find: &["ctrl+shift+z", "alt+z"]
+replace: &["ctrl+shift+z"]
+caught-by:
+    bindings::the_three_new_line_keys_and_the_redo_keys_are_bound
+    decoder::a_new_line_always_has_a_key_plain_input_sends_as_itself
+
+[break] shifted-letters-not-normalised
+rule: Ctrl with an upper-case letter is Shift with the lower-case one, as some terminals report it.
+file: crates/cortex-tui/src/keys/mod.rs
+in: normalize
+find: Key::with(KeyCode::Char(c.to_ascii_lowercase()), key.mods | Mods::SHIFT)
+replace: key
+caught-by:
+    keys::tests::an_upper_case_letter_with_ctrl_is_shift_with_it
+
+[break] a-paste-typed-as-keys
+rule: A paste is text, never keys: nothing in it is looked up in the key map.
+file: crates/cortex-tui/src/input.rs
+in: Input::handle
+find: Event::Paste(text) => self.paste(text)
+replace:
+    Event::Paste(text) => {
+        for c in text.chars() {
+            let code = if c == '\n' || c == '\r' {
+                cortex_term::KeyCode::Enter
+            } else {
+                cortex_term::KeyCode::Char(c)
+            };
+            let _ = self.key(Key::plain(code));
+        }
+        Outcome::Changed
+    }
+caught-by:
+    input::a_paste_is_text_never_keys
+
+[break] twelve-lines-made-a-chip
+rule: A paste of more than 12 lines is a chip, and one of 12 is text.
+file: crates/cortex-tui/src/paste.rs
+in: fragment
+find: lines > CHIP_LINES
+replace: lines >= CHIP_LINES
+caught-by:
+    paste::tests::twelve_lines_are_text_and_thirteen_a_chip
+    input::a_paste_over_a_limit_is_a_chip_sent_whole_and_one_under_is_text
+
+[break] two-thousand-characters-made-a-chip
+rule: A paste of more than 2,000 characters is a chip, and one of 2,000 is text.
+file: crates/cortex-tui/src/paste.rs
+in: fragment
+find: chars > CHIP_CHARS
+replace: chars >= CHIP_CHARS
+caught-by:
+    paste::tests::two_thousand_characters_are_text_and_one_more_a_chip
+
+[break] typing-undone-all-at-once
+rule: Typing is undone a word at a time.
+file: crates/cortex-tui/src/editor/mod.rs
+in: Editor::type_str
+find: Some(Open::Typing { word: last_word }) => !(word && !last_word)
+replace: Some(Open::Typing { .. }) => true
+caught-by:
+    editing::typing_is_undone_a_word_at_a_time
+    bindings::every_default_binding_does_its_action
+
+[break] a-paste-joins-the-typing-before-it
+rule: A paste is a step of undo of its own.
+file: crates/cortex-tui/src/editor/mod.rs
+in: Editor::apply
+find: self.undo.record(change, before, self.cursor, false, None);
+replace: self.undo.record(change, before, self.cursor, true, self.undo.open());
+caught-by:
+    editing::a_paste_a_yank_and_a_completion_are_each_a_step_of_their_own
+
+[break] kills-do-not-join-in-the-slot
+rule: Kills one after another join in the one kill slot.
+file: crates/cortex-tui/src/editor/mod.rs
+in: Editor::kill
+find: let continuing = self.killing == Some(way);
+replace: let continuing = false;
+caught-by:
+    editing::kills_one_after_another_join_in_the_slot
+
+[break] history-from-a-middle-row
+rule: Up steps into history only from the editor's first row.
+file: crates/cortex-tui/src/input.rs
+in: Input::act
+find: if self.editor.up(width)
+replace: if self.editor.on_first_row(width) && self.editor.up(width)
+caught-by:
+    input::history_steps_only_from_the_first_and_last_rows
+    input::history_from_a_middle_row_moves_within_the_prompt
+
+[break] history-down-from-a-middle-row
+rule: Down steps into history only from the editor's last row.
+file: crates/cortex-tui/src/input.rs
+in: Input::act
+find: if self.editor.down(width)
+replace: if self.editor.on_last_row(width) && self.editor.down(width)
+caught-by:
+    input::history_steps_only_from_the_first_and_last_rows
+
+[break] tab-accepts-in-the-effort-picker
+rule: In a picker with a toggle, Tab toggles and only Enter accepts.
+file: crates/cortex-tui/src/input.rs
+in: Input::contexts
+find: vec![Context::Toggle, Context::Picker, Context::Menu]
+replace: vec![Context::Picker, Context::Menu]
+caught-by:
+    bindings::every_default_binding_does_its_action
+
+[break] a-wider-query-searches-only-the-narrower-ones-matches
+rule: Only a query that extends the last one is matched against the last one's matches.
+file: crates/cortex-tui/src/complete/fuzzy.rs
+in: Filter::run
+find: query.starts_with(self.query.as_str())
+replace: true
+caught-by:
+    complete::fuzzy::tests::a_longer_query_narrows_what_the_last_one_matched
+    input::a_menu_narrows_and_widens_as_the_filter_changes
+
+[break] the-editor-found-by-a-bare-name
+rule: The external editor is found in the absolute folders of PATH, never started by a bare name.
+file: crates/cortex-tui/src/external.rs
+in: locate
+find: Ok(program::find(&env.path, name, env.windows))
+replace: Ok(Some(PathBuf::from(name)))
+caught-by:
+    external::tests::a_relative_editor_is_refused_and_a_missing_one_is_not_found
+
+[break] a-relative-editor-taken
+rule: An editor given by a relative path is refused: it would be found in the workspace.
+file: crates/cortex-tui/src/external.rs
+in: locate
+find: return Err(EditorError::Relative(name.to_owned()));
+replace: return Ok(Some(PathBuf::from(name)));
+caught-by:
+    external::tests::a_relative_editor_is_refused_and_a_missing_one_is_not_found
+
+[break] the-prompts-file-readable-by-others
+rule: The prompt's file is created private to the user.
+file: crates/cortex-tui/src/external.rs
+in: write_private
+find: cortex_base::private::create_new(file)?
+replace: std::fs::File::create(file)?
+caught-by:
+    external::sys_an_edit_comes_back_and_the_terminal_is_handed_over_and_back
+    external::sys_a_failing_editor_keeps_the_prompt_and_gives_the_terminal_back
+
+[break] the-prompts-folder-open-to-others
+rule: The prompt's folder is private to the user, so a file an editor writes in its place is too.
+file: crates/cortex-tui/src/external.rs
+in: Folder::new
+find: cortex_base::private::create_dir_all(&path)?;
+replace: std::fs::create_dir_all(&path)?;
+caught-by:
+    external::sys_an_edit_comes_back_and_the_terminal_is_handed_over_and_back
+
+[break] the-terminal-not-handed-over
+rule: The editor is given the terminal as the user's shell had it.
+file: crates/cortex-tui/src/external.rs
+in: edit
+find: let released = handoff.release();
+replace: let released: io::Result<()> = Ok(());
+caught-by:
+    external::sys_an_edit_comes_back_and_the_terminal_is_handed_over_and_back
+
+[break] the-chips-labels-not-read-back
+rule: A chip goes to the editor as its label and comes back as the chip.
+file: crates/cortex-tui/src/external.rs
+in: edit
+find: Ok(Edited::Changed(from_file(&read, &labels)))
+replace: Ok(Edited::Changed(Fragment::text(read)))
+caught-by:
+    external::sys_a_chip_goes_out_as_its_label_and_comes_back_as_the_chip
+
+[break] the-editors-final-line-break-kept
+rule: The one line break an editor adds at the end is taken off.
+file: crates/cortex-tui/src/external.rs
+in: edit
+find: if read.ends_with('\n') && !text.ends_with('\n') { read.pop(); }
+replace:
+caught-by:
+    external::sys_a_file_left_as_it_was_changes_nothing
+
+[break] an-empty-file-empties-the-prompt
+rule: A file left empty leaves the prompt as it was.
+file: crates/cortex-tui/src/external.rs
+in: edit
+find: if read.trim().is_empty() {
+replace: if read.trim().is_empty() && false {
+caught-by:
+    external::sys_a_file_left_empty_keeps_the_prompt
+
+[break] interrupts-ignored-before-the-editor-starts
+rule: Interrupts are ignored only after the editor is started, so that its own Ctrl+C still works.
+file: crates/cortex-tui/src/external.rs
+in: run
+find: let mut child = command.spawn()?; let ignored = cortex_term::ignore_interrupts();
+replace: let ignored = cortex_term::ignore_interrupts(); let mut child = command.spawn()?;
+caught-by:
+    external::sys_ctrl_c_ends_the_editor_and_not_the_application
+
+[break] interrupts-not-ignored-while-the-editor-runs
+rule: A Ctrl+C for the editor does not end the interface, and with it the prompt.
+file: crates/cortex-tui/src/external.rs
+in: run
+find: let ignored = cortex_term::ignore_interrupts();
+replace: let ignored = ();
+caught-by:
+    external::sys_ctrl_c_ends_the_editor_and_not_the_application
+
+[break] the-interrupt-guard-does-not-put-back
+rule: Dropping the interrupt guard puts back what the signals did before, a panic's unwinding included.
+file: crates/cortex-term/src/terminal.rs
+in: InterruptsIgnored::drop
+find: sys::restore_interrupts(&self.previous);
+replace:
+caught-by:
+    sys::unix::tests::interrupts_are_ignored_while_the_guard_lives_and_handled_after
+    sys::unix::tests::a_panic_with_the_guard_puts_the_actions_back
+
+[break] the-terminal-not-taken-back-after-a-failing-editor
+rule: The terminal is taken back whatever the editor did.
+file: crates/cortex-tui/src/external.rs
+in: edit
+find: let reclaimed = handoff.reclaim();
+replace:
+    let reclaimed = if status
+        .as_ref()
+        .is_some_and(|status| status.as_ref().is_ok_and(std::process::ExitStatus::success))
+    {
+        handoff.reclaim()
+    } else {
+        Ok(())
+    };
+caught-by:
+    external::sys_a_failing_editor_keeps_the_prompt_and_gives_the_terminal_back
+    external::sys_an_editor_that_cannot_start_gives_the_terminal_back
+
+[break] the-editor-started-in-the-workspace
+rule: The editor runs in the prompt's private folder, not where the interface was started.
+file: crates/cortex-tui/src/external.rs
+in: run
+find: command.args(&editor.args).arg(file).current_dir(folder);
+replace: command.args(&editor.args).arg(file);
+caught-by:
+    external::sys_an_edit_comes_back_and_the_terminal_is_handed_over_and_back
+
+[break] a-killed-editors-modes-left-on
+rule: Taking the terminal back turns off what a killed full-screen editor left on.
+file: crates/cortex-tui/src/external.rs
+in: TerminalHandoff::reclaim
+find: terminal.write_frame(LEFT_ON)?;
+replace:
+caught-by:
+    external::sys_a_killed_editor_keeps_the_prompt_and_its_modes_are_undone
+
+[break] a-byte-order-mark-sent-as-text
+rule: A byte-order mark an editor writes is not part of the prompt.
+file: crates/cortex-tui/src/external.rs
+in: edit
+find: Some(rest) if !text.starts_with('\u{FEFF}') => rest,
+replace: Some(_) if false => &read,
+caught-by:
+    external::sys_a_byte_order_mark_and_crlf_are_not_text
+
+[break] a-file-that-is-not-utf8-deleted
+rule: A file that is not UTF-8 is kept, with what the user wrote in it.
+file: crates/cortex-tui/src/external.rs
+in: edit
+find: std::mem::forget(folder);
+replace: drop(folder);
+caught-by:
+    external::sys_a_file_that_is_not_utf8_is_kept_where_the_user_can_find_it
+
+[break] windows-editor-looked-for-by-extension-across-path
+rule: On Windows a name is looked for folder by folder, as the command prompt does.
+file: crates/cortex-tui/src/external.rs
+in: locate
+find: for folder in &env.path {
+replace: for folder in env.path.iter().rev() {
+caught-by:
+    external::tests::on_windows_a_name_is_looked_for_folder_by_folder_with_its_extensions_only

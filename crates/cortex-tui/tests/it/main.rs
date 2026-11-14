@@ -15,9 +15,16 @@
 mod bindings;
 mod children;
 mod decoder;
+#[path = "../../examples/editor-demo/app.rs"]
+#[allow(
+    dead_code,
+    reason = "the demo is the example's, and this binary uses part of it"
+)]
+mod demo;
 mod editing;
 mod external;
 mod input;
+mod perf;
 
 use cortex_term::{Event, Key};
 use cortex_tui::complete::Command;
@@ -80,5 +87,16 @@ pub(crate) fn press(input: &mut Input, binding: &str) -> Outcome {
 /// say so ([`children`]), and passes at once otherwise.
 #[test]
 fn child_entry() {
+    let arguments: Vec<String> = std::env::args().collect();
+    if let Some(options) = arguments.iter().find_map(|a| a.strip_prefix(DEMO)) {
+        let options = demo::Options::parse(options.split(',')).expect("the demo's options");
+        demo::run(&options).expect("the demo runs");
+        #[expect(clippy::exit, reason = "a child ends when the demo does")]
+        std::process::exit(0);
+    }
     children::enter();
 }
+
+/// The argument that makes this binary the editor demo, with its options
+/// after it, separated by commas.
+pub(crate) const DEMO: &str = "cxtui-demo=";

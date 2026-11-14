@@ -32,6 +32,10 @@ pub(crate) const RESTORED: &str = "restored: yes";
 pub(crate) const NOT_RESTORED: &str = "restored: NO";
 /// What the application draws while it waits for a key.
 pub(crate) const WAITING: &str = "waiting for a key";
+/// What the application prints when it has no terminal after the editor.
+pub(crate) const LOST: &str = "the application has no terminal";
+/// What the editor prints while it waits for a line.
+pub(crate) const EDITOR_WAITING: &str = "editor waiting for a line";
 /// The variables the shell gives the application, and through it the
 /// editor.
 const MODES: &str = "CXTUI_MODES";
@@ -91,12 +95,17 @@ fn shell(options: &str) -> ! {
     cortex_term::pty::ignore_control_events();
     let (scenario, scratch) = options.split_once('|').expect("scenario|scratch");
     let before = cortex_term::pty::modes().expect("the terminal's modes");
-    let status = std::process::Command::new(this_binary())
+    let mut app = std::process::Command::new(this_binary())
         .args(child_arguments(APP, scenario))
         .env(MODES, &before)
         .env(SCRATCH, scratch)
-        .status()
+        .spawn()
         .expect("start the application");
+    // As a shell does with its job: a Ctrl+C typed for the editor is not
+    // the shell's. Taken after the start, so the application keeps its own.
+    let ignored = cortex_term::ignore_interrupts().expect("ignore interrupts");
+    let status = app.wait().expect("wait for the application");
+    drop(ignored);
     let after = cortex_term::pty::modes().expect("the terminal's modes");
     let verdict = if before == after {
         RESTORED
@@ -157,6 +166,8 @@ fn app(scenario: &str) -> ! {
         Fragment::text("hello")
     };
     let env = Env {
+        // Never the developer's own `$VISUAL`, which is looked at first.
+        visual: None,
         editor: Some(editor_value(scenario, &scratch).into()),
         ..Env::current()
     };
@@ -187,6 +198,13 @@ fn app(scenario: &str) -> ! {
         yes(std::fs::read_dir(&temp).expect("list it").next().is_none()),
     );
 
+    if terminal.is_none() {
+        report("raw again", "NO: the terminal was not taken back");
+        print!("\r\n{LOST}\r\n");
+        std::io::stdout().flush().expect("write to the terminal");
+        #[expect(clippy::exit, reason = "a child ends when it has reported")]
+        std::process::exit(1);
+    }
     draw(&mut terminal, &mut inline, WAITING);
     let terminal_now = terminal.as_mut().expect("the terminal is back");
     loop {
@@ -238,6 +256,21 @@ fn editor(scenario: &str, file: &Path) -> ! {
     );
     let had = std::fs::read_to_string(file).expect("read the prompt");
     report("file had", &format!("{had:?}"));
+    report(
+        "editor folder",
+        yes(
+            std::fs::canonicalize(std::env::current_dir().expect("its folder")).ok()
+                == std::fs::canonicalize(folder).ok(),
+        ),
+    );
+    // The test looks at the terminal now, then sends a line: read only if
+    // the terminal is in its ordinary, line-by-line mode. A Ctrl+C instead
+    // ends this editor.
+    print!("{EDITOR_WAITING}\r\n");
+    std::io::stdout().flush().expect("write to the terminal");
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).expect("read a line");
+    report("editor read", &format!("{line:?}"));
     let code = match scenario {
         "change" => {
             std::fs::write(file, had.replace("hello", "hello edited")).expect("write");
@@ -259,7 +292,25 @@ fn editor(scenario: &str, file: &Path) -> ! {
             std::fs::write(file, "changed, then failed").expect("write");
             3
         }
-        "abort" => std::process::abort(),
+        "abort" => {
+            // Killed in the middle of a full-screen session: the alternate
+            // screen, the mouse and keyboard flags left on.
+            print!("\x1b[?1049h\x1b[?1000h\x1b[>1u\x1b[>1u");
+            std::io::stdout().flush().expect("write to the terminal");
+            std::process::abort()
+        }
+        "nottext" => {
+            std::fs::write(file, b"caf\xe9 au lait").expect("write");
+            0
+        }
+        "bom" => {
+            std::fs::write(
+                file,
+                format!("\u{FEFF}{}\r\n", had.replace("hello", "bonjour")),
+            )
+            .expect("write");
+            0
+        }
         _ => 0,
     };
     #[expect(clippy::exit, reason = "the editor's exit code is the scenario's")]

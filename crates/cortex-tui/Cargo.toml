@@ -9,6 +9,17 @@ publish.workspace = true
 [lib]
 doctest = false
 
+[features]
+# The editor demo (`cargo run --release -p cortex-tui --example editor-demo
+# --features demo`), for measuring key latency with the editor in the loop.
+# A feature of its own so that test builds do not link it.
+demo = []
+
+[[example]]
+name = "editor-demo"
+path = "examples/editor-demo/main.rs"
+required-features = ["demo"]
+
 [dependencies]
 cortex-protocol.workspace = true
 cortex-base.workspace = true

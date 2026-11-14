@@ -228,6 +228,25 @@ pub(crate) fn wake() {
     }
 }
 
+/// Nothing to keep: the console's attribute is on or off.
+pub(crate) type Interrupts = ();
+
+/// Makes the process ignore Ctrl+C: the console's own attribute, which no
+/// handler sees while it is on. Ctrl+Break still reaches the handlers.
+pub(crate) fn ignore_interrupts() -> io::Result<Interrupts> {
+    // SAFETY: with no handler, the call only sets the process's attribute.
+    if unsafe { SetConsoleCtrlHandler(None, TRUE) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Clears the attribute [`ignore_interrupts`] set.
+pub(crate) fn restore_interrupts(_previous: &Interrupts) {
+    // SAFETY: as above.
+    unsafe { SetConsoleCtrlHandler(None, FALSE) };
+}
+
 /// Stops the program, which Windows has no way to do: nothing happens.
 pub(crate) fn suspend() {}
 

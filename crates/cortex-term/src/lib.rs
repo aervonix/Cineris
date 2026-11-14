@@ -46,4 +46,6 @@ pub use sanitize::sanitize;
 pub use schedule::{Scheduler, Wake};
 pub use style::{Color, ColorDepth, Style};
 pub use sys::Ready;
-pub use terminal::{Device, System, Terminal, Waker, is_terminal};
+pub use terminal::{
+    Device, InterruptsIgnored, System, Terminal, Waker, ignore_interrupts, is_terminal,
+};
