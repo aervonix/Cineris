@@ -13,6 +13,8 @@
 //! | [`children`] | Child processes for process tests: the test binary run again as a child, a grandchild or a child that will not stop, and a [`Roll`](children::Roll) that shows each one start and die. |
 //! | [`rerun`] | [`Rerun`](rerun::Rerun): the running test again in a child process, with a `PATH`, a working directory and variables of its own, for tests of how a program is found. |
 //! | [`exec`] | [`block_on`], which runs async code with no runtime, and [`join`], which runs two futures together. |
+//! | [`brief`] | [`brief`]: a long text in an assertion's message as its size and its two ends. |
+//! | [`built`] | [`ScriptedProvider::built_as`]: the script behind a real protocol's request builder, failing a request the protocol cannot build. |
 //! | [`provider`] | [`ScriptedProvider`]: a model that says what the test tells it to. For tests of the agent loop. |
 //! | [`transport`] | [`ScriptedTransport`]: recorded responses in place of a network. For tests of protocols and of the client. |
 //! | [`protocol`] | [`TestProtocol`]: a wire dialect made for tests. |
@@ -37,6 +39,8 @@
     reason = "test support fails by panicking, with a message that says what was expected"
 )]
 
+pub mod brief;
+pub mod built;
 pub mod canary;
 pub mod cases;
 pub mod children;
@@ -58,6 +62,8 @@ pub mod transport;
 pub mod vterm;
 pub mod watch;
 
+pub use brief::brief;
+pub use built::Built;
 pub use canary::{Printed, assert_never_printed};
 pub use cortex_base::{Clock, FakeClock, Rng, SeededRng};
 pub use exec::{block_on, join};
