@@ -509,6 +509,7 @@ impl Front {
 
     /// Waits until `count` turns have completed.
     pub async fn turns(&self, count: usize) {
+        let _waiting = cortex_testkit::profile::phase("wait for the turn to end");
         self.until(|seen| ends_in(seen).len() >= count).await;
     }
 
@@ -562,6 +563,7 @@ impl Front {
 
     /// Waits for the next approval request that has not been answered.
     pub async fn approval(&self) -> (RequestId, ApprovalRequest) {
+        let _waiting = cortex_testkit::profile::phase("wait for an approval request");
         let answered = self.answered.borrow().clone();
         self.until(|seen| {
             requests_in(seen)

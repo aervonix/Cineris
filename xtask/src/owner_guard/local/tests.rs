@@ -9,7 +9,7 @@ use std::process::Command;
 use super::super::{Finding, GIT_LOCATION, Terms};
 use super::{
     Found, Loaded, TERMS_FILE, TermsFile, Update, by_commit, check, load, names_by_commit,
-    parse_updates, screened,
+    parse_updates, screened, verdict,
 };
 
 /// Made-up terms of the kinds the owner's file holds: a name, a phrase, an
@@ -164,6 +164,32 @@ fn a_log_is_split_into_each_commits_diff_and_names() {
             ("1".repeat(12), "\nd\0".to_owned()),
         ]
     );
+}
+
+#[test]
+fn a_check_that_could_not_run_refuses_the_push_and_prints_no_term() {
+    let terms = terms();
+    // git failed, in a folder whose path holds a term.
+    let (printed, refused) = verdict(
+        &terms,
+        Err("`git rev-list` failed: fatal: /srv/qexample/repo: bad object".to_owned()),
+    );
+    assert!(printed.is_empty());
+    let refused = refused.unwrap_err();
+    assert!(!terms.matches(&refused), "{refused}");
+    let (_, refused) = verdict(&terms, Err("`git log` failed".to_owned()));
+    assert!(refused.unwrap_err().contains("The push is refused"));
+
+    let found = vec![Found::Ref {
+        line: 1,
+        side: "remote",
+    }];
+    let (printed, refused) = verdict(&terms, Ok((found, 2)));
+    assert_eq!(printed.len(), 1);
+    assert!(refused.unwrap_err().contains("1 place(s)"));
+    let (printed, passed) = verdict(&terms, Ok((Vec::new(), 3)));
+    assert_eq!(passed, Ok(()));
+    assert!(printed[0].contains("the 3 commit(s)"), "{printed:?}");
 }
 
 #[test]

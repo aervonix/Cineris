@@ -272,6 +272,8 @@ mod tests {
         };
         let mut seen = None;
         let outcome = scratch_test(&root, &request, |copy, filter, rest| {
+            // While the test runs, the worktree is as it was.
+            assert_eq!(contents(&root), before, "the worktree was written to");
             let it = copy.join("crates/demo/tests/it");
             seen = Some((
                 fs::read_to_string(it.join("main.rs")).unwrap(),
