@@ -97,8 +97,9 @@ use cortex_testkit::pty::Session;
 use crate::demo::STATUS_MARK;
 
 /// What starts the input box's first row: its border, a space, `◆` and a
-/// space.
-const PROMPT: &str = "\u{2502} \u{25C6} ";
+/// space; in the ASCII glyph set, which the old console host and ConPTY
+/// get, `| > `.
+const PROMPTS: [&str; 2] = ["\u{2502} \u{25C6} ", "| > "];
 
 const COLS: u16 = 120;
 const ROWS: u16 = 40;
@@ -144,13 +145,13 @@ fn sorted(mut values: Vec<f64>) -> Vec<f64> {
 /// The text on the input box's first row.
 fn editor(term: &VTerm) -> Option<String> {
     term.screen().into_iter().find_map(|row| {
-        let rest = row.strip_prefix(PROMPT)?;
+        let rest = PROMPTS.iter().find_map(|prompt| row.strip_prefix(prompt))?;
         if rest.starts_with(cortex_tui::view::input::PLACEHOLDER) {
             return Some(String::new());
         }
         Some(
             rest.trim_end()
-                .trim_end_matches('\u{2502}')
+                .trim_end_matches(['\u{2502}', '|'])
                 .trim_end()
                 .to_owned(),
         )
