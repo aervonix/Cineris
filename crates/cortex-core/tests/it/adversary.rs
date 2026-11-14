@@ -394,8 +394,6 @@ fn sys_the_fixture_sees_each_thing_a_command_can_reach() {
     world.put(".git/hooks/pre-commit", "evil\n");
     std::fs::remove_file(reach.outside_dir.join("existing.txt")).unwrap();
     let _connected = std::net::TcpStream::connect(("127.0.0.1", reach.port)).unwrap();
-    // Started directly: spawn returns once the program is running, so its
-    // environment is there to be read (a shell would still be starting it).
     let mut child = std::process::Command::new("sleep")
         .arg("600")
         .envs(reach.env())
@@ -403,6 +401,17 @@ fn sys_the_fixture_sees_each_thing_a_command_can_reach() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
+    // spawn returns when the child has begun its exec, which may not yet
+    // have set its environment up: `/proc` then shows it empty for a
+    // moment (one run in a hundred, with the crate's other tests beside
+    // it). A command under the harness has run for its turn by the time
+    // the fixture looks.
+    let environ = format!("/proc/{}/environ", child.id());
+    cortex_testkit::children::until(
+        std::time::Duration::from_secs(10),
+        "the child's environment",
+        || std::fs::read(&environ).is_ok_and(|bytes| !bytes.is_empty()),
+    );
     let reached = reach.reached(&world);
     assert_eq!(
         reached.outside,
