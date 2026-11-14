@@ -1359,7 +1359,10 @@ mod tests {
     fn an_over_long_string_is_dropped_to_its_end_however_it_is_split() {
         for end in [&b"\x07"[..], b"\x1b\\"] {
             let mut long = b"\x1b]0;".to_vec();
-            long.extend(std::iter::repeat_n(b'x', 400));
+            long.extend(std::iter::repeat_n(b'x', 300));
+            // An ESC that does not begin the end is part of the string.
+            long.extend_from_slice(b"\x1bz");
+            long.extend(std::iter::repeat_n(b'x', 100));
             long.extend_from_slice(end);
             for cut in (LONGEST_SEQUENCE - 2..=LONGEST_SEQUENCE + 2).chain([long.len() - 1]) {
                 assert_eq!(
