@@ -394,8 +394,10 @@ fn sys_the_fixture_sees_each_thing_a_command_can_reach() {
     world.put(".git/hooks/pre-commit", "evil\n");
     std::fs::remove_file(reach.outside_dir.join("existing.txt")).unwrap();
     let _connected = std::net::TcpStream::connect(("127.0.0.1", reach.port)).unwrap();
-    let mut child = std::process::Command::new("sh")
-        .args(["-c", "sleep 600"])
+    // Started directly: spawn returns once the program is running, so its
+    // environment is there to be read (a shell would still be starting it).
+    let mut child = std::process::Command::new("sleep")
+        .arg("600")
         .envs(reach.env())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

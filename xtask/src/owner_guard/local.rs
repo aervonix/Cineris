@@ -155,6 +155,14 @@ pub(crate) fn load(
             file.shown()
         ));
     }
+    if terms.has_hidden_characters() {
+        return Err(format!(
+            "a term in {} holds a character that cannot be seen (a control character, a \
+             zero-width one, a byte-order mark inside a line), so it would match almost \
+             nothing: write it again. The push is refused",
+            file.shown()
+        ));
+    }
     Ok(Loaded::Terms(terms))
 }
 
@@ -249,15 +257,12 @@ pub(crate) fn check(
 ) -> Result<(Vec<Found>, usize)> {
     let git = |arguments: &[&str]| git(dir, arguments);
     // The remote's branches as this repository last saw them: what they
-    // hold is there already. A push to a URL, which names no remote, is
-    // held against every remote's.
+    // hold is there already. A push to a URL names no remote, and another
+    // remote's branches may be private: it is held against what git says
+    // the URL has, and nothing else.
     let named_remote =
         !remote.is_empty() && git(&["config", "--get", &format!("remote.{remote}.url")]).is_ok();
-    let remotes = if named_remote {
-        format!("--remotes={remote}")
-    } else {
-        "--remotes".to_owned()
-    };
+    let remotes = named_remote.then(|| format!("--remotes={remote}"));
 
     let mut found = Vec::new();
     let mut seen = HashSet::new();
@@ -289,7 +294,10 @@ pub(crate) fn check(
             }
         }
 
-        let mut range: Vec<&str> = vec![&update.local, "--not", &remotes];
+        let mut range: Vec<&str> = vec![&update.local, "--not"];
+        if let Some(remotes) = &remotes {
+            range.push(remotes);
+        }
         if !is_zero(&update.remote)
             && git(&["cat-file", "-e", &format!("{}^{{commit}}", update.remote)]).is_ok()
         {
@@ -322,6 +330,8 @@ pub(crate) fn check(
             "--format=%x1e%H",
             "--no-show-signature",
             "--patch",
+            // The first commit's own changes, whatever `log.showRoot` says.
+            "--root",
             "--no-color",
             "--no-ext-diff",
             "--no-textconv",
@@ -347,6 +357,7 @@ pub(crate) fn check(
             "--format=%x1e%H",
             "--no-show-signature",
             "--name-only",
+            "--root",
             "-z",
             "--no-relative",
             "--no-renames",
@@ -417,7 +428,7 @@ fn names_by_commit(log: &str) -> Vec<(String, String)> {
 
 /// The folders a terms file must not be in: the worktree, and the checkout
 /// that holds the repository.
-fn repositories(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn repositories(dir: &Path) -> Vec<PathBuf> {
     let mut folders = Vec::new();
     if let Ok(top) = git(dir, &["rev-parse", "--show-toplevel"]) {
         folders.push(PathBuf::from(top.trim()));
@@ -452,13 +463,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let file = TermsFile::find(|name| std::env::var_os(name));
     let terms = match load(&file, || repositories(&dir))? {
         Loaded::Terms(terms) => terms,
-        Loaded::Missing(why) => {
-            eprintln!(
-                "warning: owner guard: {why}, so nothing was checked for the owner's personal \
-                 details. The owner keeps that file; anyone else may push without it."
-            );
-            return Ok(());
-        }
+        Loaded::Missing(why) => return missing(&why, required(&dir)),
     };
     let outcome = (|| -> Result<(Vec<Found>, usize)> {
         let (remote, updates) = match mode.as_str() {
@@ -532,6 +537,34 @@ pub(crate) fn verdict(
             found.len()
         )),
     )
+}
+
+/// The setting, in the repository's own configuration, that says the
+/// terms file must be there: the owner sets it when installing the hook,
+/// so that a push from a process with another home folder, or with the
+/// file moved, is refused and not waved through.
+pub(crate) const REQUIRED: &str = "cortex.ownerTermsRequired";
+
+/// Whether the repository at `dir` requires the terms file.
+pub(crate) fn required(dir: &Path) -> bool {
+    git(dir, &["config", "--type=bool", "--get", REQUIRED])
+        .is_ok_and(|value| value.trim() == "true")
+}
+
+/// What a push does when there is no terms file: goes, with a warning,
+/// unless the repository requires the file.
+pub(crate) fn missing(why: &str, required: bool) -> Result<()> {
+    if required {
+        return Err(format!(
+            "owner guard: {why}, and this repository requires it ({REQUIRED} is true). The \
+             push is refused. Run it where the file is, as the owner's user."
+        ));
+    }
+    eprintln!(
+        "warning: owner guard: {why}, so nothing was checked for the owner's personal details. \
+         The owner keeps that file; anyone else may push without it."
+    );
+    Ok(())
 }
 
 fn usage() -> String {

@@ -128,3 +128,94 @@ impl ModelClient for Built {
             .ok()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cortex_base::CancelToken;
+    use cortex_llm::{
+        BuildError, HttpFailure, HttpRequest, ModelClient, ModelEvent, ModelRequest, Protocol,
+        ProviderError, ProviderInfo, StreamDecoder,
+    };
+
+    use crate::{Response, ScriptedProvider, TestProtocol, block_on, fixtures};
+
+    /// The test protocol, but one that cannot build a request with a
+    /// maximum output of 1: as Anthropic's cannot build a summary whose
+    /// thinking budget is not below its `max_tokens`.
+    #[derive(Debug)]
+    struct Picky(TestProtocol);
+
+    impl Protocol for Picky {
+        fn name(&self) -> &str {
+            self.0.name()
+        }
+
+        fn build(
+            &self,
+            request: &ModelRequest,
+            provider: &ProviderInfo,
+        ) -> Result<HttpRequest, BuildError> {
+            if request.max_output == Some(1) {
+                return Err(BuildError::new("the budget is not below max_tokens"));
+            }
+            self.0.build(request, provider)
+        }
+
+        fn decoder(
+            &self,
+            request: &ModelRequest,
+            provider: &ProviderInfo,
+        ) -> Box<dyn StreamDecoder> {
+            self.0.decoder(request, provider)
+        }
+
+        fn classify(&self, failure: &HttpFailure<'_>, request: &ModelRequest) -> ProviderError {
+            self.0.classify(failure, request)
+        }
+
+        fn stable_prefix(
+            &self,
+            request: &ModelRequest,
+            provider: &ProviderInfo,
+        ) -> Result<Vec<u8>, BuildError> {
+            self.0.stable_prefix(request, provider)
+        }
+    }
+
+    #[test]
+    fn a_request_the_protocol_cannot_build_fails_and_takes_nothing_from_the_script() {
+        let script = ScriptedProvider::new([Response::new().text("served")]);
+        let built = script.built_as(
+            Arc::new(Picky(TestProtocol)),
+            ProviderInfo::new(
+                fixtures::PROVIDER,
+                fixtures::PROTOCOL,
+                "https://test.invalid",
+            ),
+        );
+        let mut refused = fixtures::request(fixtures::model());
+        refused.max_output = Some(1);
+        let events = block_on(built.stream(refused, CancelToken::new()).collect());
+        assert!(
+            matches!(events.as_slice(), [ModelEvent::Error(error)] if error.message.contains("max_tokens")),
+            "{events:?}"
+        );
+        assert_eq!(built.refused().len(), 1);
+        assert!(script.requests().is_empty(), "the script was asked");
+        // A request it can build is served from the script.
+        let events = block_on(
+            built
+                .stream(fixtures::request(fixtures::model()), CancelToken::new())
+                .collect(),
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ModelEvent::Error(_))),
+            "{events:?}"
+        );
+        assert_eq!(script.requests().len(), 1);
+    }
+}
