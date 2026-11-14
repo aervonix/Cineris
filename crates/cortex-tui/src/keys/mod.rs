@@ -536,6 +536,10 @@ impl KeyMap {
     ) -> (Self, Vec<TableError>) {
         let mut keymap = Self::defaults();
         let mut errors = Vec::new();
+        // Global actions last, so that a key given to one is taken from
+        // every context whatever order the table lists them in.
+        let mut table: Vec<(&str, &[String])> = table.into_iter().collect();
+        table.sort_by_key(|(name, _)| name.starts_with("global."));
         for (name, keys) in table {
             let Some(action) = Action::from_name(name) else {
                 errors.push(TableError {
@@ -680,6 +684,19 @@ mod tests {
         let keys = vec!["ctrl+z".to_owned()];
         let (map, errors) = KeyMap::with_table([("global.suspend", keys.as_slice())]);
         assert!(errors.is_empty());
+        // Listed before an editor action that names the same key: the
+        // global one still has it.
+        let (later, _) = KeyMap::with_table([
+            ("global.suspend", keys.as_slice()),
+            ("editor.undo", keys.as_slice()),
+        ]);
+        assert_eq!(
+            later.lookup(
+                &[Context::Editor],
+                Key::with(KeyCode::Char('z'), Mods::CTRL)
+            ),
+            Some(Action::Suspend)
+        );
         let ctrl_z = Key::with(KeyCode::Char('z'), Mods::CTRL);
         assert_eq!(
             map.lookup(&[Context::Editor], ctrl_z),

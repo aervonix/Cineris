@@ -41,7 +41,7 @@ pub fn menu(input: &Input, look: &Look, width: usize) -> Option<Vec<Line>> {
     if matches!(menu.kind, Kind::Picker(_)) && !menu.filter.is_empty() {
         lines.push(fit(
             Line::from(Span::plain(" ".repeat(INDENT + 2))).with(Span::new(
-                cortex_term::sanitize(&menu.filter).into_owned(),
+                shown(&menu.filter),
                 look.theme.style(Token::Hint),
             )),
             width,
@@ -61,11 +61,12 @@ pub fn menu(input: &Input, look: &Look, width: usize) -> Option<Vec<Line>> {
         rows(menu, look, width, &mut lines);
     }
     if let Some(toggle) = &menu.toggle {
+        // The key that toggles it, if one is bound.
         let key = input
             .keymap()
             .keys_of(Action::ToggleFast)
             .first()
-            .map_or_else(|| "tab".to_owned(), |key| keys::name(*key));
+            .map_or_else(String::new, |key| format!("{} - ", keys::name(*key)));
         let (state, state_style) = if toggle.on {
             ("on", Token::AccentText)
         } else {
@@ -73,7 +74,7 @@ pub fn menu(input: &Input, look: &Look, width: usize) -> Option<Vec<Line>> {
         };
         let mut line = Line::from(Span::plain(" ".repeat(INDENT + 2)))
             .with(Span::new(
-                format!("{key} - {}", cortex_term::sanitize(&toggle.label)),
+                format!("{key}{}", shown(&toggle.label)),
                 look.theme.style(Token::Key),
             ))
             .with(Span::plain(" ".repeat(GAP)))
@@ -81,7 +82,7 @@ pub fn menu(input: &Input, look: &Look, width: usize) -> Option<Vec<Line>> {
         if !toggle.note.is_empty() {
             line.push(Span::plain(" ".repeat(GAP)));
             line.push(Span::new(
-                cortex_term::sanitize(&toggle.note).into_owned(),
+                shown(&toggle.note),
                 look.theme.style(Token::Hint),
             ));
         }
@@ -95,7 +96,7 @@ fn rows(menu: &Menu, look: &Look, width: usize, lines: &mut Vec<Line>) {
     let visible = menu.visible();
     let labels: Vec<String> = visible
         .clone()
-        .map(|at| cortex_term::sanitize(&menu.rows[at].label).into_owned())
+        .map(|at| shown(&menu.rows[at].label))
         .collect();
     // The label column: the widest label in view, leaving the notes at
     // least a little room.
@@ -135,10 +136,7 @@ fn rows(menu: &Menu, look: &Look, width: usize, lines: &mut Vec<Line>) {
         }
         if !row.detail.is_empty() {
             line.push(Span::plain(" ".repeat(GAP)));
-            line.push(Span::new(
-                cortex_term::sanitize(&row.detail).into_owned(),
-                look.theme.style(Token::Hint),
-            ));
+            line.push(Span::new(shown(&row.detail), look.theme.style(Token::Hint)));
         }
         lines.push(fit(line, width, look));
     }
@@ -156,15 +154,17 @@ fn empty_text(menu: &Menu, look: &Look) -> String {
 
 /// The history search: what is searched for, and the prompt found.
 fn search_line(input: &Input, query: &str, look: &Look, width: usize) -> Line {
+    // The key that searches, if one is bound; the search was opened by a
+    // command otherwise.
     let key = input
         .keymap()
         .keys_of(Action::HistorySearch)
         .first()
-        .map_or_else(|| "ctrl+r".to_owned(), |key| keys::name(*key));
+        .map_or_else(|| "search".to_owned(), |key| keys::name(*key));
     let mut line = Line::from(Span::plain(" ".repeat(INDENT)))
         .with(Span::new(key, look.theme.style(Token::Key)))
         .with(Span::plain(" "))
-        .with(Span::plain(cortex_term::sanitize(query).into_owned()));
+        .with(Span::plain(shown(query)));
     line.push(Span::plain(" ".repeat(GAP)));
     match input.search_found() {
         Some(found) => {
@@ -175,7 +175,7 @@ fn search_line(input: &Input, query: &str, look: &Look, width: usize) -> Line {
                 ""
             };
             line.push(Span::new(
-                format!("{}{more}", cortex_term::sanitize(first)),
+                format!("{}{more}", shown(first)),
                 look.theme.style(Token::Hint),
             ));
         }
@@ -183,6 +183,13 @@ fn search_line(input: &Input, query: &str, look: &Look, width: usize) -> Line {
         None => line.push(Span::new("no match", look.theme.style(Token::Hint))),
     }
     fit(line, width, look)
+}
+
+/// Text from outside made safe for a menu's one line: control characters
+/// as visible symbols, and tabs and line breaks, which `sanitize` keeps, as
+/// spaces.
+fn shown(text: &str) -> String {
+    cortex_term::sanitize(text).replace(['\t', '\n'], " ")
 }
 
 fn fit(line: Line, width: usize, look: &Look) -> Line {

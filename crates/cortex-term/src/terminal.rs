@@ -60,6 +60,15 @@ const END: &[u8] = b"\x1b[0m\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h";
 /// queries, when it has not come yet, so that the reply does not arrive at
 /// the shell's prompt as typed text.
 pub const REPLY_WAIT: Duration = Duration::from_millis(100);
+
+/// How long a paste whose end has not come, or a sequence too long to keep,
+/// may go with no input before it is given up on: the paste ends with what
+/// it holds, given as a paste, and keys are keys again. A terminal sends a
+/// paste in one burst; this is long enough for a slow connection's pauses,
+/// and short enough that a lost end marker does not swallow `Ctrl+C` for
+/// long. A paste that pauses longer than this is ended there, and what
+/// follows of it arrives as keys.
+pub(crate) const OPEN_WAIT: Duration = Duration::from_secs(2);
 /// Turns the enhanced keyboard protocol on, with the flag that tells apart
 /// keys that are otherwise the same bytes.
 const KEYBOARD_ON: &[u8] = b"\x1b[>1u";
@@ -189,11 +198,11 @@ static PANIC_HOOK: Once = Once::new();
 /// do not end the program waiting for it. Dropping it, a panic's unwinding
 /// included, puts back what was there before.
 ///
-/// **Take it after the terminal is left and before the child is started,
-/// and drop it after the terminal is entered again,** so that no key can
-/// fall in between: the terminal's own handlers pass the keys over while a
-/// guard lives, and a signal still pending when it is dropped is taken
-/// then. A child keeps its own default: on Unix
+/// **Take it before the terminal is left, and drop it after the terminal
+/// is entered again,** so that no key can fall in between: leaving keeps
+/// the guard's handler, the terminal's own handlers pass the keys over
+/// while a guard lives and for a second after, and a signal still pending
+/// when it is dropped is taken then. One guard at a time. A child keeps its own default: on Unix
 /// the signals are caught by a handler that does nothing, not ignored, and
 /// `exec` resets a caught signal (it would keep an ignored one); on Windows
 /// the terminal layer's own console handler answers `Ctrl+C` as handled,
@@ -245,6 +254,9 @@ pub struct Terminal<D: Device = System> {
     pending_since: Option<Instant>,
     /// Whether the reply that ends the capability queries has come.
     answered: bool,
+    /// When the decoder last had input while inside a paste or a sequence
+    /// being dropped: it gives up on it once [`OPEN_WAIT`] has passed.
+    open_since: Option<Instant>,
 }
 
 impl Terminal<System> {
@@ -305,6 +317,7 @@ impl<D: Device> Terminal<D> {
             active: true,
             pending_since: None,
             answered: false,
+            open_since: None,
         })
     }
 
@@ -357,9 +370,24 @@ impl<D: Device> Terminal<D> {
                 self.take(found)?;
                 continue;
             }
-            let wait = match (left, timeout) {
-                (Some(left), Some(timeout)) => Some(left.min(timeout)),
-                (Some(left), None) => Some(left),
+            // A paste whose end has not come, or a sequence being dropped,
+            // is given up on after a time with no input.
+            let open = self.open_since.map(|since| {
+                OPEN_WAIT.saturating_sub(self.device.now().saturating_duration_since(since))
+            });
+            if open == Some(Duration::ZERO) {
+                self.decoder.give_up(&mut found);
+                self.open_since = None;
+                self.take(found)?;
+                continue;
+            }
+            let own = match (left, open) {
+                (Some(left), Some(open)) => Some(left.min(open)),
+                (left, open) => left.or(open),
+            };
+            let wait = match (own, timeout) {
+                (Some(own), Some(timeout)) => Some(own.min(timeout)),
+                (Some(own), None) => Some(own),
                 (None, timeout) => timeout,
             };
             self.bytes.clear();
@@ -373,6 +401,7 @@ impl<D: Device> Terminal<D> {
                     } else if self.pending_since.is_none() || !found.is_empty() {
                         self.pending_since = Some(self.device.now());
                     }
+                    self.open_since = self.decoder.open().then(|| self.device.now());
                 }
                 Ready::Resize => {
                     let (cols, rows) = self.device.size()?;
@@ -383,8 +412,9 @@ impl<D: Device> Terminal<D> {
                     found.push(Event::Resumed);
                 }
                 Ready::Woken => return Ok(None),
-                // The escape's own wait: the next pass decodes it.
-                Ready::Timeout if left.is_some() && wait == left => {}
+                // The escape's own wait, or the open paste's: the next
+                // pass decodes it, or gives up on it.
+                Ready::Timeout if own.is_some() && wait == own => {}
                 Ready::Timeout => return Ok(None),
             }
             self.take(found)?;
@@ -610,6 +640,32 @@ mod tests {
         let left = device.left.clone();
         drop(Terminal::with_device(device, caps()).unwrap());
         assert!(*left.lock().unwrap());
+    }
+
+    #[test]
+    fn a_paste_whose_end_never_comes_is_given_up_on_and_ctrl_c_works_after() {
+        let device = script(&[
+            (Ready::Input, b"\x1b[200~hello\r"),
+            (Ready::Input, b"world"),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"\x03"),
+        ]);
+        let waits = device.waits.clone();
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Paste("hello\nworld".to_owned())),
+            "what came, as a paste, never as keys"
+        );
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(Key::with(KeyCode::Char('c'), Mods::CTRL)))
+        );
+        let waits = waits.lock().unwrap().clone();
+        // The wait for more of the paste counts from its last input.
+        assert_eq!(waits[0], None);
+        assert!(waits[1].is_some_and(|wait| wait <= OPEN_WAIT && wait > OPEN_WAIT / 2));
+        assert!(waits[2].is_some_and(|wait| wait <= OPEN_WAIT && wait > OPEN_WAIT / 2));
     }
 
     #[test]

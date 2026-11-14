@@ -639,12 +639,12 @@ pub fn edit(
     let file = folder.path.join("prompt.md");
     write_private(&file, &text).map_err(EditorError::File)?;
 
-    let released = handoff.release();
     // A key that interrupts reaches the editor, and leaves the interface,
-    // and the prompt, alone: from the terminal's leaving to its taking back,
-    // so that no key falls in between. The editor keeps its own Ctrl+C (see
-    // the guard).
+    // and the prompt, alone: from before the terminal is left to after it
+    // is taken back, so that no key falls in between. The editor keeps its
+    // own Ctrl+C (see the guard).
     let ignored = cortex_term::ignore_interrupts();
+    let released = handoff.release();
     let status = released.is_ok().then(|| run(editor, &file, &folder.path));
     // Taken back whatever the editor did, and even when handing it over
     // failed partway: part of it may have been put back.

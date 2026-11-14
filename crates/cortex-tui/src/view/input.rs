@@ -73,7 +73,7 @@ pub fn input(input: &Input, look: &Look, width: usize) -> InputBox {
             lines,
             cursor: Cursor {
                 row: 1,
-                col: RoundedBox::TEXT_COLUMN + MARK_WIDTH,
+                col: inside(RoundedBox::TEXT_COLUMN + MARK_WIDTH, width),
             },
         };
     }
@@ -96,9 +96,18 @@ pub fn input(input: &Input, look: &Look, width: usize) -> InputBox {
         lines,
         cursor: Cursor {
             row: 1 + layout.cursor_row - scroll,
-            col: RoundedBox::TEXT_COLUMN + MARK_WIDTH + layout.cursor_col,
+            col: inside(
+                RoundedBox::TEXT_COLUMN + MARK_WIDTH + layout.cursor_col,
+                width,
+            ),
         },
     }
+}
+
+/// `col` kept inside the box: in one too narrow for its text, never on the
+/// right border or past it.
+fn inside(col: usize, width: usize) -> usize {
+    col.min(width.saturating_sub(2))
 }
 
 /// The first row in view: the input's scroll, moved if it would leave the
