@@ -53,6 +53,7 @@ use std::process::Command;
 
 use cortex_base::program;
 use cortex_base::rng::{Rng, SystemRng};
+use cortex_term::{Inline, Overrides, Terminal};
 
 use crate::editor::{Chip, Fragment};
 
@@ -174,6 +175,49 @@ pub trait Handoff {
     fn reclaim(&mut self) -> io::Result<()>;
 }
 
+/// The [`Handoff`] of the interface's own terminal: the inline presenter
+/// erases its live region and the terminal is left, then entered again, and
+/// the presenter starts drawing afresh where the cursor is.
+///
+/// Leaving puts back the modes the terminal had before the interface first
+/// entered it (on Windows the console's modes and code pages), and entering
+/// again sets the interface's modes from those, so an editor that changed
+/// the modes and did not put them back changes nothing for either.
+#[derive(Debug)]
+pub struct TerminalHandoff<'a> {
+    /// The terminal: taken out while the editor runs, put back after.
+    pub terminal: &'a mut Option<Terminal>,
+    /// The inline presenter.
+    pub inline: &'a mut Inline,
+    /// The settings the terminal is entered with.
+    pub overrides: Overrides,
+}
+
+impl Handoff for TerminalHandoff<'_> {
+    fn release(&mut self) -> io::Result<()> {
+        let Some(mut terminal) = self.terminal.take() else {
+            return Ok(());
+        };
+        let caps = *terminal.caps();
+        let finished = self.inline.finish(&caps, &mut terminal);
+        // Left whatever the presenter managed.
+        let left = terminal.leave();
+        finished.and(left)
+    }
+
+    fn reclaim(&mut self) -> io::Result<()> {
+        if self.terminal.is_some() {
+            return Ok(());
+        }
+        let terminal = Terminal::enter(self.overrides)?;
+        let (cols, rows) = terminal.size()?;
+        self.inline.resize(cols, rows);
+        self.inline.restart();
+        *self.terminal = Some(terminal);
+        Ok(())
+    }
+}
+
 /// The editor to run, from `env`.
 ///
 /// # Errors
@@ -193,10 +237,13 @@ pub fn find(env: &Env) -> Result<Program, EditorError> {
 }
 
 fn from_value(value: &str, env: &Env) -> Result<Program, EditorError> {
-    // The whole value, if it names a program as it is.
-    if let Some(path) = locate(value, env)? {
+    // The whole value, if it is the absolute path of a program as it is
+    // (spaces and all), or a name found on PATH.
+    let whole = Path::new(value);
+    let absolute = whole.is_absolute() || (env.windows && is_windows_absolute(value));
+    if absolute && program::is_program(whole, env.windows) {
         return Ok(Program {
-            path,
+            path: whole.to_path_buf(),
             args: Vec::new(),
         });
     }
@@ -509,15 +556,22 @@ pub fn edit(
     let file = folder.path.join("prompt.md");
     write_private(&file, &text).map_err(EditorError::File)?;
 
-    handoff.release().map_err(EditorError::Terminal)?;
-    let status = Command::new(&editor.path)
-        .args(&editor.args)
-        .arg(&file)
-        .status();
-    // Taken back whatever the editor did.
-    handoff.reclaim().map_err(EditorError::Terminal)?;
+    let released = handoff.release();
+    let status = released.is_ok().then(|| {
+        Command::new(&editor.path)
+            .args(&editor.args)
+            .arg(&file)
+            .status()
+    });
+    // Taken back whatever the editor did, and even when handing it over
+    // failed partway: part of it may have been put back.
+    let reclaimed = handoff.reclaim();
+    released.map_err(EditorError::Terminal)?;
+    reclaimed.map_err(EditorError::Terminal)?;
 
-    let status = status.map_err(|error| EditorError::Start(editor.path.clone(), error))?;
+    let status = status
+        .unwrap_or_else(|| Err(io::Error::other("the terminal was not handed over")))
+        .map_err(|error| EditorError::Start(editor.path.clone(), error))?;
     if !status.success() {
         #[cfg(unix)]
         {
@@ -623,6 +677,21 @@ mod tests {
         assert_eq!(split(r#"a\\"b c" d"#, true).unwrap(), [r"a\b c", "d"]);
         assert_eq!(split("'a b'", true).unwrap(), ["'a", "b'"]);
         assert_eq!(split(r#""open"#, true), None);
+    }
+
+    #[test]
+    fn an_absolute_program_is_taken_whole_or_with_its_arguments() {
+        let exe = std::env::current_exe().unwrap();
+        let env = |value: String| Env {
+            visual: Some(value.into()),
+            windows: cfg!(windows),
+            ..Env::default()
+        };
+        let whole = find(&env(exe.display().to_string())).unwrap();
+        assert_eq!((whole.path.as_path(), whole.args.len()), (exe.as_path(), 0));
+        let split = find(&env(format!("\"{}\" --wait -n", exe.display()))).unwrap();
+        assert_eq!(split.path, exe);
+        assert_eq!(split.args, ["--wait", "-n"]);
     }
 
     #[test]

@@ -81,6 +81,18 @@ impl Fragment {
         }
     }
 
+    /// The text, with each chip as one U+FFFC.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// The chips, in the order of their marks.
+    #[must_use]
+    pub fn chips(&self) -> &[Chip] {
+        &self.chips
+    }
+
     /// Whether it holds nothing.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -88,7 +100,7 @@ impl Fragment {
     }
 
     /// Adds `other` after this.
-    pub(crate) fn push(&mut self, other: Fragment) {
+    pub fn push(&mut self, other: Fragment) {
         self.text.push_str(&other.text);
         self.chips.extend(other.chips);
     }
