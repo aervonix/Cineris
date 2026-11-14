@@ -1,5 +1,11 @@
 # Step 21, the editor: its rules broken one at a time, with the tests that
 # must fail. Written with the code.
+#
+# One rule lives in Windows-only code, which this command cannot break where
+# it runs: the console handler answers Ctrl+C as handled while the interrupt
+# guard lives (`crates/cortex-term/src/sys/windows.rs`). The Windows run of
+# `external::sys_ctrl_c_ends_the_editor_and_not_the_application` is what
+# checks it.
 
 [break] right-splits-a-cluster
 rule: Moving right goes over a whole grapheme cluster, never into one.
@@ -134,8 +140,14 @@ caught-by:
 rule: A paste is a step of undo of its own.
 file: crates/cortex-tui/src/editor/mod.rs
 in: Editor::apply
-find: self.undo.record(change, before, self.cursor, false, None);
-replace: self.undo.record(change, before, self.cursor, true, self.undo.open());
+find:
+    self.undo.close();
+    let (change, before) = self.change(range, fragment);
+    self.undo.record(change, before, self.cursor, false, None);
+replace:
+    let open = self.undo.open();
+    let (change, before) = self.change(range, fragment);
+    self.undo.record(change, before, self.cursor, true, open);
 caught-by:
     editing::a_paste_a_yank_and_a_completion_are_each_a_step_of_their_own
 
@@ -143,7 +155,7 @@ caught-by:
 rule: Kills one after another join in the one kill slot.
 file: crates/cortex-tui/src/editor/mod.rs
 in: Editor::kill
-find: let continuing = self.killing == Some(way);
+find: let continuing = self.killing.is_some();
 replace: let continuing = false;
 caught-by:
     editing::kills_one_after_another_join_in_the_slot
@@ -190,7 +202,7 @@ caught-by:
 rule: The external editor is found in the absolute folders of PATH, never started by a bare name.
 file: crates/cortex-tui/src/external.rs
 in: locate
-find: Ok(program::find(&env.path, name, env.windows))
+find: Ok(program::find_outside(&env.path, name, env.windows, &env.avoid))
 replace: Ok(Some(PathBuf::from(name)))
 caught-by:
     external::tests::a_relative_editor_is_refused_and_a_missing_one_is_not_found
@@ -259,19 +271,22 @@ replace: if read.trim().is_empty() && false {
 caught-by:
     external::sys_a_file_left_empty_keeps_the_prompt
 
-[break] interrupts-ignored-before-the-editor-starts
-rule: Interrupts are ignored only after the editor is started, so that its own Ctrl+C still works.
-file: crates/cortex-tui/src/external.rs
-in: run
-find: let mut child = command.spawn()?; let ignored = cortex_term::ignore_interrupts();
-replace: let ignored = cortex_term::ignore_interrupts(); let mut child = command.spawn()?;
+[break] interrupts-ignored-so-the-editor-inherits-it
+rule: The guard catches the interrupt signals rather than ignoring them, so that an editor started under it keeps its own Ctrl+C (exec keeps an ignored signal ignored).
+file: crates/cortex-term/src/sys/unix.rs
+in: ignore_interrupts
+find: let ignore = action(on_interrupt_passed_over);
+replace:
+    let mut ignore = action(on_interrupt_passed_over);
+    ignore.sa_sigaction = libc::SIG_IGN;
+packages: cortex-term, cortex-tui
 caught-by:
     external::sys_ctrl_c_ends_the_editor_and_not_the_application
 
 [break] interrupts-not-ignored-while-the-editor-runs
 rule: A Ctrl+C for the editor does not end the interface, and with it the prompt.
 file: crates/cortex-tui/src/external.rs
-in: run
+in: edit
 find: let ignored = cortex_term::ignore_interrupts();
 replace: let ignored = ();
 caught-by:
@@ -349,3 +364,57 @@ find: for folder in &env.path {
 replace: for folder in env.path.iter().rev() {
 caught-by:
     external::tests::on_windows_a_name_is_looked_for_folder_by_folder_with_its_extensions_only
+
+[break] a-row-wider-than-its-width-after-white-space
+rule: No row is wider than its width: what follows a break at white space breaks again when it still does not fit.
+file: crates/cortex-tui/src/editor/layout.rs
+in: wrap_line
+find: if col + w > width && col > 0 { rows.push(Row { range: row_start..at, ends_line: false, }); row_start = at; col = 0; }
+replace:
+caught-by:
+    editing::no_row_is_wider_than_its_width_whatever_follows_white_space
+
+[break] kills-the-other-way-start-the-slot-again
+rule: Kills one after another join in the slot whichever way each went.
+file: crates/cortex-tui/src/editor/mod.rs
+in: Editor::kill
+find: let continuing = self.killing.is_some();
+replace: let continuing = self.killing == Some(way);
+caught-by:
+    editing::kills_both_ways_join_in_the_slot_in_the_texts_order
+
+[break] a-global-key-left-in-the-editor
+rule: A key bound to a global action in [keys] is taken from every context.
+file: crates/cortex-tui/src/keys/mod.rs
+in: KeyMap::with_table
+find: if context == Context::Global { keymap.map.retain(|(_, key), _| !parsed.contains(key)); }
+replace:
+caught-by:
+    keys::tests::a_key_bound_to_a_global_action_is_taken_from_every_context
+
+[break] the-editor-taken-from-a-write-root
+rule: An editor found by its name is never taken from the session's write roots.
+file: crates/cortex-tui/src/external.rs
+in: locate
+find: Ok(program::find_outside(&env.path, name, env.windows, &env.avoid))
+replace: Ok(program::find(&env.path, name, env.windows))
+caught-by:
+    external::tests::an_editor_in_a_write_root_is_passed_over
+
+[break] a-picker-closed-without-a-word
+rule: Ctrl+C with a picker open closes it and tells the caller, and keeps the prompt.
+file: crates/cortex-tui/src/input.rs
+in: Input::interrupt
+find: return Outcome::PickerClosed(name);
+replace: let _ = name;
+caught-by:
+    input::ctrl_c_with_a_picker_open_closes_it_and_says_so
+
+[break] a-paste-dropped-while-a-box-is-focused
+rule: A paste with a box or panel focused goes to the input.
+file: crates/cortex-tui/src/input.rs
+in: Input::paste
+find: if !self.focus.on_input() { self.focus.to_input(); }
+replace: if !self.focus.on_input() { return Outcome::Nothing; }
+caught-by:
+    input::a_paste_with_a_box_focused_goes_to_the_input

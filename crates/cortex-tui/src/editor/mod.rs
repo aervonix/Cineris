@@ -73,6 +73,9 @@ impl Editor {
     /// The chip whose mark is at byte `at` of [`text`](Self::text).
     #[must_use]
     pub fn chip_at(&self, at: usize) -> Option<&Chip> {
+        if at >= self.text().len() || !self.text().is_char_boundary(at) {
+            return None;
+        }
         self.buffer.chip_at(at)
     }
 
@@ -407,10 +410,13 @@ impl Editor {
         layout.cursor_row + 1 == layout.rows.len()
     }
 
-    /// Puts the cursor at byte `at`, snapped to a cluster boundary.
+    /// Puts the cursor at byte `at`, snapped to a cluster boundary: a byte
+    /// inside a character or past the end is taken as the nearest boundary
+    /// after it.
     pub fn set_cursor(&mut self, at: usize) {
         self.settle();
         self.goal = None;
+        let at = char_boundary(self.text(), at);
         self.cursor = cluster::snap(self.text(), at);
     }
 
@@ -457,7 +463,8 @@ impl Editor {
         if range.is_empty() {
             return false;
         }
-        let continuing = self.killing == Some(way);
+        // Kills one after another join, whichever way each went.
+        let continuing = self.killing.is_some();
         let removed = self.buffer.fragment(range.clone());
         self.apply(range, Fragment::default());
         match (continuing, self.slot.as_mut(), way) {
@@ -472,8 +479,8 @@ impl Editor {
     /// `range` with both ends on cluster boundaries.
     fn boundaries(&self, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
         let text = self.text();
-        let start = cluster::snap(text, range.start.min(text.len()));
-        let end = cluster::snap(text, range.end.min(text.len())).max(start);
+        let start = cluster::snap(text, char_boundary(text, range.start));
+        let end = cluster::snap(text, char_boundary(text, range.end)).max(start);
         start..end
     }
 
@@ -504,6 +511,16 @@ impl Editor {
             before,
         )
     }
+}
+
+/// `at` within `text` and on a character boundary: the first one at or
+/// after it.
+fn char_boundary(text: &str, at: usize) -> usize {
+    let mut at = at.min(text.len());
+    while !text.is_char_boundary(at) {
+        at += 1;
+    }
+    at
 }
 
 /// Line breaks as the editor holds them: `\r\n` and a lone `\r` become

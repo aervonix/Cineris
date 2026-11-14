@@ -95,16 +95,15 @@ fn shell(options: &str) -> ! {
     cortex_term::pty::ignore_control_events();
     let (scenario, scratch) = options.split_once('|').expect("scenario|scratch");
     let before = cortex_term::pty::modes().expect("the terminal's modes");
-    let mut app = std::process::Command::new(this_binary())
+    // As a shell does with its job: a Ctrl+C typed for the editor is not
+    // the shell's. The application keeps its own (see the guard).
+    let ignored = cortex_term::ignore_interrupts().expect("ignore interrupts");
+    let status = std::process::Command::new(this_binary())
         .args(child_arguments(APP, scenario))
         .env(MODES, &before)
         .env(SCRATCH, scratch)
-        .spawn()
+        .status()
         .expect("start the application");
-    // As a shell does with its job: a Ctrl+C typed for the editor is not
-    // the shell's. Taken after the start, so the application keeps its own.
-    let ignored = cortex_term::ignore_interrupts().expect("ignore interrupts");
-    let status = app.wait().expect("wait for the application");
     drop(ignored);
     let after = cortex_term::pty::modes().expect("the terminal's modes");
     let verdict = if before == after {

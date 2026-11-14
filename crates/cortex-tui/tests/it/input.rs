@@ -25,6 +25,29 @@ fn a_paste_is_text_never_keys() {
 }
 
 #[test]
+fn a_paste_with_a_box_focused_goes_to_the_input() {
+    let mut input = input_with("x");
+    input.focus_mut().update(&[7], &[]);
+    input.act(Action::FocusNext);
+    paste(&mut input, "y");
+    assert!(input.focus().on_input());
+    assert_eq!(input.editor().expanded(), "xy");
+}
+
+#[test]
+fn ctrl_c_with_a_picker_open_closes_it_and_says_so() {
+    let mut input = input_with("keep");
+    let rows = vec![cortex_tui::complete::Row::new("low", "")];
+    input.open_picker(cortex_tui::complete::Menu::picker("effort", rows, 0, None));
+    assert_eq!(
+        press(&mut input, "ctrl+c"),
+        Outcome::PickerClosed("effort".to_owned())
+    );
+    assert!(input.menu().is_none());
+    assert_eq!(input.editor().expanded(), "keep", "the prompt is kept");
+}
+
+#[test]
 fn a_paste_over_a_limit_is_a_chip_sent_whole_and_one_under_is_text() {
     let mut input = input_with("review ");
     let under = "l\n".repeat(12);

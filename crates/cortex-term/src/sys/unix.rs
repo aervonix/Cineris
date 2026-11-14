@@ -192,6 +192,11 @@ extern "C" fn on_resize(_: libc::c_int) {
 }
 
 extern "C" fn on_ending(signal: libc::c_int) {
+    // An interrupt guard lives: the key was for a child, or has come just
+    // as the terminal was taken back from one.
+    if GUARDING.load(Ordering::SeqCst) && (signal == libc::SIGINT || signal == libc::SIGQUIT) {
+        return;
+    }
     emergency();
     // SAFETY: putting the default action back and raising the signal again
     // ends the process as the signal would have.
@@ -254,13 +259,25 @@ fn install(signal: libc::c_int, handler: extern "C" fn(libc::c_int)) -> io::Resu
     let action = action(handler);
     let mut old = MaybeUninit::<libc::sigaction>::zeroed();
     // SAFETY: `action` is complete, and `old` is filled by the call.
-    unsafe {
+    let mut old = unsafe {
         check(libc::sigaction(signal, &raw const action, old.as_mut_ptr()))?;
-        PREVIOUS
+        old.assume_init()
+    };
+    // Entered while an interrupt guard lives: what to put back on leaving is
+    // what was there before the guard, not the guard's own handler.
+    if is_passing_over(&old)
+        && let Some((_, before)) = GUARDED
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push((signal, old.assume_init()));
+            .iter()
+            .find(|(guarded, _)| *guarded == signal)
+    {
+        old = *before;
     }
+    PREVIOUS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((signal, old));
     Ok(())
 }
 
@@ -283,14 +300,27 @@ fn install_handlers() -> io::Result<()> {
 /// The actions SIGINT and SIGQUIT had before [`ignore_interrupts`].
 pub(crate) type Interrupts = Vec<(libc::c_int, libc::sigaction)>;
 
-/// Ignores SIGINT and SIGQUIT, and returns what they did before.
+/// The handler of SIGINT and SIGQUIT while they are passed over: nothing.
+/// A handler, not "ignore": a program started meanwhile has its own
+/// default again, since `exec` resets a caught signal and keeps an ignored
+/// one.
+extern "C" fn on_interrupt_passed_over(_: libc::c_int) {}
+
+/// Whether a guard lives: the terminal's own handler of SIGINT and SIGQUIT
+/// passes over them too, should the terminal be entered again meanwhile.
+static GUARDING: AtomicBool = AtomicBool::new(false);
+/// What SIGINT and SIGQUIT did before the guard: what the terminal records
+/// as their previous action if it is entered while the guard lives, in
+/// place of the guard's own handler.
+static GUARDED: Mutex<Vec<(libc::c_int, libc::sigaction)>> = Mutex::new(Vec::new());
+
+/// Catches SIGINT and SIGQUIT with a handler that does nothing, and
+/// returns what they did before.
 pub(crate) fn ignore_interrupts() -> io::Result<Interrupts> {
+    GUARDING.store(true, Ordering::SeqCst);
     let mut previous = Interrupts::new();
     for signal in [libc::SIGINT, libc::SIGQUIT] {
-        // SAFETY: a zeroed `sigaction` is a valid one with an empty mask and
-        // no flags; its handler is then set to "ignore".
-        let mut ignore: libc::sigaction = unsafe { std::mem::zeroed() };
-        ignore.sa_sigaction = libc::SIG_IGN;
+        let ignore = action(on_interrupt_passed_over);
         let mut old = MaybeUninit::<libc::sigaction>::zeroed();
         // SAFETY: `ignore` is complete, and `old` is filled by the call.
         let set = unsafe { libc::sigaction(signal, &raw const ignore, old.as_mut_ptr()) };
@@ -301,14 +331,73 @@ pub(crate) fn ignore_interrupts() -> io::Result<Interrupts> {
         // SAFETY: the call succeeded, so it filled `old`.
         previous.push((signal, unsafe { old.assume_init() }));
     }
+    GUARDED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone_from(&previous);
     Ok(previous)
 }
 
+/// Whether `action` is the guard's do-nothing handler.
+fn is_passing_over(action: &libc::sigaction) -> bool {
+    action.sa_sigaction == on_interrupt_passed_over as *const () as libc::sighandler_t
+}
+
 /// Puts back what [`ignore_interrupts`] found.
+///
+/// A signal sent to the process while the guard lived may still be
+/// pending: the kernel hands it to whichever thread runs next, which on a
+/// loaded machine can be after the guard is gone, when the signal would
+/// end the process. So the signals are first blocked on this thread and
+/// any pending one taken, with the do-nothing handler still in place.
 pub(crate) fn restore_interrupts(previous: &Interrupts) {
-    for (signal, action) in previous.iter().rev() {
-        // SAFETY: `action` is what `sigaction` gave back for this signal.
-        unsafe { libc::sigaction(*signal, action, std::ptr::null_mut()) };
+    let mut set = MaybeUninit::<libc::sigset_t>::uninit();
+    let mut old = MaybeUninit::<libc::sigset_t>::uninit();
+    // SAFETY: `set` is initialised by `sigemptyset` before it is read, and
+    // `old` is filled by `pthread_sigmask` before it is read; `sigtimedwait`
+    // with a zero timeout only takes signals of `set`, which are blocked.
+    unsafe {
+        libc::sigemptyset(set.as_mut_ptr());
+        for (signal, _) in previous {
+            libc::sigaddset(set.as_mut_ptr(), *signal);
+        }
+        let blocked = libc::pthread_sigmask(libc::SIG_BLOCK, set.as_ptr(), old.as_mut_ptr()) == 0;
+        if blocked {
+            let now = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            loop {
+                let taken = libc::sigtimedwait(set.as_ptr(), std::ptr::null_mut(), &raw const now);
+                if taken > 0 {
+                    continue;
+                }
+                if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                break;
+            }
+        }
+        for (signal, action) in previous.iter().rev() {
+            // Put back only where the guard's handler is still in place:
+            // the terminal, entered again meanwhile, has its own, and has
+            // recorded `action` as what to put back when it leaves.
+            let mut current = MaybeUninit::<libc::sigaction>::zeroed();
+            if libc::sigaction(*signal, std::ptr::null(), current.as_mut_ptr()) == 0
+                && is_passing_over(&current.assume_init())
+            {
+                // `action` is what `sigaction` gave back for this signal.
+                libc::sigaction(*signal, action, std::ptr::null_mut());
+            }
+        }
+        GUARDED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        GUARDING.store(false, Ordering::SeqCst);
+        if blocked {
+            libc::pthread_sigmask(libc::SIG_SETMASK, old.as_ptr(), std::ptr::null_mut());
+        }
     }
 }
 
@@ -659,6 +748,60 @@ mod tests {
         unsafe { libc::raise(libc::SIGQUIT) };
         assert!(INTERRUPTED.load(Ordering::SeqCst), "SIGQUIT too");
         restore_interrupts(&before);
+    }
+
+    #[test]
+    fn the_terminal_entered_under_a_guard_keeps_its_handler_and_what_was_before() {
+        let mut before = MaybeUninit::<libc::sigaction>::zeroed();
+        let mine = action(on_interrupt);
+        // SAFETY: `mine` is complete, and `before` is filled by the call.
+        unsafe {
+            check(libc::sigaction(
+                libc::SIGINT,
+                &raw const mine,
+                before.as_mut_ptr(),
+            ))
+            .unwrap();
+        }
+        let guard = crate::ignore_interrupts().unwrap();
+        // The terminal is entered again while the guard lives.
+        install(libc::SIGINT, on_ending).unwrap();
+        let recorded = PREVIOUS
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|(signal, _)| *signal == libc::SIGINT)
+            .map(|(_, action)| action.sa_sigaction);
+        assert_eq!(
+            recorded,
+            Some(mine.sa_sigaction),
+            "what was before the guard"
+        );
+        // A key while the guard lives is passed over by the terminal's
+        // handler.
+        // SAFETY: the handler returns at once while the guard lives.
+        unsafe { libc::raise(libc::SIGINT) };
+        drop(guard);
+        let mut now = MaybeUninit::<libc::sigaction>::zeroed();
+        // SAFETY: a null action reads the current one.
+        unsafe {
+            check(libc::sigaction(
+                libc::SIGINT,
+                std::ptr::null(),
+                now.as_mut_ptr(),
+            ))
+            .unwrap();
+        }
+        // SAFETY: the call succeeded.
+        let now = unsafe { now.assume_init() };
+        assert_eq!(
+            now.sa_sigaction, on_ending as *const () as libc::sighandler_t,
+            "the terminal's handler stays"
+        );
+        PREVIOUS.lock().unwrap().clear();
+        // SAFETY: putting back the action found at the start.
+        unsafe { libc::sigaction(libc::SIGINT, before.as_ptr(), std::ptr::null_mut()) };
     }
 
     #[test]

@@ -182,22 +182,23 @@ pub fn is_terminal() -> bool {
 
 static PANIC_HOOK: Once = Once::new();
 
-/// While this lives, the process ignores the keys that interrupt a
-/// program at the terminal: SIGINT and SIGQUIT on Unix (`Ctrl+C`,
+/// While this lives, the keys that interrupt a program at the terminal do
+/// nothing to this process: SIGINT and SIGQUIT on Unix (`Ctrl+C`,
 /// `Ctrl+\`), and `Ctrl+C` on Windows. For a child that has been handed the
 /// terminal, such as the user's own editor: the keys reach the child, and
 /// do not end the program waiting for it. Dropping it, a panic's unwinding
 /// included, puts back what was there before.
 ///
-/// **Take it after the child is started.** An ignored signal stays ignored
-/// across `exec` on Unix, and the attribute is inherited by new processes on
-/// Windows, so a child started while it lives cannot be interrupted either.
-/// A key pressed in the moment between the child's start and this call
-/// reaches the program as it would without it: the terminal's own handler
-/// on Unix, or the end of the process on Windows once the terminal has
-/// been left.
-///
-/// On Windows dropping it clears the attribute, whatever it was before.
+/// **Take it after the terminal is left and before the child is started,
+/// and drop it after the terminal is entered again,** so that no key can
+/// fall in between: the terminal's own handlers pass the keys over while a
+/// guard lives, and a signal still pending when it is dropped is taken
+/// then. A child keeps its own default: on Unix
+/// the signals are caught by a handler that does nothing, not ignored, and
+/// `exec` resets a caught signal (it would keep an ignored one); on Windows
+/// the terminal layer's own console handler answers `Ctrl+C` as handled,
+/// and a handler is not inherited (the console's "ignore" attribute would
+/// be). `Ctrl+Break` still ends the process on Windows.
 #[must_use = "interrupts are ignored only while the guard lives"]
 pub struct InterruptsIgnored {
     previous: sys::Interrupts,

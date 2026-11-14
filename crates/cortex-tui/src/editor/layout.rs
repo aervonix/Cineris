@@ -99,23 +99,26 @@ fn wrap_line(buffer: &Buffer, line: Range<usize>, width: usize, rows: &mut Vec<R
         let at = line.start + offset;
         let w = cluster_width(buffer, at, c, width);
         if col + w > width && col > 0 {
-            match breakable {
-                Some((after, at_col)) if after > row_start && after <= at => {
-                    rows.push(Row {
-                        range: row_start..after,
-                        ends_line: false,
-                    });
-                    row_start = after;
-                    col -= at_col;
-                }
-                _ => {
-                    rows.push(Row {
-                        range: row_start..at,
-                        ends_line: false,
-                    });
-                    row_start = at;
-                    col = 0;
-                }
+            if let Some((after, at_col)) = breakable
+                && after > row_start
+                && after <= at
+            {
+                rows.push(Row {
+                    range: row_start..after,
+                    ends_line: false,
+                });
+                row_start = after;
+                col -= at_col;
+            }
+            // What followed the white space may not fit either: it breaks
+            // before this cluster too.
+            if col + w > width && col > 0 {
+                rows.push(Row {
+                    range: row_start..at,
+                    ends_line: false,
+                });
+                row_start = at;
+                col = 0;
             }
             breakable = None;
         }

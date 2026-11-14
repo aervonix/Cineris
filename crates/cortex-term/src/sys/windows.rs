@@ -25,14 +25,15 @@
 
 use std::io;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{FALSE, HANDLE, TRUE, WAIT_OBJECT_0};
 use windows_sys::Win32::Storage::FileSystem::WriteFile;
 use windows_sys::Win32::System::Console::{
-    CONSOLE_SCREEN_BUFFER_INFO, DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT,
-    ENABLE_MOUSE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_PROCESSED_OUTPUT,
+    CONSOLE_SCREEN_BUFFER_INFO, CTRL_C_EVENT, DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT,
+    ENABLE_LINE_INPUT, ENABLE_MOUSE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_PROCESSED_OUTPUT,
     ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT,
     GetConsoleCP, GetConsoleMode, GetConsoleOutputCP, GetConsoleScreenBufferInfo,
     GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD, KEY_EVENT, ReadConsoleInputW,
@@ -193,7 +194,11 @@ pub(crate) fn emergency() {
     restore_modes();
 }
 
-unsafe extern "system" fn on_control(_: u32) -> windows_sys::core::BOOL {
+unsafe extern "system" fn on_control(event: u32) -> windows_sys::core::BOOL {
+    if event == CTRL_C_EVENT && passing_over() {
+        // Handled: the program waiting for a child goes on.
+        return TRUE;
+    }
     emergency();
     // Not handled: the next handler, in the end the system's, ends the
     // process as the event asks.
@@ -228,23 +233,67 @@ pub(crate) fn wake() {
     }
 }
 
-/// Nothing to keep: the console's attribute is on or off.
-pub(crate) type Interrupts = ();
+/// Whether [`on_control`] passes over Ctrl+C now, and whether it did
+/// before the guard that set it.
+pub(crate) type Interrupts = bool;
 
-/// Makes the process ignore Ctrl+C: the console's own attribute, which no
-/// handler sees while it is on. Ctrl+Break still reaches the handlers.
+/// Ctrl+C is passed over by [`on_control`] while this is set.
+static PASSING_OVER: AtomicBool = AtomicBool::new(false);
+
+/// Makes the process pass over Ctrl+C: the layer's own handler answers it
+/// as handled. Not the console's "ignore" attribute, which a program started
+/// meanwhile would inherit; a handler is not inherited. Ctrl+Break still
+/// ends the process.
 pub(crate) fn ignore_interrupts() -> io::Result<Interrupts> {
-    // SAFETY: with no handler, the call only sets the process's attribute.
-    if unsafe { SetConsoleCtrlHandler(None, TRUE) } == 0 {
-        return Err(io::Error::last_os_error());
+    if !HANDLER.swap(true, Ordering::SeqCst) {
+        // SAFETY: the handler is a function with the signature Windows
+        // asks for, and stays for the life of the process.
+        if unsafe { SetConsoleCtrlHandler(Some(on_control), TRUE) } == 0 {
+            HANDLER.store(false, Ordering::SeqCst);
+            return Err(io::Error::last_os_error());
+        }
     }
-    Ok(())
+    START.get_or_init(Instant::now);
+    Ok(PASSING_OVER.swap(true, Ordering::SeqCst))
 }
 
-/// Clears the attribute [`ignore_interrupts`] set.
-pub(crate) fn restore_interrupts(_previous: &Interrupts) {
-    // SAFETY: as above.
-    unsafe { SetConsoleCtrlHandler(None, FALSE) };
+/// Puts back what [`ignore_interrupts`] found.
+///
+/// The console runs a handler on a thread it starts for the event, which on
+/// a loaded machine can run after the guard is gone: so a Ctrl+C that comes
+/// within [`GRACE`] of the guard's end is passed over too. By then the
+/// interface has entered the terminal again, where Ctrl+C is a key and not
+/// an event.
+pub(crate) fn restore_interrupts(previous: &Interrupts) {
+    let since = START.get_or_init(Instant::now).elapsed();
+    ENDED_AT.store(
+        u64::try_from(since.as_millis()).unwrap_or(u64::MAX),
+        Ordering::SeqCst,
+    );
+    PASSING_OVER.store(*previous, Ordering::SeqCst);
+}
+
+/// How long after a guard ends a Ctrl+C is still taken as sent while it
+/// lived.
+const GRACE: Duration = Duration::from_secs(1);
+/// When the process first used a guard, for [`ENDED_AT`].
+static START: OnceLock<Instant> = OnceLock::new();
+/// When the last guard ended, in milliseconds after [`START`]; `u64::MAX`
+/// when none has.
+static ENDED_AT: AtomicU64 = AtomicU64::new(u64::MAX);
+
+/// Whether a Ctrl+C now is passed over: a guard lives, or one has just
+/// ended.
+fn passing_over() -> bool {
+    if PASSING_OVER.load(Ordering::SeqCst) {
+        return true;
+    }
+    let ended = ENDED_AT.load(Ordering::SeqCst);
+    let Some(start) = START.get() else {
+        return false;
+    };
+    let now = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+    ended != u64::MAX && now.saturating_sub(ended) < u64::try_from(GRACE.as_millis()).unwrap_or(0)
 }
 
 /// Stops the program, which Windows has no way to do: nothing happens.

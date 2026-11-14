@@ -162,6 +162,54 @@ fn a_cursor_never_reaches_past_the_last_column_a_row_may_use() {
 }
 
 #[test]
+fn no_row_is_wider_than_its_width_whatever_follows_white_space() {
+    let pieces = [
+        " ",
+        "a",
+        "ab",
+        "\u{4F60}\u{597D}",
+        "\u{4F60}",
+        "word",
+        "\t",
+        "e\u{301}",
+    ];
+    for width in 1..12 {
+        for a in pieces {
+            for b in pieces {
+                for c in pieces {
+                    for d in pieces {
+                        let text = format!("{a}{b}{c}{d}{a}{c}");
+                        let editor = editor(&text);
+                        let layout = editor.layout(width);
+                        for row in &layout.rows {
+                            let row_text = &text[row.range.clone()];
+                            let columns: usize = cortex_base::text::graphemes(row_text)
+                                .map(|(_, cluster, w)| if cluster == "\t" { 4 } else { w })
+                                .sum();
+                            let alone = cortex_base::text::graphemes(row_text).count() == 1;
+                            assert!(
+                                columns <= width || alone,
+                                "width {width}: {row_text:?} is {columns} columns"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // A chip after white space, as the review found.
+    let mut editor = Editor::new();
+    editor.type_str("look at this:");
+    editor.insert(Fragment::chip(Chip::new(
+        "x\n".repeat(148),
+        "[pasted 148 lines]",
+    )));
+    let layout = editor.layout(20);
+    assert!(layout.cursor_col <= 20, "{layout:?}");
+    assert!(layout.rows.len() >= 2);
+}
+
+#[test]
 fn typing_is_undone_a_word_at_a_time() {
     let mut editor = Editor::new();
     for c in "fix the bug".chars() {
@@ -241,6 +289,28 @@ fn kills_one_after_another_join_in_the_slot() {
     editor.left();
     editor.kill_word_back();
     assert_eq!(editor.slot().unwrap().expanded(), "beta");
+}
+
+#[test]
+fn kills_both_ways_join_in_the_slot_in_the_texts_order() {
+    let mut editor = editor("abcdef");
+    editor.set_cursor(3);
+    editor.kill_to_line_start();
+    editor.kill_to_line_end();
+    assert_eq!(editor.text(), "");
+    assert_eq!(editor.slot().unwrap().expanded(), "abcdef");
+}
+
+#[test]
+fn a_place_inside_a_character_is_never_a_panic() {
+    let mut editor = editor("\u{E9}x\u{1F1EB}\u{1F1F7}");
+    for at in 0..12 {
+        editor.set_cursor(at);
+        assert!(editor.text().is_char_boundary(editor.cursor()));
+        assert_eq!(editor.chip_at(at), None);
+        let mut copy = self::editor(editor.text());
+        copy.replace(at..at + 1, Fragment::text("y"));
+    }
 }
 
 #[test]
