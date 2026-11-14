@@ -280,6 +280,38 @@ fn install_handlers() -> io::Result<()> {
     Ok(())
 }
 
+/// The actions SIGINT and SIGQUIT had before [`ignore_interrupts`].
+pub(crate) type Interrupts = Vec<(libc::c_int, libc::sigaction)>;
+
+/// Ignores SIGINT and SIGQUIT, and returns what they did before.
+pub(crate) fn ignore_interrupts() -> io::Result<Interrupts> {
+    let mut previous = Interrupts::new();
+    for signal in [libc::SIGINT, libc::SIGQUIT] {
+        // SAFETY: a zeroed `sigaction` is a valid one with an empty mask and
+        // no flags; its handler is then set to "ignore".
+        let mut ignore: libc::sigaction = unsafe { std::mem::zeroed() };
+        ignore.sa_sigaction = libc::SIG_IGN;
+        let mut old = MaybeUninit::<libc::sigaction>::zeroed();
+        // SAFETY: `ignore` is complete, and `old` is filled by the call.
+        let set = unsafe { libc::sigaction(signal, &raw const ignore, old.as_mut_ptr()) };
+        if let Err(error) = check(set) {
+            restore_interrupts(&previous);
+            return Err(error);
+        }
+        // SAFETY: the call succeeded, so it filled `old`.
+        previous.push((signal, unsafe { old.assume_init() }));
+    }
+    Ok(previous)
+}
+
+/// Puts back what [`ignore_interrupts`] found.
+pub(crate) fn restore_interrupts(previous: &Interrupts) {
+    for (signal, action) in previous.iter().rev() {
+        // SAFETY: `action` is what `sigaction` gave back for this signal.
+        unsafe { libc::sigaction(*signal, action, std::ptr::null_mut()) };
+    }
+}
+
 /// Stops the program as Ctrl+Z would, with the terminal put back while it
 /// is stopped and raw mode put back when it is continued.
 pub(crate) fn suspend() {
@@ -586,5 +618,79 @@ mod tests {
         // The test process never entered raw mode: as after a restore.
         assert!(!ACTIVE.load(Ordering::SeqCst));
         assert!(write(b"\x1b[?25l").is_err());
+    }
+
+    static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn on_interrupt(_: libc::c_int) {
+        INTERRUPTED.store(true, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn interrupts_are_ignored_while_the_guard_lives_and_handled_after() {
+        // A handler of the test's own, so that a signal that is not ignored
+        // is seen rather than ending the test.
+        let mut before = Vec::new();
+        for signal in [libc::SIGINT, libc::SIGQUIT] {
+            let action = action(on_interrupt);
+            let mut old = MaybeUninit::<libc::sigaction>::zeroed();
+            // SAFETY: `action` is complete, and `old` is filled by the call.
+            unsafe { check(libc::sigaction(signal, &raw const action, old.as_mut_ptr())).unwrap() };
+            // SAFETY: the call succeeded.
+            before.push((signal, unsafe { old.assume_init() }));
+        }
+        let guard = crate::ignore_interrupts().unwrap();
+        for signal in [libc::SIGINT, libc::SIGQUIT] {
+            // SAFETY: the signal is ignored now: raising it does nothing.
+            unsafe { libc::raise(signal) };
+        }
+        assert!(
+            !INTERRUPTED.load(Ordering::SeqCst),
+            "ignored while the guard lives"
+        );
+        drop(guard);
+        // SAFETY: the test's handler is back, and only sets a flag.
+        unsafe { libc::raise(libc::SIGINT) };
+        assert!(
+            INTERRUPTED.swap(false, Ordering::SeqCst),
+            "handled again after it"
+        );
+        // SAFETY: as above.
+        unsafe { libc::raise(libc::SIGQUIT) };
+        assert!(INTERRUPTED.load(Ordering::SeqCst), "SIGQUIT too");
+        restore_interrupts(&before);
+    }
+
+    #[test]
+    fn a_panic_with_the_guard_puts_the_actions_back() {
+        let mut found = MaybeUninit::<libc::sigaction>::zeroed();
+        // SAFETY: a null action reads the current one into `found`.
+        unsafe {
+            check(libc::sigaction(
+                libc::SIGINT,
+                std::ptr::null(),
+                found.as_mut_ptr(),
+            ))
+            .unwrap()
+        };
+        // SAFETY: the call succeeded.
+        let before = unsafe { found.assume_init() }.sa_sigaction;
+        let unwound = std::panic::catch_unwind(|| {
+            let _guard = crate::ignore_interrupts().unwrap();
+            panic!("a panic while the editor runs");
+        });
+        assert!(unwound.is_err());
+        // SAFETY: as above.
+        unsafe {
+            check(libc::sigaction(
+                libc::SIGINT,
+                std::ptr::null(),
+                found.as_mut_ptr(),
+            ))
+            .unwrap()
+        };
+        // SAFETY: the call succeeded.
+        assert_eq!(unsafe { found.assume_init() }.sa_sigaction, before);
+        assert_ne!(before, libc::SIG_IGN);
     }
 }

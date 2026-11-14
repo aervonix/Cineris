@@ -182,6 +182,51 @@ pub fn is_terminal() -> bool {
 
 static PANIC_HOOK: Once = Once::new();
 
+/// While this lives, the process ignores the keys that interrupt a
+/// program at the terminal: SIGINT and SIGQUIT on Unix (`Ctrl+C`,
+/// `Ctrl+\`), and `Ctrl+C` on Windows. For a child that has been handed the
+/// terminal, such as the user's own editor: the keys reach the child, and
+/// do not end the program waiting for it. Dropping it, a panic's unwinding
+/// included, puts back what was there before.
+///
+/// **Take it after the child is started.** An ignored signal stays ignored
+/// across `exec` on Unix, and the attribute is inherited by new processes on
+/// Windows, so a child started while it lives cannot be interrupted either.
+/// A key pressed in the moment between the child's start and this call
+/// reaches the program as it would without it: the terminal's own handler
+/// on Unix, or the end of the process on Windows once the terminal has
+/// been left.
+///
+/// On Windows dropping it clears the attribute, whatever it was before.
+#[must_use = "interrupts are ignored only while the guard lives"]
+pub struct InterruptsIgnored {
+    previous: sys::Interrupts,
+}
+
+impl fmt::Debug for InterruptsIgnored {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InterruptsIgnored").finish_non_exhaustive()
+    }
+}
+
+/// Ignores the interrupt keys until the guard is dropped. See
+/// [`InterruptsIgnored`].
+///
+/// # Errors
+///
+/// When the system refuses. Nothing is changed then.
+pub fn ignore_interrupts() -> io::Result<InterruptsIgnored> {
+    Ok(InterruptsIgnored {
+        previous: sys::ignore_interrupts()?,
+    })
+}
+
+impl Drop for InterruptsIgnored {
+    fn drop(&mut self) {
+        sys::restore_interrupts(&self.previous);
+    }
+}
+
 /// A terminal in raw mode. See the [module documentation](self).
 #[derive(Debug)]
 pub struct Terminal<D: Device = System> {

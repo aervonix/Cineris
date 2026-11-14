@@ -53,7 +53,7 @@ use std::process::Command;
 
 use cortex_base::program;
 use cortex_base::rng::{Rng, SystemRng};
-use cortex_term::{Inline, Overrides, Terminal};
+use cortex_term::{Inline, Overrides, Sink, Terminal};
 
 use crate::editor::{Chip, Fragment};
 
@@ -115,8 +115,12 @@ pub enum EditorError {
     Failed(Option<i32>),
     /// The editor was killed by this signal.
     Killed(i32),
-    /// The file the editor left is not UTF-8.
-    NotText,
+    /// The file the editor left is not UTF-8. It is kept, at this path,
+    /// so that what was written in it is not lost.
+    NotText(PathBuf),
+    /// Handing the terminal over failed partway. It has been taken back,
+    /// and the editor was not run.
+    Release(io::Error),
     /// The terminal could not be taken back. The caller should end.
     Terminal(io::Error),
 }
@@ -137,7 +141,12 @@ impl fmt::Display for EditorError {
             Self::Failed(Some(code)) => write!(f, "the editor ended with exit code {code}"),
             Self::Failed(None) => write!(f, "the editor failed"),
             Self::Killed(signal) => write!(f, "the editor was killed (signal {signal})"),
-            Self::NotText => write!(f, "the editor left text that is not UTF-8"),
+            Self::NotText(path) => write!(
+                f,
+                "the editor left text that is not UTF-8; it is kept in {}",
+                path.display()
+            ),
+            Self::Release(error) => write!(f, "the terminal could not be handed over: {error}"),
             Self::Terminal(error) => write!(f, "the terminal could not be taken back: {error}"),
         }
     }
@@ -209,7 +218,12 @@ impl Handoff for TerminalHandoff<'_> {
         if self.terminal.is_some() {
             return Ok(());
         }
-        let terminal = Terminal::enter(self.overrides)?;
+        let mut terminal = Terminal::enter(self.overrides)?;
+        // What an editor that was killed may have left on: the alternate
+        // screen, mouse reporting, application keys, its keyboard flags. The
+        // interface's own keyboard flags are pushed after this, when the
+        // terminal answers.
+        terminal.write_frame(LEFT_ON)?;
         let (cols, rows) = terminal.size()?;
         self.inline.resize(cols, rows);
         self.inline.restart();
@@ -217,6 +231,13 @@ impl Handoff for TerminalHandoff<'_> {
         Ok(())
     }
 }
+
+/// Turns off what a full-screen editor turns on: the alternate screen
+/// (without moving the cursor, as 1049 would), mouse reporting, application
+/// cursor keys and keypad, every level of the enhanced keyboard protocol's
+/// flags, and a hidden cursor.
+const LEFT_ON: &[u8] =
+    b"\x1b[?1047l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1l\x1b>\x1b[<99u\x1b[?25h";
 
 /// The editor to run, from `env`.
 ///
@@ -239,11 +260,9 @@ pub fn find(env: &Env) -> Result<Program, EditorError> {
 fn from_value(value: &str, env: &Env) -> Result<Program, EditorError> {
     // The whole value, if it is the absolute path of a program as it is
     // (spaces and all), or a name found on PATH.
-    let whole = Path::new(value);
-    let absolute = whole.is_absolute() || (env.windows && is_windows_absolute(value));
-    if absolute && program::is_program(whole, env.windows) {
+    if let Some(path) = absolute_program(value, env) {
         return Ok(Program {
-            path: whole.to_path_buf(),
+            path,
             args: Vec::new(),
         });
     }
@@ -267,9 +286,8 @@ fn from_value(value: &str, env: &Env) -> Result<Program, EditorError> {
 /// refused.
 fn locate(name: &str, env: &Env) -> Result<Option<PathBuf>, EditorError> {
     let path = Path::new(name);
-    let absolute = path.is_absolute() || (env.windows && is_windows_absolute(name));
-    if absolute {
-        return Ok(program::is_program(path, env.windows).then(|| path.to_path_buf()));
+    if path.is_absolute() || (env.windows && is_windows_absolute(name)) {
+        return Ok(absolute_program(name, env));
     }
     let has_separator = name.contains('/') || (env.windows && name.contains('\\'));
     if has_separator {
@@ -279,15 +297,39 @@ fn locate(name: &str, env: &Env) -> Result<Option<PathBuf>, EditorError> {
         return Ok(None);
     }
     if env.windows && Path::new(name).extension().is_none() {
-        for extension in ["exe", "com", "cmd", "bat"] {
-            let found = program::find(&env.path, &format!("{name}.{extension}"), true);
-            if found.is_some() {
-                return Ok(found);
+        // Folder by folder, as the command prompt looks: a wrapper early in
+        // PATH wins over a program later in it.
+        for folder in &env.path {
+            for extension in ["exe", "com", "cmd", "bat"] {
+                let found = program::find(
+                    std::slice::from_ref(folder),
+                    &format!("{name}.{extension}"),
+                    true,
+                );
+                if found.is_some() {
+                    return Ok(found);
+                }
             }
         }
         return Ok(None);
     }
     Ok(program::find(&env.path, name, env.windows))
+}
+
+/// `name` as an absolute path to a program, if it is one. On Windows a path
+/// with no extension is the one with `.exe`, which is what starting it
+/// would run.
+fn absolute_program(name: &str, env: &Env) -> Option<PathBuf> {
+    let path = Path::new(name);
+    if !(path.is_absolute() || (env.windows && is_windows_absolute(name))) {
+        return None;
+    }
+    let path = if env.windows && path.extension().is_none() {
+        path.with_extension("exe")
+    } else {
+        path.to_path_buf()
+    };
+    program::is_program(&path, env.windows).then_some(path)
 }
 
 /// `C:\…` or `\\server\…`: absolute by Windows's rules, whatever system
@@ -337,14 +379,16 @@ fn default(env: &Env) -> Result<Program, EditorError> {
 /// command line, without running a shell. `None` when a quote is not
 /// closed.
 ///
-/// - **Linux**, as a POSIX shell splits words: white space separates;
+/// - **Linux**, as a POSIX shell splits words: a space, a tab or a line
+///   break separates;
 ///   `'…'` keeps everything in it; `"…"` keeps everything but a backslash
 ///   before `"`, `\`, `$` or `` ` ``; a backslash outside quotes keeps the
 ///   next character. Nothing is expanded.
-/// - **Windows**, as programs split their command line: white space
-///   separates; `"…"` groups; backslashes are literal except before a `"`,
-///   where each two make one and an odd one makes the `"` literal; `''` is
-///   not a quote.
+/// - **Windows**, as programs split their command line: the program is
+///   taken as it is, up to its closing `"` when it starts with one or to a
+///   space or a tab; after it a space or a tab separates, `"…"` groups,
+///   backslashes are literal except before a `"`, where each two make one
+///   and an odd one makes the `"` literal, and `'` is not a quote.
 #[must_use]
 pub fn split(value: &str, windows: bool) -> Option<Vec<String>> {
     if windows {
@@ -361,7 +405,7 @@ fn split_posix(value: &str) -> Option<Vec<String>> {
     let mut chars = value.chars();
     while let Some(c) = chars.next() {
         match c {
-            c if c.is_whitespace() => {
+            ' ' | '\t' | '\n' => {
                 if in_word {
                     words.push(std::mem::take(&mut word));
                     in_word = false;
@@ -414,6 +458,25 @@ fn split_posix(value: &str) -> Option<Vec<String>> {
 }
 
 fn split_windows(value: &str) -> Option<Vec<String>> {
+    let value = value.trim_start_matches([' ', '\t']);
+    let (program, rest) = match value.strip_prefix('"') {
+        Some(quoted) => match quoted.find('"') {
+            Some(end) => (&quoted[..end], &quoted[end + 1..]),
+            None => (quoted, ""),
+        },
+        None => {
+            let end = value.find([' ', '\t']).unwrap_or(value.len());
+            (&value[..end], &value[end..])
+        }
+    };
+    let mut words = split_windows_arguments(rest)?;
+    if !program.is_empty() {
+        words.insert(0, program.to_owned());
+    }
+    Some(words)
+}
+
+fn split_windows_arguments(value: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut in_word = false;
@@ -450,7 +513,7 @@ fn split_windows(value: &str) -> Option<Vec<String>> {
                 }
                 quoted = !quoted;
             }
-            c if c.is_whitespace() && !quoted => {
+            ' ' | '\t' if !quoted => {
                 if in_word {
                     words.push(std::mem::take(&mut word));
                     in_word = false;
@@ -551,23 +614,23 @@ pub fn edit(
     handoff: &mut dyn Handoff,
     temp: &Path,
 ) -> Result<Edited, EditorError> {
+    if !temp.is_absolute() {
+        return Err(EditorError::File(io::Error::other(
+            "the temporary folder is not an absolute path",
+        )));
+    }
     let (text, labels) = to_file(prompt);
     let folder = Folder::new(temp).map_err(EditorError::File)?;
     let file = folder.path.join("prompt.md");
     write_private(&file, &text).map_err(EditorError::File)?;
 
     let released = handoff.release();
-    let status = released.is_ok().then(|| {
-        Command::new(&editor.path)
-            .args(&editor.args)
-            .arg(&file)
-            .status()
-    });
+    let status = released.is_ok().then(|| run(editor, &file, &folder.path));
     // Taken back whatever the editor did, and even when handing it over
     // failed partway: part of it may have been put back.
     let reclaimed = handoff.reclaim();
-    released.map_err(EditorError::Terminal)?;
     reclaimed.map_err(EditorError::Terminal)?;
+    released.map_err(EditorError::Release)?;
 
     let status = status
         .unwrap_or_else(|| Err(io::Error::other("the terminal was not handed over")))
@@ -582,10 +645,19 @@ pub fn edit(
         }
         return Err(EditorError::Failed(status.code()));
     }
-    let read = read_back(&file)?;
+    let Some(read) = read_back(&file).map_err(EditorError::File)? else {
+        // Kept, with what was written in it.
+        let kept = file.clone();
+        std::mem::forget(folder);
+        return Err(EditorError::NotText(kept));
+    };
     drop(folder);
 
-    let mut read = crate::editor::normalize(&read).into_owned();
+    let read = match read.strip_prefix('\u{FEFF}') {
+        Some(rest) if !text.starts_with('\u{FEFF}') => rest,
+        _ => &read,
+    };
+    let mut read = crate::editor::normalize(read).into_owned();
     if read.ends_with('\n') && !text.ends_with('\n') {
         read.pop();
     }
@@ -608,12 +680,33 @@ fn write_private(file: &Path, text: &str) -> io::Result<()> {
     handle.flush()
 }
 
-fn read_back(file: &Path) -> Result<String, EditorError> {
-    let (mut handle, _) = cortex_base::open_regular(file)
-        .map_err(|error| EditorError::File(io::Error::other(format!("{error}"))))?;
+/// Runs the editor on `file`, in `folder`, and waits for it. Its working
+/// folder is the private one, not the workspace: an editor that reads a
+/// configuration from where it starts (or, on Windows, a `.cmd` wrapper
+/// whose command prompt looks for programs there) finds nothing planted.
+fn run(editor: &Program, file: &Path, folder: &Path) -> io::Result<std::process::ExitStatus> {
+    let mut command = Command::new(&editor.path);
+    command.args(&editor.args).arg(file).current_dir(folder);
+    if cfg!(windows) {
+        command.env("NoDefaultCurrentDirectoryInExePath", "1");
+    }
+    let mut child = command.spawn()?;
+    // Taken after the start, so that the editor's own Ctrl+C still works: a
+    // key that interrupts reaches the editor and leaves the interface, and
+    // the prompt, alone.
+    let ignored = cortex_term::ignore_interrupts();
+    let status = child.wait();
+    drop(ignored);
+    status
+}
+
+/// The file's text, or `None` when it is not UTF-8.
+fn read_back(file: &Path) -> io::Result<Option<String>> {
+    let (mut handle, _) =
+        cortex_base::open_regular(file).map_err(|error| io::Error::other(format!("{error}")))?;
     let mut bytes = Vec::new();
-    handle.read_to_end(&mut bytes).map_err(EditorError::File)?;
-    String::from_utf8(bytes).map_err(|_| EditorError::NotText)
+    handle.read_to_end(&mut bytes)?;
+    Ok(String::from_utf8(bytes).ok())
 }
 
 /// A new folder only the user can open, removed with what is in it when
@@ -665,6 +758,7 @@ mod tests {
         assert_eq!(split(r"my\ editor -x", false).unwrap(), ["my editor", "-x"]);
         assert_eq!(split("vim 'open", false), None);
         assert_eq!(split("  ", false).unwrap(), Vec::<String>::new());
+        assert_eq!(split("ed a\u{3000}b", false).unwrap(), ["ed", "a\u{3000}b"]);
     }
 
     #[test]
@@ -673,10 +767,18 @@ mod tests {
             split(r#""C:\Program Files\Code\code.cmd" --wait"#, true).unwrap(),
             [r"C:\Program Files\Code\code.cmd", "--wait"]
         );
-        assert_eq!(split(r#"a\\\"b c\d"#, true).unwrap(), [r#"a\"b"#, r"c\d"]);
-        assert_eq!(split(r#"a\\"b c" d"#, true).unwrap(), [r"a\b c", "d"]);
-        assert_eq!(split("'a b'", true).unwrap(), ["'a", "b'"]);
-        assert_eq!(split(r#""open"#, true), None);
+        assert_eq!(
+            split(r#"ed a\\\"b c\d"#, true).unwrap(),
+            ["ed", r#"a\"b"#, r"c\d"]
+        );
+        assert_eq!(
+            split(r#"ed a\\"b c" d"#, true).unwrap(),
+            ["ed", r"a\b c", "d"]
+        );
+        assert_eq!(split("ed 'a b'", true).unwrap(), ["ed", "'a", "b'"]);
+        assert_eq!(split(r#""C:\x\" -n"#, true).unwrap(), [r"C:\x\", "-n"]);
+        assert_eq!(split(r#"ed "open"#, true), None);
+        assert_eq!(split("ed a\u{A0}b", true).unwrap(), ["ed", "a\u{A0}b"]);
     }
 
     #[test]
@@ -692,6 +794,96 @@ mod tests {
         let split = find(&env(format!("\"{}\" --wait -n", exe.display()))).unwrap();
         assert_eq!(split.path, exe);
         assert_eq!(split.args, ["--wait", "-n"]);
+    }
+
+    /// A folder of the test's own with these files in it, each marked as a
+    /// program on Linux.
+    fn folder(test: &str, files: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "cortex-tui-external-{test}-{:016x}",
+            SystemRng::new().next_u64()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in files {
+            let path = dir.join(name);
+            std::fs::write(&path, b"").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        dir
+    }
+
+    #[test]
+    fn on_windows_a_name_is_looked_for_folder_by_folder_with_its_extensions_only() {
+        let first = folder("first", &["ed", "ed.bat"]);
+        let second = folder("second", &["ed.exe"]);
+        let env = Env {
+            editor: Some("ed --wait".into()),
+            path: vec![PathBuf::from("relative"), first.clone(), second.clone()],
+            windows: true,
+            ..Env::default()
+        };
+        let found = find(&env).unwrap();
+        assert_eq!(
+            found.path,
+            first.join("ed.bat"),
+            "the wrapper earlier in PATH"
+        );
+        assert_eq!(found.args, ["--wait"]);
+        // The file with no extension is never the program.
+        let only_bare = folder("bare", &["vim"]);
+        let env = Env {
+            editor: Some("vim".into()),
+            path: vec![only_bare.clone()],
+            windows: true,
+            ..Env::default()
+        };
+        assert!(matches!(find(&env), Err(EditorError::NotFound(_))));
+        // An absolute path with no extension is the one with `.exe`.
+        let env = Env {
+            editor: Some(second.join("ed").display().to_string().into()),
+            windows: true,
+            ..Env::default()
+        };
+        assert_eq!(find(&env).unwrap().path, second.join("ed.exe"));
+        for dir in [first, second, only_bare] {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_defaults_are_vi_then_nano_and_notepad_in_the_system_folder() {
+        let tools = folder("defaults", &["nano"]);
+        let env = Env {
+            path: vec![tools.clone()],
+            ..Env::default()
+        };
+        assert_eq!(find(&env).unwrap().path, tools.join("nano"));
+        let root = folder("root", &[]);
+        std::fs::create_dir_all(root.join("System32")).unwrap();
+        std::fs::write(root.join("System32").join("notepad.exe"), b"").unwrap();
+        let env = Env {
+            system_root: Some(root.clone()),
+            path: vec![tools.clone()],
+            windows: true,
+            ..Env::default()
+        };
+        assert_eq!(
+            find(&env).unwrap().path,
+            root.join("System32").join("notepad.exe")
+        );
+        // An empty variable is passed over.
+        let env = Env {
+            visual: Some("  ".into()),
+            path: vec![tools.clone()],
+            ..Env::default()
+        };
+        assert_eq!(find(&env).unwrap().path, tools.join("nano"));
+        std::fs::remove_dir_all(tools).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
