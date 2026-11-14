@@ -72,7 +72,7 @@ impl Terms {
             .lines()
             // A byte-order mark, as some editors write one, is no part of
             // the first term: kept, it would make that term match nothing.
-            .map(|line| line.trim_start_matches('\u{feff}').trim())
+            .map(|line| line.trim().trim_start_matches('\u{feff}').trim())
             .filter(|line| !line.is_empty())
             .map(|line| Term {
                 lowered: fold(line),
@@ -94,7 +94,17 @@ impl Terms {
         self.terms.iter().any(|term| {
             term.lowered.chars().any(|character| {
                 character.is_control()
-                    || matches!(character, '\u{200b}'..='\u{200f}' | '\u{2060}' | '\u{feff}')
+                    || matches!(
+                        character,
+                        '\u{00ad}'
+                            | '\u{180e}'
+                            | '\u{200b}'..='\u{200f}'
+                            | '\u{202a}'..='\u{202e}'
+                            | '\u{2060}'..='\u{2064}'
+                            | '\u{2066}'..='\u{2069}'
+                            | '\u{fe00}'..='\u{fe0f}'
+                            | '\u{feff}'
+                    )
             })
         })
     }
@@ -545,6 +555,10 @@ mod tests {
         assert!(!terms.has_hidden_characters());
         assert!(Terms::parse("Quen\u{200b}tin\n").has_hidden_characters());
         assert!(Terms::parse("a\u{7}b\n").has_hidden_characters());
+        assert!(Terms::parse("Quen\u{202e}tin\n").has_hidden_characters());
+        assert!(Terms::parse("Quen\u{ad}tin\n").has_hidden_characters());
+        // A mark after white space is taken off too.
+        assert!(Terms::parse("  \u{feff}Quentin\n").matches("Quentin"));
     }
 
     #[test]

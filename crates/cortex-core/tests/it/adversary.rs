@@ -406,12 +406,20 @@ fn sys_the_fixture_sees_each_thing_a_command_can_reach() {
     let reached = reach.reached(&world);
     assert_eq!(
         reached.outside,
-        ["outside/f (made)", "outside/existing.txt (removed)"]
+        ["outside/f (made)", "outside/existing.txt (removed)"],
+        "{reached:#?}"
     );
-    assert_eq!(reached.protected, [".git/hooks/pre-commit (made)"]);
-    assert_eq!(reached.connections, 1);
+    assert_eq!(
+        reached.protected,
+        [".git/hooks/pre-commit (made)"],
+        "{reached:#?}"
+    );
+    assert_eq!(reached.connections, 1, "{reached:#?}");
     assert_eq!(reached.survivors.len(), 1, "{reached:#?}");
-    assert!(reached.survivors[0].starts_with(&child.id().to_string()));
+    assert!(
+        reached.survivors[0].starts_with(&format!("{} ", child.id())),
+        "{reached:#?}"
+    );
     assert!(!reached.nothing_outside());
     // Killed when it was counted.
     assert!(!child.wait().unwrap().success());

@@ -227,7 +227,7 @@ caught-by:
 rule: A byte-order mark at the start of the terms is no part of the first term.
 file: xtask/src/owner_guard.rs
 in: Terms::parse
-find: .map(|line| line.trim_start_matches('\u{feff}').trim())
+find: .map(|line| line.trim().trim_start_matches('\u{feff}').trim())
 replace: .map(str::trim)
 caught-by:
     owner_guard::tests::a_byte_order_mark_is_no_part_of_a_term_and_a_hidden_character_is_seen
@@ -245,8 +245,8 @@ caught-by:
 rule: A push to a URL is held only against what git says the URL has, not against another remote's branches.
 file: xtask/src/owner_guard/local.rs
 in: check
-find: let remotes = named_remote.then(|| format!("--remotes={remote}"));
-replace: let remotes = Some(if named_remote { format!("--remotes={remote}") } else { "--remotes".to_owned() });
+find: let remotes: Vec<String> = remotes_for(dir, remote)
+replace: let remotes: Vec<String> = vec!["--remotes".to_owned()]; let _unused: Vec<String> = remotes_for(dir, remote)
 caught-by:
     owner_guard::local::tests::sys_what_the_machine_or_another_remote_could_hide_is_still_read
 
@@ -283,5 +283,32 @@ file: crates/cortex-base/src/path/location.rs
 in: Place::read
 find: "." | ".." if verbatim => return None,
 replace: "." | ".." if verbatim && false => return None,
+caught-by:
+    cortex-base path::location::tests::what_cannot_be_read_as_a_place_is_compared_exactly
+
+[break] a-mistyped-requirement-is-not-required
+rule: A value of cortex.ownerTermsRequired that is not a plain false requires the terms file.
+file: xtask/src/owner_guard/local.rs
+in: required
+find: !matches!(value.as_str(), "false" | "no" | "off" | "0")
+replace: matches!(value.as_str(), "true" | "yes" | "on" | "1")
+caught-by:
+    owner_guard::local::tests::sys_a_repository_that_requires_the_file_refuses_a_push_without_it
+
+[break] a-verbatim-slash-is-read-as-a-separator
+rule: A `/` in an extended-length path is part of a name to Windows, and is compared exactly.
+file: crates/cortex-base/src/path/location.rs
+in: Place::read
+find: if verbatim && text[4..].contains('/') {
+replace: if false {
+caught-by:
+    cortex-base path::location::tests::what_cannot_be_read_as_a_place_is_compared_exactly
+
+[break] a-relative-path-climbs-out-unseen
+rule: A relative path whose `..` climbs above where it starts is compared exactly.
+file: crates/cortex-base/src/path/location.rs
+in: Place::read
+find: if names.pop().is_none() && !rooted {
+replace: if names.pop().is_none() && false {
 caught-by:
     cortex-base path::location::tests::what_cannot_be_read_as_a_place_is_compared_exactly
