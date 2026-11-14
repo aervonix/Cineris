@@ -405,7 +405,7 @@ A multi-line text editor of our own. A text-area crate was considered and not us
 - **Text model.** UTF-8 with cursor movement, deletion and wrapping by grapheme cluster.
 - **Movement and editing.** Characters, words, line ends, buffer ends. Delete word and line. One kill-and-yank slot. Undo and redo with typing grouped into words.
 - **History.** Up and Down on the first and last line step through earlier prompts for this project. `Ctrl+R` searches them.
-- **Paste.** Bracketed paste is enabled, so pasted text is inserted as text and never interpreted as keys. A paste of more than 12 lines or 2,000 characters is shown as a chip (`[pasted 148 lines]`) and expanded when the prompt is sent. A key expands it in place.
+- **Paste.** Bracketed paste is enabled, so pasted text is inserted as text and never interpreted as keys. A paste of more than 12 lines or 2,000 characters is shown as a chip (`[pasted 148 lines]`) and expanded when the prompt is sent. `Ctrl+X` expands it in place.
 - **Files.** Typing `@` opens file completion over the workspace, with fuzzy matching and the ignore rules. An accepted path is inserted as a token and sent as a reference the agent can read.
 - **Commands.** `/` at the start of the prompt opens the command menu.
 - **External editor.** `Ctrl+G` opens the prompt in `$EDITOR` and reads it back.
@@ -413,7 +413,7 @@ A multi-line text editor of our own. A text-area crate was considered and not us
 
 ### Default keys
 
-Every binding can be changed in `[keys]`. Bindings are looked up through a key map; no key is tested for directly in component code.
+Every binding can be changed in `[keys]`. Bindings are looked up through a key map; no key is tested for directly in component code. The map's actions and their names are listed in "The editor as built (step 21)", below.
 
 | Key | Action |
 |---|---|
@@ -428,10 +428,62 @@ Every binding can be changed in `[keys]`. Bindings are looked up through a key m
 | `Ctrl+T` | Open or close the running round's box in place. |
 | `Ctrl+R` | Search prompt history. |
 | `Ctrl+G` | Edit the prompt in the external editor. |
-| `Tab` | Accept a completion. With no completion and a turn running: switch steer and queue. |
-| `Up`, `Down` | Move in the editor. At its first or last line: history. In a menu: move. |
-| `Ctrl+A`, `Ctrl+E`, `Ctrl+W`, `Ctrl+K`, `Ctrl+U`, `Ctrl+Y`, `Alt+B`, `Alt+F`, `Ctrl+Z`, `Ctrl+Shift+Z` | The usual line-editing actions: line start and end, delete word, delete to end, delete to start, yank, word left and right, undo, redo. |
+| `Tab` | Accept a completion. With no completion and a turn running: switch steer and queue. In the `/effort` picker: the fast-mode toggle, and only `Enter` accepts. |
+| `Shift+Tab` | In a menu: move up. |
+| `Up`, `Down` | Move in the editor. At its first or last row: history. In a menu: move. In the history search: older and newer matches. |
+| `Ctrl+A`, `Ctrl+E`, `Ctrl+W`, `Ctrl+K`, `Ctrl+U`, `Ctrl+Y`, `Alt+B`, `Alt+F` | The usual line-editing actions: line start and end, delete word, delete to end of line, delete to start of line, yank, word left and right. `Ctrl+W`, `Ctrl+K`, `Ctrl+U` and `Alt+D` fill the one kill slot, and kills one after another join in it. |
+| `Ctrl+Z`, `Ctrl+_` | Undo. `Ctrl+_` is what `Ctrl+/` and `Ctrl+-` send; the enhanced keyboard protocol reports the key as `Ctrl+/`, which is bound too. |
+| `Ctrl+Shift+Z`, `Alt+Z` | Redo. Plain virtual-terminal input sends `Ctrl+Shift+Z` as `Ctrl+Z`; `Alt+Z` reaches every terminal. |
+| `Ctrl+X` | Expand the paste chip beside the cursor in place. |
+| `Left`, `Right`, `Home`, `End`, `Backspace`, `Delete`, `Ctrl+Left`, `Ctrl+Right`, `Alt+D`, `Alt+Backspace`, `Ctrl+Home`, `Ctrl+End` | Character left and right, line start and end, delete back and forward, word left and right, delete the next word and the last, start and end of the prompt. |
 | `PageUp`, `PageDown` | Full-screen presenter: scroll. Inline: left to the terminal. |
+
+**Suspending** (stopping the program as a shell job, Unix only) is the action `global.suspend`, with no key by default: `Ctrl+Z` is undo. Whoever wants `Ctrl+Z` to suspend binds it in `[keys]`. The owner chose this on 2026-11-14 ([steps/21/answered.md](../steps/21/answered.md)).
+
+### The editor as built (step 21)
+
+What steps 23 to 25 build on, in `cortex-tui`. Its public items are documented in the crate.
+
+| Module | What it is |
+|---|---|
+| `editor` | `Editor`: the prompt's text, the cursor, undo and redo, the kill slot, and `layout(width)`, the rows and the cursor's place in them. `Fragment` and `Chip`: text with chips in it. |
+| `keys` | `Action`, `Context`, `KeyMap`, and `ACTIONS`, the one table of every action with its context, its name in `[keys]` and its default keys. `parse` reads a binding's text (`ctrl+shift+z`); `name` writes one. |
+| `history` | `HistoryStore`, which the caller fills, with `MemoryHistory` in memory; `Steps`, stepping with `Up` and `Down`; `Search`, `Ctrl+R`. |
+| `paste` | What a paste becomes: text, or a chip over 12 lines or 2,000 characters. |
+| `complete` | `trigger` (does the text at the cursor ask for `@` or `/`?), `Menu` (rows, selection, scrolling, a picker's filter and its toggle row), and `fuzzy`, the matcher. |
+| `focus` | `Ring`: the input, the live tool boxes, the panels. |
+| `input` | `Input`: all of the above driven by events. A key is looked up in the contexts of what has the keyboard, and the action found is done by `Input::act`, which a slash command calls too. What the input cannot do itself comes back as an `Outcome` (send, steer or queue a prompt, interrupt, quit, redraw, open the viewer, toggle the round's box, run the external editor, a picker's choice or toggle, a focused box or panel activated or moved in). |
+| `external` | `Ctrl+G`: `find` (which editor), `split` (its value in words), `edit` (the hand-off), and `TerminalHandoff` over `cortex_term::Terminal` and `Inline`. |
+
+**The text model.**
+- Every position is a grapheme cluster boundary, found by reading only the line it is in. A movement or a deletion takes a whole cluster, and an edit that joins two clusters (two halves of a flag, a combining mark pasted after a letter) leaves the cursor after the cluster it made.
+- A chip is one U+FFFC in the text, with the chips kept in a list in the order of their marks. A chip's mark is a cluster of its own, so an accent typed after a chip never takes the chip with it. A U+FFFC that arrives as text becomes a chip that holds that character, so none is lost.
+- Line breaks are `\n`: `\r\n` and a lone `\r` are taken as one. A tab is kept and drawn four columns wide. Other control characters are kept, and drawn as visible symbols by the renderer.
+- Rows break after the last white space that fits, or between clusters when a word is wider than the row, and keep every byte, so the cursor has a place everywhere. The cursor after a full row that ends a line sits one column past the text: the input box keeps that column for it, and no row reaches the box's edge.
+- Undo: characters typed one after another are one step until a word begins after something that is not a word (`fix the bug` undoes as `bug`, `the `, `fix `); deletes one at a time likewise. A paste, a yank, a kill, a completion, a line break, a history entry and the external editor's result are each a step of their own. A thousand steps are kept.
+- The kill slot: `Ctrl+W`, `Ctrl+K`, `Ctrl+U` and `Alt+D` put what they delete in it, and kills one after another join in it in the text's order; anything else in between starts it again.
+
+**Keys.** Each action belongs to one context: `editor`, `menu`, `picker`, `toggle`, `search`, `focus`, or `global`, which is looked up last whatever has the keyboard. A menu is looked up before the editor under it; a picker's filter takes typed text, so the editor is not under it; the `/effort` picker with its fast-mode row is `toggle`, `picker`, `menu`, so there `Tab` toggles and only `Enter` accepts. A key bound to nothing that types a character is typed. `Ctrl` or `Alt` with an upper-case letter is read as `Shift` with the lower-case one, as some terminals report it. In `[keys]` an action is named by its context and its own name, `editor.new_line = ["shift+enter", "alt+enter", "ctrl+j"]`, and the list replaces the action's defaults (an empty list unbinds it); a key given to an action is taken from any other action of the same context. An entry that cannot be used is reported and the action keeps its defaults.
+
+**Plain input merges two bindings.** Every default binding is tested through the terminal layer's decoder as plain virtual-terminal input, as win32 input records and, for the keys with modifiers, as the enhanced keyboard protocol. Plain input sends `Shift+Enter` as `Enter` (send) and `Ctrl+Shift+Z` as `Ctrl+Z` (undo); `Alt+Enter`, `Ctrl+J` and `Alt+Z` arrive as themselves everywhere. Win32 input records carry `Ctrl+/` and `Ctrl+_` as a layout's control code or nothing, so those two undo keys are not reached there; `Ctrl+Z` is.
+
+**History.** `Up` on the editor's first row (by row, as wrapped) shows the prompt before, with the cursor at its start, so the next `Up` goes on; `Down` on the last row shows the next with the cursor at its end, and past the newest what was being typed. An entry edited and stepped away from keeps its edit until a prompt is sent. `Ctrl+R` finds the newest prompt that holds the search, ignoring case; `Ctrl+R` or `Up` again finds the one before, `Down` the one after, `Enter` takes it into the editor as one step of undo, and `Esc` (or `Ctrl+G`) leaves the editor as it was. A search with no match takes nothing. A prompt sent is pushed to the store expanded, once, and not when it is the same as the newest.
+
+**Completion.** `@` at the start of the prompt or after white space opens file completion; accepting puts `@path ` in place of what was typed, with the path in quotes when it holds white space. `/` at the start of the prompt opens the command menu; accepting puts `/name `. The best 64 matches are kept, 8 are shown, and the menu scrolls to keep the selected row in view and wraps at either end. As the filter changes the best match is selected. A menu with no row says why: nothing matches, or the paths have not been listed yet. `Esc` closes it until the text asks again somewhere else.
+
+**The matcher** is our own (`complete::fuzzy`): the query's characters in order, ignoring case, scored for characters at the start of a part of a path, characters one after another, a match inside the file's own name, and a shorter path. ASCII paths are matched byte by byte with no allocation, and a query that extends the last one looks only at the last one's matches. On 100,000 generated paths it takes 1.2 ms a keystroke at the median and 4.0 ms at worst, optimised, on the desktop ([../performance-budgets.md](../performance-budgets.md)).
+
+**Steering and queueing.** While a turn runs, `Enter` sends the prompt to it (`Outcome::Submit` with `Delivery::Steer`), and `Tab` with nothing to complete switches between steering and queueing (`Delivery::Queue`). When the turn ends the input goes back to steering.
+
+**`Ctrl+C`.** A turn running: interrupt it. Idle with text: clear it, as one step of undo. Idle and empty: the first press arms quitting (`Outcome::QuitArmed`, which the hint row shows), and a second press quits; any other key disarms it.
+
+**The focus ring.** `Ctrl+P` moves along the input, each live tool box in the order drawn, each panel, then the input again. The caller says what is there with `Ring::update(boxes, panels)` whenever it changes; a target that goes away gives the focus back to the input. A new kind of target is its ids passed to `update`; the ring does not change. With a box or panel focused, `Enter`, `Esc`, `Up` and `Down` are the `focus` context's.
+
+**The external editor.**
+- **Which.** `$VISUAL`, then `$EDITOR`, then `vi` and `nano` on Linux, and Notepad by its absolute path in `%SystemRoot%\System32` on Windows. A value that is the absolute path of a program is taken whole, spaces and all; otherwise it is split into words without a shell, as a POSIX shell splits them on Linux and as a Windows program splits its command line on Windows (the program word as it is, then the usual quote and backslash rules), on spaces and tabs only. The program is an absolute path, or a name found by `cortex_base::program` in the absolute folders of `PATH`; a relative path is refused. On Windows a name with no extension is looked for as `.exe`, `.com`, `.cmd` and `.bat`, folder by folder, never as the file with no extension, and an absolute path with no extension is the one with `.exe`.
+- **The file.** `prompt.md` in a new folder of the system's temporary folder, both private to the user (`cortex_base::private`); the editor runs in that folder, not the workspace. A chip goes into the file as its label (with `#2` added when two have the same) and comes back as the chip where its label is still whole. The folder is removed afterwards, except when the editor left text that is not UTF-8: then it is kept, and the error names the file.
+- **The terminal.** `TerminalHandoff` erases the live region and leaves the terminal, so the editor has the modes the user's shell had (on Windows the console's modes and code pages too); after the editor it enters the terminal again, turns off what a killed full-screen editor may have left on (the alternate screen, mouse reporting, application keys, keyboard flags), and the presenter draws afresh where the cursor is. The terminal is taken back whatever the editor did. While the editor runs, the interface ignores the interrupt keys (`cortex_term::ignore_interrupts`, taken after the editor starts), so a `Ctrl+C` meant for the editor ends at most the editor.
+- **What comes back.** The file's text with `\r\n` as `\n`, a byte-order mark and the one line break an editor adds at the end taken off. An editor that could not start, failed, or was killed leaves the prompt as it was, with an error that says which. A file left empty also leaves the prompt as it was (emptying the prompt is `Ctrl+C`), and so does one left unchanged. A change replaces the prompt as one step of undo.
 
 ### Slash commands
 
@@ -483,7 +535,7 @@ Custom commands (markdown files, see [12-extensions.md](12-extensions.md)) and e
 | Unicode | Locale. | ASCII glyphs. |
 
 - **Restoring the terminal.** Raw mode, cursor visibility, keyboard mode, paste mode and the alternate screen are restored on normal exit, on a panic, and on termination signals.
-- **Suspend and resume** (`Ctrl+Z` on Linux) restore the terminal on suspend; on resume, raw mode, bracketed paste, focus events, automatic wrap off and whichever keyboard protocol was on come back, and the live region is drawn again from where the cursor is.
+- **Suspend and resume** (the `global.suspend` action, which has no key by default; `Ctrl+Z` is undo) restore the terminal on suspend; on resume, raw mode, bracketed paste, focus events, automatic wrap off and whichever keyboard protocol was on come back, and the live region is drawn again from where the cursor is.
 - **After the terminal has been put back in an emergency** (a panic on another thread, a signal), the layer writes nothing more: a frame would turn modes on again in a terminal that is no longer the program's. The program's next write fails, and it should end. The signal handlers replace whatever was installed for those signals before; a graceful shutdown on SIGTERM is the interactive application's to design ([outstanding/signals-and-a-graceful-shutdown.md](../outstanding/signals-and-a-graceful-shutdown.md)).
 - **Automatic wrap is off while the program runs.** A character the terminal draws wider than it is counted (an emoji sequence, an ambiguous-width character in a CJK locale) cannot then push a row onto the next and throw the presenter's count of rows out; at worst the row is cut short by the terminal.
 - **Sanitising.** All text from models, tools and files passes through one function (`cortex_term::sanitize`) that makes visible every control character except newline and tab. Only the renderer emits control sequences, and it shows every control character that reaches it in a line, newline and tab included, as a symbol one column wide: C0 characters as their Control Pictures (`␛`), DEL as `␡`, and C1 characters (`U+0080` to `U+009F`, which some terminals obey like `ESC [`) as `�`. A link's address is used only when it is printable ASCII.
@@ -497,7 +549,8 @@ What steps 21 to 25 build on. Its public items are documented in the crate.
 | `Line`, `Span`, `Style`, `Color` | The styled-line model. A span is text, a style (two colours, bold, dim, italic, underline, reverse) and perhaps a link. A colour is brought down to what the terminal shows: true colour, 256, 16, or none (`NO_COLOR`). Nothing here names a colour, glyph or layout. |
 | `Inline` | The inline presenter. `draw(&Frame { commit, live, cursor }, &caps, &mut sink)` writes one frame in one call to a `Sink`, or nothing when the screen would not change. `resize`, `redraw` (Ctrl+L), `restart` (after a suspension), `finish` (erase the live region before exit), `width` (the columns a line may use). |
 | `Scheduler` | When to draw: `input()` draws at once, `stream()` at most 60 times a second, `animate(every)` ticks, and `wake(now)` says `Now`, `At(time)` or `Idle`. It holds no clock: the loop gives it the time. |
-| `Terminal` | Raw mode on `enter`, the start sequences (bracketed paste, focus events) and the capability queries, then `next(timeout)` for events, and `leave` (or dropping it) to put everything back. It is the `Sink` a presenter writes to. `waker()` wakes `next` from another thread; `suspend()` is Ctrl+Z. |
+| `Terminal` | Raw mode on `enter`, the start sequences (bracketed paste, focus events) and the capability queries, then `next(timeout)` for events, and `leave` (or dropping it) to put everything back. It is the `Sink` a presenter writes to. `waker()` wakes `next` from another thread; `suspend()` stops the program as a shell job, for the `global.suspend` action. |
+| `ignore_interrupts` | Added in step 21. A guard: while it lives, the process ignores the keys that interrupt a program at the terminal (SIGINT and SIGQUIT on Unix, `Ctrl+C` on Windows), and dropping it, a panic's unwinding included, puts back what was there. For a child that has been handed the terminal, the external editor: its own `Ctrl+C` works and does not end the interface. Taken after the child starts, since an ignored signal survives `exec` and the Windows attribute is inherited. |
 | `Decoder`, `Event`, `Key` | Keys with modifiers, pastes (one event, whatever they hold), focus changes, replies to queries, resizes and resumptions. The same bytes decode the same way however reads split them. |
 | `Capabilities`, `Overrides` | Detected from the environment, upgraded by replies, overridden by settings. The `[terminal]` section that holds the overrides is step 23's to declare; the layer takes a plain `Overrides`. |
 | `sanitize` | The one function content passes through. |
