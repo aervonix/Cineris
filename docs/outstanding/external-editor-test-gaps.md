@@ -1,0 +1,3 @@
+| Item | Who | When |
+|---|---|---|
+| **What step 21's tests of the external editor do not reach.** (1) The check that the prompt's file is private reads its permission bits, so under a umask of 077 a file created without care would pass it too; CI's umask is 022. (2) The modes the terminal has while the editor runs are checked from the virtual terminal on Linux only: under ConPTY the screen is ConPTY's rendering, so on Windows only the console's modes are compared. (3) A failed hand-over (`EditorError::Release`) is reasoned about, not provoked: it needs a terminal that refuses one write. (4) The Windows search for `.cmd` and `.bat` editors is tested as a search; starting a real `code.cmd --wait` is not. | Step 32 (hardening) | Before the first release |
