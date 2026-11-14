@@ -34,7 +34,7 @@
 [0;38;2;122;60;251m│[0m   [0;90mtest lex::numbers::trailing_separator ... FAILED[0m                                              [0;38;2;122;60;251m│[0m
 [0;38;2;122;60;251m│[0m   [0;90massertion failed: lex("1_").is_err()[0m                                                          [0;38;2;122;60;251m│[0m
 [0;38;2;122;60;251m│[0m   [0;90mtest result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s[0m                        [0;38;2;122;60;251m│[0m
-[0;38;2;122;60;251m╰──────────────────────────────────────────────────────────────────────────────[0;90m enter collapses [0;38;2;122;60;251m─╯[0m
+[0;38;2;122;60;251m╰─────────────────────────────────────────────────────────────────────────────── [0;90menter collapses[0;38;2;122;60;251m ─╯[0m
 [0m
 [0m◇[0m One test fails: [0;1;36m1_[0m must be an error, but the scanner now stops before the [0;1;36m_[0m
 [0m  and returns [0;1;36m1[0m. A separator has to be followed by a digit, so the other case[0m

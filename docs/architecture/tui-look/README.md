@@ -5,12 +5,14 @@ These are the screens of the look the owner chose on 2026-11-14 ([decision 0033]
 - **Width.** Every screen is 100 columns, except screen 6 at 60. No row uses the last column.
 - **The live region** is the last rows of each screen; the table says how many. In screens 8a and 8b the viewer owns the whole screen.
 - **How they were checked.** The design round's script drew each screen through `cortex_term::Inline` into the test kit's virtual terminal and compared every cell. The script is not in the repository; these files are the record of what was chosen.
+- **How they are checked now.** Since step 22 the real views draw the same session again and are compared with these files cell by cell, in every pull request: `cargo xtask tui-screens` ([testing-and-ci.md](../../testing-and-ci.md), "The golden screens"). Step 21's input box and menus are drawn by its views. Rows that other steps draw (dialogs, panels, the viewer's frame, and the input box's placeholder while a turn runs or the panels have the focus) are counted as not built until those steps add them.
+- **What step 22 changed in them,** each by rewriting the row from the real views (`tui-screens --write`), as 09-tui says the row should be: a bottom border with a label is as wide as the box (it was one column short, its corner left of the border above: screens 1c, 1d, 2a, 4, 8a, 8b); the live reasoning row shows the latest words (1b); on a dark background at 16 colours, `fast` is bold in the default colour, not magenta (7a, 7c); the code line still streaming is plain until it ends (1, 6, 7a, 7c); and in the `/model` menu, `fast` in a row's note is muted, as the rest of the note, not in the accent's tint (3a; step 21's menu gives a note one style). Every changed cell is listed in [step 22's records](../../steps/22/answered.md).
 
 **To see a screen as the terminal draws it,** print its ANSI file in a terminal whose background matches the file's name:
 - Linux: `cat docs/architecture/tui-look/1-dark.ans`
 - PowerShell: `Get-Content -Raw docs\architecture\tui-look\1-dark.ans`
 
-The `.txt` file beside each one is the same screen without colour, to read here.
+The `.txt` file beside each one is the same screen without colour, to read here. A test holds each to the text of its dark screen, and `tui-screens --write` writes both.
 
 | Screen | Shows | Rows, live | Files |
 |---|---|---|---|

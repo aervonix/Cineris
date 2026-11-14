@@ -34,6 +34,16 @@ Desktop pinned to 4 cores, syntect with default features off, the pure-Rust rege
 - A per-line time limit. A line that exceeds it is shown plain.
 - Colours come from the theme's small set of syntax roles, not from an imported editor theme, so highlighting follows the terminal's light or dark background and the 16-colour fallback.
 
+## Amended in step 22
+
+Built in `cortex_tui::highlight`, with these differences from the decision above, each for the reason given:
+
+- **A worker thread of its own, not the blocking pool.** `cortex-tui` has no async runtime: the interface runs on its own thread, and a dedicated worker, started when the first code block asks for it, keeps each block's parse state between lines, which a pool's tasks would have to hand back and forth. The interface hands it lines and takes what it has finished; it never waits for it.
+- **The per-line limit is a wait on the interface's side.** syntect cannot be stopped in the middle of a line, so the limit is put where it matters: a completed line waits for its colours for at most 50 ms on the caller's clock, and is committed plain after that. A line over 1,000 bytes is never given to the worker, and the regular-expression engine bounds each pattern's backtracking. A worker stuck on a line costs that line and the ones queued behind it their colours, never a frame.
+- **Lines wait while the grammars load,** under the same limit. "Until it is ready, code is shown plain" holds for the live region, where a waiting line is drawn plain; a line commits in colour if the grammars are ready within its wait, so a session's first code block is coloured too. Lines already committed are never rewritten.
+- **The default packed grammar set, not a trimmed one.** syntect's own packed set (its `default-syntaxes` feature) covers the outline extractors' languages and more, and costs 628 KB of the stripped `dist` binary: 13.2 MB with the feature and 12.6 MB without, against the 16 MB budget. Trimming and packing a set with `xtask` would need the grammar sources in the repository and saves a fraction of that, so it waits for the size budget to ask for it (as "Revisit when" says). The code line still streaming is drawn plain until it ends ([outstanding/highlighting-the-line-in-progress.md](../outstanding/highlighting-the-line-in-progress.md)).
+- **The roles** are the theme's five syntax tokens (keyword, type, string, number, comment), picked by the grammar's scope names; on the reference session they colour exactly what the design round's screens did.
+
 ## Why
 
 - It is the only option that gives broad coverage without C code.

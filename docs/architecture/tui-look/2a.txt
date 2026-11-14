@@ -1,6 +1,6 @@
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ ✓ Run cargo clippy -p parser -- -D warnings  no warnings · 8.1s                                 │
-╰─────────────────────────────────────────────────────────────────────────────── ctrl+o expands ─╯
+╰──────────────────────────────────────────────────────────────────────────────── ctrl+o expands ─╯
 
 ◇ Clippy is clean. I'll add it to CI so it stays that way; that file is
   protected, so it needs your approval.

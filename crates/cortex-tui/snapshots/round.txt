@@ -1,0 +1,396 @@
+== 60 columns, unicode, true colour, dark
+{fg=a8}╭─────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                            {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                    {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}          {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}− {bg=#361616}        if !c.is_ascii_digit() {{ break; }     {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_so…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                      {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                     {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }     {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                           {fg=a8}│|
+{fg=a8}│{} {fg=a9}✗{} {b}Run cargo test -p parser{}  {fg=a9}exit 101 · 3.4s{}             {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test lex::numbers::trailing_separator ... FAILED{}      {fg=a8}│|
+{fg=a8}│{}   {fg=a8}assertion failed: lex("1_").is_err(){}                  {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test result: FAILED. 47 passed; 1 failed; 0 ignored;…{} {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────╯|
+{fg=a8}╭─────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                            {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                    {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}          {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}− {bg=#361616}        if !c.is_ascii_digit() {{ break; }     {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_so…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                      {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                     {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }     {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                           {fg=a8}│|
+{fg=a8}│{} {fg=#7A3CFB}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                        {fg=a8}│|
+{fg=a8}╰────────────────────────────────────── ctrl+t collapses ─╯|
+{fg=a8}╭─────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                            {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                    {fg=a8}│|
+{fg=a8}│{} {fg=#7A3CFB}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                        {fg=a8}│|
+{fg=a8}╰──────────────────────────────────────── ctrl+t expands ─╯|
+
+== 60 columns, ascii, true colour, dark
+{fg=a8}+---------------------------------------------------------+|
+{fg=a8}|{} {fg=a10}+{} {b}Read lex.rs{}  {fg=a8}lines 120-178{}                            {fg=a8}||
+{fg=a8}|{} {fg=a10}+{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}-1{}                                    {fg=a8}||
+{fg=a8}|{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}          {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}- {bg=#361616}        if !c.is_ascii_digit() {{ break; }     {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_...{} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                      {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                         {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                     {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }     {} {fg=a8}||
+{fg=a8}|{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                           {fg=a8}||
+{fg=a8}|{} {fg=a9}x{} {b}Run cargo test -p parser{}  {fg=a9}exit 101 | 3.4s{}             {fg=a8}||
+{fg=a8}|{}   {fg=a8}test lex::numbers::trailing_separator ... FAILED{}      {fg=a8}||
+{fg=a8}|{}   {fg=a8}assertion failed: lex("1_").is_err(){}                  {fg=a8}||
+{fg=a8}|{}   {fg=a8}test result: FAILED. 47 passed; 1 failed; 0 ignore...{} {fg=a8}||
+{fg=a8}+---------------------------------------------------------+|
+{fg=a8}+---------------------------------------------------------+|
+{fg=a8}|{} {fg=a10}+{} {b}Read lex.rs{}  {fg=a8}lines 120-178{}                            {fg=a8}||
+{fg=a8}|{} {fg=a10}+{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}-1{}                                    {fg=a8}||
+{fg=a8}|{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}          {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}- {bg=#361616}        if !c.is_ascii_digit() {{ break; }     {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_...{} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                      {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                         {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                     {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }     {} {fg=a8}||
+{fg=a8}|{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                           {fg=a8}||
+{fg=a8}|{} {fg=#7A3CFB}-{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                        {fg=a8}||
+{fg=a8}+-------------------------------------- ctrl+t collapses -+|
+{fg=a8}+---------------------------------------------------------+|
+{fg=a8}|{} {fg=a10}+{} {b}Read lex.rs{}  {fg=a8}lines 120-178{}                            {fg=a8}||
+{fg=a8}|{} {fg=a10}+{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}-1{}                                    {fg=a8}||
+{fg=a8}|{} {fg=#7A3CFB}-{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                        {fg=a8}||
+{fg=a8}+---------------------------------------- ctrl+t expands -+|
+
+== 80 columns, unicode, true colour, dark
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                        {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}− {bg=#361616}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                                          {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}│|
+{fg=a8}│{} {fg=a9}✗{} {b}Run cargo test -p parser{}  {fg=a9}exit 101 · 3.4s{}                                 {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test lex::numbers::trailing_separator ... FAILED{}                          {fg=a8}│|
+{fg=a8}│{}   {fg=a8}assertion failed: lex("1_").is_err(){}                                      {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s{}    {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                        {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}− {bg=#361616}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                                          {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}│|
+{fg=a8}│{} {fg=#7A3CFB}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}│|
+{fg=a8}╰────────────────────────────────────────────────────────── ctrl+t collapses ─╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                        {fg=a8}│|
+{fg=a8}│{} {fg=#7A3CFB}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}│|
+{fg=a8}╰──────────────────────────────────────────────────────────── ctrl+t expands ─╯|
+
+== 80 columns, ascii, true colour, dark
+{fg=a8}+-----------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=a10}+{} {b}Read lex.rs{}  {fg=a8}lines 120-178{}                                                {fg=a8}||
+{fg=a8}|{} {fg=a10}+{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}-1{}                                                        {fg=a8}||
+{fg=a8}|{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}- {bg=#361616}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_some_and(|d| d.is_as...{} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                                          {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                                             {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                                         {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}||
+{fg=a8}|{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}||
+{fg=a8}|{} {fg=a9}x{} {b}Run cargo test -p parser{}  {fg=a9}exit 101 | 3.4s{}                                 {fg=a8}||
+{fg=a8}|{}   {fg=a8}test lex::numbers::trailing_separator ... FAILED{}                          {fg=a8}||
+{fg=a8}|{}   {fg=a8}assertion failed: lex("1_").is_err(){}                                      {fg=a8}||
+{fg=a8}|{}   {fg=a8}test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s{}    {fg=a8}||
+{fg=a8}+-----------------------------------------------------------------------------+|
+{fg=a8}+-----------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=a10}+{} {b}Read lex.rs{}  {fg=a8}lines 120-178{}                                                {fg=a8}||
+{fg=a8}|{} {fg=a10}+{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}-1{}                                                        {fg=a8}||
+{fg=a8}|{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}- {bg=#361616}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_some_and(|d| d.is_as...{} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                                          {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                                             {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                                         {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}||
+{fg=a8}|{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}||
+{fg=a8}|{} {fg=#7A3CFB}-{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}||
+{fg=a8}+---------------------------------------------------------- ctrl+t collapses -+|
+{fg=a8}+-----------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=a10}+{} {b}Read lex.rs{}  {fg=a8}lines 120-178{}                                                {fg=a8}||
+{fg=a8}|{} {fg=a10}+{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}-1{}                                                        {fg=a8}||
+{fg=a8}|{} {fg=#7A3CFB}-{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}||
+{fg=a8}+------------------------------------------------------------ ctrl+t expands -+|
+
+== 120 columns, unicode, true colour, dark
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                                                        {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                                                                {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                                                                      {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}− {bg=#361616}        if !c.is_ascii_digit() {{ break; }                                                                 {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                                                                                  {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                                                                                     {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                                                                                 {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }                                                                 {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                                                                       {fg=a8}│|
+{fg=a8}│{} {fg=a9}✗{} {b}Run cargo test -p parser{}  {fg=a9}exit 101 · 3.4s{}                                                                         {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test lex::numbers::trailing_separator ... FAILED{}                                                                  {fg=a8}│|
+{fg=a8}│{}   {fg=a8}assertion failed: lex("1_").is_err(){}                                                                              {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s{}                                            {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                                                        {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                                                                {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                                                                      {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}− {bg=#361616}        if !c.is_ascii_digit() {{ break; }                                                                 {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                                                                                  {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                                                                                     {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                                                                                 {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }                                                                 {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                                                                       {fg=a8}│|
+{fg=a8}│{} {fg=#7A3CFB}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                                                                    {fg=a8}│|
+{fg=a8}╰────────────────────────────────────────────────────────────────────────────────────────────────── ctrl+t collapses ─╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                                                        {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                                                                {fg=a8}│|
+{fg=a8}│{} {fg=#7A3CFB}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                                                                    {fg=a8}│|
+{fg=a8}╰──────────────────────────────────────────────────────────────────────────────────────────────────── ctrl+t expands ─╯|
+
+== 120 columns, ascii, true colour, dark
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=a10}+{} {b}Read lex.rs{}  {fg=a8}lines 120-178{}                                                                                        {fg=a8}||
+{fg=a8}|{} {fg=a10}+{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}-1{}                                                                                                {fg=a8}||
+{fg=a8}|{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                                                                      {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}- {bg=#361616}        if !c.is_ascii_digit() {{ break; }                                                                 {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{                             {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                                                                                  {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                                                                                     {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                                                                                 {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }                                                                 {} {fg=a8}||
+{fg=a8}|{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                                                                       {fg=a8}||
+{fg=a8}|{} {fg=a9}x{} {b}Run cargo test -p parser{}  {fg=a9}exit 101 | 3.4s{}                                                                         {fg=a8}||
+{fg=a8}|{}   {fg=a8}test lex::numbers::trailing_separator ... FAILED{}                                                                  {fg=a8}||
+{fg=a8}|{}   {fg=a8}assertion failed: lex("1_").is_err(){}                                                                              {fg=a8}||
+{fg=a8}|{}   {fg=a8}test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s{}                                            {fg=a8}||
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=a10}+{} {b}Read lex.rs{}  {fg=a8}lines 120-178{}                                                                                        {fg=a8}||
+{fg=a8}|{} {fg=a10}+{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}-1{}                                                                                                {fg=a8}||
+{fg=a8}|{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                                                                      {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#361616} 142 {fg=a9 bg=#361616}- {bg=#361616}        if !c.is_ascii_digit() {{ break; }                                                                 {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 142 {fg=a10 bg=#132A17}+ {bg=#132A17}        if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{                             {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 143 {fg=a10 bg=#132A17}+ {bg=#132A17}            self.bump();                                                                                  {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 144 {fg=a10 bg=#132A17}+ {bg=#132A17}            continue;                                                                                     {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 145 {fg=a10 bg=#132A17}+ {bg=#132A17}        }                                                                                                 {} {fg=a8}||
+{fg=a8}|{}   {fg=a8 bg=#132A17} 146 {fg=a10 bg=#132A17}+ {bg=#132A17}        if !c.is_ascii_digit() {{ break; }                                                                 {} {fg=a8}||
+{fg=a8}|{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                                                                       {fg=a8}||
+{fg=a8}|{} {fg=#7A3CFB}-{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                                                                    {fg=a8}||
+{fg=a8}+-------------------------------------------------------------------------------------------------- ctrl+t collapses -+|
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=a10}+{} {b}Read lex.rs{}  {fg=a8}lines 120-178{}                                                                                        {fg=a8}||
+{fg=a8}|{} {fg=a10}+{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}-1{}                                                                                                {fg=a8}||
+{fg=a8}|{} {fg=#7A3CFB}-{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                                                                    {fg=a8}||
+{fg=a8}+---------------------------------------------------------------------------------------------------- ctrl+t expands -+|
+
+== 80 columns, unicode, true colour, light
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a2}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a2}✓{} {b}Edit lex.rs{}  {fg=a2}+5{} {fg=a1}−1{}                                                        {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#F7E2E2} 142 {fg=a1 bg=#F7E2E2}− {bg=#F7E2E2}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#DFEEE2} 142 {fg=a2 bg=#DFEEE2}+ {bg=#DFEEE2}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#DFEEE2} 143 {fg=a2 bg=#DFEEE2}+ {bg=#DFEEE2}            self.bump();                                          {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#DFEEE2} 144 {fg=a2 bg=#DFEEE2}+ {bg=#DFEEE2}            continue;                                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#DFEEE2} 145 {fg=a2 bg=#DFEEE2}+ {bg=#DFEEE2}        }                                                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#DFEEE2} 146 {fg=a2 bg=#DFEEE2}+ {bg=#DFEEE2}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}│|
+{fg=a8}│{} {fg=a1}✗{} {b}Run cargo test -p parser{}  {fg=a1}exit 101 · 3.4s{}                                 {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test lex::numbers::trailing_separator ... FAILED{}                          {fg=a8}│|
+{fg=a8}│{}   {fg=a8}assertion failed: lex("1_").is_err(){}                                      {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s{}    {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a2}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a2}✓{} {b}Edit lex.rs{}  {fg=a2}+5{} {fg=a1}−1{}                                                        {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#F7E2E2} 142 {fg=a1 bg=#F7E2E2}− {bg=#F7E2E2}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#DFEEE2} 142 {fg=a2 bg=#DFEEE2}+ {bg=#DFEEE2}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#DFEEE2} 143 {fg=a2 bg=#DFEEE2}+ {bg=#DFEEE2}            self.bump();                                          {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#DFEEE2} 144 {fg=a2 bg=#DFEEE2}+ {bg=#DFEEE2}            continue;                                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#DFEEE2} 145 {fg=a2 bg=#DFEEE2}+ {bg=#DFEEE2}        }                                                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8 bg=#DFEEE2} 146 {fg=a2 bg=#DFEEE2}+ {bg=#DFEEE2}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}│|
+{fg=a8}│{} {fg=#7A3CFB}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}│|
+{fg=a8}╰────────────────────────────────────────────────────────── ctrl+t collapses ─╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a2}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a2}✓{} {b}Edit lex.rs{}  {fg=a2}+5{} {fg=a1}−1{}                                                        {fg=a8}│|
+{fg=a8}│{} {fg=#7A3CFB}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}│|
+{fg=a8}╰──────────────────────────────────────────────────────────── ctrl+t expands ─╯|
+
+== 80 columns, unicode, 16 colours, dark
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                        {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a9 b}− {fg=a9}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a10 b}+ {fg=a10}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 143 {fg=a10 b}+ {fg=a10}            self.bump();                                          {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 144 {fg=a10 b}+ {fg=a10}            continue;                                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 145 {fg=a10 b}+ {fg=a10}        }                                                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 146 {fg=a10 b}+ {fg=a10}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}│|
+{fg=a8}│{} {fg=a9}✗{} {b}Run cargo test -p parser{}  {fg=a9}exit 101 · 3.4s{}                                 {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test lex::numbers::trailing_separator ... FAILED{}                          {fg=a8}│|
+{fg=a8}│{}   {fg=a8}assertion failed: lex("1_").is_err(){}                                      {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s{}    {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                        {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a9 b}− {fg=a9}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a10 b}+ {fg=a10}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 143 {fg=a10 b}+ {fg=a10}            self.bump();                                          {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 144 {fg=a10 b}+ {fg=a10}            continue;                                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 145 {fg=a10 b}+ {fg=a10}        }                                                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 146 {fg=a10 b}+ {fg=a10}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}│|
+{fg=a8}│{} {fg=a13}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}│|
+{fg=a8}╰────────────────────────────────────────────────────────── ctrl+t collapses ─╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                        {fg=a8}│|
+{fg=a8}│{} {fg=a13}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}│|
+{fg=a8}╰──────────────────────────────────────────────────────────── ctrl+t expands ─╯|
+
+== 80 columns, unicode, 16 colours, light
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a2}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a2}✓{} {b}Edit lex.rs{}  {fg=a2}+5{} {fg=a1}−1{}                                                        {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a1 b}− {fg=a1}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a2 b}+ {fg=a2}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 143 {fg=a2 b}+ {fg=a2}            self.bump();                                          {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 144 {fg=a2 b}+ {fg=a2}            continue;                                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 145 {fg=a2 b}+ {fg=a2}        }                                                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 146 {fg=a2 b}+ {fg=a2}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}│|
+{fg=a8}│{} {fg=a1}✗{} {b}Run cargo test -p parser{}  {fg=a1}exit 101 · 3.4s{}                                 {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test lex::numbers::trailing_separator ... FAILED{}                          {fg=a8}│|
+{fg=a8}│{}   {fg=a8}assertion failed: lex("1_").is_err(){}                                      {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s{}    {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a2}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a2}✓{} {b}Edit lex.rs{}  {fg=a2}+5{} {fg=a1}−1{}                                                        {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a1 b}− {fg=a1}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a2 b}+ {fg=a2}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 143 {fg=a2 b}+ {fg=a2}            self.bump();                                          {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 144 {fg=a2 b}+ {fg=a2}            continue;                                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 145 {fg=a2 b}+ {fg=a2}        }                                                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 146 {fg=a2 b}+ {fg=a2}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}│|
+{fg=a8}│{} {fg=a5}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}│|
+{fg=a8}╰────────────────────────────────────────────────────────── ctrl+t collapses ─╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a2}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a2}✓{} {b}Edit lex.rs{}  {fg=a2}+5{} {fg=a1}−1{}                                                        {fg=a8}│|
+{fg=a8}│{} {fg=a5}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}│|
+{fg=a8}╰──────────────────────────────────────────────────────────── ctrl+t expands ─╯|
+
+== 80 columns, unicode, 256 colours, dark
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                        {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a9 b}− {fg=a9}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a10 b}+ {fg=a10}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 143 {fg=a10 b}+ {fg=a10}            self.bump();                                          {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 144 {fg=a10 b}+ {fg=a10}            continue;                                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 145 {fg=a10 b}+ {fg=a10}        }                                                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 146 {fg=a10 b}+ {fg=a10}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}│|
+{fg=a8}│{} {fg=a9}✗{} {b}Run cargo test -p parser{}  {fg=a9}exit 101 · 3.4s{}                                 {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test lex::numbers::trailing_separator ... FAILED{}                          {fg=a8}│|
+{fg=a8}│{}   {fg=a8}assertion failed: lex("1_").is_err(){}                                      {fg=a8}│|
+{fg=a8}│{}   {fg=a8}test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s{}    {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                        {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 141{}   {fg=a8}    while let Some(c) = self.peek() {{{}                              {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a9 b}− {fg=a9}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 142 {fg=a10 b}+ {fg=a10}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci…{} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 143 {fg=a10 b}+ {fg=a10}            self.bump();                                          {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 144 {fg=a10 b}+ {fg=a10}            continue;                                             {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 145 {fg=a10 b}+ {fg=a10}        }                                                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 146 {fg=a10 b}+ {fg=a10}        if !c.is_ascii_digit() {{ break; }                         {} {fg=a8}│|
+{fg=a8}│{}   {fg=a8} 147{}   {fg=a8}        self.bump();{}                                               {fg=a8}│|
+{fg=a8}│{} {fg=i99}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}│|
+{fg=a8}╰────────────────────────────────────────────────────────── ctrl+t collapses ─╯|
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a10}✓{} {b}Read lex.rs{}  {fg=a8}lines 120–178{}                                                {fg=a8}│|
+{fg=a8}│{} {fg=a10}✓{} {b}Edit lex.rs{}  {fg=a10}+5{} {fg=a9}−1{}                                                        {fg=a8}│|
+{fg=a8}│{} {fg=i99}⣻{} {b}Run cargo test -p parser{}  {fg=a8}1.2s{}                                            {fg=a8}│|
+{fg=a8}╰──────────────────────────────────────────────────────────── ctrl+t expands ─╯|
+
+== 80 columns, unicode, no colour, dark
+{d}╭─────────────────────────────────────────────────────────────────────────────╮|
+{d}│{} ✓ {b}Read lex.rs{}  {d}lines 120–178{}                                                {d}│|
+{d}│{} ✓ {b}Edit lex.rs{}  +5 {b}−1{}                                                        {d}│|
+{d}│{}   {d} 141{}   {d}    while let Some(c) = self.peek() {{{}                              {d}│|
+{d}│{}   {d} 142 {b}− {d}        if !c.is_ascii_digit() {{ break; }                         {} {d}│|
+{d}│{}   {d} 142 {b}+ {}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci… {d}│|
+{d}│{}   {d} 143 {b}+ {}            self.bump();                                           {d}│|
+{d}│{}   {d} 144 {b}+ {}            continue;                                              {d}│|
+{d}│{}   {d} 145 {b}+ {}        }                                                          {d}│|
+{d}│{}   {d} 146 {b}+ {}        if !c.is_ascii_digit() {{ break; }                          {d}│|
+{d}│{}   {d} 147{}   {d}        self.bump();{}                                               {d}│|
+{d}│{} {b}✗{} {b}Run cargo test -p parser{}  {b}exit 101 · 3.4s{}                                 {d}│|
+{d}│{}   {d}test lex::numbers::trailing_separator ... FAILED{}                          {d}│|
+{d}│{}   {d}assertion failed: lex("1_").is_err(){}                                      {d}│|
+{d}│{}   {d}test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s{}    {d}│|
+{d}╰─────────────────────────────────────────────────────────────────────────────╯|
+{d}╭─────────────────────────────────────────────────────────────────────────────╮|
+{d}│{} ✓ {b}Read lex.rs{}  {d}lines 120–178{}                                                {d}│|
+{d}│{} ✓ {b}Edit lex.rs{}  +5 {b}−1{}                                                        {d}│|
+{d}│{}   {d} 141{}   {d}    while let Some(c) = self.peek() {{{}                              {d}│|
+{d}│{}   {d} 142 {b}− {d}        if !c.is_ascii_digit() {{ break; }                         {} {d}│|
+{d}│{}   {d} 142 {b}+ {}        if c == '_' && self.peek_next().is_some_and(|d| d.is_asci… {d}│|
+{d}│{}   {d} 143 {b}+ {}            self.bump();                                           {d}│|
+{d}│{}   {d} 144 {b}+ {}            continue;                                              {d}│|
+{d}│{}   {d} 145 {b}+ {}        }                                                          {d}│|
+{d}│{}   {d} 146 {b}+ {}        if !c.is_ascii_digit() {{ break; }                          {d}│|
+{d}│{}   {d} 147{}   {d}        self.bump();{}                                               {d}│|
+{d}│{} ⣻ {b}Run cargo test -p parser{}  {d}1.2s{}                                            {d}│|
+{d}╰────────────────────────────────────────────────────────── ctrl+t collapses ─╯|
+{d}╭─────────────────────────────────────────────────────────────────────────────╮|
+{d}│{} ✓ {b}Read lex.rs{}  {d}lines 120–178{}                                                {d}│|
+{d}│{} ✓ {b}Edit lex.rs{}  +5 {b}−1{}                                                        {d}│|
+{d}│{} ⣻ {b}Run cargo test -p parser{}  {d}1.2s{}                                            {d}│|
+{d}╰──────────────────────────────────────────────────────────── ctrl+t expands ─╯|
+

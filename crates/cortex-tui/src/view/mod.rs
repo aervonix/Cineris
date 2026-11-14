@@ -14,12 +14,34 @@
 //! text from a model, a tool or a file never reaches a line with a control
 //! character in it.
 
+use std::time::Duration;
+
 use crate::glyphs::Glyphs;
 use crate::theme::Theme;
+
+pub mod blocks;
+pub mod header;
+pub mod hint;
+pub mod round;
 
 // Step 21's views: the input box and the menus.
 pub mod input;
 pub mod menu;
+
+pub use blocks::{error, notice, reasoning, reasoning_live, turn_summary, user};
+pub use header::{Header, header};
+pub use hint::{Hint, HintRow, RunningKeys, Speed, hint_row};
+pub use round::{
+    Call, CallState, Change, Detail, DiffLine, Measure, Placement, Round, Target, round,
+};
+
+/// Text from outside on one line: control characters as visible symbols,
+/// and tabs and line breaks, which `cortex_term::sanitize` keeps, as
+/// spaces. For a field a view draws on one row: a tool's name, a file name,
+/// the header's and the hint row's values.
+pub(crate) fn one_line(text: &str) -> String {
+    cortex_term::sanitize(text).replace(['\n', '\t'], " ")
+}
 
 /// How a view draws, beside its state: the theme, the glyph set and the
 /// `tui` settings that shape the transcript. Step 23 fills it from the
@@ -110,4 +132,44 @@ pub enum Reasoning {
     Summary,
     /// `∴ Reasoned for 6s` alone; the summary is in the viewer.
     Duration,
+}
+
+/// A time as the turn and reasoning show it: `3s`, `1m 12s`, `2h 5m`.
+#[must_use]
+pub fn duration(time: Duration) -> String {
+    let secs = time.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m", secs / 3600, secs % 3600 / 60)
+    }
+}
+
+/// A time as a tool call shows it: tenths under ten seconds (`3.4s`), then
+/// as [`duration`].
+#[must_use]
+pub fn precise(time: Duration) -> String {
+    if time.as_secs() < 10 {
+        let tenths = time.as_millis() / 100;
+        format!("{}.{}s", tenths / 10, tenths % 10)
+    } else {
+        duration(time)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn times_read_as_the_screens_show_them() {
+        assert_eq!(duration(Duration::from_millis(14_900)), "14s");
+        assert_eq!(duration(Duration::from_secs(72)), "1m 12s");
+        assert_eq!(duration(Duration::from_secs(7_500)), "2h 5m");
+        assert_eq!(precise(Duration::from_millis(3_450)), "3.4s");
+        assert_eq!(precise(Duration::from_millis(400)), "0.4s");
+        assert_eq!(precise(Duration::from_millis(12_300)), "12s");
+    }
 }

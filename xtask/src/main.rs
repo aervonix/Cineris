@@ -35,6 +35,7 @@ mod rules;
 mod runs;
 mod schema;
 mod scratch_test;
+mod screens;
 mod startup;
 mod steps;
 mod stress;
@@ -138,6 +139,12 @@ Not blocking (the `main` and `nightly` workflows run these)
                     pseudo-terminal: start to first frame, key to frame idle
                     and while streaming, frame cost, frame intervals and bytes
                     per frame, against the TUI's budgets.
+  tui-screens [--write]
+                    Draw the reference screens of the TUI's look again with
+                    the real views and compare every cell (a tier-2 test);
+                    print each screen's rows compared and not built yet.
+                    --write rewrites the rows that differ, from the views,
+                    and lists every cell changed.
   unused            Look for dependencies that no code uses (cargo-machete).
   partial-landlock  The sandbox's tests on a kernel whose Landlock is older
                     than 6, failing unless the run showed that partial case.
@@ -245,6 +252,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "live" => outside::live(rest),
         "record" => outside::record(rest),
         "perf" => perf::run(rest),
+        "tui-screens" => screens::run(rest),
         "dist" => not_built("dist", 34),
         other => Err(format!("unknown command `{other}`\n\n{USAGE}")),
     }

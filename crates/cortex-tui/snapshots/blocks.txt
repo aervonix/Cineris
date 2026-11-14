@@ -1,0 +1,156 @@
+== 60 columns, unicode, true colour, dark
+{fg=#7A3CFB b}◆{} {b}1_000 lexes as 1. Fix scan_number so digit separators|
+  {b}work, and add a test.|
+{fg=a8}·{} {fg=a8}Context compacted in the background: 148.2k → 23.6k|
+  {fg=a8}tokens (a 3.1k summary, the last 6 turns kept).|
+{fg=a9}✗{} {fg=a9}The request failed after 5 attempts: the connection to|
+  {fg=a9}the provider was reset.|
+  {fg=a8}Press enter to try the turn again, or pick another model|
+  {fg=a8}with /model.|
+{fg=a8}∴ Reasoned for 6s|
+  {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal.|
+  {fg=a8 i}Check whether a trailing _ is meant to be an error first.|
+{fg=#7A3CFB}⢿{} {fg=a8}Reasoning  3s|
+  {fg=a8 i}…ck whether a trailing `_` is meant to be an error first.|
+  {fg=a8}1m 12s · 12.4k tokens · $0.08|
+
+== 60 columns, ascii, true colour, dark
+{fg=#7A3CFB b}>{} {b}1_000 lexes as 1. Fix scan_number so digit separators|
+  {b}work, and add a test.|
+{fg=a8}.{} {fg=a8}Context compacted in the background: 148.2k → 23.6k|
+  {fg=a8}tokens (a 3.1k summary, the last 6 turns kept).|
+{fg=a9}x{} {fg=a9}The request failed after 5 attempts: the connection to|
+  {fg=a9}the provider was reset.|
+  {fg=a8}Press enter to try the turn again, or pick another model|
+  {fg=a8}with /model.|
+{fg=a8}~ Reasoned for 6s|
+  {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal.|
+  {fg=a8 i}Check whether a trailing _ is meant to be an error first.|
+{fg=#7A3CFB}\{} {fg=a8}Reasoning  3s|
+  {fg=a8 i}... whether a trailing `_` is meant to be an error first.|
+  {fg=a8}1m 12s | 12.4k tokens | $0.08|
+
+== 80 columns, unicode, true colour, dark
+{fg=#7A3CFB b}◆{} {b}1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.|
+{fg=a8}·{} {fg=a8}Context compacted in the background: 148.2k → 23.6k tokens (a 3.1k summary,|
+  {fg=a8}the last 6 turns kept).|
+{fg=a9}✗{} {fg=a9}The request failed after 5 attempts: the connection to the provider was|
+  {fg=a9}reset.|
+  {fg=a8}Press enter to try the turn again, or pick another model with /model.|
+{fg=a8}∴ Reasoned for 6s|
+  {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal. Check whether a|
+  {fg=a8 i}trailing _ is meant to be an error first.|
+{fg=#7A3CFB}⢿{} {fg=a8}Reasoning  3s|
+  {fg=a8 i}…nds the literal. Check whether a trailing `_` is meant to be an error first.|
+  {fg=a8}1m 12s · 12.4k tokens · $0.08|
+
+== 80 columns, ascii, true colour, dark
+{fg=#7A3CFB b}>{} {b}1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.|
+{fg=a8}.{} {fg=a8}Context compacted in the background: 148.2k → 23.6k tokens (a 3.1k summary,|
+  {fg=a8}the last 6 turns kept).|
+{fg=a9}x{} {fg=a9}The request failed after 5 attempts: the connection to the provider was|
+  {fg=a9}reset.|
+  {fg=a8}Press enter to try the turn again, or pick another model with /model.|
+{fg=a8}~ Reasoned for 6s|
+  {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal. Check whether a|
+  {fg=a8 i}trailing _ is meant to be an error first.|
+{fg=#7A3CFB}\{} {fg=a8}Reasoning  3s|
+  {fg=a8 i}...s the literal. Check whether a trailing `_` is meant to be an error first.|
+  {fg=a8}1m 12s | 12.4k tokens | $0.08|
+
+== 120 columns, unicode, true colour, dark
+{fg=#7A3CFB b}◆{} {b}1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.|
+{fg=a8}·{} {fg=a8}Context compacted in the background: 148.2k → 23.6k tokens (a 3.1k summary,|
+  {fg=a8}the last 6 turns kept).|
+{fg=a9}✗{} {fg=a9}The request failed after 5 attempts: the connection to the provider was reset.|
+  {fg=a8}Press enter to try the turn again, or pick another model with /model.|
+{fg=a8}∴ Reasoned for 6s|
+  {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal. Check whether a|
+  {fg=a8 i}trailing _ is meant to be an error first.|
+{fg=#7A3CFB}⢿{} {fg=a8}Reasoning  3s|
+  {fg=a8 i}…ends the literal. Check whether a trailing `_` is meant to be an error first.|
+  {fg=a8}1m 12s · 12.4k tokens · $0.08|
+
+== 120 columns, ascii, true colour, dark
+{fg=#7A3CFB b}>{} {b}1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.|
+{fg=a8}.{} {fg=a8}Context compacted in the background: 148.2k → 23.6k tokens (a 3.1k summary,|
+  {fg=a8}the last 6 turns kept).|
+{fg=a9}x{} {fg=a9}The request failed after 5 attempts: the connection to the provider was reset.|
+  {fg=a8}Press enter to try the turn again, or pick another model with /model.|
+{fg=a8}~ Reasoned for 6s|
+  {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal. Check whether a|
+  {fg=a8 i}trailing _ is meant to be an error first.|
+{fg=#7A3CFB}\{} {fg=a8}Reasoning  3s|
+  {fg=a8 i}...ds the literal. Check whether a trailing `_` is meant to be an error first.|
+  {fg=a8}1m 12s | 12.4k tokens | $0.08|
+
+== 80 columns, unicode, true colour, light
+{fg=#7A3CFB b}◆{} {b}1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.|
+{fg=a8}·{} {fg=a8}Context compacted in the background: 148.2k → 23.6k tokens (a 3.1k summary,|
+  {fg=a8}the last 6 turns kept).|
+{fg=a1}✗{} {fg=a1}The request failed after 5 attempts: the connection to the provider was|
+  {fg=a1}reset.|
+  {fg=a8}Press enter to try the turn again, or pick another model with /model.|
+{fg=a8}∴ Reasoned for 6s|
+  {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal. Check whether a|
+  {fg=a8 i}trailing _ is meant to be an error first.|
+{fg=#7A3CFB}⢿{} {fg=a8}Reasoning  3s|
+  {fg=a8 i}…nds the literal. Check whether a trailing `_` is meant to be an error first.|
+  {fg=a8}1m 12s · 12.4k tokens · $0.08|
+
+== 80 columns, unicode, 16 colours, dark
+{fg=a13 b}◆{} {b}1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.|
+{fg=a8}·{} {fg=a8}Context compacted in the background: 148.2k → 23.6k tokens (a 3.1k summary,|
+  {fg=a8}the last 6 turns kept).|
+{fg=a9}✗{} {fg=a9}The request failed after 5 attempts: the connection to the provider was|
+  {fg=a9}reset.|
+  {fg=a8}Press enter to try the turn again, or pick another model with /model.|
+{fg=a8}∴ Reasoned for 6s|
+  {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal. Check whether a|
+  {fg=a8 i}trailing _ is meant to be an error first.|
+{fg=a13}⢿{} {fg=a8}Reasoning  3s|
+  {fg=a8 i}…nds the literal. Check whether a trailing `_` is meant to be an error first.|
+  {fg=a8}1m 12s · 12.4k tokens · $0.08|
+
+== 80 columns, unicode, 16 colours, light
+{fg=a5 b}◆{} {b}1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.|
+{fg=a8}·{} {fg=a8}Context compacted in the background: 148.2k → 23.6k tokens (a 3.1k summary,|
+  {fg=a8}the last 6 turns kept).|
+{fg=a1}✗{} {fg=a1}The request failed after 5 attempts: the connection to the provider was|
+  {fg=a1}reset.|
+  {fg=a8}Press enter to try the turn again, or pick another model with /model.|
+{fg=a8}∴ Reasoned for 6s|
+  {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal. Check whether a|
+  {fg=a8 i}trailing _ is meant to be an error first.|
+{fg=a5}⢿{} {fg=a8}Reasoning  3s|
+  {fg=a8 i}…nds the literal. Check whether a trailing `_` is meant to be an error first.|
+  {fg=a8}1m 12s · 12.4k tokens · $0.08|
+
+== 80 columns, unicode, 256 colours, dark
+{fg=i99 b}◆{} {b}1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.|
+{fg=a8}·{} {fg=a8}Context compacted in the background: 148.2k → 23.6k tokens (a 3.1k summary,|
+  {fg=a8}the last 6 turns kept).|
+{fg=a9}✗{} {fg=a9}The request failed after 5 attempts: the connection to the provider was|
+  {fg=a9}reset.|
+  {fg=a8}Press enter to try the turn again, or pick another model with /model.|
+{fg=a8}∴ Reasoned for 6s|
+  {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal. Check whether a|
+  {fg=a8 i}trailing _ is meant to be an error first.|
+{fg=i99}⢿{} {fg=a8}Reasoning  3s|
+  {fg=a8 i}…nds the literal. Check whether a trailing `_` is meant to be an error first.|
+  {fg=a8}1m 12s · 12.4k tokens · $0.08|
+
+== 80 columns, unicode, no colour, dark
+{b}◆{} {b}1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.|
+{d}·{} {d}Context compacted in the background: 148.2k → 23.6k tokens (a 3.1k summary,|
+  {d}the last 6 turns kept).|
+{b}✗{} {b}The request failed after 5 attempts: the connection to the provider was|
+  {b}reset.|
+  {d}Press enter to try the turn again, or pick another model with /model.|
+{d}∴ Reasoned for 6s|
+  {d i}The loop breaks on any non-digit, so _ ends the literal. Check whether a|
+  {d i}trailing _ is meant to be an error first.|
+⢿ {d}Reasoning  3s|
+  {d i}…nds the literal. Check whether a trailing `_` is meant to be an error first.|
+  {d}1m 12s · 12.4k tokens · $0.08|
+

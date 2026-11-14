@@ -57,6 +57,10 @@ serde_json = { version = "1.0.145", default-features = false, features = ["std"]
 sha2 = { version = "0.11.1", default-features = false }
 similar = { version = "3.2.1", default-features = false, features = ["std"] }
 thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
+# Syntax highlighting, behind `cortex-tui`'s `highlight` feature (decision
+# 0015): the packed default grammars and the pure-Rust regex engine. No
+# themes, no loading of grammar files, no HTML.
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
 # The Linux sandbox's system-call filter (step 26). Without `json`, which
 # brings serde for filters written as data.
 seccompiler = { version = "0.5.0", default-features = false }

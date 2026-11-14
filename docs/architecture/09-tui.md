@@ -33,16 +33,28 @@ The transcript lives in the terminal's own scrollback. The harness owns only a s
 
 | Content | Committed when |
 |---|---|
-| Paragraph text | A wrapped line is committed when the next line begins. Only the last, growing line stays live. |
-| Code block | Line by line, as each line ends. |
-| List, quote, heading | Line by line. |
-| Table | When the table ends, because column widths depend on every row. A table taller than the live region's limit is committed in parts with the widths known so far. |
-| Inline markup still open at the end of a line (bold, code) | The line is held for at most two more lines, then committed as it is. |
+| Paragraph text | A wrapped row is committed when the next row has begun and no mark is open before the end of that row's first word. Only the last, growing row stays live. |
+| Inline markup still open at the end of a row (bold, code, a link) | The row is held for at most two more rows; when a third has begun, it is committed as it is, and its open marks stay literal from then on. |
+| Code block | Line by line, as each line ends. With highlighting, a line waits for its colours for at most 50 ms. |
+| List, quote | Their paragraphs row by row, as above; a list item's marker with its first row. |
+| Heading, rule | When its line ends. |
+| Table | When the table ends, because column widths depend on every row. A table of more than 16 body rows is committed in parts of 16, each with the widths and the layout decided for the first. |
 | Reasoning | Not committed while streaming. Replaced by its summary (`∴ Reasoned for 6s` and the provider's summary) when it ends. |
 | Tool round | Live while any of its calls runs. The round's box, with each call's line and any open detail, is committed when its last call completes ("Tool rounds", below). |
 | User prompt | On submit. |
 
-**The price.** Committed lines are wrapped for the width at the time. If the window is resized, earlier output is not re-wrapped by the harness. Collapsing or re-expanding old output in place is not possible either; long content is opened in the viewer (below) instead.
+### The commit rule
+
+What "can no longer change" means for markdown that arrives a token at a time. `cortex_tui::markdown` holds it, and its tests hold it to this.
+
+- **Blocks are decided by whole lines.** A line is read when it ends, and it says whether the block before it goes on: a blank line, or a line that starts another block, ends it. A line still arriving is given to the paragraph in progress as soon as its first characters show it can start nothing else (a letter, `**bold`, but not `-`, `1.`, `#`, `>` or `|`, which wait for the line's end).
+- **A finished block is never parsed again.** Its rows are committed and its text is dropped. Inside a paragraph, the text of committed rows is dropped too, at a break between rows that no construct spans, after which the text parses alone as it did with what came before (plain text, at white space or at a character that can neither open nor close anything), so a paragraph is parsed again only from its first row still live.
+- **The text kept is bounded.** A paragraph with no such break for long (one long word of marks or entities, or rows that all start inside a code span) keeps at most 1 KB of committed text before the break is forced where a row starts outside every construct, and 4 KB before it is forced where any row starts; the text after a forced break is parsed alone, so a construct across it may show its marks. Past 1 KB the decisions are also spaced 64 bytes apart, and one decision parses the text once for every row it commits. Each byte is then parsed a bounded number of times, whatever the text, and a frame's live rows parse no more than the text kept.
+- **A paragraph's rows are decided at the end of each word, from the text up to it,** and inside a run of text with no white space every 64 bytes, at the first place after them where the byte after the cut cannot change what ends there (the text up to a decision is parsed as if white space followed it): after a letter, a digit or most punctuation; after `!` unless `[` follows, `]` unless `(` does, `<` unless a letter does, `&` unless a letter, a digit or `#` does; after backslashes in pairs; and inside a stretch of `*`, `_` and backticks once it is longer than marks can be (below). Row k is final when row k+1 has begun and nothing before the end of row k+1's first word, or of row k+1 if that word goes on past it, can change: no mark that text still to come could close (an emphasis mark that can open, a backtick run with no closing run, a bracket that is not a link's, a backslash, an entity or an autolink at the very end), and no matched construct with such a mark inside it, whose closing mark a later code span or link could take in. Otherwise the row is held for two more rows, then committed as it is: its open marks are frozen as text, with every open mark inside a construct that starts before that point. Because the decisions depend on the text alone, the same text commits the same lines whether it arrives token by token or at once.
+- **What the dialect leaves out, so that nothing committed is restyled:** a heading is written with `#` only, because a `---` or `===` under text would turn the whole paragraph above it into a heading (`---` is a rule, `===` is text); and a table's header row starts with `|`, so that a line is known to be a table candidate from its first character. Inline HTML and strikethrough are shown as the text they are, and reference links are not resolved. A stretch of more than 64 of the marks `*`, `_` and backticks with nothing between them is text: what a mark is depends on the runs around it, so a stretch could not otherwise be decided until it ends.
+- **The parser is our own** (decision recorded in [01-workspace.md](01-workspace.md)): the commit rule needs every piece of text's place in the source and the marks still open, which a whole-document parser does not give. Its inline rules are CommonMark's for the constructs above, held by cases written from the specification's examples.
+
+**The price.** Committed lines are wrapped for the width at the time. If the window is resized, earlier output is not re-wrapped by the harness. A paragraph resized while it streams keeps the breaks of its rows already committed, and what follows them is wrapped at the new width; a row queued behind a code line still waiting for its colours is wrapped to the new width when it commits. Collapsing or re-expanding old output in place is not possible either; long content is opened in the viewer (below) instead.
 
 ### Full screen as the alternative
 
@@ -101,8 +113,8 @@ The budgets for frame time, input latency and idle CPU are in [../performance-bu
 ### Rendering cost control
 
 - Each transcript item caches its rendered lines by content version, width and theme.
-- Streaming markdown is parsed incrementally: finished blocks are never parsed again, only the block in progress.
-- Syntax highlighting loads on first use, off the UI thread. Until it is ready, code is shown unhighlighted. It then applies to new lines.
+- Streaming markdown is parsed incrementally: finished blocks are never parsed again, only the block in progress ("The commit rule", above).
+- **Syntax highlighting runs on a worker thread of its own** (`cortex_tui::highlight`, [decision 0015](../decisions/0015-syntax-highlighting.md)), started when the first code block asks for it. The worker loads the grammars, keeps each block's parse state and colours its lines in order; the interface hands it each line as it ends and takes what it has finished, and never waits for it. A completed line waits for its colours for at most 50 ms on the caller's clock, and is committed plain after that, so a stuck worker never holds the transcript; while it waits it is drawn plain in the live region. A line over 1,000 bytes is never highlighted. The line still streaming is drawn plain until it ends. The colours are the theme's five syntax tokens, picked by the grammar's scope names (keyword, type, string, number, comment).
 - In inline mode, committed lines are dropped from memory. In full-screen mode, rendered lines are kept only around the viewport and rebuilt from items on demand.
 
 ## Layout and look
@@ -166,8 +178,8 @@ In colour, the `◆` is the accent and your message is bold. The answer and its 
 | **Headings** | Bold. No `#`. | |
 | **Lists, quotes** | `–` for an unordered item and numbers for an ordered one. A quote has a dim `│`. | |
 | **Tables** | Columns aligned with spaces, and a dim rule under the header. | Falls back to stacked `key: value` rows when too wide. |
-| **Links** | Underlined text: a terminal hyperlink where supported, otherwise followed by the URL in dim. | |
-| **Reasoning** | While streaming, two live rows: the spinner, `Reasoning` and the elapsed time, dim; then the latest words in dim italic. When finished: `∴ Reasoned for 6s`, dim, then the provider's summary in dim italic, two columns in. | `tui.reasoning = "duration"` keeps only the first line; the summary is then in the viewer. |
+| **Links** | Underlined text: a terminal hyperlink where supported, otherwise followed by the URL in dim, in parentheses. | |
+| **Reasoning** | While streaming, two live rows: the spinner, `Reasoning` and the elapsed time, dim; then the latest words in dim italic, cut at their start with `…`. When finished: `∴ Reasoned for 6s`, dim, then the provider's summary in dim italic, two columns in. | `tui.reasoning = "duration"` keeps only the first line; the summary is then in the viewer. |
 | **Tool round** | A box with a dim rounded border around one round of tool calls: one line per call, and each call's detail under it when open. | See "Tool rounds", below. |
 | **Diff** | Inside an open box, under its call. A gutter holds the line number (dim) and the sign, right beside the code. Added and removed lines are tinted to the box's edge, the sign takes the line's colour, and changed words are bold. Context lines are dim. | No `+` or `−` at the far left. A diff of up to `tui.tool_detail` lines starts open. |
 | **Tool output** | Dim, under its call when open: a failure's last 3 lines, or a running command's last 4. | All of it is in the viewer. |
@@ -210,6 +222,8 @@ The spinner is an eight-frame braille cycle at 100 ms. `tui.reduced_motion = tru
 - With more than one live box, `Ctrl+P` moves focus to them as it does to panels, and `Enter` opens or closes the focused one.
 - An open box in the live region shows at most `tui.tool_detail` rows of detail; the rest is in the viewer.
 
+**Too much detail for the live region.** When the open details in a live box come to more than `tui.tool_detail` rows, the first rows are kept and a dim row says how many more there are (`… 8 more lines`); the box shows all of them once committed.
+
 **When the round's last call ends,** the box and its detail commit together, as they are, and never change after. A closed box with detail behind it says `ctrl+o expands` in its bottom border, dim. Calls that finish early wait for the round: their detail appears when the round commits, and until then the open box shows it in the live region.
 
 ### The live region
@@ -240,19 +254,21 @@ The hint row's left side:
 | A dialog, a menu or a focused panel | Its keys. |
 | Idle, after a turn | The turn's cost and the session's, for a while. |
 | Idle, in the first sessions | `/ commands · @ files · alt+enter new line`. |
+| `Ctrl+C` pressed idle with nothing typed | `ctrl+c again quits`, until the next key. |
 
 The hint row's right side:
 
 | Segment | Shown |
 |---|---|
 | Model | Always: the short model name and the reasoning level. |
-| Speed | When not `standard`: `fast` in the accent, and a cooldown while one runs ([decision 0027](../decisions/0027-speed-tiers.md)). |
+| Speed | When not `standard`: `fast` (or the tier's own name) in the accent's text colour, and while a cooldown runs `fast after 14:32`, dim: requests go at `standard` until then ([decision 0027](../decisions/0027-speed-tiers.md)). |
 | Context | From 50% of the context window: the percentage, in the warning colour from 70% and the error colour from 90%. |
 | Cost | When a budget is set: the spend against it ([14-adaptation.md](14-adaptation.md)). Otherwise on the left, for a while after each turn. When a provider reports a limit and less than a fifth of it is left: what remains and when it resets. |
 | Access | When it is not the default: `sandbox off` or `unrestricted` in the warning colour, a command that ran outside the sandbox, and under a task lease (after the first release) what remains of its time and budget. |
 | Extras | When relevant: the queued prompt count, MCP or extension problems, a rate-limit wait. |
 
-- **Narrow windows.** Segments are dropped from the right when the window is narrow. Under 50 columns the hint row shows the model and the context only.
+- **Narrow windows.** Both sides sit two columns in from the edges, in line with the input box's text. When they do not fit, the left side is cut with `…`, down to 24 columns; then the right side's segments are dropped from its right, in the order of the table above, the model last. Under 50 columns the hint row shows the model and the context only.
+- **While a turn runs with a pending message queued** (`Tab`), the keys read `esc stops · enter queues it · tab steers this turn instead`; with a dialog, a menu or a focused panel open, the spinner and time are followed by its keys.
 - **Everything else is a key away:** `/usage` for cost and the cache hit rate, `/context` for what the window holds, `/status` for the rest.
 - **Height.** While an answer streams, the live region is 6 rows: the tail, a blank row, the 3 rows of the input box, and the hint row. A running round adds its 2 border rows, one row per call, and any open detail. Rows that do not change (the box's borders) cost nothing on a frame that commits nothing.
 
@@ -579,13 +595,31 @@ keys ─► key map ─► actions ─► state changes and Ops to core
 ```
 
 - **State** is plain data: the items of the active branch (for the full-screen presenter and the viewer), the live item, editor state, dialog state, status values.
-- **View functions are pure.** Given state, width and theme they return lines. They are what the snapshot tests cover.
+- **View functions are pure.** Given state, width and a `view::Look` (the theme, the glyph set and the `tui` settings) they return lines, no row wider than the width given, which is one less than the window's. They are what the snapshot tests cover.
+- **The transcript's state** (step 22) is `transcript::Transcript`: blocks in order, each committed when it can no longer change, with `commit(width, look)` for the lines that became final and `live(width, look, tick)` for the rows still open. Step 23 maps the core's events onto it:
+
+| Event (`cortex-protocol`) | What it becomes |
+|---|---|
+| The session's start | `Block::Header(Header)`: version, model, effort, folder, branch, the profile's sentence |
+| A user message item, on submit | `Block::User(text)` |
+| `item.delta` of kind `reasoning` | `Block::Reasoning(Reasoning { text, elapsed, summary: None, finished: false })`, the text appended; when the item completes, `finished` set, with the summary if the provider sent one (reasoning without one commits as its first line) |
+| `item.delta` of kind `text` | `Block::Answer(Markdown)`: each delta `push`ed; `finish` when the item completes |
+| `item.started` of a tool call, `tool_call` and `tool_args` deltas | a `view::Call` in the round's `Block::Round(Round)`: verb, target and state from the tool's name and arguments (`Run` for `shell`, a path for the file tools) |
+| `item.delta` of kind `tool_output` | the call's `Detail::Output`, appended |
+| A tool result item | the call's state (`ToolOutcome` to `Succeeded`, `Failed`, `Denied`, `Interrupted`), its measure from the payload (an edit's counts and diff, a read's lines, an exit code) and how long it took |
+| A notice (`retry`, `compaction`, `sandbox`, `instructions`, `speed_fallback`, `info`) | `Block::Notice(sentence)`, the sentence from the notice's message and fields |
+| A turn that failed | `Block::Error { message, hint }` |
+| A turn's end, with `tui.turn_summary` | `Block::Summary { took, tokens, cost }` |
+| The session's state, usage and speed | `view::HintRow`: the model, effort, speed and its cooldown, the context's share, a budget, a limit, the access |
+| Step 21's input (not an event) | `Outcome::QuitArmed`: `Hint::QuitArmed` until the next key; `Input::send_mode()` while a turn runs: `RunningKeys::Steer` or `Queue`; a menu or the history search open (`view::menu` gives lines): its lines in the hint row's place |
+
+  `Transcript::push` gives each block a `BlockId`, and `Transcript::get_mut(id)` reaches it while any of it is still to commit: a round's results and a reasoning item's end arrive after other blocks may have been pushed below them (a notice, a steering message), so step 23 keeps the id of each item's block. The clock (`Clock::monotonic`) goes to `Transcript::set_now` each frame, for the code lines' wait; the spinner's frame is the tick. An answer is created with `Markdown::answer().with_highlighter(…)`: one highlighter for the process, whose waker wakes the interface's loop.
 - **Actions** are an enum. Keys and slash commands both produce actions, so everything is reachable both ways and testable without a terminal.
 - The TUI holds no agent logic. It never decides what a tool may do, never touches files, and never talks to a provider. It displays events and sends operations.
 
 ## Testing
 
-Covered in [../testing-and-ci.md](../testing-and-ci.md): snapshot tests of view functions, presenter tests against a virtual terminal that assert the no-flicker properties, and end-to-end tests of the real binary under a pseudo-terminal on Linux and Windows.
+Covered in [../testing-and-ci.md](../testing-and-ci.md): snapshot tests of view functions, presenter tests against a virtual terminal that assert the no-flicker properties, the golden screens (the reference screens of [tui-look/](tui-look/README.md), drawn again by the real views and compared cell by cell: `cargo xtask tui-screens`), and end-to-end tests of the real binary under a pseudo-terminal on Linux and Windows.
 
 ## Not in the first release
 
