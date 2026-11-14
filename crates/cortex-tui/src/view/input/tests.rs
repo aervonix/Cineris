@@ -115,7 +115,14 @@ fn the_reference_screens_input_boxes_are_drawn_cell_for_cell() {
 #[test]
 fn the_cursor_is_after_the_text_and_never_on_the_edge() {
     let look = look();
-    for width in 8..40 {
+    // Every width in the nightly run; every third on a pull request, which
+    // still meets every way a row can end.
+    let step = if cortex_testkit::cases::exhaustive() {
+        1
+    } else {
+        3
+    };
+    for width in (8..40).step_by(step) {
         for length in 0..60 {
             let text = "ab 中".repeat(length / 4) + &"x".repeat(length % 4);
             let input = holding(&text, width);

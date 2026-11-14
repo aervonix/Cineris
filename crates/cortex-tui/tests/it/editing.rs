@@ -173,11 +173,19 @@ fn no_row_is_wider_than_its_width_whatever_follows_white_space() {
         "\t",
         "e\u{301}",
     ];
+    // Every width and every fourth piece in the nightly run; on a pull
+    // request the first two of the fourth, which with the other three
+    // reaches every pair of pieces at a break.
+    let fourth = if cortex_testkit::cases::exhaustive() {
+        pieces.len()
+    } else {
+        2
+    };
     for width in 1..12 {
         for a in pieces {
             for b in pieces {
                 for c in pieces {
-                    for d in pieces {
+                    for d in pieces.iter().take(fourth) {
                         let text = format!("{a}{b}{c}{d}{a}{c}");
                         let editor = editor(&text);
                         let layout = editor.layout(width);
