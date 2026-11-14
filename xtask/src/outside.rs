@@ -290,7 +290,7 @@ pub(crate) fn run_ignored(
 /// Runs one test that is not ignored, and shows its output. Fails unless
 /// exactly one test ran and passed: a renamed test is a test that does not
 /// run, and cargo calls that a success.
-fn run_test(
+pub(crate) fn run_test(
     selection: &[&str],
     name: &str,
     variables: &[(&str, &str)],

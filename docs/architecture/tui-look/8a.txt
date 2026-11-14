@@ -22,7 +22,7 @@
 │ ✓ Read lex.rs  lines 120–178                                                                    │
 │ ✓ Edit lex.rs  +5 −1                                                                            │
 │ ✗ Run cargo test -p parser  exit 101 · 3.4s                                                     │
-╰──────────────────────────────────────────────────────────────────────────────── enter expands ─╯
+╰───────────────────────────────────────────────────────────────────────────────── enter expands ─╯
 
 ◇ One test fails: 1_ must be an error, but the scanner now stops before the _
   and returns 1. A separator has to be followed by a digit, so the other case

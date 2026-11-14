@@ -13,9 +13,12 @@
 //! Then it does the same for the editor demo (the example `editor-demo` of
 //! `cortex-tui`, since step 21): key to frame when idle, while streaming,
 //! and in an `@` menu over 100,000 paths, each with the harness's own share
-//! (`crates/cortex-tui/tests/it/perf.rs`). `--only term` or `--only editor`
-//! runs one of the two. With `--json PATH`, the editor's table goes to
-//! `PATH.editor`.
+//! (`crates/cortex-tui/tests/it/perf.rs`). Then the views' own share, since
+//! step 22: real views building and drawing a 30-row live region frame after
+//! frame, and the highlighter's first use
+//! (`crates/cortex-tui/tests/it/frames.rs`). `--only term`, `--only editor`
+//! or `--only views` runs one of the three. With `--json PATH`, the editor's
+//! table goes to `PATH.editor`.
 //!
 //! The rest of the performance budgets (start-up of the real binary, memory,
 //! binary size) have commands of their own: `startup` and `size`.
@@ -41,6 +44,8 @@ enum Only {
     Term,
     /// Step 21's editor demo.
     Editor,
+    /// Step 22's views, drawn frame after frame.
+    Views,
 }
 
 fn parse(arguments: &[String]) -> Result<Request> {
@@ -61,12 +66,13 @@ fn parse(arguments: &[String]) -> Result<Request> {
                 request.only = Some(match rest.next().map(String::as_str) {
                     Some("term") => Only::Term,
                     Some("editor") => Only::Editor,
-                    _ => return Err("`--only` takes `term` or `editor`".to_owned()),
+                    Some("views") => Only::Views,
+                    _ => return Err("`--only` takes `term`, `editor` or `views`".to_owned()),
                 });
             }
             other => {
                 return Err(format!(
-                    "unknown argument `{other}`\nusage: cargo xtask perf [--runs N] [--seconds N] [--json PATH] [--only term|editor]"
+                    "unknown argument `{other}`\nusage: cargo xtask perf [--runs N] [--seconds N] [--json PATH] [--only term|editor|views]"
                 ));
             }
         }
@@ -85,14 +91,18 @@ fn demo_binary(name: &str) -> PathBuf {
 }
 
 /// `cargo xtask perf [--runs N] [--seconds N] [--json PATH] [--only
-/// term|editor]`.
+/// term|editor|views]`.
 pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let request = parse(arguments)?;
-    if request.only != Some(Only::Editor) {
+    let all = request.only.is_none();
+    if all || request.only == Some(Only::Term) {
         terminal_demo(&request)?;
     }
-    if request.only != Some(Only::Term) {
+    if all || request.only == Some(Only::Editor) {
         editor_demo(&request)?;
+    }
+    if all || request.only == Some(Only::Views) {
+        views()?;
     }
     Ok(())
 }
@@ -130,6 +140,16 @@ fn terminal_demo(request: &Request) -> Result<()> {
         &["--release", "--package", "cortex-term", "--test", "it"],
         "perf::perf_the_demo_against_the_budgets",
         &variables,
+    )
+}
+
+/// Step 22's views: their share of a frame with a 30-row live region, and
+/// the highlighter's first use.
+fn views() -> Result<()> {
+    outside::run_ignored(
+        &["--release", "--package", "cortex-tui", "--test", "it"],
+        "frames::perf_frames_of_the_views_with_a_30_row_live_region",
+        &[],
     )
 }
 
@@ -197,6 +217,10 @@ mod tests {
         assert_eq!(
             parse(&strings(&["--only", "editor"])).unwrap().only,
             Some(Only::Editor)
+        );
+        assert_eq!(
+            parse(&strings(&["--only", "views"])).unwrap().only,
+            Some(Only::Views)
         );
         assert!(parse(&strings(&["--only", "both"])).is_err());
         assert!(parse(&strings(&["--runs", "0"])).is_err());

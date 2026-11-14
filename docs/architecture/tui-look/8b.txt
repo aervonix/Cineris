@@ -34,7 +34,7 @@
 │   test lex::numbers::trailing_separator ... FAILED                                              │
 │   assertion failed: lex("1_").is_err()                                                          │
 │   test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s                        │
-╰────────────────────────────────────────────────────────────────────────────── enter collapses ─╯
+╰─────────────────────────────────────────────────────────────────────────────── enter collapses ─╯
 
 ◇ One test fails: 1_ must be an error, but the scanner now stops before the _
   and returns 1. A separator has to be followed by a digit, so the other case

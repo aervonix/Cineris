@@ -2,6 +2,9 @@
 //! from key to action to state, the bindings through the terminal layer's
 //! decoder as terminals send them, the editor's grapheme and undo rules,
 //! paste, history, the menus, and the external editor (tier 3, `sys_…`).
+//! And its views: the reference screens drawn again with them through the
+//! inline presenter into the test kit's virtual terminal (`screens`), and
+//! their share of a frame (`frames`).
 
 #![allow(
     clippy::disallowed_methods,
@@ -23,8 +26,10 @@ mod decoder;
 mod demo;
 mod editing;
 mod external;
+mod frames;
 mod input;
 mod perf;
+mod screens;
 
 use cortex_term::{Event, Key};
 use cortex_tui::complete::Command;

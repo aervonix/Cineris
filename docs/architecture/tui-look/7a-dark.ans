@@ -32,9 +32,9 @@
 [0m
 [0m  [0;95mif[0m c == [0;92m'_'[0m {[0m
 [0m  [0m    [0;95mif[0m ![0;96mself[0m.peek_next().is_some_and(|d| d.is_ascii_digit()) {[0m
-[0m  [0m        [0;95mreturn[0m [0;96mErr[0m([0;96mself[0m.error([0;92m"digit separator mu[0m
+[0m          return Err(self.error("digit separator mu[0m
 [0m
 [0;90m╭─────────────────────────────────────────────────────────────────────────────────────────────────╮[0m
 [0;90m│[0m [0;1;95m◆[0m also run clippy when that's done                                                              [0;90m│[0m
 [0;90m╰─────────────────────────────────────────────────────────────────────────────────────────────────╯[0m
-[0m  [0;95m⣾[0;90m 14s  [0;90mesc stops · enter steers this turn · tab queues it instead[0m          [0;90mopus-5.5 high[0;90m · [0;95mfast[0m  [0m
+[0m  [0;95m⣾[0;90m 14s  esc stops · enter steers this turn · tab queues it instead[0m          [0;90mopus-5.5 high · [0;1mfast[0m  [0m

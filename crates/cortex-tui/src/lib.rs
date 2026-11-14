@@ -19,7 +19,10 @@
 //! | [`layout`] | Styled text at a width: wrapping, cutting with an ellipsis, padding | 22 |
 //! | [`rounded`] | The rounded box, with a label in its bottom border | 22 |
 //! | [`view`] | View functions, and the [`view::Look`] they draw with | 22 |
-//! | `view::*` | The transcript's elements, markdown, the session header and the hint row | 22 |
+//! | `view::*` | The transcript's elements: your message, tool rounds, notices, errors, reasoning, the session header, the turn summary and the hint row | 22 |
+//! | [`markdown`] | Markdown as it streams, with the rule for when a row is final | 22 |
+//! | [`highlight`] | Code highlighting on a thread of its own (the `highlight` feature) | 22 |
+//! | [`transcript`] | The transcript's blocks, what is committed and what is live | 22 |
 //! | [`editor`] | The prompt's text by grapheme cluster, with chips, undo and the kill slot | 21 |
 //! | [`keys`] | The key map and the [`Action`](keys::Action) enum: every key reaches the interface as an action | 21 |
 //! | [`history`] | Prompt history, over a [`HistoryStore`](history::HistoryStore) the caller fills | 21 |
@@ -35,9 +38,12 @@
 
 // Step 22: the look and the transcript.
 pub mod glyphs;
+pub mod highlight;
 pub mod layout;
+pub mod markdown;
 pub mod rounded;
 pub mod theme;
+pub mod transcript;
 pub mod view;
 
 // Step 21: the editor.

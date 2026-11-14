@@ -33,7 +33,7 @@ The spike code is throwaway and is not in this repo.
 | lexopt | 0.3 s | 1.6 s | 18 KB | 2 | Yes ([0011](../decisions/0011-cli-parsing.md)) |
 | **Terminal UI** | | | | | |
 | ratatui with crossterm | 4.3 s | 6.7 s | 240 KB | 64 | No, and since step 20 not crossterm either ([0002](../decisions/0002-tui-rendering.md), "Amended in step 20") |
-| pulldown-cmark | 0.9 s | 3.0 s | 379 KB | 5 | Yes |
+| pulldown-cmark | 0.9 s | 3.0 s | 379 KB | 5 | No, since step 22: the streaming markdown parser is our own. The commit rule needs every piece of text's place in the source and the marks still open, which this whole-document parser does not give; the owner agreed through the coordinator on 2026-11-14 ([architecture/09-tui.md](../architecture/09-tui.md), "The commit rule") |
 | syntect, pure-Rust regex, default grammars | 5.2 s | 11.4 s | 2,254 KB | 45 | Yes, behind a feature ([0015](../decisions/0015-syntax-highlighting.md)) |
 | **Data and text** | | | | | |
 | serde, serde_json, toml | 2.5 s | 4.2 s | 259 KB | 18 | Yes |

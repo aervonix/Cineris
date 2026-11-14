@@ -1,0 +1,233 @@
+== 60 columns, unicode, true colour, dark
+◇ {b}The {b i}scanner{b} and {fg=a14 b}scan_number|
+|
+  A paragraph with {b}bold{}, {i}italic{}, {fg=a14}code{}, a {u link=https://e.example/docs}link|
+  {fg=a8}(https://e.example/docs){} and é 漢字 👨‍👩‍👧.|
+|
+  – an item|
+  – another, long enough to wrap onto a second row at sixty|
+    columns|
+    1. nested|
+|
+  {fg=a8}│ {}a quote with {fg=a14}code|
+|
+  {fg=a8}─────────────────────────────────────────────────────────|
+|
+  {b}tool{}  {b}what it did{}                                 {b}took|
+  {fg=a8}──────────────────────────────────────────────────────|
+  read  read the scanner from line 120 to line 178  0.1s|
+  run   ran the tests of the parser crate           3.4s|
+|
+  if c == '_' && self.peek_next().is_some_and(|d| d.is_asc…|
+
+== 60 columns, ascii, true colour, dark
+o {b}The {b i}scanner{b} and {fg=a14 b}scan_number|
+|
+  A paragraph with {b}bold{}, {i}italic{}, {fg=a14}code{}, a {u link=https://e.example/docs}link|
+  {fg=a8}(https://e.example/docs){} and é 漢字 👨‍👩‍👧.|
+|
+  - an item|
+  - another, long enough to wrap onto a second row at sixty|
+    columns|
+    1. nested|
+|
+  {fg=a8}| {}a quote with {fg=a14}code|
+|
+  {fg=a8}---------------------------------------------------------|
+|
+  {b}tool{}  {b}what it did{}                                 {b}took|
+  {fg=a8}------------------------------------------------------|
+  read  read the scanner from line 120 to line 178  0.1s|
+  run   ran the tests of the parser crate           3.4s|
+|
+  if c == '_' && self.peek_next().is_some_and(|d| d.is_a...|
+
+== 80 columns, unicode, true colour, dark
+◇ {b}The {b i}scanner{b} and {fg=a14 b}scan_number|
+|
+  A paragraph with {b}bold{}, {i}italic{}, {fg=a14}code{}, a {u link=https://e.example/docs}link{fg=a8} (https://e.example/docs){} and é 漢|
+  字 👨‍👩‍👧.|
+|
+  – an item|
+  – another, long enough to wrap onto a second row at sixty columns|
+    1. nested|
+|
+  {fg=a8}│ {}a quote with {fg=a14}code|
+|
+  {fg=a8}─────────────────────────────────────────────────────────────────────────────|
+|
+  {b}tool{}  {b}what it did{}                                 {b}took|
+  {fg=a8}──────────────────────────────────────────────────────|
+  read  read the scanner from line 120 to line 178  0.1s|
+  run   ran the tests of the parser crate           3.4s|
+|
+  if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{ contin…|
+
+== 80 columns, ascii, true colour, dark
+o {b}The {b i}scanner{b} and {fg=a14 b}scan_number|
+|
+  A paragraph with {b}bold{}, {i}italic{}, {fg=a14}code{}, a {u link=https://e.example/docs}link{fg=a8} (https://e.example/docs){} and é 漢|
+  字 👨‍👩‍👧.|
+|
+  - an item|
+  - another, long enough to wrap onto a second row at sixty columns|
+    1. nested|
+|
+  {fg=a8}| {}a quote with {fg=a14}code|
+|
+  {fg=a8}-----------------------------------------------------------------------------|
+|
+  {b}tool{}  {b}what it did{}                                 {b}took|
+  {fg=a8}------------------------------------------------------|
+  read  read the scanner from line 120 to line 178  0.1s|
+  run   ran the tests of the parser crate           3.4s|
+|
+  if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{ cont...|
+
+== 120 columns, unicode, true colour, dark
+◇ {b}The {b i}scanner{b} and {fg=a14 b}scan_number|
+|
+  A paragraph with {b}bold{}, {i}italic{}, {fg=a14}code{}, a {u link=https://e.example/docs}link{fg=a8} (https://e.example/docs){} and é 漢|
+  字 👨‍👩‍👧.|
+|
+  – an item|
+  – another, long enough to wrap onto a second row at sixty columns|
+    1. nested|
+|
+  {fg=a8}│ {}a quote with {fg=a14}code|
+|
+  {fg=a8}──────────────────────────────────────────────────────────────────────────────|
+|
+  {b}tool{}  {b}what it did{}                                 {b}took|
+  {fg=a8}──────────────────────────────────────────────────────|
+  read  read the scanner from line 120 to line 178  0.1s|
+  run   ran the tests of the parser crate           3.4s|
+|
+  if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{ continue; }|
+
+== 120 columns, ascii, true colour, dark
+o {b}The {b i}scanner{b} and {fg=a14 b}scan_number|
+|
+  A paragraph with {b}bold{}, {i}italic{}, {fg=a14}code{}, a {u link=https://e.example/docs}link{fg=a8} (https://e.example/docs){} and é 漢|
+  字 👨‍👩‍👧.|
+|
+  - an item|
+  - another, long enough to wrap onto a second row at sixty columns|
+    1. nested|
+|
+  {fg=a8}| {}a quote with {fg=a14}code|
+|
+  {fg=a8}------------------------------------------------------------------------------|
+|
+  {b}tool{}  {b}what it did{}                                 {b}took|
+  {fg=a8}------------------------------------------------------|
+  read  read the scanner from line 120 to line 178  0.1s|
+  run   ran the tests of the parser crate           3.4s|
+|
+  if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{ continue; }|
+
+== 80 columns, unicode, true colour, light
+◇ {b}The {b i}scanner{b} and {fg=a6 b}scan_number|
+|
+  A paragraph with {b}bold{}, {i}italic{}, {fg=a6 b}code{}, a {u link=https://e.example/docs}link{fg=a8} (https://e.example/docs){} and é 漢|
+  字 👨‍👩‍👧.|
+|
+  – an item|
+  – another, long enough to wrap onto a second row at sixty columns|
+    1. nested|
+|
+  {fg=a8}│ {}a quote with {fg=a6 b}code|
+|
+  {fg=a8}─────────────────────────────────────────────────────────────────────────────|
+|
+  {b}tool{}  {b}what it did{}                                 {b}took|
+  {fg=a8}──────────────────────────────────────────────────────|
+  read  read the scanner from line 120 to line 178  0.1s|
+  run   ran the tests of the parser crate           3.4s|
+|
+  if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{ contin…|
+
+== 80 columns, unicode, 16 colours, dark
+◇ {b}The {b i}scanner{b} and {fg=a14 b}scan_number|
+|
+  A paragraph with {b}bold{}, {i}italic{}, {fg=a14}code{}, a {u link=https://e.example/docs}link{fg=a8} (https://e.example/docs){} and é 漢|
+  字 👨‍👩‍👧.|
+|
+  – an item|
+  – another, long enough to wrap onto a second row at sixty columns|
+    1. nested|
+|
+  {fg=a8}│ {}a quote with {fg=a14}code|
+|
+  {fg=a8}─────────────────────────────────────────────────────────────────────────────|
+|
+  {b}tool{}  {b}what it did{}                                 {b}took|
+  {fg=a8}──────────────────────────────────────────────────────|
+  read  read the scanner from line 120 to line 178  0.1s|
+  run   ran the tests of the parser crate           3.4s|
+|
+  if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{ contin…|
+
+== 80 columns, unicode, 16 colours, light
+◇ {b}The {b i}scanner{b} and {fg=a6 b}scan_number|
+|
+  A paragraph with {b}bold{}, {i}italic{}, {fg=a6 b}code{}, a {u link=https://e.example/docs}link{fg=a8} (https://e.example/docs){} and é 漢|
+  字 👨‍👩‍👧.|
+|
+  – an item|
+  – another, long enough to wrap onto a second row at sixty columns|
+    1. nested|
+|
+  {fg=a8}│ {}a quote with {fg=a6 b}code|
+|
+  {fg=a8}─────────────────────────────────────────────────────────────────────────────|
+|
+  {b}tool{}  {b}what it did{}                                 {b}took|
+  {fg=a8}──────────────────────────────────────────────────────|
+  read  read the scanner from line 120 to line 178  0.1s|
+  run   ran the tests of the parser crate           3.4s|
+|
+  if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{ contin…|
+
+== 80 columns, unicode, 256 colours, dark
+◇ {b}The {b i}scanner{b} and {fg=a14 b}scan_number|
+|
+  A paragraph with {b}bold{}, {i}italic{}, {fg=a14}code{}, a {u link=https://e.example/docs}link{fg=a8} (https://e.example/docs){} and é 漢|
+  字 👨‍👩‍👧.|
+|
+  – an item|
+  – another, long enough to wrap onto a second row at sixty columns|
+    1. nested|
+|
+  {fg=a8}│ {}a quote with {fg=a14}code|
+|
+  {fg=a8}─────────────────────────────────────────────────────────────────────────────|
+|
+  {b}tool{}  {b}what it did{}                                 {b}took|
+  {fg=a8}──────────────────────────────────────────────────────|
+  read  read the scanner from line 120 to line 178  0.1s|
+  run   ran the tests of the parser crate           3.4s|
+|
+  if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{ contin…|
+
+== 80 columns, unicode, no colour, dark
+{b}◇ The {b i}scanner{b} and scan_number|
+|
+  A paragraph with {b}bold{}, {i}italic{}, {b}code{}, a {u link=https://e.example/docs}link{d} (https://e.example/docs){} and é 漢|
+  字 👨‍👩‍👧.|
+|
+  – an item|
+  – another, long enough to wrap onto a second row at sixty columns|
+    1. nested|
+|
+  {d}│ {}a quote with {b}code|
+|
+  {d}─────────────────────────────────────────────────────────────────────────────|
+|
+  {b}tool{}  {b}what it did{}                                 {b}took|
+  {d}──────────────────────────────────────────────────────|
+  read  read the scanner from line 120 to line 178  0.1s|
+  run   ran the tests of the parser crate           3.4s|
+|
+  if c == '_' && self.peek_next().is_some_and(|d| d.is_ascii_digit()) {{ contin…|
+

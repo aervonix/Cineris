@@ -3,7 +3,7 @@
 ◆ 1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.
 
 ⢿ Reasoning  3s
-  …so the loop breaks on any non-digit and `_` ends the literal; before changin…
+  …-digit and `_` ends the literal; before changing it, check whether a trailing
 
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ ◆ Type to steer this turn                                                                       │
