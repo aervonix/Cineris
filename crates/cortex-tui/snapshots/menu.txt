@@ -1,0 +1,671 @@
+== 60 columns, unicode, true colour, dark — files, more than eight
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}src/lex/part_00.rs|
+    src/lex/part_01.rs|
+    src/lex/part_02.rs|
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+
+== 60 columns, unicode, true colour, dark — files, one
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}src/漢字/名前.rs|
+
+== 60 columns, unicode, true colour, dark — files, none
+    {fg=a8}no file matches|
+
+== 60 columns, unicode, true colour, dark — files, scrolled
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+    src/lex/part_08.rs|
+    src/lex/part_09.rs|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}src/lex/part_10.rs|
+
+== 60 columns, unicode, true colour, dark — files, not listed yet
+    {fg=a8}listing the workspace's files…|
+
+== 60 columns, unicode, true colour, dark — commands
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}mode{}   {fg=a8}pick the level|
+    model  {fg=a8}pick the model|
+
+== 60 columns, unicode, true colour, dark — the /model picker
+    opus-5.5     {fg=a8} anthropic   200k  $5 · $25 /M    fast  c…|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}sonnet-5.5{}   {fg=a8} anthropic   200k  $3 · $15 /M|
+    haiku-5.5    {fg=a8} anthropic   200k  $1 · $5 /M|
+    fable-5.2    {fg=a8} anthropic   200k  $15 · $75 /M   fast|
+    deepseek-v4  {fg=a8} deepseek    128k  $0.27 · $1.10 /M|
+    qwen3-coder  {fg=a8} openrouter  256k  $0.40 · $1.60 /M|
+
+== 60 columns, unicode, true colour, dark — the /effort picker with fast mode
+    low     {fg=a8}a quick look, least reasoning|
+    medium  {fg=a8}balanced|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}high{}    {fg=a8}careful work; the default for this model   cur…|
+    max     {fg=a8}the most reasoning the model allows|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, at…|
+
+== 60 columns, unicode, true colour, dark — a picker filtered
+    {fg=a8}me|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}medium{}  {fg=a8}balanced|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, at…|
+
+== 60 columns, unicode, true colour, dark — history search
+  {fg=#8D57FC b}ctrl+r{} clip  {fg=a8}run clippy…|
+
+== 60 columns, unicode, true colour, dark — history search, no match
+  {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 60 columns, ascii, true colour, dark — files, more than eight
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}src/lex/part_00.rs|
+    src/lex/part_01.rs|
+    src/lex/part_02.rs|
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+
+== 60 columns, ascii, true colour, dark — files, one
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}src/漢字/名前.rs|
+
+== 60 columns, ascii, true colour, dark — files, none
+    {fg=a8}no file matches|
+
+== 60 columns, ascii, true colour, dark — files, scrolled
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+    src/lex/part_08.rs|
+    src/lex/part_09.rs|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}src/lex/part_10.rs|
+
+== 60 columns, ascii, true colour, dark — files, not listed yet
+    {fg=a8}listing the workspace's files...|
+
+== 60 columns, ascii, true colour, dark — commands
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}mode{}   {fg=a8}pick the level|
+    model  {fg=a8}pick the model|
+
+== 60 columns, ascii, true colour, dark — the /model picker
+    opus-5.5     {fg=a8} anthropic   200k  $5 · $25 /M    fast ...|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}sonnet-5.5{}   {fg=a8} anthropic   200k  $3 · $15 /M|
+    haiku-5.5    {fg=a8} anthropic   200k  $1 · $5 /M|
+    fable-5.2    {fg=a8} anthropic   200k  $15 · $75 /M   fast|
+    deepseek-v4  {fg=a8} deepseek    128k  $0.27 · $1.10 /M|
+    qwen3-coder  {fg=a8} openrouter  256k  $0.40 · $1.60 /M|
+
+== 60 columns, ascii, true colour, dark — the /effort picker with fast mode
+    low     {fg=a8}a quick look, least reasoning|
+    medium  {fg=a8}balanced|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}high{}    {fg=a8}careful work; the default for this model   c...|
+    max     {fg=a8}the most reasoning the model allows|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, ...|
+
+== 60 columns, ascii, true colour, dark — a picker filtered
+    {fg=a8}me|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}medium{}  {fg=a8}balanced|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, ...|
+
+== 60 columns, ascii, true colour, dark — history search
+  {fg=#8D57FC b}ctrl+r{} clip  {fg=a8}run clippy...|
+
+== 60 columns, ascii, true colour, dark — history search, no match
+  {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 80 columns, unicode, true colour, dark — files, more than eight
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}src/lex/part_00.rs|
+    src/lex/part_01.rs|
+    src/lex/part_02.rs|
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+
+== 80 columns, unicode, true colour, dark — files, one
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}src/漢字/名前.rs|
+
+== 80 columns, unicode, true colour, dark — files, none
+    {fg=a8}no file matches|
+
+== 80 columns, unicode, true colour, dark — files, scrolled
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+    src/lex/part_08.rs|
+    src/lex/part_09.rs|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}src/lex/part_10.rs|
+
+== 80 columns, unicode, true colour, dark — files, not listed yet
+    {fg=a8}listing the workspace's files…|
+
+== 80 columns, unicode, true colour, dark — commands
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}mode{}   {fg=a8}pick the level|
+    model  {fg=a8}pick the model|
+
+== 80 columns, unicode, true colour, dark — the /model picker
+    opus-5.5     {fg=a8} anthropic   200k  $5 · $25 /M    fast  current|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}sonnet-5.5{}   {fg=a8} anthropic   200k  $3 · $15 /M|
+    haiku-5.5    {fg=a8} anthropic   200k  $1 · $5 /M|
+    fable-5.2    {fg=a8} anthropic   200k  $15 · $75 /M   fast|
+    deepseek-v4  {fg=a8} deepseek    128k  $0.27 · $1.10 /M|
+    qwen3-coder  {fg=a8} openrouter  256k  $0.40 · $1.60 /M|
+
+== 80 columns, unicode, true colour, dark — the /effort picker with fast mode
+    low     {fg=a8}a quick look, least reasoning|
+    medium  {fg=a8}balanced|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}high{}    {fg=a8}careful work; the default for this model   current|
+    max     {fg=a8}the most reasoning the model allows|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, true colour, dark — a picker filtered
+    {fg=a8}me|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}medium{}  {fg=a8}balanced|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, true colour, dark — history search
+  {fg=#8D57FC b}ctrl+r{} clip  {fg=a8}run clippy…|
+
+== 80 columns, unicode, true colour, dark — history search, no match
+  {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 80 columns, ascii, true colour, dark — files, more than eight
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}src/lex/part_00.rs|
+    src/lex/part_01.rs|
+    src/lex/part_02.rs|
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+
+== 80 columns, ascii, true colour, dark — files, one
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}src/漢字/名前.rs|
+
+== 80 columns, ascii, true colour, dark — files, none
+    {fg=a8}no file matches|
+
+== 80 columns, ascii, true colour, dark — files, scrolled
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+    src/lex/part_08.rs|
+    src/lex/part_09.rs|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}src/lex/part_10.rs|
+
+== 80 columns, ascii, true colour, dark — files, not listed yet
+    {fg=a8}listing the workspace's files...|
+
+== 80 columns, ascii, true colour, dark — commands
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}mode{}   {fg=a8}pick the level|
+    model  {fg=a8}pick the model|
+
+== 80 columns, ascii, true colour, dark — the /model picker
+    opus-5.5     {fg=a8} anthropic   200k  $5 · $25 /M    fast  current|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}sonnet-5.5{}   {fg=a8} anthropic   200k  $3 · $15 /M|
+    haiku-5.5    {fg=a8} anthropic   200k  $1 · $5 /M|
+    fable-5.2    {fg=a8} anthropic   200k  $15 · $75 /M   fast|
+    deepseek-v4  {fg=a8} deepseek    128k  $0.27 · $1.10 /M|
+    qwen3-coder  {fg=a8} openrouter  256k  $0.40 · $1.60 /M|
+
+== 80 columns, ascii, true colour, dark — the /effort picker with fast mode
+    low     {fg=a8}a quick look, least reasoning|
+    medium  {fg=a8}balanced|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}high{}    {fg=a8}careful work; the default for this model   current|
+    max     {fg=a8}the most reasoning the model allows|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, ascii, true colour, dark — a picker filtered
+    {fg=a8}me|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}medium{}  {fg=a8}balanced|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, ascii, true colour, dark — history search
+  {fg=#8D57FC b}ctrl+r{} clip  {fg=a8}run clippy...|
+
+== 80 columns, ascii, true colour, dark — history search, no match
+  {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 120 columns, unicode, true colour, dark — files, more than eight
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}src/lex/part_00.rs|
+    src/lex/part_01.rs|
+    src/lex/part_02.rs|
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+
+== 120 columns, unicode, true colour, dark — files, one
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}src/漢字/名前.rs|
+
+== 120 columns, unicode, true colour, dark — files, none
+    {fg=a8}no file matches|
+
+== 120 columns, unicode, true colour, dark — files, scrolled
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+    src/lex/part_08.rs|
+    src/lex/part_09.rs|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}src/lex/part_10.rs|
+
+== 120 columns, unicode, true colour, dark — files, not listed yet
+    {fg=a8}listing the workspace's files…|
+
+== 120 columns, unicode, true colour, dark — commands
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}mode{}   {fg=a8}pick the level|
+    model  {fg=a8}pick the model|
+
+== 120 columns, unicode, true colour, dark — the /model picker
+    opus-5.5     {fg=a8} anthropic   200k  $5 · $25 /M    fast  current|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}sonnet-5.5{}   {fg=a8} anthropic   200k  $3 · $15 /M|
+    haiku-5.5    {fg=a8} anthropic   200k  $1 · $5 /M|
+    fable-5.2    {fg=a8} anthropic   200k  $15 · $75 /M   fast|
+    deepseek-v4  {fg=a8} deepseek    128k  $0.27 · $1.10 /M|
+    qwen3-coder  {fg=a8} openrouter  256k  $0.40 · $1.60 /M|
+
+== 120 columns, unicode, true colour, dark — the /effort picker with fast mode
+    low     {fg=a8}a quick look, least reasoning|
+    medium  {fg=a8}balanced|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}high{}    {fg=a8}careful work; the default for this model   current|
+    max     {fg=a8}the most reasoning the model allows|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 120 columns, unicode, true colour, dark — a picker filtered
+    {fg=a8}me|
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}medium{}  {fg=a8}balanced|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 120 columns, unicode, true colour, dark — history search
+  {fg=#8D57FC b}ctrl+r{} clip  {fg=a8}run clippy…|
+
+== 120 columns, unicode, true colour, dark — history search, no match
+  {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 120 columns, ascii, true colour, dark — files, more than eight
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}src/lex/part_00.rs|
+    src/lex/part_01.rs|
+    src/lex/part_02.rs|
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+
+== 120 columns, ascii, true colour, dark — files, one
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}src/漢字/名前.rs|
+
+== 120 columns, ascii, true colour, dark — files, none
+    {fg=a8}no file matches|
+
+== 120 columns, ascii, true colour, dark — files, scrolled
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+    src/lex/part_08.rs|
+    src/lex/part_09.rs|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}src/lex/part_10.rs|
+
+== 120 columns, ascii, true colour, dark — files, not listed yet
+    {fg=a8}listing the workspace's files...|
+
+== 120 columns, ascii, true colour, dark — commands
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}mode{}   {fg=a8}pick the level|
+    model  {fg=a8}pick the model|
+
+== 120 columns, ascii, true colour, dark — the /model picker
+    opus-5.5     {fg=a8} anthropic   200k  $5 · $25 /M    fast  current|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}sonnet-5.5{}   {fg=a8} anthropic   200k  $3 · $15 /M|
+    haiku-5.5    {fg=a8} anthropic   200k  $1 · $5 /M|
+    fable-5.2    {fg=a8} anthropic   200k  $15 · $75 /M   fast|
+    deepseek-v4  {fg=a8} deepseek    128k  $0.27 · $1.10 /M|
+    qwen3-coder  {fg=a8} openrouter  256k  $0.40 · $1.60 /M|
+
+== 120 columns, ascii, true colour, dark — the /effort picker with fast mode
+    low     {fg=a8}a quick look, least reasoning|
+    medium  {fg=a8}balanced|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}high{}    {fg=a8}careful work; the default for this model   current|
+    max     {fg=a8}the most reasoning the model allows|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 120 columns, ascii, true colour, dark — a picker filtered
+    {fg=a8}me|
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}medium{}  {fg=a8}balanced|
+|
+    {fg=#8D57FC b}tab - fast mode{}  {fg=#8D57FC}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 120 columns, ascii, true colour, dark — history search
+  {fg=#8D57FC b}ctrl+r{} clip  {fg=a8}run clippy...|
+
+== 120 columns, ascii, true colour, dark — history search, no match
+  {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 80 columns, unicode, true colour, light — files, more than eight
+  {fg=#7A3CFB}◆{} {fg=#7A3CFB b}src/lex/part_00.rs|
+    src/lex/part_01.rs|
+    src/lex/part_02.rs|
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+
+== 80 columns, unicode, true colour, light — files, one
+  {fg=#7A3CFB}◆{} {fg=#7A3CFB b}src/漢字/名前.rs|
+
+== 80 columns, unicode, true colour, light — files, none
+    {fg=a8}no file matches|
+
+== 80 columns, unicode, true colour, light — files, scrolled
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+    src/lex/part_08.rs|
+    src/lex/part_09.rs|
+  {fg=#7A3CFB}◆{} {fg=#7A3CFB b}src/lex/part_10.rs|
+
+== 80 columns, unicode, true colour, light — files, not listed yet
+    {fg=a8}listing the workspace's files…|
+
+== 80 columns, unicode, true colour, light — commands
+  {fg=#7A3CFB}◆{} {fg=#7A3CFB b}mode{}   {fg=a8}pick the level|
+    model  {fg=a8}pick the model|
+
+== 80 columns, unicode, true colour, light — the /model picker
+    opus-5.5     {fg=a8} anthropic   200k  $5 · $25 /M    fast  current|
+  {fg=#7A3CFB}◆{} {fg=#7A3CFB b}sonnet-5.5{}   {fg=a8} anthropic   200k  $3 · $15 /M|
+    haiku-5.5    {fg=a8} anthropic   200k  $1 · $5 /M|
+    fable-5.2    {fg=a8} anthropic   200k  $15 · $75 /M   fast|
+    deepseek-v4  {fg=a8} deepseek    128k  $0.27 · $1.10 /M|
+    qwen3-coder  {fg=a8} openrouter  256k  $0.40 · $1.60 /M|
+
+== 80 columns, unicode, true colour, light — the /effort picker with fast mode
+    low     {fg=a8}a quick look, least reasoning|
+    medium  {fg=a8}balanced|
+  {fg=#7A3CFB}◆{} {fg=#7A3CFB b}high{}    {fg=a8}careful work; the default for this model   current|
+    max     {fg=a8}the most reasoning the model allows|
+|
+    {fg=#7A3CFB b}tab - fast mode{}  {fg=#7A3CFB}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, true colour, light — a picker filtered
+    {fg=a8}me|
+  {fg=#7A3CFB}◆{} {fg=#7A3CFB b}medium{}  {fg=a8}balanced|
+|
+    {fg=#7A3CFB b}tab - fast mode{}  {fg=#7A3CFB}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, true colour, light — history search
+  {fg=#7A3CFB b}ctrl+r{} clip  {fg=a8}run clippy…|
+
+== 80 columns, unicode, true colour, light — history search, no match
+  {fg=#7A3CFB b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 80 columns, unicode, 16 colours, dark — files, more than eight
+  {fg=a13}◆{} {b}src/lex/part_00.rs|
+    src/lex/part_01.rs|
+    src/lex/part_02.rs|
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+
+== 80 columns, unicode, 16 colours, dark — files, one
+  {fg=a13}◆{} {b}src/漢字/名前.rs|
+
+== 80 columns, unicode, 16 colours, dark — files, none
+    {fg=a8}no file matches|
+
+== 80 columns, unicode, 16 colours, dark — files, scrolled
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+    src/lex/part_08.rs|
+    src/lex/part_09.rs|
+  {fg=a13}◆{} {b}src/lex/part_10.rs|
+
+== 80 columns, unicode, 16 colours, dark — files, not listed yet
+    {fg=a8}listing the workspace's files…|
+
+== 80 columns, unicode, 16 colours, dark — commands
+  {fg=a13}◆{} {b}mode{}   {fg=a8}pick the level|
+    model  {fg=a8}pick the model|
+
+== 80 columns, unicode, 16 colours, dark — the /model picker
+    opus-5.5     {fg=a8} anthropic   200k  $5 · $25 /M    fast  current|
+  {fg=a13}◆{} {b}sonnet-5.5{}   {fg=a8} anthropic   200k  $3 · $15 /M|
+    haiku-5.5    {fg=a8} anthropic   200k  $1 · $5 /M|
+    fable-5.2    {fg=a8} anthropic   200k  $15 · $75 /M   fast|
+    deepseek-v4  {fg=a8} deepseek    128k  $0.27 · $1.10 /M|
+    qwen3-coder  {fg=a8} openrouter  256k  $0.40 · $1.60 /M|
+
+== 80 columns, unicode, 16 colours, dark — the /effort picker with fast mode
+    low     {fg=a8}a quick look, least reasoning|
+    medium  {fg=a8}balanced|
+  {fg=a13}◆{} {b}high{}    {fg=a8}careful work; the default for this model   current|
+    max     {fg=a8}the most reasoning the model allows|
+|
+    {b}tab - fast mode{}  {b}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, 16 colours, dark — a picker filtered
+    {fg=a8}me|
+  {fg=a13}◆{} {b}medium{}  {fg=a8}balanced|
+|
+    {b}tab - fast mode{}  {b}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, 16 colours, dark — history search
+  {b}ctrl+r{} clip  {fg=a8}run clippy…|
+
+== 80 columns, unicode, 16 colours, dark — history search, no match
+  {b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 80 columns, unicode, 16 colours, light — files, more than eight
+  {fg=a5}◆{} {fg=a5 b}src/lex/part_00.rs|
+    src/lex/part_01.rs|
+    src/lex/part_02.rs|
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+
+== 80 columns, unicode, 16 colours, light — files, one
+  {fg=a5}◆{} {fg=a5 b}src/漢字/名前.rs|
+
+== 80 columns, unicode, 16 colours, light — files, none
+    {fg=a8}no file matches|
+
+== 80 columns, unicode, 16 colours, light — files, scrolled
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+    src/lex/part_08.rs|
+    src/lex/part_09.rs|
+  {fg=a5}◆{} {fg=a5 b}src/lex/part_10.rs|
+
+== 80 columns, unicode, 16 colours, light — files, not listed yet
+    {fg=a8}listing the workspace's files…|
+
+== 80 columns, unicode, 16 colours, light — commands
+  {fg=a5}◆{} {fg=a5 b}mode{}   {fg=a8}pick the level|
+    model  {fg=a8}pick the model|
+
+== 80 columns, unicode, 16 colours, light — the /model picker
+    opus-5.5     {fg=a8} anthropic   200k  $5 · $25 /M    fast  current|
+  {fg=a5}◆{} {fg=a5 b}sonnet-5.5{}   {fg=a8} anthropic   200k  $3 · $15 /M|
+    haiku-5.5    {fg=a8} anthropic   200k  $1 · $5 /M|
+    fable-5.2    {fg=a8} anthropic   200k  $15 · $75 /M   fast|
+    deepseek-v4  {fg=a8} deepseek    128k  $0.27 · $1.10 /M|
+    qwen3-coder  {fg=a8} openrouter  256k  $0.40 · $1.60 /M|
+
+== 80 columns, unicode, 16 colours, light — the /effort picker with fast mode
+    low     {fg=a8}a quick look, least reasoning|
+    medium  {fg=a8}balanced|
+  {fg=a5}◆{} {fg=a5 b}high{}    {fg=a8}careful work; the default for this model   current|
+    max     {fg=a8}the most reasoning the model allows|
+|
+    {fg=a5 b}tab - fast mode{}  {fg=a5}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, 16 colours, light — a picker filtered
+    {fg=a8}me|
+  {fg=a5}◆{} {fg=a5 b}medium{}  {fg=a8}balanced|
+|
+    {fg=a5 b}tab - fast mode{}  {fg=a5}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, 16 colours, light — history search
+  {fg=a5 b}ctrl+r{} clip  {fg=a8}run clippy…|
+
+== 80 columns, unicode, 16 colours, light — history search, no match
+  {fg=a5 b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 80 columns, unicode, 256 colours, dark — files, more than eight
+  {fg=i99}◆{} {fg=i99 b}src/lex/part_00.rs|
+    src/lex/part_01.rs|
+    src/lex/part_02.rs|
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+
+== 80 columns, unicode, 256 colours, dark — files, one
+  {fg=i99}◆{} {fg=i99 b}src/漢字/名前.rs|
+
+== 80 columns, unicode, 256 colours, dark — files, none
+    {fg=a8}no file matches|
+
+== 80 columns, unicode, 256 colours, dark — files, scrolled
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+    src/lex/part_08.rs|
+    src/lex/part_09.rs|
+  {fg=i99}◆{} {fg=i99 b}src/lex/part_10.rs|
+
+== 80 columns, unicode, 256 colours, dark — files, not listed yet
+    {fg=a8}listing the workspace's files…|
+
+== 80 columns, unicode, 256 colours, dark — commands
+  {fg=i99}◆{} {fg=i99 b}mode{}   {fg=a8}pick the level|
+    model  {fg=a8}pick the model|
+
+== 80 columns, unicode, 256 colours, dark — the /model picker
+    opus-5.5     {fg=a8} anthropic   200k  $5 · $25 /M    fast  current|
+  {fg=i99}◆{} {fg=i99 b}sonnet-5.5{}   {fg=a8} anthropic   200k  $3 · $15 /M|
+    haiku-5.5    {fg=a8} anthropic   200k  $1 · $5 /M|
+    fable-5.2    {fg=a8} anthropic   200k  $15 · $75 /M   fast|
+    deepseek-v4  {fg=a8} deepseek    128k  $0.27 · $1.10 /M|
+    qwen3-coder  {fg=a8} openrouter  256k  $0.40 · $1.60 /M|
+
+== 80 columns, unicode, 256 colours, dark — the /effort picker with fast mode
+    low     {fg=a8}a quick look, least reasoning|
+    medium  {fg=a8}balanced|
+  {fg=i99}◆{} {fg=i99 b}high{}    {fg=a8}careful work; the default for this model   current|
+    max     {fg=a8}the most reasoning the model allows|
+|
+    {fg=i99 b}tab - fast mode{}  {fg=i99}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, 256 colours, dark — a picker filtered
+    {fg=a8}me|
+  {fg=i99}◆{} {fg=i99 b}medium{}  {fg=a8}balanced|
+|
+    {fg=i99 b}tab - fast mode{}  {fg=i99}on{}  {fg=a8}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, 256 colours, dark — history search
+  {fg=i99 b}ctrl+r{} clip  {fg=a8}run clippy…|
+
+== 80 columns, unicode, 256 colours, dark — history search, no match
+  {fg=i99 b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 80 columns, unicode, no colour, dark — files, more than eight
+  ◆ {b}src/lex/part_00.rs|
+    src/lex/part_01.rs|
+    src/lex/part_02.rs|
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+
+== 80 columns, unicode, no colour, dark — files, one
+  ◆ {b}src/漢字/名前.rs|
+
+== 80 columns, unicode, no colour, dark — files, none
+    {d}no file matches|
+
+== 80 columns, unicode, no colour, dark — files, scrolled
+    src/lex/part_03.rs|
+    src/lex/part_04.rs|
+    src/lex/part_05.rs|
+    src/lex/part_06.rs|
+    src/lex/part_07.rs|
+    src/lex/part_08.rs|
+    src/lex/part_09.rs|
+  ◆ {b}src/lex/part_10.rs|
+
+== 80 columns, unicode, no colour, dark — files, not listed yet
+    {d}listing the workspace's files…|
+
+== 80 columns, unicode, no colour, dark — commands
+  ◆ {b}mode{}   {d}pick the level|
+    model  {d}pick the model|
+
+== 80 columns, unicode, no colour, dark — the /model picker
+    opus-5.5     {d} anthropic   200k  $5 · $25 /M    fast  current|
+  ◆ {b}sonnet-5.5{}   {d} anthropic   200k  $3 · $15 /M|
+    haiku-5.5    {d} anthropic   200k  $1 · $5 /M|
+    fable-5.2    {d} anthropic   200k  $15 · $75 /M   fast|
+    deepseek-v4  {d} deepseek    128k  $0.27 · $1.10 /M|
+    qwen3-coder  {d} openrouter  256k  $0.40 · $1.60 /M|
+
+== 80 columns, unicode, no colour, dark — the /effort picker with fast mode
+    low     {d}a quick look, least reasoning|
+    medium  {d}balanced|
+  ◆ {b}high{}    {d}careful work; the default for this model   current|
+    max     {d}the most reasoning the model allows|
+|
+    {b}tab - fast mode{}  {b}on{}  {d}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, no colour, dark — a picker filtered
+    {d}me|
+  ◆ {b}medium{}  {d}balanced|
+|
+    {b}tab - fast mode{}  {b}on{}  {d}· about 2.5x the output speed, at 2x the price|
+
+== 80 columns, unicode, no colour, dark — history search
+  {b}ctrl+r{} clip  {d}run clippy…|
+
+== 80 columns, unicode, no colour, dark — history search, no match
+  {b}ctrl+r{} zzz  {d}no match|
+

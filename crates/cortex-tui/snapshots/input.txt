@@ -1,0 +1,515 @@
+== 60 columns, unicode, true colour, dark — empty
+{fg=a8}╭─────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {fg=a8}Describe a task, or ask a question{}                    {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────╯|
+cursor at row 1, column 4|
+
+== 60 columns, unicode, true colour, dark — one line
+{fg=a8}╭─────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}also run clippy when that's done                      {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────╯|
+cursor at row 1, column 36|
+
+== 60 columns, unicode, true colour, dark — wrapped, with wide characters and a chip
+{fg=a8}╭─────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}fix the 漢字 lexer and look at {fg=a8}[pasted 148 lines]{}     {fg=a8}│|
+{fg=a8}│{}   then tell me what 1_000 lexes as in every case        {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────╯|
+cursor at row 2, column 50|
+
+== 60 columns, unicode, true colour, dark — lines
+{fg=a8}╭─────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}first                                                 {fg=a8}│|
+{fg=a8}│{}   second                                                {fg=a8}│|
+{fg=a8}│{}       indented                                          {fg=a8}│|
+{fg=a8}│{}                                                         {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────╯|
+cursor at row 4, column 4|
+
+== 60 columns, unicode, true colour, dark — controls
+{fg=a8}╭─────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}ansi ␛[31m red ␇ bell                                 {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────╯|
+cursor at row 1, column 25|
+
+== 60 columns, unicode, true colour, dark — scrolled
+{fg=a8}╭─────────────────────────────────────────────────────────╮|
+{fg=a8}│{}   line 5                                                {fg=a8}│|
+{fg=a8}│{}   line 6                                                {fg=a8}│|
+{fg=a8}│{}   line 7                                                {fg=a8}│|
+{fg=a8}│{}   line 8                                                {fg=a8}│|
+{fg=a8}│{}   line 9                                                {fg=a8}│|
+{fg=a8}│{}   line 10                                               {fg=a8}│|
+{fg=a8}│{}   line 11                                               {fg=a8}│|
+{fg=a8}│{}   line 12                                               {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────╯|
+cursor at row 8, column 11|
+
+== 60 columns, ascii, true colour, dark — empty
+{fg=a8}+---------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {fg=a8}Describe a task, or ask a question{}                    {fg=a8}||
+{fg=a8}+---------------------------------------------------------+|
+cursor at row 1, column 4|
+
+== 60 columns, ascii, true colour, dark — one line
+{fg=a8}+---------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}also run clippy when that's done                      {fg=a8}||
+{fg=a8}+---------------------------------------------------------+|
+cursor at row 1, column 36|
+
+== 60 columns, ascii, true colour, dark — wrapped, with wide characters and a chip
+{fg=a8}+---------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}fix the 漢字 lexer and look at {fg=a8}[pasted 148 lines]{}     {fg=a8}||
+{fg=a8}|{}   then tell me what 1_000 lexes as in every case        {fg=a8}||
+{fg=a8}+---------------------------------------------------------+|
+cursor at row 2, column 50|
+
+== 60 columns, ascii, true colour, dark — lines
+{fg=a8}+---------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}first                                                 {fg=a8}||
+{fg=a8}|{}   second                                                {fg=a8}||
+{fg=a8}|{}       indented                                          {fg=a8}||
+{fg=a8}|{}                                                         {fg=a8}||
+{fg=a8}+---------------------------------------------------------+|
+cursor at row 4, column 4|
+
+== 60 columns, ascii, true colour, dark — controls
+{fg=a8}+---------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}ansi ␛[31m red ␇ bell                                 {fg=a8}||
+{fg=a8}+---------------------------------------------------------+|
+cursor at row 1, column 25|
+
+== 60 columns, ascii, true colour, dark — scrolled
+{fg=a8}+---------------------------------------------------------+|
+{fg=a8}|{}   line 5                                                {fg=a8}||
+{fg=a8}|{}   line 6                                                {fg=a8}||
+{fg=a8}|{}   line 7                                                {fg=a8}||
+{fg=a8}|{}   line 8                                                {fg=a8}||
+{fg=a8}|{}   line 9                                                {fg=a8}||
+{fg=a8}|{}   line 10                                               {fg=a8}||
+{fg=a8}|{}   line 11                                               {fg=a8}||
+{fg=a8}|{}   line 12                                               {fg=a8}||
+{fg=a8}+---------------------------------------------------------+|
+cursor at row 8, column 11|
+
+== 80 columns, unicode, true colour, dark — empty
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {fg=a8}Describe a task, or ask a question{}                                        {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 4|
+
+== 80 columns, unicode, true colour, dark — one line
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}also run clippy when that's done                                          {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 36|
+
+== 80 columns, unicode, true colour, dark — wrapped, with wide characters and a chip
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}fix the 漢字 lexer and look at {fg=a8}[pasted 148 lines]{} then tell me what       {fg=a8}│|
+{fg=a8}│{}   1_000 lexes as in every case                                              {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 2, column 32|
+
+== 80 columns, unicode, true colour, dark — lines
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}first                                                                     {fg=a8}│|
+{fg=a8}│{}   second                                                                    {fg=a8}│|
+{fg=a8}│{}       indented                                                              {fg=a8}│|
+{fg=a8}│{}                                                                             {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 4, column 4|
+
+== 80 columns, unicode, true colour, dark — controls
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}ansi ␛[31m red ␇ bell                                                     {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 25|
+
+== 80 columns, unicode, true colour, dark — scrolled
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{}   line 5                                                                    {fg=a8}│|
+{fg=a8}│{}   line 6                                                                    {fg=a8}│|
+{fg=a8}│{}   line 7                                                                    {fg=a8}│|
+{fg=a8}│{}   line 8                                                                    {fg=a8}│|
+{fg=a8}│{}   line 9                                                                    {fg=a8}│|
+{fg=a8}│{}   line 10                                                                   {fg=a8}│|
+{fg=a8}│{}   line 11                                                                   {fg=a8}│|
+{fg=a8}│{}   line 12                                                                   {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 8, column 11|
+
+== 80 columns, ascii, true colour, dark — empty
+{fg=a8}+-----------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {fg=a8}Describe a task, or ask a question{}                                        {fg=a8}||
+{fg=a8}+-----------------------------------------------------------------------------+|
+cursor at row 1, column 4|
+
+== 80 columns, ascii, true colour, dark — one line
+{fg=a8}+-----------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}also run clippy when that's done                                          {fg=a8}||
+{fg=a8}+-----------------------------------------------------------------------------+|
+cursor at row 1, column 36|
+
+== 80 columns, ascii, true colour, dark — wrapped, with wide characters and a chip
+{fg=a8}+-----------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}fix the 漢字 lexer and look at {fg=a8}[pasted 148 lines]{} then tell me what       {fg=a8}||
+{fg=a8}|{}   1_000 lexes as in every case                                              {fg=a8}||
+{fg=a8}+-----------------------------------------------------------------------------+|
+cursor at row 2, column 32|
+
+== 80 columns, ascii, true colour, dark — lines
+{fg=a8}+-----------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}first                                                                     {fg=a8}||
+{fg=a8}|{}   second                                                                    {fg=a8}||
+{fg=a8}|{}       indented                                                              {fg=a8}||
+{fg=a8}|{}                                                                             {fg=a8}||
+{fg=a8}+-----------------------------------------------------------------------------+|
+cursor at row 4, column 4|
+
+== 80 columns, ascii, true colour, dark — controls
+{fg=a8}+-----------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}ansi ␛[31m red ␇ bell                                                     {fg=a8}||
+{fg=a8}+-----------------------------------------------------------------------------+|
+cursor at row 1, column 25|
+
+== 80 columns, ascii, true colour, dark — scrolled
+{fg=a8}+-----------------------------------------------------------------------------+|
+{fg=a8}|{}   line 5                                                                    {fg=a8}||
+{fg=a8}|{}   line 6                                                                    {fg=a8}||
+{fg=a8}|{}   line 7                                                                    {fg=a8}||
+{fg=a8}|{}   line 8                                                                    {fg=a8}||
+{fg=a8}|{}   line 9                                                                    {fg=a8}||
+{fg=a8}|{}   line 10                                                                   {fg=a8}||
+{fg=a8}|{}   line 11                                                                   {fg=a8}||
+{fg=a8}|{}   line 12                                                                   {fg=a8}||
+{fg=a8}+-----------------------------------------------------------------------------+|
+cursor at row 8, column 11|
+
+== 120 columns, unicode, true colour, dark — empty
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {fg=a8}Describe a task, or ask a question{}                                                                                {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 4|
+
+== 120 columns, unicode, true colour, dark — one line
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}also run clippy when that's done                                                                                  {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 36|
+
+== 120 columns, unicode, true colour, dark — wrapped, with wide characters and a chip
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}fix the 漢字 lexer and look at {fg=a8}[pasted 148 lines]{} then tell me what 1_000 lexes as in every case                  {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 100|
+
+== 120 columns, unicode, true colour, dark — lines
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}first                                                                                                             {fg=a8}│|
+{fg=a8}│{}   second                                                                                                            {fg=a8}│|
+{fg=a8}│{}       indented                                                                                                      {fg=a8}│|
+{fg=a8}│{}                                                                                                                     {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 4, column 4|
+
+== 120 columns, unicode, true colour, dark — controls
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}ansi ␛[31m red ␇ bell                                                                                             {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 25|
+
+== 120 columns, unicode, true colour, dark — scrolled
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{}   line 5                                                                                                            {fg=a8}│|
+{fg=a8}│{}   line 6                                                                                                            {fg=a8}│|
+{fg=a8}│{}   line 7                                                                                                            {fg=a8}│|
+{fg=a8}│{}   line 8                                                                                                            {fg=a8}│|
+{fg=a8}│{}   line 9                                                                                                            {fg=a8}│|
+{fg=a8}│{}   line 10                                                                                                           {fg=a8}│|
+{fg=a8}│{}   line 11                                                                                                           {fg=a8}│|
+{fg=a8}│{}   line 12                                                                                                           {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 8, column 11|
+
+== 120 columns, ascii, true colour, dark — empty
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {fg=a8}Describe a task, or ask a question{}                                                                                {fg=a8}||
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+cursor at row 1, column 4|
+
+== 120 columns, ascii, true colour, dark — one line
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}also run clippy when that's done                                                                                  {fg=a8}||
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+cursor at row 1, column 36|
+
+== 120 columns, ascii, true colour, dark — wrapped, with wide characters and a chip
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}fix the 漢字 lexer and look at {fg=a8}[pasted 148 lines]{} then tell me what 1_000 lexes as in every case                  {fg=a8}||
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+cursor at row 1, column 100|
+
+== 120 columns, ascii, true colour, dark — lines
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}first                                                                                                             {fg=a8}||
+{fg=a8}|{}   second                                                                                                            {fg=a8}||
+{fg=a8}|{}       indented                                                                                                      {fg=a8}||
+{fg=a8}|{}                                                                                                                     {fg=a8}||
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+cursor at row 4, column 4|
+
+== 120 columns, ascii, true colour, dark — controls
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+{fg=a8}|{} {fg=#7A3CFB b}> {}ansi ␛[31m red ␇ bell                                                                                             {fg=a8}||
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+cursor at row 1, column 25|
+
+== 120 columns, ascii, true colour, dark — scrolled
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+{fg=a8}|{}   line 5                                                                                                            {fg=a8}||
+{fg=a8}|{}   line 6                                                                                                            {fg=a8}||
+{fg=a8}|{}   line 7                                                                                                            {fg=a8}||
+{fg=a8}|{}   line 8                                                                                                            {fg=a8}||
+{fg=a8}|{}   line 9                                                                                                            {fg=a8}||
+{fg=a8}|{}   line 10                                                                                                           {fg=a8}||
+{fg=a8}|{}   line 11                                                                                                           {fg=a8}||
+{fg=a8}|{}   line 12                                                                                                           {fg=a8}||
+{fg=a8}+---------------------------------------------------------------------------------------------------------------------+|
+cursor at row 8, column 11|
+
+== 80 columns, unicode, true colour, light — empty
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {fg=a8}Describe a task, or ask a question{}                                        {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 4|
+
+== 80 columns, unicode, true colour, light — one line
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}also run clippy when that's done                                          {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 36|
+
+== 80 columns, unicode, true colour, light — wrapped, with wide characters and a chip
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}fix the 漢字 lexer and look at {fg=a8}[pasted 148 lines]{} then tell me what       {fg=a8}│|
+{fg=a8}│{}   1_000 lexes as in every case                                              {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 2, column 32|
+
+== 80 columns, unicode, true colour, light — lines
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}first                                                                     {fg=a8}│|
+{fg=a8}│{}   second                                                                    {fg=a8}│|
+{fg=a8}│{}       indented                                                              {fg=a8}│|
+{fg=a8}│{}                                                                             {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 4, column 4|
+
+== 80 columns, unicode, true colour, light — controls
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆ {}ansi ␛[31m red ␇ bell                                                     {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 25|
+
+== 80 columns, unicode, true colour, light — scrolled
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{}   line 5                                                                    {fg=a8}│|
+{fg=a8}│{}   line 6                                                                    {fg=a8}│|
+{fg=a8}│{}   line 7                                                                    {fg=a8}│|
+{fg=a8}│{}   line 8                                                                    {fg=a8}│|
+{fg=a8}│{}   line 9                                                                    {fg=a8}│|
+{fg=a8}│{}   line 10                                                                   {fg=a8}│|
+{fg=a8}│{}   line 11                                                                   {fg=a8}│|
+{fg=a8}│{}   line 12                                                                   {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 8, column 11|
+
+== 80 columns, unicode, 16 colours, dark — empty
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a13 b}◆ {fg=a8}Describe a task, or ask a question{}                                        {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 4|
+
+== 80 columns, unicode, 16 colours, dark — one line
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a13 b}◆ {}also run clippy when that's done                                          {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 36|
+
+== 80 columns, unicode, 16 colours, dark — wrapped, with wide characters and a chip
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a13 b}◆ {}fix the 漢字 lexer and look at {fg=a8}[pasted 148 lines]{} then tell me what       {fg=a8}│|
+{fg=a8}│{}   1_000 lexes as in every case                                              {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 2, column 32|
+
+== 80 columns, unicode, 16 colours, dark — lines
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a13 b}◆ {}first                                                                     {fg=a8}│|
+{fg=a8}│{}   second                                                                    {fg=a8}│|
+{fg=a8}│{}       indented                                                              {fg=a8}│|
+{fg=a8}│{}                                                                             {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 4, column 4|
+
+== 80 columns, unicode, 16 colours, dark — controls
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a13 b}◆ {}ansi ␛[31m red ␇ bell                                                     {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 25|
+
+== 80 columns, unicode, 16 colours, dark — scrolled
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{}   line 5                                                                    {fg=a8}│|
+{fg=a8}│{}   line 6                                                                    {fg=a8}│|
+{fg=a8}│{}   line 7                                                                    {fg=a8}│|
+{fg=a8}│{}   line 8                                                                    {fg=a8}│|
+{fg=a8}│{}   line 9                                                                    {fg=a8}│|
+{fg=a8}│{}   line 10                                                                   {fg=a8}│|
+{fg=a8}│{}   line 11                                                                   {fg=a8}│|
+{fg=a8}│{}   line 12                                                                   {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 8, column 11|
+
+== 80 columns, unicode, 16 colours, light — empty
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a5 b}◆ {fg=a8}Describe a task, or ask a question{}                                        {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 4|
+
+== 80 columns, unicode, 16 colours, light — one line
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a5 b}◆ {}also run clippy when that's done                                          {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 36|
+
+== 80 columns, unicode, 16 colours, light — wrapped, with wide characters and a chip
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a5 b}◆ {}fix the 漢字 lexer and look at {fg=a8}[pasted 148 lines]{} then tell me what       {fg=a8}│|
+{fg=a8}│{}   1_000 lexes as in every case                                              {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 2, column 32|
+
+== 80 columns, unicode, 16 colours, light — lines
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a5 b}◆ {}first                                                                     {fg=a8}│|
+{fg=a8}│{}   second                                                                    {fg=a8}│|
+{fg=a8}│{}       indented                                                              {fg=a8}│|
+{fg=a8}│{}                                                                             {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 4, column 4|
+
+== 80 columns, unicode, 16 colours, light — controls
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=a5 b}◆ {}ansi ␛[31m red ␇ bell                                                     {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 25|
+
+== 80 columns, unicode, 16 colours, light — scrolled
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{}   line 5                                                                    {fg=a8}│|
+{fg=a8}│{}   line 6                                                                    {fg=a8}│|
+{fg=a8}│{}   line 7                                                                    {fg=a8}│|
+{fg=a8}│{}   line 8                                                                    {fg=a8}│|
+{fg=a8}│{}   line 9                                                                    {fg=a8}│|
+{fg=a8}│{}   line 10                                                                   {fg=a8}│|
+{fg=a8}│{}   line 11                                                                   {fg=a8}│|
+{fg=a8}│{}   line 12                                                                   {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 8, column 11|
+
+== 80 columns, unicode, 256 colours, dark — empty
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=i99 b}◆ {fg=a8}Describe a task, or ask a question{}                                        {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 4|
+
+== 80 columns, unicode, 256 colours, dark — one line
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=i99 b}◆ {}also run clippy when that's done                                          {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 36|
+
+== 80 columns, unicode, 256 colours, dark — wrapped, with wide characters and a chip
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=i99 b}◆ {}fix the 漢字 lexer and look at {fg=a8}[pasted 148 lines]{} then tell me what       {fg=a8}│|
+{fg=a8}│{}   1_000 lexes as in every case                                              {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 2, column 32|
+
+== 80 columns, unicode, 256 colours, dark — lines
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=i99 b}◆ {}first                                                                     {fg=a8}│|
+{fg=a8}│{}   second                                                                    {fg=a8}│|
+{fg=a8}│{}       indented                                                              {fg=a8}│|
+{fg=a8}│{}                                                                             {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 4, column 4|
+
+== 80 columns, unicode, 256 colours, dark — controls
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=i99 b}◆ {}ansi ␛[31m red ␇ bell                                                     {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 25|
+
+== 80 columns, unicode, 256 colours, dark — scrolled
+{fg=a8}╭─────────────────────────────────────────────────────────────────────────────╮|
+{fg=a8}│{}   line 5                                                                    {fg=a8}│|
+{fg=a8}│{}   line 6                                                                    {fg=a8}│|
+{fg=a8}│{}   line 7                                                                    {fg=a8}│|
+{fg=a8}│{}   line 8                                                                    {fg=a8}│|
+{fg=a8}│{}   line 9                                                                    {fg=a8}│|
+{fg=a8}│{}   line 10                                                                   {fg=a8}│|
+{fg=a8}│{}   line 11                                                                   {fg=a8}│|
+{fg=a8}│{}   line 12                                                                   {fg=a8}│|
+{fg=a8}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 8, column 11|
+
+== 80 columns, unicode, no colour, dark — empty
+{d}╭─────────────────────────────────────────────────────────────────────────────╮|
+{d}│{} {b}◆ {d}Describe a task, or ask a question{}                                        {d}│|
+{d}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 4|
+
+== 80 columns, unicode, no colour, dark — one line
+{d}╭─────────────────────────────────────────────────────────────────────────────╮|
+{d}│{} {b}◆ {}also run clippy when that's done                                          {d}│|
+{d}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 36|
+
+== 80 columns, unicode, no colour, dark — wrapped, with wide characters and a chip
+{d}╭─────────────────────────────────────────────────────────────────────────────╮|
+{d}│{} {b}◆ {}fix the 漢字 lexer and look at {d}[pasted 148 lines]{} then tell me what       {d}│|
+{d}│{}   1_000 lexes as in every case                                              {d}│|
+{d}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 2, column 32|
+
+== 80 columns, unicode, no colour, dark — lines
+{d}╭─────────────────────────────────────────────────────────────────────────────╮|
+{d}│{} {b}◆ {}first                                                                     {d}│|
+{d}│{}   second                                                                    {d}│|
+{d}│{}       indented                                                              {d}│|
+{d}│{}                                                                             {d}│|
+{d}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 4, column 4|
+
+== 80 columns, unicode, no colour, dark — controls
+{d}╭─────────────────────────────────────────────────────────────────────────────╮|
+{d}│{} {b}◆ {}ansi ␛[31m red ␇ bell                                                     {d}│|
+{d}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 1, column 25|
+
+== 80 columns, unicode, no colour, dark — scrolled
+{d}╭─────────────────────────────────────────────────────────────────────────────╮|
+{d}│{}   line 5                                                                    {d}│|
+{d}│{}   line 6                                                                    {d}│|
+{d}│{}   line 7                                                                    {d}│|
+{d}│{}   line 8                                                                    {d}│|
+{d}│{}   line 9                                                                    {d}│|
+{d}│{}   line 10                                                                   {d}│|
+{d}│{}   line 11                                                                   {d}│|
+{d}│{}   line 12                                                                   {d}│|
+{d}╰─────────────────────────────────────────────────────────────────────────────╯|
+cursor at row 8, column 11|
+

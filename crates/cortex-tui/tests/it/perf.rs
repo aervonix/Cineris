@@ -94,7 +94,11 @@ fn measure_fuzzy_matching_on_100k_paths() {
 use cortex_testkit::VTerm;
 use cortex_testkit::pty::Session;
 
-use crate::demo::{PROMPT, STATUS_MARK};
+use crate::demo::STATUS_MARK;
+
+/// What starts the input box's first row: its border, a space, `◆` and a
+/// space.
+const PROMPT: &str = "\u{2502} \u{25C6} ";
 
 const COLS: u16 = 120;
 const ROWS: u16 = 40;
@@ -141,6 +145,9 @@ fn sorted(mut values: Vec<f64>) -> Vec<f64> {
 fn editor(term: &VTerm) -> Option<String> {
     term.screen().into_iter().find_map(|row| {
         let rest = row.strip_prefix(PROMPT)?;
+        if rest.starts_with(cortex_tui::view::input::PLACEHOLDER) {
+            return Some(String::new());
+        }
         Some(
             rest.trim_end()
                 .trim_end_matches('\u{2502}')
@@ -191,6 +198,15 @@ fn idle_keys(
     }
     let mut latencies = Vec::new();
     for index in 0..count {
+        // The first row holds the text the reader looks at: start it again
+        // before it fills.
+        if typed.len() >= 90 {
+            session.send(b"\x15");
+            session.wait_for(LIMIT, "the prompt cleared", |t| {
+                editor(t).as_deref() == Some("")
+            });
+            typed.clear();
+        }
         let c = char::from(b'a' + u8::try_from(index % 26).unwrap_or(0));
         typed.push(c);
         let sent = session.send(c.to_string().as_bytes());
@@ -270,9 +286,9 @@ fn perf_the_editor_against_the_key_budgets() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(8);
-    let (idle, idle_own) = idle_keys(40, "", &[], &scratch.join("idle.json"));
+    let (idle, idle_own) = idle_keys(200, "", &[], &scratch.join("idle.json"));
     let (stream, stream_own, lost) = streaming_keys(seconds, &scratch.join("stream.json"));
-    let (menu, menu_own) = idle_keys(12, "@", &["files=100000"], &scratch.join("menu.json"));
+    let (menu, menu_own) = idle_keys(24, "@", &["files=100000"], &scratch.join("menu.json"));
     let mut out = String::from(
         "| Key to frame (ms) | median | 99th | most | budget |\n|---|---|---|---|---|\n",
     );

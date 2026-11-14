@@ -418,3 +418,41 @@ find: if !self.focus.on_input() { self.focus.to_input(); }
 replace: if !self.focus.on_input() { return Outcome::Nothing; }
 caught-by:
     input::a_paste_with_a_box_focused_goes_to_the_input
+
+[break] the-cursor-a-column-off-in-the-box
+rule: The cursor sits after the text in the input box, past the border, a space and the mark.
+file: crates/cortex-tui/src/view/input.rs
+in: input
+find: RoundedBox::TEXT_COLUMN + MARK_WIDTH + layout.cursor_col
+replace: RoundedBox::TEXT_COLUMN + layout.cursor_col
+caught-by:
+    view::input::tests::the_input_box_in_every_variant
+
+[break] the-selected-row-not-marked
+rule: The selected row of a menu is marked with the accent's diamond.
+file: crates/cortex-tui/src/view/menu.rs
+in: rows
+find: line.push(Span::new(look.glyphs.user, look.theme.style(Token::Accent)));
+replace: line.push(Span::plain(" "));
+caught-by:
+    view::menu::tests::the_selected_row_is_marked_in_the_accent_and_drawn_as_the_selection
+    view::menu::tests::the_reference_screens_menus_are_drawn_cell_for_cell
+
+[break] a-menu-shows-every-row
+rule: A menu shows at most eight rows.
+file: crates/cortex-tui/src/complete/mod.rs
+in: Menu::visible
+find: self.top..(self.top + ROWS).min(self.rows.len())
+replace: 0..self.rows.len()
+caught-by:
+    complete::tests::a_menu_scrolls_to_keep_the_selection_in_view_and_wraps
+    view::menu::tests::the_menus_in_every_variant
+
+[break] the-input-box-never-scrolls
+rule: The input box grows to eight rows, then scrolls to keep the cursor in view.
+file: crates/cortex-tui/src/view/input.rs
+in: input
+find: let scroll = in_view(input.scroll(), layout.cursor_row, layout.rows.len());
+replace: let scroll = 0;
+caught-by:
+    view::input::tests::the_box_grows_to_eight_rows_and_scrolls_with_the_cursor
