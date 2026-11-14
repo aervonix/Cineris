@@ -98,3 +98,354 @@ find: (depth == ColorDepth::TrueColor && reported).then(
 replace: (depth == ColorDepth::TrueColor).then(
 caught-by:
     theme::tests::without_a_reported_background_there_is_no_tint
+
+# The transcript (pull request 2): streaming markdown, the views, the
+# highlighter and the golden screens.
+
+[break] a-committed-paragraph-parsed-again
+rule: A paragraph's committed rows are dropped from its text where nothing spans the break: finished text is never parsed again.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::decide
+find: let (split, rows) = cut;
+replace:
+    let _ = cut;
+    let (split, rows) = (0, 0);
+caught-by:
+    markdown::tests::nothing_finished_is_parsed_again
+
+[break] a-row-committed-while-a-mark-is-open
+rule: A paragraph's row is committed only when no mark that text still to come could close is open before the end of the next row's first word, or after it has been held for two more rows.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::decide
+find: .is_some_and(|at| at < first_word_end);
+replace: .is_some_and(|_| false);
+caught-by:
+    markdown::tests::token_by_token_commits_what_all_at_once_does_for_random_documents
+    markdown::tests::a_mark_left_open_holds_its_row_for_two_more_then_stays_literal
+
+[break] a-mark-open-across-a-closed-construct-taken-as-final
+rule: A matched construct with an open mark inside it may yet be undone (a later code span or link can take in its closing mark), so the rows from its start are not final.
+file: crates/cortex-tui/src/markdown/inline.rs
+in: finish
+find: if opens.get(inside).is_some_and(|&open| open < span.end) {
+replace: if false {
+caught-by:
+    markdown::inline::tests::the_marks_still_open_are_where_they_are
+
+[break] model-text-skips-sanitize
+rule: Text from a model passes through sanitize before it is laid out.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::read
+find: let line = sanitize(raw).into_owned();
+occurrence: 1
+replace: let line = raw.to_owned();
+caught-by:
+    markdown::tests::content_reaches_no_line_unsanitised_and_no_line_is_too_wide
+
+[break] a-file-name-skips-sanitize
+rule: A tool call's target (a path from the model) passes through sanitize.
+file: crates/cortex-tui/src/view/round.rs
+in: call_line
+find: title.push_str(&one_line(file_name(path)));
+replace: title.push_str(file_name(path));
+caught-by:
+    view::round::tests::paths_names_and_output_are_shown_safely
+
+[break] a-block-row-reaches-past-its-width
+rule: No row a view draws is wider than the width it is given: a row led by a glyph is cut to it.
+file: crates/cortex-tui/src/view/blocks.rs
+in: led
+find: cut(&line, width, look.glyphs.ellipsis)
+replace: line
+caught-by:
+    view::blocks::tests::content_is_sanitised_and_never_too_wide
+
+[break] a-box-commits-before-its-last-call-ends
+rule: A round's box stays live while any of its calls runs, and is committed when its last call ends.
+file: crates/cortex-tui/src/transcript.rs
+in: Block::is_open
+find: Self::Round(round) => round.is_running(),
+replace: Self::Round(_) => false,
+caught-by:
+    transcript::tests::a_round_commits_only_when_its_last_call_ends_and_what_follows_waits
+
+[break] tool-detail-ignored-by-an-open-live-box
+rule: An open box in the live region shows at most tui.tool_detail rows of detail.
+file: crates/cortex-tui/src/view/round.rs
+in: round
+find: clip_detail(&mut rows, look);
+replace:
+caught-by:
+    view::round::tests::an_open_live_box_shows_at_most_tool_detail_rows
+
+[break] highlighting-on-the-callers-thread
+rule: Highlighting runs on a worker thread of its own, never on the thread that draws.
+file: crates/cortex-tui/src/highlight.rs
+find:
+    std::thread::Builder::new()
+        .name("cortex-highlight".to_owned())
+        .spawn(move || engine::run(&shared))
+        .is_ok()
+replace:
+    {
+        engine::run(&shared);
+        true
+    }
+caught-by:
+    highlight::tests::the_worker_starts_on_first_use_off_the_callers_thread_and_colours_by_scope
+
+[break] a-code-line-waits-without-end
+rule: A code line waits for its colours for at most WAIT, then commits plain: a stuck worker never holds the transcript.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::flush
+find: if self.scratch || self.now.saturating_sub(*since) >= WAIT
+replace: if self.scratch
+caught-by:
+    highlight::tests::a_frame_never_waits_for_the_worker
+
+[break] a-pathological-line-highlighted
+rule: A line over LONGEST bytes is never given to the highlighter: it is drawn plain at once.
+file: crates/cortex-tui/src/highlight.rs
+in: Highlighter::line
+find: if text.len() > LONGEST {
+replace: if false {
+caught-by:
+    highlight::tests::the_worker_starts_on_first_use_off_the_callers_thread_and_colours_by_scope
+
+[break] a-wide-table-not-stacked
+rule: A table too wide for the room falls back to stacked rows.
+file: crates/cortex-tui/src/markdown/table.rs
+in: Table::draw
+find: if total <= room {
+replace: if true {
+caught-by:
+    markdown::table::tests::a_table_too_wide_is_stacked
+
+[break] a-links-address-hidden-without-hyperlinks
+rule: Where the terminal has no hyperlinks, a link's text is followed by its address.
+file: crates/cortex-tui/src/markdown/rows.rs
+in: Laid::new
+find: && !frame.look.hyperlinks
+replace: && false
+caught-by:
+    markdown::tests::blocks_are_drawn_as_09_says
+
+[break] live-reasoning-shows-its-first-words
+rule: Reasoning while it streams shows its latest words.
+file: crates/cortex-tui/src/view/blocks.rs
+in: reasoning_live
+find: Keep::End
+replace: Keep::Start
+caught-by:
+    view::blocks::tests::live_reasoning_shows_its_latest_words
+
+[break] notices-set-apart-from-each-other
+rule: A blank row sets each block apart, except one notice from the next.
+file: crates/cortex-tui/src/transcript.rs
+in: gap
+find: (last == Kind::Notice && kind == Kind::Notice)
+replace: false
+caught-by:
+    transcript::tests::blocks_are_set_apart_by_a_blank_row_except_notice_from_notice
+
+[break] tui-screens-passes-a-row-it-skipped
+rule: The golden screens compare every cell of every row they count as compared.
+file: crates/cortex-tui/tests/it/screens/mod.rs
+in: compare_screen
+find: outcome.compared += 1;
+replace:
+    outcome.compared += 1;
+    continue;
+caught-by:
+    cortex-tui::it screens::a_changed_cell_is_found_and_a_row_not_built_is_not_compared
+
+[break] tui-screens-compares-a-row-not-built
+rule: A row another step draws is counted as not built and never compared.
+file: crates/cortex-tui/tests/it/screens/mod.rs
+in: compare_screen
+find:
+    if let Row::NotBuilt(what) = row {
+replace:
+    if let Row::NotBuilt(what) = row
+        && false
+    {
+caught-by:
+    cortex-tui::it screens::the_views_draw_the_reference_screens
+
+# The review's findings: each rule it found unkept, now kept, broken again.
+
+[break] a-long-word-decided-only-at-its-end
+rule: A run of text with no white space is decided inside, every LONG_RUN bytes, so a very long word does not keep its rows live.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::evaluate
+find: at >= paragraph.due && settled_inside_word(&paragraph.src, at, &paragraph.frozen)
+replace: false
+caught-by:
+    markdown::tests::a_very_long_word_does_not_keep_its_rows_live_or_cost_more_than_its_length
+
+[break] a-long-words-first-word-runs-past-its-row
+rule: The first word of a row ends at the row's end when the word goes on past it, so a mark later in a long word does not hold the rows before it.
+file: crates/cortex-tui/src/markdown/rows.rs
+in: Laid::first_word_end
+find: self.source_after(end.min(row_end))
+replace: self.source_after(end)
+caught-by:
+    markdown::tests::a_decision_inside_a_long_word_never_commits_what_the_rest_of_it_changes
+
+[break] kept-text-without-a-bound
+rule: A paragraph keeps at most LIMIT bytes of committed text: past it a break is forced where any row starts, so its rows starting inside constructs cost no more than their length.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::decide
+find: .filter(|&split| kept(split) > LIMIT && settled(split))
+replace: .filter(|_| false)
+caught-by:
+    markdown::tests::rows_that_all_start_inside_a_code_span_cost_no_more_than_their_length
+
+[break] a-resize-forgets-the-committed-rows
+rule: A paragraph's rows committed at another width keep the breaks they were drawn with, and what follows is wrapped at the width now: no text is lost or shown twice.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::rewidth
+find: paragraph.fixed = Some((laid.rows[..committed].to_vec(), laid.row_start(committed)));
+replace: let _ = (laid, committed);
+caught-by:
+    markdown::tests::a_window_resized_while_a_paragraph_streams_loses_and_repeats_nothing
+
+[break] a-forced-row-leaves-the-marks-inside-what-it-holds
+rule: A row committed with a mark still open freezes that mark, and every open mark inside a construct that starts before the row's point, so no later text undoes what was committed.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::decide
+find: paragraph.frozen.extend(parsed.settling(first_word_end));
+replace: paragraph.frozen.extend(parsed.opens.iter().copied().filter(|&open| open < first_word_end));
+caught-by:
+    markdown::tests::a_forced_row_freezes_the_marks_inside_a_construct_it_holds
+
+[break] a-frame-takes-the-colours
+rule: The live region only looks at a code line's colours: the commit after it still has them.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::flush
+find: self.highlighter.peek(*block, *index)
+replace: self.highlighter.take(*block, *index)
+caught-by:
+    highlight::tests::a_frame_drawn_once_the_colours_are_in_leaves_them_for_the_commit
+
+[break] partial-text-skips-sanitize
+rule: Text from a model passes through sanitize before it is laid out, when a line's text reaches its paragraph before the line ends too.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::partial
+find: let text = sanitize(&self.pending[start..usable]).into_owned();
+replace: let text = self.pending[start..usable].to_owned();
+caught-by:
+    markdown::tests::content_reaches_no_line_unsanitised_and_no_line_is_too_wide
+
+[break] a-queued-code-line-wider-than-the-window
+rule: A code line that waited for its colours while the window shrank is no wider than the window when it commits.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::flush
+find: let width = width.min(frame.width);
+replace: let width = width.max(frame.width);
+caught-by:
+    highlight::tests::a_code_line_that_waited_while_the_window_shrank_fits_it_and_drops_nothing_after
+
+[break] a-header-only-table-dropped
+rule: A table too wide for the room with only a header shows the header: what it says is never dropped.
+file: crates/cortex-tui/src/markdown/table.rs
+in: Table::draw
+find: if first && rows.is_empty() {
+replace: if false {
+caught-by:
+    markdown::tests::a_table_with_only_a_header_too_wide_for_the_room_shows_the_header
+
+[break] reasoning-without-a-summary-holds-what-follows
+rule: Reasoning is open until it has finished, with a summary or without one.
+file: crates/cortex-tui/src/transcript.rs
+in: Block::is_open
+find: Self::Reasoning(reasoning) => !reasoning.finished,
+replace: Self::Reasoning(reasoning) => reasoning.summary.is_none(),
+caught-by:
+    transcript::tests::reasoning_that_ends_without_a_summary_commits_and_lets_what_follows
+
+[break] a-block-reached-by-its-place
+rule: A block is reached by its id while it is open, wherever it is in the queue.
+file: crates/cortex-tui/src/transcript.rs
+in: Transcript::get_mut
+find: .find(|entry| entry.id == id)
+replace: .rfind(|_| true)
+caught-by:
+    transcript::tests::a_round_commits_only_when_its_last_call_ends_and_what_follows_waits
+
+[break] a-one-row-field-keeps-its-line-break
+rule: A field a view draws on one row shows a tab or a line break as a space.
+file: crates/cortex-tui/src/view/mod.rs
+in: one_line
+find: cortex_term::sanitize(text).replace(['\n', '\t'], " ")
+replace: cortex_term::sanitize(text).into_owned()
+caught-by:
+    view::hint::tests::a_tab_or_a_line_break_in_a_one_row_field_reaches_no_line
+
+[break] the-armed-quit-unsaid
+rule: The hint row says when Ctrl+C has armed quitting.
+file: crates/cortex-tui/src/view/hint.rs
+in: left_side
+find: Hint::QuitArmed => Line::styled("ctrl+c again quits", hint)
+replace: Hint::QuitArmed => Line::new()
+caught-by:
+    view::hint::tests::the_hint_row_as_the_reference_screens_show_it
+
+# The second review's findings.
+
+[break] a-mark-stretch-decided-before-it-is-text
+rule: Inside a stretch of `*`, `_` and backticks, a decision waits until the stretch is longer than marks can be.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: settled_inside_word
+find: > inline::MARK_RUN + 1
+replace: > 0
+caught-by:
+    markdown::tests::a_decision_inside_a_long_word_never_commits_what_the_rest_of_it_changes
+
+[break] a-long-stretch-of-marks-read-as-marks
+rule: A stretch of more than MARK_RUN marks with nothing between them is text.
+file: crates/cortex-tui/src/markdown/inline.rs
+in: Parser::scan
+find: if end - at > MARK_RUN {
+replace: if false {
+caught-by:
+    markdown::inline::tests::a_stretch_of_marks_longer_than_marks_can_be_is_text
+
+[break] the-line-in-progress-kept-whole
+rule: Text of the line in progress given to the paragraph is not kept: a frame's live rows parse no more than the text kept, whatever the line's length.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::partial
+find: self.pending.drain(..taken);
+replace: let _ = taken;
+caught-by:
+    markdown::tests::a_run_made_only_of_marks_keeps_little_text_and_costs_its_length
+
+[break] a-wrapped-queued-row-loses-its-indent
+rule: A row queued behind a code line and wrapped to a smaller window keeps its marks' indent on its later lines.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: fitted
+find: Line::plain(" ".repeat(indent))
+replace: Line::new()
+caught-by:
+    highlight::tests::a_code_line_that_waited_while_the_window_shrank_fits_it_and_drops_nothing_after
+
+[break] an-entity-cut-by-white-space-held-open
+rule: At a word's end, where white space follows, `&` and `<` running to the end hold nothing.
+file: crates/cortex-tui/src/markdown/inline.rs
+in: parse_cut
+find:
+    if !continues {
+        return parsed;
+    }
+replace:
+caught-by:
+    markdown::tests::an_entity_or_an_autolink_cut_by_white_space_holds_nothing
+
+[break] a-second-resize-forgets-the-rows-of-the-first
+rule: A resize keeps the rows committed at every width before it, those kept by an earlier resize included.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::rewidth
+find: let laid = paragraph.lay_out(parsed.pieces, old, frame);
+replace: let laid = Laid::new(parsed.pieces, old, frame);
+caught-by:
+    markdown::tests::a_window_resized_again_and_again_keeps_every_row_committed_at_each_width
