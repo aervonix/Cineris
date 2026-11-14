@@ -163,6 +163,11 @@ fn a_box_of_any_width_keeps_to_it() {
         input.set_width(text_width(width));
         let drawn = input_box(&input, &look, width);
         assert!(
+            drawn.cursor.col < width.saturating_sub(1).max(1),
+            "width {width}: the cursor at {} is on or past the border",
+            drawn.cursor.col
+        );
+        assert!(
             testing::problems(&drawn.lines, width).is_empty(),
             "width {width}: {:?}",
             testing::problems(&drawn.lines, width)

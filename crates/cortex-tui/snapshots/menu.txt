@@ -59,6 +59,12 @@
 == 60 columns, unicode, true colour, dark — history search, no match
   {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
 
+== 60 columns, unicode, true colour, dark — history search, a prompt with a tab
+  {fg=#8D57FC b}ctrl+r{} fn  {fg=a8} fn main() {{}|
+
+== 60 columns, unicode, true colour, dark — files, a name with a tab and a line break
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}odd name .rs|
+
 == 60 columns, ascii, true colour, dark — files, more than eight
   {fg=#7A3CFB}>{} {fg=#8D57FC b}src/lex/part_00.rs|
     src/lex/part_01.rs|
@@ -119,6 +125,12 @@
 
 == 60 columns, ascii, true colour, dark — history search, no match
   {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 60 columns, ascii, true colour, dark — history search, a prompt with a tab
+  {fg=#8D57FC b}ctrl+r{} fn  {fg=a8} fn main() {{}|
+
+== 60 columns, ascii, true colour, dark — files, a name with a tab and a line break
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}odd name .rs|
 
 == 80 columns, unicode, true colour, dark — files, more than eight
   {fg=#7A3CFB}◆{} {fg=#8D57FC b}src/lex/part_00.rs|
@@ -181,6 +193,12 @@
 == 80 columns, unicode, true colour, dark — history search, no match
   {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
 
+== 80 columns, unicode, true colour, dark — history search, a prompt with a tab
+  {fg=#8D57FC b}ctrl+r{} fn  {fg=a8} fn main() {{}|
+
+== 80 columns, unicode, true colour, dark — files, a name with a tab and a line break
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}odd name .rs|
+
 == 80 columns, ascii, true colour, dark — files, more than eight
   {fg=#7A3CFB}>{} {fg=#8D57FC b}src/lex/part_00.rs|
     src/lex/part_01.rs|
@@ -241,6 +259,12 @@
 
 == 80 columns, ascii, true colour, dark — history search, no match
   {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 80 columns, ascii, true colour, dark — history search, a prompt with a tab
+  {fg=#8D57FC b}ctrl+r{} fn  {fg=a8} fn main() {{}|
+
+== 80 columns, ascii, true colour, dark — files, a name with a tab and a line break
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}odd name .rs|
 
 == 120 columns, unicode, true colour, dark — files, more than eight
   {fg=#7A3CFB}◆{} {fg=#8D57FC b}src/lex/part_00.rs|
@@ -303,6 +327,12 @@
 == 120 columns, unicode, true colour, dark — history search, no match
   {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
 
+== 120 columns, unicode, true colour, dark — history search, a prompt with a tab
+  {fg=#8D57FC b}ctrl+r{} fn  {fg=a8} fn main() {{}|
+
+== 120 columns, unicode, true colour, dark — files, a name with a tab and a line break
+  {fg=#7A3CFB}◆{} {fg=#8D57FC b}odd name .rs|
+
 == 120 columns, ascii, true colour, dark — files, more than eight
   {fg=#7A3CFB}>{} {fg=#8D57FC b}src/lex/part_00.rs|
     src/lex/part_01.rs|
@@ -363,6 +393,12 @@
 
 == 120 columns, ascii, true colour, dark — history search, no match
   {fg=#8D57FC b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 120 columns, ascii, true colour, dark — history search, a prompt with a tab
+  {fg=#8D57FC b}ctrl+r{} fn  {fg=a8} fn main() {{}|
+
+== 120 columns, ascii, true colour, dark — files, a name with a tab and a line break
+  {fg=#7A3CFB}>{} {fg=#8D57FC b}odd name .rs|
 
 == 80 columns, unicode, true colour, light — files, more than eight
   {fg=#7A3CFB}◆{} {fg=#7A3CFB b}src/lex/part_00.rs|
@@ -425,6 +461,12 @@
 == 80 columns, unicode, true colour, light — history search, no match
   {fg=#7A3CFB b}ctrl+r{} zzz  {fg=a8}no match|
 
+== 80 columns, unicode, true colour, light — history search, a prompt with a tab
+  {fg=#7A3CFB b}ctrl+r{} fn  {fg=a8} fn main() {{}|
+
+== 80 columns, unicode, true colour, light — files, a name with a tab and a line break
+  {fg=#7A3CFB}◆{} {fg=#7A3CFB b}odd name .rs|
+
 == 80 columns, unicode, 16 colours, dark — files, more than eight
   {fg=a13}◆{} {b}src/lex/part_00.rs|
     src/lex/part_01.rs|
@@ -485,6 +527,12 @@
 
 == 80 columns, unicode, 16 colours, dark — history search, no match
   {b}ctrl+r{} zzz  {fg=a8}no match|
+
+== 80 columns, unicode, 16 colours, dark — history search, a prompt with a tab
+  {b}ctrl+r{} fn  {fg=a8} fn main() {{}|
+
+== 80 columns, unicode, 16 colours, dark — files, a name with a tab and a line break
+  {fg=a13}◆{} {b}odd name .rs|
 
 == 80 columns, unicode, 16 colours, light — files, more than eight
   {fg=a5}◆{} {fg=a5 b}src/lex/part_00.rs|
@@ -547,6 +595,12 @@
 == 80 columns, unicode, 16 colours, light — history search, no match
   {fg=a5 b}ctrl+r{} zzz  {fg=a8}no match|
 
+== 80 columns, unicode, 16 colours, light — history search, a prompt with a tab
+  {fg=a5 b}ctrl+r{} fn  {fg=a8} fn main() {{}|
+
+== 80 columns, unicode, 16 colours, light — files, a name with a tab and a line break
+  {fg=a5}◆{} {fg=a5 b}odd name .rs|
+
 == 80 columns, unicode, 256 colours, dark — files, more than eight
   {fg=i99}◆{} {fg=i99 b}src/lex/part_00.rs|
     src/lex/part_01.rs|
@@ -608,6 +662,12 @@
 == 80 columns, unicode, 256 colours, dark — history search, no match
   {fg=i99 b}ctrl+r{} zzz  {fg=a8}no match|
 
+== 80 columns, unicode, 256 colours, dark — history search, a prompt with a tab
+  {fg=i99 b}ctrl+r{} fn  {fg=a8} fn main() {{}|
+
+== 80 columns, unicode, 256 colours, dark — files, a name with a tab and a line break
+  {fg=i99}◆{} {fg=i99 b}odd name .rs|
+
 == 80 columns, unicode, no colour, dark — files, more than eight
   ◆ {b}src/lex/part_00.rs|
     src/lex/part_01.rs|
@@ -668,4 +728,10 @@
 
 == 80 columns, unicode, no colour, dark — history search, no match
   {b}ctrl+r{} zzz  {d}no match|
+
+== 80 columns, unicode, no colour, dark — history search, a prompt with a tab
+  {b}ctrl+r{} fn  {d} fn main() {{}|
+
+== 80 columns, unicode, no colour, dark — files, a name with a tab and a line break
+  ◆ {b}odd name .rs|
 

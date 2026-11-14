@@ -354,7 +354,8 @@ impl Input {
     /// takes the focus back and the paste with it.
     fn paste(&mut self, text: &str) -> Outcome {
         self.quit_armed = false;
-        if !self.focus.on_input() {
+        let moved = !self.focus.on_input();
+        if moved {
             self.focus.to_input();
         }
         if let Some(search) = &mut self.search {
@@ -374,7 +375,11 @@ impl Input {
         }
         self.editor.insert(paste::fragment(text));
         self.after_edit();
-        Outcome::Changed
+        if moved {
+            Outcome::Focused(Target::Input)
+        } else {
+            Outcome::Changed
+        }
     }
 
     /// Does `action`: what a key bound to it does, or a slash command that

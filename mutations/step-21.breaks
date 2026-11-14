@@ -414,8 +414,8 @@ caught-by:
 rule: A paste with a box or panel focused goes to the input.
 file: crates/cortex-tui/src/input.rs
 in: Input::paste
-find: if !self.focus.on_input() { self.focus.to_input(); }
-replace: if !self.focus.on_input() { return Outcome::Nothing; }
+find: if moved { self.focus.to_input(); }
+replace: if moved { return Outcome::Nothing; }
 caught-by:
     input::a_paste_with_a_box_focused_goes_to_the_input
 
@@ -456,3 +456,86 @@ find: let scroll = in_view(input.scroll(), layout.cursor_row, layout.rows.len())
 replace: let scroll = 0;
 caught-by:
     view::input::tests::the_box_grows_to_eight_rows_and_scrolls_with_the_cursor
+
+[break] an-over-long-sequence-cut-at-the-limit
+rule: A sequence too long to keep is dropped to its end, however the reads split it: none of it becomes keys.
+file: crates/cortex-term/src/input.rs
+in: escape
+find: Step::Skip(bytes.len(), skip)
+replace: Step::Done(LONGEST_SEQUENCE, None)
+caught-by:
+    input::tests::an_over_long_control_sequence_is_dropped_to_its_end_however_it_is_split
+    input::tests::an_over_long_string_is_dropped_to_its_end_however_it_is_split
+
+[break] an-over-long-control-sequence-typed-after-a-bad-byte
+rule: An over-long control sequence ended by a byte no sequence holds is dropped, not typed as Alt+[ and keys.
+file: crates/cortex-term/src/input.rs
+in: csi
+find: _ if 2 + index > LONGEST_SEQUENCE => return Some((2 + index, None)),
+replace:
+caught-by:
+    input::tests::an_over_long_control_sequence_is_dropped_to_its_end_however_it_is_split
+
+[break] a-string-skip-ended-by-any-escape
+rule: A string being dropped ends only at BEL or ESC backslash.
+file: crates/cortex-term/src/input.rs
+in: skip_to_end
+find: if byte == 0x07 || (escape && byte == b'\\') {
+replace: if byte == 0x07 || escape {
+caught-by:
+    input::tests::an_over_long_string_is_dropped_to_its_end_however_it_is_split
+
+[break] a-paste-without-an-end-swallows-keys-for-good
+rule: A paste whose end never comes is given up on after a time with no input, and keys are keys again.
+file: crates/cortex-term/src/terminal.rs
+in: Terminal::next
+find: if open == Some(Duration::ZERO) {
+replace: if open == Some(Duration::ZERO) && false {
+caught-by:
+    terminal::tests::a_paste_whose_end_never_comes_is_given_up_on_and_ctrl_c_works_after
+
+[break] a-paste-given-up-on-is-lost
+rule: What a paste given up on had received is kept, as a paste.
+file: crates/cortex-term/src/input.rs
+in: Decoder::give_up
+find: events.push(Event::Paste(paste_text(&paste)));
+replace: drop(paste);
+caught-by:
+    input::tests::giving_up_on_a_paste_keeps_what_came_as_a_paste_and_keys_are_keys_again
+    terminal::tests::a_paste_whose_end_never_comes_is_given_up_on_and_ctrl_c_works_after
+
+[break] the-terminals-handler-ends-the-process-under-a-guard
+rule: The terminal's own handler passes the interrupts over while a guard lives.
+file: crates/cortex-term/src/sys/unix.rs
+in: on_ending
+find: if is_interrupt(signal) && (GUARDING.load(Ordering::SeqCst) || guard_just_ended()) { return; }
+replace:
+caught-by:
+    sys::unix::tests::the_terminal_entered_under_a_guard_keeps_its_handler_and_what_was_before
+
+[break] the-terminal-records-the-guards-handler
+rule: The terminal entered under a guard records what was there before the guard, not the guard's handler.
+file: crates/cortex-term/src/sys/unix.rs
+in: install
+find: old = *before;
+replace:
+caught-by:
+    sys::unix::tests::the_terminal_entered_under_a_guard_keeps_its_handler_and_what_was_before
+
+[break] leaving-the-terminal-drops-the-guard
+rule: Leaving the terminal under a guard keeps the guard's handler.
+file: crates/cortex-term/src/sys/unix.rs
+in: leave
+find: if GUARDING.load(Ordering::SeqCst) && is_interrupt(signal) {
+replace: if false {
+caught-by:
+    sys::unix::tests::leaving_the_terminal_under_a_guard_keeps_the_guard_and_puts_back_what_was_before
+
+[break] a-menu-line-with-a-raw-tab
+rule: A menu line holds no tab or line break from what it shows.
+file: crates/cortex-tui/src/view/menu.rs
+in: shown
+find: cortex_term::sanitize(text).replace(['\t', '\n'], " ")
+replace: cortex_term::sanitize(text).into_owned()
+caught-by:
+    view::menu::tests::the_menus_in_every_variant

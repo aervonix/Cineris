@@ -217,6 +217,20 @@ pub struct Decoder {
     /// The first half of a character outside the Basic Multilingual Plane,
     /// from a win32 input record, waiting for its second half.
     high_surrogate: Option<u32>,
+    /// Inside a sequence longer than [`LONGEST_SEQUENCE`], which is being
+    /// dropped to its end.
+    skipping: Option<Skip>,
+}
+
+/// A sequence too long to keep, being dropped until it ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Skip {
+    /// A control sequence: it ends at its final byte, or before any byte
+    /// that cannot be in one.
+    Control,
+    /// A string (OSC, DCS and their kind): it ends at BEL or ESC `\`.
+    /// `escape`: the last byte dropped was ESC.
+    Text { escape: bool },
 }
 
 /// One key as Windows Terminal's win32 input mode reports it.
@@ -247,6 +261,9 @@ enum Step {
     Record(usize, Record),
     /// The bytes are the beginning of something longer.
     Incomplete,
+    /// This many bytes were used, and began a sequence longer than any a
+    /// terminal sends, which is dropped to its end.
+    Skip(usize, Skip),
 }
 
 impl Decoder {
@@ -280,9 +297,42 @@ impl Decoder {
         }
     }
 
+    /// Whether it is inside something whose end may never come: a paste, or
+    /// a sequence being dropped. The reader gives up on it after a time
+    /// with no input ([`give_up`](Self::give_up)).
+    pub(crate) fn open(&self) -> bool {
+        self.paste.is_some() || self.skipping.is_some()
+    }
+
+    /// Nothing has come for a long time inside a paste or a sequence being
+    /// dropped: the paste ends with what it holds, given as a paste and
+    /// never as keys, and the sequence is over. What follows is decoded as
+    /// it comes.
+    pub(crate) fn give_up(&mut self, events: &mut Vec<Event>) {
+        self.skipping = None;
+        if let Some(paste) = self.paste.take() {
+            // Bytes kept as the possible start of the end marker were not
+            // text.
+            self.buffer.clear();
+            events.push(Event::Paste(paste_text(&paste)));
+        }
+    }
+
     fn decode(&mut self, events: &mut Vec<Event>, flushing: bool) {
         let mut start = 0;
         loop {
+            if let Some(skip) = self.skipping {
+                let (used, ended) = skip_to_end(&self.buffer[start..], skip);
+                start += used;
+                match ended {
+                    Ok(()) => self.skipping = None,
+                    Err(still) => {
+                        self.skipping = Some(still);
+                        break;
+                    }
+                }
+                continue;
+            }
             if let Some(paste) = &mut self.paste {
                 let rest = &self.buffer[start..];
                 if let Some(end) = find(rest, PASTE_END) {
@@ -324,6 +374,10 @@ impl Decoder {
                     }
                 }
                 Step::Incomplete => break,
+                Step::Skip(used, skip) => {
+                    start += used;
+                    self.skipping = Some(skip);
+                }
             }
         }
         self.buffer.drain(..start);
@@ -581,6 +635,7 @@ fn escape(bytes: &[u8], flushing: bool) -> Step {
                 Step::Done(used, other) => Step::Done(1 + used, other),
                 Step::Record(used, record) => Step::Record(1 + used, record),
                 Step::Incomplete => Step::Incomplete,
+                Step::Skip(used, skip) => Step::Skip(1 + used, skip),
             };
         }
     };
@@ -588,8 +643,16 @@ fn escape(bytes: &[u8], flushing: bool) -> Step {
         Some((used, event)) => Step::Done(used, event),
         None if bytes.len() > LONGEST_SEQUENCE => {
             // Not a sequence any terminal sends. It is not kept growing:
-            // what has arrived of it, up to the limit, is dropped.
-            Step::Done(LONGEST_SEQUENCE, None)
+            // what has arrived of it is dropped, and the rest as it comes,
+            // to its end, so that none of it becomes keys.
+            let skip = if second == b'[' {
+                Skip::Control
+            } else {
+                Skip::Text {
+                    escape: bytes.last() == Some(&0x1b),
+                }
+            };
+            Step::Skip(bytes.len(), skip)
         }
         None if flushing => {
             // It never finished: Alt with the introducer, and the rest is
@@ -603,6 +666,29 @@ fn escape(bytes: &[u8], flushing: bool) -> Step {
             )
         }
         None => Step::Incomplete,
+    }
+}
+
+/// Drops what belongs to the sequence `skip` from the front of `bytes`: the
+/// bytes used, and `Ok` if it ended there or the state to go on in.
+fn skip_to_end(bytes: &[u8], skip: Skip) -> (usize, Result<(), Skip>) {
+    match skip {
+        Skip::Control => match bytes.iter().position(|byte| !(0x20..=0x3f).contains(byte)) {
+            // The final byte ends it, and is the sequence's; anything else
+            // was never part of it, and is decoded on its own.
+            Some(at) if (0x40..=0x7e).contains(&bytes[at]) => (at + 1, Ok(())),
+            Some(at) => (at, Ok(())),
+            None => (bytes.len(), Err(skip)),
+        },
+        Skip::Text { mut escape } => {
+            for (at, &byte) in bytes.iter().enumerate() {
+                if byte == 0x07 || (escape && byte == b'\\') {
+                    return (at + 1, Ok(()));
+                }
+                escape = byte == 0x1b;
+            }
+            (bytes.len(), Err(Skip::Text { escape }))
+        }
     }
 }
 
@@ -679,6 +765,10 @@ fn csi(bytes: &[u8]) -> Option<(usize, Option<Event>)> {
                 break;
             }
             0x20..=0x3f => {}
+            // A byte no sequence holds after more than a sequence's length:
+            // a sequence too long to keep, dropped up to that byte, which is
+            // decoded on its own; none of it becomes keys.
+            _ if 2 + index > LONGEST_SEQUENCE => return Some((2 + index, None)),
             // A byte no sequence holds: this was never one, but `Alt+[`
             // followed by what was typed next, which is decoded on its own.
             _ => {
@@ -1230,6 +1320,70 @@ mod tests {
                 assert_eq!(events, whole, "cut at {first} and {second}");
             }
         }
+    }
+
+    /// Feeds `input` in two reads cut at `cut`, then `after`, and flushes.
+    fn cut_in_two(input: &[u8], cut: usize, after: &[u8]) -> Vec<Event> {
+        let mut decoder = Decoder::new();
+        let mut events = Vec::new();
+        decoder.feed(&input[..cut], &mut events);
+        decoder.feed(&input[cut..], &mut events);
+        decoder.feed(after, &mut events);
+        decoder.flush(&mut events);
+        events
+    }
+
+    #[test]
+    fn an_over_long_control_sequence_is_dropped_to_its_end_however_it_is_split() {
+        let mut long = b"\x1b[".to_vec();
+        long.extend(std::iter::repeat_n(b"1;", 200).flatten());
+        long.push(b'm');
+        let typed = keys(&[
+            (KeyCode::Char('a'), Mods::NONE),
+            (KeyCode::Char('b'), Mods::NONE),
+        ]);
+        // At the limit, and around it, and anywhere else.
+        for cut in (LONGEST_SEQUENCE - 3..=LONGEST_SEQUENCE + 3).chain([1, 2, 100, long.len()]) {
+            assert_eq!(cut_in_two(&long, cut, b"ab"), typed, "cut at {cut}");
+        }
+        // A byte that cannot be in a control sequence ends it, and is a key.
+        let mut broken = long[..300].to_vec();
+        broken.push(b'\r');
+        assert_eq!(
+            cut_in_two(&broken, LONGEST_SEQUENCE, b""),
+            keys(&[(KeyCode::Enter, Mods::NONE)])
+        );
+    }
+
+    #[test]
+    fn an_over_long_string_is_dropped_to_its_end_however_it_is_split() {
+        for end in [&b"\x07"[..], b"\x1b\\"] {
+            let mut long = b"\x1b]0;".to_vec();
+            long.extend(std::iter::repeat_n(b'x', 400));
+            long.extend_from_slice(end);
+            for cut in (LONGEST_SEQUENCE - 2..=LONGEST_SEQUENCE + 2).chain([long.len() - 1]) {
+                assert_eq!(
+                    cut_in_two(&long, cut, b"q"),
+                    keys(&[(KeyCode::Char('q'), Mods::NONE)]),
+                    "end {end:?}, cut at {cut}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn giving_up_on_a_paste_keeps_what_came_as_a_paste_and_keys_are_keys_again() {
+        let mut decoder = Decoder::new();
+        let mut events = Vec::new();
+        decoder.feed(b"\x1b[200~line one\r\nline two\x1b[20", &mut events);
+        assert!(events.is_empty());
+        assert!(decoder.open());
+        decoder.give_up(&mut events);
+        assert_eq!(events, vec![Event::Paste("line one\nline two".to_owned())]);
+        assert!(!decoder.open());
+        events.clear();
+        decoder.feed(b"\x03", &mut events);
+        assert_eq!(events, keys(&[(KeyCode::Char('c'), Mods::CTRL)]));
     }
 
     /// Whether the nightly run asked for every case (`CORTEX_PROPERTY_SCALE`

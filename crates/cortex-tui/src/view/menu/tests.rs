@@ -22,13 +22,22 @@ fn look() -> Look {
 
 fn input() -> Input {
     let history = MemoryHistory::from_prompts(
-        ["fix the lexer", "run clippy\nand the tests"].map(String::from),
+        [
+            "fix the lexer",
+            "run clippy\nand the tests",
+            "\tfn main() {}",
+        ]
+        .map(String::from),
     );
     let mut input = Input::new(KeyMap::defaults(), Box::new(history));
     input.set_files(
         (0..20)
             .map(|n| format!("src/lex/part_{n:02}.rs"))
-            .chain(["README.md".to_owned(), "src/漢字/名前.rs".to_owned()])
+            .chain([
+                "README.md".to_owned(),
+                "src/漢字/名前.rs".to_owned(),
+                "odd\tname\n.rs".to_owned(),
+            ])
             .collect(),
     );
     input.set_commands(vec![
@@ -120,6 +129,11 @@ fn states() -> Vec<(&'static str, Input)> {
     for c in "zzz".chars() {
         no_match.handle(&Event::Key(Key::plain(KeyCode::Char(c))));
     }
+    let mut tab = input();
+    tab.act(Action::HistorySearch);
+    for c in "fn".chars() {
+        tab.handle(&Event::Key(Key::plain(KeyCode::Char(c))));
+    }
     let mut listing = Input::new(KeyMap::defaults(), Box::new(MemoryHistory::new()));
     listing.handle(&Event::Key(Key::plain(KeyCode::Char('@'))));
     vec![
@@ -134,6 +148,8 @@ fn states() -> Vec<(&'static str, Input)> {
         ("a picker filtered", filtered),
         ("history search", search),
         ("history search, no match", no_match),
+        ("history search, a prompt with a tab", tab),
+        ("files, a name with a tab and a line break", typed("@oddna")),
     ]
 }
 

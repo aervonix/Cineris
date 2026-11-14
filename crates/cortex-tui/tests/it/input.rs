@@ -29,7 +29,10 @@ fn a_paste_with_a_box_focused_goes_to_the_input() {
     let mut input = input_with("x");
     input.focus_mut().update(&[7], &[]);
     input.act(Action::FocusNext);
-    paste(&mut input, "y");
+    assert_eq!(
+        paste(&mut input, "y"),
+        Outcome::Focused(cortex_tui::focus::Target::Input)
+    );
     assert!(input.focus().on_input());
     assert_eq!(input.editor().expanded(), "xy");
 }
