@@ -74,7 +74,7 @@ caught-by:
 rule: What the remote's branches have already is not what a push adds.
 file: xtask/src/owner_guard/local.rs
 in: check
-find: let mut range: Vec<&str> = vec![&update.local, "--not", &remotes];
+find: let mut range: Vec<&str> = vec![&update.local, "--not"];
 replace: let mut range: Vec<&str> = vec![&update.local];
 caught-by:
     owner_guard::local::tests::sys_a_clean_push_and_what_the_remote_has_find_nothing
@@ -220,3 +220,68 @@ find: [at] => *at..*at + request.from.len(),
 replace: [at, ..] => *at..*at + request.from.len(),
 caught-by:
     replace::tests::text_is_replaced_exactly_once_or_not_at_all
+
+# ------------------------------------------ the review's findings, fixed
+
+[break] a-byte-order-mark-hides-the-first-term
+rule: A byte-order mark at the start of the terms is no part of the first term.
+file: xtask/src/owner_guard.rs
+in: Terms::parse
+find: .map(|line| line.trim_start_matches('\u{feff}').trim())
+replace: .map(str::trim)
+caught-by:
+    owner_guard::tests::a_byte_order_mark_is_no_part_of_a_term_and_a_hidden_character_is_seen
+
+[break] a-required-file-that-is-missing-passes
+rule: In a repository that requires the terms file, a push without it is refused.
+file: xtask/src/owner_guard/local.rs
+in: missing
+find: if required {
+replace: if false {
+caught-by:
+    owner_guard::local::tests::sys_a_repository_that_requires_the_file_refuses_a_push_without_it
+
+[break] a-push-by-url-is-excused-by-another-remote
+rule: A push to a URL is held only against what git says the URL has, not against another remote's branches.
+file: xtask/src/owner_guard/local.rs
+in: check
+find: let remotes = named_remote.then(|| format!("--remotes={remote}"));
+replace: let remotes = Some(if named_remote { format!("--remotes={remote}") } else { "--remotes".to_owned() });
+caught-by:
+    owner_guard::local::tests::sys_what_the_machine_or_another_remote_could_hide_is_still_read
+
+[break] a-root-commit-is-not-read-under-show-root-off
+rule: A root commit's own changes are read whatever log.showRoot says.
+file: xtask/src/owner_guard/local.rs
+in: check
+find: "--patch", "--root"
+replace: "--patch"
+caught-by:
+    owner_guard::local::tests::sys_what_the_machine_or_another_remote_could_hide_is_still_read
+
+[break] a-replaced-commit-is-read-as-its-replacement
+rule: The guard reads the objects a push sends, not what git replace refs say they are.
+file: xtask/src/owner_guard.rs
+in: git
+find: command.env("GIT_NO_REPLACE_OBJECTS", "1");
+replace:
+caught-by:
+    owner_guard::local::tests::sys_what_the_machine_or_another_remote_could_hide_is_still_read
+
+[break] a-protocols-refusal-is-served-from-the-script
+rule: A request the protocol cannot build fails, and takes nothing from the script.
+file: crates/cortex-testkit/src/built.rs
+in: Built::stream
+find: Ok(_) => self.inner.stream(request, cancel)
+replace: Ok(_) | Err(_) => self.inner.stream(request, cancel)
+caught-by:
+    cortex-testkit built::tests::a_request_the_protocol_cannot_build_fails_and_takes_nothing_from_the_script
+
+[break] a-verbatim-dot-dot-is-read-as-a-plain-one
+rule: In an extended-length path `.` and `..` are names, as Windows reads them, not steps.
+file: crates/cortex-base/src/path/location.rs
+in: Place::read
+find: "." | ".." if verbatim => return None,
+replace: "." | ".." if verbatim && false => return None,
+caught-by:
+    cortex-base path::location::tests::what_cannot_be_read_as_a_place_is_compared_exactly

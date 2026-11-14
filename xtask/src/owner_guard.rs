@@ -70,7 +70,9 @@ impl Terms {
     pub(crate) fn parse(text: &str) -> Self {
         let terms = text
             .lines()
-            .map(str::trim)
+            // A byte-order mark, as some editors write one, is no part of
+            // the first term: kept, it would make that term match nothing.
+            .map(|line| line.trim_start_matches('\u{feff}').trim())
             .filter(|line| !line.is_empty())
             .map(|line| Term {
                 lowered: fold(line),
@@ -82,6 +84,19 @@ impl Terms {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.terms.is_empty()
+    }
+
+    /// Whether a term holds a character that cannot be seen: a control
+    /// character, a zero-width one or a byte-order mark inside it. Such a
+    /// term matches only text with the same hidden character, which is
+    /// almost certainly not what was meant.
+    pub(crate) fn has_hidden_characters(&self) -> bool {
+        self.terms.iter().any(|term| {
+            term.lowered.chars().any(|character| {
+                character.is_control()
+                    || matches!(character, '\u{200b}'..='\u{200f}' | '\u{2060}' | '\u{feff}')
+            })
+        })
     }
 
     /// Whether any term is in `text`.
@@ -440,6 +455,9 @@ pub(crate) fn git(dir: &Path, arguments: &[&str]) -> Result<String> {
     for variable in GIT_LOCATION {
         command.env_remove(variable);
     }
+    // What a repository's `git replace` refs say an object is would hide
+    // the object itself, which is what a push sends.
+    command.env("GIT_NO_REPLACE_OBJECTS", "1");
     let output = command
         .args(arguments)
         .current_dir(dir)
@@ -518,6 +536,15 @@ mod tests {
         assert!(terms.matches("cd /SRV/qexample/Coding"));
         assert!(terms.matches("/srv/qexamples"));
         assert!(!terms.matches("/srv/other"));
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_no_part_of_a_term_and_a_hidden_character_is_seen() {
+        let terms = Terms::parse("\u{feff}Quentin\r\nExample Person\n");
+        assert!(terms.matches("by Quentin"));
+        assert!(!terms.has_hidden_characters());
+        assert!(Terms::parse("Quen\u{200b}tin\n").has_hidden_characters());
+        assert!(Terms::parse("a\u{7}b\n").has_hidden_characters());
     }
 
     #[test]

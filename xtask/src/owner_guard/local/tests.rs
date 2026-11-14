@@ -8,8 +8,8 @@ use std::process::Command;
 
 use super::super::{Finding, GIT_LOCATION, Terms};
 use super::{
-    Found, Loaded, TERMS_FILE, TermsFile, Update, by_commit, check, load, names_by_commit,
-    parse_updates, screened, verdict,
+    Found, Loaded, TERMS_FILE, TermsFile, Update, by_commit, check, load, missing, names_by_commit,
+    parse_updates, repositories, required, screened, verdict,
 };
 
 /// Made-up terms of the kinds the owner's file holds: a name, a phrase, an
@@ -105,6 +105,10 @@ fn a_file_that_is_there_and_cannot_be_used_refuses_the_push() {
     let folder = dir.join("a-folder");
     std::fs::create_dir_all(&folder).unwrap();
     assert!(messages(&TermsFile::Default(folder)).contains("cannot be read"));
+
+    // A term with a character that cannot be seen matches almost nothing.
+    std::fs::write(&file, "Quen\u{200b}tin\n").unwrap();
+    assert!(messages(&TermsFile::Default(file.clone())).contains("cannot be seen"));
 
     // Inside the repository, where `git add` could take it.
     std::fs::write(&file, TERMS).unwrap();
@@ -433,6 +437,92 @@ fn sys_a_clean_push_and_what_the_remote_has_find_nothing() {
     let deletion = repo.update("refs/heads/gone", &"0".repeat(40), "refs/heads/quentin");
     let (found, commits) = check(&repo.dir, "origin", &[deletion], &terms()).unwrap();
     assert_eq!((found, commits), (Vec::new(), 0));
+}
+
+/// What a push to a URL, a root commit under `log.showRoot=false`, a
+/// replaced commit and a local branch's name could hide.
+#[test]
+fn sys_what_the_machine_or_another_remote_could_hide_is_still_read() {
+    let repo = Repo::new("hidden");
+    let short = |hash: &str| hash[..12].to_owned();
+    // A commit already on a private remote, pushed by URL to the public
+    // one: the other remote's branches do not excuse it.
+    git_in(
+        repo.dir.parent().unwrap(),
+        &repo.config,
+        "Someone",
+        &["init", "-q", "--bare", "backup.git"],
+    );
+    repo.git("Someone", &["remote", "add", "backup", "../backup.git"]);
+    let private = repo.commit("Someone", "Notes for Quentin", &[]);
+    repo.git("Someone", &["push", "-q", "backup", "main"]);
+    let update = repo.update("refs/heads/main", &private, "refs/heads/main");
+    let (found, commits) = check(&repo.dir, "../remote.git", &[update], &terms()).unwrap();
+    // The first commit too: by URL, nothing says the remote has it.
+    assert_eq!(commits, 2, "{found:?}");
+    assert!(found.contains(&Found::Commit(Finding::Commit {
+        commit: short(&private),
+        field: "message",
+    })));
+
+    // A root commit, with `log.showRoot` off in the repository's own
+    // configuration: its tree is still read.
+    repo.git("Someone", &["config", "log.showRoot", "false"]);
+    repo.git("Someone", &["switch", "-q", "--orphan", "fresh"]);
+    let root = repo.commit("Someone", "Start again", &[("x.txt", "by Quentin\n")]);
+    let update = repo.update("refs/heads/fresh", &root, "refs/heads/fresh");
+    let (found, _) = check(&repo.dir, "origin", &[update], &terms()).unwrap();
+    assert!(
+        found.contains(&Found::InCommit {
+            commit: short(&root),
+            finding: Finding::Line {
+                path: Some("x.txt".to_owned()),
+                line: 1,
+            },
+        }),
+        "{found:?}"
+    );
+
+    // A commit replaced by a clean one: the push sends the commit itself.
+    repo.git("Someone", &["switch", "-q", "main"]);
+    let dirty = repo.commit("Someone", "As Quentin asked", &[]);
+    let clean = repo.commit("Someone", "Clean", &[]);
+    repo.git("Someone", &["replace", "-f", &dirty, &clean]);
+    // And the local branch's own name.
+    let update = repo.update("refs/heads/quentin-work", &clean, "refs/heads/work");
+    let (found, _) = check(&repo.dir, "origin", &[update], &terms()).unwrap();
+    assert!(
+        found.contains(&Found::Commit(Finding::Commit {
+            commit: short(&dirty),
+            field: "message",
+        })),
+        "{found:?}"
+    );
+    assert!(found.contains(&Found::Ref {
+        line: 1,
+        side: "local"
+    }));
+}
+
+#[test]
+fn sys_a_repository_that_requires_the_file_refuses_a_push_without_it() {
+    let repo = Repo::new("required");
+    assert!(!required(&repo.dir));
+    assert_eq!(missing("there is no file", false), Ok(()));
+    repo.git("Someone", &["config", "cortex.ownerTermsRequired", "true"]);
+    assert!(required(&repo.dir));
+    let refused = missing("there is no file", true).unwrap_err();
+    assert!(refused.contains("The push is refused"), "{refused}");
+    // The folders a terms file may not be in: the worktree, and the
+    // checkout that holds the repository (the same one here).
+    let folders = repositories(&repo.dir);
+    let canonical = |path: &Path| std::fs::canonicalize(path).unwrap();
+    assert!(
+        folders
+            .iter()
+            .any(|folder| canonical(folder) == canonical(&repo.dir)),
+        "{folders:?}"
+    );
 }
 
 #[test]

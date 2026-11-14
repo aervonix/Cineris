@@ -60,3 +60,21 @@ time profile of `approve_diff` (CORTEX_TESTKIT_PROFILE): 149.4 ms from the proce
 ```
 
 That run was before the core rig marked its waits for an approval and for a turn's end, which now show where the 136 ms goes. `cortex-cli`'s slowest system test, `commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start`, ran the binary twelve times: 285 ms of its 305 were the binary's runs (each 2 to 28 ms; the ones that send a request about 27 ms), 1.2 ms the scripted server, and 10 ms the test's own work. `cortex-agent`'s slowest integration tests are the seeded-order tests (`order::one_seed_is_one_order_of_events`, 0.10 s), whose time is the test's own: a world and a session each round.
+
+## The independent review
+
+A reviewer on Opus 5.5, which had not seen the session's reasoning, read the whole diff before the first push. It found no way the local guard prints a term, no workflow input in a script, no new right, and nothing that adds to the blocking checks' time. What it found, and what was done:
+
+| Finding | Done |
+|---|---|
+| With the terms file in place, a push from a process with another `HOME` found no default file and passed with a warning; and the guard is the branch's own code. | Fixed for the first: a repository can require the file (`git config cortex.ownerTermsRequired true`, part of the install), and then a missing file refuses the push. Test and break. The second is CI's case too, and stated in the docs: it catches an accident. |
+| Once the hook is installed, a branch made before this change cannot push: its guard has no `--pre-push`. | It fails closed. The docs and the install note say to install once this is merged, and to rebase open branches. |
+| A byte-order mark at the start of the terms made the first term match nothing (CI's guard too). | Fixed in the shared parser; and a term with a character that cannot be seen refuses the push. Tests and breaks. |
+| A push to a URL was held against every remote's branches, so a commit on a private remote went unchecked. | Fixed: held only against what git says the URL has. Test and break. |
+| `log.showRoot=false` in the repository dropped a root commit's changes; `git replace` refs showed a replacement in place of what is sent. | Fixed: `--root`, and `GIT_NO_REPLACE_OBJECTS=1` for every git the guard runs (CI's too). Tests and breaks. |
+| Tests that would pass with the code broken: `Built`'s refusal; `repositories()`; the local ref's name; the remote's object in the range; the screening of the verdict's lines. | Tests for the first four, each with a break. The last: a finding's text holds no term by construction (no ref name, no matching path), so the screening there cannot be seen to fail; it stays as a second guard. |
+| The path helper normalised `.`, `..` and `/` in an extended-length path, which Windows reads literally, and let `..` climb above a relative path's start. | Fixed: both are compared exactly. Tests and a break. No caller passed such a path. |
+| Docs: the number of git commands, the `try.yml` comment, `--features` passed twice to `partial-landlock`, `ci.md` missing. | Fixed the first two; the third is harmless and kept (the job's own check names the feature); `ci.md` is written with the pull request's runs. |
+| The adversarial fixture misses a process that clears its environment, and spins a core while the turn runs. | Both stated in the docs. The kill's sweep is what holds the first. |
+
+The step's own stress run found one more: the fixture's own test failed 20 times in 100, because a `sh -c` child had not yet become `sleep` when `/proc` was read. It starts `sleep` directly now, and passed 200 of 200.

@@ -140,11 +140,17 @@ fn is_separator(character: char) -> bool {
 }
 
 impl<'a> Place<'a> {
-    /// `None` for a path that is not valid Unicode, or an extended-length
-    /// path that names neither a drive nor a share (a volume by its GUID, a
-    /// device): those are compared exactly.
+    /// `None` for a path that is not valid Unicode; an extended-length path
+    /// that names neither a drive nor a share (a volume by its GUID, a
+    /// device), or holds a `/`, `.` or `..`, which Windows reads literally
+    /// there; and a relative path whose `..` climbs above where it starts.
+    /// Those are compared exactly.
     fn read(path: &'a Path) -> Option<Self> {
         let text = path.to_str()?;
+        let verbatim = strip_verbatim(text, "").is_some();
+        if verbatim && text[4..].contains('/') {
+            return None;
+        }
         let (root, rest) = if let Some(rest) = strip_verbatim(text, "UNC\\") {
             share(rest)?
         } else if let Some(rest) = strip_verbatim(text, "") {
@@ -162,12 +168,19 @@ impl<'a> Place<'a> {
         } else {
             (Root::Relative, text)
         };
+        let rooted = !matches!(root, Root::Relative | Root::Drive { rooted: false, .. });
         let mut names: Vec<&str> = Vec::new();
         for name in rest.split(is_separator) {
             match name {
-                "" | "." => {}
+                "" => {}
+                "." | ".." if verbatim => return None,
+                "." => {}
                 ".." => {
-                    names.pop();
+                    // Above a root is the root; above where a relative path
+                    // starts is somewhere this text does not say.
+                    if names.pop().is_none() && !rooted {
+                        return None;
+                    }
                 }
                 name => names.push(name),
             }
@@ -266,8 +279,6 @@ mod tests {
             (r"\\?\UNC\server\share", r"\\server\share\"),
             // Both sides extended.
             (r"\\?\C:\Work", r"\\?\c:\work"),
-            // The prefix written with the other separator.
-            (r"//?/C:/Work", r"C:\Work"),
         ];
         for (first, second) in pairs {
             assert!(same(Windows, first, second), "{first} and {second}");
@@ -383,5 +394,15 @@ mod tests {
         assert!(!same(Windows, volume, r"C:\Work"));
         assert!(!same(Windows, r"\\?\C:Work", r"C:Work"));
         assert!(!same(Windows, r"\\?\UNC\server", r"\\server"));
+        // Windows reads `.`, `..` and `/` literally in an extended-length
+        // path: not the plain path they would make.
+        assert!(!same(Windows, r"\\?\C:\w\..\x", r"C:\x"));
+        assert!(!same(Windows, r"\\?\C:\w\.\x", r"C:\w\x"));
+        assert!(!same(Windows, r"\\?\C:/w/x", r"C:\w\x"));
+        // A relative path that climbs above where it starts.
+        assert!(!same(Windows, r"..\a", "a"));
+        assert!(!same(Windows, r"C:..\a", "C:a"));
+        assert!(!within(Windows, r"..\secret", r"."));
+        assert!(same(Windows, r"a\..\b", "b"));
     }
 }
