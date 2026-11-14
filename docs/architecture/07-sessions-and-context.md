@@ -319,3 +319,20 @@ Replaying the newer turns without their reasoning is what makes this valid on pr
 - `cortex sessions export` applies a stricter pass and shows what it masked. There is no built-in upload or sharing feature.
 
 See [../security.md](../security.md).
+
+## Invariants to test
+
+What a review of this page's code should try to break ([testing-and-ci.md](../testing-and-ci.md), "Invariants to test"). `Rig::fill` in `cortex-agent`'s rig puts a session's first request at a named pressure without counting bytes by hand.
+
+| Invariant | How a review breaks it | Held by |
+|---|---|---|
+| Each request of an epoch begins with the one before it, byte for byte. | Edit an earlier message, change the system prompt's sections, reorder the tools, carry reasoning across a changed prompt. | The loop's debug-build check on real protocols' bytes (`ScriptedProvider::built_as`), `context::the_prefix_holds_over_a_long_session_and_breaks_when_history_is_edited`. |
+| A request the provider's protocol cannot build is never sent as if it could. | A summary whose thinking budget is not below `max_tokens` (the step 15 review). | `Built` fails such a request in a test as the real client does; a test of each request shape the loop makes. |
+| The history read again from the log is the one built live. | Resume after a summary, after a masked entry, after a change of model, across a day. | `context::a_history_read_again_is_the_one_built_live` and the tests of resume beside it; `mutations/step-15.breaks`. |
+| A background summary is used only for the history it summarised. | A rewind, or an edit of history, while the summary is under way. | `context::a_summary_over_history_a_rewind_took_away_is_not_used`. |
+| Compaction never splits a round, and carries the plan, the files and the user's last message exactly. | Keep recent turns that end in a tool call; a file touched only in this branch. | `context::a_compaction_that_keeps_recent_turns_never_splits_a_round`, `a_compaction_carries_the_plan_the_files_and_the_last_message_exactly`. |
+| Every request a summary makes is counted by the ledger. | A summary prepared in the background, one given up after it finished, one at the trigger when the ledger has no request left. | `context::a_summary_at_the_trigger_is_a_request_the_ledger_counts` and its neighbours. |
+| A session that cannot compact says so, and sends nothing past its window. | Instruction files and tools past the trigger on a small window ([outstanding](../outstanding/a-prompt-past-the-trigger-on-a-small-window.md)); a summary too large for the new epoch; automatic compaction off. | `context::a_summary_too_large_for_the_new_epoch_fails_the_compaction_and_records_nothing`, `with_automatic_compaction_off_the_turn_stops_and_asks`, `pressure::past_the_trigger_and_past_the_window_the_turn_asks_for_a_compaction`. |
+| An overflow teaches the budget, and the summary request then fits. | A provider's refusal of a request the estimate thought fitted, in a long turn. | `context::after_an_overflow_the_summary_request_is_cut_to_fit_what_the_provider_showed`, `after_an_overflow_in_one_long_turn_the_summary_request_keeps_its_last_round`. |
+| An instruction file is read only where the agent may read. | A link out of the workspace, a file a rule denies, a configured name that is a path (step 15's review). | `cortex-core`'s `context::a_link_out_of_the_workspace_is_not_followed_where_a_rule_allows_reading_there`, `an_instruction_file_a_rule_denies_is_not_read`. |
+| The redaction mark covers exactly what was masked. | A masked summary, a second summary over a first, a masked turn replayed after a summary. | `cortex-core`'s `redact::tests::resumed_marks`. |

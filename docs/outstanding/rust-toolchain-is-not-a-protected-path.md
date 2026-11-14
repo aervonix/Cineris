@@ -1,0 +1,3 @@
+| Item | Who | When |
+|---|---|---|
+| **`rust-toolchain.toml` decides which toolchain rustup installs and runs, and is not a protected path.** A confined command can write one; the next `cargo` the user runs outside the harness installs the toolchain it names (from the official channel only) and runs that compiler. Inside the sandbox it cannot fetch. Found while writing [security.md](../security.md), section 11, in the fourth tooling step. **Recommendation:** protect `rust-toolchain.toml` and `rust-toolchain` at any depth, as `.cargo/config.toml` is, unless the owner holds that the official channel makes it harmless. | The owner, then step 32 (hardening pass) | Before the first release |

@@ -35,6 +35,7 @@ These are the rules of the build plan. They hold in every change.
 Each cost a session hours to find. The details are in [docs/steps/11/](docs/steps/11/).
 
 - **The system temporary directory is on the hosted runner's slow disk** (`C:`). The Windows test job points `TEMP` and `TMP` at the workspace's disk, which halved `cortex-core`'s tests. A test that needs something only `C:` has (short "8.3" names) must look there itself.
+- **A canonical path is not the same text as a plain one.** `std::fs::canonicalize` and `AbsPath::to_fs_path` give `\\?\C:\…` (or `\\?\UNC\server\share\…`) on Windows, and a path from the environment, the configuration or a test is plain, in whatever case: `==`, `starts_with` and `strip_prefix` call them different. Compare two paths of the system's own with `cortex_base::same_location`, `location_within` or `strip_location_prefix`, which take the prefix off and fold case as NTFS does (on Linux they compare as `Path` does). It cost CI round trips twice (step 15's instruction discovery, step 26's `find_outside`). No rule checks for it: whether a path is canonical is not in its text, and a check of `canonicalize` beside `==` would miss every case that crosses a `let` or a function, as both of those did.
 - **Connecting to a loopback port that nothing listens on takes about 2 s** on Windows, which tries three times before it gives up, where Linux refuses at once. A test that connects to a port it may have closed spends that.
 - **A Job Object goes on listing a process for a moment after the process has exited.** Ask for its members by process id and look at each one; never trust its count of active processes for "what is still running".
 - **Printing can hide a race.** A line written to the terminal takes longer than the window some races have. When a timing bug will not show, keep the trace in memory and print it only when something has gone wrong. Repeat the whole workspace, not one crate: a race that needs other tests' load beside it never shows in a crate run alone.
@@ -49,7 +50,10 @@ Each cost a session hours to find. The details are in [docs/steps/11/](docs/step
 | Check formatting, repo rules, lints and licences | `cargo xtask check` |
 | Run all tests | `cargo xtask test` |
 | Run tiers 1 and 2 only | `cargo xtask test --profile fast` |
-| Run one crate's tests, and build only it | `cargo xtask test -p <crate>` |
+| Run one crate's tests, and build only it | `cargo xtask test -p <crate>` (for `cortex-sandbox` on Linux it turns `backends` on, or its confinement tests are not built) |
+| Run one throwaway test file against a crate, registering nothing | `cargo xtask scratch-test <crate> <file>` |
+| See where a test's time goes | `CORTEX_TESTKIT_PROFILE=1 cargo xtask test -p <crate> -E 'test(=<name>)' --no-capture` |
+| Check what a push would send for the owner's details | `cargo xtask owner-guard --unpushed` (the git hook runs it on every push) |
 | Check that every link in the docs leads somewhere, and that the step records are in their places | `cargo xtask links` |
 | Run exactly what CI runs | `cargo xtask ci` |
 | See each tier's time by crate and its slowest tests, built as CI builds | `cargo xtask ci --tiers` |
@@ -59,19 +63,20 @@ Each cost a session hours to find. The details are in [docs/steps/11/](docs/step
 | Get a run's job and tier tables for `ci.md` | `cargo xtask ci-times <run id> --against main` |
 | Run tests many times over, each under the next seed | `cargo xtask stress -p <crate> --count 300`, and `--cores 2 --load 6` to make a race show |
 | Break the code on purpose and see which tests fail | `cargo xtask mutate`, `--jobs 4` for four at a time; `mutate --check` checks every list without building anything |
-| Edit Rust code by its tokens, so the match survives `rustfmt` | `cargo xtask replace <file> --from '<code>' --to '<code>'` |
+| Edit Rust code by its tokens, so the match survives `rustfmt` | `cargo xtask replace <file> --from '<code>' --to '<code>'`; any other file by its exact text with `--text` |
 | Ask the permission engine about a command | `cargo xtask decide [--rule '…'] -- <command>` |
 | Format | `cargo xtask fmt` |
 | Regenerate the protocol schema and TypeScript declarations | `cargo xtask schema` |
 | Regenerate every generated file, the configuration schema and reference included | `cargo xtask gen` |
 | Build `cortex` and its alias `cx` | `cargo xtask alias` |
 | Fuzz the stream decoders (needs a nightly toolchain and cargo-fuzz) | `cargo xtask fuzz` |
-| Run the live smoke test, or record provider fixtures: by hand, never in CI, and it costs money | `cargo xtask live [PROVIDER]`, `cargo xtask record [--provider PROVIDER]`, `cargo xtask record --toolbox`; `record --dry-run` sends nothing, `live --spent` totals the spend |
+| Run the live smoke test, or record provider fixtures: by hand, never in CI, and it costs money | `cargo xtask live [PROVIDER]`, `cargo xtask live --headless [PROVIDER]` (the real binary's runs, with no time limit), `cargo xtask record [--provider PROVIDER]`, `cargo xtask record --toolbox`; `record --dry-run` sends nothing, `live --spent` totals the spend |
 
 `./x <command>` is the same as `cargo xtask <command>`.
 
 **At the owner's desk, heavy commands run on the desktop through `rx`,** the owner's script, which copies the worktree there without `.git` and runs the command under a test lock shared with the other sessions: `rx check`, `rx test`, `rx -- <command>`. `rx busy` shows what holds the lock and what is queued for it; `rx --time …` also prints how long the run waited for the lock and how long it ran; `rx --exclusive …` is for performance numbers: it refuses while the desktop is throttled, and waits until the machine is idle before it runs. Windows-only code is linted there with `rx -- cargo xwin clippy --target x86_64-pc-windows-msvc --workspace --all-targets --locked -- -D warnings`, which checks and lints and runs nothing.
 
+- **Never push with `--no-verify`.** The pre-push hook (`xtask/hooks/pre-push`, installed in the repository's own hooks folder) checks every commit a push sends for the owner's details before the branch is public; `--no-verify` skips it. If it refuses a push, take the term out and rewrite the commits that carry it. If it cannot run, say so to the coordinator; do not push round it ([docs/testing-and-ci.md](docs/testing-and-ci.md), "The owner guard").
 - **Run `cargo xtask ci` before you call a change done**, and read its output: every step runs even when an earlier one fails, so one run shows everything that is wrong. The repo rules read the files git tracks, as a pull request holds them: `git add` a new file first, or they do not see it.
 - **Windows is checked only by CI** unless you have a Windows machine. Write for both from the start: paths, line endings, process handling, file names that differ only by case. To run an `xtask` command on Windows, Linux or both before there is a pull request, push the branch and start the `try` workflow: `gh workflow run try --ref <branch> -f os=windows -f command="test -p <crate> <filter>"`, or `-f command=startup -f profile=dist` to measure a release build's start-up; `-f filter="EXPR; EXPR"` takes nextest filter expressions, `-f against=main` compares the branch with another ref on one runner, and `-f os=linux-22.04` runs on the one runner with Landlock ABI 4 ([docs/testing-and-ci.md](docs/testing-and-ci.md), "A run on the runners without a pull request").
 - **When a test runs out of time,** read its output: a test that uses the test kit's gates, scripted server or children says what each thread was waiting for, and its process tree, before nextest stops it. `CORTEX_TESTKIT_PAUSE_MS=<n>` widens the scripted server's races on purpose ([docs/testing-and-ci.md](docs/testing-and-ci.md), "When a test runs out of time").
