@@ -286,7 +286,7 @@ caught-by:
 rule: A history read again tells the date the harness's own date notice gave, not one an instruction file or the repository map happens to state.
 file: crates/cortex-agent/src/context/mod.rs
 in: Context::load
-find: if notice.source == NoticeSource::Harness
+find: if notice.source == NoticeSource::Harness && notice.text.starts_with("Today's date is ")
 replace: if true
 caught-by:
     cortex-agent context::tests::a_reload_takes_the_date_from_the_harnesss_own_notice_only
