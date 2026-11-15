@@ -12,6 +12,7 @@
 
 use std::hash::{DefaultHasher, Hasher};
 
+use cortex_protocol::item::NoticeSource;
 use cortex_protocol::message::ToolResultPart;
 use cortex_protocol::{Item, ItemId, Message, Part, Role};
 
@@ -55,6 +56,9 @@ struct Meta {
     /// The message begins with the date part of an epoch's first user
     /// message.
     dated: bool,
+    /// The message is the epoch's repository map: the one notice that a
+    /// summary's replay leaves out, because the new epoch is given its own.
+    map: bool,
 }
 
 /// The messages of an epoch.
@@ -76,6 +80,11 @@ impl History {
     /// How many messages there are.
     pub(crate) fn len(&self) -> usize {
         self.messages.len()
+    }
+
+    /// Whether the epoch's history holds a repository map.
+    pub(crate) fn has_map(&self) -> bool {
+        self.meta.iter().any(|meta| meta.map)
     }
 
     /// Whether the epoch begins with a summary.
@@ -176,6 +185,7 @@ impl History {
                 bytes: message.0,
                 fingerprint: message.1,
                 dated: false,
+                map: matches!(item, Item::Notice(notice) if notice.source == NoticeSource::Map),
             });
         } else if self.messages.len() == before
             && matches!(item, Item::ToolResult(_))
@@ -221,10 +231,14 @@ impl History {
     ///
     /// The result is what [`push_projected`](Self::push_projected) makes
     /// of the same items after a summary: a message that held only
-    /// reasoning is left out, and a first user message loses the date it
-    /// carried, which the summary says now.
+    /// reasoning is left out, a first user message loses the date it
+    /// carried, which the summary says now, and the old epoch's repository
+    /// map is left out, because the new epoch is given its own.
     pub(crate) fn extend_projected(&mut self, other: &Self, from: usize) {
         for (message, meta) in other.messages.iter().zip(&other.meta).skip(from) {
+            if meta.map {
+                continue;
+            }
             let mut message = if message.role == Role::Assistant {
                 project(message)
             } else {
@@ -244,6 +258,7 @@ impl History {
                 bytes,
                 fingerprint,
                 dated: false,
+                map: false,
             });
         }
         self.dated = true;
