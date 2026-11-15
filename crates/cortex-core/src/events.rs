@@ -86,13 +86,31 @@ struct QueueState {
     closed: bool,
 }
 
+/// What a front end that does not wait on [`EventQueue::next`] is told
+/// when its queue has something again (step 23): the interface's loop,
+/// which reads with [`EventQueue::try_next`] on a thread of its own.
+pub type Wake = Arc<dyn Fn() + Send + Sync>;
+
 /// One client's queue of events and requests.
-#[derive(Debug)]
 pub struct EventQueue {
     state: Mutex<QueueState>,
     wake: Notify,
+    /// Called when the queue goes from empty to holding something, and when
+    /// it closes. A reader that leaves something in it comes back by
+    /// itself, so one call a burst is enough.
+    hook: Mutex<Option<Wake>>,
     capacity: usize,
     deltas: bool,
+}
+
+impl std::fmt::Debug for EventQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventQueue")
+            .field("state", &self.state)
+            .field("capacity", &self.capacity)
+            .field("deltas", &self.deltas)
+            .finish_non_exhaustive()
+    }
 }
 
 impl EventQueue {
@@ -103,8 +121,37 @@ impl EventQueue {
         Self {
             state: Mutex::new(QueueState::default()),
             wake: Notify::new(),
+            hook: Mutex::new(None),
             capacity: capacity.max(1),
             deltas,
+        }
+    }
+
+    /// Calls `wake` whenever the queue goes from empty to holding
+    /// something, and when it closes: for a reader on a thread of its own
+    /// that takes what is there with [`try_next`](Self::try_next) and then
+    /// waits for something else. A reader that leaves something in the
+    /// queue is not called again until it has emptied it. Called at once if
+    /// the queue holds something already.
+    pub fn set_wake(&self, wake: Wake) {
+        *lock(&self.hook) = Some(Arc::clone(&wake));
+        let state = lock(&self.state);
+        let now = !state.items.is_empty() || state.closed;
+        drop(state);
+        if now {
+            wake();
+        }
+    }
+
+    /// After something was queued: wakes a waiting reader, and the hook if
+    /// the queue was empty before it.
+    fn queued(&self, was_empty: bool) {
+        self.wake.notify_one();
+        if was_empty {
+            let hook = lock(&self.hook).clone();
+            if let Some(hook) = hook {
+                hook();
+            }
         }
     }
 
@@ -138,9 +185,10 @@ impl EventQueue {
                         }),
                     };
                     state.dropping.insert(delta.item_id.clone());
+                    let was_empty = state.items.is_empty();
                     state.items.push_back(Outgoing::Event(resync));
                     drop(state);
-                    self.wake.notify_one();
+                    self.queued(was_empty);
                     return;
                 }
             }
@@ -155,9 +203,10 @@ impl EventQueue {
             }
             _ => {}
         }
+        let was_empty = state.items.is_empty();
         state.items.push_back(Outgoing::Event(event));
         drop(state);
-        self.wake.notify_one();
+        self.queued(was_empty);
     }
 
     /// Queues a request to the client. Never dropped.
@@ -166,9 +215,10 @@ impl EventQueue {
         if state.closed {
             return;
         }
+        let was_empty = state.items.is_empty();
         state.items.push_back(Outgoing::Request { id, request });
         drop(state);
-        self.wake.notify_one();
+        self.queued(was_empty);
     }
 
     /// The next thing for the client, if there is one. Never waits.
@@ -211,6 +261,17 @@ impl EventQueue {
         lock(&self.state).closed = true;
         self.wake.notify_waiters();
         self.wake.notify_one();
+        let hook = lock(&self.hook).clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
+    /// Whether the client is disconnected: nothing more is queued, and
+    /// what is there is all there will be.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        lock(&self.state).closed
     }
 }
 
@@ -528,6 +589,54 @@ mod tests {
                 }),
             }),
         )
+    }
+
+    #[test]
+    fn the_wake_hook_is_called_once_a_burst_and_when_the_queue_closes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let queue = EventQueue::new(8, true);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        queue.set_wake(Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing queued yet");
+        // A burst: one call, however much it holds.
+        queue.push(event(1, Event::TurnStarted(TurnStarted {})));
+        queue.push(completed(2, "i_1"));
+        queue.push(completed(3, "i_2"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // A reader that leaves something is not called again.
+        let _ = queue.try_next();
+        queue.push(completed(4, "i_3"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // Emptied, the next thing is a new burst.
+        let _ = drain(&queue);
+        queue.push_request(
+            RequestId::Number(1),
+            ServerRequest::Question(cortex_protocol::methods::QuestionRequest {
+                session_id: SessionId::new("s_1"),
+                turn_id: None,
+                question: "Go on?".to_owned(),
+                choices: Vec::new(),
+                extension: None,
+            }),
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let _ = queue.try_next();
+        // Closing is told too, so a reader learns the client is gone.
+        queue.close();
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert!(queue.is_closed());
+        // A hook set on a queue that holds something is called at once.
+        let full = EventQueue::new(8, true);
+        full.push(completed(1, "i_1"));
+        let late = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&late);
+        full.set_wake(Arc::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        assert_eq!(late.load(Ordering::SeqCst), 1);
     }
 
     fn drain(queue: &EventQueue) -> Vec<SessionEvent> {
