@@ -247,7 +247,7 @@ pub(crate) fn ci_runs(packages: &[String], rest: &[String], split: bool) -> Vec<
 
 /// The filtersets among arguments for nextest, joined with `or` as nextest
 /// joins them, and the other arguments.
-fn filtersets(arguments: &[String]) -> (Option<String>, Vec<String>) {
+pub(crate) fn filtersets(arguments: &[String]) -> (Option<String>, Vec<String>) {
     const NAMES: [&str; 3] = ["-E", "--filterset", "--filter-expr"];
     let mut found = Vec::new();
     let mut rest = Vec::new();
