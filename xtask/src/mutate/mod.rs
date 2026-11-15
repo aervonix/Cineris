@@ -27,9 +27,11 @@
 //! a run through `rx` gives the shared test lock back between slices.
 
 mod drive;
+mod fix;
 mod jobs;
 pub(crate) mod lex;
 mod list;
+mod names;
 
 pub(crate) use drive::{sync, tree_files};
 
@@ -55,7 +57,21 @@ Without one, every break.
 
   --check        Only check that every break still applies, and the pre-flight:
                  no `find` ending in a comma, no `in` naming two items, no two
-                 breaks making one change. Runs nothing.
+                 breaks making one change. Runs nothing. Also checks that each
+                 `caught-by` names a test that exists, against the lists of
+                 tests kept in target/mutate/test-lists.json, which it never
+                 builds: with none that is fresh it says so and skips the names.
+  --tests        With --check: build the tests of the crates the breaks run
+                 (cargo nextest list), keep their lists, and check every
+                 `caught-by` against them. BREAK narrows which breaks' names.
+                 This is the one that builds; at the desk, `rx -- cargo xtask
+                 mutate --check --tests`.
+  --fix-in       With --check: for each break whose `in:` no longer holds its
+                 `find`, print the `in:` of the one item that holds it now.
+                 Refuses to guess when the code is in several items, in none,
+                 or is gone.
+  --write        With --fix-in: rewrite those `in:` lines in the lists, and
+                 nothing else, then check again.
   --list         Print the breaks chosen, and stop.
   --report       Print what is known so far for the tree as it is. Runs nothing.
   --minutes N    Stop starting new work after N minutes, and carry on from
@@ -92,6 +108,13 @@ struct Request {
     compile_check: bool,
     /// How many breaks run at a time.
     jobs: usize,
+    /// `--check --tests`: build the lists of tests that `caught-by` names are
+    /// checked against.
+    tests: bool,
+    /// `--check --fix-in`: offer the `in:` of a break whose item moved.
+    fix_in: bool,
+    /// `--fix-in --write`: rewrite those lines.
+    write: bool,
 }
 
 /// How many breaks run at a time when the run does not say. Two: in wave 9,
@@ -119,6 +142,9 @@ impl Request {
             again: false,
             compile_check: true,
             jobs: JOBS,
+            tests: false,
+            fix_in: false,
+            write: false,
         };
         let mut rest = arguments.iter();
         while let Some(argument) = rest.next() {
@@ -138,6 +164,9 @@ impl Request {
                 "--report" => mode(Mode::Report)?,
                 "--again" => request.again = true,
                 "--no-compile-check" => request.compile_check = false,
+                "--tests" => request.tests = true,
+                "--fix-in" => request.fix_in = true,
+                "--write" => request.write = true,
                 "--jobs" | "-j" => {
                     let text = rest
                         .next()
@@ -176,6 +205,20 @@ impl Request {
                     return Err(format!("unknown option `{option}`\n\n{USAGE}"));
                 }
                 name => request.only.push(name.to_owned()),
+            }
+        }
+        for (given, flag, needs) in [
+            (request.tests, "--tests", "--check"),
+            (request.fix_in, "--fix-in", "--check"),
+            (request.write, "--write", "--fix-in"),
+        ] {
+            let held = if needs == "--check" {
+                request.mode == Mode::Check
+            } else {
+                request.fix_in
+            };
+            if given && !held {
+                return Err(format!("`{flag}` is for use with `{needs}`\n\n{USAGE}"));
             }
         }
         Ok(request)
@@ -229,7 +272,27 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     if request.mode == Mode::Check {
         // The whole list, whatever was chosen: a break that does not apply
         // is wrong whether or not it is run today.
-        report_check(&root, &all)?;
+        let mut all = all;
+        if request.fix_in {
+            let fixes = fix::propose_all(&root, &all);
+            for fix in &fixes {
+                println!("{}\n", fix.describe());
+            }
+            if request.write {
+                let written = fix::write(&root, &fixes)?;
+                if written > 0 {
+                    println!("Rewrote {written} `in:` line(s) in {}/.\n", list::DIRECTORY);
+                    all = list::load_all(&root)?;
+                }
+            }
+        }
+        if request.tests {
+            // The names of the breaks chosen; the rest are checked as ever.
+            let chosen = choose(&all, &request.only)?;
+            report_check(&root, &all, &Names::Built(&chosen))?;
+        } else {
+            report_check(&root, &all, &Names::Kept)?;
+        }
         return Ok(done);
     }
     let chosen = choose(&all, &request.only)?;
@@ -244,7 +307,7 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
         println!("There are no breaks in {}/.", list::DIRECTORY);
         return Ok(done);
     }
-    report_check(&root, &all)?;
+    report_check(&root, &all, &Names::Not)?;
 
     let scratch = scratch_directory(&root)?;
     let mut say = |line: &str| println!("{line}");
@@ -323,31 +386,93 @@ fn choose(all: &[Break], names: &[String]) -> Result<Vec<Break>> {
 }
 
 /// The `breaks` step of `cargo xtask check`: every break of every list
-/// still applies to the tree. It reads the files the breaks name and runs
-/// nothing.
+/// still applies to the tree, and every test a `caught-by` names is one of
+/// the kept lists of tests, where there is a fresh one. It reads the files
+/// the breaks name and runs and builds nothing.
 pub(crate) fn check_breaks_apply() -> Result<()> {
     let root = workspace::root();
     let all = list::load_all(&root)?;
-    report_check(&root, &all)
+    report_check(&root, &all, &Names::Kept)
 }
 
-fn report_check(root: &Path, breaks: &[Break]) -> Result<()> {
-    let problems = check(root, breaks);
+/// How the tests a `caught-by` names are looked for.
+enum Names<'a> {
+    /// Not at all: a run of the breaks finds a wrong name itself.
+    Not,
+    /// In the lists of tests that are kept and fresh. Nothing is built.
+    Kept,
+    /// In lists made now, for the breaks given: `cargo nextest list`, which
+    /// builds the tests of the crates they run.
+    Built(&'a [Break]),
+}
+
+fn report_check(root: &Path, breaks: &[Break], names: &Names<'_>) -> Result<()> {
+    let mut problems = check(root, breaks);
+    let applying = problems.len();
+    let checked = match names {
+        Names::Not => None,
+        Names::Kept => Some(names::check(root, breaks, None)?),
+        Names::Built(chosen) => {
+            crate::checks::require_nextest()?;
+            let mut list = |packages: &[String]| {
+                println!("Listing the tests of {} ...", packages.join(", "));
+                names::nextest_list(root, packages)
+            };
+            Some(names::check(root, chosen, Some(&mut list))?)
+        }
+    };
+    let mut wrong_names = 0;
+    if let Some(checked) = &checked {
+        wrong_names = checked.problems.len();
+        problems.extend(checked.problems.iter().cloned());
+    }
     if problems.is_empty() {
         println!(
             "Every break applies: {} in {}/.",
             breaks.len(),
             list::DIRECTORY
         );
+        if let Some(checked) = &checked {
+            println!("{}", names_said(checked));
+        }
         return Ok(());
     }
     for problem in &problems {
         println!("{problem}\n");
     }
+    if let Some(checked) = checked
+        .as_ref()
+        .filter(|checked| !checked.unchecked.is_empty())
+    {
+        println!("{}", names_said(checked));
+    }
     Err(format!(
-        "{} break(s) do not apply. Nothing was run.",
+        "{} problem(s) in the break lists: {applying} break(s) that do not apply, {wrong_names} \
+         `caught-by` name(s) of tests that do not exist. Nothing was run.",
         problems.len()
     ))
+}
+
+/// What a check of the `caught-by` names covered, in a line.
+fn names_said(checked: &names::Checked) -> String {
+    let missing = checked.unchecked.len();
+    match (checked.names, missing) {
+        (_, 0) => format!(
+            "Every `caught-by` names a test that exists: {} name(s) checked against the lists of \
+             tests kept in target/mutate/test-lists.json.",
+            checked.names
+        ),
+        (0, _) => format!(
+            "The names in `caught-by` were not checked against the tests that exist: no fresh \
+             list of tests for {missing} set(s) of crates. `cargo xtask mutate --check --tests` \
+             builds them."
+        ),
+        (names, _) => format!(
+            "{names} `caught-by` name(s) checked; those of {missing} set(s) of crates were not: \
+             no fresh list of tests ({}). `cargo xtask mutate --check --tests` builds them.",
+            checked.unchecked.join("; ")
+        ),
+    }
 }
 
 /// What is wrong with the breaks, against the tree at `root`: one message
@@ -1262,6 +1387,9 @@ replace: 5
                 again: true,
                 compile_check: false,
                 jobs: 2,
+                tests: false,
+                fix_in: false,
+                write: false,
             }
         );
         assert_eq!(
@@ -1281,6 +1409,24 @@ replace: 5
     }
 
     #[test]
+    fn the_check_takes_the_flags_that_list_the_tests_and_correct_the_in_lines() {
+        let request = Request::parse(&strings(&[
+            "--check", "--tests", "--fix-in", "--write", "step-12",
+        ]))
+        .unwrap();
+
+        assert_eq!(request.mode, Mode::Check);
+        assert!(request.tests && request.fix_in && request.write);
+        assert_eq!(request.only, strings(&["step-12"]));
+        // In any order.
+        assert!(
+            Request::parse(&strings(&["--write", "--fix-in", "--check"]))
+                .unwrap()
+                .write
+        );
+    }
+
+    #[test]
     fn a_request_that_makes_no_sense_is_refused() {
         for (arguments, expected) in [
             (&["--minutes"][..], "needs a number"),
@@ -1289,6 +1435,15 @@ replace: 5
             (&["--minutes", "1e300"], "is not a number of minutes"),
             (&["--check", "--report"], "say one of"),
             (&["--fast"], "unknown option `--fast`"),
+            (&["--tests"], "`--tests` is for use with `--check`"),
+            (
+                &["--list", "--fix-in"],
+                "`--fix-in` is for use with `--check`",
+            ),
+            (
+                &["--check", "--write"],
+                "`--write` is for use with `--fix-in`",
+            ),
         ] {
             let error = Request::parse(&strings(arguments)).unwrap_err();
             assert!(error.contains(expected), "{arguments:?}: {error}");

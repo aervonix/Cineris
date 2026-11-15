@@ -462,6 +462,64 @@ pub(crate) fn names_test(entry: &str, binary: &str, name: &str) -> bool {
     }
 }
 
+/// Whether a `caught-by` entry names the test `id`, which is `<binary>
+/// <name>` as [`crate::junit::TestCase::id`] writes it.
+pub(crate) fn names_id(entry: &str, id: &str) -> bool {
+    id.split_once(' ')
+        .is_some_and(|(binary, name)| names_test(entry, binary, name))
+}
+
+/// The text of a list with the `in:` of the break whose `[break]` is on
+/// line `break_line` (counted from 1) made `anchor`, and nothing else
+/// changed: the line's ending, the break's other lines and every comment
+/// stay as they were. A value written on indented lines after `in:` is
+/// replaced by one on the key's line. `None` when the break has no `in:`.
+pub(crate) fn with_anchor(text: &str, break_line: usize, anchor: &str) -> Option<String> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut rewritten = String::with_capacity(text.len() + anchor.len());
+    let mut done = false;
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index];
+        let inside = index + 1 > break_line;
+        if inside && line.starts_with("[break]") {
+            // The next break's: this one has no `in:`.
+            break;
+        }
+        let is_the_key = inside
+            && !done
+            && !line.starts_with([' ', '\t', '#'])
+            && line
+                .split_once(':')
+                .is_some_and(|(key, _)| key.trim() == "in");
+        if is_the_key {
+            let ending = if line.ends_with("\r\n") {
+                "\r\n"
+            } else if line.ends_with('\n') {
+                "\n"
+            } else {
+                ""
+            };
+            rewritten.push_str(&format!("in: {anchor}{ending}"));
+            done = true;
+            index += 1;
+            while index < lines.len() && lines[index].starts_with([' ', '\t']) {
+                index += 1;
+            }
+            continue;
+        }
+        rewritten.push_str(line);
+        index += 1;
+    }
+    if !done {
+        return None;
+    }
+    for line in &lines[index..] {
+        rewritten.push_str(line);
+    }
+    Some(rewritten)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Break, Expect, names_test, parse};

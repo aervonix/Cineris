@@ -298,3 +298,135 @@ find: if self.pending >= QUEUE / 2 {
 replace: if self.pending >= QUEUE * 4 {
 caught-by:
     cortex-stats synthetic::tests::a_heavy_month_has_every_kind_priced_and_is_made_in_a_moment
+
+# The breaks of the sixth tooling step's `mutate --check`: the names of the
+# tests a `caught-by` names are looked for, and an `in:` that no longer holds
+# its code is corrected. Run `cargo xtask mutate tooling-6`.
+
+[break] caught-by-naming-no-test-passes
+rule: A `caught-by` entry that no test of the listed crates has is refused, with its list, its line and the name.
+file: xtask/src/mutate/names.rs
+in: missing
+find: listed.tests.iter().any(|id| list::names_id(entry, id))
+replace: true
+caught-by:
+    mutate::names::tests::a_caught_by_that_names_no_test_is_refused_with_its_list_line_and_name
+    mutate::names::tests::the_check_alone_reads_a_fresh_list_and_builds_nothing
+
+[break] an-ignored-test-can-catch
+rule: A test marked `#[ignore]` is listed apart, since a run of a break never runs it, so no break is caught by one.
+file: xtask/src/mutate/names.rs
+in: parse_listing
+find: if case.get("ignored").and_then(Value::as_bool) == Some(true) {
+replace: if false {
+caught-by:
+    mutate::names::tests::nextests_list_is_read_with_the_ignored_tests_apart
+    mutate::names::tests::an_ignored_test_is_not_one_that_can_catch
+
+[break] a-stale-list-is-used
+rule: A list of tests made for other code is not used: a test added since would be called missing.
+file: xtask/src/mutate/names.rs
+in: fresh
+find: .filter(|stored| stored.key == key)
+replace: .filter(|_| true)
+caught-by:
+    mutate::names::tests::a_list_made_for_other_code_is_not_used
+
+[break] a-set-of-crates-keeps-the-order-it-was-given
+rule: A set of crates is the same set in any order, as the build is, so one list serves both.
+file: xtask/src/mutate/names.rs
+in: set_name
+find: let set: BTreeSet<&str> = packages.iter().map(String::as_str).collect();
+replace: let set: Vec<&str> = packages.iter().map(String::as_str).collect();
+caught-by:
+    mutate::names::tests::a_set_of_crates_is_the_same_in_any_order
+
+[break] a-test-that-moved-is-not-offered
+rule: A name that no test has is told with the tests of the same last name, which is where a test that moved went.
+file: xtask/src/mutate/names.rs
+in: similar
+find: .filter(|(_, other)| *other == last)
+replace: .filter(|(_, other)| *other != last)
+caught-by:
+    mutate::names::tests::a_test_that_moved_is_offered_by_its_last_name
+
+[break] a-renamed-test-is-not-offered
+rule: A name that no test has is told with the tests whose names hold it or are held by it, which is where a test that was renamed at its start or end went.
+file: xtask/src/mutate/names.rs
+in: similar
+find: other.contains(last) || last.contains(other) || shared >= 16
+replace: false
+caught-by:
+    mutate::names::tests::a_test_renamed_at_its_start_or_end_is_offered_by_the_name_it_kept
+
+[break] tests-flag-without-check
+rule: `--tests`, `--fix-in` and `--write` are for use with `--check` and `--fix-in`, and are refused without.
+file: xtask/src/mutate/mod.rs
+in: Request::parse
+find: request.mode == Mode::Check
+replace: true
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+[break] fix-in-offers-a-name-of-several-items
+rule: An `in:` that is offered names the one item that holds the code, and no other: a name of two items is refused by the pre-flight.
+file: xtask/src/mutate/fix.rs
+in: look
+find: && items.len() == 1
+replace: && items.len() >= 1
+caught-by:
+    mutate::fix::tests::a_name_that_picks_out_two_items_gets_the_one_around_it
+
+[break] fix-in-guesses-among-several-places
+rule: Code that is now in several items is not guessed at: no `in:` is offered, and the places are named.
+file: xtask/src/mutate/fix.rs
+in: look
+find: [only] => only.clone(),
+replace: [only, ..] => only.clone(),
+caught-by:
+    mutate::fix::tests::code_in_several_items_is_not_guessed
+
+[break] fix-in-offers-the-place-of-code-in-no-item
+rule: Code that is in no item has no `in:` to offer, and the message says to leave `in:` out.
+file: xtask/src/mutate/fix.rs
+in: look
+find: if chain.is_empty() {
+replace: if false {
+caught-by:
+    mutate::fix::tests::code_in_no_item_is_told_to_leave_in_out
+
+[break] fix-in-rewrites-from-the-top
+rule: The `in:` lines are rewritten from the end of a list: a value of several lines becomes one, and the lines after it move up.
+file: xtask/src/mutate/fix.rs
+in: write
+find: std::cmp::Reverse(fix.line)
+replace: fix.line
+caught-by:
+    mutate::fix::tests::the_in_lines_are_rewritten_and_nothing_else_is
+
+[break] fix-in-rewrites-the-next-breaks-in
+rule: The `in:` that is rewritten is the one of the break asked for, never the next break's.
+file: xtask/src/mutate/list.rs
+in: with_anchor
+find: if inside && line.starts_with("[break]") {
+replace: if false && inside {
+caught-by:
+    mutate::fix::tests::an_in_is_replaced_in_its_own_break_and_with_its_own_line_ending
+
+[break] fix-in-takes-a-type-for-an-item
+rule: A keyword inside a type (`*const u8`) does not begin an item, so the item that holds a place is the function and not a constant called `u8`.
+file: xtask/src/mutate/lex.rs
+in: begins_an_item
+find: "}" | ";" | "]" | "{" | ")" | "pub" | "unsafe" | "async" | "const" | "extern"
+replace: "}" | ";" | "]" | "{" | ")" | "pub" | "unsafe" | "async" | "const" | "extern" | "*"
+caught-by:
+    mutate::lex::tests::a_keyword_inside_a_type_or_a_signature_does_not_begin_an_item
+
+[break] fix-in-reads-an-impls-where-clause-as-its-type
+rule: An `impl` block is named by the type in its header before a `where` clause, not by a bound after it.
+file: xtask/src/mutate/lex.rs
+in: impl_subject
+find: "{" | "where" | ";" => break,
+replace: "{" | ";" => break,
+caught-by:
+    mutate::lex::tests::the_items_that_hold_a_place_are_named_outermost_first

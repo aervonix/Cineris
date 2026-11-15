@@ -310,20 +310,7 @@ pub(crate) fn locate_with_items(
     // type and a module of the same name), so a match is counted once.
     let mut matches: Vec<usize> = Vec::new();
     for scope in scopes.iter().cloned() {
-        let Some(last_start) = scope.end.checked_sub(wanted.len()) else {
-            continue;
-        };
-        for start in scope.start..=last_start {
-            let here = &all[start..start + wanted.len()];
-            if here
-                .iter()
-                .zip(&wanted)
-                .all(|(token, wanted)| token.text(source) == *wanted)
-                && !splits_an_operator(source, all, start, wanted.len())
-            {
-                matches.push(start);
-            }
-        }
+        matches.extend(match_starts(source, all, &wanted, scope));
     }
     matches.sort_unstable();
     matches.dedup();
@@ -346,6 +333,127 @@ pub(crate) fn locate_with_items(
                 .collect(),
         )),
     }
+}
+
+/// The index of the first token of each match of `wanted` (the texts of a
+/// `find`'s tokens) within the tokens `scope` of `all`, in source order.
+fn match_starts(source: &str, all: &[Token], wanted: &[&str], scope: Range<usize>) -> Vec<usize> {
+    let Some(last_start) = scope.end.checked_sub(wanted.len()) else {
+        return Vec::new();
+    };
+    (scope.start..=last_start)
+        .filter(|&start| {
+            all[start..start + wanted.len()]
+                .iter()
+                .zip(wanted)
+                .all(|(token, wanted)| token.text(source) == *wanted)
+                && !splits_an_operator(source, all, start, wanted.len())
+        })
+        .collect()
+}
+
+/// Where `find` is anywhere in `source`, whatever item it is in: the bytes
+/// of each match, from its first token to its last, in source order. What
+/// `--fix-in` looks for when the item a break names no longer holds it.
+pub(crate) fn find_everywhere(source: &str, all: &[Token], find: &str) -> Vec<Range<usize>> {
+    let wanted = tokens(find);
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let wanted: Vec<&str> = wanted.iter().map(|token| token.text(find)).collect();
+    match_starts(source, all, &wanted, 0..all.len())
+        .into_iter()
+        .map(|start| all[start].start..all[start + wanted.len() - 1].end)
+        .collect()
+}
+
+/// An item that holds a place in the source, and the name an `in:` gives it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Enclosing {
+    /// What `in:` calls the item: a function's, a module's or a type's
+    /// name, and for an `impl` block the type it is for.
+    pub(crate) name: String,
+    /// The line its keyword is on.
+    pub(crate) line: usize,
+}
+
+/// The items that hold byte `at` of `source`, the outermost first: the
+/// module, the `impl` block, the function. An item with no name an `in:`
+/// could use is left out.
+pub(crate) fn enclosing_items(source: &str, all: &[Token], at: usize) -> Vec<Enclosing> {
+    let text = |index: usize| all[index].text(source);
+    let position = all.partition_point(|token| token.start < at);
+    let mut held = Vec::new();
+    for index in 0..position {
+        if !begins_an_item(source, all, index) {
+            continue;
+        }
+        if item_end(source, all, index, all.len()) <= position {
+            continue;
+        }
+        let name = if text(index) == "impl" {
+            impl_subject(source, all, index)
+        } else {
+            let mut after = if text(index) == "macro_rules" { 2 } else { 1 };
+            if text(index) == "static"
+                && all.get(index + 1).map(|token| token.text(source)) == Some("mut")
+            {
+                after = 2;
+            }
+            (index + after < all.len())
+                .then(|| text(index + after))
+                // `const fn name` is the item that begins at `fn`.
+                .filter(|name| {
+                    is_word_start(name) && !matches!(*name, "fn" | "unsafe" | "async" | "extern")
+                })
+                .map(str::to_owned)
+        };
+        if let Some(name) = name {
+            held.push(Enclosing {
+                name,
+                line: line_of(source, all[index].start),
+            });
+        }
+    }
+    held
+}
+
+/// Whether an item begins at token `index`: one of the keywords that begin
+/// an item, with something before it that an item has (or nothing), so that
+/// `*const u8` and `-> impl Display` are not taken for items.
+fn begins_an_item(source: &str, all: &[Token], index: usize) -> bool {
+    let text = |index: usize| all[index].text(source);
+    let keyword = text(index);
+    if keyword != "impl" && !NAMED.contains(&keyword) {
+        return false;
+    }
+    index == 0
+        || matches!(
+            text(index - 1),
+            "}" | ";" | "]" | "{" | ")" | "pub" | "unsafe" | "async" | "const" | "extern"
+        )
+        || text(index - 1).starts_with('"')
+}
+
+/// The type an `impl` block is for: the last name in its header that is not
+/// inside angle brackets (`Budget` in `impl fmt::Debug for Budget` and in
+/// `impl<T> Budget<T> where T: Copy`).
+fn impl_subject(source: &str, all: &[Token], index: usize) -> Option<String> {
+    let text = |index: usize| all[index].text(source);
+    let mut depth = 0usize;
+    let mut subject = None;
+    for at in index + 1..all.len() {
+        match text(at) {
+            "{" | "where" | ";" => break,
+            "<" => depth += 1,
+            ">" if text(at - 1) != "-" => depth = depth.saturating_sub(1),
+            word if depth == 0 && is_word_start(word) && !matches!(word, "for" | "dyn" | "mut") => {
+                subject = Some(word.to_owned());
+            }
+            _ => {}
+        }
+    }
+    subject
 }
 
 /// The items an anchor names (`Round::spawn`), as token ranges: each
@@ -995,6 +1103,65 @@ mod tests {
         let source = "mod a { fn a() -> u8 { 7 } }";
 
         assert_eq!(found(source, Some("a"), "7", None), "7");
+    }
+
+    /// The names of the items that hold the last `here` of `source`.
+    fn held_by(source: &str) -> Vec<String> {
+        let all = tokens(source);
+        let at = source.rfind("here").unwrap();
+        super::enclosing_items(source, &all, at)
+            .into_iter()
+            .map(|item| item.name)
+            .collect()
+    }
+
+    #[test]
+    fn the_items_that_hold_a_place_are_named_outermost_first() {
+        let source = "mod tests {\n    impl<T> Budget<T> where T: Copy {\n        pub(crate) async fn run(&self) {\n            here();\n        }\n    }\n}\n";
+
+        assert_eq!(held_by(source), ["tests", "Budget", "run"]);
+        assert_eq!(
+            held_by("impl fmt::Debug for Budget { fn fmt(&self) { here } }"),
+            ["Budget", "fmt"]
+        );
+        assert_eq!(
+            held_by("const LIMIT: u8 = 1;\nfn after() { here }"),
+            ["after"]
+        );
+    }
+
+    #[test]
+    fn a_keyword_inside_a_type_or_a_signature_does_not_begin_an_item() {
+        // `*const u8` and `-> impl Display` are types, not items.
+        assert_eq!(
+            held_by("fn f(x: *const u8) -> impl Display { here() }"),
+            ["f"]
+        );
+        // `const fn` is the function, not a constant called `fn`.
+        assert_eq!(held_by("pub const fn g() { here }"), ["g"]);
+        // Inside an item that ended, nothing holds the place.
+        assert_eq!(
+            held_by("fn done() {}\nstatic mut COUNT: u8 = 0;\nhere();"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn find_everywhere_reports_every_match_whatever_item_it_is_in() {
+        let source = "fn a() { x == 0 }\nfn b() { y = 0; z = 0 }\n";
+        let all = tokens(source);
+
+        let found = super::find_everywhere(source, &all, "= 0");
+
+        // Not the second half of `==`.
+        assert_eq!(
+            found
+                .iter()
+                .map(|range| line_of(source, range.start))
+                .collect::<Vec<_>>(),
+            [2, 2]
+        );
+        assert!(super::find_everywhere(source, &all, "// nothing").is_empty());
     }
 
     #[test]
