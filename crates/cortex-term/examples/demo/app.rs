@@ -25,6 +25,7 @@
 //! | `quit-after-turn` | Quit when the turn ends. |
 //! | `panic-on=C` | Panic when the key C is typed. |
 //! | `caught-panic-on=C` | When the key C is typed, panic on another thread, catch it there, and go on. |
+//! | `abort-on=C` | Abort the process when the key C is typed, as a failed allocation does. |
 //! | `terminate-on=C` | End the process as SIGTERM or Ctrl+Break would when C is typed. |
 //! | `stats=PATH` | Write the frame and key timings there on exit, as JSON. |
 //!
@@ -101,6 +102,8 @@ pub struct Options {
     pub panic_on: Option<char>,
     /// Panic on another thread on this key, and catch it there.
     pub caught_panic_on: Option<char>,
+    /// Abort the process on this key.
+    pub abort_on: Option<char>,
     /// End the process as a signal would on this key.
     pub terminate_on: Option<char>,
     /// Where to write the timings.
@@ -117,6 +120,7 @@ impl Default for Options {
             quit_after_turn: false,
             panic_on: None,
             caught_panic_on: None,
+            abort_on: None,
             terminate_on: None,
             stats: None,
         }
@@ -150,6 +154,7 @@ impl Options {
                 "quit-after-turn" => options.quit_after_turn = true,
                 "panic-on" => options.panic_on = Some(key()?),
                 "caught-panic-on" => options.caught_panic_on = Some(key()?),
+                "abort-on" => options.abort_on = Some(key()?),
                 "terminate-on" => options.terminate_on = Some(key()?),
                 "stats" => options.stats = Some(value.to_owned()),
                 "" => {}
@@ -463,6 +468,9 @@ pub fn run(options: &Options) -> io::Result<()> {
                 match code {
                     KeyCode::Char(c) if Some(c) == options.panic_on => {
                         panic!("demo panic on request");
+                    }
+                    KeyCode::Char(c) if Some(c) == options.abort_on => {
+                        std::process::abort();
                     }
                     KeyCode::Char(c) if Some(c) == options.caught_panic_on => {
                         // As the core catches a tool's panic: on a thread of

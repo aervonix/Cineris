@@ -21,7 +21,8 @@
 //!   other thread dies of a panic nobody catches learns of it from that
 //!   thread, and leaves the terminal itself (step 23; this closed
 //!   `docs/outstanding/a-caught-panic-leaves-the-terminal.md`).
-//! - **A signal** (SIGTERM, SIGHUP, SIGINT, SIGQUIT) **or a console event**
+//! - **A signal** (SIGTERM, SIGHUP, SIGINT, SIGQUIT, and since step 23
+//!   SIGABRT, which an abort raises) **or a console event**
 //!   (Ctrl+Break, the console closing, logging off, shutting down): a handler
 //!   does the same, and then lets the signal or the event end the process as
 //!   it would have. The handlers replace any installed before them. From then

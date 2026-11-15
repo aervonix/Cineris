@@ -56,7 +56,15 @@ static LEAVING: AtomicBool = AtomicBool::new(false);
 static PREVIOUS: Mutex<Vec<(libc::c_int, libc::sigaction)>> = Mutex::new(Vec::new());
 
 /// The signals that end the program, after which the terminal is put back.
-const ENDING: [libc::c_int; 4] = [libc::SIGTERM, libc::SIGHUP, libc::SIGINT, libc::SIGQUIT];
+/// SIGABRT since step 23: an allocation that failed, or a panic while a
+/// panic unwinds, aborts the process, and no panic hook runs then.
+const ENDING: [libc::c_int; 5] = [
+    libc::SIGTERM,
+    libc::SIGHUP,
+    libc::SIGINT,
+    libc::SIGQUIT,
+    libc::SIGABRT,
+];
 
 fn check(result: libc::c_int) -> io::Result<libc::c_int> {
     if result == -1 {
