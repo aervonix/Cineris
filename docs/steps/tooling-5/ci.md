@@ -1,6 +1,29 @@
 # After the fifth tooling step: tier 2's time on Windows, failure text in stress, edits by script, a rig that cannot hang on a question, and the owner's colours
 
-The pull request's runs are recorded here when it is open.
+This step added tools and test support, a little test-only code in `cortex-term` (two signal helpers behind its `pty` feature) and the owner's colours in `cortex-tui`'s theme. No dependency was added. The tables were made with `cargo xtask ci-times`, the A/B sections written by it.
+
+## On the pull request
+
+<!-- written by cargo xtask ci-times: it replaces this up to the end mark -->
+Pull request 50, on `main` at `9ddbf67`. "Main" is main's own run at `9ddbf67` (run 43639354819).
+The PR's run is 43672945463, at `0ce8622`.
+
+| Job | Main, `9ddbf67` | The PR at `0ce8622` |
+|---|---|---|
+| `lint-linux` | 46 s | 45 s |
+| `test-linux` | 115 s | 77 s |
+| `lint-windows` | 72 s | 76 s |
+| `test-windows` | 213 s | 151 s |
+
+| Time above process start, against the budget | Linux, main (5 ms) | Linux, `0ce8622` (3 ms) | Windows, main (10 ms) | Windows, `0ce8622` (8 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 11.3 s | 5.4 s | 17.8 s | 12.1 s |
+| Tier 2, integration (40 s) | 18.0 s | 9.4 s | 38.3 s | 26.6 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 17.7 s | 13.4 s | 90.3 s | 68.5 s |
+
+<!-- end of what cargo xtask ci-times wrote -->
+
+The two runs were on runners of different speed (start 5 and 3 ms on Linux, 10 and 8 ms on Windows), so the A/B sections below are the comparison. The first run of `test-windows` failed at a flake of `cortex-tools`, which the step did not change, on a loaded runner ([outstanding/a-git-look-too-slow-on-a-loaded-windows-runner.md](../../outstanding/a-git-look-too-slow-on-a-loaded-windows-runner.md)); its rerun passed. The static checks: `rules` 0.7 s and `breaks` 0.3 s at the desk for 867 breaks, as before the step.
 
 ## Windows, both trees on one runner
 
