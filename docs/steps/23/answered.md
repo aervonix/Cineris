@@ -14,3 +14,266 @@ Step 23 builds the interactive application: `cortex` with no `-p` opens the term
 | **Changing a file over the undo limit** (the open item `files-over-the-undo-limit`, closed here). | **The refusal stays,** and the item is closed: asking would let `edit` and `write` hold a file of any size in memory, and 16 MiB is their memory bound too. | [architecture/05-tools.md](../../architecture/05-tools.md), "Checkpoints" |
 | **The zero-width joiner and non-joiner** in drawn text, which the new escape in `sanitize` could have written as escapes. | **Kept in drawn text:** they join emoji sequences and shape Persian and the Indic scripts. A line is added to [names-that-escape-to-the-same-text](../../outstanding/names-that-escape-to-the-same-text.md): two names that differ only by a joiner or a non-joiner look alike. | [architecture/09-tui.md](../../architecture/09-tui.md), "Sanitising" |
 | **A summary running past its turn** ([outstanding item](../../outstanding/a-background-summary-past-its-turn-cannot-be-interrupted.md)). The interface offers no interrupt between turns, and step 27's "Must not change" is the core's behaviour. | **Moved to step 32,** with the reason in the item. | The item |
+
+## Open items settled
+
+Beside the owner's items above, which the table closes:
+
+| Item | Settled | Recorded in |
+|---|---|---|
+| `the-input-box-while-a-turn-runs` | **Closed:** the empty box says `Type to steer this turn` while a turn runs, and holds only its `◆` while a box or a panel has the focus (screens 1b to 1d, and 4). | [architecture/09-tui.md](../../architecture/09-tui.md), "The application as built (step 23)" |
+| `names-a-client-shows-as-they-are` | **Closed:** `cortex-term`'s `sanitize`, through which every view draws text from outside, writes every character that acts unseen and is not a control as an escape, keeping the two joiners. Approval details, the rules an answer would add, the undo and assembly notices and errors are all drawn through it; data stays exact. | [architecture/09-tui.md](../../architecture/09-tui.md), "Sanitising" |
+| `a-caught-panic-leaves-the-terminal` | **Closed:** the terminal layer's panic hook puts the terminal back only for a panic on the thread that entered it. A system test panics on another thread, catches it, and the demo goes on drawing in raw mode. | [architecture/09-tui.md](../../architecture/09-tui.md), "The application as built (step 23)" |
+
+## The design, before building (reviewed)
+
+The six points the step's prompt asked to settle before building widely, each with the choice made, what it changes outside `cortex-tui` and `cortex-cli`, and where it departs from a page of `docs/`. Written against `main` at `d050503` as a note of its own, revised after its independent review (the findings are at the end, with what each changed), and folded in here before the first pull request. The owner's answers to it are the table above; where they changed it (trust's third answer), the table wins.
+
+### 1. Where the application lives
+
+**In `cortex-tui`, as a module `app`,** with the loop, the state and the mapping of events, talking to the core only in `cortex-protocol`'s types through a small trait. `cortex-cli` makes the core, its thread and runtime, the terminal and the history store, and hands them in. `cortex-tui` keeps its three dependencies (`cortex-protocol`, `cortex-base`, `cortex-term`); no edge is added to [01-workspace.md](../../architecture/01-workspace.md).
+
+```rust
+// cortex_tui::app
+pub trait Link: Send {
+    /// Queues an operation. Never waits: its result comes back from `next`.
+    fn send(&mut self, op: Op) -> Ticket;
+    /// Answers a request the core put to this client. Never waits.
+    fn respond(&mut self, request: RequestId, response: ServerResponse);
+    /// What has arrived, oldest first. Never waits.
+    fn next(&mut self) -> Option<Inbound>;
+}
+
+pub enum Inbound {
+    Event(SessionEvent),
+    Request(RequestId, ServerRequest),
+    Done(Ticket, Result<OpResult, ErrorData>),
+    /// The core is gone (its thread ended, or the connection closed).
+    Gone(ErrorData),
+}
+```
+
+**What crosses the boundary:** `Op` and `OpResult` (or `ErrorData`), `SessionEvent`, `RequestId` with `ServerRequest` and `ServerResponse`. Nothing else: no `Core`, no `Outgoing`, no configuration type. The link is given the terminal's `Waker` and calls it when something arrives. **What stays on the client's side,** because it is the person's and not the session's: the `[tui]`, `[keys]` and `[terminal]` settings (read by the binary and handed in), the prompt history (`HistoryStore`, step 21), the external editor, the clipboard.
+
+**The in-process link** is `cortex-cli`'s (`interactive.rs`): a channel of operations to the core thread, where one task calls `Core::handle` for each in order; results back through a small queue; `Core::respond` called on the interface's thread, since it takes a lock and sends on a channel and never waits on a disk; events read straight from the client's `EventQueue` with `try_next`, so that its merging and its `item.resync` keep working for a client that is behind (an open external editor while a turn streams). Step 27's `attach` is a second implementation of `Link` over the RPC connection, and drives the same application.
+
+**Order of operations.** Every operation that changes the session (`turn/start`, `turn/interrupt`, `session/set`, `session/compact`, `session/rewind`, `session/undo`, `session/new`, `session/open`, `session/close`) runs in one lane, in the order sent: an interrupt cannot overtake the prompt it is meant to stop. Reads (`session/list`, `session/read`, `models/list`, `config/get`, `permissions/list`, `workspace/files`) run on tasks of their own beside it. `shutdown` runs outside the lane, so a lane stuck behind an open cannot hold the end of the program.
+
+**Departure from [02-runtime.md](../../architecture/02-runtime.md):** the ops channel from the interface to the core thread is **unbounded** ("bounded MPSC (64); the front end waits" there). The interface must never wait on the core thread, and every operation is caused by a person's key, so the queue is bounded by typing; a bounded channel would only move the queue into the interface. 02-runtime's table is changed in the same change.
+
+**Changes this needs outside the two crates:** `cortex-core`'s `EventQueue` calls a hook when it goes from empty to not empty and when it closes (the link's waker), one call a burst; and `CoreOptions` takes the user's configuration the binary already loaded, so that it is not read twice.
+
+### 2. The threads and the loop
+
+| Thread | Owns | Wakes the interface by |
+|---|---|---|
+| **Main: the interface** | `Terminal`, `Inline`, `Scheduler`, `Input`, `Transcript`, the dialogs, the app's state | (blocks in `Terminal::next(timeout)`) |
+| **Core** | a current-thread Tokio runtime, timer and I/O on, and the `Core` | the link's waker: an event queue that stops being empty, an op's result |
+| The core's blocking pool | session reads, rewinds, the file listing for `@`, trust and approval files | (through the core thread) |
+| Highlighter (step 22) | the grammars and each block's state | its waker, which is the terminal's |
+| File filter (new, only past 20,000 paths) | the `@` candidates of a large workspace | the terminal's waker, with the query's generation |
+| History (new, client side) | the project's history file | the terminal's waker, once loaded |
+| Log writer (`cortex-base`) | the log file | nothing |
+
+**One wake of the loop:**
+1. Take every terminal event already read (keys, pastes, resizes), each through `Input` or the open dialog.
+2. **If a key or a paste arrived, draw its frame now,** before anything from the core is looked at.
+3. Then the inbox, in its order (requests are queued with the events, and are taken in turn): at most 1 ms of it, looking for terminal input every 64 events and going back to step 1 when there is some. What is left stays in the core's queue, where deltas merge, and a stream frame is asked for.
+4. Draw if the scheduler says so: input-driven frames at once, stream-driven ones at most 60 a second.
+
+So a key's frame waits for the key's own handling, at most one batch of 64 events, and one frame, never for the core, a disk or the network: the interface thread makes no call that can wait on any of them (ops are queued, `Core::respond` takes a lock held only to change a table, the history is another thread's, the file list is the core's pool's, the highlighter's colours are taken when ready, the file filter's rows a frame later).
+
+**Idle** is no turn running, nothing animating, no highlight or filter outstanding: the scheduler says `Idle`, and the thread blocks in `poll`/`WaitForMultipleObjectsEx` with no time limit. The core thread's runtime is parked with no timer (02-runtime: an idle session has none), and the workers wait on their channels. **No timer is set for "a while":** the hint row's cost after a turn lasts until the next prompt, and the armed quit until the next key (step 21's rule; 02-runtime's "within 1 s: quit" is changed to it). The second interrupt's window (2 s, from 02-runtime's table) is a comparison of two key times, not a timer. **Departure from 09-tui** ("the turn's cost and the session's, for a while"): until the next prompt instead.
+
+**Order on the way in.**
+- While the app's `session/new` or `session/open` is outstanding, that session's events are held back in the app (an assembly sends a handful), so that the header (from the result) is the first block and the notices of its assembly come after it. Requests are not held: the trust question arrives while the open is outstanding.
+- **A prompt sent before the session is open is held** and sent when the open returns, the session's first; so is a prompt given on the command line (`cortex "fix the build"` at a terminal), which is sent as soon as the session is open.
+- **`set_running(true)` on submit,** not on `turn.started`, so that `Esc` straight after `Enter` interrupts the turn it started; it is set back when the prompt is refused or the turn completes.
+- **`item.resync`:** the item's deltas stop until it completes; the completed item's text past what arrived is then added, so an answer never loses its middle.
+- **A resumed session's history** is read with `session/read` and drawn into the scrollback; a live event with a `seq` at or below the read's `seq` is dropped.
+
+**Dialogs take only keys meant for them.** A dialog that appears while the person is typing (the trust question arrives just after the first frame; an approval while a steering message is being written) must not take that typing as its answer. A dialog takes keys read after its first frame was written and 300 ms more (a comparison of the key's time with the frame's, no timer); earlier keys go on into the editor, where they were going. A paste never answers a dialog.
+
+### 3. The question and trust dialogs
+
+Both are a change to what the core does. **Proposed, not built yet.**
+
+**`Core::respond` takes all three answers.** The open-request table in `clients` holds a `ServerRequest` and a sender of `ServerResponse`; an answer of the wrong kind for the request is refused (`request_not_open`), as an answer to a request that is not open is now. Only a `user` client that was asked may answer, as for approvals.
+
+**A wait for an answer never hangs.** Today an approval whose askers have all gone waits for another to join ([06-permissions-and-sandbox.md](../../architecture/06-permissions-and-sandbox.md), as built in step 13a). That is right for a session that is running, which another client can open; a session still being put together, or a rewind under way, has nobody who can join. So the trust and rewind questions are raced against the asking client's queue closing and the core's cancel token: either ends the wait as "no answer".
+
+#### Trust
+
+**Asked when a session opens** (`session/new`, `session/open` of a stored session, `session/fork`) and all of these hold:
+- the client that opens it declared `trust` (the TUI does; headless does not, and nothing changes for it);
+- the project is not trusted, or is trusted with its rules changed since;
+- `--trust-project` was not given.
+
+That is [06-permissions-and-sandbox.md](../../architecture/06-permissions-and-sandbox.md)'s "opening a project for the first time asks one question": every project, with or without a `.cortex/` folder, since trust also lets git read the repository's own configuration (`repository_trusted`: the base state, git's record of what a command changed, `git status` as a read). The request lists what trust turns on, each a `TrustResource`:
+- **git**, as a new kind `repository`, with what it allows;
+- **each of the project's rules** (`rules`; `changed` when they changed since trust), every rule of its files and of every profile they define (point 6);
+- **each setting held back**, as a new kind `settings`: the key, its value, and what it raises or widens.
+
+`repository` and `settings` are new values of an open enumeration that only informs: additions, with a schema diff, and no new protocol version. A project trusted with its rules changed is asked about the rules only.
+
+**What the core does with the answer.**
+- **Yes:** it pins **the definition it showed**, not the files as they are when the answer comes (a `git pull` or another session may change `.cortex/config.toml` while the dialog is open), with the same function `cortex permissions trust` uses. The session is then put together trusted, and a change made meanwhile reads as "rules changed", as at any start.
+- **No, no answer, or a client that went away:** the session is put together untrusted, as today. The core does not ask again about that project for the rest of its life (a `/new` in the same run is not asked twice). Nothing is written, so the next start asks again.
+- The session's assembly is split at that point: the trust look (on the blocking pool), the question (awaited on the core thread, the open waiting on it), then the rest of the assembly, which loads the configuration again only when the answer was yes.
+
+**In the TUI** it is shown in place of the input box: `? Trust this project?`, the folder, then each resource in full, and `y Trust it   n Not now`; `Esc` is not now.
+
+**Tests,** in `cortex-core` (tier 2):
+- a user client is asked, and its yes pins and loads trusted;
+- a no loads untrusted, and the next `session/new` of the same core does not ask;
+- a project whose rules changed is asked about its rules, with `changed`;
+- a change to the rules while the question is open is not pinned;
+- a headless client is never asked;
+- a client that disconnects while asked gets no session, and the core's lane goes on.
+
+In the TUI: the dialog against a scripted link, and one end-to-end run where a project's `.cortex/config.toml` sets a model, the dialog shows it, `y` is pressed, and the header shows the project's model.
+
+#### The question
+
+**Asked by an undo or a rewind when a file was changed since the harness left it.** [07-sessions-and-context.md](../../architecture/07-sessions-and-context.md) says a restore "does not overwrite something the user has edited since unless the user says so", and `cortex-session` already takes that answer (`Restore::overwrite_edited`), but nothing asks it: today such a file is reported as not put back.
+
+- **The ask.** With a client that declared `questions`, the core plans the rewind, and if the plan names files edited since, asks one `question/ask`: "These files were changed after the turn that changed them: `a.rs`, `b.rs`. Put them back as they were before that turn, losing those changes?", with the choices `Put them back` and `Keep them as they are`.
+- **The answer.** The first rewinds with `overwrite_edited` set to those names. The second, no answer, or a client that cannot be asked rewinds as today.
+- **No turn starts meanwhile:** the history change is held across the question.
+- **The test** is the `/undo` end-to-end test's second half: the user edits the file the turn changed, `/undo`, the dialog, `Put them back`, and the file is as it was before the turn.
+
+**Alternative, if the owner does not want the rewind question:** the question dialog is built and tested against a scripted link only, `respond` takes question answers, and its first sender is step 28 (the `tool.before` hook's "ask the user").
+
+#### Esc, Ctrl+C and a question
+
+09-tui says `esc denies`; 02-runtime's table says the first interrupt with an approval pending denies it and stops the turn. Both hold, on two keys:
+- **`Esc` answers the dialog:** an approval denied (the call gets an error result and the round goes on), trust not now, a question unanswered.
+- **`Ctrl+C` interrupts the turn,** which withdraws the open question (`request.resolved`, `cancelled`).
+
+Since the TUI can stop the turn from a question, the policy must say so ([03-agent-loop.md](../../architecture/03-agent-loop.md), "Approve", names step 23 for it): `Policy::answers_may_stop` becomes true for a core whose front end can stop the turn from a question (a new `CoreOptions` flag that interactive mode sets). With it, no call with side effects that the model wrote after the asked call starts while the question is open; calls that only read still run. That is slower when several calls ask, and never wrong. Its cost is measured in the step.
+
+### 4. The slash commands this step ships
+
+| Ships here | Through |
+|---|---|
+| `/help` | a block listing the commands and the keys, from `ACTIONS` |
+| `/new` | `session/close`, then `session/new` |
+| `/sessions` | the picker over `session/list` (resume, switch). Fork is step 25's |
+| `/undo` | **`session/undo`**, a new method: `cortex-session`'s `Session::plan_undo`, which steps back before the last turn, its first turn included, records the rewind as an undo (which the corrections-as-evaluations step reads), and puts files back. `session/rewind` takes the last item to keep, so it cannot undo a first turn, and finding the item would read the whole log |
+| `/model`, `/effort` | pickers over `models/list` and the model's levels, sending `session/set`; `/effort` has the fast-mode toggle (`Tab`, `tab - fast mode`) only when the model offers a fast speed, and the toggle sends `session/set` with the speed |
+| `/mode` | a picker of the levels, `session/set` |
+| `/permissions` | `permissions/list` in a picker; a new picker action, `picker.remove` (`Delete`), removes the selected one (`permissions/revoke`) |
+| `/compact [focus]` | `session/compact`. Offered by itself (the hint row and an error's next step) where a turn ends with `compaction_needed` |
+| `/status` | a block: provider, model, effort, speed, level, sandbox, the limits in force, session id, workspace; MCP and extensions say "none" until their steps |
+| `/view [n]` | the viewer |
+| `/copy` | the last answer, through the terminal's clipboard sequence (OSC 52), an addition to `cortex-term` |
+| `/config` | the effective configuration from `config/get`, without where each value came from (that needs a field the protocol lacks: an item) |
+| `/theme` | a picker of the built-in themes (`auto`, `dark`, `light`) for the run |
+| `/quit` | quits |
+
+**Owned by later steps, not shipped:** `/context`, `/usage`, `/plan`, `/project`, `/profile`, `/verify`, `/reload` (24); `/rewind` and fork (25); `/extend` (29); `/lease` (after the release).
+
+**Listed in 09-tui with no step, each filed as an open item:** `/mcp` (recommend step 30), `/extensions` (recommend step 28), `/export` (recommend step 32), and `/config`'s provenance.
+
+**The command line in interactive mode.** `--resume`, `--continue`, `--fork`, `--model`, `--effort`, `--speed`, `--permission-mode`, `--profile`, `-c`, `--allow`, `--deny`, `--trust-project`, `--system-append`, `--log-level` and a prompt given as words are honoured as headless honours them; `--no-session` opens an ephemeral session. The headless-only flags (`--output`, `--include-deltas`, `--fail-on-denial`, `--quiet`) are refused with a usage error, exit 2, and a sentence saying they are for `-p`.
+
+### 5. The cut into two pull requests
+
+**PR 1, `worktree-step-23-loop`:**
+- `cortex_tui::app`: the loop, the `Link` trait, the state; the mapping of every event in 09-tui's table onto the transcript; the hint row from the session's state;
+- the input wired: submit, steer, queue, interrupt and the second interrupt, `set_running`, `set_width`, `Ctrl+T` and the live boxes in the focus ring, `Ctrl+L`, `Ctrl+C` and `Ctrl+D`, `global.suspend` to `Terminal::suspend` and `Inline::restart`;
+- the approval dialog (with the leave-the-sandbox form), answered through `Core::respond`, closed by `request.resolved`, with the dialog's own keys in a new `dialog` context of `ACTIONS` (and `[keys] dialog`);
+- `[tui]`, `[keys]` and `[terminal]` declared in `cortex-config` (done), `KeyMap::with_table` with each `TableError` as a notice, `Look::hyperlinks` from the terminal;
+- interactive mode in `cortex-cli`: the log (file only), the core thread, the in-process link, the start-up order below, `--resume` and `--continue` opening a session (without the history drawn: PR 2), the held prompt;
+- `cortex-term`: the panic hook (done); `sanitize` escapes what acts unseen (point 6); SIGABRT in the emergency set; a crash report, written by the binary's own panic hook to the log directory with a backtrace, and its one-line pointer printed after the terminal is put back (02-runtime specifies it; nothing builds it yet);
+- the core's `answers_may_stop` for the TUI;
+- the pseudo-terminal harness for the real binary on both OSes, with phase timings, and the end-to-end tests of a full turn with tools, an approval, an interruption mid-stream and mid-tool, a steer and a queue;
+- the first `try` measurements of start to first frame.
+
+**PR 2:** the trust and question dialogs with their core changes; `session/undo`; the other slash commands and pickers; the viewer (`cortex-term` gains the alternate screen, which its emergency restore leaves too, only while it is on); history (with a setter on `Input`, `set_history`, since it is filled after the first frame); `@` files (`workspace/files`) with the filter off the key's path (an `Input` hook to hand the query out and take the rows back); the external editor, with the session's write roots in `Env::avoid` (a new field of the session's state); resume with its history drawn, and undo, end to end; signals and a graceful end; `config/reload`; the remaining golden rows (2a, 2b, 8a, 8b, the placeholders); the budgets measured; the records.
+
+**Start-up order** (15-efficiency's "open the session after the first frame"):
+1. Parse the arguments.
+2. Read the configuration: the user's layers, the profile and `-c`. `[terminal]`, `[tui]`, `[keys]` and `log.level` come from it, and every key of those is user-only.
+3. Start the log.
+4. `Core::start`, given that configuration, on the main thread: it opens nothing more than headless does before its first request, and an invalid catalog stops the program before the terminal is touched, exit 2, as headless does.
+5. Move the core to its thread.
+6. Enter the terminal with the overrides, and draw the first frame: the input box and the hint row.
+7. Only then send `session/new` or `session/open`.
+
+An open that fails (`day_limit_needs_stats`, a session locked elsewhere) is an error block with its next step, and the app stays up: `/new` and `/sessions` still work. Unreadable statistics at start (`stats_newer`, a file set aside) are a notice, and the error codes `day_limit_needs_stats`, `stats_newer` and `unknown_value` have sentences of their own.
+
+### 6. The open items naming step 23
+
+| Item | What this step does | Why |
+|---|---|---|
+| `the-input-box-while-a-turn-runs` | **Closes:** `Type to steer this turn` while a turn runs, nothing while a box or panel has the focus | The input knows both states |
+| `names-a-client-shows-as-they-are` | **Closes, in `cortex-term`'s `sanitize`:** besides drawing each control character as a symbol, it writes every other character that acts unseen (`cortex_base::acts_unseen`: the bidirectional controls, the characters of no width, the tag characters, the line and paragraph separators) as `\u{…}`, with `cortex_base::visible`'s rule for variation selectors. Text is escaped once, when it is drawn, and stays exact as data (`adds`, the `@` paths put in a prompt, ids, configuration values). Every view, menu and picker row, the approval's details and the undo and assembly notices already pass `sanitize`. **The zero-width joiner and non-joiner are kept** in what is drawn: they join an emoji sequence and shape Persian and the Indic scripts, and they can neither reorder text nor hide any. **The owner's to confirm** | One place, at the point of drawing; `cortex-term` already depends on `cortex-base` |
+| `config-reload-through-the-core` | **Closes,** in PR 2: `config/reload` checks the files again (the old configuration stays on error), **judges trust again** (a trusted project that adds an allow rule has its rules set aside, as at a start), applies the keys marked `Now` to each open session (the engine's rules through a new engine as `session/set` makes one, the limits, the retry policy, the log's level, and `stats.retention` and the `[usage]` keys, which step 16 asked for), applies the `NextEpoch` keys when the session's next epoch begins and lists them as `pending` until then, and lists the `Restart` keys as `pending` with a sentence. `/reload` stays step 24's | The item names it; step 24 needs it |
+| `continue-chooses-the-newest-session` | **Closes:** `session/list` orders by `updated_at`, newest first (a change to `cortex-core`'s list, as the item says); `--continue` and the picker take that order | One order for both |
+| `files-over-the-undo-limit` | **Recommendation: keep the refusal, and close the item with that answer.** Asking would let `edit` and `write` read and match a file of any size in memory (16 MiB is also their memory bound), against the memory budgets; the model is told why, and a shell command's change to such a file is detected and listed as one an undo cannot put back. **The owner's call** | Asking costs more than it gives |
+| `file-completion-on-a-large-workspace` | **Closes:** past 20,000 paths the filter runs on a thread of its own; the key's echo is drawn first and the menu's rows a frame later, a result for a query that is no longer the text's dropped | The item's recommendation |
+| `signals-and-a-graceful-shutdown` | **Closes,** in PR 2. See below | The item asks for three decisions |
+| `log-level-from-configuration-in-headless-mode` | **Closes both halves:** the binary reads `log.level` from the user's configuration before the log starts, in both modes (`--log-level` and `CORTEX_LOG` still rank above it), and hands the same load to `Core::start`, which no longer reads it again | One load for both, which costs headless nothing |
+| `reading-a-key-at-a-terminal` | **Closes,** in PR 2 if the time allows: `cortex auth login` at a terminal reads the key with echo off through `cortex-term`, reached through a small function in `cortex-tui` | It needs only the terminal layer |
+| `a-background-summary-past-its-turn-cannot-be-interrupted` | **Leaves it, and recommends step 32:** the TUI offers no interrupt between turns (`Esc` and `Ctrl+C` idle are the editor's), and quitting ends the session, which stops the summary. Step 27 cannot take it either: its "Must not change" is the core's behaviour | Neither front end offers an interrupt between turns |
+| `session-compact-after-a-turns-last-request` | **Closes:** at the end of a turn with a compaction pending, the loop runs a turn that only compacts, as an idle session's `session/compact` does, and `docs/protocol/` says so | `/compact` is offered during a turn |
+| `terminal-test-gaps` | **Does its half:** the real binary under a pseudo-terminal restored after exit, a panic and each of SIGTERM, SIGHUP, SIGINT and SIGQUIT one by one (Linux), and a panic on another thread (done, in `cortex-term`) | The presenter's generated scripts and the stop under a shell with job control stay |
+| `ambiguous-width-glyphs` | **Recommendation: leave it,** and document `tui.glyphs = "ascii"` for a terminal set to draw them wide (done in the reference). Most terminals in a CJK locale draw them narrow by default, so choosing ASCII by locale would take the look from the many for the few | **The owner's** |
+| `highlighting-the-line-in-progress` | **Recommendation: leave it plain until it ends,** as built: a row that changes colour as it grows (an opening quote) is worse than a plain one, and colouring it costs a round trip to the worker each frame | **The owner's** |
+| `trust-of-a-profile-a-project-defines` | **Recommendation: one pin of every rule the project's files hold, in their base and in every profile they define,** compared the same way at every start whichever profile is selected; the trust dialog and `permissions trust` show each rule with the profile it is in. One question, and `--profile review` works after it | **The owner's** |
+| `the-default-editor-on-windows-11`, the folder half | **Builds:** a folder that cannot be removed is tried again when the app ends, and one still there is named on standard error after the terminal is left. **Checked by hand:** on Windows, `Ctrl+G` with `code --wait` or an editor whose helper holds the file; quit; the message names the folder | The other half is answered |
+| `key-latency-over-conpty` | **Measures** the harness's own share with the real application on a hosted Windows runner, as the item recommends, and records the console's part beside it; the decision stays the owner's | Due before this step |
+
+**Also closed:** `a-caught-panic-leaves-the-terminal` (done: the hook puts the terminal back only for a panic on the thread that entered it, and a system test shows the demo still drawing after a panic caught on another thread).
+
+#### Signals, a failed write and a panic
+
+- **SIGTERM, SIGHUP, SIGINT and SIGQUIT** (Ctrl+Break, the console's close, log-off and shutdown on Windows):
+  - the layer puts the terminal back at once, as now, and then hands the signal to the app instead of ending the process: the handler wakes the loop through the waker's pipe;
+  - **the watchdog is armed in the handler itself:** `alarm(3)` on Unix, whose default action ends the process; on Windows the handler's thread waits up to 3 s for the app to end, since Windows ends the process when the handler returns from a close, log-off or shutdown event;
+  - the app interrupts the turn with `now`, runs `Core::shutdown` (at most 2 s) and exits 143, 129, 130 or 131.
+  - While the external editor has the terminal, the interface thread is waiting for it: the watchdog ends the process, and the editor has the signal from its terminal too.
+- **SIGABRT** (an allocation that failed, a panic while panicking) joins the emergency set: the terminal is put back, and the default action ends the process.
+- **A failed write** after an emergency ends the app the same way.
+- **A panic** is judged by the thread it ends, since a hook cannot tell a caught panic from one that is not:
+  - the interface's own puts the terminal back (the hook);
+  - the core thread's ends the app: its link reports `Gone`, the app leaves the terminal, prints the crash report's one line, and exits 1;
+  - the highlighter's turns highlighting off, which step 22 built it to survive;
+  - any other thread's is in the log.
+
+### What changes outside `cortex-tui` and `cortex-cli`
+
+| Where | Change | Kind |
+|---|---|---|
+| Protocol | `workspace/files` (session, limit): the workspace's paths with the ignore rules, newest change first, at most 100,000, listed on the blocking pool by `cortex-tools`' walk; `@` needs them listed "by the core" (step 21), and over RPC the workspace is the server's | New method |
+| Protocol | `session/undo` (session, `restore_files`): `Session::plan_undo` | New method |
+| Protocol | `TrustResourceKind::Repository` and `Settings` | New values of an open enumeration |
+| Protocol | `SessionState::write_roots`: the roots the session's commands may write, for the external editor's `Env::avoid` | New optional field |
+| Protocol | `session/list` ordered by `updated_at`; `session/compact` at a turn's last request runs a compact-only turn after it; `session/rewind` and `session/undo` may ask a question | Behaviour, said in `docs/protocol/` |
+| `cortex-core` | `Core::respond` takes question and trust answers; the trust question at open; the rewind's question; `config/reload`; `EventQueue`'s wake hook; `CoreOptions` takes the loaded configuration and the TUI's `answers_may_stop` | API additions and behaviour |
+| `cortex-agent` | The compact-only turn after a turn whose last request had a compaction pending | Behaviour |
+| `cortex-config` | `[tui]`, `[keys]`, `[terminal]` declared (done) | Schema, reference regenerated |
+| `cortex-term` | The panic hook's thread (done); `sanitize` escapes what acts unseen; the signal hand-off and its watchdog; SIGABRT; the alternate screen; the clipboard sequence | Public API additions and behaviour, recorded in 09-tui |
+
+### The review of this note
+
+An independent reviewer read the first version against the specification and the code. Its findings, and what each changed above:
+
+| Finding | Changed |
+|---|---|
+| Keys typed before a dialog appeared could answer it | Dialogs take only keys read after their first frame and 300 ms more; a paste never answers (point 2) |
+| A yes pinned the files as they were at the answer, not what was shown | The shown definition is pinned (point 3) |
+| Trust was asked only when `.cortex/` held something, which left repository trust unasked against 06 | Every untrusted project is asked, with git listed (point 3) |
+| `Esc` and `Ctrl+C` in a dialog, and `answers_may_stop`, were not decided | Decided (point 3) |
+| The watchdog's place, Windows' close events, SIGQUIT's code, SIGABRT, and per-thread panics | Decided (point 6, signals) |
+| A prompt before the session opened, `Esc` straight after `Enter`, an interrupt overtaking its prompt | Held prompts, running on submit, one ordered lane (points 1 and 2) |
+| Kept ops were sent only at the next key | The channel is unbounded (point 1) |
+| A false claim that `cortex-term` cannot reach `cortex-base`; escaping at the boundary would damage data, `\r` and joiners | Escaping moves into `sanitize` (point 6) |
+| `config/reload` did not judge trust again; `NextEpoch` keys were only listed | Both fixed (point 6) |
+| Waits for a trust or rewind answer could hang the lane | Raced against the client's queue and the cancel token; `shutdown` outside the lane (points 1 and 3) |
+| `/undo` could not undo a first turn and read the whole log | `session/undo` (point 4) |
+| `item.resync` and a resume's duplicate events were not handled | Both handled (point 2) |
+| The external editor could not be given the write roots | `SessionState::write_roots` (point 5) |
+| Omissions: `/compact` on `compaction_needed`, error wording, the statistics notice, suspend, hyperlinks, `request.resolved`, `Input`'s setters, the remove action, `/status`'s limits, the interactive flags, the crash report, `key-latency-over-conpty`, the quit window, step 27's "Must not change" | Each added where it belongs |
+| Load the configuration once; the 4 ms slice was the whole streaming key budget; requests share the events' queue; the alternate screen in an emergency | One load; a 1 ms slice in batches of 64; taken in order; only while it is on |

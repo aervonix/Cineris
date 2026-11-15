@@ -1,6 +1,6 @@
 //! The application's one way to the core: operations out, events, requests
 //! and results in, in `cortex-protocol`'s types and nothing else
-//! (`docs/steps/23/design.md`, point 1).
+//! (`docs/steps/23/answered.md`, point 1).
 //!
 //! The binary's in-process link runs the core on a thread of its own and
 //! calls `cortex_core::Core::handle` there; step 27's `attach` is a second
