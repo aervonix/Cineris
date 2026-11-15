@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="9" skipped="0" failures="5" errors="0" uuid="a515ba2a-7e50-468d-b064-2b383260e261" timestamp="2026-11-15T01:27:48.020+00:00" time="0.012">
+    <testsuite name="jx@stress-0" tests="3" skipped="0" errors="0" failures="2">
+        <testcase name="tests::panics_plain" classname="jx" timestamp="2026-11-15T01:27:48.020+00:00" time="0.003">
+            <failure message="thread &apos;tests::panics_plain&apos; (1693601) panicked at src/lib.rs:19:9" type="test failure with exit code 101">thread &apos;tests::panics_plain&apos; (1693601) panicked at src/lib.rs:19:9:
+plain panic with &lt;xml&gt; &amp; &quot;quotes&quot;
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</failure>
+            <system-out>
+running 1 test
+test tests::panics_plain ... FAILED
+
+failures:
+
+failures:
+    tests::panics_plain
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>
+thread &apos;tests::panics_plain&apos; (1693601) panicked at src/lib.rs:19:9:
+plain panic with &lt;xml&gt; &amp; &quot;quotes&quot;
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</system-err>
+        </testcase>
+        <testcase name="tests::ok" classname="jx" timestamp="2026-11-15T01:27:48.020+00:00" time="0.004"/>
+        <testcase name="tests::flaky" classname="jx" timestamp="2026-11-15T01:27:48.020+00:00" time="0.004">
+            <failure message="thread &apos;tests::flaky&apos; (1693602) panicked at src/lib.rs:11:9" type="test failure with exit code 101">thread &apos;tests::flaky&apos; (1693602) panicked at src/lib.rs:11:9:
+assertion `left == right` failed: the repeat was even: 0
+with a second line
+and a third
+and a fourth
+and a fifth
+and a sixth
+and a seventh
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</failure>
+            <system-out>
+running 1 test
+stdout line
+test tests::flaky ... FAILED
+
+failures:
+
+failures:
+    tests::flaky
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>some stderr line
+second stderr
+
+thread &apos;tests::flaky&apos; (1693602) panicked at src/lib.rs:11:9:
+assertion `left == right` failed: the repeat was even: 0
+with a second line
+and a third
+and a fourth
+and a fifth
+and a sixth
+and a seventh
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</system-err>
+        </testcase>
+    </testsuite>
+    <testsuite name="jx@stress-1" tests="3" skipped="0" errors="0" failures="1">
+        <testcase name="tests::ok" classname="jx" timestamp="2026-11-15T01:27:48.024+00:00" time="0.003"/>
+        <testcase name="tests::panics_plain" classname="jx" timestamp="2026-11-15T01:27:48.024+00:00" time="0.003">
+            <failure message="thread &apos;tests::panics_plain&apos; (1693606) panicked at src/lib.rs:19:9" type="test failure with exit code 101">thread &apos;tests::panics_plain&apos; (1693606) panicked at src/lib.rs:19:9:
+plain panic with &lt;xml&gt; &amp; &quot;quotes&quot;
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</failure>
+            <system-out>
+running 1 test
+test tests::panics_plain ... FAILED
+
+failures:
+
+failures:
+    tests::panics_plain
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>
+thread &apos;tests::panics_plain&apos; (1693606) panicked at src/lib.rs:19:9:
+plain panic with &lt;xml&gt; &amp; &quot;quotes&quot;
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</system-err>
+        </testcase>
+        <testcase name="tests::flaky" classname="jx" timestamp="2026-11-15T01:27:48.024+00:00" time="0.003"/>
+    </testsuite>
+    <testsuite name="jx@stress-2" tests="3" skipped="0" errors="0" failures="2">
+        <testcase name="tests::ok" classname="jx" timestamp="2026-11-15T01:27:48.028+00:00" time="0.004"/>
+        <testcase name="tests::panics_plain" classname="jx" timestamp="2026-11-15T01:27:48.028+00:00" time="0.004">
+            <failure message="thread &apos;tests::panics_plain&apos; (1693612) panicked at src/lib.rs:19:9" type="test failure with exit code 101">thread &apos;tests::panics_plain&apos; (1693612) panicked at src/lib.rs:19:9:
+plain panic with &lt;xml&gt; &amp; &quot;quotes&quot;
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</failure>
+            <system-out>
+running 1 test
+test tests::panics_plain ... FAILED
+
+failures:
+
+failures:
+    tests::panics_plain
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>
+thread &apos;tests::panics_plain&apos; (1693612) panicked at src/lib.rs:19:9:
+plain panic with &lt;xml&gt; &amp; &quot;quotes&quot;
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</system-err>
+        </testcase>
+        <testcase name="tests::flaky" classname="jx" timestamp="2026-11-15T01:27:48.028+00:00" time="0.004">
+            <failure message="thread &apos;tests::flaky&apos; (1693614) panicked at src/lib.rs:11:9" type="test failure with exit code 101">thread &apos;tests::flaky&apos; (1693614) panicked at src/lib.rs:11:9:
+assertion `left == right` failed: the repeat was even: 2
+with a second line
+and a third
+and a fourth
+and a fifth
+and a sixth
+and a seventh
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</failure>
+            <system-out>
+running 1 test
+stdout line
+test tests::flaky ... FAILED
+
+failures:
+
+failures:
+    tests::flaky
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+</system-out>
+            <system-err>some stderr line
+second stderr
+
+thread &apos;tests::flaky&apos; (1693614) panicked at src/lib.rs:11:9:
+assertion `left == right` failed: the repeat was even: 2
+with a second line
+and a third
+and a fourth
+and a fifth
+and a sixth
+and a seventh
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+</system-err>
+        </testcase>
+    </testsuite>
+</testsuites>

@@ -208,7 +208,20 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let cases = junit::read(&report).map_err(|error| {
         format!("the stress run left no report to read ({error}). Did it build?")
     })?;
-    let summary = summarise(&cases, request.count, request.first_seed);
+    // Read again for the failures' text: `read` has checked it is there.
+    let xml = std::fs::read_to_string(&report).unwrap_or_default();
+    let shown = report
+        .strip_prefix(&root)
+        .unwrap_or(&report)
+        .display()
+        .to_string();
+    let summary = summarise(
+        &cases,
+        &junit::failures(&xml),
+        &shown,
+        request.count,
+        request.first_seed,
+    );
     print!("{}", summary.text);
     conclude(&summary, status.success(), request.count)
 }
@@ -245,9 +258,138 @@ struct Summary {
 /// How many seeds of a failing test are listed.
 const SEEDS_SHOWN: usize = 12;
 
+/// How many lines of a failure's text are shown.
+const LINES_SHOWN: usize = 6;
+
+/// How many characters of one line are shown.
+const LINE_WIDTH: usize = 160;
+
+/// How many other failures of one test, with another text, are named.
+const OTHERS_SHOWN: usize = 2;
+
+/// A failure's text as it is shown: its lines without the empty ones and
+/// the note about backtraces, the panic's thread named no more (the test
+/// is), each line cut to [`LINE_WIDTH`]; a timeout says so and shows what
+/// the test wrote to standard error, where the test kit's timeout report
+/// is. The count is of every line there was.
+fn failure_lines(failure: &junit::Failure) -> (Vec<String>, usize) {
+    let mut lines: Vec<String> = Vec::new();
+    let timed_out = failure.kind.contains("timeout");
+    let source = if timed_out {
+        lines.push(format!("timed out ({})", failure.kind));
+        &failure.stderr
+    } else if failure.text.trim().is_empty() {
+        lines.push(if failure.kind.is_empty() {
+            "failed, and the report keeps no text for it".to_owned()
+        } else {
+            format!("{}, and the report keeps no text for it", failure.kind)
+        });
+        &failure.stderr
+    } else {
+        &failure.text
+    };
+    for line in source.lines() {
+        let line = line.trim_end();
+        if line.trim().is_empty() || line.starts_with("note: run with `RUST_BACKTRACE") {
+            continue;
+        }
+        // `thread 'a::b' (1234) panicked at src/x.rs:1:2:`
+        let line = match line.strip_prefix("thread '") {
+            Some(rest) => match rest.find(" panicked at ") {
+                Some(at) => &rest[at + 1..],
+                None => line,
+            },
+            None => line,
+        };
+        lines.push(cut(line));
+    }
+    let all = lines.len();
+    lines.truncate(LINES_SHOWN);
+    (lines, all)
+}
+
+/// `line`, or its first [`LINE_WIDTH`] characters and an ellipsis.
+fn cut(line: &str) -> String {
+    match line.char_indices().nth(LINE_WIDTH) {
+        Some((at, _)) => format!("{} …", &line[..at]),
+        None => line.to_owned(),
+    }
+}
+
+/// What tells two failures' texts apart: their lines with the digits
+/// taken out, which differ from one repeat to the next (a seed, a process
+/// id, a time) when the failure is the same.
+fn likeness(lines: &[String]) -> String {
+    lines
+        .iter()
+        .flat_map(|line| line.chars().filter(|c| !c.is_ascii_digit()))
+        .collect()
+}
+
+/// The text shown under a failing test: its first failure's lines, then
+/// the first line of up to [`OTHERS_SHOWN`] failures whose text is not
+/// like it, and where the rest is.
+fn explain(failures: &[&junit::Failure], first_seed: u64, report: &str) -> String {
+    let mut text = String::new();
+    let mut ordered = failures.to_vec();
+    ordered.sort_by_key(|failure| failure.repeat.unwrap_or(0));
+    let Some(first) = ordered.first() else {
+        let _ = writeln!(
+            text,
+            "  The report keeps no text for its failures: {report}"
+        );
+        return text;
+    };
+    let seed_of =
+        |failure: &junit::Failure| first_seed.wrapping_add(u64::from(failure.repeat.unwrap_or(0)));
+    let (lines, all) = failure_lines(first);
+    let _ = writeln!(text, "  failure, under seed {}:", seed_of(first));
+    for line in &lines {
+        let _ = writeln!(text, "    | {line}");
+    }
+    if all > lines.len() {
+        let _ = writeln!(text, "    | … and {} more line(s)", all - lines.len());
+    }
+    let mut seen = vec![likeness(&lines)];
+    let mut unlike = 0;
+    for failure in &ordered[1..] {
+        let (lines, _) = failure_lines(failure);
+        let key = likeness(&lines);
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        unlike += 1;
+        if unlike <= OTHERS_SHOWN {
+            let _ = writeln!(
+                text,
+                "  another failure, under seed {}: {}",
+                seed_of(failure),
+                lines.first().map_or("", String::as_str)
+            );
+        }
+    }
+    if unlike > OTHERS_SHOWN {
+        let _ = writeln!(
+            text,
+            "  and {} more failure(s) with other texts",
+            unlike - OTHERS_SHOWN
+        );
+    }
+    let _ = writeln!(text, "  all of it: {report}");
+    text
+}
+
 /// Reads a stress run's report: for each test that failed, on how many of
-/// its repeats, with which seeds, and how to run one of them again.
-fn summarise(cases: &[TestCase], count: u32, first_seed: u64) -> Summary {
+/// its repeats, with which seeds, what its failure said, and how to run one
+/// of them again.
+fn summarise(
+    cases: &[TestCase],
+    failures: &[junit::Failure],
+    report: &str,
+    count: u32,
+    first_seed: u64,
+) -> Summary {
     // For each test: how often it ran, and the repeats it failed on.
     let mut tests: BTreeMap<(String, String), (u32, Vec<u32>)> = BTreeMap::new();
     let mut repeats_seen = 0;
@@ -311,6 +453,11 @@ fn summarise(cases: &[TestCase], count: u32, first_seed: u64) -> Summary {
                 String::new()
             }
         );
+        let own: Vec<&junit::Failure> = failures
+            .iter()
+            .filter(|failure| &failure.binary == binary && &failure.name == name)
+            .collect();
+        text.push_str(&explain(&own, first_seed, report));
         // nextest's binary id is `<package>` or `<package>::<target>`.
         let package = binary.split("::").next().unwrap_or(binary);
         let seed = first_seed.wrapping_add(u64::from(failed.first().copied().unwrap_or(0)));
@@ -328,9 +475,22 @@ fn summarise(cases: &[TestCase], count: u32, first_seed: u64) -> Summary {
 
 #[cfg(test)]
 mod tests {
-    use super::{Request, summarise};
+    use super::{Request, Summary, summarise};
     use crate::junit;
     use crate::load::Squeeze;
+
+    /// Where the tests say the report is.
+    const REPORT_PATH: &str = "target/nextest/stress/junit.xml";
+
+    fn summary(xml: &str, count: u32, first_seed: u64) -> Summary {
+        summarise(
+            &junit::parse(xml),
+            &junit::failures(xml),
+            REPORT_PATH,
+            count,
+            first_seed,
+        )
+    }
 
     #[test]
     fn a_squeeze_is_this_commands_and_not_nextests() {
@@ -498,7 +658,7 @@ mod tests {
 
     #[test]
     fn a_test_that_fails_on_some_repeats_is_reported_with_the_seeds_that_fail_it() {
-        let summary = summarise(&junit::parse(&report()), 4, 1000);
+        let summary = summary(&report(), 4, 1000);
 
         assert_eq!(summary.failing, 2);
         assert_eq!(summary.repeats_seen, 4);
@@ -510,10 +670,16 @@ mod tests {
 FAILED 4 of 4 times: cortex-agent::it denials::broken
   It fails every time: the order of events is not what it depends on.
   seeds: 1000, 1001, 1002, 1003
+  failure, under seed 1000:
+    | no
+  all of it: target/nextest/stress/junit.xml
   again: CORTEX_TEST_SEED=1000 cargo xtask test -p cortex-agent -E 'test(=denials::broken)'
 
 FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
   seeds: 1001, 1003
+  failure, under seed 1001:
+    | no
+  all of it: target/nextest/stress/junit.xml
   again: CORTEX_TEST_SEED=1001 cargo xtask test -p cortex-agent -E 'test(=denials::needs_one_order)'
 "
         );
@@ -526,7 +692,7 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
             "",
         );
 
-        let summary = summarise(&junit::parse(&report), 4, 0);
+        let summary = summary(&report, 4, 0);
 
         assert_eq!(summary.failing, 0);
         assert_eq!(
@@ -544,7 +710,7 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
                       classname=\"a\" time=\"0.1\"><flakyFailure>no</flakyFailure></testcase>\
                       </testsuite>";
 
-        let summary = summarise(&junit::parse(report), 2, 0);
+        let summary = summary(report, 2, 0);
 
         assert_eq!(summary.failing, 1);
         assert!(
@@ -558,15 +724,15 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
 
     #[test]
     fn a_run_found_nothing_only_if_nextest_agrees_and_every_repeat_is_there() {
-        let clean = summarise(
-            &junit::parse(&report().replace(
+        let clean = summary(
+            &report().replace(
                 "<failure type=\"test failure with exit code 101\">no</failure>",
                 "",
-            )),
+            ),
             4,
             0,
         );
-        let failing = summarise(&junit::parse(&report()), 4, 0);
+        let failing = summary(&report(), 4, 0);
 
         assert_eq!(super::conclude(&clean, true, 4), Ok(()));
         let error = super::conclude(&failing, false, 4).unwrap_err();
@@ -592,7 +758,7 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
             ));
         }
 
-        let summary = summarise(&junit::parse(&xml), 20, 0);
+        let summary = summary(&xml, 20, 0);
 
         assert!(
             summary
@@ -605,6 +771,134 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
             summary
                 .text
                 .contains("again: CORTEX_TEST_SEED=0 cargo xtask test -p a -E 'test(=t)'"),
+            "{}",
+            summary.text
+        );
+    }
+
+    /// A report nextest 0.9 wrote for three repeats of a crate made for
+    /// it: `tests::flaky` fails on the even repeats with a message of nine
+    /// lines, `tests::panics_plain` on every repeat with one of a line
+    /// that holds `<`, `&` and quotes.
+    const REAL: &str = include_str!("../fixtures/stress/junit.xml");
+
+    #[test]
+    fn each_failure_is_shown_by_the_start_of_its_message_with_where_the_rest_is() {
+        let summary = summary(REAL, 3, 40);
+
+        assert_eq!(summary.failing, 2);
+        let flaky = summary
+            .text
+            .split("\nFAILED ")
+            .find(|part| part.contains("jx tests::flaky"))
+            .unwrap();
+        assert_eq!(
+            flaky,
+            "2 of 3 times: jx tests::flaky
+  seeds: 40, 42
+  failure, under seed 40:
+    | panicked at src/lib.rs:11:9:
+    | assertion `left == right` failed: the repeat was even: 0
+    | with a second line
+    | and a third
+    | and a fourth
+    | and a fifth
+    | … and 4 more line(s)
+  all of it: target/nextest/stress/junit.xml
+  again: CORTEX_TEST_SEED=40 cargo xtask test -p jx -E 'test(=tests::flaky)'
+"
+        );
+        // The failure of repeat 2 differs only in its numbers: it is not
+        // named again.
+        assert!(!flaky.contains("another failure"), "{flaky}");
+        assert!(
+            summary.text.contains(
+                "  failure, under seed 40:\n    | panicked at src/lib.rs:19:9:\n    | plain \
+                 panic with <xml> & \"quotes\"\n  all of it:"
+            ),
+            "{}",
+            summary.text
+        );
+    }
+
+    #[test]
+    fn a_timeout_shows_what_the_test_wrote_and_a_failure_of_another_kind_is_named() {
+        let xml = "<testsuite name=\"a@stress-0\"><testcase name=\"t\" classname=\"a\" \
+                   time=\"10\"><failure type=\"test timeout\"/><system-err>\nthe test kit: \
+                   still waiting after 8.0 s\n  the gate made at a.rs:4:2, 8.0 s\n\
+                   </system-err></testcase></testsuite><testsuite name=\"a@stress-1\">\
+                   <testcase name=\"t\" classname=\"a\" time=\"0.1\"><failure \
+                   message=\"thread &apos;t&apos; (9) panicked at a.rs:9:1\" type=\"test \
+                   failure with exit code 101\">thread &apos;t&apos; (9) panicked at \
+                   a.rs:9:1:\nleft and right differ</failure></testcase></testsuite>\
+                   <testsuite name=\"a@stress-2\"><testcase name=\"t\" classname=\"a\" \
+                   time=\"0.1\"><failure type=\"test failure with exit code 101\">thread \
+                   &apos;t&apos; (12) panicked at a.rs:9:1:\nleft and right differ</failure>\
+                   </testcase></testsuite>";
+
+        let summary = summary(xml, 3, 0);
+
+        assert!(
+            summary.text.contains(
+                "  failure, under seed 0:\n    | timed out (test timeout)\n    | the test kit: \
+                 still waiting after 8.0 s\n    |   the gate made at a.rs:4:2, 8.0 s\n  \
+                 another failure, under seed 1: panicked at a.rs:9:1:\n  all of it:"
+            ),
+            "{}",
+            summary.text
+        );
+    }
+
+    #[test]
+    fn a_long_line_is_cut_and_many_other_texts_are_counted() {
+        let mut xml = String::new();
+        for repeat in 0..5 {
+            let word = ["alpha", "beta", "gamma", "delta", "epsilon"][repeat];
+            xml.push_str(&format!(
+                "<testsuite name=\"a@stress-{repeat}\"><testcase name=\"t\" classname=\"a\" \
+                 time=\"0.1\"><failure type=\"x\">{word} {}</failure></testcase></testsuite>",
+                "y".repeat(300)
+            ));
+        }
+
+        let summary = summary(&xml, 5, 0);
+
+        let first = format!("    | alpha {} …\n", "y".repeat(154));
+        assert!(summary.text.contains(&first), "{}", summary.text);
+        assert!(
+            summary
+                .text
+                .contains("  another failure, under seed 1: beta yyy"),
+            "{}",
+            summary.text
+        );
+        assert!(
+            summary
+                .text
+                .contains("  another failure, under seed 2: gamma"),
+            "{}",
+            summary.text
+        );
+        assert!(
+            summary
+                .text
+                .contains("  and 2 more failure(s) with other texts\n"),
+            "{}",
+            summary.text
+        );
+    }
+
+    #[test]
+    fn a_retry_that_passed_shows_the_failure_it_needed_it_for() {
+        let xml = "<testsuite name=\"a@stress-0\"><testcase name=\"timing_sensitive::t\" \
+                   classname=\"a\" time=\"0.1\"><flakyFailure type=\"test failure\">the \
+                   first try lost a race</flakyFailure></testcase></testsuite>";
+
+        let summary = summary(xml, 1, 0);
+
+        assert_eq!(summary.failing, 1);
+        assert!(
+            summary.text.contains("    | the first try lost a race\n"),
             "{}",
             summary.text
         );
