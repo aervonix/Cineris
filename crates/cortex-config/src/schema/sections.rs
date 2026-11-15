@@ -13,7 +13,8 @@ use cortex_protocol::lease::{NetworkAccess, Rule};
 use cortex_protocol::{Level, ModelRole, Speed};
 
 use super::types::{
-    Headers, Profiles, ReasoningVisibility, Reserved, SessionDurability, StoreChoice,
+    Headers, Profiles, ReasoningVisibility, Reserved, SessionDurability, StoreChoice, UsageRanges,
+    Weekday,
 };
 use super::{CONFIG_VERSION, settings};
 
@@ -100,22 +101,21 @@ settings! {
         /// The verification mode, commands and time limits.
         [reserved RunsCode]
         pub verify: Reserved,
-        /// Variant overrides per model, and the map and profile budgets.
-        [reserved UserOnly]
-        pub adapt: Reserved,
+        /// Variant overrides per model.
+        [nested]
+        pub adapt: AdaptSettings,
         /// Whether local statistics are recorded, and for how long.
-        [reserved UserOnly]
-        pub stats: Reserved,
+        [nested]
+        pub stats: StatsSettings,
         /// The repository map's caps.
         [reserved UserOnly]
         pub index: Reserved,
         /// The run engine: concurrency, workspaces, budgets.
         [reserved UserOnly]
         pub runs: Reserved,
-        /// The usage view: week start, ranges, the opt-in refresh and the
-        /// other tools whose records may be read.
-        [reserved UserOnly]
-        pub usage: Reserved,
+        /// The usage view: week start, ranges and the opt-in refresh.
+        [nested]
+        pub usage: UsageSettings,
         /// The terminal UI: presenter, theme, density.
         [reserved UserOnly]
         pub tui: Reserved,
@@ -511,6 +511,80 @@ settings! {
         /// Every layer adds to the list.
         [Preference, NextEpoch, joined]
         pub env_remove: Vec<String>,
+    }
+}
+
+settings! {
+    /// How the harness adapts to each model
+    /// (`docs/architecture/14-adaptation.md`, "Adapting to the model").
+    pub struct AdaptSettings {
+        /// Variant overrides by model: `[adapt.variants."claude-opus-5-5"]`
+        /// with `edit_format`, `tool_schema`, `prompt_style` or `effort`.
+        /// An override wins over the catalog's default for that model, and
+        /// applies from the next context epoch that builds a prompt. A
+        /// choice the build does not know stops the session from starting,
+        /// with the choices it has. The user's alone.
+        [nested]
+        pub variants: BTreeMap<String, VariantSettings>,
+    }
+}
+
+settings! {
+    /// The choices at each variant point for one model. A point left out
+    /// keeps the catalog's default.
+    pub struct VariantSettings {
+        /// The edit format: `replace`.
+        [UserOnly, NextEpoch]
+        pub edit_format: Option<String>,
+        /// How tools are declared: `strict` (the provider checks the
+        /// arguments, where the model can) or `loose` (the harness alone).
+        [UserOnly, NextEpoch]
+        pub tool_schema: Option<String>,
+        /// The prompt style: `concise`, or `guided` for more guidance on the
+        /// tools.
+        [UserOnly, NextEpoch]
+        pub prompt_style: Option<String>,
+        /// The reasoning level the model runs at unless a role sets its own:
+        /// one of its levels, or an alias. `model.effort` and a role's
+        /// `effort` win over it.
+        [UserOnly, NextEpoch]
+        pub effort: Option<String>,
+    }
+}
+
+settings! {
+    /// Local statistics (`docs/architecture/14-adaptation.md`, "Local
+    /// statistics"). Nothing of them leaves the machine.
+    pub struct StatsSettings {
+        /// Whether events are recorded. Off, nothing is written, every
+        /// adaptive feature uses its default, and the usage view has the
+        /// open session's figures alone.
+        [UserOnly, Restart]
+        pub enabled: bool = true,
+        /// How many months a monthly file of events stays after its own
+        /// month. What it added up to stays in the aggregates.
+        [UserOnly, Now, 1..=1200]
+        pub retention: u32 = 12,
+    }
+}
+
+settings! {
+    /// The usage view (`docs/architecture/18-usage.md`).
+    pub struct UsageSettings {
+        /// The first day of a week: `monday` to `sunday`.
+        [UserOnly, Now]
+        pub week_start: Weekday = Weekday::Monday,
+        /// `calendar` weeks and months, or `rolling`: the last 7 and 30
+        /// days.
+        [UserOnly, Now]
+        pub ranges: UsageRanges = UsageRanges::Calendar,
+        /// The providers whose documented usage endpoint
+        /// `cortex usage --refresh` may ask, with that provider's own key:
+        /// `["openrouter"]`. Empty, nothing is ever asked. Only when the
+        /// user asks, never on its own. The user's alone: a project's file
+        /// cannot turn it on.
+        [UserOnly, Now]
+        pub refresh: Vec<String>,
     }
 }
 

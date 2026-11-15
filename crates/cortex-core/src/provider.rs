@@ -517,6 +517,66 @@ pub(crate) fn image_support(entry: &ModelEntry) -> Option<ImageSupport> {
         })
 }
 
+/// The variants a model is addressed with: the catalog's defaults, with
+/// the user's overrides for it (`[adapt.variants."<model>"]`).
+///
+/// # Errors
+///
+/// `unknown_variant` when an override names a choice this build does not
+/// have, or `strict` tools for a model that cannot be held to them.
+pub(crate) fn variants_for(
+    entry: &ModelEntry,
+    overrides: Option<&cortex_config::schema::VariantSettings>,
+) -> Result<cortex_llm::Variants, Box<ErrorData>> {
+    let mut variants = entry.variants.clone();
+    let Some(overrides) = overrides else {
+        return Ok(variants);
+    };
+    let refuse = |point: &str, value: &str, choices: &[&str]| {
+        config_error(
+            "unknown_variant",
+            format!(
+                "`adapt.variants.\"{}\".{point}` is `{value}`, which is not a choice this version \
+                 has for the model. It has {}.",
+                entry.info.id,
+                choices
+                    .iter()
+                    .map(|choice| format!("`{choice}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+    };
+    if let Some(format) = &overrides.edit_format {
+        if !cortex_llm::catalog::EDIT_FORMATS.contains(&format.as_str()) {
+            return Err(refuse("edit_format", format, cortex_llm::catalog::EDIT_FORMATS));
+        }
+        variants.edit_format.clone_from(format);
+    }
+    if let Some(style) = &overrides.prompt_style {
+        if !cortex_llm::catalog::PROMPT_STYLES.contains(&style.as_str()) {
+            return Err(refuse("prompt_style", style, cortex_llm::catalog::PROMPT_STYLES));
+        }
+        variants.prompt_style.clone_from(style);
+    }
+    if let Some(schema) = &overrides.tool_schema {
+        let strict_allowed = entry.info.capabilities.strict_tools;
+        let choices: &[&str] = if strict_allowed {
+            &["strict", "loose"]
+        } else {
+            &["loose"]
+        };
+        match cortex_llm::ToolSchemaStyle::from_name(schema) {
+            Some(cortex_llm::ToolSchemaStyle::Strict) if !strict_allowed => {
+                return Err(refuse("tool_schema", schema, choices));
+            }
+            Some(style) => variants.tool_schema = style,
+            None => return Err(refuse("tool_schema", schema, choices)),
+        }
+    }
+    Ok(variants)
+}
+
 /// What clients are made from, shared by every session of a core.
 pub(crate) struct Providers {
     pub(crate) catalog: Catalog,
@@ -770,12 +830,18 @@ impl Providers {
         let output_limit = max_output.map_or(entry.info.max_output, |asked| {
             asked.min(entry.info.max_output)
         });
+        // The user's variant overrides for this model: they win over the
+        // catalog's defaults, and a role's own effort wins over theirs.
+        let overrides = settings.adapt.variants.get(entry.info.id.as_str());
+        let variants = variants_for(&entry, overrides)?;
+        let effort = effort.or_else(|| overrides.and_then(|chosen| chosen.effort.as_deref()));
         let reasoning = reasoning(&entry, effort, visibility, output_limit)?;
         let client = self.client(settings, env, &provider, images)?;
         let mut model = RoleModel::new(client, entry);
         model.reasoning = reasoning;
         model.effort = effort.map(str::to_owned);
         model.max_output = max_output;
+        model.variants = variants;
         Ok(model)
     }
 }

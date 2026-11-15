@@ -149,6 +149,30 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | `context.instruction_names` | list of text | `[]` | raises cost | next epoch | More names of instruction files, read after `AGENTS.md` and `CLAUDE.md` in each directory. From a project, after trust: what they hold is sent with every request. |
 | `context.instructions_cap` | whole number, 0 to 100000000 | `49152` | raises cost | next epoch | The most the instruction files may hold in all, in bytes. Past it the innermost files are cut, and the user is warned. From a project, after trust. |
 
+## `[adapt]`
+
+| Key | Type | Default | From a project | Takes effect | What it is |
+|---|---|---|---|---|---|
+| `adapt.variants.*.edit_format` | text | not set | user only | next epoch | The edit format: `replace`. |
+| `adapt.variants.*.tool_schema` | text | not set | user only | next epoch | How tools are declared: `strict` (the provider checks the arguments, where the model can) or `loose` (the harness alone). |
+| `adapt.variants.*.prompt_style` | text | not set | user only | next epoch | The prompt style: `concise`, or `guided` for more guidance on the tools. |
+| `adapt.variants.*.effort` | text | not set | user only | next epoch | The reasoning level the model runs at unless a role sets its own: one of its levels, or an alias. `model.effort` and a role's `effort` win over it. |
+
+## `[stats]`
+
+| Key | Type | Default | From a project | Takes effect | What it is |
+|---|---|---|---|---|---|
+| `stats.enabled` | `true` or `false` | `true` | user only | restart | Whether events are recorded. Off, nothing is written, every adaptive feature uses its default, and the usage view has the open session's figures alone. |
+| `stats.retention` | whole number, 1 to 1200 | `12` | user only | at once | How many months a monthly file of events stays after its own month. What it added up to stays in the aggregates. |
+
+## `[usage]`
+
+| Key | Type | Default | From a project | Takes effect | What it is |
+|---|---|---|---|---|---|
+| `usage.week_start` | `"monday"`, `"tuesday"`, `"wednesday"`, `"thursday"`, `"friday"`, `"saturday"`, `"sunday"` | `"monday"` | user only | at once | The first day of a week: `monday` to `sunday`. |
+| `usage.ranges` | `"calendar"`, `"rolling"` | `"calendar"` | user only | at once | `calendar` weeks and months, or `rolling`: the last 7 and 30 days. |
+| `usage.refresh` | list of text | `[]` | user only | at once | The providers whose documented usage endpoint `cortex usage --refresh` may ask, with that provider's own key: `["openrouter"]`. Empty, nothing is ever asked. Only when the user asks, never on its own. The user's alone: a project's file cannot turn it on. |
+
 ## Reserved sections
 
 These sections belong to parts of the harness that are not built yet. A file may already hold them: what is in them is kept and not checked. The build step that owns a section declares its keys, and they then move into the tables above. Until then a project's file cannot set anything in a section marked *user only*, and a section marked *runs code* waits for trust.
@@ -160,11 +184,8 @@ These sections belong to parts of the harness that are not built yet. A file may
 | `[http]` | user only | The HTTP client: the connect timeout, a proxy, and extra certificate authorities. |
 | `[tools]` | user only | Enabled tools, output limits and per-tool settings. |
 | `[verify]` | runs code | The verification mode, commands and time limits. |
-| `[adapt]` | user only | Variant overrides per model, and the map and profile budgets. |
-| `[stats]` | user only | Whether local statistics are recorded, and for how long. |
 | `[index]` | user only | The repository map's caps. |
 | `[runs]` | user only | The run engine: concurrency, workspaces, budgets. |
-| `[usage]` | user only | The usage view: week start, ranges, the opt-in refresh and the other tools whose records may be read. |
 | `[tui]` | user only | The terminal UI: presenter, theme, density. |
 | `[keys]` | user only | Key bindings by mode. |
 | `[terminal]` | user only | Terminal capability overrides. |

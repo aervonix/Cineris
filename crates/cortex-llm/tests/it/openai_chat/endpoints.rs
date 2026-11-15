@@ -195,17 +195,23 @@ fn venices_endpoint_gives_balances_and_each_models_limits() {
     assert_eq!(balance("DIEM"), Some(100_023_000_000));
     assert_eq!(balance("BUNDLED_CREDITS"), dollars(25));
     let model = Some(ModelId::new("zai-org-glm-5-1"));
-    let window = |measure: LimitMeasure, limit: u64, resets: bool| LimitWindow {
+    // The start of the next epoch is kept as what it is: the documentation
+    // does not say it resets the daily limits.
+    assert_eq!(
+        usage.next_epoch,
+        Some(
+            UtcTime::parse("2026-11-14T00:00:00Z")
+                .unwrap()
+                .to_timestamp()
+        )
+    );
+    let window = |measure: LimitMeasure, limit: u64, _daily: bool| LimitWindow {
         measure,
         speed: None,
         limit: Some(limit),
         // The endpoint says how large a limit is, not how much is left.
         remaining: None,
-        resets_at: resets.then(|| {
-            UtcTime::parse("2026-11-14T00:00:00Z")
-                .unwrap()
-                .to_timestamp()
-        }),
+        resets_at: None,
     };
     assert_eq!(
         usage.limits,

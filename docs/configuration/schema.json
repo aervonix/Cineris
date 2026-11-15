@@ -4,10 +4,45 @@
   "description": "A Cortex-Harness configuration file: the user's `config.toml`, a project's `.cortex/config.toml` or `.cortex/config.local.toml`, or the managed file. Generated from the settings in `crates/cortex-config`; not edited by hand. `x-cortex-trust` says what a project's file may set, and `x-cortex-effect` when a change takes effect.",
   "properties": {
     "adapt": {
-      "description": "Variant overrides per model, and the map and profile budgets.",
-      "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "additionalProperties": true,
+      "description": "Variant overrides per model.",
+      "properties": {
+        "variants": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "properties": {
+              "edit_format": {
+                "description": "The edit format: `replace`.",
+                "type": "string",
+                "x-cortex-effect": "next epoch",
+                "x-cortex-trust": "user only"
+              },
+              "effort": {
+                "description": "The reasoning level the model runs at unless a role sets its own: one of its levels, or an alias. `model.effort` and a role's `effort` win over it.",
+                "type": "string",
+                "x-cortex-effect": "next epoch",
+                "x-cortex-trust": "user only"
+              },
+              "prompt_style": {
+                "description": "The prompt style: `concise`, or `guided` for more guidance on the tools.",
+                "type": "string",
+                "x-cortex-effect": "next epoch",
+                "x-cortex-trust": "user only"
+              },
+              "tool_schema": {
+                "description": "How tools are declared: `strict` (the provider checks the arguments, where the model can) or `loose` (the harness alone).",
+                "type": "string",
+                "x-cortex-effect": "next epoch",
+                "x-cortex-trust": "user only"
+              }
+            },
+            "type": "object"
+          },
+          "description": "Variant overrides by model: `[adapt.variants.\"claude-opus-5-5\"]` with `edit_format`, `tool_schema`, `prompt_style` or `effort`. An override wins over the catalog's default for that model, and applies from the next context epoch that builds a prompt. A choice the build does not know stops the session from starting, with the choices it has. The user's alone.",
+          "type": "object"
+        }
+      },
+      "type": "object"
     },
     "compat": {
       "additionalProperties": true,
@@ -794,10 +829,27 @@
       "x-cortex-trust": "user only"
     },
     "stats": {
+      "additionalProperties": true,
       "description": "Whether local statistics are recorded, and for how long.",
-      "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Whether events are recorded. Off, nothing is written, every adaptive feature uses its default, and the usage view has the open session's figures alone.",
+          "type": "boolean",
+          "x-cortex-effect": "restart",
+          "x-cortex-trust": "user only"
+        },
+        "retention": {
+          "default": 12,
+          "description": "How many months a monthly file of events stays after its own month. What it added up to stays in the aggregates.",
+          "maximum": 1200,
+          "minimum": 1,
+          "type": "integer",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        }
+      },
+      "type": "object"
     },
     "terminal": {
       "description": "Terminal capability overrides.",
@@ -818,10 +870,46 @@
       "x-cortex-trust": "user only"
     },
     "usage": {
-      "description": "The usage view: week start, ranges, the opt-in refresh and the other tools whose records may be read.",
-      "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "additionalProperties": true,
+      "description": "The usage view: week start, ranges and the opt-in refresh.",
+      "properties": {
+        "ranges": {
+          "default": "calendar",
+          "description": "`calendar` weeks and months, or `rolling`: the last 7 and 30 days.",
+          "enum": [
+            "calendar",
+            "rolling"
+          ],
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "refresh": {
+          "default": [],
+          "description": "The providers whose documented usage endpoint `cortex usage --refresh` may ask, with that provider's own key: `[\"openrouter\"]`. Empty, nothing is ever asked. Only when the user asks, never on its own. The user's alone: a project's file cannot turn it on.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "week_start": {
+          "default": "monday",
+          "description": "The first day of a week: `monday` to `sunday`.",
+          "enum": [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday"
+          ],
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        }
+      },
+      "type": "object"
     },
     "verify": {
       "description": "The verification mode, commands and time limits.",

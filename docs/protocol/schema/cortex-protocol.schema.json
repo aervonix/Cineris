@@ -396,6 +396,40 @@
       ],
       "type": "object"
     },
+    "Balance": {
+      "description": "An amount of money a provider reported as left, in one currency.",
+      "properties": {
+        "currency": {
+          "description": "The currency as the provider names it: `USD`, `CNY`, or a unit of\nthe provider's own.",
+          "type": "string"
+        },
+        "limit": {
+          "description": "The budget it is left of, where there is one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remaining": {
+          "description": "What is left, as an exact decimal number: `110.00`. It may be\nnegative. Absent when the provider reports only a limit or a spend.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "used": {
+          "description": "What has been spent of it, where the provider says.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "currency"
+      ],
+      "type": "object"
+    },
     "Billing": {
       "anyOf": [
         {
@@ -3067,6 +3101,47 @@
       ],
       "description": "The job a model is doing. Configuration names one model per role (`docs/architecture/14-adaptation.md`, \"Model roles and routing\")."
     },
+    "ModelTime": {
+      "description": "The time a model's part of some turns took, in milliseconds.",
+      "properties": {
+        "connect_ms": {
+          "default": 0,
+          "description": "From sending a request to the provider's answering it: the\nconnection, the request's upload and the provider's queue.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "first_byte_ms": {
+          "default": 0,
+          "description": "From the answer to the response's first event.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "retry_ms": {
+          "default": 0,
+          "description": "Waiting to send a failed request again.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "streaming_ms": {
+          "default": 0,
+          "description": "From the first event to the response's end.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "summary_ms": {
+          "default": 0,
+          "description": "Waiting for a summary, when a compaction could not go on without\none.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ModelUsage": {
       "description": "A session's usage for one provider, model, role and speed.",
       "properties": {
@@ -4291,6 +4366,31 @@
     "ProviderLimits": {
       "description": "The limits one provider last reported. A provider that reports none has\nno entry, and a front end shows \"not available\".",
       "properties": {
+        "available": {
+          "description": "Whether the account or key may make calls now, where the provider\nsays. Added in step 16.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "balances": {
+          "description": "Money left, one entry a currency, where the provider's usage\nendpoint reports it (the opt-in refresh). Amounts in different\ncurrencies are never added together or converted. Added in step 16.",
+          "items": {
+            "$ref": "#/$defs/Balance"
+          },
+          "type": "array"
+        },
+        "next_epoch": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the provider's next accounting period begins, where it names\none without saying which limits it resets (Venice.ai's \"epoch\").\nIt is not a limit's reset time. Added in step 16."
+        },
         "provider": {
           "$ref": "#/$defs/ProviderId",
           "description": "The provider."
@@ -4466,6 +4566,41 @@
           "type": "string"
         }
       },
+      "type": "object"
+    },
+    "RefreshOutcome": {
+      "description": "What one provider's usage endpoint answered.",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ErrorData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why it did not. The figures kept from before stay as they were."
+        },
+        "limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderLimits"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The figures, when the refresh worked. They are also kept, and\n`usage/report` shows them from then on."
+        },
+        "provider": {
+          "$ref": "#/$defs/ProviderId",
+          "description": "The provider."
+        }
+      },
+      "required": [
+        "provider"
+      ],
       "type": "object"
     },
     "RequestId": {
@@ -6034,6 +6169,65 @@
       ],
       "type": "object"
     },
+    "TimeTotals": {
+      "description": "Where the wall time of some turns went, in milliseconds. Every moment of\na turn is in exactly one part, so the parts add up to `wall_ms`: a tool\nthat runs while the response is still arriving is in the model's time,\nand a question to the user while a tool runs is in the tools'.",
+      "properties": {
+        "approval_ms": {
+          "default": 0,
+          "description": "Waiting for the user to answer whether a call may run, with no tool\nrunning.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "harness_ms": {
+          "default": 0,
+          "description": "The harness's own work: assembling requests, recording, planning.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "$ref": "#/$defs/ModelTime",
+          "default": {
+            "connect_ms": 0,
+            "first_byte_ms": 0,
+            "retry_ms": 0,
+            "streaming_ms": 0,
+            "summary_ms": 0
+          },
+          "description": "Waiting for a model."
+        },
+        "tools_ms": {
+          "default": 0,
+          "description": "Waiting for tools once the response had ended.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "turns": {
+          "default": 0,
+          "description": "How many turns.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "verification_ms": {
+          "default": 0,
+          "description": "Running the project's checks.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wall_ms": {
+          "default": 0,
+          "description": "Their wall time, from the prompt to `turn.completed`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "Timestamp": {
       "description": "A moment in time, in RFC 3339 form in UTC: `2026-11-12T10:15:02Z`.\nFractional seconds are allowed.",
       "type": "string"
@@ -6284,6 +6478,54 @@
       "required": [
         "call_id",
         "content"
+      ],
+      "type": "object"
+    },
+    "ToolTime": {
+      "description": "The time one tool took over some turns, in milliseconds.",
+      "properties": {
+        "approval_ms": {
+          "default": 0,
+          "description": "How long its calls waited for the user's answer.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "calls": {
+          "default": 0,
+          "description": "How many calls.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "queued_ms": {
+          "default": 0,
+          "description": "How long its calls waited, once allowed, before they ran: for a slot,\nfor an earlier call they conflict with, or for the response to end.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "running_ms": {
+          "default": 0,
+          "description": "Its calls' running time, added up. Calls that ran side by side are\neach counted whole.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "share_ms": {
+          "default": 0,
+          "description": "Its part of the turns' tool time (`TimeTotals::tools_ms`): when calls\nrun side by side each has an equal part of that moment.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool": {
+          "description": "The tool's name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool"
       ],
       "type": "object"
     },
@@ -6649,6 +6891,35 @@
       ],
       "description": "The period a usage report covers."
     },
+    "UsageRefreshParams": {
+      "description": "`usage/refresh`: asks the documented usage endpoint of each provider the\nuser turned the refresh on for (`usage.refresh`), with that provider's\nown credential. Only a `user` client may call it. Added in step 16.",
+      "properties": {
+        "providers": {
+          "description": "Only these providers, each of which must be in `usage.refresh`.\nEmpty: every provider in it.",
+          "items": {
+            "$ref": "#/$defs/ProviderId"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "UsageRefreshResult": {
+      "description": "The result of `usage/refresh`: one entry for each provider asked.",
+      "properties": {
+        "providers": {
+          "description": "What each provider answered, in the order of `usage.refresh`.",
+          "items": {
+            "$ref": "#/$defs/RefreshOutcome"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "type": "object"
+    },
     "UsageReport": {
       "description": "Usage and cost over a range: the result of `usage/report`.",
       "properties": {
@@ -6699,6 +6970,17 @@
           },
           "type": "array"
         },
+        "time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeTotals"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the time of the range's turns went, all rows together. Added\nin step 16."
+        },
         "to": {
           "anyOf": [
             {
@@ -6710,9 +6992,23 @@
           ],
           "description": "The end of the range."
         },
+        "tools": {
+          "description": "The time each tool took in the range, the most first. Added in step\n16.",
+          "items": {
+            "$ref": "#/$defs/ToolTime"
+          },
+          "type": "array"
+        },
         "totals": {
           "$ref": "#/$defs/UsageTotals",
           "description": "All rows together."
+        },
+        "zone": {
+          "description": "The time zone the days were counted in, as the user is shown it.\nAdded in step 16.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -6826,6 +7122,17 @@
             }
           ],
           "description": "The speed the requests ran at."
+        },
+        "time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeTotals"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the time of the turns in the row went: for a report grouped\nby provider, model or project only, since a turn has no one speed\nor source. Added in step 16."
         },
         "totals": {
           "$ref": "#/$defs/UsageTotals",
@@ -7175,6 +7482,15 @@
         },
         "result": {
           "$ref": "#/$defs/UsageGetResult"
+        }
+      },
+      "usage/refresh": {
+        "description": "Asks the providers' usage endpoints that the user turned on, with each one's own credential. Only a `user` client.",
+        "params": {
+          "$ref": "#/$defs/UsageRefreshParams"
+        },
+        "result": {
+          "$ref": "#/$defs/UsageRefreshResult"
         }
       },
       "usage/report": {

@@ -35,6 +35,11 @@ session.durability = "item"
 shell.env_remove = []
 shell.max_timeout = "30m"
 shell.timeout = "2m"
+stats.enabled = true
+stats.retention = 12
+usage.ranges = "calendar"
+usage.refresh = []
+usage.week_start = "monday"
 
 ## managed
 managed.locked = ["sandbox.enabled"]  # managed: ~/managed/config.toml:3

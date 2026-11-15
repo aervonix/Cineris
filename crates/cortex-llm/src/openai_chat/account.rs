@@ -67,6 +67,12 @@ pub struct AccountUsage {
     pub balances: Vec<Balance>,
     /// Limits counted in requests or tokens.
     pub limits: Vec<AccountLimit>,
+    /// When the provider's next accounting period begins, where it names
+    /// one: Venice.ai's `nextEpochBegins`. Its documentation calls it "the
+    /// start of the next epoch" and does not say which limits it resets, so
+    /// it is kept as what it is, and is no limit's reset time (since step
+    /// 16).
+    pub next_epoch: Option<cortex_protocol::Timestamp>,
 }
 
 /// An amount of money in one currency, as a provider's usage endpoint
@@ -164,6 +170,7 @@ pub fn read(
         available: None,
         balances: Vec::new(),
         limits: Vec::new(),
+        next_epoch: None,
     };
     match provider.flags.text(flag::USAGE_ENDPOINT) {
         Some(OPENROUTER_KEY) => {
@@ -225,7 +232,7 @@ pub fn read(
                     });
                 }
             }
-            let next_day = data
+            usage.next_epoch = data
                 .get("nextEpochBegins")
                 .and_then(Value::as_str)
                 .and_then(|time| UtcTime::parse(time).ok())
@@ -254,7 +261,9 @@ pub fn read(
                             // The endpoint says how large a limit is, not
                             // how much of it is left.
                             remaining: None,
-                            resets_at: next_day.clone().filter(|_| per == Per::Day),
+                            // The epoch's start is not documented as the
+                            // reset of any limit.
+                            resets_at: None,
                         },
                     });
                 }
