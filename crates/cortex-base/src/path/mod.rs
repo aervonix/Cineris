@@ -140,6 +140,11 @@ impl PathStyle {
 /// Every variant is a refusal of one path, never a failure of the caller's
 /// whole operation: code that walks a directory reports the entry and goes
 /// on to the next.
+///
+/// The message writes a path or a name with every character that would act
+/// unseen as an escape ([`crate::visible`]): it reaches the model in a
+/// tool's result, and a name from the workspace must not start lines of its
+/// own there. The fields hold them as they were.
 #[derive(Debug, thiserror::Error)]
 pub enum PathError {
     /// The path is the empty string.
@@ -147,29 +152,29 @@ pub enum PathError {
     Empty,
     /// The path contains a NUL character, which no file system accepts and
     /// which would cut the path short in a system call.
-    #[error("the path `{path}` contains a NUL character")]
+    #[error("the path `{shown_path}` contains a NUL character", shown_path = crate::visible(.path))]
     ContainsNul {
         /// The path, with each NUL written as `\0`.
         path: String,
     },
     /// The path, or a name the file system returned, is not valid Unicode.
     /// Rules match paths as text, so such a path cannot be checked.
-    #[error("the path `{path}` is not valid Unicode, so it cannot be checked against any rule")]
+    #[error("the path `{shown_path}` is not valid Unicode, so it cannot be checked against any rule", shown_path = crate::visible(.path))]
     NotUnicode {
         /// The path, with each invalid sequence replaced by `U+FFFD`.
         path: String,
     },
     /// A Windows device or extended-length path: `\\.\…` or `\\?\…`.
     #[error(
-        "`{path}` is a device or extended-length path (`\\\\.\\` or `\\\\?\\`), which is not \
+        "`{shown_path}` is a device or extended-length path (`\\\\.\\` or `\\\\?\\`), which is not \
          accepted: write an ordinary path"
-    )]
+    , shown_path = crate::visible(.path))]
     DevicePath {
         /// The path as written.
         path: String,
     },
     /// A Windows network path with no server or no share.
-    #[error("`{path}` is not a complete network path: it needs a server and a share")]
+    #[error("`{shown_path}` is not a complete network path: it needs a server and a share", shown_path = crate::visible(.path))]
     MalformedShare {
         /// The path as written.
         path: String,
@@ -177,9 +182,9 @@ pub enum PathError {
     /// A network share that the configuration does not allow. Also returned
     /// for a drive letter that is mapped to such a share.
     #[error(
-        "`{path}` is on the network share `\\\\{server}\\{share}`, which the configuration \
+        "`{shown_path}` is on the network share `\\\\{shown_server}\\{shown_share}`, which the configuration \
          does not allow"
-    )]
+    , shown_path = crate::visible(.path), shown_server = crate::visible(.server), shown_share = crate::visible(.share))]
     ShareNotAllowed {
         /// The path as written.
         path: String,
@@ -190,25 +195,25 @@ pub enum PathError {
     },
     /// A Windows path relative to a drive's current directory: `C:name`.
     #[error(
-        "`{path}` is relative to the current directory of a drive, which is not a fixed \
+        "`{shown_path}` is relative to the current directory of a drive, which is not a fixed \
          place: write `C:\\…` in full, or a path relative to the workspace"
-    )]
+    , shown_path = crate::visible(.path))]
     DriveRelative {
         /// The path as written.
         path: String,
     },
     /// A Windows path that starts at the root of the current drive: `\name`.
     #[error(
-        "`{path}` starts at the root of whichever drive is current: write the drive letter, \
+        "`{shown_path}` starts at the root of whichever drive is current: write the drive letter, \
          or a path relative to the workspace"
-    )]
+    , shown_path = crate::visible(.path))]
     RootRelative {
         /// The path as written.
         path: String,
     },
     /// A name that Windows reserves for a device: `NUL`, `CON`, `COM1`,
     /// with or without an extension.
-    #[error("`{path}`: `{name}` is a device name on Windows, not a file")]
+    #[error("`{shown_path}`: `{shown_name}` is a device name on Windows, not a file", shown_path = crate::visible(.path), shown_name = crate::visible(.name))]
     ReservedName {
         /// The path as written.
         path: String,
@@ -218,9 +223,9 @@ pub enum PathError {
     /// A name that ends with a dot or a space. Windows drops them, so the
     /// name would open a different file from the one written.
     #[error(
-        "`{path}`: the name `{name}` ends with a dot or a space, which Windows drops, so it \
+        "`{shown_path}`: the name `{shown_name}` ends with a dot or a space, which Windows drops, so it \
          would open a different file"
-    )]
+    , shown_path = crate::visible(.path), shown_name = crate::visible(.name))]
     TrailingDotOrSpace {
         /// The path as written.
         path: String,
@@ -231,8 +236,8 @@ pub enum PathError {
     /// colon is the important one: it selects an alternate data stream of
     /// the file before it.
     #[error(
-        "`{path}`: the name `{name}` contains {character:?}, which Windows does not allow in a file name"
-    )]
+        "`{shown_path}`: the name `{shown_name}` contains {character:?}, which Windows does not allow in a file name"
+    , shown_path = crate::visible(.path), shown_name = crate::visible(.name))]
     InvalidCharacter {
         /// The path as written.
         path: String,
@@ -242,52 +247,52 @@ pub enum PathError {
         character: char,
     },
     /// An absolute path was needed.
-    #[error("`{path}` is not an absolute path")]
+    #[error("`{shown_path}` is not an absolute path", shown_path = crate::visible(.path))]
     NotAbsolute {
         /// The path as written.
         path: String,
     },
     /// A relative path was needed.
-    #[error("`{path}` is not a relative path")]
+    #[error("`{shown_path}` is not a relative path", shown_path = crate::visible(.path))]
     NotRelative {
         /// The path as written.
         path: String,
     },
     /// A relative path that climbs out of the directory it is relative to.
-    #[error("`{path}` leads out of the directory it is relative to")]
+    #[error("`{shown_path}` leads out of the directory it is relative to", shown_path = crate::visible(.path))]
     Escapes {
         /// The path as written.
         path: String,
     },
     /// A single name was needed, and this has a separator in it or is `.`
     /// or `..`.
-    #[error("`{name}` is not a single file name")]
+    #[error("`{shown_name}` is not a single file name", shown_name = crate::visible(.name))]
     NotAName {
         /// What was given.
         name: String,
     },
     /// The path begins with `~` and the home directory is not known.
-    #[error("`{path}` begins with `~`, and the home directory is not known")]
+    #[error("`{shown_path}` begins with `~`, and the home directory is not known", shown_path = crate::visible(.path))]
     NoHome {
         /// The path as written.
         path: String,
     },
     /// A symbolic link whose target does not exist. Writing through it
     /// would create a file somewhere the path does not show.
-    #[error("`{path}` is a symbolic link to something that does not exist")]
+    #[error("`{shown_path}` is a symbolic link to something that does not exist", shown_path = crate::visible(.path))]
     DanglingLink {
         /// The link.
         path: String,
     },
     /// The workspace root exists and is not a directory.
-    #[error("`{path}` is not a directory")]
+    #[error("`{shown_path}` is not a directory", shown_path = crate::visible(.path))]
     NotADirectory {
         /// The path.
         path: String,
     },
     /// The file system refused to resolve the path: no permission, a loop of
     /// links, a file where a directory was needed.
-    #[error("`{path}` could not be resolved: {source}")]
+    #[error("`{shown_path}` could not be resolved: {source}", shown_path = crate::visible(.path))]
     Io {
         /// The path being resolved.
         path: String,

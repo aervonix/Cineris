@@ -89,7 +89,7 @@ fn a_file_reached_through_a_link_is_read_at_its_real_location() {
     // the file, so a rule on the file cannot be dodged through the link.
     let plan = ws.plan(&tool, json!({"path": "inside-link"})).unwrap();
     assert!(
-        matches!(plan.effects.as_slice(), [Effect::Read(path)] if path.display() == "real/notes.txt")
+        matches!(plan.effects.as_slice(), [Effect::Read(path)] if path.data() == "real/notes.txt")
     );
     assert_eq!(
         ok(&ws.call(&tool, json!({"path": "inside-link"}))),
@@ -108,7 +108,7 @@ fn a_file_reached_through_a_link_is_read_at_its_real_location() {
         panic!("one read, not {:?}", plan.effects);
     };
     assert!(!path.is_inside_workspace());
-    assert!(path.display().ends_with("/unix_read_link/outside.txt"));
+    assert!(path.data().ends_with("/unix_read_link/outside.txt"));
 }
 
 #[test]

@@ -9,6 +9,8 @@
 
 use std::fmt::Write as _;
 
+use cortex_base::visible;
+
 use crate::language::Language;
 
 /// The most entries one file's outline keeps. A generated file with fifty
@@ -188,41 +190,6 @@ impl Outline {
     }
 }
 
-/// Whether a character would change how the text around it reads without
-/// being seen: a control character (a line break, an escape), one that
-/// reorders text (the bidirectional controls), a line or paragraph
-/// separator, or one of no width.
-fn hidden(character: char) -> bool {
-    character.is_control()
-        || matches!(
-            character,
-            '\u{200B}'..='\u{200F}' | '\u{061C}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
-        )
-}
-
-/// `text` with every character that would act unseen written as an
-/// escape (`\n`, `\u{1b}`): a file named with a line break must not start
-/// a line of its own in the map, which is the harness's notice.
-#[must_use]
-pub fn visible(text: &str) -> std::borrow::Cow<'_, str> {
-    if !text.chars().any(hidden) {
-        return std::borrow::Cow::Borrowed(text);
-    }
-    let mut out = String::with_capacity(text.len() + 8);
-    for character in text.chars() {
-        match character {
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            other if hidden(other) => {
-                let _ = write!(out, "\\u{{{:x}}}", u32::from(other));
-            }
-            other => out.push(other),
-        }
-    }
-    std::borrow::Cow::Owned(out)
-}
-
 /// Cuts `text` to at most `chars` characters, marking a cut with `…`.
 #[must_use]
 pub(crate) fn clip(text: &str, chars: usize) -> String {
@@ -261,12 +228,23 @@ mod tests {
         assert_eq!(Kind::from_word("nothing"), None);
     }
 
+    /// A head and a doc are shown through `cortex_base::visible`: a tag
+    /// character (the independent review of step 18) is an escape too.
     #[test]
-    fn what_would_act_unseen_is_written_as_an_escape() {
-        assert_eq!(visible("plain é"), "plain é");
-        assert_eq!(visible("a\nb\tc\u{1b}[0m"), "a\\nb\\tc\\u{1b}[0m");
-        assert_eq!(visible("x\u{202E}y"), "x\\u{202e}y");
-        assert_eq!(visible("a\u{2028}b\u{200B}c"), "a\\u{2028}b\\u{200b}c");
+    fn an_outline_shows_what_would_act_unseen_as_escapes() {
+        let outline = Outline {
+            language: None,
+            entries: vec![Entry {
+                line: 1,
+                depth: 0,
+                kind: Kind::Block,
+                name: "a".into(),
+                head: "a\nb\u{E0041}".into(),
+                doc: Some("c\u{202E}".into()),
+            }],
+            truncated: false,
+        };
+        assert_eq!(outline.render(), "1  a\\nb\\u{e0041}  — c\\u{202e}\n");
     }
 
     #[test]

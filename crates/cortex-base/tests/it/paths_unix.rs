@@ -68,11 +68,11 @@ fn a_link_that_stays_inside_resolves_to_the_real_file_inside() {
     ] {
         let resolved = resolver.resolve(written).unwrap();
         assert!(resolved.is_inside_workspace(), "{written:?}");
-        assert_eq!(resolved.display(), "real/file.txt", "{written:?}");
+        assert_eq!(resolved.data(), "real/file.txt", "{written:?}");
         assert_eq!(resolved, resolver.resolve("real/file.txt").unwrap());
     }
     assert_eq!(
-        resolver.resolve("alias/new.txt").unwrap().display(),
+        resolver.resolve("alias/new.txt").unwrap().data(),
         "real/new.txt"
     );
 }
@@ -189,7 +189,7 @@ fn a_workspace_opened_through_a_link_is_known_by_its_real_location() {
     ] {
         let resolved = resolver.resolve(written).unwrap();
         assert!(resolved.is_inside_workspace(), "{written:?}");
-        assert_eq!(resolved.display(), "src/lib.rs");
+        assert_eq!(resolved.data(), "src/lib.rs");
     }
 }
 
@@ -236,7 +236,7 @@ fn names_that_only_windows_refuses_are_ordinary_files() {
         let resolved = resolver.resolve(name).unwrap();
         assert!(resolved.exists(), "{name:?}");
         assert!(resolved.is_inside_workspace());
-        assert_eq!(resolved.display(), name);
+        assert_eq!(resolved.data(), name);
         assert_eq!(resolved.abs().file_name(), Some(name));
     }
     assert_eq!(scratch.listing("ws").len(), names.len());

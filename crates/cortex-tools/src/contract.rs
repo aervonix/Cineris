@@ -265,9 +265,9 @@ impl Effect {
     #[must_use]
     pub fn target(&self) -> String {
         match self {
-            Self::Read(path) | Self::Write(path) => path.display(),
+            Self::Read(path) | Self::Write(path) => path.shown(),
             Self::ReadTree(path) => {
-                let shown = path.display();
+                let shown = path.shown();
                 if shown.ends_with('/') {
                     format!("{shown}**")
                 } else {

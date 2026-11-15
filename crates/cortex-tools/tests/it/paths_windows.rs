@@ -34,7 +34,7 @@ fn both_separators_are_accepted_and_the_forward_one_is_shown() {
         let plan = ws.plan(&read, json!({"path": path})).unwrap();
         assert_eq!(plan.summary, "Read src/Main.rs", "{path}");
         assert!(
-            matches!(plan.effects.as_slice(), [Effect::Read(found)] if found.display() == "src/Main.rs")
+            matches!(plan.effects.as_slice(), [Effect::Read(found)] if found.data() == "src/Main.rs")
         );
     }
     assert_eq!(

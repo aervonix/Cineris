@@ -375,15 +375,29 @@ fn parent_of(root_fs: &Path, root_abs: &AbsPath, fs_parent: &Path) -> Result<Par
     })
 }
 
-/// How a path under a walked directory is shown to the model: under the
-/// directory's own shown path.
-pub(crate) fn shown_path(root_shown: &str, relative: &str) -> String {
-    if root_shown == "." {
+/// A path under a walked directory as data, under the directory's own:
+/// for a program to use, never for text a model or a client reads.
+pub(crate) fn joined_path(root: &str, relative: &str) -> String {
+    if root == "." {
         relative.to_owned()
-    } else if root_shown.ends_with('/') {
-        format!("{root_shown}{relative}")
+    } else if root.ends_with('/') {
+        format!("{root}{relative}")
     } else {
-        format!("{root_shown}/{relative}")
+        format!("{root}/{relative}")
+    }
+}
+
+/// How a path under a walked directory is shown to the model: under the
+/// directory's own shown path, with every character that would act unseen
+/// written as an escape.
+pub(crate) fn shown_path(root_shown: &str, relative: &str) -> String {
+    let joined = joined_path(root_shown, relative);
+    // A name from the walk is the workspace's: a line break in it must
+    // not start what looks like another entry (the independent review
+    // of step 18). Escaping what is escaped already changes nothing.
+    match cortex_base::visible(&joined) {
+        std::borrow::Cow::Borrowed(_) => joined,
+        std::borrow::Cow::Owned(escaped) => escaped,
     }
 }
 

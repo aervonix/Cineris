@@ -157,10 +157,22 @@ impl ResolvedPath {
         self.names_a_directory
     }
 
-    /// The path as it is shown to a model: relative to the workspace when
-    /// inside it, absolute otherwise, always with `/`.
+    /// The path as it is shown to a model or a client, in text: relative to
+    /// the workspace when inside it, absolute otherwise, always with `/`,
+    /// and every character that would act unseen (a line break, a
+    /// bidirectional control, a tag character) written as an escape
+    /// ([`crate::visible`]), so that a name cannot start lines of its own
+    /// in a result, a notice or a prompt.
     #[must_use]
-    pub fn display(&self) -> String {
+    pub fn shown(&self) -> String {
+        crate::visible(&self.data()).into_owned()
+    }
+
+    /// The path as data, for a program to read back: in a tool's payload,
+    /// as a key. The same as [`ResolvedPath::shown`] but with nothing
+    /// escaped. Never put it in text a model or a client reads.
+    #[must_use]
+    pub fn data(&self) -> String {
         match &self.relative {
             Some(relative) => relative.to_string(),
             None => self.abs.to_string(),
