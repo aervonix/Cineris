@@ -14,8 +14,9 @@
 //!   A pass that gave way while a map was asked for is run again for it.
 //! - **It stops with the session:** a pass looks at the session's token
 //!   between files.
-//! - **Nothing is held:** the map is read from the cache when asked for, an
-//!   outline made from its file, and both dropped.
+//! - **Nothing is held:** a map is made from the cache the pass before it
+//!   read or made, without reading it again, an outline from its file, and
+//!   both are dropped.
 //! - **A pass that panics** answers who waits with no map, and lets the next
 //!   request start another. An idle session goes on passing while each
 //!   pass makes progress, a few passes at most for each idle slice.
@@ -138,10 +139,12 @@ impl Shared {
                 || self.turn.load(Ordering::SeqCst) && lock(&self.state).waiting.is_empty();
             // A pass that panics (an extractor's bug, a gate's) must not
             // leave the index running for ever and who waits unanswered.
+            // The pass keeps the cache it read or made, so the maps asked
+            // for are made from it without reading it again.
             let passed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.index.pass(&self.cancel, &give_way)
+                self.index.pass_and_keep(&self.cancel, &give_way)
             }));
-            let Ok(report) = passed else {
+            let Ok((report, snapshot)) = passed else {
                 tracing::warn!("a pass of the repository index failed: no map from it");
                 let mut state = lock(&self.state);
                 state.waiting.clear();
@@ -176,12 +179,15 @@ impl Shared {
                         tokens: self.tokens,
                     };
                     let map = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        self.index.map(&request)
+                        self.index.map_from(&snapshot, &request)
                     }))
                     .unwrap_or(None);
                     answer.send(map);
                 }
             }
+            // The cache's text is the size of the cache: not held past the
+            // maps.
+            drop(snapshot);
             let mut state = lock(&self.state);
             if !state.waiting.is_empty() {
                 continue;

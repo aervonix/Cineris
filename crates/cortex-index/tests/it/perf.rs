@@ -546,11 +546,16 @@ fn sys_perf_a_tree_of_real_code() {
                 })
                 .unwrap();
         }
+        // As the session's index does it: the map from the cache the pass
+        // kept.
         let start = Instant::now();
-        let report = index.pass(&CancelToken::new(), &|| false);
+        let (report, snapshot) = index.pass_and_keep(&CancelToken::new(), &|| false);
         let passed = start.elapsed();
-        map = index.map(&MapRequest::new()).expect("a map");
+        map = index
+            .map_from(&snapshot, &MapRequest::new())
+            .expect("a map");
         let total = start.elapsed();
+        drop(snapshot);
         assert!(report.read <= 1, "{report:?}");
         (ms(passed), ms(total - passed), ms(total))
     };
@@ -575,9 +580,20 @@ fn sys_perf_a_tree_of_real_code() {
     for line in table {
         println!("{line}");
     }
+    let after_warm = memory_kib();
+    let alone = median(
+        (0..5)
+            .map(|_| {
+                let start = Instant::now();
+                assert!(index.map(&MapRequest::new()).is_some());
+                ms(start.elapsed())
+            })
+            .collect(),
+    );
+    println!("the map alone, reading the cache from the disk: {alone:.1} ms (median of 5)");
     breakdown(&tree);
     println!(
-        "memory (KiB, peak and now): before {before:?}, after the cold passes {after_cold:?}, at the end {:?}",
+        "memory (KiB, peak and now): before {before:?}, after the cold passes {after_cold:?}, after the warm ones {after_warm:?}, after the breakdown's walks and reads {:?}",
         memory_kib()
     );
     println!("--- the map ---\n{map}--- end ---");
