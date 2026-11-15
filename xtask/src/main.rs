@@ -170,10 +170,13 @@ By hand only, against a real provider (never in CI)
   live [PROVIDER]   The live smoke test, against anthropic (when no provider
                     is named), openrouter, deepseek or venice. For anthropic
                     and deepseek, then one headless run of the real binary.
-  live --headless [PROVIDER]
+  live --headless [PROVIDER] [--test NAME]... [--dry-run]
                     Every headless run of the real binary against the provider
                     (anthropic when none is named, or deepseek): cortex-cli's
                     tests/system/live.rs, under cargo test, with no time limit.
+                    --test runs the one named (its name, or the end of it:
+                    compaction); --dry-run prints what would run and sends,
+                    builds and reads nothing.
   live --spent [--since YYYY-MM-DD]
                     Total the spend ledger: every live call's provider, model,
                     tokens and cost, kept outside the repository.
