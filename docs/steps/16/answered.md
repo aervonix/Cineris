@@ -128,3 +128,9 @@ A reviewer that had not seen the work read the whole change against the specific
 | The overflow record settles the refused request as the one sent | **Intended**: it was sent. The next request begins a new epoch, so the prefix check and the difference are of the new one. |
 | `cortex stats reset` while another process writes | **Left**: the reset says what it removed, and a writer's later lines start a file again; a reset is a deliberate act at the keyboard. |
 | A request with no usage counts as unpriced | **Left**: not shown anywhere. |
+
+## Breaks and stress
+
+- **`cargo xtask mutate step-16`:** all 41 breaks of `mutations/step-16.breaks` are caught by the tests they name. The run was on the desk's side slot at two jobs, with the last break run alone. The first two runs at four jobs never got past their baselines: file tests of `cortex-base`, `cortex-config` and `cortex-stats` all timed out at the same moment with nothing broken, which is the desk's disk stalling under four copies. A break that first went uncaught (the main model asked after a `fast` failure at the trigger, with no summary in the background) has its own test now.
+- **`cargo xtask stress -p cortex-stats -p cortex-agent -p cortex-core --count 50`:** 49 of 50 passed. The one failure was a timeout, with no output, of `store::the_aggregates_rebuild_to_the_same_values_from_the_files` under seed 46, during a burst of load on the desk. It did not happen again in 200 repeats on the laptop, nor in 300 repeats of `cortex-stats` on two cores with load added (`--cores 2 --load 6`).
+- **Spend:** none. The three live refreshes are free and are not in the spend ledger.
