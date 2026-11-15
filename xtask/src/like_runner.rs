@@ -35,56 +35,60 @@ pub(crate) const RUNNER_THREADS: &str = "4";
 
 /// Each crate's factor in each tier, Linux and Windows: a runner's time
 /// above the start of a test's process over the desk's, the same tree on
-/// both. Measured on 2026-11-15 in the fifth tooling step, from the desk's
-/// run of `main` at `9ddbf67` at four test threads against `try` run
-/// 43663690282 (main against itself, three rounds, start 3 ms on Linux and
-/// 8 ms on Windows). Only a crate and tier with at least 0.05 s at the desk
-/// is listed.
+/// both, the job split into its two runs. Measured on 2026-11-15 in the
+/// fifth tooling step, from the desk's run of the step's branch at
+/// `ef5009d` at four test threads (quiet, `rx --exclusive`) against the
+/// branch's side of `try` run 43691692866 (an A/B against `main` at
+/// `8a894c4`, five rounds, start 3 ms on Linux and 10 ms on Windows). Only
+/// a crate and tier with at least 0.05 s at the desk is listed. The first
+/// table, of `main` at `9ddbf67` in one run, read Windows' tier 2 of the
+/// split job 51% high.
 const FACTORS: &[(&str, Tier, f64, f64)] = &[
-    ("cortex-agent", Tier::Integration, 2.23, 4.55),
-    ("cortex-base", Tier::Unit, 2.42, 4.34),
-    ("cortex-base", Tier::Integration, 1.27, 3.12),
-    ("cortex-cli", Tier::System, 1.28, 5.60),
-    ("cortex-config", Tier::Integration, 0.25, 1.13),
-    ("cortex-core", Tier::Unit, 0.66, 2.62),
-    ("cortex-core", Tier::Integration, 0.73, 2.19),
-    ("cortex-core", Tier::System, 1.15, 10.18),
-    ("cortex-llm", Tier::Unit, 2.76, 11.19),
-    ("cortex-llm", Tier::Integration, 1.63, 4.17),
-    ("cortex-llm", Tier::System, 2.13, 0.55),
-    ("cortex-policy", Tier::Unit, 1.60, 3.17),
-    ("cortex-policy", Tier::Integration, 0.92, 2.09),
-    ("cortex-policy", Tier::System, 1.47, 9.73),
-    ("cortex-sandbox", Tier::System, 4.82, 6.16),
-    ("cortex-session", Tier::Unit, 1.38, 2.87),
-    ("cortex-session", Tier::Integration, 1.06, 2.00),
-    ("cortex-session", Tier::System, 5.63, 41.54),
-    ("cortex-term", Tier::Unit, 2.56, 2.75),
-    ("cortex-term", Tier::Integration, 2.12, 2.84),
-    ("cortex-term", Tier::System, 1.47, 5.59),
-    ("cortex-tools", Tier::Unit, 3.23, 5.79),
-    ("cortex-tools", Tier::Integration, 2.54, 8.29),
-    ("cortex-tools", Tier::System, 4.12, 65.54),
-    ("cortex-tui", Tier::Unit, 2.10, 3.60),
-    ("cortex-tui", Tier::Integration, 1.71, 3.04),
-    ("cortex-tui", Tier::System, 4.73, 13.73),
-    ("xtask", Tier::Unit, 3.90, 7.23),
-    ("xtask", Tier::System, 1.39, 6.54),
+    ("cortex-agent", Tier::Integration, 2.25, 5.50),
+    ("cortex-base", Tier::Unit, 2.74, 5.39),
+    ("cortex-base", Tier::Integration, 0.13, 0.57),
+    ("cortex-cli", Tier::System, 0.58, 3.73),
+    ("cortex-config", Tier::Integration, 0.07, 0.38),
+    ("cortex-core", Tier::Unit, 0.49, 1.76),
+    ("cortex-core", Tier::Integration, 0.69, 1.93),
+    ("cortex-core", Tier::System, 1.15, 12.38),
+    ("cortex-llm", Tier::Unit, 3.72, 6.34),
+    ("cortex-llm", Tier::Integration, 1.73, 3.19),
+    ("cortex-llm", Tier::System, 1.90, 0.72),
+    ("cortex-policy", Tier::Unit, 1.96, 3.98),
+    ("cortex-policy", Tier::Integration, 0.44, 1.06),
+    ("cortex-policy", Tier::System, 0.92, 7.24),
+    ("cortex-sandbox", Tier::System, 3.51, 7.41),
+    ("cortex-session", Tier::Unit, 2.38, 4.50),
+    ("cortex-session", Tier::Integration, 0.46, 1.26),
+    ("cortex-session", Tier::System, 5.10, 49.93),
+    ("cortex-term", Tier::Unit, 2.36, 2.97),
+    ("cortex-term", Tier::Integration, 2.12, 3.44),
+    ("cortex-term", Tier::System, 1.22, 5.63),
+    ("cortex-tools", Tier::Unit, 3.47, 6.52),
+    ("cortex-tools", Tier::Integration, 1.04, 4.26),
+    ("cortex-tools", Tier::System, 2.32, 83.87),
+    ("cortex-tui", Tier::Unit, 2.17, 3.46),
+    ("cortex-tui", Tier::Integration, 1.96, 3.43),
+    ("cortex-tui", Tier::System, 3.40, 16.23),
+    ("xtask", Tier::Unit, 3.54, 8.53),
+    ("xtask", Tier::System, 1.41, 9.91),
 ];
 
 /// Each tier's factor, Linux and Windows, for a crate the table does not
 /// know: the tier's whole time on the runner over the desk's, in the same
 /// measurement.
 const TIER_FACTORS: [(Tier, f64, f64); 3] = [
-    (Tier::Unit, 2.27, 4.33),
-    (Tier::Integration, 1.14, 2.85),
-    (Tier::System, 1.76, 12.23),
+    (Tier::Unit, 2.41, 4.40),
+    (Tier::Integration, 0.69, 1.74),
+    (Tier::System, 1.16, 12.36),
 ];
 
 /// How much slower than the measured runner a slow one was, Linux and
-/// Windows: tier 2 of `main` at `9ddbf67` in its own CI run (43639354819,
-/// start 4 and 10 ms), over the measured runner's.
-const SLOW_RUNNER: (f64, f64) = (1.77, 1.41);
+/// Windows: tier 2 of the same tree in its pull request's CI run
+/// (43691685559, start 4 and 10 ms: 14.0 and 30.2 s), over the measured
+/// runner's (9.7 and 24.8 s).
+const SLOW_RUNNER: (f64, f64) = (1.44, 1.22);
 
 fn factor(krate: &str, tier: Tier, os: Os) -> f64 {
     let pick = |linux: f64, windows: f64| match os {
@@ -250,26 +254,26 @@ mod tests {
 
     #[test]
     fn a_crate_is_scaled_by_its_own_factor_and_an_unknown_one_by_its_tiers() {
-        assert_eq!(factor("cortex-llm", Tier::Integration, Os::Windows), 4.17);
-        assert_eq!(factor("cortex-new", Tier::Unit, Os::Windows), 4.33);
-        assert_eq!(factor("cortex-new", Tier::Unit, Os::Linux), 2.27);
+        assert_eq!(factor("cortex-llm", Tier::Integration, Os::Windows), 3.19);
+        assert_eq!(factor("cortex-new", Tier::Unit, Os::Windows), 4.40);
+        assert_eq!(factor("cortex-new", Tier::Unit, Os::Linux), 2.41);
 
         let text = estimate(&desk());
 
-        // Windows: 1 s of cortex-llm's tier 2 is 4.2 s on the runner and
-        // 5.9 s on a slow one; 1 s of an unknown crate's tier 1 is 4.3 s.
+        // Windows: 1 s of cortex-llm's tier 2 is 3.2 s on the runner and
+        // 3.9 s on a slow one; 1 s of an unknown crate's tier 1 is 4.4 s.
         assert!(
-            text.contains("  2, integration      1.0 s    4.2 s          5.9 s     40 s\n"),
+            text.contains("  2, integration      1.0 s    3.2 s          3.9 s     40 s\n"),
             "{text}"
         );
-        assert!(text.contains("      most: cortex-llm 4.2 s\n"), "{text}");
+        assert!(text.contains("      most: cortex-llm 3.2 s\n"), "{text}");
         assert!(
-            text.contains("  1, unit             1.0 s    4.3 s          6.1 s     20 s\n"),
+            text.contains("  1, unit             1.0 s    4.4 s          5.4 s     20 s\n"),
             "{text}"
         );
-        // Linux's slow runner is 1.77 times the measured one.
+        // Linux's slow runner is 1.44 times the measured one.
         assert!(
-            text.contains("  2, integration      1.0 s    1.6 s          2.9 s     40 s\n"),
+            text.contains("  2, integration      1.0 s    1.7 s          2.5 s     40 s\n"),
             "{text}"
         );
     }
@@ -281,8 +285,8 @@ mod tests {
 
         let text = estimate(&cases);
 
-        // 2 s of cortex-tools' system tests is 131 s on the Windows runner.
-        assert!(text.contains("131.1 s"), "{text}");
+        // 2 s of cortex-tools' system tests is 168 s on the Windows runner.
+        assert!(text.contains("167.7 s"), "{text}");
         assert!(text.contains("90 s  over on a slow runner"), "{text}");
     }
 
