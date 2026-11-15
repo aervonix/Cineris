@@ -5,7 +5,7 @@
 [break] the-16-colour-accent-from-the-reduction
 rule: At 16 colours the accent is the one the theme names (magenta), never the automatic reduction, which is bright blue.
 file: crates/cortex-tui/src/theme.rs
-in: resolve
+in: resolve_colour
 find: ColorDepth::Ansi16 => palette.accent_16,
 replace: ColorDepth::Ansi16 => palette.accent.for_depth(depth),
 caught-by:
@@ -24,7 +24,7 @@ caught-by:
 [break] accent-text-in-magenta-on-a-dark-16-colour-terminal
 rule: On a dark background at 16 colours no magenta reaches the target, so accent-coloured text is bold in the default colour.
 file: crates/cortex-tui/src/theme.rs
-in: resolve
+in: resolve_colour
 find: (ColorDepth::Mono, _) | (ColorDepth::Ansi16, Background::Dark) => plain.bold(),
 replace:
     (ColorDepth::Mono, _) => plain.bold(),
@@ -35,7 +35,7 @@ caught-by:
 [break] muted-is-not-dim-without-colour
 rule: Without colour, a token that was only a colour gets an attribute, so meaning is never carried by colour alone.
 file: crates/cortex-tui/src/theme.rs
-in: resolve
+in: resolve_colour
 find: let muted = if mono { plain.dim() } else { fg(palette.muted) };
 replace: let muted = if mono { plain } else { fg(palette.muted) };
 caught-by:
@@ -93,7 +93,7 @@ caught-by:
 [break] a-tint-mixed-into-a-background-nobody-reported
 rule: The diff tints are mixed into the background the terminal reported, and there is none when it reported none.
 file: crates/cortex-tui/src/theme.rs
-in: resolve
+in: resolve_colour
 find: (depth == ColorDepth::TrueColor && reported).then(
 replace: (depth == ColorDepth::TrueColor).then(
 caught-by:
@@ -381,6 +381,7 @@ find: cortex_term::sanitize(text).replace(['\n', '\t'], " ")
 replace: cortex_term::sanitize(text).into_owned()
 caught-by:
     view::hint::tests::a_tab_or_a_line_break_in_a_one_row_field_reaches_no_line
+    view::menu::tests::the_menus_in_every_variant
 
 [break] the-armed-quit-unsaid
 rule: The hint row says when Ctrl+C has armed quitting.

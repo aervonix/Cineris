@@ -1,0 +1,276 @@
+# The fifth tooling step: stress's failure text, replace --script, the rigs
+# that cannot hang on a question, the fake timer's waits in the timeout
+# report, the style comparison of the golden screens, the owner's colours,
+# the index of the open items, the comma that a find cannot match, the test
+# binary in roles and the interrupt hand-off, the runner-like estimate and
+# the records written from runs. Written with the code, and run with
+# `cargo xtask mutate tooling-5`.
+
+# -------------------------------------------------------------------- stress
+
+[break] stress-drops-a-failures-message
+rule: A stress run prints each failing test's message, read from the report.
+file: xtask/src/stress.rs
+in: summarise
+find: text.push_str(&explain(&own, first_seed, report));
+replace:
+caught-by:
+    stress::tests::each_failure_is_shown_by_the_start_of_its_message_with_where_the_rest_is
+    stress::tests::a_timeout_shows_what_the_test_wrote_and_a_failure_of_another_kind_is_named
+
+[break] stress-reports-a-pass-for-a-failed-run
+rule: A run in which a test failed on some repeat is a failure, whatever nextest's status says.
+file: xtask/src/stress.rs
+in: conclude
+find: if summary.failing > 0 {
+replace: if summary.failing > usize::MAX - 1 {
+caught-by:
+    stress::tests::a_run_found_nothing_only_if_nextest_agrees_and_every_repeat_is_there
+
+[break] a-timeout-shows-no-standard-error
+rule: A timeout's failure shows what the test wrote to standard error, where the timeout report is.
+file: xtask/src/stress.rs
+in: failure_lines
+find: &failure.stderr
+occurrence: 1
+replace: &failure.text
+caught-by:
+    stress::tests::a_timeout_shows_what_the_test_wrote_and_a_failure_of_another_kind_is_named
+
+[break] a-failures-text-is-not-read
+rule: The report's failure text is read from the first failure element of a case.
+file: xtask/src/junit.rs
+in: failures
+find: let (kind, text) = child_text(&children[at..], child);
+replace: let (kind, text) = (child_text(&children[at..], child).0, String::new());
+caught-by:
+    junit::tests::a_failures_text_kind_and_standard_error_are_read_and_a_pass_has_none
+    stress::tests::each_failure_is_shown_by_the_start_of_its_message_with_where_the_rest_is
+
+# ------------------------------------------------------------ replace --script
+
+[break] a-script-is-applied-in-part
+rule: replace --script makes every edit or none: an edit that cannot be made stops the script before any file is written.
+file: xtask/src/replace.rs
+in: apply_script
+find: let (edited, lines) = edit(&files[index].1, &step.request, &path.display().to_string())
+replace: let (edited, lines) = edit(&files[index].1, &step.request, &path.display().to_string()).or_else(|_| Ok::<_, String>((files[index].1.clone(), String::new())))
+caught-by:
+    replace::tests::a_script_with_one_edit_that_cannot_be_made_is_refused_whole_and_names_it
+    replace::tests::a_script_on_real_files_writes_all_of_them_or_none
+
+[break] a-script-edit-does-not-see-the-one-before
+rule: Each edit of a script is made on what the edits before it left.
+file: xtask/src/replace.rs
+in: apply_script
+find: files[index].1 = edited;
+replace: let _ = edited;
+caught-by:
+    replace::tests::an_edit_sees_what_the_edits_before_it_left
+    replace::tests::every_edit_of_a_script_is_made_in_order
+
+[break] a-script-file-is-not-rust-by-its-name
+rule: A .rs file in a script is matched by tokens, any other file by its text.
+file: xtask/src/replace.rs
+in: parse_script
+find: edit.request.text = forced_text || !rust;
+replace: edit.request.text = forced_text;
+caught-by:
+    replace::tests::a_script_is_read_into_its_edits
+
+# ------------------------------------------------------- rigs and the timer
+
+[break] an-unexpected-approval-waits
+rule: The core rig's Front fails a test at once on an approval it did not expect and nobody answers.
+file: crates/cortex-core/tests/it/main.rs
+in: Front::open_approval
+find: .find(|(id, _)| !answered.contains(id))
+replace: .find(|(id, _)| !answered.contains(id) && false)
+packages: cortex-core
+caught-by:
+    approvals::an_approval_the_test_did_not_expect_fails_it_at_once_naming_the_call
+    approvals::a_front_answers_by_its_policy_what_the_test_did_not_take_up
+
+[break] an-unscripted-question-is-allowed
+rule: The agent rig fails a test on a question it scripted no answer for.
+file: crates/cortex-agent/tests/it/main.rs
+in: Rig::drop
+find: if !asked.is_empty() && !std::thread::panicking() {
+replace: if false {
+packages: cortex-agent
+caught-by:
+    denials::a_question_with_no_scripted_answer_fails_the_test_naming_the_call
+
+[break] a-fake-timers-wait-is-not-named
+rule: A manual fake timer's wait is named for the timeout report while it runs.
+file: crates/cortex-testkit/src/timer.rs
+in: FakeTimer::sleep
+find: doing: Some(doing)
+replace: doing: { drop(doing); None }
+caught-by:
+    timer::tests::a_running_wait_is_named_for_the_timeout_report_until_it_ends
+
+[break] a-finished-wait-stays-named
+rule: A wait that has ended is not named any more, though its future is held.
+file: crates/cortex-testkit/src/timer.rs
+in: ManualSleep::poll
+find: this.doing = None;
+replace:
+caught-by:
+    timer::tests::a_running_wait_is_named_for_the_timeout_report_until_it_ends
+
+# ---------------------------------------------------- screens and colours
+
+[break] the-style-comparison-passes-a-changed-colour
+rule: The golden screens compare a cell's style as well as its text.
+file: crates/cortex-tui/tests/it/screens/mod.rs
+in: same
+find: a == b
+replace: a.text == b.text && a.tail == b.tail
+packages: cortex-tui
+caught-by:
+    screens::a_changed_colour_weight_or_background_is_found_and_an_unseen_one_is_not
+
+[break] red-green-and-yellow-are-not-bold-on-light
+rule: On a light background, status text in red, green or yellow is bold.
+file: crates/cortex-tui/src/theme.rs
+in: Palette::light
+find: warm_bold: true
+replace: warm_bold: false
+caught-by:
+    theme::tests::on_a_light_background_red_green_and_yellow_text_is_bold
+
+[break] keywords-are-magenta-on-dark
+rule: On a dark background, and when none is reported, keywords in code are bright blue.
+file: crates/cortex-tui/src/theme.rs
+in: Palette::dark
+find: syntax_keyword: Color::Ansi(12)
+replace: syntax_keyword: Color::Ansi(13)
+caught-by:
+    theme::tests::on_a_dark_background_keywords_are_bright_blue
+
+[break] code-goes-bold-on-light
+rule: By the owner's choice, highlighted code and whole changed lines keep their weight on a light background.
+file: crates/cortex-tui/src/theme.rs
+in: resolve
+find: let reached = !wide || palette.warm_bold_code_and_lines;
+replace: let reached = true;
+caught-by:
+    theme::tests::on_a_light_background_red_green_and_yellow_text_is_bold
+
+# ---------------------------------------------------------- the open items
+
+[break] the-index-check-passes-an-unlisted-item
+rule: Every open item is listed in the index of docs/outstanding/README.md exactly once.
+file: xtask/src/rules/layout.rs
+in: unlisted
+find: if listed == 1 {
+replace: if listed <= 1 {
+caught-by:
+    rules::layout::tests::an_item_the_index_does_not_list_once_is_named
+
+# -------------------------------------------------- the comma a find ends in
+
+[break] the-comma-before-a-bracket-is-not-explained
+rule: The pre-flight says why a find whose comma comes before a closing bracket cannot match.
+file: xtask/src/mutate/mod.rs
+in: comma_before_a_bracket
+find: if lex::code_texts(&one.find).last() != Some(&",") {
+replace: if true {
+caught-by:
+    mutate::tests::a_find_whose_comma_comes_before_a_bracket_is_told_why_it_cannot_match
+
+[break] replace-does-not-explain-the-comma
+rule: replace says why a --from whose comma comes before a closing bracket cannot match.
+file: xtask/src/replace.rs
+in: comma_before_a_bracket
+find: if lex::code_texts(&request.from).last() != Some(&",") {
+replace: if true {
+caught-by:
+    replace::tests::a_match_whose_comma_comes_before_a_bracket_is_told_why_it_cannot_be_made
+
+# ------------------------------------------- roles and the interrupt hand-off
+
+[break] a-shell-says-restored-whatever-the-modes
+rule: The shell says the terminal was put back only when its modes after the child are the ones before.
+file: crates/cortex-testkit/src/role.rs
+in: ModeShell::run
+find: if before == after {
+replace: if true {
+packages: cortex-term
+caught-by:
+    system::sys_the_terminal_is_put_back_after_a_panic
+
+[break] the-guard-does-not-drain-a-pending-interrupt
+rule: An interrupt still pending as the guard ends is taken, not left to end the process.
+file: crates/cortex-term/src/sys/unix.rs
+in: restore_interrupts
+find: let taken = libc::sigtimedwait(set.as_ptr(), std::ptr::null_mut(), &raw const now);
+replace: let taken = 0;
+caught-by:
+    signals::sys_an_interrupt_pending_as_the_guard_ends_is_taken_by_it
+
+[break] no-grace-after-the-guard
+rule: For a second after a guard ends, the terminal's own handler passes an interrupt over.
+file: crates/cortex-term/src/sys/unix.rs
+in: guard_just_ended
+find: ended != 0 && monotonic().saturating_sub(ended) < GUARD_GRACE_NANOS
+replace: false
+caught-by:
+    signals::sys_an_interrupt_while_the_guard_lives_or_just_after_is_passed_over
+
+[break] an-interrupt-while-the-guard-lives-ends-the-process
+rule: While a guard lives, the terminal's own handler passes an interrupt over.
+file: crates/cortex-term/src/sys/unix.rs
+in: on_ending
+find: (GUARDING.load(Ordering::SeqCst) || guard_just_ended())
+replace: guard_just_ended()
+caught-by:
+    signals::sys_an_interrupt_while_the_guard_lives_or_just_after_is_passed_over
+
+# --------------------------------------------- the estimate and the records
+
+[break] a-crate-is-scaled-by-its-tiers-factor
+rule: A crate the table knows is scaled by its own factor, not its tier's.
+file: xtask/src/like_runner.rs
+in: factor
+find: .find(|(name, of, ..)| *name == krate && *of == tier)
+replace: .find(|(name, of, ..)| *name == krate && *of == tier && false)
+caught-by:
+    like_runner::tests::a_crate_is_scaled_by_its_own_factor_and_an_unknown_one_by_its_tiers
+
+[break] the-slow-runner-is-the-runner
+rule: The estimate gives a slow runner's figure as well as the measured runner's.
+file: xtask/src/like_runner.rs
+in: estimate
+find: Os::Windows => SLOW_RUNNER.1
+replace: Os::Windows => 1.0
+caught-by:
+    like_runner::tests::a_crate_is_scaled_by_its_own_factor_and_an_unknown_one_by_its_tiers
+
+[break] a-section-replaces-what-follows-it
+rule: Writing a ci.md section replaces it up to the next heading, and keeps the rest of the page.
+file: xtask/src/records.rs
+in: with_section
+find: if end < lines.len() {
+replace: if false {
+caught-by:
+    records::tests::a_section_is_replaced_in_place_or_added_at_the_end
+
+[break] an-ab-is-the-mean-of-its-rounds
+rule: An A/B's tables are of each test's median over the rounds.
+file: xtask/src/records.rs
+in: compare
+find: let base = crate::ab::medians(&sides.base);
+replace: let base = sides.base.concat();
+caught-by:
+    records::tests::an_ab_is_each_tiers_median_on_both_sides_with_the_change
+
+[break] main-is-labelled-as-the-pr
+rule: The records label main's run "Main" and the pull request's "The PR at".
+file: xtask/src/records.rs
+in: is_main
+find: info.branch == "main"
+replace: info.branch == "master"
+caught-by:
+    records::tests::the_pull_requests_section_is_in_the_records_form

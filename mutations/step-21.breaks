@@ -531,11 +531,6 @@ replace: if false {
 caught-by:
     sys::unix::tests::leaving_the_terminal_under_a_guard_keeps_the_guard_and_puts_back_what_was_before
 
-[break] a-menu-line-with-a-raw-tab
-rule: A menu line holds no tab or line break from what it shows.
-file: crates/cortex-tui/src/view/menu.rs
-in: shown
-find: cortex_term::sanitize(text).replace(['\t', '\n'], " ")
-replace: cortex_term::sanitize(text).into_owned()
-caught-by:
-    view::menu::tests::the_menus_in_every_variant
+# The menu's one line is view::one_line since the fifth tooling step, whose
+# break (step-22/a-one-row-field-keeps-its-line-break) names the menu's
+# test too: `a-menu-line-with-a-raw-tab` was this break.

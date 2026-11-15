@@ -52,12 +52,12 @@ caught-by:
 
 [break] ci-times-mixes-the-runs-starts
 rule: Each column of the tier table is held against its own run's start cost.
-file: xtask/src/runs.rs
-in: tables
+file: xtask/src/records.rs
+in: pr_section
 find: tiers::total(cases, tier, *start).above_start
 replace: tiers::total(cases, tier, starts[0]).above_start
 caught-by:
-    runs::tests::the_tables_are_those_of_a_steps_ci_page
+    runs::tests::the_tables_are_those_of_a_steps_ci_page_and_name_main_and_the_pr
 
 [break] try-passes-a-quote
 rule: A try run passes on no word with a character a shell would read.
