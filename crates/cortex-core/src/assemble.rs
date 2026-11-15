@@ -1415,6 +1415,22 @@ pub(crate) fn assemble(
             .map(|repo| Arc::new(repo.clone()) as Arc<dyn cortex_tools::Outliner>),
         images: provider::image_support(&main.entry),
     };
+    // Where the session's commands may write: the workspace, its private
+    // temporary directory and the configuration's `sandbox.write`, for a
+    // front end that keeps the programs it runs out of them (step 23).
+    let mut write_roots = vec![root.to_native_string()];
+    write_roots.push(sandbox::temp_path(&id).to_string_lossy().into_owned());
+    for entry in &settings.sandbox.write {
+        let home = options.env.home();
+        if let Some(path) = cortex_config::load::expand_home(entry, home.as_deref()) {
+            let path = if path.is_absolute() {
+                path
+            } else {
+                root.to_fs_path().join(path)
+            };
+            write_roots.push(path.to_string_lossy().into_owned());
+        }
+    }
     let info = SessionInfo {
         id: id.clone(),
         workspace: root.to_native_string(),
@@ -1430,6 +1446,7 @@ pub(crate) fn assemble(
         } else {
             cortex_protocol::session::SandboxStatus::Off
         },
+        write_roots,
     };
     let mut ledger = Ledger::new(Arc::clone(&clock))
         .with_account(Account::for_lease(&lease, Arc::clone(&clock)))

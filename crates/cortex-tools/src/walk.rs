@@ -443,6 +443,55 @@ pub(crate) fn shown_path(root_shown: &str, relative: &str) -> String {
     }
 }
 
+/// The files of a workspace, for a front end's file completion
+/// (`workspace/files`, since step 23): their paths under `root` with `/`
+/// between names, the most recently changed first, as the ignore rules, the
+/// hidden-file rule and `gate` leave them, at most `limit`. Says whether
+/// there were more. Blocks: it walks the tree on several threads, as
+/// `search` and `list` do.
+#[must_use]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the walk blocks, and runs on the blocking pool: each file's time is asked as it is met"
+)]
+pub fn workspace_files(
+    root: &ResolvedPath,
+    gate: &dyn ReadGate,
+    cancel: &CancelToken,
+    limit: usize,
+) -> (Vec<String>, bool) {
+    let found: Mutex<Vec<(std::time::SystemTime, String)>> = Mutex::new(Vec::new());
+    let spec = WalkSpec {
+        root,
+        max_depth: None,
+        include_ignored: false,
+        glob: None,
+        threads: 0,
+    };
+    let _ = walk(&spec, gate, cancel, &mut || {
+        let found = &found;
+        Box::new(move |entry: &Found<'_>| {
+            if entry.kind != EntryKind::File {
+                return;
+            }
+            let changed = std::fs::symlink_metadata(entry.fs_path)
+                .and_then(|meta| meta.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            found
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((changed, entry.relative.to_owned()));
+        })
+    });
+    let mut found = found.into_inner().unwrap_or_else(PoisonError::into_inner);
+    // Newest first; the path breaks a tie, so that the order is the same
+    // whatever order the walk's threads met them in.
+    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let truncated = found.len() > limit;
+    found.truncate(limit);
+    (found.into_iter().map(|(_, path)| path).collect(), truncated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

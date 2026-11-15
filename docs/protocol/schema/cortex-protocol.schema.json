@@ -5488,6 +5488,13 @@
         "workspace": {
           "description": "The workspace root. An absolute path on the server's machine.",
           "type": "string"
+        },
+        "write_roots": {
+          "description": "The directories the session's commands may write to, as absolute\npaths: the workspace, the session's temporary directory and any the\nconfiguration adds. A front end keeps a program it runs for the\nperson (an external editor) out of them, since a command could have\nput one there (since step 23).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -5563,6 +5570,24 @@
         "workspace",
         "created_at",
         "updated_at"
+      ],
+      "type": "object"
+    },
+    "SessionUndoParams": {
+      "description": "`session/undo`: steps back before the session's last turn, its first\nincluded, and records the step as an undo (since step 23).",
+      "properties": {
+        "restore_files": {
+          "default": false,
+          "description": "Whether to put files back as they were before the turn, from its\nsnapshots.",
+          "type": "boolean"
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The session."
+        }
+      },
+      "required": [
+        "session_id"
       ],
       "type": "object"
     },
@@ -6610,6 +6635,14 @@
           "description": "Learned or shared commands used for the safe list."
         },
         {
+          "const": "repository",
+          "description": "Git reading the repository's own configuration, which can name programs for git to run (since step 23)."
+        },
+        {
+          "const": "settings",
+          "description": "A setting of the project's that raises cost or widens access, held back until the project is trusted (since step 23)."
+        },
+        {
           "description": "A value this version of the protocol does not know. Receivers need a default branch.",
           "type": "string",
           "x-cortex-open": true
@@ -6620,6 +6653,10 @@
     "TrustResponse": {
       "description": "The answer to `trust/request`.",
       "properties": {
+        "never": {
+          "description": "With `trusted` false: remember the refusal, so that the project is\nnot asked about at later starts either (since step 23). It is kept\nbeside the trusted projects, and `cortex permissions trust` lifts it.",
+          "type": "boolean"
+        },
         "trusted": {
           "default": false,
           "description": "Whether the resources listed may be used.",
@@ -7255,6 +7292,49 @@
         }
       ],
       "description": "What the project's checks said at the end of a turn."
+    },
+    "WorkspaceFilesParams": {
+      "description": "`workspace/files`: the paths of a session's workspace, for a front end's\nfile completion (since step 23).",
+      "properties": {
+        "limit": {
+          "description": "The most paths to return. Absent: the server's own limit.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The session."
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "WorkspaceFilesResult": {
+      "description": "The result of `workspace/files`.",
+      "properties": {
+        "paths": {
+          "description": "The files, relative to the workspace's root with `/` between parts,\nthe most recently changed first, as the ignore rules and the\nsession's read rules leave them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "default": false,
+          "description": "Whether there were more than the limit.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
     }
   },
   "$ref": "#/$defs/JsonRpcMessage",
@@ -7452,6 +7532,15 @@
           "$ref": "#/$defs/SessionResult"
         }
       },
+      "session/undo": {
+        "description": "Steps back before the last turn, putting its files back if asked.",
+        "params": {
+          "$ref": "#/$defs/SessionUndoParams"
+        },
+        "result": {
+          "$ref": "#/$defs/SessionResult"
+        }
+      },
       "shutdown": {
         "description": "Stops the server cleanly.",
         "params": {
@@ -7513,6 +7602,15 @@
         },
         "result": {
           "$ref": "#/$defs/Empty"
+        }
+      },
+      "workspace/files": {
+        "description": "Lists the workspace's files, for file completion.",
+        "params": {
+          "$ref": "#/$defs/WorkspaceFilesParams"
+        },
+        "result": {
+          "$ref": "#/$defs/WorkspaceFilesResult"
         }
       }
     },
