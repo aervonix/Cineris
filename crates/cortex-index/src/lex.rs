@@ -136,12 +136,25 @@ impl Syntax {
         ],
         ..Self::C_LIKE
     };
+    /// A name in backticks (``fun `doesn't crash`()``) may hold any
+    /// character but a backtick and a line break: its content is blanked
+    /// as a string's, so a quote in it opens nothing, and the recogniser
+    /// reads the name from the line as written.
     pub(crate) const KOTLIN: Self = Self {
+        quotes: &[
+            quote(b'"', true, false),
+            quote(b'\'', true, false),
+            quote(b'`', false, false),
+        ],
         triple: b"\"",
         nested_block: true,
         ..Self::C_LIKE
     };
-    pub(crate) const SWIFT: Self = Self::KOTLIN;
+    pub(crate) const SWIFT: Self = Self {
+        triple: b"\"",
+        nested_block: true,
+        ..Self::C_LIKE
+    };
     pub(crate) const PHP: Self = Self {
         line_comments: &["//", "#"],
         hash_attribute: true,

@@ -62,4 +62,10 @@ class ParserTest {
     @Test
     fun `parses an empty file`() {
     }
+
+    @Test
+    fun `doesn't lose what follows`() {
+    }
+
+    fun helper() {}
 }

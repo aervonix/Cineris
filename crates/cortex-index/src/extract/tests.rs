@@ -732,14 +732,18 @@ fn a_python_f_string_with_its_own_quotes_inside_does_not_hide_what_follows() {
 
 #[test]
 fn a_kotlin_function_named_in_backticks_is_outlined() {
-    let text = "class ParserTest {\n    @Test\n    fun `parses an empty file`() {\n    }\n    fun String.`reads (twice)`() {}\n    fun plain() {}\n}\n";
+    // A name in backticks may hold spaces, brackets and an apostrophe,
+    // which must not open a character literal that blanks the line's `{`.
+    let text = "class ParserTest {\n    @Test\n    fun `parses an empty file`() {\n    }\n    fun String.`reads (twice)`() {}\n    fun `doesn't crash`() {\n        val x = 1\n    }\n    fun plain() {}\n}\nfun after() {}\n";
     assert_eq!(
         shape(Some(Language::Kotlin), "ParserTest.kt", text),
         vec![
             entry(0, Kind::Class, "ParserTest"),
             entry(1, Kind::Method, "parses an empty file"),
             entry(1, Kind::Method, "reads (twice)"),
+            entry(1, Kind::Method, "doesn't crash"),
             entry(1, Kind::Method, "plain"),
+            entry(0, Kind::Function, "after"),
         ]
     );
 }
