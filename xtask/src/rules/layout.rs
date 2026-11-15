@@ -54,6 +54,44 @@ pub(crate) fn check(texts: &BTreeMap<String, String>) -> Vec<Violation> {
             violations.push(Violation::new(file, line, problem));
         }
     }
+    if let Some(index) = texts.get(OUTSTANDING_PAGE) {
+        violations.extend(unlisted(texts, index));
+    }
+    violations
+}
+
+/// The open items the index of [`OUTSTANDING_PAGE`] does not list exactly
+/// once, as a link to the item's file: `[name](name.md)`. An index that a
+/// step may forget to change goes stale, and one that misses an item is
+/// worse than none.
+fn unlisted(texts: &BTreeMap<String, String>, index: &str) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    for file in texts.keys() {
+        let Some(path) = file.strip_prefix(OUTSTANDING) else {
+            continue;
+        };
+        if path == "README.md" || path.contains('/') || !path.ends_with(".md") {
+            continue;
+        }
+        let listed = index.matches(&format!("]({path})")).count();
+        if listed == 1 {
+            continue;
+        }
+        let problem = if listed == 0 {
+            format!(
+                "this item is not in the index of `{OUTSTANDING_PAGE}`.\n    Add a line \
+                 `- [{name}]({path}): <the mechanism it covers>. Owner: <who settles it>.` \
+                 under the crate or area it is about, and take it out when the item is settled.",
+                name = path.trim_end_matches(".md")
+            )
+        } else {
+            format!(
+                "the index of `{OUTSTANDING_PAGE}` lists this item {listed} times: once, under \
+                 the crate or area it is about."
+            )
+        };
+        violations.push(Violation::new(file, None, problem));
+    }
     violations
 }
 
@@ -245,6 +283,37 @@ mod tests {
     const ITEM: &str = "| Item | Who | When |\n|---|---|---|\n| **A flag.** It has a recommendation. | Step 13 | In that step |\n";
 
     #[test]
+    fn an_item_the_index_does_not_list_once_is_named() {
+        let index = "# Still outstanding\n\n### cortex-tui\n\n- [a-flag](a-flag.md): a flag. \
+                     Owner: step 23.\n- [twice](twice.md): x.\n\nAlso [twice](twice.md).\n";
+        let listed = found(&[
+            ("docs/outstanding/README.md", index),
+            ("docs/outstanding/a-flag.md", ITEM),
+            ("docs/outstanding/forgotten.md", ITEM),
+            ("docs/outstanding/twice.md", ITEM),
+        ]);
+
+        assert_eq!(listed.len(), 2, "{listed:#?}");
+        assert!(
+            listed[0].starts_with("docs/outstanding/forgotten.md")
+                && listed[0].contains("is not in the index")
+                && listed[0].contains("- [forgotten](forgotten.md): "),
+            "{listed:#?}"
+        );
+        assert!(
+            listed[1].starts_with("docs/outstanding/twice.md")
+                && listed[1].contains("lists this item 2 times"),
+            "{listed:#?}"
+        );
+        // A link to a file of the same name elsewhere does not count.
+        let elsewhere = found(&[
+            ("docs/outstanding/README.md", "- [a](../steps/a-flag.md)\n"),
+            ("docs/outstanding/a-flag.md", ITEM),
+        ]);
+        assert_eq!(elsewhere.len(), 1, "{elsewhere:#?}");
+    }
+
+    #[test]
     fn records_and_items_in_their_places_pass() {
         assert_eq!(
             found(&[
@@ -267,7 +336,12 @@ mod tests {
                     "docs/steps/tooling-w5/ci.md",
                     "# After the wave 5 tooling step: developer tooling\n"
                 ),
-                ("docs/outstanding/README.md", "# Still outstanding\n"),
+                (
+                    "docs/outstanding/README.md",
+                    "# Still outstanding\n\n### cortex-cli\n\n- \
+                     [speed-flag-for-headless-mode](speed-flag-for-headless-mode.md): a flag. \
+                     Owner: step 13.\n- [quickjs-2](quickjs-2.md): the engine. Owner: the owner.\n"
+                ),
                 ("docs/outstanding/speed-flag-for-headless-mode.md", ITEM),
                 ("docs/outstanding/quickjs-2.md", &format!("{ITEM}\n\n")),
                 // Nothing here is this rule's.
