@@ -249,17 +249,25 @@ impl Index {
         // the next is read, so a pass holds one window's outlines, not the
         // workspace's.
         let mut stopped: Option<Partial> = None;
+        // The listing and the cache's records are both in path order: one
+        // walk through the records serves the whole listing, where a search
+        // for each file would compare paths twenty times over.
+        let mut cursor = 0;
         for window in listing.files.chunks(WINDOW) {
             let held: Vec<Option<usize>> = window
                 .iter()
                 .map(|file| {
                     let old = old.as_ref()?;
-                    let at = old
+                    while old.records.get(cursor).is_some_and(|record| {
+                        walk::path_order(&record.path, &file.relative).is_lt()
+                    }) {
+                        cursor += 1;
+                    }
+                    let record = old
                         .records
-                        .binary_search_by(|record| walk::path_order(&record.path, &file.relative))
-                        .ok()?;
-                    let record = &old.records[at];
-                    (record.stamp == file.stamp && !record.flags.unsettled).then_some(at)
+                        .get(cursor)
+                        .filter(|record| record.path == file.relative)?;
+                    (record.stamp == file.stamp && !record.flags.unsettled).then_some(cursor)
                 })
                 .collect();
             let wanted: Vec<&Listed> = window
