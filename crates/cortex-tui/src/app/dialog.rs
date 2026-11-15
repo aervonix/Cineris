@@ -4,9 +4,13 @@
 //!
 //! **Only keys meant for it answer it.** A dialog can appear while the
 //! person is typing: an approval while a steering message is being
-//! written. A key read before the dialog's first frame was written, or less
-//! than [`GRACE`] after, goes on to the editor, where it was going; a paste
-//! never answers a dialog. Both are comparisons of times, so no timer runs.
+//! written. A key read before the dialog's first frame was written goes on
+//! to the editor, where it was going. **When the person was typing as it
+//! appeared** (a key read less than [`GRACE`] before its first frame), keys
+//! read less than [`GRACE`] after that frame go to the editor too: they
+//! were typed before the person could see it. Otherwise the dialog takes
+//! keys at once. A paste never answers a dialog. All of these are
+//! comparisons of times, so no timer runs.
 
 use std::time::{Duration, Instant};
 
@@ -42,6 +46,9 @@ pub(crate) struct Dialog {
     pub(crate) asks: Asks,
     /// When its first frame was written.
     pub(crate) shown: Option<Instant>,
+    /// Whether the person was typing as it appeared: then it takes keys
+    /// only from [`GRACE`] after its first frame.
+    pub(crate) typing: bool,
     /// The note being written, after "deny with a note".
     note: Option<String>,
 }
@@ -73,6 +80,7 @@ impl Dialog {
             id,
             asks: Asks::Approval { request, diff },
             shown: None,
+            typing: false,
             note: None,
         }
     }
@@ -86,7 +94,17 @@ impl Dialog {
 
     /// Whether a key read at `at` may answer the dialog.
     fn takes_keys_at(&self, at: Instant) -> bool {
-        self.shown.is_some_and(|shown| at >= shown + GRACE)
+        self.shown
+            .is_some_and(|shown| at >= shown && (!self.typing || at >= shown + GRACE))
+    }
+
+    /// Its first frame was written at `at`; the last key before it was read
+    /// at `last_key`.
+    pub(crate) fn drawn(&mut self, at: Instant, last_key: Option<Instant>) {
+        if self.shown.is_none() {
+            self.shown = Some(at);
+            self.typing = last_key.is_some_and(|key| at.saturating_duration_since(key) < GRACE);
+        }
     }
 
     /// A key, read at `at`.

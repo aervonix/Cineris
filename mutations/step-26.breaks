@@ -520,8 +520,8 @@ caught-by:
 rule: While commands are confined, an answer may be to stop the turn, so nothing after an open question that changes anything starts until it is answered.
 file: crates/cortex-core/src/policy.rs
 in: EnginePolicy::answers_may_stop
-find: self.fail_on_denial || self.sandboxed.load(std::sync::atomic::Ordering::Acquire)
-replace: self.fail_on_denial
+find: || self.sandboxed.load(std::sync::atomic::Ordering::Acquire)
+replace:
 caught-by:
     cortex-core::it sandbox::while_commands_are_confined_a_later_call_waits_for_the_open_question
 

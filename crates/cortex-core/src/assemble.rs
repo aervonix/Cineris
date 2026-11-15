@@ -1257,6 +1257,7 @@ pub(crate) fn assemble(
         timer: Arc::clone(&options.timer),
         timeout: options.approval_timeout,
         fail_on_denial: options.fail_on_denial,
+        stops_from_questions: options.answers_may_stop,
         sandboxed: sandbox.confines(),
     }));
 

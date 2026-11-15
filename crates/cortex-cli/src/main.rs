@@ -8,6 +8,7 @@
 //! | [`args`] | The command line, read into what to do. |
 //! | [`help`] | The help, in the name the program was started with. |
 //! | [`headless`] | A prompt run to completion, with standard output for the result. |
+//! | [`interactive`] | The terminal UI on a session: the core's thread, the in-process link, start-up. |
 //! | [`report`] | The result record and what each output format writes. |
 //! | [`exit`] | The exit codes. |
 //! | [`signals`] | Ctrl-C, SIGTERM and the console's events. |
@@ -34,6 +35,7 @@ mod commands;
 mod exit;
 mod headless;
 mod help;
+mod interactive;
 mod report;
 mod signals;
 mod usage_view;
@@ -95,13 +97,7 @@ fn dispatch(command: Command, name: &'static str, started: Instant) -> u8 {
         }
         Command::Run(run) => match mode(&run, std::io::stdout().is_terminal()) {
             Mode::Headless => headless::run(*run, name, started),
-            Mode::Interactive => {
-                eprintln!(
-                    "{name}: the interactive application is not built yet. Run a prompt \
-                     headless with `{name} -p \"…\"`, or see `{name} --help`."
-                );
-                exit::USAGE
-            }
+            Mode::Interactive => interactive::run(*run, name, started),
         },
         Command::Sessions(command) => commands::sessions(command, name),
         Command::Config(command) => commands::config(command, name),

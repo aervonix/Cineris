@@ -30,3 +30,82 @@ replace:
     pub glyphs
 caught-by:
     cortex-config::it trust::every_key_has_a_trust_class
+
+[break] the-interface-cannot-hold-later-calls
+rule: A core whose front end can stop the turn from a question holds every later call with side effects while the question is open.
+file: crates/cortex-core/src/policy.rs
+in: EnginePolicy::answers_may_stop
+find: || self.stops_from_questions
+replace:
+caught-by:
+    cortex-core::it approvals::with_answers_may_stop_a_later_call_waits_for_the_open_question
+
+[break] the-wake-hook-every-event
+rule: The queue's hook is called when it goes from empty to holding something, not for every event: one wake a burst.
+file: crates/cortex-core/src/events.rs
+in: EventQueue::queued
+find: if was_empty {
+replace: if true {
+caught-by:
+    events::tests::the_wake_hook_is_called_once_a_burst_and_when_the_queue_closes
+
+[break] the-wake-hook-never-on-close
+rule: Closing a client's queue calls its hook, so a reader on its own thread learns the client is gone.
+file: crates/cortex-core/src/events.rs
+in: EventQueue::close
+find:
+    self.wake.notify_one();
+    let hook = lock(&self.hook).clone();
+replace:
+    self.wake.notify_one();
+    let hook: Option<Wake> = None;
+caught-by:
+    events::tests::the_wake_hook_is_called_once_a_burst_and_when_the_queue_closes
+
+[break] a-dialog-takes-typing-meant-for-the-editor
+rule: A dialog drawn while the person is typing takes keys only from a grace after its first frame: keys typed before they could see it are the editor's.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::takes_keys_at
+find: (!self.typing || at >= shown + GRACE)
+replace: true
+caught-by:
+    app::tests::a_dialog_that_appears_while_the_person_types_takes_keys_only_after_a_grace
+
+[break] a-dialog-answered-before-it-is-drawn
+rule: A key read before a dialog's first frame was written never answers it.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::takes_keys_at
+find: at >= shown &&
+replace:
+caught-by:
+    app::tests::a_dialog_that_appears_while_the_person_types_takes_keys_only_after_a_grace
+
+[break] no-second-interrupt
+rule: A second interrupt within two seconds of the first stops running commands at once.
+file: crates/cortex-tui/src/app/state.rs
+in: App::interrupt
+find: at.saturating_duration_since(last) <= SECOND_INTERRUPT
+replace: false
+caught-by:
+    app::tests::esc_right_after_enter_interrupts_and_a_second_within_two_seconds_stops_now
+
+[break] running-only-once-the-turn-starts
+rule: A prompt sent makes the interface running at once, so that Esc straight after Enter interrupts the turn it started.
+file: crates/cortex-tui/src/app/state.rs
+in: App::submit
+find:
+    if started {
+        self.start_running(at);
+    }
+replace:
+caught-by:
+    app::tests::esc_right_after_enter_interrupts_and_a_second_within_two_seconds_stops_now
+
+[break] events-not-held-while-opening
+rule: The session's events are held while the app's open is under way, so that its header is the first block.
+file: crates/cortex-tui/src/app/state.rs
+in: App::drain
+find: if self.opening {
+replace: if false {
+caught-by:
+    app::tests::the_session_is_opened_after_the_first_frame_and_its_header_comes_first
