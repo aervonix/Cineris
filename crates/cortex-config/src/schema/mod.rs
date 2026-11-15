@@ -45,14 +45,15 @@ pub use json::json_schema;
 pub(crate) use redact::redact;
 pub use reference::reference_page;
 pub use sections::{
-    AdaptSettings, CompatSettings, CredentialSettings, LimitSet, LimitSettings, LogSettings,
-    ManagedSettings, ModelSettings, PermissionSettings, ProviderSettings, RetrySettings,
-    RoleSettings, SandboxSettings, SessionSettings, Settings, StatsSettings, UsageSettings,
-    VariantSettings,
+    AdaptSettings, CompatSettings, CredentialSettings, KeySettings, LimitSet, LimitSettings,
+    LogSettings, ManagedSettings, ModelSettings, PermissionSettings, ProviderSettings,
+    RetrySettings, RoleSettings, SandboxSettings, SessionSettings, Settings, StatsSettings,
+    TerminalSettings, TuiSettings, UsageSettings, VariantSettings,
 };
 pub use types::{
-    EnvText, Headers, Profiles, ReasoningVisibility, Reserved, SessionDurability, StoreChoice,
-    UsageRanges, Weekday,
+    Bindings, ColorChoice, DensityChoice, EnvText, GlyphChoice, Headers, Profiles, ReasoningShown,
+    ReasoningVisibility, Reserved, SessionDurability, StoreChoice, ToolOutputChoice, UsageRanges,
+    Weekday,
 };
 pub(crate) use types::{magnitude, milliseconds_as_text};
 

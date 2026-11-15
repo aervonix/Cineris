@@ -178,14 +178,14 @@ const CASES: &[Case] = &[
     },
     Case {
         name: "a list replaces: a layer that sets a list sets all of it",
-        managed: "[tui]\npanels = [\"plan\", \"review\"]",
-        user: "[tui]\npanels = [\"usage\"]",
+        managed: "[usage]\nrefresh = [\"anthropic\", \"deepseek\"]",
+        user: "[usage]\nrefresh = [\"venice\"]",
         project: "",
         local: "",
         profile: None,
         env: &[],
         cli: &[],
-        expect: &[("tui.panels", "[\"usage\"]", "user")],
+        expect: &[("usage.refresh", "[\"venice\"]", "user")],
     },
     Case {
         name: "a named collection takes an entry from each layer, and merges one entry's keys",

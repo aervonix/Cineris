@@ -316,10 +316,10 @@ mod tests {
         // Key bindings are not secrets.
         assert_eq!(
             redact(
-                &KeyPath::new(["keys", "normal", "ctrl+p"]),
-                &toml("\"palette\"")
+                &KeyPath::new(["keys", "editor"]),
+                &toml("{ submit = [\"ctrl+s\"] }")
             ),
-            toml("\"palette\"")
+            toml("{ submit = [\"ctrl+s\"] }")
         );
     }
 

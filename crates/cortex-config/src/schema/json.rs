@@ -277,7 +277,8 @@ mod tests {
         );
 
         assert_eq!(properties["profiles"]["additionalProperties"]["$ref"], "#");
-        assert_eq!(properties["tui"]["x-cortex-reserved"], true);
+        assert_eq!(properties["rpc"]["x-cortex-reserved"], true);
+        assert_eq!(properties["tui"]["properties"]["glyphs"]["x-cortex-trust"], "user only");
         assert_eq!(properties["hooks"]["x-cortex-trust"], "runs code");
         assert_eq!(
             properties["model"]["properties"]["roles"]["additionalProperties"]["properties"]["speed"]

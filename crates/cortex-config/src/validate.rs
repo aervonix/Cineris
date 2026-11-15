@@ -400,7 +400,7 @@ mod tests {
             [profiles.review]
             model.main = "other"
             permissions.mode = "read-only"
-            [tui]
+            [rpc]
             anything = { goes = ["here", 1] }
             "#,
         );

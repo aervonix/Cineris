@@ -528,6 +528,110 @@ choice! {
     }
 }
 
+choice! {
+    /// Which tool detail starts open in the terminal UI.
+    pub enum ToolOutputChoice {
+        /// A failure's output and a short diff start open; the rest starts
+        /// closed.
+        Auto => "auto",
+        /// Every detail starts open.
+        Always => "always",
+        /// Every box stays closed.
+        Never => "never",
+    }
+}
+
+choice! {
+    /// What finished reasoning leaves in the terminal UI's transcript.
+    pub enum ReasoningShown {
+        /// `Reasoned for 6s` and the provider's summary.
+        Summary => "summary",
+        /// `Reasoned for 6s` alone; the summary is in the viewer.
+        Duration => "duration",
+    }
+}
+
+choice! {
+    /// How much room the terminal UI's transcript gives its blocks.
+    pub enum DensityChoice {
+        /// A blank line between blocks.
+        Comfortable => "comfortable",
+        /// A blank line only between turns, and reasoning as its first line.
+        Compact => "compact",
+    }
+}
+
+choice! {
+    /// The terminal UI's glyph set.
+    pub enum GlyphChoice {
+        /// Unicode when the terminal can show it, ASCII otherwise.
+        Auto => "auto",
+        /// The Unicode set.
+        Unicode => "unicode",
+        /// The ASCII set.
+        Ascii => "ascii",
+    }
+}
+
+choice! {
+    /// How many colours the terminal shows, in place of detecting it.
+    pub enum ColorChoice {
+        /// No colour: attributes only.
+        None => "none",
+        /// The sixteen palette colours.
+        Ansi16 => "16",
+        /// The 256-colour palette.
+        Indexed256 => "256",
+        /// Any colour.
+        TrueColor => "truecolor",
+    }
+}
+
+/// The key bindings of one context of the terminal UI: a table from an
+/// action's name to the keys bound to it, each written as `ctrl+shift+z`.
+/// The list replaces the action's defaults, and an empty one unbinds it.
+///
+/// It is one setting: a layer that sets a context's table sets all of it.
+/// The names of the actions and the text of the keys are the interface's
+/// to check (`cortex_tui::keys::KeyMap::with_table`), which shows each
+/// entry it cannot use and keeps that action's defaults: this crate does
+/// not know them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Bindings(pub BTreeMap<String, Vec<String>>);
+
+impl Setting for Bindings {
+    fn node() -> Node {
+        Node::Leaf(Kind::Map(Box::new(Kind::List(Box::new(Kind::Text)))))
+    }
+
+    fn read(value: &Value) -> Result<Self, String> {
+        let Value::Table(table) = value else {
+            return Err("expected a table from action names to lists of keys".to_owned());
+        };
+        table
+            .iter()
+            .map(|(action, keys)| {
+                <Vec<String>>::read(keys)
+                    .map(|keys| (action.clone(), keys))
+                    .map_err(|error| format!("{action}: {error}"))
+            })
+            .collect::<Result<_, _>>()
+            .map(Self)
+    }
+
+    fn write(&self) -> Option<Value> {
+        if self.0.is_empty() {
+            return None;
+        }
+        Some(Value::Table(
+            self.0
+                .iter()
+                .filter_map(|(action, keys)| Some((action.clone(), keys.write()?)))
+                .collect(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
