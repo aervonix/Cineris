@@ -1,3 +1,0 @@
-| Item | Who | When |
-|---|---|---|
-| **The toolbox fixtures were recorded without `outline`.** Step 18 added the `outline` tool to every session's read-only tools, so the tools the binary sends a provider are not the ones `crates/cortex-llm/fixtures/toolbox/` were recorded with, and `cortex-cli`'s `sys_the_toolbox_the_binary_sends_is_the_one_its_fixtures_were_recorded_with` warns (it does not fail). Whether each provider takes the new tool's schema is known only from a recording: `cargo xtask record --toolbox`, which calls each provider's cheapest model once, a fraction of a cent, and needs the owner's keys. | The owner, or the next step that records fixtures | Before the next live run, or step 34 |

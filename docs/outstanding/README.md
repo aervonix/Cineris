@@ -66,7 +66,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-price-that-depends-on-the-time-of-day](a-price-that-depends-on-the-time-of-day.md): The catalog's single rate card records DeepSeek's off-peak requests at the peak price, an upper bound. Owner: the owner, with step 16.
 - [account-in-the-replay-rule](account-in-the-replay-rule.md): Whether a request carries its account, so a provider tying reasoning to an account never gets another's. Owner: the first step that adds such a provider, or step 53.
 - [fuzz-targets-for-later-decoders](fuzz-targets-for-later-decoders.md): Each later provider protocol's decoder needs a fuzz target in `fuzz/` and a line in `xtask/src/outside.rs`. Owner: steps 31, 35 and 36.
-- [the-toolbox-fixtures-without-outline](the-toolbox-fixtures-without-outline.md): The toolbox fixtures were recorded before the `outline` tool; re-recording them is a paid call. Owner: the owner, or the next step that records.
 - [the-prefix-check-and-image-references](the-prefix-check-and-image-references.md): The debug prefix check skips requests holding a stored image reference; a protocol should write a placeholder. Owner: step 33, or the step that next touches images.
 
 ### cortex-policy
