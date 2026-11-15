@@ -9,6 +9,7 @@
 #   gh workflow run try --ref <branch> -f command="test -p cortex-agent" -f filter="test(/denials/); test(=x)"
 #   gh workflow run try --ref <branch> -f os=windows -f command=test -f against=main -f count=5
 #   gh workflow run try --ref <branch> -f os=linux-22.04 -f command="test -p cortex-sandbox"
+#   gh workflow run try --ref <branch> -f os=windows -f command="perf -p cortex-index"
 #   gh workflow run try --ref <branch> -f os=linux-22.04 -f command=partial-landlock
 #   gh workflow run try --ref <branch> -f os=linux -f command=ci
 #   gh workflow run try --ref <branch> -f os=windows -f command=test -f testkit=profile
@@ -32,7 +33,7 @@ on:
         options: [both, linux, windows, linux-22.04]
         default: both
       command:
-        description: "test [-p CRATE] [FILTER], stress -p CRATE [ARGS], startup, perf [ARGS], ci [ARGS], or a nightly job: partial-landlock, advisories, unused."
+        description: "test [-p CRATE] [FILTER], stress -p CRATE [ARGS], startup, perf [ARGS], perf -p CRATE (its ignored perf_ tests, in release), ci [ARGS], or a nightly job: partial-landlock, advisories, unused."
         required: true
         default: "test"
       profile:

@@ -30,7 +30,7 @@ A reviewer on Opus 5.5, which had not seen the session's reasoning, read the who
 | The rule lexed every Rust file, twice, in the blocking `rules` step. | Fixed: only the files whose text calls a starter, and only those that may declare a test module in a file of its own. The step takes 0.6 s on the desktop with the rules and without. |
 | combine was not tested from a linked worktree, the real case. | A test: the worktree's branch, head, refs, status, stashes and the list of worktrees are the same after. |
 | An A/B base inside the head's checkout gets the head's cargo configuration. | Fixed: the base is moved beside the checkout, and `ab` refuses one inside. |
-| One failing test ends an A/B run. | Outstanding ([outstanding/an-ab-run-ends-at-a-failing-test.md](../../outstanding/an-ab-run-ends-at-a-failing-test.md)). |
+| One failing test ends an A/B run. | Left outstanding then; settled by the sixth tooling step: `ab --keep-going`, which `try` passes for an `against` run. |
 | The head checkout kept the job's token while an A/B run builds any ref's code. | Fixed: `persist-credentials: false`. |
 | A rerun of an ignored test passed the "ran something" guard. | Fixed, with a test of an ignored test. |
 | A `try` filter after the command's own `--` went to the test binary. | Fixed: filters go before it. |

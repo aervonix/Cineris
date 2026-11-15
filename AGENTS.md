@@ -67,6 +67,8 @@ Each cost a session hours to find. The details are in [docs/steps/11/](docs/step
 | Make many edits across many files, all of them or none (the way round the shell guard) | Write the edits to a file, then `cargo xtask replace --script <file>` in a call of its own (`--script --help` has the format) |
 | Estimate what a hosted runner would report, before pushing | `cargo xtask ci --tiers --like-runner [-p <crate>]` |
 | Ask whether a change is slower on the runner, for one crate (about two minutes) | `gh workflow run try --ref <branch> -f os=windows -f command="test -p <crate>" -f against=main -f count=5`, then `cargo xtask ci-times --ab <run id>` |
+| Read a CI job's log, any workflow's (the nightly's included), with its escape codes taken out | `cargo xtask ci-log <run id> [--job NAME] [--grep RE]` for a run's failed jobs, or `<job id>` for one job; through `rx`, `rx -- env GH_REPO=<owner>/<repo> cargo xtask ci-log …` |
+| Run a crate's ignored `perf_` tests in a release build on a runner, and nothing else | `gh workflow run try --ref <branch> -f os=windows -f command="perf -p <crate>"` |
 | Ask the permission engine about a command | `cargo xtask decide [--rule '…'] -- <command>` |
 | Format | `cargo xtask fmt` |
 | Regenerate the protocol schema and TypeScript declarations | `cargo xtask schema` |

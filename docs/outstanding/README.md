@@ -138,7 +138,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 - [a-retried-tests-standard-error-in-the-report](a-retried-tests-standard-error-in-the-report.md): `xtask` reads a retried test's standard error from its first attempt, not the last. Owner: a later tooling step.
 - [actionlint-in-the-checks](actionlint-in-the-checks.md): The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary. Owner: the owner.
-- [an-ab-run-ends-at-a-failing-test](an-ab-run-ends-at-a-failing-test.md): `cargo xtask ab` stops at the first round with a failing test and loses the rounds already measured. Owner: a later tooling step.
 - [cortex-llm-optimised-in-the-ci-build](cortex-llm-optimised-in-the-ci-build.md): Whether to build `cortex-llm` at `opt-level = 1` in the `ci` profile to speed its integration tests. Owner: the owner.
 - [perf-in-the-main-workflow](perf-in-the-main-workflow.md): `cargo xtask perf` is not yet run in the `main` workflow on both systems with stored baselines. Owner: a tooling step, or step 33.
 - [replace-and-the-comments-beside-a-match](replace-and-the-comments-beside-a-match.md): `replace` stacks a `--to`'s doc comment on the file's, and can leave a read-only file's temporary copy on Windows. Owner: a later tooling step.
