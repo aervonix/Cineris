@@ -1,0 +1,254 @@
+# Step 18: the repository map, in cortex-index, and what it added to
+# cortex-agent (the map in an epoch), cortex-tools (the outline tool) and
+# cortex-core (the index of a session).
+#
+# Each rule is broken here: the extractors' nesting, the cache's
+# invalidation, the caps, the walk's ignore rules, links and gate, the
+# map's budget and its stability, the map's place in an epoch and in what
+# a summary replays, the start-up path, and the outline tool's workspace.
+
+[break] a-brace-language-drops-nested-definitions
+rule: A definition whose body holds others (a type, an impl, an interface, a module) has what is inside it outlined, one level deeper.
+file: crates/cortex-index/src/extract/brace.rs
+find: Body::Holds => Frame::Holds { entry: done.entry },
+replace: Body::Holds => Frame::Opaque { entry: done.entry },
+caught-by:
+    cortex-index extract::tests::methods_nest_in_their_impl_and_class_in_every_brace_language
+    cortex-index::it outlines::rust
+
+[break] an-indentation-language-drops-nested-definitions
+rule: In Python and Ruby a class or a module holds what is indented under it; only a function's body is opaque.
+file: crates/cortex-index/src/extract/indent.rs
+in: Blocks::opaque
+find: self.open.iter().any(|open| open.opaque)
+replace: !self.open.is_empty()
+caught-by:
+    cortex-index extract::tests::methods_nest_in_their_class_in_the_indentation_languages
+    cortex-index::it outlines::python
+    cortex-index::it outlines::ruby
+
+[break] a-function-body-is-outlined
+rule: Nothing inside a function's body is outlined: a local struct or a closure is not a definition of the file.
+file: crates/cortex-index/src/extract/brace.rs
+find: Body::Opaque => Frame::Opaque { entry: done.entry }
+replace: Body::Opaque => Frame::Holds { entry: done.entry }
+caught-by:
+    cortex-index extract::tests::nothing_inside_a_function_body_is_outlined
+
+[break] a-brace-in-a-string-opens-a-block
+rule: The lexer blanks a string's content, so a brace in it is not counted.
+file: crates/cortex-index/src/lex.rs
+in: Lexer::code_at
+find: if let Some(quote) = syntax.quotes.iter().find(|quote| quote.mark == byte) {
+replace: if let Some(quote) = syntax.quotes.iter().find(|quote| quote.mark == byte && false) {
+caught-by:
+    cortex-index extract::tests::a_brace_in_a_string_or_a_comment_does_not_open_a_block
+    cortex-index lex::tests::comments_and_strings_are_blanked_and_keep_their_length
+
+[break] the-cache-reads-every-file-again
+rule: A warm pass reads again only the files whose stamp changed or that were unsettled; an unchanged file keeps its record unopened.
+file: crates/cortex-index/src/pass.rs
+in: Index::pass
+find: (record.stamp == file.stamp && !record.flags.unsettled).then_some(at)
+replace: (false).then_some(at)
+caught-by:
+    cortex-index::it index::a_warm_pass_reads_only_what_changed
+
+[break] the-cache-misses-a-changed-file
+rule: A file whose size, modification time or change time is not the cached one is read again.
+file: crates/cortex-index/src/pass.rs
+in: Index::pass
+find: (record.stamp == file.stamp && !record.flags.unsettled).then_some(at)
+replace: (record.path == file.relative && !record.flags.unsettled).then_some(at)
+caught-by:
+    cortex-index::it index::a_warm_pass_reads_only_what_changed
+
+[break] an-unsettled-record-is-trusted
+rule: A file modified within two seconds of the pass that read it, or after it, is read again by every pass until it settles.
+file: crates/cortex-index/src/pass.rs
+in: Index::read_one
+find: unsettled: stamp.modified > now - window
+replace: unsettled: false
+caught-by:
+    cortex-index::it index::a_file_written_again_within_its_time_step_is_read_again
+    cortex-index::it index::a_file_dated_after_the_clock_is_read_again_until_the_clock_passes_it
+
+[break] the-file-cap-is-not-enforced
+rule: A pass indexes at most max_files files, the ones nearest the top of the tree, and says it is partial.
+file: crates/cortex-index/src/walk.rs
+in: list
+find: if all.len() > limits.max_files {
+replace: if false {
+caught-by:
+    cortex-index::it index::the_file_cap_keeps_the_top_of_the_tree_and_the_listing_cap_bounds_the_walk
+
+[break] the-listing-cap-is-not-enforced
+rule: A listing stops at max_listed entries, so a tree of millions costs a bounded walk.
+file: crates/cortex-index/src/walk.rs
+in: list
+find: if entries > limits.max_listed {
+replace: if false {
+caught-by:
+    cortex-index::it index::the_file_cap_keeps_the_top_of_the_tree_and_the_listing_cap_bounds_the_walk
+
+[break] the-byte-cap-is-not-enforced
+rule: A file larger than max_file_bytes is listed and not read.
+file: crates/cortex-index/src/pass.rs
+in: Index::read_one
+find: if stamp.size > self.limits.max_file_bytes {
+replace: if false {
+caught-by:
+    cortex-index::it index::a_file_over_the_cap_is_listed_and_not_read_and_a_binary_one_has_no_outline
+
+[break] the-time-cap-is-not-enforced
+rule: A pass stops at its time limit and the next carries on from what it wrote.
+file: crates/cortex-index/src/pass.rs
+in: Index::pass
+find: clock.monotonic().saturating_sub(started) >= limit
+replace: false
+caught-by:
+    cortex-index::it index::a_pass_out_of_time_writes_what_it_read_and_the_next_carries_on
+
+[break] a-pass-cut-short-while-listing-writes-the-cache
+rule: A pass whose listing was cut short writes nothing: the files it did not reach would lose their records.
+file: crates/cortex-index/src/pass.rs
+in: Index::pass
+find: if matches!(listing.partial, Some(Partial::Time | Partial::Stopped)) {
+replace: if false {
+caught-by:
+    cortex-index::it index::a_pass_stopped_while_listing_writes_nothing
+
+[break] the-gate-is-not-asked
+rule: A file the permission engine's gate does not let through is not indexed and not named in the map.
+file: crates/cortex-index/src/walk.rs
+in: list
+find: if !gate.may_index(&abs) {
+replace: if false {
+caught-by:
+    cortex-index::it index::ignore_files_hidden_directories_and_the_gate_are_honoured
+
+[break] the-ignore-files-are-not-read
+rule: A pass honours the ignore files search and list honour, .gitignore at every level whether or not the tree is a repository.
+file: crates/cortex-index/src/walk.rs
+in: list
+find: .git_ignore(true)
+replace: .git_ignore(false)
+caught-by:
+    cortex-index::it index::ignore_files_hidden_directories_and_the_gate_are_honoured
+    cortex-index::it index::a_workspace_that_is_not_a_repository_and_non_ascii_names_are_indexed
+
+[break] links-are-followed
+rule: A pass follows no link, inside the workspace or out of it.
+file: crates/cortex-index/src/walk.rs
+in: list
+find: .follow_links(false)
+replace: .follow_links(true)
+caught-by:
+    cortex-index::it index::links_are_not_followed_inside_or_out_of_the_workspace
+
+[break] a-cut-cache-is-trusted
+rule: A cache with no end line was cut short, and is read as no cache.
+file: crates/cortex-index/src/cache.rs
+in: CacheFile::parse
+find: if !ended {
+replace: if false {
+caught-by:
+    cortex-index cache::tests::a_cache_that_cannot_be_trusted_is_none
+
+[break] the-cache-is-not-private
+rule: The cache is written owner-only, every time.
+file: crates/cortex-index/src/pass.rs
+in: Index::write
+find: owner_only: true
+replace: owner_only: false
+caught-by:
+    cortex-index::it index::the_cache_is_private_and_holds_no_more_than_the_workspace
+
+[break] the-map-passes-its-budget
+rule: The map is never larger than its budget.
+file: crates/cortex-index/src/map.rs
+in: render
+find: if text.len() + all <= budget {
+replace: if true {
+caught-by:
+    cortex-index::it map::a_map_at_exactly_its_budget_is_whole_and_one_byte_less_says_what_it_left_out
+
+[break] the-touched-files-order-leaks-into-the-map
+rule: The map is the same bytes for the same inputs: the touched files are a set, and their order does not matter.
+file: crates/cortex-index/src/map.rs
+in: rank
+find: let touched: BTreeSet<&str> = request.touched.iter().map(String::as_str).collect();
+replace: let touched: BTreeSet<&str> = request.touched.iter().take(1).map(String::as_str).collect();
+caught-by:
+    cortex-index::it map::the_map_is_the_same_bytes_for_the_same_inputs
+
+[break] a-second-map-in-an-epoch
+rule: An epoch is given one map: once its history holds one, none is asked for or given.
+file: crates/cortex-agent/src/turn/map.rs
+in: Session::give_map
+find: if self.context.history.has_map() || self.map.none == Some(epoch) {
+replace: if self.map.none == Some(epoch) {
+caught-by:
+    cortex-agent::it map::a_map_ready_in_time_goes_just_before_the_first_prompt_once
+    cortex-agent::it map::a_compaction_gives_a_fresh_map_and_a_resume_keeps_it_as_the_history_was_sent
+
+[break] a-summary-replays-the-old-map
+rule: After a summary the old epoch's map is not replayed with the turns it did not cover: the new epoch has its own.
+file: crates/cortex-agent/src/context/history.rs
+in: History::extend_projected
+find: if meta.map {
+replace: if false {
+caught-by:
+    cortex-agent context::tests::an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again
+
+[break] a-reload-replays-the-old-map
+rule: A history read again from the log leaves out the old epoch's map after a summary, as the live session did.
+file: crates/cortex-agent/src/context/mod.rs
+in: Context::load
+find: if index < at
+replace: if false
+caught-by:
+    cortex-agent context::tests::an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again
+
+[break] the-map-is-not-a-map-notice
+rule: The map is a notice of its own source, which is what marks it as the epoch's map in the history.
+file: crates/cortex-agent/src/turn/map.rs
+in: Session::give_map
+find: self.record_notice(turn, NoticeSource::Map, text).await
+replace: self.record_notice(turn, NoticeSource::Harness, text).await
+caught-by:
+    cortex-agent::it map::a_map_ready_in_time_goes_just_before_the_first_prompt_once
+
+[break] the-index-is-used-on-the-start-up-path
+rule: Nothing on the path that puts a session together reads the repository index: its first pass starts once the loop runs.
+file: crates/cortex-core/src/assemble.rs
+in: assemble
+find: Some(crate::repo_map::RepoIndex::new(
+replace: let _ = index.pass(&cancel, &|| false); Some(crate::repo_map::RepoIndex::new(
+packages: cortex-core
+caught-by:
+    cortex-core::it index::the_index_is_not_touched_until_the_session_is_open
+
+[break] the-outline-tool-reads-outside-the-workspace
+rule: The outline tool works inside the workspace only: a path outside it is refused when the call is planned, and nothing is read.
+file: crates/cortex-tools/src/outline.rs
+in: OutlineTool::plan
+find: if !target.is_inside_workspace() {
+replace: if false {
+caught-by:
+    cortex-tools::it outline::a_path_outside_the_workspace_is_refused_and_nothing_is_read
+
+[break] the-outline-tool-walks-past-the-gate
+rule: A directory's outline puts every entry to the read gate, so a file a rule protects is neither read nor named.
+file: crates/cortex-tools/src/outline.rs
+in: outline_directory
+find:
+    gate,
+    cancel,
+    &mut || {
+replace:
+    &crate::context::OpenGate,
+    cancel,
+    &mut || {
+caught-by:
+    cortex-tools::it outline::a_directorys_outline_is_its_files_in_order_down_to_its_depth_past_the_gate
