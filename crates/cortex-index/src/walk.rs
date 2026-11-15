@@ -419,15 +419,21 @@ pub(crate) fn list(
     }
 
     listing.found = all.len();
+    if !all.is_empty() {
+        listing.dirs.insert(String::new(), all.len());
+    }
     for file in &all {
-        *listing.dirs.entry(String::new()).or_default() += 1;
         let mut at = 0;
         while let Some(slash) = file.relative[at..].find('/') {
             at += slash;
-            *listing
-                .dirs
-                .entry(file.relative[..at].to_owned())
-                .or_default() += 1;
+            // A directory's name is made once, not once for each file in
+            // it.
+            let dir = &file.relative[..at];
+            if let Some(count) = listing.dirs.get_mut(dir) {
+                *count += 1;
+            } else {
+                listing.dirs.insert(dir.to_owned(), 1);
+            }
             at += 1;
         }
     }

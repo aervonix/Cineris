@@ -49,8 +49,8 @@ caught-by:
 rule: A warm pass reads again only the files whose stamp changed or that were unsettled; an unchanged file keeps its record unopened.
 file: crates/cortex-index/src/pass.rs
 in: Index::pass
-find: (record.stamp == file.stamp && !record.flags.unsettled).then_some(at)
-replace: (false).then_some(at)
+find: (record.stamp == file.stamp && !record.flags.unsettled).then_some(cursor)
+replace: (false).then_some(cursor)
 caught-by:
     cortex-index::it index::a_warm_pass_reads_only_what_changed
 
@@ -58,8 +58,8 @@ caught-by:
 rule: A file whose size, modification time or change time is not the cached one is read again.
 file: crates/cortex-index/src/pass.rs
 in: Index::pass
-find: (record.stamp == file.stamp && !record.flags.unsettled).then_some(at)
-replace: (record.path == file.relative && !record.flags.unsettled).then_some(at)
+find: (record.stamp == file.stamp && !record.flags.unsettled).then_some(cursor)
+replace: (record.path == file.relative && !record.flags.unsettled).then_some(cursor)
 caught-by:
     cortex-index::it index::a_warm_pass_reads_only_what_changed
 
