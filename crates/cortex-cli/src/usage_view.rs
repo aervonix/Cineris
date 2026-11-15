@@ -204,10 +204,10 @@ fn limit_line(limits: &ProviderLimits, now: UtcTime) -> String {
 /// The report, as `cortex usage` prints it.
 pub(crate) fn usage(report: &UsageReport, now: UtcTime) -> String {
     let mut out = String::new();
-    let from = report
-        .from
-        .as_ref()
-        .map_or_else(|| "everything on record".to_owned(), |from| format!("from {from}"));
+    let from = report.from.as_ref().map_or_else(
+        || "everything on record".to_owned(),
+        |from| format!("from {from}"),
+    );
     let _ = writeln!(
         out,
         "Usage · {} ({from}; days in {})",
@@ -337,7 +337,11 @@ pub(crate) fn stats(summary: &StatsSummary) -> String {
         );
     }
     if summary.unreadable > 0 {
-        let _ = writeln!(out, "Unreadable: {} lines were skipped.", summary.unreadable);
+        let _ = writeln!(
+            out,
+            "Unreadable: {} lines were skipped.",
+            summary.unreadable
+        );
     }
     out.push_str("Nothing of it leaves this machine. `cortex stats reset` deletes it.\n");
     out
@@ -426,7 +430,10 @@ mod tests {
         assert!(text.contains("model 60%"), "{text}");
         assert!(text.contains("tools 40%"), "{text}");
         // A limit past its reset time is never shown as full.
-        assert!(text.contains("reset since, unknown until the next request"), "{text}");
+        assert!(
+            text.contains("reset since, unknown until the next request"),
+            "{text}"
+        );
         assert!(!text.contains("100 of 100"), "{text}");
         assert!(text.contains("as of 2 min ago"), "{text}");
     }

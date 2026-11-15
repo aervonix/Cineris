@@ -13,11 +13,11 @@ use cortex_base::Secret;
 use cortex_config::{Diagnostic, Env, LayerKind, LoadOptions, Platform};
 use cortex_core::{ClientInfo, Core, CoreOptions, OpError, Project, TokioTimer, TrustState};
 use cortex_protocol::ErrorKind;
+use cortex_protocol::ProjectKey;
 use cortex_protocol::methods::{
     Op, OpResult, SessionListParams, UsageRefreshParams, UsageReportParams,
 };
 use cortex_protocol::usage::{UsageGroup, UsageRange};
-use cortex_protocol::ProjectKey;
 
 use crate::args::{
     AuthCommand, Common, ConfigCommand, PermissionsCommand, SessionsCommand, StatsCommand,
@@ -231,11 +231,8 @@ pub(crate) fn usage(command: UsageCommand, name: &'static str) -> Done {
             let client = core.connect(ClientInfo::user());
             let refreshed = if command.refresh {
                 Some(
-                    core.handle(
-                        client.id,
-                        Op::UsageRefresh(UsageRefreshParams::default()),
-                    )
-                    .await,
+                    core.handle(client.id, Op::UsageRefresh(UsageRefreshParams::default()))
+                        .await,
                 )
             } else {
                 None

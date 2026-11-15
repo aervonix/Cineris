@@ -1,0 +1,301 @@
+# Step 16: statistics, roles and variants, and where a turn's time goes.
+#
+# Each rule the step's done criteria name is broken here, one at a time:
+# recording that never waits, nothing read at start-up, aggregates that
+# rebuild to the same values, costs fixed when recorded, limits past their
+# reset, ranges at day, week, month and zone boundaries, the opt-in
+# refresh, the roles' fallbacks and budgets, variants per epoch, and the
+# turn-time split that adds up.
+
+[break] recording-blocks-the-loop
+rule: Recording never waits: with the writer stalled and its queue full, an event is dropped and counted.
+file: crates/cortex-stats/src/recorder.rs
+in: Recorder::send
+find: if let Err(TrySendError::Full(_)) = self.queue.try_send(message) {
+replace: if self.queue.send(message).is_err() {
+caught-by:
+    cortex-stats::lib recorder::tests::a_stalled_writer_drops_and_counts_and_never_waits
+
+[break] a-file-read-at-start-up
+rule: Making a recorder reads nothing: the aggregates are read when they are asked for.
+file: crates/cortex-stats/src/recorder.rs
+in: Recorder::new
+find: let (queue, receiver) = sync_channel(options.queue.max(1));
+replace: let _ = crate::store::Aggregates::load(&options.dir); let (queue, receiver) = sync_channel(options.queue.max(1));
+packages: cortex-stats, cortex-core
+caught-by:
+    cortex-stats::it store::nothing_is_read_until_it_is_asked_for
+    cortex-core::it usage::a_turn_reaches_the_report_from_the_files_and_its_cost_stays_as_it_was_priced
+
+[break] aggregates-do-not-rebuild-to-the-same-values
+rule: The aggregates are each file read to its last whole line, so a rebuild from the files gives the same values.
+file: crates/cortex-stats/src/store.rs
+in: read_from
+find: entry.offset += read as u64;
+replace: entry.offset += (read as u64).saturating_sub(1);
+caught-by:
+    cortex-stats::it store::the_aggregates_rebuild_to_the_same_values_from_the_files
+    cortex-stats::it store::two_writers_that_bring_the_aggregates_up_to_date_out_of_order_lose_nothing
+
+[break] a-pruned-files-part-is-lost
+rule: All-time totals outlive the pruning of raw files: a pruned file's part moves into what is kept.
+file: crates/cortex-stats/src/store.rs
+in: Aggregates::sync
+find: if let Some(file) = self.files.remove(month) { self.kept.merge(&file.part); }
+replace: self.files.remove(month);
+caught-by:
+    cortex-stats::it store::all_time_outlives_the_raw_files_and_old_days_fold_into_months
+    cortex-stats::it store::the_aggregates_rebuild_to_the_same_values_from_the_files
+
+[break] a-recorded-cost-is-priced-again
+rule: A cost is fixed when it is recorded: the aggregates add the cost the record holds, never one worked out again from its tokens.
+file: crates/cortex-stats/src/aggregate.rs
+in: Part::add_line
+find: CostBasis::Metered => sum.metered_nanos = cost.usd_nanos,
+replace: CostBasis::Metered => sum.metered_nanos = (tokens.input + tokens.output * 4) * 1000,
+packages: cortex-stats, cortex-core
+caught-by:
+    cortex-core::it usage::a_turn_reaches_the_report_from_the_files_and_its_cost_stays_as_it_was_priced
+    cortex-stats::it store::all_time_outlives_the_raw_files_and_old_days_fold_into_months
+
+[break] a-limit-past-its-reset-shown-full
+rule: A limit past its reset time is reported as not known, not as full.
+file: crates/cortex-stats/src/query.rs
+in: current_limits
+find: window.remaining = None;
+replace: window.remaining = window.limit;
+caught-by:
+    cortex-stats::it limits::a_limit_past_its_reset_time_is_not_known_rather_than_full
+
+[break] the-month-misses-its-first-day
+rule: A calendar month runs from its first local day to today.
+file: crates/cortex-stats/src/query.rs
+in: days_of
+find: UsageRange::Month => today.first_of_month(),
+replace: UsageRange::Month => today.first_of_month().add_days(1),
+caught-by:
+    cortex-stats::it ranges::the_days_of_each_range
+    cortex-stats::it ranges::a_range_ends_at_the_local_midnight_on_either_side
+
+[break] the-week-starts-a-day-early
+rule: A calendar week runs from its first day (Monday, or `usage.week_start`) to today.
+file: crates/cortex-stats/src/query.rs
+in: days_of
+find: today.add_days(-back)
+replace: today.add_days(-back - 1)
+caught-by:
+    cortex-stats::it ranges::the_days_of_each_range
+    cortex-stats::it ranges::a_range_ends_at_the_local_midnight_on_either_side
+
+[break] a-range-leaves-out-today
+rule: Both ends of a range are in it: today counts.
+file: crates/cortex-stats/src/query.rs
+in: in_range
+find: first <= day && day <= last
+replace: first <= day && day < last
+caught-by:
+    cortex-stats::it ranges::a_range_ends_at_the_local_midnight_on_either_side
+    cortex-stats::it ranges::today_is_the_users_today_not_utcs
+
+[break] the-day-is-utcs-not-the-users
+rule: A moment's local date is taken at the zone's offset at that moment.
+file: crates/cortex-base/src/zone/mod.rs
+in: Zone::date_of
+find: let local = time.unix_secs() + i64::from(self.offset_at(time));
+replace: let local = time.unix_secs();
+packages: cortex-base, cortex-stats
+caught-by:
+    cortex-base::lib zone::tests::a_fixed_zone_moves_the_date_at_its_own_midnight
+    cortex-stats::it store::an_event_goes_to_its_month_with_the_local_day_it_fell_on
+    cortex-stats::it ranges::today_is_the_users_today_not_utcs
+
+[break] summer-time-ignored
+rule: A zone's rule changes its offset on its days: summer time is an hour ahead.
+file: crates/cortex-base/src/zone/posix.rs
+in: PosixRule::offset_at
+find: if in_dst { dst_offset } else { self.std_offset }
+replace: self.std_offset
+packages: cortex-base, cortex-stats
+caught-by:
+    cortex-base::lib zone::tests::a_posix_rule_changes_offset_on_its_days
+    cortex-stats::it ranges::today_is_the_users_today_not_utcs
+
+[break] the-refresh-asks-with-the-list-empty
+rule: With `usage.refresh` empty nothing connects: only the providers the user listed are asked.
+file: crates/cortex-core/src/usage.rs
+in: refresh
+find: let allowed: Vec<ProviderId> = settings.usage.refresh.iter().map(|name| ProviderId::new(name.as_str())).collect();
+replace: let allowed: Vec<ProviderId> = ["openrouter", "deepseek", "venice"].iter().map(|name| ProviderId::new(*name)).collect();
+caught-by:
+    cortex-core::it usage::with_the_list_empty_nothing_is_asked_and_a_project_cannot_turn_it_on
+    cortex-core::it usage::a_provider_with_no_documented_endpoint_has_no_refresh_and_only_a_user_may_ask
+
+[break] a-project-turns-the-refresh-on
+rule: `usage.refresh` is the user's alone: a project's configuration cannot turn the refresh on.
+file: crates/cortex-config/src/schema/sections.rs
+in: UsageSettings
+find: [UserOnly, Now] pub refresh: Vec<String>
+replace: [Preference, Now] pub refresh: Vec<String>
+caught-by:
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it trust::every_key_has_a_trust_class
+
+[break] the-refresh-asks-as-anyone
+rule: Only a `user` client may ask the providers' usage endpoints.
+file: crates/cortex-core/src/core.rs
+in: Core::require_user
+find: Some(ClientRole::User) => Ok(()),
+replace: Some(_) => Ok(()),
+caught-by:
+    cortex-core::it usage::a_provider_with_no_documented_endpoint_has_no_refresh_and_only_a_user_may_ask
+
+[break] the-key-follows-a-redirect
+rule: No credential goes past its own host: the transport follows no redirect.
+file: crates/cortex-llm/src/transport.rs
+find: .redirect(reqwest::redirect::Policy::none())
+replace: .redirect(reqwest::redirect::Policy::limited(3))
+packages: cortex-core
+caught-by:
+    cortex-core::it usage::a_redirect_takes_the_key_to_no_other_host
+
+[break] a-refresh-that-never-answers-waits-for-ever
+rule: A refresh's time is bounded: one that never answers fails at its limit and changes nothing kept.
+file: crates/cortex-core/src/usage.rs
+in: refresh_one
+find: let sleep = inner.providers.timer.sleep(REFRESH_LIMIT);
+replace: let sleep = std::future::pending::<()>();
+caught-by:
+    cortex-core::it usage::a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer
+
+[break] the-files-are-not-owner-only
+rule: Every statistics file, `limits.json` among them, is owner-only.
+file: crates/cortex-stats/src/store.rs
+in: write_private
+find: owner_only: true
+replace: owner_only: false
+packages: cortex-stats, cortex-core
+caught-by:
+    cortex-stats::it store::every_file_is_owner_only
+    cortex-core::it usage::the_refresh_asks_the_documented_endpoint_with_that_providers_key_and_nothing_else
+
+[break] the-epoch-is-a-limits-reset
+rule: Venice.ai's next epoch is shown as what it is, never as a confirmed reset of the daily limits.
+file: crates/cortex-llm/src/openai_chat/account.rs
+in: read
+find: resets_at: None
+occurrence: 2
+replace: resets_at: usage.next_epoch.clone().filter(|_| per == Per::Day)
+caught-by:
+    cortex-llm::it openai_chat::endpoints::*
+
+[break] a-summary-goes-to-the-judge
+rule: A summary is a utility call: it goes to the `fast` role, and to `main` when that has no model.
+file: crates/cortex-agent/src/config.rs
+in: UtilityCall::role
+find: Self::Summary => ModelRole::Fast
+replace: Self::Summary => ModelRole::Judge
+caught-by:
+    cortex-agent::it roles::a_background_summary_is_recorded_in_the_turn_that_counted_it
+    cortex-agent::it context::a_summary_prepared_in_the_background_is_used_and_the_newer_turns_follow_it_without_reasoning
+
+[break] a-fast-failure-is-not-asked-of-main
+rule: When the `fast` role's model fails a summary in a compaction, the main model is asked once.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::compacting
+find: let fast_failed = !refusal && self.summary_role != ModelRole::Main && !fast_retried;
+replace: let fast_failed = false;
+caught-by:
+    cortex-agent::it context::when_every_summary_fails_the_turn_ends_and_nothing_is_recorded
+
+[break] one-budget-for-every-role
+rule: Each role has a budget of its own: the `fast` model's refusal marks only its own, and the main model's retry is not cut for it.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::budget_for_mut
+find: if *role == ModelRole::Main {
+replace: if true {
+caught-by:
+    cortex-agent::it summaries::a_summary_the_fast_role_refused_is_asked_of_the_main_model
+    cortex-agent::it summaries::a_background_summary_refused_as_too_long_teaches_the_fast_roles_budget_alone
+
+[break] a-summary-left-at-close-is-not-counted
+rule: A summary still running when the session closes is counted when the loop ends.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::count_left_summaries
+find: self.summary_stat(&turn, &summarized, record);
+replace: let _ = (&turn, &summarized, record);
+caught-by:
+    cortex-agent::it roles::a_summary_left_running_when_the_session_closes_is_counted
+
+[break] the-turn-that-started-a-summary-is-forgotten
+rule: A summary counted by a later turn names the turn that started it.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::summary_stat
+find: started_in: (summarized.started_in != *turn).then(|| summarized.started_in.clone())
+replace: started_in: None
+caught-by:
+    cortex-agent::it roles::a_background_summary_is_recorded_in_the_turn_that_counted_it
+
+[break] a-variant-override-does-not-reach-the-request
+rule: A variant override changes the request: the request is made with the epoch's variants.
+file: crates/cortex-agent/src/turn.rs
+in: Session::prepare
+find: request.variants = self.epoch_variants();
+replace:
+caught-by:
+    cortex-agent::it roles::a_variant_override_changes_the_request_and_is_recorded
+
+[break] the-epoch-does-not-record-its-variants
+rule: The variants are fixed for an epoch and recorded in its `epoch` entry.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::epoch_start
+find: variants: Some(self.model.variants.clone())
+replace: variants: None
+caught-by:
+    cortex-agent::it roles::a_variant_override_changes_the_request_and_is_recorded
+
+[break] a-retry-wait-leaves-time-out
+rule: The turn-time split adds up to the wall time: the time after a retry's wait is the next attempt's connection.
+file: crates/cortex-agent/src/timing.rs
+in: TurnClock::close
+find: self.totals[Spend::Connect.index()] += spent - waited;
+replace: let _ = spent - waited;
+caught-by:
+    cortex-agent::it timing::a_retrys_wait_is_its_own_part
+    cortex-agent::lib timing::tests::every_moment_is_in_one_part_and_the_parts_add_up
+
+[break] milliseconds-rounded-apart
+rule: The parts' milliseconds add up to the turn's: each is rounded where the parts are laid end to end.
+file: crates/cortex-agent/src/timing.rs
+in: TurnClock::finish
+find: ms[spend.index()] = millis(at) - millis(begin);
+replace: ms[spend.index()] = millis(self.totals[spend.index()]);
+caught-by:
+    cortex-agent::lib timing::tests::milliseconds_add_up_however_the_parts_fall
+
+[break] the-first-byte-is-the-connection
+rule: The provider's answer ends the connection's part and begins the wait for the first byte.
+file: crates/cortex-agent/src/turn.rs
+in: Session::spend_on
+find: ModelEvent::Answered => self.times.enter(now, Spend::FirstByte),
+replace: ModelEvent::Answered => {}
+caught-by:
+    cortex-agent::it timing::a_turns_time_is_cut_into_parts_that_add_up_to_its_wall_time
+
+[break] a-question-in-a-round-is-tool-time
+rule: In a tool round with no call running and a question open, the time is the user's answer's.
+file: crates/cortex-agent/src/timing.rs
+in: TurnClock::round
+find: } else if asking { Spend::Approval
+replace: } else if asking { Spend::Harness
+caught-by:
+    cortex-agent::it timing::a_turns_time_is_cut_into_parts_that_add_up_to_its_wall_time
+    cortex-agent::lib timing::tests::every_moment_is_in_one_part_and_the_parts_add_up
+
+[break] the-client-never-says-the-provider-answered
+rule: The client says once an attempt when the provider answered, before the response.
+file: crates/cortex-llm/src/client.rs
+in: attempt
+find: out.emit(ModelEvent::Answered).await;
+replace:
+caught-by:
+    cortex-llm::it client::the_client_says_when_the_provider_answered_once_an_attempt

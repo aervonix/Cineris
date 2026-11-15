@@ -131,8 +131,8 @@ fn day_of(year: i64, day: Day) -> i64 {
             let month_first = days_from_civil(year, i64::from(month), 1);
             // 1970-01-01 was a Thursday: 4 counted from Sunday.
             let first_weekday = (month_first + 4).rem_euclid(7);
-            let mut day = 1 + (i64::from(weekday) - first_weekday).rem_euclid(7)
-                + (i64::from(week) - 1) * 7;
+            let mut day =
+                1 + (i64::from(weekday) - first_weekday).rem_euclid(7) + (i64::from(week) - 1) * 7;
             let last = days_in_month(year, i64::from(month));
             while day > last {
                 day -= 7;

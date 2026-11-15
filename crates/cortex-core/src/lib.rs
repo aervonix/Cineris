@@ -46,12 +46,12 @@ mod usage;
 
 pub use crate::clients::{ClientId, ClientInfo};
 pub use crate::core::{Client, Core, CoreOptions, OpError};
-pub use crate::usage::StatsSummary;
 pub use crate::events::{EventQueue, Outgoing, QUEUE_CAPACITY};
 pub use crate::manage::{Project, ProviderCredential, TrustState, Trusted};
 pub use crate::policy::PermissionDenial;
 pub use crate::provider::{ANTHROPIC_KEY_ENV, Connector, EFFORT_ALIASES, KeyFound};
 pub use crate::rules::parse_rule;
+pub use crate::usage::StatsSummary;
 /// The runtime's timer, which the core's options take: the provider layer's
 /// and the process runner's waits are on it.
 pub use cortex_llm::TokioTimer;

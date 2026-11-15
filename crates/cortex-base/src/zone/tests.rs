@@ -22,7 +22,13 @@ fn a_date_reads_writes_and_counts() {
     // 1 January 2024 was a Monday, 7 January a Sunday.
     assert_eq!(date("2024-01-01").weekday(), 0);
     assert_eq!(date("2024-01-07").weekday(), 6);
-    for wrong in ["2023-02-29", "2024-13-01", "2024-1-01", "2024-01-00", "abcd-ef-gh"] {
+    for wrong in [
+        "2023-02-29",
+        "2024-13-01",
+        "2024-1-01",
+        "2024-01-00",
+        "abcd-ef-gh",
+    ] {
         assert!(LocalDate::parse(wrong).is_none(), "{wrong}");
     }
 }
@@ -44,7 +50,10 @@ fn a_fixed_zone_moves_the_date_at_its_own_midnight() {
         at("2026-11-16T05:00:00Z")
     );
     let tokyo = Zone::fixed(9 * 3600);
-    assert_eq!(tokyo.date_of(at("2026-11-15T15:00:00Z")), date("2026-11-16"));
+    assert_eq!(
+        tokyo.date_of(at("2026-11-15T15:00:00Z")),
+        date("2026-11-16")
+    );
 }
 
 #[test]
@@ -65,7 +74,10 @@ fn a_posix_rule_changes_offset_on_its_days() {
         london.start_of(date("2026-03-29")),
         at("2026-03-29T00:00:00Z")
     );
-    assert_eq!(london.date_of(at("2026-06-30T23:30:00Z")), date("2026-07-01"));
+    assert_eq!(
+        london.date_of(at("2026-06-30T23:30:00Z")),
+        date("2026-07-01")
+    );
 
     // The southern hemisphere: summer spans the new year.
     let sydney = Zone::posix(SYDNEY).unwrap();
@@ -75,9 +87,16 @@ fn a_posix_rule_changes_offset_on_its_days() {
     for wrong in ["", "G", "GMT", "GMT0BST,M13.5.0,M10.5.0", "GMT0BST,M3.5.0"] {
         assert!(PosixRule::parse(wrong).is_none(), "{wrong}");
     }
-    assert_eq!(Zone::posix("UTC0").unwrap().offset_at(at("2026-07-01T00:00:00Z")), 0);
     assert_eq!(
-        Zone::posix("<+0530>-5:30").unwrap().offset_at(at("2026-07-01T00:00:00Z")),
+        Zone::posix("UTC0")
+            .unwrap()
+            .offset_at(at("2026-07-01T00:00:00Z")),
+        0
+    );
+    assert_eq!(
+        Zone::posix("<+0530>-5:30")
+            .unwrap()
+            .offset_at(at("2026-07-01T00:00:00Z")),
         19_800
     );
 }

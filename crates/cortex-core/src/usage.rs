@@ -21,10 +21,11 @@ use cortex_base::{CancelToken, Zone};
 use cortex_config::{Loaded, StateDir};
 use cortex_llm::openai_chat::account::{self, AccountUsage};
 use cortex_llm::{HttpRequest, Transport};
-use cortex_protocol::methods::{RefreshOutcome, UsageRefreshParams, UsageRefreshResult, UsageReportParams};
+use cortex_protocol::methods::{
+    RefreshOutcome, UsageRefreshParams, UsageRefreshResult, UsageReportParams,
+};
 use cortex_protocol::usage::{
-    Balance, LimitSource, ModelUsage, ProviderLimits, UsageGroup, UsageRange, UsageReport,
-    UsageRow,
+    Balance, LimitSource, ModelUsage, ProviderLimits, UsageGroup, UsageRange, UsageReport, UsageRow,
 };
 use cortex_protocol::{ErrorData, ErrorKind, ProviderId};
 use cortex_stats::{Aggregates, LimitsFile, Query, Recorder, RecorderOptions, StatsDir};
@@ -57,7 +58,10 @@ pub(crate) fn recorder(user: &Loaded, options: &CoreOptions) -> Option<Recorder>
 }
 
 /// `usage/report`.
-pub(crate) async fn report(core: &Core, params: &UsageReportParams) -> Result<UsageReport, OpError> {
+pub(crate) async fn report(
+    core: &Core,
+    params: &UsageReportParams,
+) -> Result<UsageReport, OpError> {
     let inner = &core.inner;
     if params.range == UsageRange::Session {
         return session_report(core, params);
@@ -155,7 +159,9 @@ fn session_report(core: &Core, params: &UsageReportParams) -> Result<UsageReport
             provider: group_by
                 .contains(&UsageGroup::Provider)
                 .then(|| by.provider.clone()),
-            model: group_by.contains(&UsageGroup::Model).then(|| by.model.clone()),
+            model: group_by
+                .contains(&UsageGroup::Model)
+                .then(|| by.model.clone()),
             project: None,
             project_label: None,
             source: group_by
@@ -199,7 +205,11 @@ pub(crate) fn decimal(nanos: i64) -> String {
 
 /// What an endpoint reported, as the protocol carries it. Nothing but the
 /// figures.
-fn limits_of(provider: &ProviderId, usage: AccountUsage, seen: cortex_protocol::Timestamp) -> ProviderLimits {
+fn limits_of(
+    provider: &ProviderId,
+    usage: AccountUsage,
+    seen: cortex_protocol::Timestamp,
+) -> ProviderLimits {
     // A limit of one model cannot be told from another's in a limit
     // window, which names no model: only the key's own are kept (Venice.ai
     // reports each model's configured limits, which the provider's page

@@ -298,8 +298,12 @@ fn settle(writer: &Writer, state: &mut State) {
         let now = writer.clock.now();
         let zone = state.zone.get_or_insert_with(Zone::system);
         if let Ok(mut aggregates) = Aggregates::load(dir)
-            && let Ok(true) =
-                aggregates.sync(dir, zone.date_of(now), &month_of(now), writer.options.retention)
+            && let Ok(true) = aggregates.sync(
+                dir,
+                zone.date_of(now),
+                &month_of(now),
+                writer.options.retention,
+            )
         {
             let _ = aggregates.save(dir, writer.clock.as_ref());
         }

@@ -68,9 +68,9 @@ pub mod verify;
 
 pub use config::{LoopConfig, Models, RoleModel, SessionInfo, UtilityCall, Workspace};
 pub use context::{
-    Assembled, CORE_INSTRUCTIONS, ContextError, ContextParts, ContextSettings, Environment, GUIDED_NOTES,
-    FileText, InstructionFiles, MemoryInstructionFiles, NOTICE_LEAD, NoInstructionFiles,
-    PrefixDifference, SUMMARY_INSTRUCTIONS, check_prefix,
+    Assembled, CORE_INSTRUCTIONS, ContextError, ContextParts, ContextSettings, Environment,
+    FileText, GUIDED_NOTES, InstructionFiles, MemoryInstructionFiles, NOTICE_LEAD,
+    NoInstructionFiles, PrefixDifference, SUMMARY_INSTRUCTIONS, check_prefix,
 };
 pub use events::EventSink;
 pub use guard::RepetitionLimits;

@@ -422,7 +422,10 @@ impl Core {
     }
 
     /// The live usage of an open session.
-    pub(crate) fn session_usage(&self, session: &SessionId) -> Option<cortex_protocol::usage::SessionUsage> {
+    pub(crate) fn session_usage(
+        &self,
+        session: &SessionId,
+    ) -> Option<cortex_protocol::usage::SessionUsage> {
         self.live(session).ok().map(|live| live.handle.usage())
     }
 

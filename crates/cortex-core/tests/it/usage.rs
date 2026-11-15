@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cortex_core::{ClientInfo, Core};
-use cortex_protocol::methods::{Op, OpResult, UsageRefreshParams, UsageRefreshResult, UsageReportParams};
+use cortex_protocol::methods::{
+    Op, OpResult, UsageRefreshParams, UsageRefreshResult, UsageReportParams,
+};
 use cortex_protocol::usage::{LimitSource, TokenUsage, UsageRange, UsageReport};
 use cortex_protocol::{ErrorKind, ProviderId};
 use cortex_testkit::{Gate, Reply, ScriptedTransport, ServerReply, SseServer, join};
@@ -35,7 +37,10 @@ fn refresh_config(world: &World, base: &str) {
     ));
 }
 
-async fn refresh(core: &Core, info: ClientInfo) -> Result<UsageRefreshResult, cortex_core::OpError> {
+async fn refresh(
+    core: &Core,
+    info: ClientInfo,
+) -> Result<UsageRefreshResult, cortex_core::OpError> {
     let client = core.connect(info);
     match core
         .handle(client.id, Op::UsageRefresh(UsageRefreshParams::default()))
@@ -77,7 +82,15 @@ fn net<T>(future: impl std::future::Future<Output = T>) -> T {
 }
 
 fn limits_text(world: &World) -> Option<String> {
-    std::fs::read_to_string(world.dirs().state.unwrap().join("stats").join("limits.json")).ok()
+    std::fs::read_to_string(
+        world
+            .dirs()
+            .state
+            .unwrap()
+            .join("stats")
+            .join("limits.json"),
+    )
+    .ok()
 }
 
 #[test]
@@ -98,14 +111,20 @@ fn the_refresh_asks_the_documented_endpoint_with_that_providers_key_and_nothing_
     let request = &requests[0];
     assert_eq!(request.method, "GET");
     assert_eq!(request.path, "/api/v1/key");
-    assert_eq!(request.header("authorization"), Some(format!("Bearer {KEY}").as_str()));
+    assert_eq!(
+        request.header("authorization"),
+        Some(format!("Bearer {KEY}").as_str())
+    );
     assert!(request.body.is_empty(), "it carries nothing");
     let every_header: String = request
         .headers
         .iter()
         .map(|(name, value)| format!("{name}: {value}\n"))
         .collect();
-    assert!(!every_header.contains("sk-ant"), "no other provider's key: {every_header}");
+    assert!(
+        !every_header.contains("sk-ant"),
+        "no other provider's key: {every_header}"
+    );
 
     let outcome = &result.providers[0];
     assert_eq!(outcome.provider, ProviderId::new("openrouter"));
@@ -116,13 +135,26 @@ fn the_refresh_asks_the_documented_endpoint_with_that_providers_key_and_nothing_
     assert_eq!(limits.windows[0].remaining, Some(49));
     // Kept, owner-only, and with nothing but the figures.
     let kept = limits_text(&world).unwrap();
-    assert!(!kept.contains("sk-or"), "the key's label is not kept: {kept}");
+    assert!(
+        !kept.contains("sk-or"),
+        "the key's label is not kept: {kept}"
+    );
     assert!(!kept.contains("SECRETID"), "no id is kept: {kept}");
-    let path = world.dirs().state.unwrap().join("stats").join("limits.json");
+    let path = world
+        .dirs()
+        .state
+        .unwrap()
+        .join("stats")
+        .join("limits.json");
     assert!(cortex_base::private::is_private(&path).unwrap());
     // And the report shows it, with no connection of its own.
     let shown = net(report(&core, UsageRange::Month));
-    assert!(shown.limits.iter().any(|limits| limits.source == LimitSource::Refresh));
+    assert!(
+        shown
+            .limits
+            .iter()
+            .any(|limits| limits.source == LimitSource::Refresh)
+    );
     assert_eq!(server.requests().len(), 1, "the report made no request");
 }
 
@@ -132,14 +164,15 @@ fn a_redirect_takes_the_key_to_no_other_host() {
     with_key(&mut world);
     let elsewhere = SseServer::start();
     let server = SseServer::start();
-    server.push(
-        ServerReply::status(302).header("location", &elsewhere.url("/steal")),
-    );
+    server.push(ServerReply::status(302).header("location", &elsewhere.url("/steal")));
     refresh_config(&world, &server.base_url());
     let core = world.core();
     let result = net(refresh(&core, ClientInfo::user())).unwrap();
     assert!(result.providers[0].error.is_some());
-    assert!(elsewhere.requests().is_empty(), "nothing went to the other host");
+    assert!(
+        elsewhere.requests().is_empty(),
+        "nothing went to the other host"
+    );
     assert!(limits_text(&world).is_none(), "nothing was kept");
 }
 
@@ -208,7 +241,10 @@ fn with_the_list_empty_nothing_is_asked_and_a_project_cannot_turn_it_on() {
     let Ok(OpResult::UsageRefresh(named)) = named else {
         panic!("{named:?}");
     };
-    assert_eq!(named.providers[0].error.as_ref().unwrap().code, "refresh_not_enabled");
+    assert_eq!(
+        named.providers[0].error.as_ref().unwrap().code,
+        "refresh_not_enabled"
+    );
     // A session in the project does not turn it on either.
     world.run(async {
         let front = Front::start(&world, &core).await;
@@ -227,8 +263,13 @@ fn a_provider_with_no_documented_endpoint_has_no_refresh_and_only_a_user_may_ask
     let transport = ScriptedTransport::new(Vec::<Reply>::new());
     let core = world.core_with(|options| options.transport = Some(Arc::new(transport.clone())));
     let result = world.run(refresh(&core, ClientInfo::user())).unwrap();
-    assert_eq!(result.providers[0].error.as_ref().unwrap().code, "no_usage_endpoint");
-    let refused = world.run(refresh(&core, ClientInfo::observer())).unwrap_err();
+    assert_eq!(
+        result.providers[0].error.as_ref().unwrap().code,
+        "no_usage_endpoint"
+    );
+    let refused = world
+        .run(refresh(&core, ClientInfo::observer()))
+        .unwrap_err();
     assert_eq!(refused.kind, ErrorKind::Usage);
     assert_eq!(refused.code, "role_not_allowed");
     assert!(transport.requests().is_empty());

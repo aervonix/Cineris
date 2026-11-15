@@ -34,8 +34,8 @@ caught-by:
 rule: A summary request refused as too long is answered by one more try, cut to half the limit.
 file: crates/cortex-agent/src/turn/epochs.rs
 in: Session::compacting
-find: let again = if refusal { refused < 2 } else { from_background };
-replace: let again = from_background;
+find: let again = if refusal { refused < 2 } else { from_background || fast_failed };
+replace: let again = from_background || fast_failed;
 caught-by:
     cortex-agent::it summaries::a_summary_request_refused_as_too_long_is_cut_and_tried_again
     cortex-agent::it summaries::a_summary_the_fast_role_refused_is_asked_of_the_main_model

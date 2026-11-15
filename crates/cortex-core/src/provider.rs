@@ -549,13 +549,21 @@ pub(crate) fn variants_for(
     };
     if let Some(format) = &overrides.edit_format {
         if !cortex_llm::catalog::EDIT_FORMATS.contains(&format.as_str()) {
-            return Err(refuse("edit_format", format, cortex_llm::catalog::EDIT_FORMATS));
+            return Err(refuse(
+                "edit_format",
+                format,
+                cortex_llm::catalog::EDIT_FORMATS,
+            ));
         }
         variants.edit_format.clone_from(format);
     }
     if let Some(style) = &overrides.prompt_style {
         if !cortex_llm::catalog::PROMPT_STYLES.contains(&style.as_str()) {
-            return Err(refuse("prompt_style", style, cortex_llm::catalog::PROMPT_STYLES));
+            return Err(refuse(
+                "prompt_style",
+                style,
+                cortex_llm::catalog::PROMPT_STYLES,
+            ));
         }
         variants.prompt_style.clone_from(style);
     }

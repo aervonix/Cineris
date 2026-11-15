@@ -58,8 +58,8 @@ use crate::state::{Observer, TurnState};
 use crate::stats::{
     ContextStat, RequestPurpose, RequestStat, StatEvent, Stats, ToolCallStat, TurnStat,
 };
-use crate::timing::{Spend, TurnClock};
 use crate::store::{Attempt, ITEM_PREFIX, Record, SessionStore, StoreError, TURN_PREFIX};
+use crate::timing::{Spend, TurnClock};
 use crate::toolset::ToolSet;
 use crate::usage::{UsageBook, add_request};
 use crate::verify::{Verifier, VerifyCx, VerifyOutcome};
@@ -482,8 +482,7 @@ impl Session {
                 );
                 // A panic is a bug. It ends the turn, and the session can
                 // take the next prompt.
-                let ended =
-                    Guarded(Box::pin(self.turn(running, prompt).instrument(span))).await;
+                let ended = Guarded(Box::pin(self.turn(running, prompt).instrument(span))).await;
                 next = match ended {
                     Ok(next) => next,
                     Err(panic) => {
@@ -1523,7 +1522,8 @@ impl Session {
             written: &turn.written,
             cancel: turn.cancel.child(),
         };
-        self.times.enter(self.clock.monotonic(), Spend::Verification);
+        self.times
+            .enter(self.clock.monotonic(), Spend::Verification);
         let verified = turn.cancel.race(self.verifier.verify(cx)).await;
         self.times.enter(self.clock.monotonic(), Spend::Harness);
         let Some(outcome) = verified else {

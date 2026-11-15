@@ -170,9 +170,12 @@ pub fn report(
     }
 
     // Time is a turn's: it can be shown by provider, model and project.
-    let time_groups = group_by
-        .iter()
-        .all(|group| matches!(group, UsageGroup::Provider | UsageGroup::Model | UsageGroup::Project));
+    let time_groups = group_by.iter().all(|group| {
+        matches!(
+            group,
+            UsageGroup::Provider | UsageGroup::Model | UsageGroup::Project
+        )
+    });
     let mut row_time: BTreeMap<RowKey, TimeTotals> = BTreeMap::new();
     let mut all_time = TimeTotals::default();
     for (key, time) in &part.time {
@@ -206,7 +209,11 @@ pub fn report(
         );
     }
     let mut tools: Vec<ToolTime> = tools.into_values().collect();
-    tools.sort_by(|a, b| b.share_ms.cmp(&a.share_ms).then_with(|| a.tool.cmp(&b.tool)));
+    tools.sort_by(|a, b| {
+        b.share_ms
+            .cmp(&a.share_ms)
+            .then_with(|| a.tool.cmp(&b.tool))
+    });
 
     let mut rows_out = Vec::with_capacity(rows.len().max(row_time.len()));
     // Every row of usage, and a row of time alone where turns ran and no

@@ -122,10 +122,7 @@ impl LocalDate {
     /// The first day of this date's month.
     #[must_use]
     pub const fn first_of_month(self) -> Self {
-        Self {
-            day: 1,
-            ..self
-        }
+        Self { day: 1, ..self }
     }
 
     /// The month as `YYYY-MM`.

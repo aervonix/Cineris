@@ -42,8 +42,8 @@ use crate::context::{
 };
 use crate::state::TurnState;
 use crate::stats::{ContextStat, RequestPurpose, RequestStat, StatEvent};
-use crate::timing::Spend;
 use crate::store::{EpochReason, EpochStart, Record, StoreError, Summary};
+use crate::timing::Spend;
 use crate::usage::add_request;
 
 /// A summary taken in the background, while it runs and once it is done.

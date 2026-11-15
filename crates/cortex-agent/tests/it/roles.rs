@@ -82,10 +82,7 @@ fn a_background_summary_is_recorded_in_the_turn_that_counted_it() {
 /// under `main`.
 #[test]
 fn with_no_fast_role_a_summary_goes_to_the_main_model() {
-    let world = World::new(
-        "summary_no_fast",
-        [says("Goal: from main."), says("Done.")],
-    );
+    let world = World::new("summary_no_fast", [says("Goal: from main."), says("Done.")]);
     let rig = Setup::new(&world).start(&world);
     rig.window(4_000);
     rig.fill(Fill::Compacting, "go");
@@ -105,10 +102,7 @@ fn with_no_fast_role_a_summary_goes_to_the_main_model() {
 #[test]
 fn a_summary_stopped_part_way_is_counted() {
     // The turn's own request waits, so that the interrupt finds it running.
-    let world = World::new(
-        "summary_stopped",
-        [Response::new().stall(), says("Two.")],
-    );
+    let world = World::new("summary_stopped", [Response::new().stall(), says("Two.")]);
     let fast = ScriptedProvider::new([Response::new()
         .tokens(tokens(700, 3))
         .usage()
@@ -144,10 +138,7 @@ fn a_summary_stopped_part_way_is_counted() {
 #[test]
 fn a_summary_left_running_when_the_session_closes_is_counted() {
     let world = World::new("summary_left", [says("One.")]);
-    let fast = ScriptedProvider::new([Response::new()
-        .tokens(tokens(500, 2))
-        .usage()
-        .stall()]);
+    let fast = ScriptedProvider::new([Response::new().tokens(tokens(500, 2)).usage().stall()]);
     let mut setup = Setup::new(&world);
     setup.utility = Some(RoleModel::new(Arc::new(fast.clone()), fixtures::model()));
     let rig = setup.start(&world);

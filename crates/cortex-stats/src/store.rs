@@ -497,8 +497,9 @@ impl LimitsFile {
                 None => self.providers.push(limits),
             }
         }
-        self.providers
-            .sort_by(|a, b| (a.provider.as_str(), a.source.as_str()).cmp(&(b.provider.as_str(), b.source.as_str())));
+        self.providers.sort_by(|a, b| {
+            (a.provider.as_str(), a.source.as_str()).cmp(&(b.provider.as_str(), b.source.as_str()))
+        });
     }
 
     /// Reads the file, takes `newer` into it, and writes it back.
