@@ -206,7 +206,7 @@ pub(crate) fn check_report(report: &Path, os: Os, slowest: usize) -> Result<()> 
 /// are over budget: hosted runners differ in speed by a factor of two, and
 /// a slow one reads every tier slow, the unit tier too, with every test as
 /// it was. The figures are what the fifth tooling step's runs read
-/// (docs/outstanding/windows-tier-three-margin-and-the-powershell-tests.md).
+/// (docs/steps/tooling-5/ci.md).
 pub(crate) fn runner_line(os: Os, start: f64, sample: usize) -> String {
     let ms = (1000.0 * start).round();
     if sample < SMALL_SAMPLE {

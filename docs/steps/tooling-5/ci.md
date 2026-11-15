@@ -64,7 +64,7 @@ The two runs were on runners of different speed (start 5 and 4 ms on Linux, 6 an
 | Run | What | Result |
 |---|---|---|
 | 43691692866 | Both OSes, A/B against `main` at `8a894c4`, five rounds | The sections above |
-| 43692957473 | The PR's `ci` at `81c5589` | `test-windows` failed on the tier budgets alone, every test passing, on the slowest Windows runner seen (12 ms a process start): tier 1 22.2 s, tier 2 41.6 s, tier 3 138.8 s, each about twice the A/B's at 10 ms; rerun ([outstanding/windows-tier-three-margin-and-the-powershell-tests.md](../../outstanding/windows-tier-three-margin-and-the-powershell-tests.md)) |
+| 43692957473 | The PR's `ci` at `81c5589` | `test-windows` failed on the tier budgets alone, every test passing, on the slowest Windows runner seen (12 ms a process start): tier 1 22.2 s, tier 2 41.6 s, tier 3 138.8 s, each about twice the A/B's at 10 ms; rerun ([outstanding/windows-tier-three-margin-and-the-powershell-tests.md](../tooling-6/answered.md)) |
 | 43691694394 | Linux, `advisories`, after the ignore of RUSTSEC-2025-0141 | Passed |
 | 43691696481 | Windows, release build, `test -p cortex-testkit --run-ignored only watch::tests::sys_ --no-capture`, five repeats | Passed; the timeout report's tree 2.27 s after its waits the first time, 0.32 to 0.34 s after |
 | 43671662851 | Windows, `test -p cortex-term -p cortex-tui -p cortex-core -p cortex-agent -p cortex-testkit -p xtask` | Passed |
