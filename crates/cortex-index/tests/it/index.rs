@@ -88,13 +88,18 @@ fn rust_file(name: &str) -> String {
 
 #[test]
 fn a_warm_pass_reads_only_what_changed() {
-    let tree = Tree::new(cortex_testkit::scratch!("a_warm_pass_reads_only_what_changed"));
+    let tree = Tree::new(cortex_testkit::scratch!(
+        "a_warm_pass_reads_only_what_changed"
+    ));
     for n in 0..20 {
         tree.write(&format!("src/m{n}.rs"), &rust_file(&format!("f{n}")));
     }
     let index = tree.index();
     let cold = tree.pass(&index);
-    assert_eq!((cold.found, cold.read, cold.kept, cold.indexed), (20, 20, 0, 20));
+    assert_eq!(
+        (cold.found, cold.read, cold.kept, cold.indexed),
+        (20, 20, 0, 20)
+    );
     assert!(cold.written && cold.complete());
 
     let warm = tree.pass(&index);
@@ -106,17 +111,28 @@ fn a_warm_pass_reads_only_what_changed() {
     tree.write("src/new.rs", &rust_file("added"));
     std::fs::remove_file(tree.scratch.join("ws/src/m7.rs")).expect("remove");
     let after = tree.pass(&index);
-    assert_eq!((after.read, after.kept, after.indexed), (2, 18, 20), "{after:?}");
+    assert_eq!(
+        (after.read, after.kept, after.indexed),
+        (2, 18, 20),
+        "{after:?}"
+    );
     let outline = index
         .outline_of(&tree.root.join("src/m3.rs").expect("a path"))
         .expect("an outline");
     assert_eq!(outline.outline.entries[0].name, "changed_name");
-    assert!(!index.map(&MapRequest::new()).expect("a map").contains("src/m7.rs"));
+    assert!(
+        !index
+            .map(&MapRequest::new())
+            .expect("a map")
+            .contains("src/m7.rs")
+    );
 }
 
 #[test]
 fn a_file_written_again_within_its_time_step_is_read_again() {
-    let tree = Tree::new(cortex_testkit::scratch!("a_file_written_again_within_its_time_step"));
+    let tree = Tree::new(cortex_testkit::scratch!(
+        "a_file_written_again_within_its_time_step"
+    ));
     tree.write("a.rs", &rust_file("first"));
     // Modified a moment ago: a second write in the same step of the file
     // system's clock would leave the time and the size as they are.
@@ -132,8 +148,13 @@ fn a_file_written_again_within_its_time_step_is_read_again() {
     std::fs::write(tree.scratch.join("ws/a.rs"), rust_file("other")).expect("write");
     tree.date("a.rs", Duration::from_millis(500));
     let second = tree.pass(&index);
-    assert_eq!(second.read, 1, "an unsettled file is read again: {second:?}");
-    let outline = index.outline_of(&tree.root.join("a.rs").expect("path")).expect("outline");
+    assert_eq!(
+        second.read, 1,
+        "an unsettled file is read again: {second:?}"
+    );
+    let outline = index
+        .outline_of(&tree.root.join("a.rs").expect("path"))
+        .expect("outline");
     assert_eq!(outline.outline.entries[0].name, "other");
     // Once its time is well past, it settles and is kept.
     tree.clock.advance(Duration::from_secs(10));
@@ -148,20 +169,27 @@ fn a_file_dated_after_the_clock_is_read_again_until_the_clock_passes_it() {
     let index = tree.index();
     tree.pass(&index);
     // The clock is set back an hour and a half: the file's time is ahead.
-    let back = tree.clock.now().checked_sub(Duration::from_secs(5400)).expect("a time");
+    let back = tree
+        .clock
+        .now()
+        .checked_sub(Duration::from_secs(5400))
+        .expect("a time");
     tree.clock.set_now(back);
     std::fs::write(tree.scratch.join("ws/a.rs"), rust_file("b")).expect("write");
     tree.date("a.rs", Duration::ZERO);
     assert_eq!(tree.pass(&index).read, 1);
     assert_eq!(tree.pass(&index).read, 1, "still ahead of the clock");
-    tree.clock.set_now(UtcTime::parse("2026-06-02T12:00:00Z").expect("a time"));
+    tree.clock
+        .set_now(UtcTime::parse("2026-06-02T12:00:00Z").expect("a time"));
     assert_eq!(tree.pass(&index).read, 1);
     assert_eq!(tree.pass(&index).read, 0, "settled");
 }
 
 #[test]
 fn ignore_files_hidden_directories_and_the_gate_are_honoured() {
-    let tree = Tree::new(cortex_testkit::scratch!("ignore_files_hidden_directories_and_the_gate"));
+    let tree = Tree::new(cortex_testkit::scratch!(
+        "ignore_files_hidden_directories_and_the_gate"
+    ));
     tree.write(".gitignore", "target/\n*.log\n");
     tree.write("src/.gitignore", "generated.rs\n");
     tree.write(".ignore", "vendor/\n");
@@ -180,10 +208,22 @@ fn ignore_files_hidden_directories_and_the_gate_are_honoured() {
     let index = tree.index_with(Limits::default(), gate);
     let report = tree.pass(&index);
     assert_eq!(report.indexed, 1, "{report:?}");
-    assert_eq!(report.skipped.denied, 1, "the file the gate denies; its directory is not gone into");
+    assert_eq!(
+        report.skipped.denied, 1,
+        "the file the gate denies; its directory is not gone into"
+    );
     let map = index.map(&MapRequest::new()).expect("a map");
     assert!(map.contains("src/lib.rs"), "{map}");
-    for hidden in ["generated", "target", "run.log", "vendor", ".git", ".cortex", "secrets", "token"] {
+    for hidden in [
+        "generated",
+        "target",
+        "run.log",
+        "vendor",
+        ".git",
+        ".cortex",
+        "secrets",
+        "token",
+    ] {
         assert!(!map.contains(hidden), "{hidden} is named:\n{map}");
     }
 }
@@ -195,8 +235,11 @@ fn links_are_not_followed_inside_or_out_of_the_workspace() {
     tree.write("real.rs", &rust_file("real"));
     let outside = tree.scratch.file("outside/far.rs", rust_file("far"));
     std::os::unix::fs::symlink(&outside, tree.scratch.join("ws/out.rs")).expect("link");
-    std::os::unix::fs::symlink(tree.scratch.join("ws/real.rs"), tree.scratch.join("ws/in.rs"))
-        .expect("link");
+    std::os::unix::fs::symlink(
+        tree.scratch.join("ws/real.rs"),
+        tree.scratch.join("ws/in.rs"),
+    )
+    .expect("link");
     std::os::unix::fs::symlink(tree.scratch.join("outside"), tree.scratch.join("ws/dir"))
         .expect("link");
     let index = tree.index();
@@ -223,7 +266,10 @@ fn a_file_over_the_cap_is_listed_and_not_read_and_a_binary_one_has_no_outline() 
     assert_eq!(report.indexed, 3);
     let map = index.map(&MapRequest::new()).expect("a map");
     assert!(map.contains("small.rs: fn small"), "{map}");
-    assert!(!map.contains("big.rs:") && !map.contains("blob.rs:"), "{map}");
+    assert!(
+        !map.contains("big.rs:") && !map.contains("blob.rs:"),
+        "{map}"
+    );
     // Asked for, the large file is outlined from its first bytes.
     let outline = index
         .outline_of(&tree.root.join("big.rs").expect("path"))
@@ -259,14 +305,19 @@ fn a_file_that_vanishes_or_changes_mid_pass_is_left_out_or_read_as_it_is() {
     assert!(done.load(Ordering::SeqCst));
     assert_eq!(report.indexed, 2, "{report:?}");
     let map = index.map(&MapRequest::new()).expect("a map");
-    assert!(map.contains("after_change") && !map.contains("gone.rs"), "{map}");
+    assert!(
+        map.contains("after_change") && !map.contains("gone.rs"),
+        "{map}"
+    );
     // The record holds what was read, so the next pass keeps it.
     assert_eq!(tree.pass(&index).read, 1, "the changed file was unsettled");
 }
 
 #[test]
 fn a_corrupt_or_older_cache_is_rebuilt() {
-    let tree = Tree::new(cortex_testkit::scratch!("a_corrupt_or_older_cache_is_rebuilt"));
+    let tree = Tree::new(cortex_testkit::scratch!(
+        "a_corrupt_or_older_cache_is_rebuilt"
+    ));
     tree.write("a.rs", &rust_file("a"));
     tree.write("b.rs", &rust_file("b"));
     let index = tree.index();
@@ -324,7 +375,10 @@ fn the_file_cap_keeps_the_top_of_the_tree_and_the_listing_cap_bounds_the_walk() 
     // fill what is left.
     assert!(map.contains("top.rs") && map.contains("z/y4.rs"), "{map}");
     assert!(map.contains("The index is partial"), "{map}");
-    assert!(map.contains("a/ (30)"), "the tree counts what the cap left out:\n{map}");
+    assert!(
+        map.contains("a/ (30)"),
+        "the tree counts what the cap left out:\n{map}"
+    );
 
     let limits = Limits {
         max_listed: 8,
@@ -372,8 +426,14 @@ fn a_pass_out_of_time_writes_what_it_read_and_the_next_carries_on() {
         pass_time: Duration::from_millis(60),
         ..Limits::default()
     };
-    let index = Index::new(tree.root.clone(), tree.cache_dir(), limits, Arc::new(OpenGate), clock.clone())
-        .with_threads(1);
+    let index = Index::new(
+        tree.root.clone(),
+        tree.cache_dir(),
+        limits,
+        Arc::new(OpenGate),
+        clock.clone(),
+    )
+    .with_threads(1);
     let mut passes = 0;
     let mut indexed = Vec::new();
     loop {
@@ -388,7 +448,10 @@ fn a_pass_out_of_time_writes_what_it_read_and_the_next_carries_on() {
         assert!(passes < 20, "never finished: {indexed:?}");
     }
     assert!(passes > 1, "one pass did it all: the time cap did not bite");
-    assert!(indexed.windows(2).all(|pair| pair[0] < pair[1]), "{indexed:?}");
+    assert!(
+        indexed.windows(2).all(|pair| pair[0] < pair[1]),
+        "{indexed:?}"
+    );
     assert_eq!(indexed.last(), Some(&40));
 }
 
@@ -408,7 +471,10 @@ fn a_pass_stopped_while_listing_writes_nothing() {
     cancel.cancel();
     let report = index.pass(&cancel, &|| false);
     assert!(!report.written, "{report:?}");
-    assert_eq!(std::fs::read_to_string(index.cache_path()).expect("the cache"), before);
+    assert_eq!(
+        std::fs::read_to_string(index.cache_path()).expect("the cache"),
+        before
+    );
 }
 
 #[test]
@@ -447,19 +513,27 @@ fn two_sessions_writing_one_cache_at_once_leave_it_whole_and_right() {
         let path = tree.root.join(&format!("f{n:02}.rs")).expect("path");
         let text = std::fs::read_to_string(path.to_fs_path()).expect("read");
         let outline = two.outline_of(&path).expect("an outline");
-        assert!(text.contains(&outline.outline.entries[0].name), "f{n:02}: {outline:?}");
+        assert!(
+            text.contains(&outline.outline.entries[0].name),
+            "f{n:02}: {outline:?}"
+        );
     }
 }
 
 #[test]
 fn a_workspace_that_is_not_a_repository_and_non_ascii_names_are_indexed() {
-    let tree = Tree::new(cortex_testkit::scratch!("a_workspace_that_is_not_a_repository"));
+    let tree = Tree::new(cortex_testkit::scratch!(
+        "a_workspace_that_is_not_a_repository"
+    ));
     tree.write("src/ünïcode/naïve.rs", &rust_file("café"));
     tree.write(".gitignore", "skip.rs\n");
     tree.write("skip.rs", &rust_file("skipped"));
     let index = tree.index();
     let report = tree.pass(&index);
-    assert_eq!(report.indexed, 1, "a .gitignore counts with no repository: {report:?}");
+    assert_eq!(
+        report.indexed, 1,
+        "a .gitignore counts with no repository: {report:?}"
+    );
     let map = index.map(&MapRequest::new()).expect("a map");
     assert!(map.contains("src/ünïcode/naïve.rs: fn café"), "{map}");
 }

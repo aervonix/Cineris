@@ -698,7 +698,10 @@ fn an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again() {
             _ => None,
         })
         .collect();
-    assert!(!text.contains("OLD MAP") && text.contains("NEW MAP"), "{text}");
+    assert!(
+        !text.contains("OLD MAP") && text.contains("NEW MAP"),
+        "{text}"
+    );
 }
 
 /// A resume and a change of model keep the history, and the map in it.
@@ -706,7 +709,11 @@ fn an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again() {
 fn a_reloaded_epoch_keeps_the_map_its_history_holds() {
     let mut read = context();
     read.load(&Opened {
-        items: vec![map_notice("i_1", "MAP"), user("i_2", "go"), thinking_answer("i_3", None)],
+        items: vec![
+            map_notice("i_1", "MAP"),
+            user("i_2", "go"),
+            thinking_answer("i_3", None),
+        ],
         epochs: vec![(0, epoch("one"))],
         ..Opened::default()
     });

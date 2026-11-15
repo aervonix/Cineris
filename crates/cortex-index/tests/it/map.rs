@@ -28,7 +28,7 @@ fn project(test: &str) -> Tree {
     tree.write("src/parse/mod.rs", &rust_file(&["parse", "tokens"]));
     tree.write("src/parse/expr.rs", &rust_file(&["expr"]));
     tree.write("tests/it.rs", &rust_file(&["runs"]));
-    tree.write("docs/guide.md", "# Guide\n\n## Install\n");
+    tree.write("guides/intro.md", "# Guide\n\n## Install\n");
     tree
 }
 
@@ -65,7 +65,9 @@ fn the_map_is_the_same_bytes_for_the_same_inputs() {
         .expect("a map");
     // Another pass over the same files, another order of the same touched
     // files, another reader's threads: the same map.
-    let again = tree.index_with(Limits::default(), Arc::new(OpenGate)).with_threads(3);
+    let again = tree
+        .index_with(Limits::default(), Arc::new(OpenGate))
+        .with_threads(3);
     tree.pass(&again);
     let reversed: Vec<String> = touched.iter().rev().cloned().collect();
     let second = again
@@ -98,17 +100,30 @@ fn touched_files_come_first_then_recent_sessions_then_recent_changes() {
     let map = index
         .map(&MapRequest {
             touched: vec!["tests/it.rs".to_owned()],
-            recent: vec!["docs/guide.md".to_owned()],
+            recent: vec!["guides/intro.md".to_owned()],
             ..MapRequest::new()
         })
         .expect("a map");
-    let files = map.split("Files, most relevant first:\n").nth(1).expect("files");
-    let order: Vec<&str> = files.lines().map(|line| line.split(':').next().unwrap_or("")).collect();
-    assert_eq!(&order[..3], ["tests/it.rs", "docs/guide.md", "src/hot.rs"], "{map}");
+    let files = map
+        .split("Files, most relevant first:\n")
+        .nth(1)
+        .expect("files");
+    let order: Vec<&str> = files
+        .lines()
+        .map(|line| line.split(':').next().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        &order[..3],
+        ["tests/it.rs", "guides/intro.md", "src/hot.rs"],
+        "{map}"
+    );
     // Then shallower before deeper.
     let rest = &order[3..];
     let depth = |path: &str| path.matches('/').count();
-    assert!(rest.windows(2).all(|pair| depth(pair[0]) <= depth(pair[1])), "{rest:?}");
+    assert!(
+        rest.windows(2).all(|pair| depth(pair[0]) <= depth(pair[1])),
+        "{rest:?}"
+    );
 }
 
 #[test]
@@ -126,8 +141,16 @@ fn a_map_at_exactly_its_budget_is_whole_and_one_byte_less_says_what_it_left_out(
     // Too small for everything: it says how many files it left out, and
     // stays inside the budget.
     let cut = index.map(&request(tokens - 30)).expect("a map");
-    assert!(cut.len() <= (tokens - 30) * 3, "{} > {}", cut.len(), (tokens - 30) * 3);
-    assert!(cut.contains("more files not shown") || cut.contains("more file not shown"), "{cut}");
+    assert!(
+        cut.len() <= (tokens - 30) * 3,
+        "{} > {}",
+        cut.len(),
+        (tokens - 30) * 3
+    );
+    assert!(
+        cut.contains("more files not shown") || cut.contains("more file not shown"),
+        "{cut}"
+    );
     // However small the budget, never past it.
     for tokens in [0, 10, 80, 120, 200, 400] {
         if let Some(map) = index.map(&request(tokens)) {
@@ -142,8 +165,14 @@ fn a_fresh_clone_has_no_recent_changes_to_rank_by() {
     let index = tree.index();
     tree.pass(&index);
     let map = index.map(&MapRequest::new()).expect("a map");
-    let files = map.split("Files, most relevant first:\n").nth(1).expect("files");
+    let files = map
+        .split("Files, most relevant first:\n")
+        .nth(1)
+        .expect("files");
     // Every file has one time: the order is by depth and path alone.
     let first = files.lines().next().expect("a line");
-    assert!(first.starts_with("Cargo.toml") || first.starts_with("README.md"), "{map}");
+    assert!(
+        first.starts_with("Cargo.toml") || first.starts_with("README.md"),
+        "{map}"
+    );
 }

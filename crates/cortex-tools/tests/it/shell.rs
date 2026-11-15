@@ -664,7 +664,7 @@ fn the_tool_asks_by_default_runs_alone_and_names_its_limits() {
     // It is one of the declared tools of a session.
     let toolbox = Toolbox::read_only(Arc::new(ToolRegistry::new())).with(tool);
     assert!(toolbox.names().any(|name| name == "shell"));
-    assert_eq!(toolbox.len(), 6);
+    assert_eq!(toolbox.len(), 7);
 }
 
 #[test]

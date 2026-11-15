@@ -172,6 +172,17 @@ pub struct CoreOptions {
     pub git: Option<Arc<dyn Git>>,
     /// Whether a new session records the workspace's starting state.
     pub base_capture: bool,
+    /// Whether a session has the repository index: the map of its context
+    /// epochs and the `outline` tool's outlines.
+    pub repo_index: bool,
+    /// How long the first request of an epoch waits for the repository map
+    /// when `index.map_wait` is not set: 150 ms for the interactive app,
+    /// none for a headless run.
+    pub map_wait: Duration,
+    /// What the repository index may read, in place of the permission
+    /// engine's gate: a test's, which watches when the index is first used
+    /// (`cortex_testkit::Untouched`).
+    pub index_gate: Option<Arc<dyn cortex_index::Gate>>,
     /// Cancelled when the process is to stop: every session's token is a
     /// child of it.
     pub cancel: CancelToken,
@@ -226,6 +237,9 @@ impl CoreOptions {
             shell: None,
             git: None,
             base_capture: true,
+            repo_index: true,
+            map_wait: Duration::from_millis(150),
+            index_gate: None,
             cancel: CancelToken::new(),
             zone: None,
         }
@@ -586,6 +600,7 @@ impl Core {
             images,
             notices,
             lease_count,
+            repo,
         } = assembled;
         // The client is listening before the session can say anything.
         sink.subscribe(client.0, queue);
@@ -599,6 +614,11 @@ impl Core {
         // Everything the session's loop logs is inside its span.
         let span = tracing::info_span!("session", session = %handle.id());
         let task = tokio::spawn(tracing::Instrument::instrument(session.run(), span));
+        // The repository index's first pass, now that the loop runs: never
+        // on the path that puts the session together.
+        if let Some(repo) = &repo {
+            repo.warm();
+        }
         self.probe_context(&handle, &loaded);
         let live = Arc::new(Live {
             handle,

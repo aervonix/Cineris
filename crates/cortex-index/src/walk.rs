@@ -404,7 +404,10 @@ pub(crate) fn list(
         let mut at = 0;
         while let Some(slash) = file.relative[at..].find('/') {
             at += slash;
-            *listing.dirs.entry(file.relative[..at].to_owned()).or_default() += 1;
+            *listing
+                .dirs
+                .entry(file.relative[..at].to_owned())
+                .or_default() += 1;
             at += 1;
         }
     }

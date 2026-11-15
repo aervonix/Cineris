@@ -806,12 +806,19 @@ fn nothing_that_happens_to_the_registry_changes_the_declared_tool_list() {
     let toolbox = Toolbox::read_only(Arc::clone(&registry));
     assert_eq!(
         toolbox.names().collect::<Vec<_>>(),
-        ["list", "read", "search", "tool_call", "tool_search"]
+        [
+            "list",
+            "outline",
+            "read",
+            "search",
+            "tool_call",
+            "tool_search"
+        ]
     );
     let declared =
         |toolbox: &Toolbox| -> Vec<ToolSpec> { toolbox.specs().into_iter().cloned().collect() };
     let before = declared(&toolbox);
-    assert_eq!(before.len(), 5);
+    assert_eq!(before.len(), 6);
 
     // A server connects with tools; one is found and called; the server's
     // tools change; an extension the user just asked for appears; the

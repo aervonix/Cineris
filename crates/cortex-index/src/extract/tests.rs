@@ -23,15 +23,60 @@ fn entry(depth: u8, kind: Kind, name: &str) -> (u8, Kind, String) {
 #[test]
 fn methods_nest_in_their_impl_and_class_in_every_brace_language() {
     let cases: [(Language, &str, &str, Kind); 9] = [
-        (Language::Rust, "a.rs", "impl A {\n    fn m(&self) {}\n}\n", Kind::Impl),
-        (Language::Java, "A.java", "class A {\n    void m() {}\n}\n", Kind::Class),
-        (Language::CSharp, "A.cs", "class A\n{\n    void m() {}\n}\n", Kind::Class),
-        (Language::Kotlin, "A.kt", "class A {\n    fun m() {}\n}\n", Kind::Class),
-        (Language::Swift, "A.swift", "class A {\n    func m() {}\n}\n", Kind::Class),
-        (Language::Cpp, "a.hpp", "class A {\n    void m();\n};\n", Kind::Class),
-        (Language::TypeScript, "a.ts", "class A {\n  m() {}\n}\n", Kind::Class),
-        (Language::Php, "a.php", "class A {\n    function m() {}\n}\n", Kind::Class),
-        (Language::Go, "a.go", "type A interface {\n\tm()\n}\n", Kind::Interface),
+        (
+            Language::Rust,
+            "a.rs",
+            "impl A {\n    fn m(&self) {}\n}\n",
+            Kind::Impl,
+        ),
+        (
+            Language::Java,
+            "A.java",
+            "class A {\n    void m() {}\n}\n",
+            Kind::Class,
+        ),
+        (
+            Language::CSharp,
+            "A.cs",
+            "class A\n{\n    void m() {}\n}\n",
+            Kind::Class,
+        ),
+        (
+            Language::Kotlin,
+            "A.kt",
+            "class A {\n    fun m() {}\n}\n",
+            Kind::Class,
+        ),
+        (
+            Language::Swift,
+            "A.swift",
+            "class A {\n    func m() {}\n}\n",
+            Kind::Class,
+        ),
+        (
+            Language::Cpp,
+            "a.hpp",
+            "class A {\n    void m();\n};\n",
+            Kind::Class,
+        ),
+        (
+            Language::TypeScript,
+            "a.ts",
+            "class A {\n  m() {}\n}\n",
+            Kind::Class,
+        ),
+        (
+            Language::Php,
+            "a.php",
+            "class A {\n    function m() {}\n}\n",
+            Kind::Class,
+        ),
+        (
+            Language::Go,
+            "a.go",
+            "type A interface {\n\tm()\n}\n",
+            Kind::Interface,
+        ),
     ];
     for (language, file, text, kind) in cases {
         let found = shape(Some(language), file, text);
@@ -82,7 +127,10 @@ fn nothing_inside_a_function_body_is_outlined() {
             "a.rs",
             "fn outer() {\n    struct Local;\n    fn inner() {}\n}\nfn after() {}\n"
         ),
-        vec![entry(0, Kind::Function, "outer"), entry(0, Kind::Function, "after")]
+        vec![
+            entry(0, Kind::Function, "outer"),
+            entry(0, Kind::Function, "after")
+        ]
     );
 }
 
@@ -108,7 +156,10 @@ fn bytes_that_are_not_utf8_are_read_around() {
 
 #[test]
 fn a_very_long_line_is_read_and_its_head_is_cut() {
-    let long = format!("fn long({}) {{}}\nfn after() {{}}\n", "a: u8, ".repeat(100_000));
+    let long = format!(
+        "fn long({}) {{}}\nfn after() {{}}\n",
+        "a: u8, ".repeat(100_000)
+    );
     let outline = extract(Some(Language::Rust), "a.rs", &long);
     assert_eq!(outline.entries.len(), 2);
     assert!(outline.entries[0].head.chars().count() <= crate::outline::HEAD_CHARS);
@@ -168,7 +219,11 @@ fn an_empty_or_binary_looking_text_has_no_outline() {
         assert!(extract(Some(language), "a", "").entries.is_empty());
     }
     assert!(extract(None, "a", "").entries.is_empty());
-    assert!(extract(None, "a", "plain prose\nwith no indentation\n").entries.is_empty());
+    assert!(
+        extract(None, "a", "plain prose\nwith no indentation\n")
+            .entries
+            .is_empty()
+    );
 }
 
 #[test]

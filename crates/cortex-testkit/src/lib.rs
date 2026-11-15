@@ -8,6 +8,7 @@
 //! | [`canary`] | [`assert_never_printed`]: no `Debug` or `Display` form of a value holds a made-up key. |
 //! | [`timer`] | [`FakeTimer`]: waits that move the fake clock instead of waiting. |
 //! | [`gate`] | [`Gate`]: how two sides of a test take turns without sleeping. |
+//! | [`untouched`] | [`Untouched`]: something the start-up path must not touch (the repository index, the statistics), held while a session opens. |
 //! | [`scratch`] | [`Scratch`]: a directory of a test's own, with files, a git repository when the test needs one, and nothing left behind. |
 //! | [`seed`] | The seed of a test whose order of events is seeded: 0 in an ordinary run, the next one for each repeat of `cargo xtask stress`, and printed so that a failure can be run again. |
 //! | [`children`] | Child processes for process tests: the test binary run again as a child, a grandchild or a child that will not stop, and a [`Roll`](children::Roll) that shows each one start and die. |
@@ -61,6 +62,7 @@ pub mod seed;
 pub mod server;
 pub mod timer;
 pub mod transport;
+pub mod untouched;
 pub mod vterm;
 pub mod watch;
 
@@ -76,4 +78,5 @@ pub use scratch::Scratch;
 pub use server::{ReceivedRequest, ServerReply, SseServer};
 pub use timer::FakeTimer;
 pub use transport::{Reply, ScriptedTransport};
+pub use untouched::Untouched;
 pub use vterm::VTerm;

@@ -213,7 +213,11 @@ impl Lexer {
         let in_comment = matches!(self.state, State::Block(_) | State::RubyDoc);
         let in_string = matches!(
             self.state,
-            State::Str(_) | State::Triple(_) | State::RawRust(_) | State::Verbatim | State::Heredoc { .. }
+            State::Str(_)
+                | State::Triple(_)
+                | State::RawRust(_)
+                | State::Verbatim
+                | State::Heredoc { .. }
         );
         let blanked = |code: Vec<u8>| Lexed {
             code: to_text(code),
@@ -361,8 +365,8 @@ impl Lexer {
                 .find(|marker| rest.starts_with(marker.as_bytes()))
             {
                 let hash = *marker == "#";
-                let at_word = at == 0
-                    || matches!(bytes[at - 1], b' ' | b'\t' | b';' | b'(' | b'&' | b'|');
+                let at_word =
+                    at == 0 || matches!(bytes[at - 1], b' ' | b'\t' | b';' | b'(' | b'&' | b'|');
                 let attribute = hash && syntax.hash_attribute && rest.starts_with(b"#[");
                 if !attribute && (!(hash && syntax.hash_at_word) || at_word) {
                     return bytes.len();
@@ -426,7 +430,13 @@ fn to_text(code: Vec<u8>) -> String {
         error
             .into_bytes()
             .into_iter()
-            .map(|byte| if byte.is_ascii() { char::from(byte) } else { ' ' })
+            .map(|byte| {
+                if byte.is_ascii() {
+                    char::from(byte)
+                } else {
+                    ' '
+                }
+            })
             .collect()
     })
 }
@@ -581,7 +591,10 @@ mod tests {
         assert_eq!(lines[3], "def yes");
         let lines = lex(Syntax::RUBY, "list << item\ndef yes");
         assert_eq!(lines[1], "def yes");
-        let lines = lex(Syntax::PHP, "$a = <<<EOT\nfunction no() {\nEOT;\nfunction yes() {");
+        let lines = lex(
+            Syntax::PHP,
+            "$a = <<<EOT\nfunction no() {\nEOT;\nfunction yes() {",
+        );
         assert_eq!(lines[1].trim(), "");
         assert_eq!(lines[3], "function yes() {");
         let lines = lex(Syntax::RUBY, "=begin\ndef no\n=end\ndef yes");

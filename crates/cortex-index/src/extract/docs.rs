@@ -77,7 +77,7 @@ impl Docs {
             let rest = &line[prefix.len()..];
             // `////` is a rule, and `#!` a script's first line.
             if !rest.starts_with(['/', '!']) || prefix.ends_with('!') {
-                    self.offer(rest);
+                self.offer(rest);
                 return;
             }
         }
@@ -140,7 +140,10 @@ mod tests {
             doc_of(&["/**", " * @deprecated", " * Reads it.", " */"], RUST),
             Some("Reads it.".into())
         );
-        assert_eq!(doc_of(&["/** One line. */"], RUST), Some("One line.".into()));
+        assert_eq!(
+            doc_of(&["/** One line. */"], RUST),
+            Some("One line.".into())
+        );
     }
 
     #[test]

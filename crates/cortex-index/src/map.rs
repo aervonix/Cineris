@@ -183,8 +183,12 @@ fn counts(cache: &CacheFile, max_files: usize) -> String {
         line.push(' ');
         line.push_str(match why {
             Partial::Files => "",
-            Partial::Listing => "the listing stopped at its cap, so the map covers the part of the tree it reached.",
-            Partial::Time | Partial::Stopped => "some files are not read yet; a later map has them.",
+            Partial::Listing => {
+                "the listing stopped at its cap, so the map covers the part of the tree it reached."
+            }
+            Partial::Time | Partial::Stopped => {
+                "some files are not read yet; a later map has them."
+            }
         });
         if *why == Partial::Files {
             let _ = write!(

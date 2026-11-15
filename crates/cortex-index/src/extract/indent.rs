@@ -70,7 +70,9 @@ fn word<'a>(text: &'a str, word: &str) -> Option<&'a str> {
 
 fn is_constant(name: &str) -> bool {
     name.len() > 1
-        && name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
         && name.starts_with(|c: char| c.is_ascii_uppercase())
 }
 
@@ -167,7 +169,11 @@ pub(crate) fn python(text: &str, out: &mut Builder) {
             None
         } else if let Some(after) = word(rest, "def") {
             ident(after).map(|(name, _)| {
-                let kind = if blocks.in_type() { Kind::Method } else { Kind::Function };
+                let kind = if blocks.in_type() {
+                    Kind::Method
+                } else {
+                    Kind::Function
+                };
                 (kind, name.to_owned(), true)
             })
         } else if let Some(after) = word(rest, "class") {
@@ -258,7 +264,11 @@ pub(crate) fn ruby(text: &str, out: &mut Builder) {
                 .chars()
                 .take_while(|c| !c.is_whitespace() && *c != '(' && *c != ';')
                 .collect();
-            let kind = if blocks.in_type() { Kind::Method } else { Kind::Function };
+            let kind = if blocks.in_type() {
+                Kind::Method
+            } else {
+                Kind::Function
+            };
             (!name.is_empty()).then_some((kind, name, true, false))
         } else if let Some(after) = word(code, "class") {
             if after.starts_with("<<") {

@@ -136,7 +136,10 @@ fn a_map_ready_in_time_goes_just_before_the_first_prompt_once() {
     assert!(text(&first.messages[0]).ends_with("MAP"));
     assert!(text(&first.messages[0]).starts_with(cortex_agent::NOTICE_LEAD));
     assert!(text(&first.messages[1]).contains("first"));
-    assert!(timer.sleeps().is_empty(), "a map that is ready waits for nothing");
+    assert!(
+        timer.sleeps().is_empty(),
+        "a map that is ready waits for nothing"
+    );
     assert_eq!(source.started.load(Ordering::SeqCst), 2);
     assert_eq!(source.ended.load(Ordering::SeqCst), 2);
 }
@@ -164,10 +167,18 @@ fn a_late_map_follows_at_the_next_boundary_after_a_round_never_inside_it() {
     // The epoch's first chance waited its 150 ms, once, and gave up.
     assert_eq!(timer.sleeps(), [Duration::from_millis(150)]);
     let requests = world.provider.requests();
-    assert!(requests[0].messages.iter().all(|message| !text(message).contains("LATE MAP")));
+    assert!(
+        requests[0]
+            .messages
+            .iter()
+            .all(|message| !text(message).contains("LATE MAP"))
+    );
     let second = &requests[1].messages;
     let roles: Vec<&Role> = second.iter().map(|message| &message.role).collect();
-    assert_eq!(roles, [&Role::User, &Role::Assistant, &Role::Tool, &Role::User]);
+    assert_eq!(
+        roles,
+        [&Role::User, &Role::Assistant, &Role::Tool, &Role::User]
+    );
     assert!(text(&second[3]).ends_with("LATE MAP"));
     crate::assert_valid_history(second);
 }
@@ -249,7 +260,10 @@ fn a_compaction_gives_a_fresh_map_and_a_resume_keeps_it_as_the_history_was_sent(
     // The epoch after the compaction has its own map and not the old one,
     // though the turns it replays held it.
     let sent: String = last_before.messages.iter().map(text).collect();
-    assert!(sent.contains("SECOND MAP") && !sent.contains("FIRST MAP"), "{sent}");
+    assert!(
+        sent.contains("SECOND MAP") && !sent.contains("FIRST MAP"),
+        "{sent}"
+    );
 
     // Resumed: the history read back is the one sent, and no map is built.
     let resumed_source = ScriptedMap::new([Answer::Now("NOT ASKED")]);
@@ -260,7 +274,11 @@ fn a_compaction_gives_a_fresh_map_and_a_resume_keeps_it_as_the_history_was_sent(
         resumed.prompt("fourth");
         resumed.events.turns(1).await;
     });
-    assert_eq!(resumed_source.requests(), 0, "the epoch's history holds its map");
+    assert_eq!(
+        resumed_source.requests(),
+        0,
+        "the epoch's history holds its map"
+    );
     let after = world.provider.requests().last().expect("a request").clone();
     assert!(after.messages.len() > last_before.messages.len());
     assert_eq!(

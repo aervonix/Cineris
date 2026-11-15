@@ -37,6 +37,7 @@ mod manage;
 mod policy;
 mod provider;
 mod redact;
+mod repo_map;
 mod rules;
 mod sandbox;
 mod shell_cache;
