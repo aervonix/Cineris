@@ -340,3 +340,12 @@ find: *fenced = !*fenced;
 replace:
 caught-by:
     records::tests::a_section_is_written_between_its_marks_and_the_rest_of_the_page_is_kept
+
+[break] an-ab-compares-rounds-one-side-never-ran
+rule: An A/B's tables compare only the rounds both sides finished; an OS with none is left out.
+file: xtask/src/records.rs
+in: complete_rounds
+find: if rounds == 0 {
+replace: if false {
+caught-by:
+    records::tests::only_the_rounds_both_sides_finished_are_compared

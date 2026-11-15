@@ -214,6 +214,19 @@ pub(crate) struct Compared {
     pub(crate) tiers: Vec<(Tier, f64, usize, f64, usize)>,
 }
 
+/// The rounds both sides finished, or none when there is no such round. A
+/// run that a failing test ended has fewer rounds on one side: medians of
+/// what one side ran alone would compare nothing.
+pub(crate) fn complete_rounds(mut sides: Sides) -> Option<Sides> {
+    let rounds = sides.base.len().min(sides.head.len());
+    if rounds == 0 {
+        return None;
+    }
+    sides.base.truncate(rounds);
+    sides.head.truncate(rounds);
+    Some(sides)
+}
+
 /// Compares the sides of one OS as `cargo xtask ab` does: each test's
 /// median over the rounds, and one start cost for both, from both sides'
 /// tests together.
@@ -358,7 +371,7 @@ fn is_heading(line: &str, fenced: &mut bool) -> bool {
 /// it would lose what it says.
 pub(crate) fn with_section(text: &str, heading: &str, body: &str) -> Result<String> {
     let line = format!("## {heading}");
-    let block = format!("{OPEN_MARK}\n{}\n{CLOSE_MARK}\n", body.trim_end());
+    let block = format!("{OPEN_MARK}\n{}\n\n{CLOSE_MARK}\n", body.trim_end());
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let mut fenced = false;
     let mut start = None;
@@ -471,12 +484,19 @@ pub(crate) fn ab_times(run: u64, against: &str, write: Option<&Path>) -> Result<
     let mut compared = Vec::new();
     for os in [Os::Windows, Os::Linux] {
         if let Some(sides) = ab_reports(run, os)? {
-            compared.push(compare(os, &sides));
+            match complete_rounds(sides) {
+                Some(sides) => compared.push(compare(os, &sides)),
+                None => println!(
+                    "run {run}: {} has no round that both sides finished (a test that fails \
+                     ends an A/B run), so it is left out",
+                    os_name(os)
+                ),
+            }
         }
     }
     if compared.is_empty() {
         return Err(format!(
-            "run {run} kept no `try-linux` or `try-windows` artifact"
+            "run {run} has no A/B round that both sides finished, on any OS"
         ));
     }
     let sections: Vec<(String, String)> = compared
@@ -654,7 +674,7 @@ mod tests {
             written,
             format!(
                 "# After step 9: x\n\nIntro.\n\n## Windows\n\nKept.\n\n## On the pull \
-                 request\n\n{OPEN_MARK}\nTable one.\n{CLOSE_MARK}\n"
+                 request\n\n{OPEN_MARK}\nTable one.\n\n{CLOSE_MARK}\n"
             )
         );
         // A note written after the end mark, and the sections after, are
@@ -695,6 +715,25 @@ mod tests {
             2,
             "{replaced}"
         );
+    }
+
+    #[test]
+    fn only_the_rounds_both_sides_finished_are_compared() {
+        let round = || cases(1.004, 2.004, 3.004);
+        // A failing test ended the run in the head's first round.
+        let ended = Sides {
+            base: vec![round()],
+            head: vec![],
+        };
+        assert!(complete_rounds(ended).is_none());
+        // It ended in the third: two rounds are compared.
+        let partly = Sides {
+            base: vec![round(), round(), round()],
+            head: vec![round(), round()],
+        };
+        let kept = complete_rounds(partly).unwrap();
+        assert_eq!((kept.base.len(), kept.head.len()), (2, 2));
+        assert_eq!(compare(Os::Linux, &kept).rounds, 2);
     }
 
     #[test]
