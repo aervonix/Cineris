@@ -158,11 +158,8 @@ caught-by:
 [break] an-abort-leaves-the-terminal-raw
 rule: An abort puts the terminal back: SIGABRT is one of the signals whose handler restores it.
 file: crates/cortex-term/src/sys/unix.rs
-find:
-    libc::SIGQUIT,
-    libc::SIGABRT,
-replace:
-    libc::SIGQUIT,
-    libc::SIGQUIT,
+in: ENDING
+find: libc::SIGABRT
+replace: libc::SIGQUIT
 caught-by:
     cortex-term::it system::sys_the_terminal_is_put_back_after_an_abort
