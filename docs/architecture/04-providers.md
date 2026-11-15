@@ -659,14 +659,26 @@ The ports are the ones each server's documentation gives as its default. llama.c
 
 **The `/usage` refresh** (`openai_chat::account`; [18-usage.md](18-usage.md), "The opt-in refresh"). The module builds a `GET` with no body and reads the answer; whether it is made at all is the user's setting, and making it is step 16's.
 
-| Provider | Endpoint | What it reports |
+Every provider the catalog has is in this table. It is the one place the refresh of each is written down: the endpoint, the kind of key it takes, what comes back, and what the harness does with it. Read from each provider's documentation on 2026-11-15 ([steps/16/answered.md](../steps/16/answered.md)), and by one live call to each of the three endpoints, which answered 200 with the figures named here. A provider's documentation changes: the step that touches an endpoint reads it again.
+
+| Provider | Endpoint | The key it takes | What it returns | What the harness keeps |
+|---|---|---|---|---|
+| `openrouter` | `GET <base>/key` | The ordinary API key of the provider. (`GET /credits` takes a management key and is not used.) | `data.usage` (what the key has spent), `data.limit` (the key's own credit limit) and `data.limit_remaining`, and `data.free_model_daily_requests` (`limit`, `remaining`): today's requests to free models. It also returns the key's `label`, which is a shortened form of the key, and the ids of its creator, organization, workspace and budgets. | One balance in USD: remaining, limit, used. One per-day request limit on the key, with what is left of it and no reset time. **Never kept:** the label and the ids. |
+| `deepseek` | `GET <base>/user/balance` | The ordinary API key. | `is_available` (whether the balance is enough to make calls), and for each currency `total_balance`. | Whether the key may make calls, and one balance a currency with what remains. No limits and no epoch. |
+| `venice` | `GET <base>/api_keys/rate_limits` | An inference key or an admin key: the answer is about the key that asked. (`/billing/*` and `/rate_limits/log` take an admin key and are not used.) | `data.accessPermitted`, `data.balances` (an amount for each of its currencies: `USD`, `DIEM`, bundled credits), `data.nextEpochBegins`, and `data.rateLimits`: for each model, limits by the minute (`RPM`, `TPM`) and by the day (`RPD`), each with its size and none with what is left. | Whether the key may make calls, one balance a currency with what remains, and `nextEpochBegins` as the next epoch. The model limits are read and not kept: a limit window names no model. |
+| `anthropic` | none | Its usage, cost and rate-limit endpoints (`/v1/organizations/usage_report/messages`, `/cost_report`, `/analytics/*`, `/rate_limits`) are the Admin API's. They take an Admin API credential: an `sk-ant-admin` key, an `org:admin` OAuth token, or a personal or service-account key not scoped to a workspace. "Workspace API keys don't work." | | **No refresh.** Nothing is built for a credential other than the one the user gives for model calls (the owner's decision of 2026-11-15). Anthropic's limits come from the rate-limit headers of its responses, as every provider's do ([18-usage.md](18-usage.md)). |
+| `openai` | none | Its usage API takes an admin key, which is not the key a user gives for model calls. | | **No refresh**, for the same reason. |
+| the local servers | none | | | Nothing to report. |
+
+**How the harness uses it.** Only when the user has put the provider in `usage.refresh` (their own configuration; a project's cannot) and asks: the refresh key of the `/usage` view, or `cortex usage --refresh`, through `usage/refresh`. Each provider listed is asked once, with a `GET` that has no body, at the endpoint above under the provider's own base URL and with its own credential and headers, over the transport model calls use, which follows no redirect. It has 20 seconds to answer, and the answer is read to 256 KiB. What it returns is read into `AccountUsage` ("What the refresh reads" below), and `cortex-core` keeps the figures in `stats/limits.json` as the provider's limits with the source `refresh`, owner-only, not at all with statistics off. `cortex usage` prints them: `balance USD <amount> left`, `may not make calls now`, `next epoch <time>`, and the source and age. A failed refresh (a timeout, a 401, a 5xx, an answer that is not what the endpoint documents) changes nothing that is kept and names the provider and the status, with nothing of the answer's text. A key of the wrong kind for an endpoint is such a failure: the harness never asks for a second credential. No key is written to a log, a result or this page.
+
+**What the refresh reads** (`openai_chat::account`).
+
+| Provider | Format | What it reads |
 |---|---|---|
-| `openrouter` | `GET <base>/key` | What the key has spent, the key's own credit limit and what is left of it, and today's free-model requests. |
-| `deepseek` | `GET <base>/user/balance` | The balance in each currency, and whether it is enough to make calls. |
-| `venice` | `GET <base>/api_keys/rate_limits` | The balance in each of its currencies, whether the key may make calls, and each model's limits by the minute and by the day. |
-| `openai` | none | Its usage API takes an admin key, which is not the key a user gives for model calls. |
-| `anthropic` | none | Read in step 16: its usage, cost and rate-limit endpoints are the Admin API's, which takes an Admin API credential; "workspace API keys don't work". |
-| the local servers | none | |
+| `openrouter` | `openrouter-key` | What the key has spent, the key's own credit limit and what is left of it, and today's free-model requests. |
+| `deepseek` | `deepseek-balance` | The balance in each currency, and whether it is enough to make calls. |
+| `venice` | `venice-rate-limits` | The balance in each of its currencies, whether the key may make calls, and each model's limits by the minute and by the day. |
 
 - **All three report money**: an amount in a currency (US dollars, yuan, Venice.ai's own unit). The protocol's `LimitWindow` counts requests and tokens and cannot say that. So what is read is returned as a type of this crate (`AccountUsage`), and since step 16 reaches `/usage` as `ProviderLimits::balances`: exact decimal strings, one a currency, never added together or converted. Venice.ai's `nextEpochBegins` is `AccountUsage::next_epoch`, not a limit's reset time: its documentation does not say what it resets. A model's own limits (Venice.ai reports each one's) are not kept, since a limit window names no model.
 - **The answer is read and dropped.** OpenRouter's holds a shortened form of the key. `AccountUsage` has no member for the provider's own text, and must not gain one.
