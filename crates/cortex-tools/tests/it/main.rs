@@ -25,6 +25,7 @@ mod editing;
 mod editing_windows;
 mod execute;
 mod list;
+mod outline;
 #[cfg(unix)]
 mod paths_unix;
 #[cfg(windows)]

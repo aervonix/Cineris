@@ -618,6 +618,10 @@ fn start_core(plan: &Plan) -> Result<Core, OpError> {
     }
     options.trust_project = run.trust_project;
     options.fail_on_denial = run.fail_on_denial;
+    // A headless run's first request does not wait for the repository map
+    // (the coordinator's decision in step 18): the map follows as a notice
+    // at the first boundary where it is ready. `index.map_wait` sets a wait.
+    options.map_wait = std::time::Duration::ZERO;
     options.system_append.clone_from(&run.system_append);
     options.guard.clone_from(&plan.guard);
     // The same executable, under the other hidden subcommand: the sandbox

@@ -914,7 +914,7 @@ export interface NoticeItem {
 }
 
 /** Why the harness added a notice to the conversation. */
-export type NoticeSource = "instructions" | "plan" | "repetition" | "verification" | "limit" | "harness" | (string & {});
+export type NoticeSource = "instructions" | "plan" | "repetition" | "verification" | "limit" | "harness" | "map" | (string & {});
 
 /** What produced an assistant message. Raw blocks are valid only for replay to the same protocol, and to a model that can read them. */
 export interface Origin {

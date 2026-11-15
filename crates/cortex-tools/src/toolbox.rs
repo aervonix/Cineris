@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use crate::contract::{Tool, ToolSpec};
 use crate::list::ListTool;
+use crate::outline::OutlineTool;
 use crate::read::ReadTool;
 use crate::registry::{ToolCall, ToolRegistry, ToolSearch};
 use crate::search::SearchTool;
@@ -29,8 +30,8 @@ impl Toolbox {
         Self::default()
     }
 
-    /// The tools that only read: `read`, `list` and `search`, and
-    /// `tool_search` and `tool_call` in front of `registry`.
+    /// The tools that only read: `read`, `list`, `search` and `outline`,
+    /// and `tool_search` and `tool_call` in front of `registry`.
     ///
     /// A session adds the rest with [`with`](Self::with), because each is
     /// made with something of the session's own:
@@ -46,6 +47,7 @@ impl Toolbox {
             .with(ReadTool::new())
             .with(ListTool::new())
             .with(SearchTool::new())
+            .with(OutlineTool::new())
             .with(ToolSearch::new(Arc::clone(&registry)))
             .with(ToolCall::new(registry))
     }

@@ -204,6 +204,8 @@ pub(crate) struct Assembled {
     /// What to tell front ends once the session is open.
     pub(crate) notices: Vec<Event>,
     pub(crate) lease_count: u64,
+    /// The repository index, whose first pass starts once the loop runs.
+    pub(crate) repo: Option<crate::repo_map::RepoIndex>,
 }
 
 /// Where a directory really is: resolved through any link, whether or not
@@ -923,6 +925,8 @@ pub(crate) fn assemble(
     load.overrides.extend(wanted.overrides.iter().cloned());
     load.overrides.extend(settings_overrides(&wanted.settings));
     let state = StateDir::from_dirs(&load.dirs);
+    // Where the repository index keeps its cache: the project's, by its key.
+    let index_dir = state.as_ref().and_then(|state| state.index_dir(&project));
     let Trust {
         rules: rules_trusted,
         repository: repository_trusted,
@@ -1341,6 +1345,43 @@ pub(crate) fn assemble(
     }
     let log: SharedLog = Arc::new(std::sync::Mutex::new(kept));
 
+    // ------------------------------------------------ the repository index
+    // Made here, touching no file: its first pass starts once the loop runs
+    // (`Core::open`). What it indexes is held to what the agent could read
+    // unasked, by the same gate as the base state.
+    let repo = match &index_dir {
+        Some(dir) if options.repo_index => {
+            let index_settings = &settings.index;
+            let limits = cortex_index::Limits {
+                max_files: usize::try_from(index_settings.max_files).unwrap_or(usize::MAX),
+                max_file_bytes: index_settings.max_file_bytes,
+                pass_time: index_settings.pass_time,
+                ..cortex_index::Limits::default()
+            };
+            let keep = policy.keep_gate();
+            let gate: Arc<dyn cortex_index::Gate> = options
+                .index_gate
+                .clone()
+                .unwrap_or_else(|| Arc::new(move |path: &AbsPath| keep.may_keep(path)));
+            let index = cortex_index::Index::new(
+                root.clone(),
+                dir.clone(),
+                limits,
+                gate,
+                Arc::clone(&clock),
+            );
+            Some(crate::repo_map::RepoIndex::new(
+                index,
+                usize::try_from(index_settings.map_tokens).unwrap_or(usize::MAX),
+                // The files of recent sessions come from the statistics
+                // (step 16), when they exist.
+                Arc::new(cortex_index::NoRecentFiles),
+                cancel.clone(),
+            ))
+        }
+        _ => None,
+    };
+
     // ------------------------------------------------------------ the loop
     let main = models.main().clone();
     let workspace = Workspace {
@@ -1348,7 +1389,9 @@ pub(crate) fn assemble(
         content,
         files,
         limits: OutputLimits::default(),
-        outliner: None,
+        outliner: repo
+            .as_ref()
+            .map(|repo| Arc::new(repo.clone()) as Arc<dyn cortex_tools::Outliner>),
         images: provider::image_support(&main.entry),
     };
     let info = SessionInfo {
@@ -1402,6 +1445,14 @@ pub(crate) fn assemble(
         settings: context_settings(settings),
         plan: Some(Arc::clone(&board)),
         cache_key: Some(id.to_string()),
+        map: repo
+            .as_ref()
+            .filter(|_| settings.index.map)
+            .map(|repo| cortex_agent::RepoMap {
+                source: Arc::new(repo.clone()) as Arc<dyn cortex_agent::MapSource>,
+                timer: Arc::clone(&options.timer),
+                wait: settings.index.map_wait.unwrap_or(options.map_wait),
+            }),
     };
     let parts = SessionParts {
         info,
@@ -1464,6 +1515,7 @@ pub(crate) fn assemble(
         images,
         notices,
         lease_count: lease_count + 1,
+        repo,
     })
 }
 

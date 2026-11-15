@@ -122,7 +122,13 @@ impl Index {
     /// The index of the workspace at `root`, a resolved root, with its
     /// cache in `dir` (`<state>/projects/<project key>/index`).
     #[must_use]
-    pub fn new(root: AbsPath, dir: PathBuf, limits: Limits, gate: Arc<dyn Gate>, clock: SharedClock) -> Self {
+    pub fn new(
+        root: AbsPath,
+        dir: PathBuf,
+        limits: Limits,
+        gate: Arc<dyn Gate>,
+        clock: SharedClock,
+    ) -> Self {
         let threads = std::thread::available_parallelism()
             .map_or(1, |cores| (cores.get() / 2).clamp(1, MAX_THREADS));
         Self {
@@ -169,7 +175,11 @@ impl Index {
     ///
     /// `control` says when to stop between files: the session's end, a
     /// turn that began, the time.
-    pub fn pass(&self, cancel: &cortex_base::CancelToken, give_way: &(dyn Fn() -> bool + Sync)) -> PassReport {
+    pub fn pass(
+        &self,
+        cancel: &cortex_base::CancelToken,
+        give_way: &(dyn Fn() -> bool + Sync),
+    ) -> PassReport {
         let started = self.clock.monotonic();
         let limit = self.limits.pass_time;
         let clock = Arc::clone(&self.clock);
@@ -278,7 +288,9 @@ impl Index {
                 scope.spawn(|| {
                     loop {
                         if let Some(why) = control.stop() {
-                            let mut stopped = stopped.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let mut stopped = stopped
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             stopped.get_or_insert(why);
                             return;
                         }
@@ -286,16 +298,22 @@ impl Index {
                         let Some(item) = work.get(at) else { return };
                         let found = self.read_one(item.file, now);
                         if let Some(slot) = results.get(at) {
-                            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = found;
+                            *slot
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) = found;
                         }
                     }
                 });
             }
         });
         for (item, slot) in work.iter_mut().zip(results) {
-            item.found = slot.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
+            item.found = slot
+                .into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
-        stopped.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner)
+        stopped
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Reads one file and outlines it. `None` when it could not be opened

@@ -3446,6 +3446,10 @@
           "description": "Something else the model needs to know."
         },
         {
+          "const": "map",
+          "description": "The repository map: an epoch's view of the workspace, given once in it."
+        },
+        {
           "description": "A value this version of the protocol does not know. Receivers need a default branch.",
           "type": "string",
           "x-cortex-open": true

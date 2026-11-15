@@ -491,7 +491,15 @@ mod tests {
                 truncated: false,
             },
         );
-        writer.file("src/b.bin", &stamp(4), Flags { binary: true, ..Flags::default() }, &Outline::default());
+        writer.file(
+            "src/b.bin",
+            &stamp(4),
+            Flags {
+                binary: true,
+                ..Flags::default()
+            },
+            &Outline::default(),
+        );
         writer.finish()
     }
 

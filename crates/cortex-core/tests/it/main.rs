@@ -31,6 +31,7 @@ mod context;
 mod events;
 mod gates;
 mod harness_git;
+mod index;
 mod lifecycle;
 mod plan;
 mod provider;
@@ -261,6 +262,10 @@ impl World {
         options.harness_version = "0.0.0-test".to_owned();
         options.connector = Some(Arc::new(Scripted(self.provider.clone())));
         options.base_capture = false;
+        // No repository index unless a test asks: its map arrives at a
+        // boundary of its own timing, which a test of exact requests does
+        // not want.
+        options.repo_index = false;
         options.runner = Some(
             Runner::new()
                 .with_timer(timer)

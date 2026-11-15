@@ -10,6 +10,11 @@ context.instructions_cap = 49152            # default
 context.keep_recent_tokens = 0              # default
 context.prepare_at = 0.7                    # default
 credentials.store = "auto"                  # default
+index.map = true                            # default
+index.map_tokens = 1500                     # default
+index.max_file_bytes = 1048576              # default
+index.max_files = 20000                     # default
+index.pass_time = "2s"                      # default
 limits.day.cost = 20.0                      # user: ~/cortex/config.toml:29
 log.level = "info,cortex_llm=debug"         # environment: CORTEX_LOG
 managed.locked = ["sandbox.enabled"]        # managed: ~/managed/config.toml:3

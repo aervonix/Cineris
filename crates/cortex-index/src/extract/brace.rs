@@ -101,11 +101,15 @@ pub(crate) trait Recogniser {
 #[derive(Debug, Clone, Copy)]
 enum Frame {
     /// A definition's body that holds others.
-    Holds { entry: Option<usize> },
+    Holds {
+        entry: Option<usize>,
+    },
     /// A body or a block whose contents are not outlined. `entry` is set
     /// for a definition that may take its name when it closes (C's
     /// `typedef struct { … } Name;`).
-    Opaque { entry: Option<usize> },
+    Opaque {
+        entry: Option<usize>,
+    },
     Transparent,
 }
 
@@ -310,9 +314,7 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
                     reader.without_body();
                 }
                 b'{' => {
-                    let opened = reader
-                        .pending
-                        .take_if(|pending| pending.brackets <= 0);
+                    let opened = reader.pending.take_if(|pending| pending.brackets <= 0);
                     let frame = match opened {
                         Some(mut done) => {
                             Reader::cut_head(&mut done, start, at);

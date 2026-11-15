@@ -45,7 +45,12 @@ impl Session {
             return Ok(());
         }
         // A request made for another epoch was for another history.
-        if self.map.pending.as_ref().is_none_or(|(asked, _)| *asked != epoch) {
+        if self
+            .map
+            .pending
+            .as_ref()
+            .is_none_or(|(asked, _)| *asked != epoch)
+        {
             let root = self.env.workspace.paths.root().clone();
             let touched: Vec<String> = self
                 .env

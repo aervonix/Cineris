@@ -73,6 +73,65 @@ pub trait Outliner: Send + Sync {
     /// with its line number. `None` when there is none: an unknown
     /// language, a file not indexed yet.
     fn outline(&self, path: &AbsPath) -> Option<String>;
+
+    /// The outline of the file at `path` as the `outline` tool shows it:
+    /// the text and what it is. `Err` says, for the model, why there is
+    /// none (a binary file, one that cannot be opened). By default it is
+    /// [`outline`](Self::outline), of a language not said.
+    fn describe(&self, path: &AbsPath) -> Result<Outlined, String> {
+        self.outline(path)
+            .map(|text| {
+                let definitions = text.lines().count();
+                Outlined::new(text, None, definitions)
+            })
+            .ok_or_else(|| "it has no outline".to_owned())
+    }
+}
+
+/// One file's outline, for the `outline` tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Outlined {
+    /// One definition a line, its line number first, nested ones indented.
+    pub text: String,
+    /// The language whose extractor made it; `None` when it was made from
+    /// the file's indentation alone.
+    pub language: Option<String>,
+    /// How many definitions it has.
+    pub definitions: usize,
+    /// The file's size in bytes, when known.
+    pub size: Option<u64>,
+    /// The outline is of the file's first this many bytes: the file is
+    /// larger than the cap on one file.
+    pub covered: Option<u64>,
+}
+
+impl Outlined {
+    /// An outline of the whole file.
+    #[must_use]
+    pub fn new(text: String, language: Option<String>, definitions: usize) -> Self {
+        Self {
+            text,
+            language,
+            definitions,
+            size: None,
+            covered: None,
+        }
+    }
+
+    /// The file's size.
+    #[must_use]
+    pub fn with_size(mut self, size: u64) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    /// The outline is of the file's first `bytes`.
+    #[must_use]
+    pub fn covering(mut self, bytes: u64) -> Self {
+        self.covered = Some(bytes);
+        self
+    }
 }
 
 /// What images the session's model accepts in a tool result.

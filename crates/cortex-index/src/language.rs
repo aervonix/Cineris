@@ -88,7 +88,9 @@ impl Language {
     /// The language a short name names.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|language| language.name() == name)
+        Self::ALL
+            .into_iter()
+            .find(|language| language.name() == name)
     }
 
     /// The language of a file by its name alone. Case is ignored in the
@@ -154,14 +156,12 @@ impl Language {
     /// reads declarations in: a header, where a prototype is the interface.
     #[must_use]
     pub fn is_header(file_name: &str) -> bool {
-        file_name
-            .rsplit_once('.')
-            .is_some_and(|(_, extension)| {
-                matches!(
-                    extension.to_ascii_lowercase().as_str(),
-                    "h" | "hh" | "hpp" | "hxx" | "h++"
-                )
-            })
+        file_name.rsplit_once('.').is_some_and(|(_, extension)| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "h" | "hh" | "hpp" | "hxx" | "h++"
+            )
+        })
     }
 }
 

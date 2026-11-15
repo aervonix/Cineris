@@ -25,9 +25,7 @@ pub(crate) fn recogniser(language: Language, header: bool) -> Box<dyn Recogniser
         Language::JavaScript | Language::TypeScript => Box::new(Js),
         Language::Php => Box::new(Php),
         // The engines of the others are not this one; a shell's is.
-        Language::Shell | Language::Python | Language::Ruby | Language::Markdown => {
-            Box::new(Shell)
-        }
+        Language::Shell | Language::Python | Language::Ruby | Language::Markdown => Box::new(Shell),
     }
 }
 
@@ -126,9 +124,35 @@ fn strip_annotations(mut text: &str) -> &str {
 
 /// The words that open a statement, not a declaration.
 const STATEMENTS: &[&str] = &[
-    "if", "for", "foreach", "while", "switch", "catch", "return", "new", "throw", "else", "do",
-    "try", "sizeof", "delete", "case", "goto", "using", "lock", "fixed", "await", "yield",
-    "assert", "synchronized", "typeof", "when", "elif", "defer", "go", "select",
+    "if",
+    "for",
+    "foreach",
+    "while",
+    "switch",
+    "catch",
+    "return",
+    "new",
+    "throw",
+    "else",
+    "do",
+    "try",
+    "sizeof",
+    "delete",
+    "case",
+    "goto",
+    "using",
+    "lock",
+    "fixed",
+    "await",
+    "yield",
+    "assert",
+    "synchronized",
+    "typeof",
+    "when",
+    "elif",
+    "defer",
+    "go",
+    "select",
 ];
 
 /// A method or a function declared C-style: `[type] name(` with a type
@@ -242,7 +266,9 @@ impl Recogniser for Rust {
             if let Some(after) = word(rest, "extern") {
                 // `extern "C"`: the quotes stay, the name is blanked.
                 rest = match after.strip_prefix('"') {
-                    Some(quoted) => quoted.split_once('"').map_or(after, |(_, r)| r.trim_start()),
+                    Some(quoted) => quoted
+                        .split_once('"')
+                        .map_or(after, |(_, r)| r.trim_start()),
                     None => after,
                 };
                 if rest.starts_with('{') {
@@ -295,9 +321,7 @@ impl Recogniser for Rust {
             } else {
                 after
             };
-            let target = after
-                .split_once('{')
-                .map_or(after, |(target, _)| target);
+            let target = after.split_once('{').map_or(after, |(target, _)| target);
             let target = target
                 .split_once(" where")
                 .map_or(target, |(target, _)| target);
@@ -305,7 +329,11 @@ impl Recogniser for Rust {
             if name.is_empty() {
                 return Found::Nothing;
             }
-            return Found::Def(Def::new(Kind::Impl, crate::outline::clip(&name, 80), Body::Holds));
+            return Found::Def(Def::new(
+                Kind::Impl,
+                crate::outline::clip(&name, 80),
+                Body::Holds,
+            ));
         }
         Found::Nothing
     }
@@ -369,7 +397,9 @@ impl Recogniser for Go {
         if let Some(after) = word(code, "func") {
             if after.starts_with('(') {
                 // A method: `func (s *Server) Start()`.
-                let receiver = after.split_once(')').map(|(inside, rest)| (inside, rest.trim_start()));
+                let receiver = after
+                    .split_once(')')
+                    .map(|(inside, rest)| (inside, rest.trim_start()));
                 let Some((inside, rest)) = receiver else {
                     return Found::Nothing;
                 };
@@ -681,7 +711,11 @@ impl Recogniser for Kotlin {
             };
             // An extension function: `fun String.shout()`.
             let before_paren = after.split('(').next().unwrap_or(after);
-            let name = before_paren.rsplit('.').next().unwrap_or(before_paren).trim();
+            let name = before_paren
+                .rsplit('.')
+                .next()
+                .unwrap_or(before_paren)
+                .trim();
             return match ident(name) {
                 Some((name, _)) => {
                     Found::Def(Def::new(function_or_method(scope), name, Body::Opaque))
@@ -773,9 +807,17 @@ impl Recogniser for Swift {
             }
             // `class` before `func` or `var` is a modifier.
             if let Some(after) = word(rest, "class")
-                && ["func", "var", "let", "subscript", "override", "final", "static"]
-                    .iter()
-                    .any(|next| word(after, next).is_some())
+                && [
+                    "func",
+                    "var",
+                    "let",
+                    "subscript",
+                    "override",
+                    "final",
+                    "static",
+                ]
+                .iter()
+                .any(|next| word(after, next).is_some())
             {
                 rest = after;
             }
@@ -893,7 +935,14 @@ impl Recogniser for Cish {
                 Found::Transparent
             } else {
                 // `extern "C" int f(void);`
-                self.recognise(after.split_once('"').map_or("", |(_, r)| r).split_once('"').map_or("", |(_, r)| r.trim_start()), scope)
+                self.recognise(
+                    after
+                        .split_once('"')
+                        .map_or("", |(_, r)| r)
+                        .split_once('"')
+                        .map_or("", |(_, r)| r.trim_start()),
+                    scope,
+                )
             };
         }
         if let Some(after) = word(code, "namespace") {
@@ -918,7 +967,9 @@ impl Recogniser for Cish {
                     }
                     // `typedef struct Tag {`, or a name that comes at the close.
                     let name = ident(tagged)
-                        .filter(|(_, rest)| rest.trim_start().starts_with('{') || rest.trim().is_empty())
+                        .filter(|(_, rest)| {
+                            rest.trim_start().starts_with('{') || rest.trim().is_empty()
+                        })
                         .map_or_else(String::new, |(name, _)| name.to_owned());
                     return Found::Def(Def::new(kind, name, Body::Opaque));
                 }
@@ -965,7 +1016,10 @@ impl Recogniser for Cish {
                 };
                 // `struct point p = {…}` or `struct point *make(…)` is not one.
                 let tail = tail.trim_start();
-                if !(tail.is_empty() || tail.starts_with(['{', ':']) || word(tail, "final").is_some()) {
+                if !(tail.is_empty()
+                    || tail.starts_with(['{', ':'])
+                    || word(tail, "final").is_some())
+                {
                     break;
                 }
                 return Found::Def(Def::new(kind, name, Body::Holds));
@@ -990,7 +1044,11 @@ impl Recogniser for Cish {
                 Kind::Function
             };
             let def = Def::new(kind, name, Body::Opaque);
-            return Found::Def(if self.header || in_type { def } else { def.needing_body() });
+            return Found::Def(if self.header || in_type {
+                def
+            } else {
+                def.needing_body()
+            });
         }
         Found::Nothing
     }
@@ -1077,7 +1135,9 @@ impl Recogniser for Js {
             if let Some(after) = word(rest, keyword) {
                 let name: String = after
                     .chars()
-                    .take_while(|c| is_ident(*c) || *c == '.' || *c == '"' || *c == '\'' || *c == ' ')
+                    .take_while(|c| {
+                        is_ident(*c) || *c == '.' || *c == '"' || *c == '\'' || *c == ' '
+                    })
                     .collect::<String>()
                     .trim()
                     .to_owned();
@@ -1144,7 +1204,10 @@ impl Js {
         if STATEMENTS.contains(&name.as_str()) {
             return Found::Nothing;
         }
-        let tail = tail.trim_start().trim_start_matches(['?', '!']).trim_start();
+        let tail = tail
+            .trim_start()
+            .trim_start_matches(['?', '!'])
+            .trim_start();
         let interface = matches!(scope.container, Some((Kind::Interface, _)));
         if tail.starts_with('(') || tail.starts_with('<') {
             return Found::Def(Def::new(Kind::Method, name, Body::Opaque));

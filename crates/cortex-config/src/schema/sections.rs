@@ -107,9 +107,10 @@ settings! {
         /// Whether local statistics are recorded, and for how long.
         [nested]
         pub stats: StatsSettings,
-        /// The repository map's caps.
-        [reserved UserOnly]
-        pub index: Reserved,
+        /// The repository map: whether epochs are given one, its budget,
+        /// and the caps of the index it is made from.
+        [nested]
+        pub index: IndexSettings,
         /// The run engine: concurrency, workspaces, budgets.
         [reserved UserOnly]
         pub runs: Reserved,
@@ -458,6 +459,42 @@ settings! {
         /// project, after trust.
         [RaisesCost, NextEpoch, 0..=100_000_000]
         pub instructions_cap: u64 = 49_152,
+    }
+}
+
+settings! {
+    /// The repository map and the index it is made from
+    /// (`docs/architecture/15-efficiency.md`, "Repository map").
+    pub struct IndexSettings {
+        /// Whether each context epoch is given the repository map: the
+        /// workspace's directories and its most relevant files with their
+        /// main definitions. The `outline` tool works either way.
+        [Preference, NextEpoch]
+        pub map: bool = true,
+        /// The map's budget, in tokens. A project's file may lower it and
+        /// may not raise it: the map is sent with every request of an
+        /// epoch.
+        [TightenOnly, NextEpoch, 0..=50_000]
+        pub map_tokens: u64 = 1_500,
+        /// How long the first request of an epoch waits for the map when it
+        /// is not ready yet; past it, the map follows as a notice at the next
+        /// boundary where it is. Unset, 150 ms in the interactive app and
+        /// none in a headless run, whose start it would otherwise slow.
+        [Preference, NextEpoch]
+        pub map_wait: Option<Duration>,
+        /// The most files the index reads. Past it, the files nearest the
+        /// top of the tree are indexed, and the map says it is partial.
+        [TightenOnly, Restart, 1..=10_000_000]
+        pub max_files: u64 = 20_000,
+        /// The largest file the index reads, in bytes. A larger one is
+        /// listed and not outlined, unless the `outline` tool is asked
+        /// for it.
+        [TightenOnly, Restart, 1..=1_073_741_824]
+        pub max_file_bytes: u64 = 1_048_576,
+        /// The most time one pass of the index takes. One that runs out
+        /// carries on when the session is next idle.
+        [TightenOnly, Restart]
+        pub pass_time: Duration = Duration::from_secs(2),
     }
 }
 

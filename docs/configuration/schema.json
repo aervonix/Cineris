@@ -185,10 +185,60 @@
       "x-cortex-trust": "user only"
     },
     "index": {
-      "description": "The repository map's caps.",
-      "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "additionalProperties": true,
+      "description": "The repository map: whether epochs are given one, its budget, and the caps of the index it is made from.",
+      "properties": {
+        "map": {
+          "default": true,
+          "description": "Whether each context epoch is given the repository map: the workspace's directories and its most relevant files with their main definitions. The `outline` tool works either way.",
+          "type": "boolean",
+          "x-cortex-effect": "next epoch",
+          "x-cortex-trust": "preference"
+        },
+        "map_tokens": {
+          "default": 1500,
+          "description": "The map's budget, in tokens. A project's file may lower it and may not raise it: the map is sent with every request of an epoch.",
+          "maximum": 50000,
+          "minimum": 0,
+          "type": "integer",
+          "x-cortex-effect": "next epoch",
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+        },
+        "map_wait": {
+          "description": "How long the first request of an epoch waits for the map when it is not ready yet; past it, the map follows as a notice at the next boundary where it is. Unset, 150 ms in the interactive app and none in a headless run, whose start it would otherwise slow.",
+          "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+          "type": "string",
+          "x-cortex-effect": "next epoch",
+          "x-cortex-trust": "preference"
+        },
+        "max_file_bytes": {
+          "default": 1048576,
+          "description": "The largest file the index reads, in bytes. A larger one is listed and not outlined, unless the `outline` tool is asked for it.",
+          "maximum": 1073741824,
+          "minimum": 1,
+          "type": "integer",
+          "x-cortex-effect": "restart",
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+        },
+        "max_files": {
+          "default": 20000,
+          "description": "The most files the index reads. Past it, the files nearest the top of the tree are indexed, and the map says it is partial.",
+          "maximum": 10000000,
+          "minimum": 1,
+          "type": "integer",
+          "x-cortex-effect": "restart",
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+        },
+        "pass_time": {
+          "default": "2s",
+          "description": "The most time one pass of the index takes. One that runs out carries on when the session is next idle.",
+          "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+          "type": "string",
+          "x-cortex-effect": "restart",
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+        }
+      },
+      "type": "object"
     },
     "keys": {
       "description": "Key bindings by mode.",

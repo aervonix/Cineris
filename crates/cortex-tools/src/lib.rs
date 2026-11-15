@@ -11,7 +11,7 @@
 //! | [`files`] | [`FileSnapshot`] and [`FileTable`], the session's table of seen files. |
 //! | [`schema`] | Validation of arguments against a tool's JSON Schema. |
 //! | [`blocking`] | [`run_blocking`]: blocking work on the blocking pool, with a cancellation token. |
-//! | [`read`], [`list`], [`search`] | The tools [`ReadTool`], [`ListTool`] and [`SearchTool`]. |
+//! | [`read`], [`list`], [`search`], [`outline`] | The tools [`ReadTool`], [`ListTool`], [`SearchTool`] and [`OutlineTool`]. |
 //! | [`write`], [`edit`] | The tools [`WriteTool`] and [`EditTool`], which change files: the staleness guard, the two matching tiers, line endings and byte-order marks kept, atomic writes. |
 //! | [`checkpoint`] | [`Checkpoints`], the seam through which those two record what they change for undo, and [`Editing`], what they are made with. |
 //! | [`plan`] | [`PlanBoard`], a session's plan, which the user can edit, and [`PlanTool`]. |
@@ -36,6 +36,7 @@ pub mod contract;
 pub mod edit;
 pub mod files;
 pub mod list;
+pub mod outline;
 pub mod output;
 pub mod plan;
 pub mod process;
@@ -67,7 +68,7 @@ pub use blocking::{BlockingError, run_blocking};
 pub use checkpoint::{
     Change, CheckpointError, Checkpoints, EDIT_LIMIT, Editing, MemoryCheckpoints,
 };
-pub use context::{ImageSupport, OpenGate, Outliner, PlanCx, ReadGate, RunCx};
+pub use context::{ImageSupport, OpenGate, Outlined, Outliner, PlanCx, ReadGate, RunCx};
 pub use contract::{
     BoxFuture, ChangePreview, Concurrency, ConcurrencyClass, Effect, Json, NetworkTarget, NoOutput,
     Plan, Preview, Tool, ToolOutput, ToolSpec,
@@ -75,6 +76,7 @@ pub use contract::{
 pub use edit::EditTool;
 pub use files::{FileSnapshot, FileTable, LineRanges, SeenFile, Shown, Staleness};
 pub use list::ListTool;
+pub use outline::OutlineTool;
 pub use output::{Budget, Compression, Keep, OutputLimits, Shaped, Treatment};
 pub use plan::{PlanBoard, PlanChange, PlanEditError, PlanTool};
 pub use read::ReadTool;
