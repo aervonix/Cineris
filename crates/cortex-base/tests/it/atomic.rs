@@ -301,7 +301,9 @@ mod unix {
 
     #[test]
     fn only_a_regular_file_is_replaced() {
-        let scratch = Scratch::new("atomic_unix_not_a_file");
+        // A directory with a short path: a socket's address has room for
+        // about a hundred bytes of it.
+        let scratch = Scratch::short("atomic_unix_not_a_file");
         let socket = scratch.join("agent.sock");
         let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
         let link = scratch.join("link-to-socket");

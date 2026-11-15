@@ -137,7 +137,6 @@ mod unix {
 
     #[test]
     fn devices_and_sockets_are_not_files() {
-        let scratch = Scratch::new("nofollow_special");
         assert!(matches!(
             open_regular(std::path::Path::new("/dev/null")),
             Err(OpenError::NotAFile)
@@ -147,6 +146,9 @@ mod unix {
             open_regular(std::path::Path::new("/dev/zero")),
             Err(OpenError::NotAFile)
         ));
+        // In a directory of its own with a short path: a socket's address
+        // has room for about a hundred bytes of it.
+        let scratch = Scratch::short("nofollow_special");
         let socket = scratch.join("agent.sock");
         let _listener = UnixListener::bind(&socket).unwrap();
         assert!(matches!(open_regular(&socket), Err(OpenError::NotAFile)));
