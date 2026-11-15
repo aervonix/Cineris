@@ -119,6 +119,12 @@ fn a_days_reader_reads_a_new_file_from_its_start() {
     );
     let (mut reader, before) = start(&dir, "w_mine/2026-11-15");
     assert_eq!(before.requests, 3);
+    // Deleted and made again with no read between: the name gives another
+    // file than the one held, which is read from its start.
+    dir.reset().unwrap();
+    append(&dir, &line("2026-11-15", Some("w_theirs/2026-11-15"), 1));
+    assert_eq!(reader.catch_up().unwrap().requests, 1);
+    // And deleted, read while gone, and made again.
     dir.reset().unwrap();
     assert_eq!(reader.catch_up().unwrap(), DaySpent::default());
     append(&dir, &line("2026-11-15", Some("w_theirs/2026-11-15"), 1));
