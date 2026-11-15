@@ -20,7 +20,7 @@ use crate::view::{Call, CallState, Change, Detail, DiffLine, Measure, Target};
 /// The call's line before its arguments are known: the verb from the
 /// tool's name, running.
 #[must_use]
-pub fn started(tool: &str) -> Call {
+pub(crate) fn started(tool: &str) -> Call {
     Call {
         verb: verb(tool),
         target: Target::None,
@@ -52,7 +52,7 @@ fn verb(tool: &str) -> String {
 
 /// What the call acts on, from its arguments once they are whole.
 #[must_use]
-pub fn target(tool: &str, arguments: &Value) -> Target {
+pub(crate) fn target(tool: &str, arguments: &Value) -> Target {
     let text = |key: &str| arguments.get(key).and_then(Value::as_str);
     match tool {
         "read" | "edit" | "write" | "list" | "outline" => match text("path") {
@@ -83,7 +83,7 @@ pub fn target(tool: &str, arguments: &Value) -> Target {
 
 /// The call once its result has come: its state, measure, time and detail.
 /// `output` is what streamed while it ran.
-pub fn finish(call: &mut Call, result: &ToolResultItem, output: &str) {
+pub(crate) fn finish(call: &mut Call, result: &ToolResultItem, output: &str) {
     call.state = match result.outcome {
         ToolOutcome::Success => CallState::Succeeded,
         ToolOutcome::Denied => CallState::Denied,
@@ -185,7 +185,7 @@ fn result_text(result: &ToolResultItem) -> String {
 /// line by the old file's number, any other by the new one's. The changed
 /// middle of a removed line and the added line after it is emphasised.
 #[must_use]
-pub fn diff_lines(diff: &str) -> Vec<DiffLine> {
+pub(crate) fn diff_lines(diff: &str) -> Vec<DiffLine> {
     let mut lines = Vec::new();
     let (mut old, mut new) = (0u64, 0u64);
     for line in diff.lines() {
@@ -259,10 +259,10 @@ fn emphasise(lines: &mut [DiffLine]) {
         let removed_end = removed.len() - suffix;
         let added_end = added.len() - suffix;
         if prefix < removed_end {
-            lines[at - 1].emphasis = vec![prefix..removed_end];
+            lines[at - 1].emphasis = std::iter::once(prefix..removed_end).collect();
         }
         if prefix < added_end {
-            lines[at].emphasis = vec![prefix..added_end];
+            lines[at].emphasis = std::iter::once(prefix..added_end).collect();
         }
     }
 }
@@ -407,8 +407,8 @@ mod tests {
             ]
         );
         // The changed middle of a replaced line.
-        assert_eq!(lines[1].emphasis, vec![11..12]);
-        assert_eq!(lines[2].emphasis, vec![11..12]);
+        assert_eq!(lines[1].emphasis, std::iter::once(11..12).collect::<Vec<_>>());
+        assert_eq!(lines[2].emphasis, std::iter::once(11..12).collect::<Vec<_>>());
     }
 
     #[test]
