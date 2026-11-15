@@ -20,7 +20,7 @@
 //!   that goes on drawing on a terminal it no longer holds. A program whose
 //!   other thread dies of a panic nobody catches learns of it from that
 //!   thread, and leaves the terminal itself (step 23; this closed
-//!   `docs/outstanding/a-caught-panic-leaves-the-terminal.md`).
+//!   the open item on a caught panic, `docs/steps/23/answered.md`).
 //! - **A signal** (SIGTERM, SIGHUP, SIGINT, SIGQUIT, and since step 23
 //!   SIGABRT, which an abort raises) **or a console event**
 //!   (Ctrl+Break, the console closing, logging off, shutting down): a handler

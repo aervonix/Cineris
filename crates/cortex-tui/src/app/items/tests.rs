@@ -125,8 +125,11 @@ impl Rig {
         self.mapper.tick(&mut self.transcript, self.now);
         let look = look();
         let committed: Vec<Line> = self.transcript.commit(80, &look);
-        self.scrollback
-            .extend(committed.iter().map(|line| line.text().trim_end().to_owned()));
+        self.scrollback.extend(
+            committed
+                .iter()
+                .map(|line| line.text().trim_end().to_owned()),
+        );
         self.transcript
             .live(80, &look, 0)
             .iter()
@@ -169,7 +172,10 @@ fn reasoning_ends_when_the_answer_begins_and_says_how_long_it_took() {
     rig.started("i_1");
     rig.reasoning("i_1", "Look at the scanner first.");
     let live = rig.frame();
-    assert!(live.iter().any(|row| row.contains("Reasoning")), "{live:#?}");
+    assert!(
+        live.iter().any(|row| row.contains("Reasoning")),
+        "{live:#?}"
+    );
     rig.later(Duration::from_secs(6));
     rig.text("i_1", "The scanner stops early.\n\n");
     let _ = rig.frame();
@@ -190,7 +196,10 @@ fn an_answer_ends_where_a_call_begins_and_text_after_it_is_a_new_answer() {
     // round, which is still live.
     assert!(rig.scrollback.join("\n").contains("I'll read it."));
     let live = rig.frame();
-    let round = live.iter().position(|row| row.contains("Read")).expect("the round");
+    let round = live
+        .iter()
+        .position(|row| row.contains("Read"))
+        .expect("the round");
     let then = live
         .iter()
         .position(|row| row.contains("Then I'll fix it."))
@@ -221,7 +230,10 @@ fn a_call_takes_its_target_from_its_arguments_and_its_measure_from_its_result() 
         StopReason::ToolCalls,
     ));
     let calls = rig.calls();
-    assert_eq!(calls[0].target, crate::view::Target::Path("src/lex.rs".to_owned()));
+    assert_eq!(
+        calls[0].target,
+        crate::view::Target::Path("src/lex.rs".to_owned())
+    );
     rig.running("i_2", "c_1", "read");
     rig.later(Duration::from_secs(3));
     let _ = rig.frame();
@@ -244,10 +256,7 @@ fn a_running_commands_output_is_kept_to_its_tail() {
     rig.running("i_2", "c_1", "shell");
     let line = "x".repeat(1023) + "\n";
     for _ in 0..200 {
-        rig.delta(
-            "i_2",
-            Delta::ToolOutput(TextDelta { text: line.clone() }),
-        );
+        rig.delta("i_2", Delta::ToolOutput(TextDelta { text: line.clone() }));
     }
     let calls = rig.calls();
     let crate::view::Detail::Output(output) = &calls[0].detail else {
@@ -276,7 +285,10 @@ fn an_answer_whose_deltas_stopped_is_completed_from_the_whole_item() {
     let all = rig.scrollback.join("\n");
     assert!(all.contains("The first part, and the second."), "{all}");
     assert!(!all.contains("never"), "{all}");
-    assert_eq!(rig.mapper.last_answer(), "The first part, and the second.\n");
+    assert_eq!(
+        rig.mapper.last_answer(),
+        "The first part, and the second.\n"
+    );
 }
 
 #[test]
@@ -352,7 +364,10 @@ fn the_map_is_shown_folded_and_a_summary_as_a_notice() {
     }));
     let _ = rig.frame();
     let all = rig.scrollback.join("\n");
-    assert!(all.contains("The repository map was given to the model (3 lines)."), "{all}");
+    assert!(
+        all.contains("The repository map was given to the model (3 lines)."),
+        "{all}"
+    );
     assert!(!all.contains("src/"), "the map itself is not drawn: {all}");
     assert!(!all.contains("edited the plan"), "{all}");
     assert!(all.contains("summarised"), "{all}");

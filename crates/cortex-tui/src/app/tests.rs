@@ -14,8 +14,8 @@ use cortex_protocol::jsonrpc::RequestId;
 use cortex_protocol::lease::Level;
 use cortex_protocol::message::Part;
 use cortex_protocol::methods::{
-    ApprovalChoice, ApprovalDetail, ApprovalRequest, ApprovalResponse, CommandDetail,
-    Disposition, Op, OpResult, ServerRequest, ServerResponse, SessionResult, TurnInterruptResult,
+    ApprovalChoice, ApprovalDetail, ApprovalRequest, ApprovalResponse, CommandDetail, Disposition,
+    Op, OpResult, ServerRequest, ServerResponse, SessionResult, TurnInterruptResult,
     TurnStartResult,
 };
 use cortex_protocol::model::ModelRole;
@@ -242,7 +242,10 @@ fn approval(call: &str) -> ServerRequest {
 fn the_session_is_opened_after_the_first_frame_and_its_header_comes_first() {
     let now = Instant::now();
     let (mut app, link) = app(now);
-    assert!(link.take_sent().is_empty(), "nothing before the first frame");
+    assert!(
+        link.take_sent().is_empty(),
+        "nothing before the first frame"
+    );
     let _ = app.frame(now);
     app.drawn(now);
     let sent = link.take_sent();
@@ -406,7 +409,10 @@ fn a_dialog_that_appears_while_the_person_types_takes_keys_only_after_a_grace() 
     app.drawn(now);
     // Typed in the grace after it: still the editor's.
     type_text(&mut app, "yes", now + Duration::from_millis(100));
-    assert!(link.script().answers.is_empty(), "typing answered the dialog");
+    assert!(
+        link.script().answers.is_empty(),
+        "typing answered the dialog"
+    );
     assert_eq!(app.input().editor().expanded(), "yyes");
     // A paste never answers.
     app.terminal(&TermEvent::Paste("y".to_owned()), now + dialog::GRACE * 2);
@@ -503,7 +509,11 @@ fn a_request_settled_elsewhere_closes_its_dialog() {
     opened(&mut app, &link, now);
     let at = shown_dialog(&mut app, &link, 4, now);
     let (_, live, _) = app.frame(at);
-    assert!(text(&live).iter().any(|line| line.contains("Run cargo build?")));
+    assert!(
+        text(&live)
+            .iter()
+            .any(|line| line.contains("Run cargo build?"))
+    );
     link.give(event(Event::RequestResolved(RequestResolved {
         request_id: RequestId::Number(4),
         resolution: Resolution::Cancelled,
@@ -511,7 +521,9 @@ fn a_request_settled_elsewhere_closes_its_dialog() {
     drain(&mut app, at);
     let (_, live, _) = app.frame(at);
     assert!(
-        !text(&live).iter().any(|line| line.contains("Run cargo build?")),
+        !text(&live)
+            .iter()
+            .any(|line| line.contains("Run cargo build?")),
         "{:#?}",
         text(&live)
     );
@@ -578,7 +590,10 @@ fn a_turn_shows_the_message_the_answer_and_its_end() {
     let live = screen(&mut app, now, &mut scrollback);
     let all = scrollback.join("\n");
     assert!(all.contains("why does it fail?"), "{all}");
-    assert!(all.contains("It fails because the feature is off."), "{all}");
+    assert!(
+        all.contains("It fails because the feature is off."),
+        "{all}"
+    );
     assert!(
         live.iter().any(|line| line.contains("Describe a task")),
         "{live:#?}"
@@ -628,7 +643,9 @@ fn the_hint_row_follows_the_turn() {
     assert!(hint.contains("esc stops"), "{hint}");
     // The box says what typing does now.
     assert!(
-        text(&live).iter().any(|line| line.contains("Type to steer this turn")),
+        text(&live)
+            .iter()
+            .any(|line| line.contains("Type to steer this turn")),
         "{live:#?}"
     );
 }
@@ -652,7 +669,10 @@ fn quitting_with_ctrl_d_or_quit_or_twice_ctrl_c() {
     key(&mut app, "enter", now);
     key(&mut app, "enter", now);
     assert_eq!(app.exit(), Some(&Exit::Quit));
-    assert!(turn_start(&link.take_sent()).is_empty(), "/quit is no prompt");
+    assert!(
+        turn_start(&link.take_sent()).is_empty(),
+        "/quit is no prompt"
+    );
 }
 
 #[test]

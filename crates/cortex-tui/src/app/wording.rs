@@ -23,9 +23,7 @@ pub(crate) fn error(error: &ErrorData) -> (String, Option<String>) {
         "compaction_needed" => Some("/compact makes room, and /new starts a new session."),
         code::HISTORY_CHANGING => Some("The session's history was being changed: send it again."),
         code::TURN_RUNNING => Some("Wait for the turn to end, or stop it with esc."),
-        code::SESSION_NOT_OPEN | code::UNKNOWN_SESSION => {
-            Some("/new starts a new session.")
-        }
+        code::SESSION_NOT_OPEN | code::UNKNOWN_SESSION => Some("/new starts a new session."),
         "enforced_spend_limit_reached" => {
             Some("The provider's spending limit was reached: it is set in the provider's console.")
         }

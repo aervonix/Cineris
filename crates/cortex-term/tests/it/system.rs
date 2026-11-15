@@ -184,8 +184,8 @@ fn sys_the_terminal_is_put_back_after_a_panic() {
 
 /// A panic another thread catches leaves the terminal the program's: the
 /// demo goes on drawing in raw mode, keys reach it, and the terminal is put
-/// back when it ends (`docs/outstanding/a-caught-panic-leaves-the-terminal.md`,
-/// closed in step 23).
+/// back when it ends (the open item on a caught panic, closed in step 23:
+/// `docs/steps/23/answered.md`).
 #[test]
 fn sys_a_panic_caught_on_another_thread_leaves_the_terminal_to_the_program() {
     let mut session = start("caught-panic-on=K");

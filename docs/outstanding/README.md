@@ -78,7 +78,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 - [cd-readings-the-analysis-does-not-share](cd-readings-the-analysis-does-not-share.md): The command analysis reads `cd` differently from bash (mode-000 directories) and probably from Git for Windows. Owner: step 32, with a Windows run.
 - [false-asks-from-the-pattern-and-word-checks](false-asks-from-the-pattern-and-word-checks.md): The pattern and word checks ask or refuse needlessly for several link, quoting, set and heredoc forms. Owner: step 32.
-- [files-over-the-undo-limit](files-over-the-undo-limit.md): Editing tools refuse files over 16 MiB; asking instead needs an engine question no rule can lift. Owner: step 23.
 - [git-forms-the-command-analysis-misreads](git-forms-the-command-analysis-misreads.md): The command analysis misses `git config` run through an alias, and misreads `git diff` outside a repository. Owner: step 32.
 - [link-makers-the-command-analysis-does-not-see](link-makers-the-command-analysis-does-not-see.md): The command analysis misses links made by `env ln`, abbreviated `cp` options, and `cp -a`, `cp -R`, `mv`. Owner: step 32.
 - [names-the-path-resolver-refuses](names-the-path-resolver-refuses.md): Windows names the path resolver cannot read (trailing dot, stream, provider path) go unchecked for off-table commands. Owner: step 32.
@@ -115,7 +114,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-term
 
-- [a-caught-panic-leaves-the-terminal](a-caught-panic-leaves-the-terminal.md): The terminal's panic hook puts the terminal back on a panic that is then caught, so the interactive app goes on without raw mode. Owner: the next step that changes `cortex-term`, or step 32.
 - [a-paste-that-stalls](a-paste-that-stalls.md): A bracketed paste with no end marker for 2 seconds is split, and the remainder arrives as keys. Owner: step 25.
 - [backspace-sent-as-ctrl-h](backspace-sent-as-ctrl-h.md): The decoder reads byte 0x08 as `Ctrl+Backspace`, so a terminal whose Backspace sends `^H` deletes a word. Owner: step 25.
 - [input-decoder-corners](input-decoder-corners.md): `sys::unix::wait` and `sys::windows::wait` restart their timeout after an interrupted call, stale wake or key release. Owner: step 32.
@@ -130,17 +128,13 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-tui
 
-- [names-a-client-shows-as-they-are](names-a-client-shows-as-they-are.md): What the model reads of the workspace is escaped; approval details and rules, undo and assembly notices, the sandbox's lines and `cortex-term`'s guard still show names as they are to a client. Owner: step 23.
-- [ambiguous-width-glyphs](ambiguous-width-glyphs.md): Fourteen East Asian ambiguous-width glyphs, box edges among them, break box layout in terminals that draw them wide. Owner: step 23, with the owner; before step 25.
 - [editor-cost-on-very-large-text](editor-cost-on-very-large-text.md): The prompt editor lays out all its text on every key; a shortened `@` query refilters all paths. Owner: step 33.
 - [external-editor-test-gaps](external-editor-test-gaps.md): Parts of the external editor (umask, ConPTY modes, failed hand-over, `.cmd` editors, interrupt guard) are untested. Owner: step 32.
 - [file-completion-on-a-large-workspace](file-completion-on-a-large-workspace.md): Filtering an `@` menu over about 100,000 paths on the key's path can miss the idle key budget. Owner: step 23.
 - [highlighted-code-drawn-again](highlighted-code-drawn-again.md): `Markdown::render` draws code plain when a finished answer is redrawn at another width. Owner: step 25.
-- [highlighting-the-line-in-progress](highlighting-the-line-in-progress.md): The streaming code line is drawn plain until it commits; colouring it a frame behind is the alternative. Owner: the owner, then step 23; before step 25.
 - [signals-and-a-graceful-shutdown](signals-and-a-graceful-shutdown.md): Terminal signal handlers end the process without flushing the session log, and writes after an emergency restore fail. Owner: step 23.
 - [the-bincode-advisory-ignored-for-syntect](the-bincode-advisory-ignored-for-syntect.md): `deny.toml` ignores RUSTSEC-2025-0141, `bincode` unmaintained, reached only through `syntect`'s loading of its packed grammars; drop it when `syntect` moves off `bincode` or a flaw is named. Owner: the next step that touches highlighting, otherwise step 25.
 - [the-default-editor-on-windows-11](the-default-editor-on-windows-11.md): Windows 11's tabbed Notepad may exit at once, so `Ctrl+G` removes the prompt's folder while it is open. Owner: the owner, by hand, after step 23.
-- [the-input-box-while-a-turn-runs](the-input-box-while-a-turn-runs.md): `view::input` has one placeholder; the reference screens need two more states, a turn running and a focused panel. Owner: step 23; before step 25.
 
 ### cortex-testkit
 
