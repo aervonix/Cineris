@@ -767,6 +767,42 @@ fn the_trigger_waits_for_a_summary_still_under_way() {
     assert!(all_text(&world.provider.requests()[2].messages[0]).contains("Goal: read."));
 }
 
+/// A summary the trigger was waiting for, stopped by an interrupt, was
+/// paid for as far as it went: it is kept and counted, here when the
+/// session closes (found by the review of step 16).
+#[test]
+fn a_summary_the_trigger_waited_for_is_counted_when_an_interrupt_stops_it() {
+    let world = World::new("background_waited_interrupted", filling());
+    let fast = ScriptedProvider::new([Response::new()
+        .tokens(cortex_protocol::usage::TokenUsage {
+            input: 4_321,
+            output: 2,
+            ..cortex_protocol::usage::TokenUsage::default()
+        })
+        .usage()
+        .stall()]);
+    let rig = with_fast(&world, &fast);
+    world.run(async {
+        rig.prompt("read them");
+        while rig.handle.turn_state() != cortex_agent::TurnState::Compacting {
+            settle().await;
+        }
+        settle().await;
+        let _ = rig.handle.interrupt();
+        rig.events.turns(1).await;
+        rig.handle.close();
+        for _ in 0..100 {
+            settle().await;
+        }
+    });
+    let counted = rig.stats.all().into_iter().any(|event| {
+        matches!(event, cortex_agent::StatEvent::Request(request)
+            if request.purpose == cortex_agent::RequestPurpose::Summary
+                && request.usage.as_ref().is_some_and(|usage| usage.tokens.input == 4_321))
+    });
+    assert!(counted, "{:#?}", rig.stats.all());
+}
+
 /// A summary the `fast` role's model failed in the background is asked for
 /// again at the trigger, of the main model: a role whose model fails falls
 /// back to `main` for the rest of the epoch (since step 16).

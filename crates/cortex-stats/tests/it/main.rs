@@ -53,6 +53,7 @@ pub(crate) fn request(at: &str, project: &str, model: &str, nanos: u64) -> Recor
         at: Timestamp::new(at),
         session: SessionId::new("s_1"),
         turn: TurnId::new("t_1"),
+        started_in: None,
         project: Some(ProjectKey::new(project)),
         provider: ProviderId::new("anthropic"),
         model: ModelId::new(model),

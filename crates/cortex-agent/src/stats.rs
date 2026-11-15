@@ -98,6 +98,8 @@ pub struct ToolCallStat {
     pub model: ModelId,
     /// The per-model variants in effect.
     pub variants: Variants,
+    /// The reasoning level in effect, as the model names it.
+    pub effort: Option<String>,
     /// How the call ended.
     pub outcome: ToolStatOutcome,
     /// How long it ran. Zero for a call that never ran.

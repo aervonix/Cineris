@@ -29,7 +29,7 @@ Four rules hold for all of them.
 
 **Cost, against the speed budgets.**
 
-- Events are queued to the log-writer thread. Recording never blocks the core.
+- Events are queued to a writer thread (since step 16 the statistics' own, not the log's). Recording never blocks the core.
 - Nothing is read at start-up. The aggregates file (kilobytes) is loaded the first time an adaptive decision needs it.
 - Old monthly files are folded into the aggregates and deleted after a retention period (default 12 months).
 

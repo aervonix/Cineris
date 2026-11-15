@@ -1071,6 +1071,7 @@ impl Session {
         let summarized = match summarized {
             Ok(summarized) => summarized,
             Err(_) => {
+                self.summary_role = ModelRole::Main;
                 return Ok(Err(ErrorData::new(
                     ErrorKind::Internal,
                     "summary_failed",
@@ -1342,11 +1343,16 @@ impl Session {
                 let covered = job.covered.clone();
                 let cancel = job.cancel.clone();
                 self.times.enter(self.clock.monotonic(), Spend::Summary);
-                let joined = turn.cancel.race(job.handle).await;
+                let mut handle = job.handle;
+                let joined = turn.cancel.race(&mut handle).await;
                 self.times.enter(self.clock.monotonic(), Spend::Harness);
                 match joined {
                     None => {
+                        // Stopped, and kept: what it used is counted at the
+                        // next boundary, or when the loop ends (found by
+                        // the review of step 16).
                         cancel.cancel();
+                        self.given_up.push(handle);
                         return Phase::Interrupted(None);
                     }
                     Some(joined) => match self.counted(turn, joined).await {
@@ -1473,6 +1479,12 @@ impl Session {
                     }
                     Err(Unfinished::Store(error)) => return Phase::Finishing(End::store(&error)),
                     Err(Unfinished::TooLarge(message)) => {
+                        // Too large from the `fast` role's model: the main
+                        // model is asked, and not `fast` again (found by the
+                        // review of step 16).
+                        if self.summary_role != ModelRole::Main {
+                            self.fast_refused = Some(self.context.epoch_number);
+                        }
                         ErrorData::new(ErrorKind::ContextOverflow, "summary_too_large", message)
                     }
                 },
