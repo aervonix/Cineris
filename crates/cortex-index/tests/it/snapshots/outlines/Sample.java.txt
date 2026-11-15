@@ -1,0 +1,14 @@
+language: java
+   9 class Cart  | public final class Cart<T extends Item> implements Iterable<T>  — A shopping cart.
+  14   method Cart  | public Cart()  — Makes an empty cart.
+  18   method Cart  | Cart(int limit)
+  29   method add  | public synchronized boolean add(T item)  — Adds an item.
+  36   method byCategory  | public Map<String, List<T>> byCategory(String prefix, int max) throws IOException
+  45   method empty  | public static <U> Cart<U> empty()
+  49   interface Listener  | interface Listener
+  50     method changed  | void changed(Cart<?> cart)
+  53   enum State  | enum State
+  56     method isOpen  | boolean isOpen()
+  59   struct Line  | record Line(String sku, int count)
+  62 interface Audited  | @interface Audited
+  63   method value  | String value()

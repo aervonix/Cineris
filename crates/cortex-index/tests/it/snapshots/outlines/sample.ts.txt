@@ -1,0 +1,19 @@
+language: typescript
+   4 const MAX_PAGE  | export const MAX_PAGE = 100  — The largest page.
+  12 fn loadPage  | export async function loadPage(id: string): Promise<Page>  — Loads a page.
+  17 fn handler  | export const handler = async (event: Event) =>
+  21 fn add  | const add = (a: number, b: number): number => a + b
+  23 interface Page  | export interface Page
+  25   method render  | render(): string
+  29 type PageId  | export type PageId = string
+  31 enum Color  | export enum Color
+  36 class Renderer  | export default class Renderer<T> extends Base implements Drawable
+  40   method constructor  | constructor(private readonly root: Element)
+  45   method draw  | async draw(page: Page): Promise<void>  — Draws everything.
+  51   method size  | get size(): number
+  55   method #secret  | #secret()
+  57   method onClick  | onClick = (event: MouseEvent) =>
+  62 mod Shapes  | namespace Shapes
+  63   fn area  | export function area(): number
+  68 fn ids  | function* ids()
+  72 fn legacy  | module.exports.legacy = function ()

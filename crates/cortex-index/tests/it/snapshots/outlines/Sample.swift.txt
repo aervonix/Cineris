@@ -1,0 +1,19 @@
+language: swift
+   4 struct Point  | public struct Point: Equatable  — A point in space.
+   9   method init  | public init(x: Double, y: Double)  — Makes a point.
+  14   method ==  | public static func == (lhs: Point, rhs: Point) -> Bool
+  18   method move  | mutating func move(by delta: Double)
+  24 interface Shape  | protocol Shape
+  25   method area  | func area() -> Double
+  29 class Circle  | final class Circle: Shape
+  32   method init  | init?(radius: Double)
+  37   method deinit  | deinit
+  39   method unit  | class func unit() -> Circle
+  41   method area  | func area() -> Double
+  46 impl Point  | extension Point: CustomStringConvertible
+  49   method scaled  | func scaled(_ factor: Double) -> Point
+  54 enum Direction  | enum Direction
+  57   method opposite  | func opposite() -> Direction
+  61 class Counter  | actor Counter
+  63   method increment  | func increment()
+  66 type Handler  | typealias Handler = (Point) -> Void

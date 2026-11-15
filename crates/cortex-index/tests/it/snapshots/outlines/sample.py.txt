@@ -1,0 +1,11 @@
+language: python
+   5 const MAX_RETRIES  | MAX_RETRIES = 3
+   6 const DEFAULT_NAME  | DEFAULT_NAME: str = "x"
+  10 fn top_level  | def top_level(a, b)  — Adds two numbers.
+  18 class Point  | class Point  — A point on the plane.
+  26   method __init__  | def __init__(self, x)
+  30   method norm  | def norm(self, other=None) -> float  — The length of the vector.
+  39   class Inner  | class Inner
+  40     method method  | def method(self)
+  48 fn fetch  | async def fetch(url)
+  53 fn documented_by_comment  | def documented_by_comment()  — A comment about the next function.

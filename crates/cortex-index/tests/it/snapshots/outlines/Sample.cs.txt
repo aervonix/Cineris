@@ -1,0 +1,15 @@
+language: csharp
+   4 mod Shop.Billing  | namespace Shop.Billing
+   9   class InvoiceService  | public sealed class InvoiceService : IInvoiceService  — Works out invoices.
+  15     method InvoiceService  | public InvoiceService(ILogger logger)  — Makes a service.
+  20     prop Count  | public int Count
+  22     prop Name  | public string Name => "invoices"
+  25     method CreateAsync  | public async Task<Invoice> CreateAsync(Order order, CancellationToken token = default)
+  32     method Round  | private static decimal Round(decimal value) => Math.Round(value, 2)
+  37   interface IInvoiceService  | public interface IInvoiceService
+  39     method CreateAsync  | Task<Invoice> CreateAsync(Order order, CancellationToken token)
+  42   struct Money  | public record struct Money(decimal Amount, string Currency)
+  44   enum Status  | public enum Status
+  46   type Handler  | public delegate void Handler(object sender, EventArgs args)
+  48   struct Point  | internal struct Point
+  51     method ToString  | public override string ToString()

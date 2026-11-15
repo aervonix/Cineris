@@ -250,6 +250,7 @@ name = "cortex-index"
 version = "0.0.0"
 dependencies = [
  "cortex-base",
+ "cortex-testkit",
 ]
 
 [[package]]

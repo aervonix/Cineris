@@ -1,0 +1,20 @@
+language: kotlin
+   6 const MAX_PAGE  | const val MAX_PAGE = 100  — The largest page size.
+  13 class UserRepository  | class UserRepository(private val api: Api) : Repository  — A repository of users.
+  16   method load  | suspend fun load(id: String): User  — Loads one user.
+  21   method all  | override fun all(): Flow<List<User>> = api.stream()
+  23   method parse  | private inline fun <reified T> parse(raw: String): T
+  27   class companion object  | companion object
+  28     method create  | fun create(): UserRepository = UserRepository(Api())
+  31   class Cache  | inner class Cache
+  32     method clear  | fun clear()
+  36 class User  | data class User(val id: String, val name: String)
+  38 interface Result  | sealed interface Result
+  39   class Ok  | data class Ok(val value: String) : Result
+  40   class Missing  | object Missing : Result
+  43 enum Role  | enum class Role
+  46   method label  | fun label(): String = name.lowercase()
+  49 fn shout  | fun String.shout(): String = uppercase()
+  51 type Users  | typealias Users = List<User>
+  53 interface Callback  | fun interface Callback
+  54   method invoke  | fun invoke(value: Int)

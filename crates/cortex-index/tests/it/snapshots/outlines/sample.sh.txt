@@ -1,0 +1,5 @@
+language: shell
+   5 fn usage  | usage()  — Prints usage.
+  13 fn build  | function build
+  18 fn deploy  | function deploy()
+  24 fn clean_up  | clean_up ()
