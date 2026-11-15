@@ -376,14 +376,14 @@ fn walk(root: &Path, relative: &str, files: &mut Vec<String>, skip_builds: bool)
 /// 64-bit FNV-1a: small, and the same on every machine and toolchain, which
 /// is what a key that outlives a run needs.
 #[derive(Clone, Copy)]
-struct Fnv(u64);
+pub(super) struct Fnv(pub(super) u64);
 
 impl Fnv {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self(0xcbf2_9ce4_8422_2325)
     }
 
-    fn add(&mut self, bytes: &[u8]) {
+    pub(super) fn add(&mut self, bytes: &[u8]) {
         for byte in bytes {
             self.0 ^= u64::from(*byte);
             self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
@@ -674,10 +674,7 @@ enum Verdict {
 /// Judges a break by what happened when it was made. `tests` is every test
 /// that ran with nothing broken.
 fn judge(one: &Break, outcome: &Outcome, tests: &[String]) -> Verdict {
-    let named = |entry: &str, id: &str| {
-        id.split_once(' ')
-            .is_some_and(|(binary, name)| list::names_test(entry, binary, name))
-    };
+    let named = list::names_id;
     match outcome {
         Outcome::DoesNotCompile(detail) => Verdict::Flagged(
             "DOES NOT COMPILE",

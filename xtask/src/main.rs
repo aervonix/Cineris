@@ -118,7 +118,11 @@ Showing that the tests bite
   mutate [BREAK...] Break the code on purpose, one break of mutations/*.breaks
                     at a time, on a copy of the tree, and report which tests
                     fail. --check only checks that every break still applies
-                    (`check` runs that). `mutate --help` has the rest.
+                    (`check` runs that), and that each `caught-by` names a
+                    test that exists where a fresh list of tests is kept;
+                    --check --tests builds that list, --check --fix-in
+                    [--write] offers the new `in:` of code that moved.
+                    `mutate --help` has the rest.
 
 On the runners, without a pull request (the `try` workflow runs this)
   try --command 'COMMAND [ARGS]' [--profile ci|release|dist] [--count N]
