@@ -28,7 +28,7 @@ use crate::tiers::{self, Os, Tier};
 pub(crate) const PR_SECTION: &str = "On the pull request";
 
 /// The heading of the A/B's section.
-pub(crate) const AB_SECTION: &str = "Both trees on one runner";
+pub(crate) const AB_SECTION: &str = "both trees on one runner";
 
 fn short(sha: &str) -> String {
     sha.chars().take(7).collect()
@@ -71,9 +71,11 @@ fn tier_label(info: &RunInfo) -> String {
 }
 
 fn budget_text(tier: Tier) -> String {
-    match tier {
-        Tier::System => "60 s on Linux, 90 s on Windows".to_owned(),
-        _ => format!("{:.0} s", tier.budget(Os::Linux)),
+    let (linux, windows) = (tier.budget(Os::Linux), tier.budget(Os::Windows));
+    if (linux - windows).abs() < f64::EPSILON {
+        format!("{linux:.0} s")
+    } else {
+        format!("{linux:.0} s on Linux, {windows:.0} s on Windows")
     }
 }
 
@@ -256,32 +258,48 @@ fn budget_of(tier: Tier, os: Os) -> String {
     format!("{:.0} s", tier.budget(os))
 }
 
-/// The section "Both trees on one runner": a table for each OS.
-pub(crate) fn ab_section(run: u64, against: &str, compared: &[Compared]) -> String {
+/// The heading of one OS's A/B section, as the records write it.
+pub(crate) fn ab_heading(os: Os) -> String {
+    format!("{}, {}", os_name(os), AB_SECTION)
+}
+
+/// What `against` is called in an A/B's table: `Main` for `main`, the ref
+/// itself otherwise.
+fn against_label(against: &str) -> String {
+    if against == "main" {
+        "Main".to_owned()
+    } else {
+        format!("`{against}`")
+    }
+}
+
+/// One OS's section "<OS>, both trees on one runner": which run and runner,
+/// and the table of each tier on both sides.
+pub(crate) fn ab_section(run: u64, against: &str, one: &Compared) -> String {
     let mut text = String::new();
-    for one in compared {
+    let _ = writeln!(
+        text,
+        "`try` with `-f against={against}` (run {run}), the median of {} runs each, on one \
+         runner at {:.1} ms a process start:\n",
+        one.rounds,
+        one.start * 1000.0
+    );
+    let _ = writeln!(
+        text,
+        "| Tier | The PR | {} | Change | Budget |",
+        against_label(against)
+    );
+    let _ = writeln!(text, "|---|---|---|---|---|");
+    for (tier, new, new_count, old, old_count) in &one.tiers {
         let _ = writeln!(
             text,
-            "{}: `try` with `-f against={against}` (run {run}), the median of {} runs each, on one \
-             runner at {:.1} ms a process start.\n",
-            os_name(one.os),
-            one.rounds,
-            one.start * 1000.0
+            "| {} | {new:.1} s ({} tests) | {old:.1} s ({}) | {} | {} |",
+            tier.name(),
+            thousands(*new_count),
+            thousands(*old_count),
+            signed(new - old),
+            budget_of(*tier, one.os)
         );
-        let _ = writeln!(text, "| Tier | This branch | Main | Change | Budget |");
-        let _ = writeln!(text, "|---|---|---|---|---|");
-        for (tier, new, new_count, old, old_count) in &one.tiers {
-            let _ = writeln!(
-                text,
-                "| {} | {new:.1} s ({} tests) | {old:.1} s ({}) | {} | {} |",
-                tier.name(),
-                thousands(*new_count),
-                thousands(*old_count),
-                signed(new - old),
-                budget_of(*tier, one.os)
-            );
-        }
-        text.push('\n');
     }
     text
 }
@@ -316,37 +334,77 @@ pub(crate) fn pr_ab_section(run: u64, compared: &[Compared]) -> String {
     text
 }
 
-/// `text` with the section `## heading` replaced by `body`, up to the next
-/// heading of the same level or higher, or added at the end.
-pub(crate) fn with_section(text: &str, heading: &str, body: &str) -> String {
+/// What opens and closes the text `ci-times` writes in a section: writing
+/// again replaces what is between them, and nothing else.
+const OPEN_MARK: &str =
+    "<!-- written by cargo xtask ci-times: it replaces this up to the end mark -->";
+const CLOSE_MARK: &str = "<!-- end of what cargo xtask ci-times wrote -->";
+
+/// Whether `line` is a heading of level one or two, outside a fenced block
+/// (`fenced` says whether the line is inside one, and is kept up to date).
+fn is_heading(line: &str, fenced: &mut bool) -> bool {
+    if line.trim_start().starts_with("```") {
+        *fenced = !*fenced;
+        return false;
+    }
+    !*fenced && (line.starts_with("## ") || line.starts_with("# "))
+}
+
+/// `text` with `body` as what `ci-times` wrote in the section `## heading`:
+/// a section the page does not have is added at the end, with the body
+/// between the marks; in one it has, the text between the marks is
+/// replaced, and everything else, the notes after the end mark included, is
+/// kept. A section that has no marks was written by hand, and is refused:
+/// it would lose what it says.
+pub(crate) fn with_section(text: &str, heading: &str, body: &str) -> Result<String> {
     let line = format!("## {heading}");
-    let body = body.trim_end();
-    let section = format!("{line}\n\n{body}\n");
+    let block = format!("{OPEN_MARK}\n{}\n{CLOSE_MARK}\n", body.trim_end());
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let Some(start) = lines.iter().position(|each| each.trim_end() == line) else {
+    let mut fenced = false;
+    let mut start = None;
+    for (index, each) in lines.iter().enumerate() {
+        if is_heading(each, &mut fenced) && each.trim_end() == line {
+            start = Some(index);
+            break;
+        }
+    }
+    let Some(start) = start else {
         let mut out = text.trim_end().to_owned();
-        out.push_str("\n\n");
-        out.push_str(&section);
-        return out;
+        out.push_str(&format!("\n\n{line}\n\n{block}"));
+        return Ok(out);
     };
+    let mut fenced = false;
     let end = lines[start + 1..]
         .iter()
-        .position(|each| each.starts_with("## ") || each.starts_with("# "))
+        .position(|each| is_heading(each, &mut fenced))
         .map_or(lines.len(), |offset| start + 1 + offset);
-    let mut out: String = lines[..start].concat();
-    out.push_str(&section);
-    if end < lines.len() {
-        out.push('\n');
-        out.push_str(&lines[end..].concat());
+    let within = &lines[start + 1..end];
+    let open = within.iter().position(|each| each.trim_end() == OPEN_MARK);
+    let close = within.iter().position(|each| each.trim_end() == CLOSE_MARK);
+    let (Some(open), Some(close)) = (open, close) else {
+        return Err(format!(
+            "the section \"{heading}\" is already there, and ci-times did not write it: it would \
+             replace what it says. Move it, rename its heading, or take it out, then write again"
+        ));
+    };
+    if close < open {
+        return Err(format!(
+            "the section \"{heading}\" has its marks out of order"
+        ));
     }
-    out
+    let mut out: String = lines[..start + 1 + open].concat();
+    out.push_str(&block);
+    out.push_str(&lines[start + 2 + close..].concat());
+    Ok(out)
 }
 
 /// Writes `body` as the section `heading` of `file`.
 fn write_section(file: &Path, heading: &str, body: &str) -> Result<()> {
     let text = std::fs::read_to_string(file)
         .map_err(|error| format!("could not read {}: {error}", file.display()))?;
-    std::fs::write(file, with_section(&text, heading, body))
+    let written = with_section(&text, heading, body)
+        .map_err(|error| format!("{}: {error}", file.display()))?;
+    std::fs::write(file, written)
         .map_err(|error| format!("could not write {}: {error}", file.display()))?;
     println!("wrote the section \"{heading}\" of {}", file.display());
     Ok(())
@@ -416,12 +474,15 @@ pub(crate) fn ab_times(run: u64, against: &str, write: Option<&Path>) -> Result<
             "run {run} kept no `try-linux` or `try-windows` artifact"
         ));
     }
-    let section = ab_section(run, against, &compared);
-    println!("## {AB_SECTION}\n\n{section}");
-    println!("{}", pr_ab_section(run, &compared));
-    if let Some(file) = write {
-        write_section(file, AB_SECTION, &section)?;
+    for one in &compared {
+        let section = ab_section(run, against, one);
+        let heading = ab_heading(one.os);
+        println!("## {heading}\n\n{section}");
+        if let Some(file) = write {
+            write_section(file, &heading, &section)?;
+        }
     }
+    println!("{}", pr_ab_section(run, &compared));
     Ok(())
 }
 
@@ -535,14 +596,20 @@ mod tests {
         };
 
         let compared = compare(Os::Windows, &sides);
-        let section = ab_section(43, "main", std::slice::from_ref(&compared));
-        let pr = pr_ab_section(43, &[compared]);
+        let section = ab_section(43, "main", &compared);
+        let pr = pr_ab_section(43, std::slice::from_ref(&compared));
 
+        assert_eq!(ab_heading(Os::Windows), "Windows, both trees on one runner");
         assert!(
             section.starts_with(
-                "Windows: `try` with `-f against=main` (run 43), the median of 3 runs each, on \
-                 one runner at 4.0 ms a process start.\n"
+                "`try` with `-f against=main` (run 43), the median of 3 runs each, on one runner \
+                 at 4.0 ms a process start:\n\n| Tier | The PR | Main | Change | Budget |\n"
             ),
+            "{section}"
+        );
+        // Another ref is named as it is.
+        assert!(
+            ab_section(43, "step-21", &compared).contains("| Tier | The PR | `step-21` | Change |"),
             "{section}"
         );
         // The median, not the mean: base's 9 s round is passed over.
@@ -571,26 +638,46 @@ mod tests {
     }
 
     #[test]
-    fn a_section_is_replaced_in_place_or_added_at_the_end() {
-        let page = "# After step 9: x\n\nIntro.\n\n## On the pull request\n\nOld table.\n\nMore old.\n\n## Windows\n\nKept.\n";
+    fn a_section_is_written_between_its_marks_and_the_rest_of_the_page_is_kept() {
+        let page = "# After step 9: x\n\nIntro.\n\n## Windows\n\nKept.\n";
 
-        let replaced = with_section(page, PR_SECTION, "New table.\n");
-
+        // A page without the section gets it at its end, between the marks.
+        let written = with_section(page, PR_SECTION, "Table one.\n").unwrap();
         assert_eq!(
-            replaced,
-            "# After step 9: x\n\nIntro.\n\n## On the pull request\n\nNew table.\n\n## Windows\n\nKept.\n"
+            written,
+            format!(
+                "# After step 9: x\n\nIntro.\n\n## Windows\n\nKept.\n\n## On the pull \
+                 request\n\n{OPEN_MARK}\nTable one.\n{CLOSE_MARK}\n"
+            )
         );
-        // Written again, it is the same page.
-        assert_eq!(with_section(&replaced, PR_SECTION, "New table."), replaced);
-        // A page without the section gets it at its end.
+        // A note written after the end mark, and the sections after, are
+        // kept when it is written again; written twice, it is the same page.
+        let noted =
+            format!("{written}\nWhat the first runs found.\n\n## Other runs\n\nAlso kept.\n");
+        let again = with_section(&noted, PR_SECTION, "Table two.").unwrap();
+        assert_eq!(again, noted.replace("Table one.", "Table two."));
         assert_eq!(
-            with_section("# After step 9: x\n\nIntro.\n", AB_SECTION, "A/B."),
-            "# After step 9: x\n\nIntro.\n\n## Both trees on one runner\n\nA/B.\n"
+            with_section(&again, PR_SECTION, "Table two.").unwrap(),
+            again
         );
-        // The last section of a page runs to its end.
+        // A section written by hand is refused, not lost.
+        let by_hand = "# T\n\n## On the pull request\n\nNotes by hand.\n";
+        let error = with_section(by_hand, PR_SECTION, "new").unwrap_err();
+        assert!(error.contains("ci-times did not write it"), "{error}");
+        // A heading inside a fenced block is not one.
+        let fenced = format!(
+            "# T\n\n## On the pull request\n\n{OPEN_MARK}\nold\n{CLOSE_MARK}\n\n```text\n## \
+             not a heading\n```\n"
+        );
+        let replaced = with_section(&fenced, PR_SECTION, "new").unwrap();
+        assert!(
+            replaced.contains("```text\n## not a heading\n```\n"),
+            "{replaced}"
+        );
         assert_eq!(
-            with_section("# T\n\n## On the pull request\n\nold\n", PR_SECTION, "new"),
-            "# T\n\n## On the pull request\n\nnew\n"
+            replaced.matches("## On the pull request").count(),
+            1,
+            "{replaced}"
         );
     }
 

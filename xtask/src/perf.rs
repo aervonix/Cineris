@@ -90,8 +90,6 @@ fn demo_binary(name: &str) -> PathBuf {
         .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
 }
 
-/// `cargo xtask perf [--runs N] [--seconds N] [--json PATH] [--only
-/// term|editor|views]`.
 /// A glyph set a demo is run in, and how it is chosen: on Unix the
 /// terminal layer takes Unicode from a locale that names UTF-8
 /// (`cortex_term::Capabilities::detect`), so each demo runs under one and
@@ -127,6 +125,8 @@ fn glyph_sets() -> Vec<GlyphSet> {
     }
 }
 
+/// `cargo xtask perf [--runs N] [--seconds N] [--json PATH] [--only
+/// term|editor|views]`.
 pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let request = parse(arguments)?;
     let all = request.only.is_none();

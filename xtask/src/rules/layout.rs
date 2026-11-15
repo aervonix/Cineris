@@ -60,11 +60,39 @@ pub(crate) fn check(texts: &BTreeMap<String, String>) -> Vec<Violation> {
     violations
 }
 
+/// `text` without its fenced code blocks and its HTML comments: a link in
+/// either lists nothing.
+fn prose(text: &str) -> String {
+    let mut out = String::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if !fenced {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    let mut kept = String::new();
+    let mut rest = out.as_str();
+    while let Some(at) = rest.find("<!--") {
+        kept.push_str(&rest[..at]);
+        rest = rest[at..]
+            .find("-->")
+            .map_or("", |end| &rest[at + end + 3..]);
+    }
+    kept.push_str(rest);
+    kept
+}
+
 /// The open items the index of [`OUTSTANDING_PAGE`] does not list exactly
 /// once, as a link to the item's file: `[name](name.md)`. An index that a
 /// step may forget to change goes stale, and one that misses an item is
 /// worse than none.
 fn unlisted(texts: &BTreeMap<String, String>, index: &str) -> Vec<Violation> {
+    let index = &prose(index);
     let mut violations = Vec::new();
     for file in texts.keys() {
         let Some(path) = file.strip_prefix(OUTSTANDING) else {
@@ -305,6 +333,15 @@ mod tests {
                 && listed[1].contains("lists this item 2 times"),
             "{listed:#?}"
         );
+        // A link in fenced code or a comment lists nothing.
+        let hidden = found(&[
+            (
+                "docs/outstanding/README.md",
+                "```text\n- [a-flag](a-flag.md)\n```\n<!-- [a-flag](a-flag.md) -->\n",
+            ),
+            ("docs/outstanding/a-flag.md", ITEM),
+        ]);
+        assert_eq!(hidden.len(), 1, "{hidden:#?}");
         // A link to a file of the same name elsewhere does not count.
         let elsewhere = found(&[
             ("docs/outstanding/README.md", "- [a](../steps/a-flag.md)\n"),

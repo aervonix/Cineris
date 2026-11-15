@@ -892,3 +892,27 @@ fn a_front_answers_by_its_policy_what_the_test_did_not_take_up() {
         front.close().await;
     });
 }
+
+/// A request another client answers is not one this front must answer:
+/// waiting for the turn's end with no policy, it sees the request and its
+/// resolution, and goes on.
+#[test]
+fn a_request_another_client_answered_is_not_unexpected() {
+    let world = World::new("answered_elsewhere", [protected_write("c1"), says("Done.")]);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let second = front.join(ClientInfo::user()).await;
+        front.prompt("set up CI").await;
+        let (id, _) = second.approval().await;
+        second.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        assert_eq!(resolutions(&front), [Resolution::Answered]);
+        assert!(
+            front.answered.borrow().is_empty(),
+            "this front answered nothing"
+        );
+        front.close().await;
+        second.close().await;
+    });
+}

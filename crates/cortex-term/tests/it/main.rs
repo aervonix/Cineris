@@ -43,6 +43,12 @@ const DEMO: Role = Role::new("cxterm-demo=");
 const SHELL: Role = Role::new("cxterm-shell=");
 /// What the shell prints just before it starts the demo.
 const STARTING: &str = "starting the demo";
+/// This binary as a shell that runs [`LEAVES_RAW`], the check that the
+/// shell says when the modes were not put back.
+const SHELL_OVER_RAW: Role = Role::new("cxterm-shell-over-raw=");
+/// This binary as a program that enters the terminal and ends without
+/// leaving it: raw mode left on.
+const LEAVES_RAW: Role = Role::new("cxterm-leaves-raw=");
 
 #[test]
 fn child_entry() {
@@ -57,6 +63,16 @@ fn child_entry() {
             .as_the_old_console()
             .announcing(STARTING)
             .run(DEMO.command(&options));
+    }
+    if SHELL_OVER_RAW.options().is_some() {
+        ModeShell::new().run(LEAVES_RAW.command(""));
+    }
+    if LEAVES_RAW.options().is_some() {
+        let terminal =
+            cortex_term::Terminal::enter(cortex_term::Overrides::default()).expect("enter");
+        std::mem::forget(terminal);
+        #[expect(clippy::exit, reason = "the child ends with the terminal left raw")]
+        std::process::exit(0);
     }
     signals::enter();
 }

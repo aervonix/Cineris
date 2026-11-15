@@ -423,8 +423,6 @@ fn on_a_light_background_red_green_and_yellow_text_is_bold() {
             assert_eq!(style.fg, Color::Ansi(colour), "{token:?} at {depth:?}");
             assert!(style.bold, "{token:?} at {depth:?} is not bold");
         }
-        // Where there is no tint, a changed line is drawn in its colour,
-        // bold; with one, it is the tint behind the default colour.
         // Highlighted code and a whole changed line keep their weight, by
         // the owner's choice: where there is no tint, a changed line is
         // drawn in its colour, not bold; with one, it is the tint behind

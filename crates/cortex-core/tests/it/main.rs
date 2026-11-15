@@ -549,12 +549,25 @@ impl Front {
         *self.answering.borrow_mut() = answering;
     }
 
-    /// The first approval request not taken up, if there is one.
+    /// The first approval request not taken up, if there is one: one this
+    /// front has not answered or taken with [`Front::approval`], and that
+    /// is not resolved (by another client, a time limit, an interruption).
     fn open_approval(&self) -> Option<(RequestId, ApprovalRequest)> {
         let answered = self.answered.borrow();
-        requests_in(&self.seen.borrow())
+        let seen = self.seen.borrow();
+        let resolved: Vec<&RequestId> = seen
+            .iter()
+            .filter_map(|outgoing| match outgoing {
+                Outgoing::Event(SessionEvent {
+                    event: Event::RequestResolved(resolved),
+                    ..
+                }) => Some(&resolved.request_id),
+                _ => None,
+            })
+            .collect();
+        requests_in(&seen)
             .into_iter()
-            .find(|(id, _)| !answered.contains(id))
+            .find(|(id, _)| !answered.contains(id) && !resolved.contains(&id))
     }
 
     /// Waits until `count` turns have completed. An approval that arrives
@@ -587,6 +600,11 @@ impl Front {
                     self.drain();
                     if self.ends().len() >= count {
                         return;
+                    }
+                    // Resolved meanwhile (another client answered it, an
+                    // interruption withdrew it): not this front's to answer.
+                    if self.open_approval().is_none() {
+                        continue;
                     }
                     panic!(
                         "the turn asked for an approval the test did not expect, and would wait \

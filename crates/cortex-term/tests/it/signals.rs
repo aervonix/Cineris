@@ -72,16 +72,23 @@ fn play(case: &str) {
         }
         // In the terminal, an interrupt while the guard lives is passed
         // over; and so is one just after it ended (the grace).
-        "guarded" | "grace" => {
+        // The terminal entered while a guard lives, as it is when an editor
+        // hands it back: its own handler passes an interrupt over while the
+        // guard lives.
+        "guarded" => {
+            let guard = cortex_term::ignore_interrupts().expect("the guard");
+            let terminal = Terminal::enter(Overrides::default()).expect("enter the terminal");
+            raise_interrupt().expect("raise the interrupt");
+            drop(guard);
+            terminal.leave().expect("leave the terminal");
+        }
+        // In the terminal, an interrupt just after the guard ended is passed
+        // over (the grace).
+        "grace" => {
             let terminal = Terminal::enter(Overrides::default()).expect("enter the terminal");
             let guard = cortex_term::ignore_interrupts().expect("the guard");
-            if case == "guarded" {
-                raise_interrupt().expect("raise the interrupt");
-            }
             drop(guard);
-            if case == "grace" {
-                raise_interrupt().expect("raise the interrupt");
-            }
+            raise_interrupt().expect("raise the interrupt");
             terminal.leave().expect("leave the terminal");
         }
         // The control: in the terminal with no guard, it ends the process,
@@ -96,13 +103,20 @@ fn play(case: &str) {
 
 /// Runs `case` in a pseudo-terminal, and returns its exit status and
 /// whether it said it survived.
+/// Runs `case` in a pseudo-terminal, and returns its exit status and
+/// whether it said it survived. A case expected to survive is waited for
+/// until it says so: the program can end before its last output is read.
 #[cfg(unix)]
-fn run(case: &str) -> (std::process::ExitStatus, bool) {
+fn run(case: &str, survives: bool) -> (std::process::ExitStatus, bool) {
     use cortex_testkit::pty::Session;
 
+    let limit = Duration::from_secs(30);
     let mut session =
         Session::start(&super::this_binary(), &SIGNALS.arguments(case), 80, 24).answering();
-    let status = session.wait_exit(Duration::from_secs(30));
+    if survives {
+        session.wait_for(limit, "the case to say it survived", |t| t.shows(SURVIVED));
+    }
+    let status = session.wait_exit(limit);
     let survived = session.screen().shows(SURVIVED);
     (status, survived)
 }
@@ -112,11 +126,11 @@ fn run(case: &str) -> (std::process::ExitStatus, bool) {
 fn sys_an_interrupt_pending_as_the_guard_ends_is_taken_by_it() {
     use std::os::unix::process::ExitStatusExt as _;
 
-    let (status, survived) = run("drain");
+    let (status, survived) = run("drain", true);
     assert!(survived && status.success(), "drain: {status}");
     // Without the guard the same pending interrupt ends the child: the case
     // above is not passing for want of a signal.
-    let (status, survived) = run("undrained");
+    let (status, survived) = run("undrained", false);
     assert!(!survived, "undrained survived: {status}");
     assert_eq!(status.signal(), Some(libc::SIGINT), "undrained: {status}");
 }
@@ -127,11 +141,11 @@ fn sys_an_interrupt_while_the_guard_lives_or_just_after_is_passed_over() {
     use std::os::unix::process::ExitStatusExt as _;
 
     for case in ["guarded", "grace"] {
-        let (status, survived) = run(case);
+        let (status, survived) = run(case, true);
         assert!(survived && status.success(), "{case}: {status}");
     }
     // In the terminal with no guard, the interrupt ends the child.
-    let (status, survived) = run("no-grace");
+    let (status, survived) = run("no-grace", false);
     assert!(!survived, "no-grace survived: {status}");
     assert_eq!(status.signal(), Some(libc::SIGINT), "no-grace: {status}");
 }

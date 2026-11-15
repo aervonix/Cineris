@@ -32,8 +32,6 @@ pub(crate) const WAITING: &str = "waiting for a key";
 pub(crate) const LOST: &str = "the application has no terminal";
 /// What the editor prints while it waits for a line.
 pub(crate) const EDITOR_WAITING: &str = "editor waiting for a line";
-/// The variables the shell gives the application, and through it the
-/// editor.
 /// The variable the shell gives the application, and through it the
 /// editor: the test's scratch directory, where the report is.
 const SCRATCH: &str = "CXTUI_SCRATCH";

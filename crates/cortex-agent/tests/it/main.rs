@@ -572,13 +572,12 @@ impl Tool for Probe {
 pub struct ScriptedPolicy {
     decisions: Mutex<BTreeMap<String, Decision>>,
     /// The answers to come for each tool's questions, in order. With none
-    /// left the answer is to allow.
-    /// The answers to come for each tool's questions, in order. With none
     /// left the answer is [`ScriptedPolicy::answer_all`]'s.
     answers: Mutex<BTreeMap<String, VecDeque<Verdict>>>,
     /// The answer to a question with none scripted. Without one, such a
-    /// question fails the test, naming the call: a default answer could hide
-    /// a question that should not have been asked, or one that was.
+    /// question's call is refused and the test fails when its rig goes,
+    /// naming the call: a default answer could hide a question that should
+    /// not have been asked.
     unscripted: Mutex<Option<Verdict>>,
     /// The calls that were asked about with no answer scripted, by their
     /// plan's summary: each fails the test when its rig goes.

@@ -91,6 +91,23 @@ fn restored(session: &mut Session) {
     session.wait_exit(LIMIT);
 }
 
+/// The shell's own check: a program that ends with the terminal raw is
+/// reported as not having put it back, with the modes before and after.
+#[cfg(unix)]
+#[test]
+fn sys_the_shell_says_when_the_terminal_was_not_put_back() {
+    use super::SHELL_OVER_RAW;
+
+    let mut session =
+        Session::start(&this_binary(), &SHELL_OVER_RAW.arguments(""), 100, 30).answering();
+    session.wait_for(LIMIT, "the shell's verdict", |t| t.shows("after:"));
+    let screen = session.screen().dump();
+    assert!(session.screen().shows(NOT_RESTORED), "{screen}");
+    assert!(!session.screen().shows(RESTORED), "{screen}");
+    assert!(session.screen().shows("before:"), "{screen}");
+    session.wait_exit(LIMIT);
+}
+
 fn editor_shows(term: &VTerm, text: &str) -> bool {
     term.shows(&format!("> {text}"))
 }

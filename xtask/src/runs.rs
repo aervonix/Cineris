@@ -501,6 +501,8 @@ pub(crate) struct Measured {
     pub(crate) windows: Option<Vec<TestCase>>,
 }
 
+/// Where a run's artifacts are downloaded: a folder for each run under the
+/// build directory, read from there afterwards.
 fn download_root() -> PathBuf {
     workspace::root().join("target").join("xtask-runs")
 }

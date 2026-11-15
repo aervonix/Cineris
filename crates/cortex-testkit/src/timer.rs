@@ -149,7 +149,7 @@ impl Timer for FakeTimer {
         // Named for the timeout report while it runs: a test that waits
         // for something behind a wait nobody ends would otherwise be
         // stopped at its limit with nothing to say what it waited for.
-        let doing = crate::watch::doing(format!(
+        let doing = crate::watch::naming(format!(
             "a wait of {} on the manual fake timer, made when the fake clock read {} (it ends \
              only when the test moves the clock past it, with `FakeTimer::advance`)",
             seconds(duration),
@@ -184,7 +184,6 @@ impl Future for AutoSleep {
     }
 }
 
-/// A wait of a manual timer.
 /// A wait of a manual timer.
 struct ManualSleep {
     timer: FakeTimer,
