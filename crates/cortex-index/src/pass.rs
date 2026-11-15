@@ -8,11 +8,11 @@
 //! FIFO), read up to the cap and outlined, on a few threads.
 //!
 //! **A pass never makes the cache worse.** One whose listing was cut short
-//! (the session ended, a turn began, the time ran out while listing) writes
-//! nothing: the files it did not see would lose their outlines. One whose
+//! (the session ended, a turn began) writes nothing: the files it did not see would lose their outlines. One whose
 //! listing was whole but that stopped while reading writes what it has:
 //! the files it did not reach have no record, and the next pass reads
-//! them. That is how a pass that runs out of time carries on.
+//! them. That is how a pass that runs out of time carries on. The time is
+//! the reading's: a listing is bounded by its cap on entries.
 //!
 //! **Two passes at once** (two sessions on one project) each write a whole
 //! cache, by an atomic replace: the last one wins, and both are valid. What
@@ -131,7 +131,7 @@ impl Index {
         gate: Arc<dyn Gate>,
         clock: SharedClock,
     ) -> Self {
-        // How many threads read is worked out by the first pass: asking the
+        // How many threads read is worked out by each pass: asking the
         // system reads files on Linux (the process's cgroup), and making
         // an index must touch none.
         let threads = 0;
@@ -228,6 +228,14 @@ impl Index {
 
         let old = self.cache();
         let root_fs = self.root.to_fs_path();
+        // Asked once a pass, not when the index is made: asking reads files
+        // on Linux, and making an index must touch none.
+        let threads = if self.threads == 0 {
+            std::thread::available_parallelism()
+                .map_or(1, |cores| (cores.get() / 2).clamp(1, MAX_THREADS))
+        } else {
+            self.threads
+        };
         let mut writer = Writer::new(self.root.as_str());
         // Directories in the order the files are in, so that a directory's
         // subdirectories follow it (`a`, `a/x`, `a-b`), which is what the
@@ -261,7 +269,8 @@ impl Index {
                 .map(|(file, _)| file)
                 .collect();
             let read = if stopped.is_none() {
-                let (read, why) = self.read_all(&root_fs, &wanted, &control, now, report.read == 0);
+                let (read, why) =
+                    self.read_all(&root_fs, &wanted, &control, now, report.read == 0, threads);
                 stopped = why;
                 read
             } else {
@@ -319,17 +328,12 @@ impl Index {
         control: &Control<'_>,
         now: i128,
         first: bool,
+        threads: usize,
     ) -> (Vec<Option<String>>, Option<Partial>) {
         let next = AtomicUsize::new(0);
         let stopped: std::sync::Mutex<Option<Partial>> = std::sync::Mutex::new(None);
         let results: Vec<std::sync::Mutex<Option<String>>> =
             files.iter().map(|_| std::sync::Mutex::new(None)).collect();
-        let threads = if self.threads == 0 {
-            std::thread::available_parallelism()
-                .map_or(1, |cores| (cores.get() / 2).clamp(1, MAX_THREADS))
-        } else {
-            self.threads
-        };
         let threads = threads.min(files.len()).max(1);
         let work = || {
             loop {

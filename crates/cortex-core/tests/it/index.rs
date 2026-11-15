@@ -166,3 +166,36 @@ fn the_outline_tool_and_a_large_read_have_the_indexs_outlines() {
         );
     });
 }
+
+/// With no map, a session makes nothing ahead: no background pass, no
+/// cache (the review of step 18).
+#[test]
+fn with_the_map_off_no_pass_runs_in_the_background() {
+    let world = World::new("index_map_off", [says("Done.")]);
+    world.put("src/lib.rs", "pub fn hello() {}\n");
+    world.user_config("[index]\nmap = false\n");
+    let watch = Arc::new(Untouched::new());
+    let touch = Arc::clone(&watch);
+    let core = world.core_with(|options| {
+        options.repo_index = true;
+        options.map_wait = Duration::ZERO;
+        options.index_gate = Some(Arc::new(move |_: &AbsPath| {
+            touch.touch();
+            true
+        }));
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("go").await;
+        assert!(map_notices(&front).is_empty());
+        front.close().await;
+    });
+    watch.release();
+    assert_eq!(watch.touches(), 0, "nothing was indexed");
+    let state = world.dirs().state.unwrap();
+    assert!(
+        !state.join("projects").exists(),
+        "no cache was written under {}",
+        state.display()
+    );
+}

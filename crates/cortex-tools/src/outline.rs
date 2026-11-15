@@ -1,9 +1,9 @@
 //! The `outline` tool (`docs/architecture/05-tools.md`, "`outline`"): the
 //! structure of a file or a directory without its content.
 //!
-//! - **A file:** its definitions with their lines, from the repository
-//!   index through the session's [`Outliner`]: the cached outline when the
-//!   file is as the index last saw it, one made now otherwise. A file over
+//! - **A file:** its definitions with their lines, made from the file as it
+//!   is now by the repository index's extractors, through the session's
+//!   [`Outliner`]. A file over
 //!   the cap on one file is outlined from its first bytes, and the result
 //!   says how much it covers. A file in no language with an extractor is
 //!   outlined from its indentation, and the result says so. A binary file
@@ -73,7 +73,7 @@ fn visible(text: &str) -> String {
         character.is_control()
             || matches!(
                 character,
-                '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+                '\u{200B}'..='\u{200F}' | '\u{061C}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
             )
     };
     let mut out = String::with_capacity(text.len());
@@ -457,4 +457,20 @@ fn outline_directory(
 fn file_outline(path: &AbsPath, outliner: &dyn Outliner) -> Option<String> {
     let outlined = outliner.describe(path).ok()?;
     (outlined.definitions > 0).then_some(outlined.text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visible;
+
+    /// A line break, an escape, a bidirectional control, a line separator
+    /// and a zero-width character are each written as an escape.
+    #[test]
+    fn what_would_act_unseen_is_written_as_an_escape() {
+        assert_eq!(visible("plain é"), "plain é");
+        assert_eq!(
+            visible("a\nb\u{1b}c\u{202E}d\u{2028}e\u{200B}f\u{FEFF}"),
+            "a\\nb\\u{1b}c\\u{202e}d\\u{2028}e\\u{200b}f\\u{feff}"
+        );
+    }
 }

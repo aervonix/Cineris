@@ -287,7 +287,7 @@ rule: A history read again tells the date the harness's own date notice gave, no
 file: crates/cortex-agent/src/context/mod.rs
 in: Context::load
 find: if notice.source == NoticeSource::Harness && notice.text.starts_with("Today's date is ")
-replace: if true
+replace: .filter(|_| true)
 caught-by:
     cortex-agent context::tests::a_reload_takes_the_date_from_the_harnesss_own_notice_only
 
@@ -317,3 +317,56 @@ find: Some(Partial::Time) if !started_reading => {}
 replace: Some(Partial::Time) if !started_reading && false => {}
 caught-by:
     cortex-index::it index::a_listing_longer_than_the_time_limit_still_ends_and_the_reading_carries_on
+
+[break] an-idle-slice-is-unbounded
+rule: An idle session carries on with unfinished work a few passes at most, however little each pass reads.
+file: crates/cortex-core/src/repo_map.rs
+in: Shared::work
+find: if state.unfinished && idle && progressed && idle_passes < IDLE_PASSES {
+replace: if state.unfinished && idle && progressed {
+caught-by:
+    cortex-core repo_map::tests::an_idle_slice_carries_on_a_bounded_number_of_passes
+
+[break] a-pass-that-gave-way-ends-the-idle-slice
+rule: A pass that gave way to a turn which is over by the time the worker looks is carried on, since the turn's end left the idle slice to the running pass.
+file: crates/cortex-core/src/repo_map.rs
+in: Shared::work
+find: let progressed = gave_way || indexed.is_none_or(|before| report.indexed > before);
+replace: let progressed = indexed.is_none_or(|before| report.indexed > before);
+caught-by:
+    cortex-core repo_map::tests::a_pass_that_gave_way_to_a_turn_already_over_is_carried_on
+
+[break] a-tiny-pass-time-is-used-as-set
+rule: A pass is given at least 250 ms to read, whatever the configuration says.
+file: crates/cortex-core/src/repo_map.rs
+in: limits
+find: pass_time.max(LEAST_PASS_TIME)
+replace: pass_time
+caught-by:
+    cortex-core repo_map::tests::the_pass_time_is_never_below_the_least
+
+[break] the-map-writes-a-line-separator-as-it-is
+rule: A character that would act unseen in a name (a line or paragraph separator, a zero-width one) is written as an escape in the map.
+file: crates/cortex-index/src/outline.rs
+in: hidden
+find: '\u{2028}'..='\u{202E}'
+replace: '\u{202A}'..='\u{202E}'
+caught-by:
+    cortex-index outline::tests::what_would_act_unseen_is_written_as_an_escape
+
+[break] the-outline-tool-writes-a-zero-width-character-as-it-is
+rule: A character that would act unseen in a name is written as an escape in the outline tool's listing.
+file: crates/cortex-tools/src/outline.rs
+in: visible
+find: '\u{200B}'..='\u{200F}'
+replace: '\u{200E}'..='\u{200F}'
+caught-by:
+    cortex-tools outline::tests::what_would_act_unseen_is_written_as_an_escape
+
+[break] the-map-off-still-indexes
+rule: With the map off, a session starts no background pass and writes no cache.
+file: crates/cortex-core/src/core.rs
+find: .filter(|_| loaded.settings.index.map)
+replace: .filter(|_| true)
+caught-by:
+    cortex-core::it index::with_the_map_off_no_pass_runs_in_the_background

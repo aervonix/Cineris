@@ -491,8 +491,11 @@ settings! {
         /// for it.
         [TightenOnly, Restart, 1..=1_073_741_824]
         pub max_file_bytes: u64 = 1_048_576,
-        /// The most time one pass of the index takes. One that runs out
-        /// carries on when the session is next idle.
+        /// The most time one pass of the index spends reading files, after
+        /// its listing (which its cap on entries bounds). One that runs out
+        /// carries on when the session is next idle. At least 250 ms is
+        /// used, whatever is set: less would make an idle session pass over
+        /// the workspace again for every few files.
         [TightenOnly, Restart]
         pub pass_time: Duration = Duration::from_secs(2),
     }

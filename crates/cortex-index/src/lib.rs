@@ -11,7 +11,7 @@
 //! | [`walk`] | What a pass lists: the ignore rules, the permission [`Gate`], the [`Limits`]. |
 //! | [`pass`] | [`Index`] and [`Index::pass`]: the workspace set beside the cache, and what changed read again. |
 //! | [`map`] | Ranking and rendering the map ([`MapRequest`], [`Index::map`]), and the [`RecentFiles`] seam. |
-//! | [`lookup`] | [`Index::outline_of`]: one file's outline, cached or made now. |
+//! | [`lookup`] | [`Index::outline_of`]: one file's outline, made from the file as it is now; [`Index::map`]. |
 //!
 //! Nothing here holds the index in memory between uses, and nothing runs
 //! on its own: the core starts the work, on the blocking pool, after the

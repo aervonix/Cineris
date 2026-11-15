@@ -165,6 +165,17 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | `stats.enabled` | `true` or `false` | `true` | user only | restart | Whether events are recorded. Off, nothing is written, every adaptive feature uses its default, and the usage view has the open session's figures alone. |
 | `stats.retention` | whole number, 1 to 1200 | `3` | user only | at once | How many months a monthly file of events stays after its own month: 3 by default. What it added up to stays in the aggregates, every all-time figure with it, so only the raw events go (a heavy user's are about 90 MB a month). |
 
+## `[index]`
+
+| Key | Type | Default | From a project | Takes effect | What it is |
+|---|---|---|---|---|---|
+| `index.map` | `true` or `false` | `true` | preference | next epoch | Whether each context epoch is given the repository map: the workspace's directories and its most relevant files with their main definitions. The `outline` tool works either way. |
+| `index.map_tokens` | whole number, 0 to 50000 | `1500` | tighten only: a lower limit is a preference, a higher one user only | next epoch | The map's budget, in tokens. A project's file may lower it and may not raise it: the map is sent with every request of an epoch. |
+| `index.map_wait` | length of time | not set | preference | next epoch | How long the first request of an epoch waits for the map when it is not ready yet; past it, the map follows as a notice at the next boundary where it is. Unset, 150 ms in the interactive app and none in a headless run, whose start it would otherwise slow. |
+| `index.max_files` | whole number, 1 to 10000000 | `20000` | tighten only: a lower limit is a preference, a higher one user only | restart | The most files the index reads. Past it, the files nearest the top of the tree are indexed, and the map says it is partial. |
+| `index.max_file_bytes` | whole number, 1 to 1073741824 | `1048576` | tighten only: a lower limit is a preference, a higher one user only | restart | The largest file the index reads, in bytes. A larger one is listed and not outlined, unless the `outline` tool is asked for it. |
+| `index.pass_time` | length of time | `"2s"` | tighten only: a lower limit is a preference, a higher one user only | restart | The most time one pass of the index spends reading files, after its listing (which its cap on entries bounds). One that runs out carries on when the session is next idle. At least 250 ms is used, whatever is set: less would make an idle session pass over the workspace again for every few files. |
+
 ## `[usage]`
 
 | Key | Type | Default | From a project | Takes effect | What it is |
@@ -184,7 +195,6 @@ These sections belong to parts of the harness that are not built yet. A file may
 | `[http]` | user only | The HTTP client: the connect timeout, a proxy, and extra certificate authorities. |
 | `[tools]` | user only | Enabled tools, output limits and per-tool settings. |
 | `[verify]` | runs code | The verification mode, commands and time limits. |
-| `[index]` | user only | The repository map's caps. |
 | `[runs]` | user only | The run engine: concurrency, workspaces, budgets. |
 | `[tui]` | user only | The terminal UI: presenter, theme, density. |
 | `[keys]` | user only | Key bindings by mode. |
