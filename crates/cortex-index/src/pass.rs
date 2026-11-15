@@ -69,6 +69,8 @@ pub struct Index {
     gate: Arc<dyn Gate>,
     clock: SharedClock,
     threads: usize,
+    /// Whether the last whole listing met its cap on entries.
+    capped: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl std::fmt::Debug for Index {
@@ -142,10 +144,11 @@ impl Index {
             gate,
             clock,
             threads,
+            capped: Arc::default(),
         }
     }
 
-    /// Reads files on this many threads.
+    /// Lists the workspace and reads its files on this many threads.
     #[must_use]
     pub fn with_threads(mut self, threads: usize) -> Self {
         self.threads = threads.max(1);
@@ -211,7 +214,29 @@ impl Index {
             let now = self.clock.now();
             i128::from(now.unix_secs()) * 1_000_000_000 + i128::from(now.subsec_nanos())
         };
-        let listing = walk::list(&self.root, &self.gate, &self.limits, &control);
+        // Asked once a pass, not when the index is made: asking reads files
+        // on Linux, and making an index must touch none. Half the cores at
+        // most: a pass is background work beside the session's own.
+        let threads = if self.threads == 0 {
+            std::thread::available_parallelism()
+                .map_or(1, |cores| (cores.get() / 2).clamp(1, MAX_THREADS))
+        } else {
+            self.threads
+        };
+        // A workspace whose last listing met its cap is listed on one thread
+        // at once: the walk on several would meet it too, and be made again.
+        let capped = self.capped.load(Ordering::Relaxed);
+        let listing = walk::list(
+            &self.root,
+            &self.gate,
+            &self.limits,
+            &control,
+            if capped { 1 } else { threads },
+        );
+        if listing.partial != Some(Partial::Stopped) {
+            self.capped
+                .store(listing.partial == Some(Partial::Listing), Ordering::Relaxed);
+        }
         let _ = out_of_time();
         let mut report = PassReport {
             found: listing.found,
@@ -228,14 +253,6 @@ impl Index {
 
         let old = self.cache();
         let root_fs = self.root.to_fs_path();
-        // Asked once a pass, not when the index is made: asking reads files
-        // on Linux, and making an index must touch none.
-        let threads = if self.threads == 0 {
-            std::thread::available_parallelism()
-                .map_or(1, |cores| (cores.get() / 2).clamp(1, MAX_THREADS))
-        } else {
-            self.threads
-        };
         let mut writer = Writer::new(self.root.as_str());
         // Directories in the order the files are in, so that a directory's
         // subdirectories follow it (`a`, `a/x`, `a-b`), which is what the

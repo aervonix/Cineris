@@ -76,7 +76,7 @@ caught-by:
 [break] the-file-cap-is-not-enforced
 rule: A pass indexes at most max_files files, the ones nearest the top of the tree, and says it is partial.
 file: crates/cortex-index/src/walk.rs
-in: list
+in: finish
 find: if all.len() > limits.max_files {
 replace: if false {
 caught-by:
@@ -85,7 +85,7 @@ caught-by:
 [break] the-listing-cap-is-not-enforced
 rule: A listing stops at max_listed entries, so a tree of millions costs a bounded walk.
 file: crates/cortex-index/src/walk.rs
-in: list
+in: list_in_order
 find: if entries > limits.max_listed {
 replace: if false {
 caught-by:
@@ -121,7 +121,7 @@ caught-by:
 [break] the-gate-is-not-asked
 rule: A file the permission engine's gate does not let through is not indexed and not named in the map.
 file: crates/cortex-index/src/walk.rs
-in: list
+in: Gathered::take
 find: if !gate.may_index(&abs) {
 replace: if false {
 caught-by:
@@ -130,7 +130,7 @@ caught-by:
 [break] the-ignore-files-are-not-read
 rule: A pass honours the ignore files search and list honour, .gitignore at every level whether or not the tree is a repository.
 file: crates/cortex-index/src/walk.rs
-in: list
+in: walker
 find: .git_ignore(true)
 replace: .git_ignore(false)
 caught-by:
@@ -140,7 +140,7 @@ caught-by:
 [break] links-are-followed
 rule: A pass follows no link, inside the workspace or out of it.
 file: crates/cortex-index/src/walk.rs
-in: list
+in: walker
 find: .follow_links(false)
 replace: .follow_links(true)
 caught-by:
@@ -303,7 +303,7 @@ caught-by:
 [break] a-listing-is-cut-by-the-time
 rule: A listing is bounded by its cap on entries and not by the time, so that a pass whose listing outlasts its time still ends and writes.
 file: crates/cortex-index/src/walk.rs
-in: list
+in: list_in_order
 find: if let Some(why) = control.stop_listing() {
 replace: if let Some(why) = control.stop() {
 caught-by:
@@ -370,3 +370,67 @@ find: .filter(|_| loaded.settings.index.map)
 replace: .filter(|_| true)
 caught-by:
     cortex-core::it index::with_the_map_off_no_pass_runs_in_the_background
+
+[break] the-listing-on-threads-is-left-unsorted
+rule: A listing made on several threads is put in path order after, so that it is the listing the walk on one thread makes.
+file: crates/cortex-index/src/walk.rs
+in: finish
+find: all.sort_by(|one, other| path_order(&one.relative, &other.relative));
+replace: {}
+caught-by:
+    cortex-index::it index::the_listing_on_several_threads_is_the_listing_on_one
+
+[break] a-listing-at-its-cap-is-cut-where-the-threads-reach
+rule: A listing on several threads that meets its cap on entries is made again on one thread in name order, so that the cut is the same on every machine.
+file: crates/cortex-index/src/walk.rs
+in: list_on_threads
+find: return None;
+replace: return Some(finish(std::mem::take(&mut *handed.lock().unwrap_or_else(std::sync::PoisonError::into_inner)), Some(Partial::Listing), limits));
+caught-by:
+    cortex-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads
+
+[break] a-nested-ignore-file-is-missed-on-threads
+rule: The walk on several threads honours the same ignore files, at every level, and the same gate as the walk on one.
+file: crates/cortex-index/src/walk.rs
+in: list_on_threads
+find: walker(root_fs, root, gate)
+replace: WalkBuilder::new(root_fs)
+caught-by:
+    cortex-index::it index::the_listing_on_several_threads_is_the_listing_on_one
+
+[break] the-threads-of-a-listing-do-not-give-way
+rule: Each thread of a listing on several threads looks before each entry whether to give way to a turn, so that a pass on several threads stops as one on one thread does.
+file: crates/cortex-index/src/walk.rs
+in: list_on_threads
+find: if control.stop_listing().is_some() {
+replace: if false {
+caught-by:
+    cortex-index::it index::a_listing_on_several_threads_gives_way_at_each_threads_next_entry
+
+[break] the-path-order-is-the-bytes-order
+rule: The path order takes `/` as the least byte, so that it is the order of comparing the names one by one (`a`, `a/x`, `a-b`).
+file: crates/cortex-index/src/walk.rs
+in: path_order
+find: let key = |byte: &u8| if *byte == b'/' { 0 } else { *byte };
+replace: let key = |byte: &u8| *byte;
+caught-by:
+    cortex-index::it tree_order::property_the_path_order_is_the_order_name_by_name
+    cortex-index::it tree_order::subdirectories_are_drawn_under_their_own_directory
+
+[break] the-listing-cap-on-threads-is-not-enforced
+rule: A listing on several threads stops at max_listed entries too, and is then made again on one thread.
+file: crates/cortex-index/src/walk.rs
+in: list_on_threads
+find: if entries.fetch_add(1, AtomicOrdering::SeqCst) >= limits.max_listed {
+replace: if false {
+caught-by:
+    cortex-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads
+
+[break] a-listing-on-threads-is-cut-by-the-time
+rule: A listing on several threads is bounded by its cap on entries and not by the time, as the walk on one thread is.
+file: crates/cortex-index/src/walk.rs
+in: list_on_threads
+find: if control.stop_listing().is_some() {
+replace: if control.stop().is_some() {
+caught-by:
+    cortex-index::it index::a_listing_longer_than_the_time_limit_still_ends_and_the_reading_carries_on
