@@ -103,3 +103,28 @@ A reviewer read the refresh as soon as it worked. It found nothing that blocks.
 | A failed read of `limits.json` let the next update drop the other providers' figures | **Fixed:** the update refuses to write when the read fails other than by absence. |
 | `usage.refresh` is read when the core starts, though declared "at once" | **Left** for step 24's refresh key with hot reload: the CLI starts a core for every command. |
 | 18's example named `anthropic`, which has no refresh | **Corrected** in 18. |
+
+## The full review, before the push
+
+A reviewer that had not seen the work read the whole change against the specification. It found nothing that blocks, seven things to fix and some notes. Each fix has a test and a break.
+
+| Found | Done |
+|---|---|
+| A summary the trigger was waiting for, stopped by an interrupt, was dropped uncounted: its task was raced by value | **Fixed:** the task is raced by reference and kept, and counted at the next boundary or when the loop ends. Test: `context::a_summary_the_trigger_waited_for_is_counted_when_an_interrupt_stops_it`. |
+| The day's account took its budget from the first session of the day, so a project's lower day limit was lost (or held another project to it) | **Fixed:** one purse for the day (`Account::with_spent`), and each session an account of its own budget that spends from it (`Account::draws_on`). Test: `usage::each_session_holds_the_day_to_its_own_limits`. |
+| A request's span stayed open until the next request replaced it, and the turn's with it | **Fixed:** the span is let go when its record is made, and at a turn's end. The spans test now checks the order spans close in. |
+| A `fast` summary too large for the new epoch was asked of `fast` again | **Fixed:** it marks `fast` as turned away for the epoch, so the main model is asked. |
+| The stored request record dropped `started_in`, and documented `turn` wrongly | **Fixed:** `RequestRecord::started_in`, and the doc of `turn`. |
+| A turn's parts were cut a log write later than its `duration_ms` was taken | **Fixed:** one reading of the clock for the turn's start and its parts' start, and one for its end, its `duration_ms` and its parts' end. |
+| `cortex stats`, and a report with statistics off, pruned old monthly files without saving | **Fixed:** `Aggregates::sync` prunes only when given a retention, which only callers that save give. Test: `usage::showing_the_statistics_prunes_nothing`. |
+
+| Note | Settled |
+|---|---|
+| Tool records left the effort out of their variant set | **Fixed**: `ToolCallStat::effort`, so tools' and turns' outcome keys agree. |
+| 14 still said the log's writer thread | **Corrected.** |
+| "reset since" was printed for a reset still ahead | **Fixed**: only past a reset. |
+| Nothing tested that the variants are fixed for an epoch | **Added**: `roles::variants_changed_between_two_openings_begin_a_new_epoch`, with a break. |
+| An `epoch` entry with a choice this build does not know is read as one with none, and goes on | **Left**: a later build's choice cannot arise before a second edit format exists; the reader says so in its documentation. |
+| The overflow record settles the refused request as the one sent | **Intended**: it was sent. The next request begins a new epoch, so the prefix check and the difference are of the new one. |
+| `cortex stats reset` while another process writes | **Left**: the reset says what it removed, and a writer's later lines start a file again; a reset is a deliberate act at the keyboard. |
+| A request with no usage counts as unpriced | **Left**: not shown anywhere. |
