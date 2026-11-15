@@ -154,6 +154,67 @@ pub fn ignore_control_events() {
     sys::pty::ignore_control_events();
 }
 
+/// An interrupt (SIGINT) made pending on the calling thread by
+/// [`interrupt_pending_here`]: blocked on the thread, and sent to it.
+/// Dropping it unblocks the signal, so one still pending then is delivered
+/// as it would have been. Unix only.
+#[cfg(unix)]
+#[must_use = "the interrupt stays blocked until this is dropped"]
+pub struct PendingInterrupt {
+    previous: libc::sigset_t,
+}
+
+#[cfg(unix)]
+impl std::fmt::Debug for PendingInterrupt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingInterrupt").finish_non_exhaustive()
+    }
+}
+
+#[cfg(unix)]
+impl PendingInterrupt {
+    /// Whether the interrupt is still pending: nothing has taken it.
+    #[must_use]
+    pub fn still_pending(&self) -> bool {
+        sys::pty::interrupt_is_pending()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for PendingInterrupt {
+    fn drop(&mut self) {
+        sys::pty::restore_mask(&self.previous);
+    }
+}
+
+/// Makes an interrupt pending on the calling thread, deterministically: the
+/// state a `Ctrl+C` is in when the kernel has not yet handed it to a thread
+/// (step 21's race, in which another thread took it after an interrupt
+/// guard was gone). A test of what takes a pending interrupt (the guard of
+/// [`crate::ignore_interrupts`], as it ends) makes one with this, and drops
+/// the result after: a signal still pending then is delivered. Unix only.
+///
+/// # Errors
+///
+/// When the system refuses to block or send the signal.
+#[cfg(unix)]
+pub fn interrupt_pending_here() -> io::Result<PendingInterrupt> {
+    Ok(PendingInterrupt {
+        previous: sys::pty::interrupt_pending_here()?,
+    })
+}
+
+/// Raises an interrupt (SIGINT) on the calling thread: its handler has run
+/// when this returns. Unix only.
+///
+/// # Errors
+///
+/// When the system refuses.
+#[cfg(unix)]
+pub fn raise_interrupt() -> io::Result<()> {
+    sys::pty::raise_interrupt()
+}
+
 /// Lets process `pid` go on after it stopped itself (SIGCONT), as a shell's
 /// `fg` does. Unix only.
 ///

@@ -115,7 +115,7 @@ fn demo(options: &[&str]) -> (String, Vec<String>) {
         }
         _ => (
             crate::children::this_binary(),
-            crate::children::child_arguments(crate::DEMO, &options.join(",")),
+            crate::DEMO.arguments(&options.join(",")),
         ),
     }
 }

@@ -14,22 +14,18 @@
 //! The application and the editor write what they found to a report file in
 //! the test's scratch directory, one `name: value` line each.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use cortex_term::{Event, Frame, Inline, Line, Overrides, Terminal};
+use cortex_testkit::role::{ModeShell, Report, Role, same_modes_as_the_shell, write_terminal, yes};
+pub(crate) use cortex_testkit::role::{NOT_RESTORED, RESTORED, this_binary};
 use cortex_tui::editor::{Chip, Fragment};
 use cortex_tui::external::{self, Edited, Env, TerminalHandoff};
 
-/// The name of the entry test.
-pub(crate) const ENTRY: &str = "child_entry";
-/// The argument that makes this binary the shell: `scenario|scratch`.
-pub(crate) const SHELL: &str = "cxtui-shell=";
-const APP: &str = "cxtui-app=";
-const EDITOR: &str = "cxtui-editor=";
-/// The shell's verdicts.
-pub(crate) const RESTORED: &str = "restored: yes";
-pub(crate) const NOT_RESTORED: &str = "restored: NO";
+/// This binary as the shell: `scenario|scratch`.
+pub(crate) const SHELL: Role = Role::new("cxtui-shell=");
+const APP: Role = Role::new("cxtui-app=");
+const EDITOR: Role = Role::new("cxtui-editor=");
 /// What the application draws while it waits for a key.
 pub(crate) const WAITING: &str = "waiting for a key";
 /// What the application prints when it has no terminal after the editor.
@@ -38,83 +34,34 @@ pub(crate) const LOST: &str = "the application has no terminal";
 pub(crate) const EDITOR_WAITING: &str = "editor waiting for a line";
 /// The variables the shell gives the application, and through it the
 /// editor.
-const MODES: &str = "CXTUI_MODES";
+/// The variable the shell gives the application, and through it the
+/// editor: the test's scratch directory, where the report is.
 const SCRATCH: &str = "CXTUI_SCRATCH";
-
-/// The arguments that start this binary as a child.
-pub(crate) fn child_arguments(mark: &str, options: &str) -> Vec<String> {
-    vec![
-        "--exact".to_owned(),
-        ENTRY.to_owned(),
-        "--nocapture".to_owned(),
-        "--test-threads=1".to_owned(),
-        format!("{mark}{options}"),
-    ]
-}
-
-/// This test binary's path.
-pub(crate) fn this_binary() -> String {
-    std::env::current_exe()
-        .expect("the test binary has a path")
-        .to_str()
-        .expect("the test binary's path is Unicode")
-        .to_owned()
-}
 
 /// Becomes the child the arguments name, if they name one.
 pub(crate) fn enter() {
-    let arguments: Vec<String> = std::env::args().collect();
-    if let Some(options) = arguments.iter().find_map(|a| a.strip_prefix(SHELL)) {
-        shell(options);
+    if let Some(options) = SHELL.options() {
+        let (scenario, scratch) = options.split_once('|').expect("scenario|scratch");
+        // As a shell does with its job: a Ctrl+C typed for the editor is
+        // not the shell's. The application keeps its own (see the guard).
+        let mut app = APP.command(scenario);
+        app.env(SCRATCH, scratch);
+        ModeShell::new().ignoring_interrupts().run(app);
     }
-    if let Some(scenario) = arguments.iter().find_map(|a| a.strip_prefix(APP)) {
-        app(scenario);
+    if let Some(scenario) = APP.options() {
+        app(&scenario);
     }
-    if let Some(scenario) = arguments.iter().find_map(|a| a.strip_prefix(EDITOR)) {
+    if let Some(scenario) = EDITOR.options() {
+        let arguments: Vec<String> = std::env::args().collect();
         let file = arguments.last().expect("the file's path");
-        editor(scenario, Path::new(file));
+        editor(&scenario, Path::new(file));
     }
 }
 
-/// Appends `name: value` to the report.
+/// Appends `name: value` to the report in the test's scratch directory.
 fn report(name: &str, value: &str) {
     let scratch = std::env::var_os(SCRATCH).expect("the scratch directory");
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(PathBuf::from(scratch).join("report.txt"))
-        .expect("open the report");
-    writeln!(file, "{name}: {value}").expect("write the report");
-}
-
-fn yes(ok: bool) -> &'static str {
-    if ok { "yes" } else { "NO" }
-}
-
-fn shell(options: &str) -> ! {
-    cortex_term::pty::ignore_control_events();
-    let (scenario, scratch) = options.split_once('|').expect("scenario|scratch");
-    let before = cortex_term::pty::modes().expect("the terminal's modes");
-    // As a shell does with its job: a Ctrl+C typed for the editor is not
-    // the shell's. The application keeps its own (see the guard).
-    let ignored = cortex_term::ignore_interrupts().expect("ignore interrupts");
-    let status = std::process::Command::new(this_binary())
-        .args(child_arguments(APP, scenario))
-        .env(MODES, &before)
-        .env(SCRATCH, scratch)
-        .status()
-        .expect("start the application");
-    drop(ignored);
-    let after = cortex_term::pty::modes().expect("the terminal's modes");
-    let verdict = if before == after {
-        RESTORED
-    } else {
-        NOT_RESTORED
-    };
-    print!("\r\n{verdict} ({status})\r\n");
-    std::io::stdout().flush().expect("write to the terminal");
-    #[expect(clippy::exit, reason = "a child ends when it has reported")]
-    std::process::exit(0);
+    Report::in_dir(Path::new(&scratch)).say(name, value);
 }
 
 /// The editor's value for a scenario, as `$EDITOR` would hold it.
@@ -137,10 +84,7 @@ fn editor_value(scenario: &str, scratch: &Path) -> String {
             }
             path.display().to_string()
         }
-        _ => {
-            let arguments = child_arguments(EDITOR, scenario).join(" ");
-            format!("\"{}\" {arguments}", this_binary())
-        }
+        _ => EDITOR.command_line(scenario),
     }
 }
 
@@ -199,8 +143,7 @@ fn app(scenario: &str) -> ! {
 
     if terminal.is_none() {
         report("raw again", "NO: the terminal was not taken back");
-        print!("\r\n{LOST}\r\n");
-        std::io::stdout().flush().expect("write to the terminal");
+        write_terminal(&format!("\r\n{LOST}\r\n"));
         #[expect(clippy::exit, reason = "a child ends when it has reported")]
         std::process::exit(1);
     }
@@ -241,9 +184,10 @@ fn draw(terminal: &mut Option<Terminal>, inline: &mut Inline, text: &str) {
 }
 
 fn editor(scenario: &str, file: &Path) -> ! {
-    let modes = cortex_term::pty::modes().expect("the editor's terminal");
-    let shell = std::env::var(MODES).expect("the shell's modes");
-    report("editor modes", yes(modes == shell));
+    report(
+        "editor modes",
+        yes(same_modes_as_the_shell().expect("the shell's modes")),
+    );
     report(
         "private file",
         yes(cortex_base::private::is_private(file).expect("look at the file")),
@@ -265,8 +209,7 @@ fn editor(scenario: &str, file: &Path) -> ! {
     // The test looks at the terminal now, then sends a line: read only if
     // the terminal is in its ordinary, line-by-line mode. A Ctrl+C instead
     // ends this editor.
-    print!("{EDITOR_WAITING}\r\n");
-    std::io::stdout().flush().expect("write to the terminal");
+    write_terminal(&format!("{EDITOR_WAITING}\r\n"));
     let mut line = String::new();
     std::io::stdin().read_line(&mut line).expect("read a line");
     report("editor read", &format!("{line:?}"));
@@ -294,8 +237,7 @@ fn editor(scenario: &str, file: &Path) -> ! {
         "abort" => {
             // Killed in the middle of a full-screen session: the alternate
             // screen, the mouse and keyboard flags left on.
-            print!("\x1b[?1049h\x1b[?1000h\x1b[>1u\x1b[>1u");
-            std::io::stdout().flush().expect("write to the terminal");
+            write_terminal("\x1b[?1049h\x1b[?1000h\x1b[>1u\x1b[>1u");
             std::process::abort()
         }
         "nottext" => {
