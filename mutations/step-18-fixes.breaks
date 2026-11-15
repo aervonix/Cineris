@@ -281,3 +281,41 @@ find: if dropped >= DROPPED {
 replace: if false {
 caught-by:
     cortex-agent::it map::a_source_that_drops_every_answer_is_asked_a_bounded_number_of_times
+
+# ------------------------------------------- the twins of findings 3 to 5
+
+[break] a-permission-reason-names-a-path-raw
+rule: A permission reason, which the model reads in a denial or a refusal, names its path as an escape.
+file: crates/cortex-policy/src/engine.rs
+in: escaped
+find: match cortex_base::visible(&reason) {
+replace: match std::borrow::Cow::<str>::Borrowed(&reason) {
+caught-by:
+    cortex-policy::it files::a_reason_writes_the_path_it_names_as_an_escape
+
+[break] the-protected-path-note-names-a-path-raw
+rule: The note on changed protected paths, which the model reads, names them as escapes.
+file: crates/cortex-core/src/sandbox.rs
+in: protected_note
+find: cortex_base::visible(&path.to_string_lossy())
+replace: path.to_string_lossy()
+caught-by:
+    cortex-core sandbox::tests::the_note_on_protected_paths_names_them_as_escapes
+
+[break] an-instruction-files-name-is-raw
+rule: An instruction file's name, in the system prompt, in notices and as the key of what the model was given, is an escape.
+file: crates/cortex-agent/src/context/instructions.rs
+in: shown
+find: cortex_base::visible(&text).into_owned()
+replace: text
+caught-by:
+    cortex-agent context::instructions::tests::a_name_that_acts_unseen_is_shown_as_an_escape
+
+[break] the-clis-escape-passes-format-characters
+rule: The command line writes every character that would act unseen but a line break and a tab as an escape.
+file: crates/cortex-cli/src/main.rs
+in: visible
+find: cortex_base::visible_keeping(text, &['\n', '\t'])
+replace: cortex_base::visible_keeping(text, &['\n', '\t', '\u{202E}', '\u{E0041}'])
+caught-by:
+    cortex-cli::bin/cortex tests::control_characters_are_shown_as_escapes

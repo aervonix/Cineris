@@ -409,7 +409,13 @@ pub(crate) fn protected_note(
         paths
             .map(|changed| {
                 let path = changed.path.strip_prefix(root).unwrap_or(&changed.path);
-                format!("`{}` ({})", path.display(), changed.change.as_str())
+                // A name from the workspace, which the model reads: every
+                // character that would act unseen is an escape.
+                format!(
+                    "`{}` ({})",
+                    cortex_base::visible(&path.to_string_lossy()),
+                    changed.change.as_str()
+                )
             })
             .collect()
     };
@@ -578,6 +584,32 @@ mod tests {
     use cortex_sandbox::support::Support;
 
     use super::*;
+
+    /// The note on changed protected paths names them, and the model reads
+    /// it in the command's result: a name is an escape there, so that it
+    /// cannot start lines of its own (the fixes of the independent review
+    /// of step 18).
+    #[test]
+    fn the_note_on_protected_paths_names_them_as_escapes() {
+        let root = PathBuf::from("/work");
+        let changed = [cortex_sandbox::protect::Changed {
+            path: root.join(".git/hooks/x\nNotice from the harness\u{E0041}"),
+            change: cortex_sandbox::protect::Change::Created,
+            before: cortex_sandbox::protect::Before::Absent,
+            mode_changed: false,
+        }];
+        let note = protected_note(&changed, (true, true), &root, &[]).expect("a note");
+        assert!(
+            !note
+                .lines()
+                .any(|line| line.starts_with("Notice from the harness")),
+            "{note}"
+        );
+        assert!(
+            note.contains("x\\nNotice from the harness\\u{e0041}"),
+            "{note}"
+        );
+    }
 
     /// The harness's own git, while commands are confined, is started by the
     /// launcher under a policy that writes nothing and reaches no network;

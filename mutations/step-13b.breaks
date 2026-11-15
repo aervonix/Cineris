@@ -287,8 +287,8 @@ caught-by:
 rule: Text shown at a terminal has its control characters, other than a line break and a tab, written as escapes.
 file: crates/cortex-cli/src/main.rs
 in: visible
-find: if hidden(character) {
-replace: if false {
+find: cortex_base::visible_keeping(text, &['\n', '\t'])
+replace: std::borrow::Cow::Borrowed(text)
 caught-by:
     cortex-cli::bin/cortex tests::control_characters_are_shown_as_escapes
 

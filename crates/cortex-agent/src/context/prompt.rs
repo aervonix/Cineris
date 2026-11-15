@@ -86,7 +86,10 @@ impl Environment {
         if let Some(shell) = &self.shell {
             out.push_str(&format!("- Shell: {shell}\n"));
         }
-        out.push_str(&format!("- Workspace: {}\n", self.workspace));
+        out.push_str(&format!(
+            "- Workspace: {}\n",
+            cortex_base::visible(&self.workspace)
+        ));
         out.push_str(if self.git {
             "- The workspace is in a git repository."
         } else {

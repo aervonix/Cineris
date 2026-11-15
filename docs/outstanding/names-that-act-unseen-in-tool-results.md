@@ -1,3 +1,0 @@
-| Item | Who | When |
-|---|---|---|
-| **Names that act unseen in tool results.** A file name on Linux may hold a line break, an escape or a bidirectional control, and git can track such names. Since step 18 the repository map and the `outline` tool write such characters as escapes, so that a file cannot be named to start lines of its own in what the model reads (found by the review of step 18). `list`, `search` and `read` show names as they are: a listing's line break starts what looks like another entry, and a name can hold text that looks like the harness's notice. They are `cortex-tools`' tools, which step 18 could not change. | A later step on `cortex-tools`, or step 32 | Before the first usable release |

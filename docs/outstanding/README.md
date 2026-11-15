@@ -119,12 +119,12 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-tools
 
-- [names-that-act-unseen-in-tool-results](names-that-act-unseen-in-tool-results.md): `list`, `search` and `read` show a name with a line break or an escape as it is; the map and `outline` escape them. Owner: a later `cortex-tools` step, or step 32.
 - [a-git-look-too-slow-on-a-loaded-windows-runner](a-git-look-too-slow-on-a-loaded-windows-runner.md): The shell's look at changes gave up as too slow on a loaded Windows runner, failing one system test once. Owner: the next step that changes the look, or step 32.
 - [cmd-searches-the-current-directory](cmd-searches-the-current-directory.md): `cmd.exe` finds a program in the working directory before `PATH`, so a workspace `git.bat` runs as `git`. Owner: the owner.
 
 ### cortex-tui
 
+- [names-a-client-shows-as-they-are](names-a-client-shows-as-they-are.md): What the model reads of the workspace is escaped; approval details and rules, undo and assembly notices, the sandbox's lines and `cortex-term`'s guard still show names as they are to a client. Owner: step 23.
 - [ambiguous-width-glyphs](ambiguous-width-glyphs.md): Fourteen East Asian ambiguous-width glyphs, box edges among them, break box layout in terminals that draw them wide. Owner: step 23, with the owner; before step 25.
 - [editor-cost-on-very-large-text](editor-cost-on-very-large-text.md): The prompt editor lays out all its text on every key; a shortened `@` query refilters all paths. Owner: step 33.
 - [external-editor-test-gaps](external-editor-test-gaps.md): Parts of the external editor (umask, ConPTY modes, failed hand-over, `.cmd` editors, interrupt guard) are untested. Owner: step 32.

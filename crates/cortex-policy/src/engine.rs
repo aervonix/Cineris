@@ -2872,6 +2872,17 @@ fn place_all(
     Ok(placed)
 }
 
+/// A reason as the model and a person read it: the paths and patterns in it
+/// come from the workspace and the project's configuration, so every
+/// character that would act unseen in them is an escape (the fixes of step
+/// 18's review). The one place every reason passes.
+fn escaped(reason: String) -> String {
+    match cortex_base::visible(&reason) {
+        std::borrow::Cow::Borrowed(_) => reason,
+        std::borrow::Cow::Owned(escaped) => escaped,
+    }
+}
+
 /// The strictest of the findings, as the answer for the call.
 fn combine(findings: Vec<Finding>, read_only: bool, storable: bool) -> Outcome {
     let mut reasons = Vec::new();
@@ -2880,8 +2891,13 @@ fn combine(findings: Vec<Finding>, read_only: bool, storable: bool) -> Outcome {
     for finding in findings {
         match finding {
             Finding::Allow => {}
-            Finding::Deny { reason, .. } => return Outcome::Deny { reason },
+            Finding::Deny { reason, .. } => {
+                return Outcome::Deny {
+                    reason: escaped(reason),
+                };
+            }
             Finding::Ask { reason, lift } => {
+                let reason = escaped(reason);
                 if !reasons.contains(&reason) {
                     reasons.push(reason);
                 }

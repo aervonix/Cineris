@@ -629,7 +629,12 @@ fn continuity_note(
         .iter()
         .map(|one| {
             let path = one.path.strip_prefix(root).unwrap_or(&one.path);
-            format!("`{}` ({})", path.display(), one.change.as_str())
+            // A name from the workspace, which the model reads.
+            format!(
+                "`{}` ({})",
+                cortex_base::visible(&path.to_string_lossy()),
+                one.change.as_str()
+            )
         })
         .collect();
     let undo = if by_hand.len() == changed.len() {

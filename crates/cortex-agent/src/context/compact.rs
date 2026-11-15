@@ -268,7 +268,10 @@ impl Carried {
             self.files
                 .iter()
                 .filter(|file| want(file))
-                .map(|file| format!("`{}`", file.path))
+                // A path from the workspace, which the model reads: every
+                // character that would act unseen is an escape. The record
+                // keeps it as it is.
+                .map(|file| format!("`{}`", cortex_base::visible(&file.path)))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
