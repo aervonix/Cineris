@@ -1,6 +1,6 @@
 //! A dialog in the input box's place: the request it answers, its keys, and
 //! the guard that keeps typing meant for the editor from answering it
-//! (`docs/steps/23/design.md`, point 2).
+//! (`docs/steps/23/answered.md`, point 2).
 //!
 //! **Only keys meant for it answer it.** A dialog can appear while the
 //! person is typing: an approval while a steering message is being

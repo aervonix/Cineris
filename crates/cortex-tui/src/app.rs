@@ -1,6 +1,6 @@
 //! The interactive application: the transcript, the input and the dialogs
 //! wired to a session through a [`Link`] (`docs/architecture/09-tui.md`;
-//! `docs/steps/23/design.md` until it is folded into the step's record).
+//! `docs/steps/23/answered.md`, "The design, before building").
 //!
 //! ```text
 //! terminal ─► Terminal::next ─► App::terminal ─► Input / Dialog ─► Op ─► Link ─► core
