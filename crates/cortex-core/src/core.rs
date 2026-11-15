@@ -1702,7 +1702,10 @@ fn session_error(failure: &cortex_session::SessionError) -> OpError {
 ///   profile too, whatever its value;
 /// - what is the user's alone: a provider's address and headers, the
 ///   shell, the data directory, the credential store;
-/// - what runs code or widens access.
+/// - what runs code or widens access;
+/// - a wait or a time limit (tighten-only): a project's file may shorten
+///   one and not lengthen it, but an override is past that rule, so a
+///   client could make the session wait as long as the range allows.
 ///
 /// Each key is judged by the rule the schema gives it for a project's file.
 /// (Choosing a profile is not an override anyone may give: the loader

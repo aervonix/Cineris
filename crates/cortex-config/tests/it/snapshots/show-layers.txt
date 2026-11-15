@@ -80,7 +80,7 @@ permissions.rules = [
 ]
 
 ## project-local
-retry.max_wait = "5m"  # project-local: ~/work/app/.cortex/config.local.toml:2
+retry.max_wait = "1m"  # project-local: ~/work/app/.cortex/config.local.toml:2
 
 ## profile
 model.effort = "high"           # profile review (user: ~/cortex/config.toml:32)

@@ -510,6 +510,14 @@ fn a_supervisor_cannot_start_a_session_above_the_level_it_could_set() {
             json!({"http": {"proxy": "http://elsewhere.invalid"}}),
             json!({"credentials": {"store": "file"}}),
             json!({"no_such_section": {"key": 1}}),
+            // Nor a wait or a time limit, which a project's file may only
+            // shorten: an override ranks as the command line, past the rule
+            // that holds a project to the value in effect, so a longer one
+            // and a shorter one alike are the user's to give.
+            json!({"retry": {"idle_timeout": "1h"}}),
+            json!({"retry": {"max_wait": "1m"}}),
+            json!({"shell": {"timeout": "1m"}}),
+            json!({"model": {"speed_wait": "2m"}}),
         ] {
             let refused = start(supervisor.clone(), SessionSettings::default(), config.clone())
                 .await
@@ -523,7 +531,7 @@ fn a_supervisor_cannot_start_a_session_above_the_level_it_could_set() {
         let level = start(
             supervisor.clone(),
             at(Level::ReadOnly),
-            json!({"shell": {"timeout": "1m"}, "model": {"main": OTHER_MODEL}}),
+            json!({"model": {"speed_fallback": false, "main": OTHER_MODEL}}),
         )
         .await
         .unwrap();

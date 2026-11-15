@@ -1,0 +1,237 @@
+# A fix to step 9: the settings a repository could slow or stall a session
+# with (docs/steps/09/answered.md, "Settings a repository could slow a session
+# with (2026-11-15)"). A break for each key's range, one for each change of
+# class, and the mechanism: tighten-only on a length of time, its warning, and
+# the check over the schema.
+
+# ------------------------------------------------------------------ ranges
+
+[break] backoff-base-retries-at-once
+rule: retry.backoff_base is at least 100 ms, in every file: below it the attempts are spent before a brief outage can pass.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 100..=60_000]
+replace: [TightenOnly, Now, 0..=60_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+    cortex-config::it waits::a_project_cannot_shorten_a_wait_past_its_floor
+
+[break] backoff-cap-has-no-floor
+rule: retry.backoff_cap is at least a second, so that the attempts span more than a moment.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 1_000..=300_000]
+replace: [TightenOnly, Now, 0..=300_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+
+[break] max-wait-below-a-minute
+rule: retry.max_wait is at least a minute, so that no file can make an ordinary rate limit end a turn.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 60_000..=3_600_000]
+replace: [TightenOnly, Now, 0..=3_600_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+
+[break] idle-timeout-of-a-millisecond
+rule: retry.idle_timeout is at least 30 s: set to a millisecond it would fail every request.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 30_000..=3_600_000]
+occurrence: 1
+replace: [TightenOnly, Now, 1..=3_600_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+
+[break] first-event-timeout-of-a-millisecond
+rule: retry.first_event_timeout is at least 30 s: set to a millisecond it would fail every request.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 30_000..=3_600_000]
+occurrence: 2
+replace: [TightenOnly, Now, 1..=3_600_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+    cortex-config::it waits::a_project_cannot_shorten_a_wait_past_its_floor
+
+[break] a-providers-idle-timeout-unbounded
+rule: A provider's own idle_timeout has the range of retry.idle_timeout.
+file: crates/cortex-config/src/schema/sections.rs
+find: [UserOnly, Now, 30_000..=3_600_000]
+occurrence: 1
+replace: [UserOnly, Now]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+
+[break] a-providers-first-event-timeout-has-no-floor
+rule: A provider's own first_event_timeout has the range of retry.first_event_timeout.
+file: crates/cortex-config/src/schema/sections.rs
+find: [UserOnly, Now, 30_000..=3_600_000]
+occurrence: 2
+replace: [UserOnly, Now, 0..=3_600_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+
+[break] speed-wait-of-a-day
+rule: model.speed_wait is at most two minutes.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 0..=120_000]
+replace: [TightenOnly, Now, 0..=86_400_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+
+[break] speed-cooldown-of-nothing
+rule: model.speed_cooldown is at least a minute, so that a session does not change speed every few requests.
+file: crates/cortex-config/src/schema/sections.rs
+find: [Preference, Now, 60_000..=3_600_000]
+replace: [Preference, Now, 0..=3_600_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+
+[break] shortest-cooldown-of-a-day
+rule: model.speed_cooldown_min is at most an hour.
+file: crates/cortex-config/src/schema/sections.rs
+find: [Preference, Now, 0..=3_600_000]
+replace: [Preference, Now, 0..=86_400_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+
+[break] shell-timeout-of-nothing
+rule: shell.timeout is at least a second: below it every command that asks for no limit would fail.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, NextEpoch, 1_000..=1_800_000]
+replace: [TightenOnly, NextEpoch, 0..=1_800_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+
+[break] shell-max-timeout-of-a-millisecond
+rule: shell.max_timeout is at least ten seconds: below it no build or test run could finish.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, NextEpoch, 10_000..=86_400_000]
+replace: [TightenOnly, NextEpoch, 1..=86_400_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
+
+# ----------------------------------------------------------------- classes
+
+[break] backoff-base-a-preference
+rule: A project's file may shorten retry.backoff_base and may not lengthen it.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 100..=60_000]
+replace: [Preference, Now, 100..=60_000]
+caught-by:
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it trust::every_key_has_a_trust_class
+    cortex-config::it waits::no_project_may_lengthen_a_wait_or_a_time_limit_trusted_or_not
+
+[break] backoff-cap-a-preference
+rule: A project's file may shorten retry.backoff_cap and may not lengthen it.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 1_000..=300_000]
+replace: [Preference, Now, 1_000..=300_000]
+caught-by:
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it waits::no_project_may_lengthen_a_wait_or_a_time_limit_trusted_or_not
+
+[break] max-wait-a-preference
+rule: A project's file may shorten retry.max_wait and may not lengthen it.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 60_000..=3_600_000]
+replace: [Preference, Now, 60_000..=3_600_000]
+caught-by:
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it waits::no_project_may_lengthen_a_wait_or_a_time_limit_trusted_or_not
+
+[break] idle-timeout-a-preference
+rule: A project's file may shorten retry.idle_timeout and may not lengthen it.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 30_000..=3_600_000]
+occurrence: 1
+replace: [Preference, Now, 30_000..=3_600_000]
+caught-by:
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it waits::no_project_may_lengthen_a_wait_or_a_time_limit_trusted_or_not
+    cortex-config::it waits::a_length_of_time_is_tightened_against_the_one_in_effect_in_any_units
+
+[break] first-event-timeout-a-preference
+rule: A project's file may shorten retry.first_event_timeout and may not lengthen it.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 30_000..=3_600_000]
+occurrence: 2
+replace: [Preference, Now, 30_000..=3_600_000]
+caught-by:
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it waits::no_project_may_lengthen_a_wait_or_a_time_limit_trusted_or_not
+
+[break] speed-wait-a-preference
+rule: A project's file may shorten model.speed_wait and may not lengthen it.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 0..=120_000]
+replace: [Preference, Now, 0..=120_000]
+caught-by:
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it waits::no_project_may_lengthen_a_wait_or_a_time_limit_trusted_or_not
+
+[break] shell-timeout-a-preference
+rule: A project's file may shorten shell.timeout and may not lengthen it.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, NextEpoch, 1_000..=1_800_000]
+replace: [Preference, NextEpoch, 1_000..=1_800_000]
+caught-by:
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it waits::no_project_may_lengthen_a_wait_or_a_time_limit_trusted_or_not
+
+[break] background-summary-a-preference
+rule: Turning the background summary off is the user's alone: off, every compaction waits for its summary.
+file: crates/cortex-config/src/schema/sections.rs
+find: [UserOnly, Now] pub background: bool = true
+replace: [Preference, Now] pub background: bool = true
+caught-by:
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it trust::every_key_has_a_trust_class
+    cortex-config::it waits::only_the_user_turns_the_background_summary_off
+
+# --------------------------------------------------------------- mechanism
+
+[break] tighten-only-reads-no-length-of-time
+rule: A tighten-only length of time is compared as one, so that a project can shorten it.
+file: crates/cortex-config/src/schema/mod.rs
+in: Trust::class
+find: (types::magnitude(value), current.and_then(types::magnitude))
+replace: (value.as_integer().map(|n| n as f64), current.and_then(|c| c.as_integer().map(|n| n as f64)))
+caught-by:
+    cortex-config::it waits::a_project_may_shorten_each_wait_and_time_limit
+    cortex-config::it waits::a_length_of_time_is_tightened_against_the_one_in_effect_in_any_units
+
+[break] tighten-only-compared-with-the-default
+rule: A project's tighten-only value is compared with the value in effect, the user's included, not with the default.
+file: crates/cortex-config/src/merge.rs
+in: Merger::set
+find: let class = trust.class(value, self.current(key));
+replace: let class = trust.class(value, crate::merge::get(&self.defaults, key));
+caught-by:
+    cortex-config::it waits::a_length_of_time_is_tightened_against_the_one_in_effect_in_any_units
+
+[break] tighten-only-warning-says-may-not-set
+rule: The warning for a longer wait or limit says a project may lower it, and names the value in effect.
+file: crates/cortex-config/src/merge.rs
+in: Merger::admit
+find: (Trust::TightenOnly, Some(current)) =>
+replace: (Trust::TightenOnly, Some(current)) if false =>
+caught-by:
+    cortex-config::it waits::no_project_may_lengthen_a_wait_or_a_time_limit_trusted_or_not
+
+[break] a-number-a-project-sets-without-a-range
+rule: Every length of time or number a project's file can set has a range, or a reason on the check's list.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Restart, 1..=10_000_000]
+replace: [TightenOnly, Restart]
+caught-by:
+    cortex-config::it waits::every_number_a_project_can_set_has_a_range
+
+# ------------------------------------------------------------------ readers
+
+[break] a-supervisor-sets-a-wait
+rule: A client that is not a `user` is refused a tighten-only override in session/new: it ranks as the command line, past the rule that holds a project to the value in effect.
+file: crates/cortex-core/src/core.rs
+in: only_preferences
+find: Trust::Preference | Trust::RaisesCost | Trust::BySpeed
+replace: Trust::Preference | Trust::RaisesCost | Trust::BySpeed | Trust::TightenOnly
+caught-by:
+    cortex-core::it settings::a_supervisor_cannot_start_a_session_above_the_level_it_could_set

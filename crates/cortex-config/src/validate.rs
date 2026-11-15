@@ -269,9 +269,11 @@ fn check_leaf(
         && !(low..=high).contains(&number)
     {
         let message = match value {
-            Value::String(text) => {
-                format!("`{text}` is out of range: expected {low} ms to {high} ms")
-            }
+            Value::String(text) => format!(
+                "`{text}` is out of range: expected {} to {}",
+                crate::schema::milliseconds_as_text(low),
+                crate::schema::milliseconds_as_text(high),
+            ),
             _ => format!("{number} is out of range: expected {low} to {high}"),
         };
         checked.report(diagnostics, Severity::Error, key, message);
@@ -435,21 +437,88 @@ mod tests {
         );
     }
 
-    /// A length of time with a range is ranged in milliseconds, and says
-    /// so: the map's wait is at most a second.
+    /// A length of time with a range is ranged in milliseconds, and the
+    /// range is written as lengths of time: the map's wait is at most a
+    /// second.
     #[test]
     fn a_length_of_time_out_of_range_is_an_error_in_milliseconds() {
         let (usable, said) = user("[index]\nmap_wait = \"2s\"\n");
         assert!(!usable);
         assert_eq!(
             said,
-            [
-                "error: /work/config.toml:2: index.map_wait: `2s` is out of range: expected 0 ms \
-              to 1000 ms"
-            ]
+            ["error: /work/config.toml:2: index.map_wait: `2s` is out of range: expected 0s to 1s"]
         );
         let (usable, said) = user("[index]\nmap_wait = \"1s\"\n");
         assert!(usable && said.is_empty(), "{said:?}");
+        // The comparison is in milliseconds, whatever the units written.
+        let (usable, said) = user("[index]\nmap_wait = \"1001ms\"\n");
+        assert!(!usable, "{said:?}");
+    }
+
+    /// Every wait and time limit a repository's file could slow or stall a
+    /// session with has a floor and a ceiling, and they bind the user's own
+    /// file too: each end is accepted, and a millisecond past either is an
+    /// error that names the range.
+    #[test]
+    fn each_wait_and_time_limit_is_held_to_its_range() {
+        // The table, the key, the range as the error writes it, and the
+        // floor and the ceiling in milliseconds.
+        let ranges: [(&str, &str, &str, u64, u64); 13] = [
+            ("retry", "backoff_base", "100ms to 1m", 100, 60_000),
+            ("retry", "backoff_cap", "1s to 5m", 1_000, 300_000),
+            ("retry", "max_wait", "1m to 1h", 60_000, 3_600_000),
+            ("retry", "idle_timeout", "30s to 1h", 30_000, 3_600_000),
+            (
+                "retry",
+                "first_event_timeout",
+                "30s to 1h",
+                30_000,
+                3_600_000,
+            ),
+            (
+                "providers.local",
+                "idle_timeout",
+                "30s to 1h",
+                30_000,
+                3_600_000,
+            ),
+            (
+                "providers.local",
+                "first_event_timeout",
+                "30s to 1h",
+                30_000,
+                3_600_000,
+            ),
+            ("model", "speed_wait", "0s to 2m", 0, 120_000),
+            ("model", "speed_cooldown", "1m to 1h", 60_000, 3_600_000),
+            ("model", "speed_cooldown_min", "0s to 1h", 0, 3_600_000),
+            ("shell", "timeout", "1s to 30m", 1_000, 1_800_000),
+            ("shell", "max_timeout", "10s to 1d", 10_000, 86_400_000),
+            ("index", "map_wait", "0s to 1s", 0, 1_000),
+        ];
+        for (table, key, range, floor, ceiling) in ranges {
+            for inside in [floor, ceiling] {
+                let (usable, said) = user(&format!("[{table}]\n{key} = \"{inside}ms\"\n"));
+                assert!(
+                    usable && said.is_empty(),
+                    "{table}.{key} = {inside}ms: {said:?}"
+                );
+            }
+            for outside in [floor.checked_sub(1), Some(ceiling + 1)]
+                .into_iter()
+                .flatten()
+            {
+                let (usable, said) = user(&format!("[{table}]\n{key} = \"{outside}ms\"\n"));
+                assert!(!usable, "{table}.{key} = {outside}ms was accepted");
+                assert_eq!(
+                    said,
+                    [format!(
+                        "error: /work/config.toml:2: {table}.{key}: `{outside}ms` is out of \
+                         range: expected {range}"
+                    )],
+                );
+            }
+        }
     }
 
     #[test]

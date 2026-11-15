@@ -195,18 +195,25 @@ settings! {
         [Preference, Now]
         pub speed_fallback: bool = true,
         /// The longest one request waits in place for a speed tier before it
-        /// falls back to `standard`. `"0s"` never waits.
-        [Preference, Now]
+        /// falls back to `standard`. `"0s"` never waits. At most two
+        /// minutes: past that, `standard` answers sooner than the tier would,
+        /// whatever keeping it saves. A project's file may lower it and may
+        /// not raise it: every wait is the session's.
+        [TightenOnly, Now, 0..=120_000]
         pub speed_wait: Duration = Duration::from_secs(20),
         /// How long requests stay at `standard` after a fallback, when the
-        /// provider does not say when the tier is available again.
-        [Preference, Now]
+        /// provider does not say when the tier is available again. From one
+        /// minute, the window a provider counts its limits in, so that a
+        /// session does not change speed (and perhaps write its cache again)
+        /// every few requests; to an hour, past which a tier that keeps
+        /// refusing is better turned off with `model.speed`.
+        [Preference, Now, 60_000..=3_600_000]
         pub speed_cooldown: Duration = Duration::from_secs(600),
         /// The least time requests stay at `standard` after a fallback when
         /// the provider does say when the tier is available again: its time,
         /// or this long, whichever is later. `"0s"` takes the provider's
-        /// time as given.
-        [Preference, Now]
+        /// time as given. At most an hour, as `speed_cooldown` is.
+        [Preference, Now, 0..=3_600_000]
         pub speed_cooldown_min: Duration = Duration::from_secs(60),
         /// Settings of one role: `main`, `fast` or `judge`.
         [nested]
@@ -264,12 +271,14 @@ settings! {
         [UserOnly, Now]
         pub headers: Headers,
         /// How long a response stream may be silent before the request
-        /// fails. Overrides `retry.idle_timeout` for this provider.
-        [UserOnly, Now]
+        /// fails. Overrides `retry.idle_timeout` for this provider, within
+        /// the same range: 30 seconds to an hour.
+        [UserOnly, Now, 30_000..=3_600_000]
         pub idle_timeout: Option<Duration>,
         /// How long to wait for the first event of a response. Overrides
-        /// `retry.first_event_timeout` for this provider.
-        [UserOnly, Now]
+        /// `retry.first_event_timeout` for this provider, within the same
+        /// range: 30 seconds to an hour.
+        [UserOnly, Now, 30_000..=3_600_000]
         pub first_event_timeout: Option<Duration>,
         /// Capability flags of the endpoint, as the provider's protocol
         /// names them. For `anthropic-messages`: `replay_reasoning`
@@ -290,25 +299,41 @@ settings! {
         [RaisesCost, Now, 1..=20]
         pub attempts: u32 = 5,
         /// The wait before the second attempt. Each later wait is this
-        /// multiplied by `backoff_factor` again, up to `backoff_cap`.
-        [Preference, Now]
+        /// multiplied by `backoff_factor` again, up to `backoff_cap`. From
+        /// 100 ms, below which the attempts are spent before a brief outage
+        /// can pass, to a minute. A project's file may lower it and may not
+        /// raise it.
+        [TightenOnly, Now, 100..=60_000]
         pub backoff_base: Duration = Duration::from_secs(1),
         /// What the wait is multiplied by after each attempt.
         [Preference, Now, 1..=10]
         pub backoff_factor: f64 = 2.0,
-        /// The longest wait between two attempts.
-        [Preference, Now]
+        /// The longest wait between two attempts. From a second, so that the
+        /// attempts span more than a moment, to five minutes, past which a
+        /// provider is down rather than busy. A project's file may lower it
+        /// and may not raise it.
+        [TightenOnly, Now, 1_000..=300_000]
         pub backoff_cap: Duration = Duration::from_secs(30),
         /// The longest wait a provider may ask for. A longer one ends the
-        /// turn with the error and the provider's hint.
-        [Preference, Now]
+        /// turn with the error and the provider's hint. From a minute, the
+        /// window a provider counts its limits in, so that no file can make
+        /// an ordinary rate limit end a turn, to an hour, past which the wait
+        /// is a quota and not a rate limit. A project's file may lower it and
+        /// may not raise it.
+        [TightenOnly, Now, 60_000..=3_600_000]
         pub max_wait: Duration = Duration::from_secs(120),
         /// How long a response stream may be silent before the request
-        /// fails.
-        [Preference, Now]
+        /// fails. From 30 seconds, within which a hosted provider that is
+        /// still working sends a token or a ping, to an hour, past the five
+        /// minutes the built-in entries give a local server. A project's
+        /// file may lower it and may not raise it.
+        [TightenOnly, Now, 30_000..=3_600_000]
         pub idle_timeout: Duration = Duration::from_secs(90),
-        /// How long to wait for the first event of a response.
-        [Preference, Now]
+        /// How long to wait for the first event of a response. From 30
+        /// seconds, below which a long prompt would fail every time, to an
+        /// hour, past the ten minutes the built-in entries give a local
+        /// server. A project's file may lower it and may not raise it.
+        [TightenOnly, Now, 30_000..=3_600_000]
         pub first_event_timeout: Duration = Duration::from_secs(60),
     }
 }
@@ -434,7 +459,10 @@ settings! {
         /// Whether a summary is prepared in the background from
         /// `prepare_at`, on the `fast` role's model (the main model when
         /// there is none), so that the compaction need not wait for it.
-        [Preference, Now]
+        /// The user's alone: off, every compaction waits at the trigger for
+        /// its summary, and a repository's file must not make the sessions
+        /// in it wait.
+        [UserOnly, Now]
         pub background: bool = true,
         /// The trigger: the fraction of what a request may hold (the
         /// model's context window less room for the answer and a margin)
@@ -549,12 +577,17 @@ settings! {
         /// after them, last.
         [UserOnly, NextEpoch]
         pub args: Option<Vec<String>>,
-        /// The time limit of a command that asks for none.
-        [Preference, NextEpoch]
+        /// The time limit of a command that asks for none, held to
+        /// `max_timeout`. From a second, below which every command would
+        /// fail, to half an hour, past which a command that hangs holds up
+        /// its turn too long. A project's file may lower it and may not
+        /// raise it.
+        [TightenOnly, NextEpoch, 1_000..=1_800_000]
         pub timeout: Duration = Duration::from_secs(120),
-        /// The longest time limit a command may ask for. A project's file
-        /// may lower it and may not raise it.
-        [TightenOnly, NextEpoch]
+        /// The longest time limit a command may ask for. From ten seconds,
+        /// below which a build or a test run could never finish, to a day.
+        /// A project's file may lower it and may not raise it.
+        [TightenOnly, NextEpoch, 10_000..=86_400_000]
         pub max_timeout: Duration = Duration::from_secs(30 * 60),
         /// Environment variables that commands are not given, besides
         /// the key variables of the providers, which are always removed.

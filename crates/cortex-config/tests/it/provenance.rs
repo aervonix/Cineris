@@ -71,7 +71,7 @@ model.reasoning = "none"
 "#;
 
 const LOCAL: &str = r#"[retry]
-max_wait = "5m"
+max_wait = "1m"
 "#;
 
 fn machine(test: &str) -> Machine {
