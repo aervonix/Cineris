@@ -210,3 +210,71 @@ fn with_the_map_off_no_pass_runs_in_the_background() {
         state.display()
     );
 }
+
+/// The index asks the permission engine in force, not the one the session
+/// was put together with (the independent review of step 18, a note): a
+/// change of level replaces the engine, and a file allowed for the session
+/// after it reaches the next epoch's map. A key file is left out of the
+/// map until a rule lets it be read unasked.
+#[test]
+fn the_index_follows_the_engine_in_force_after_a_change_of_level() {
+    let world = World::new(
+        "index_live_gate",
+        [
+            says("Done."),
+            calls(&[("c1", "read", json!({"path": "keys/server.pem"}))]),
+            says("Read."),
+            says("The summary."),
+            says("After."),
+        ],
+    );
+    world.put("src/lib.rs", "pub fn hello() {}\n");
+    world.put("keys/server.pem", "a\n  b\n");
+    let core = world.core_with(|options| options.repo_index = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("first").await;
+        let first = map_notices(&front);
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert!(!first[0].contains("server.pem"), "{}", first[0]);
+        // Down a level and up again: the engine is replaced twice.
+        for level in [
+            cortex_protocol::lease::Level::ReadOnly,
+            cortex_protocol::lease::Level::Supervised,
+        ] {
+            front
+                .op(cortex_protocol::methods::Op::SessionSet(
+                    cortex_protocol::methods::SessionSetParams {
+                        session_id: front.session.clone(),
+                        settings: cortex_protocol::session::SessionSettings {
+                            level: Some(level),
+                            ..cortex_protocol::session::SessionSettings::default()
+                        },
+                    },
+                ))
+                .await
+                .unwrap();
+        }
+        // The key file is read with the user's leave, for the session.
+        front.prompt("read the key").await;
+        let (id, _) = front.approval().await;
+        front
+            .answer(&id, cortex_protocol::methods::ApprovalChoice::AllowSession)
+            .unwrap();
+        front.turns(2).await;
+        front
+            .op(cortex_protocol::methods::Op::SessionCompact(
+                cortex_protocol::methods::SessionCompactParams {
+                    session_id: front.session.clone(),
+                    focus: None,
+                },
+            ))
+            .await
+            .unwrap();
+        front.turns(3).await;
+        front.turn("after").await;
+        let maps = map_notices(&front);
+        assert_eq!(maps.len(), 2, "{maps:?}");
+        assert!(maps[1].contains("keys/server.pem: a"), "{}", maps[1]);
+    });
+}

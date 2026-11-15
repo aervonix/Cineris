@@ -172,11 +172,19 @@ impl EnginePolicy {
             .clone()
     }
 
-    /// What the base state may keep: what the read rules would let the
-    /// agent read unasked.
-    pub(crate) fn keep_gate(&self) -> Arc<dyn KeepGate> {
-        let engine = self.engine();
-        Arc::new(move |path: &AbsPath| engine.may_store(path))
+    /// What the base state, the instruction files and the repository index
+    /// may keep and name: what the read rules of the engine in force would
+    /// let the agent read unasked. The engine is asked for each path, not
+    /// taken once: a change of level replaces it, and what is approved or
+    /// refused after that is the new one's (the independent review of step
+    /// 18 found the index left on the engine of the session's assembly).
+    pub(crate) fn keep_gate(self: &Arc<Self>) -> Arc<dyn KeepGate> {
+        let policy = Arc::downgrade(self);
+        Arc::new(move |path: &AbsPath| {
+            policy
+                .upgrade()
+                .is_some_and(|policy| policy.engine().may_store(path))
+        })
     }
 
     fn outcome(&self, call: &PlannedCall<'_>) -> Outcome {

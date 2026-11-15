@@ -319,3 +319,22 @@ find: cortex_base::visible_keeping(text, &['\n', '\t'])
 replace: cortex_base::visible_keeping(text, &['\n', '\t', '\u{202E}', '\u{E0041}'])
 caught-by:
     cortex-cli::bin/cortex tests::control_characters_are_shown_as_escapes
+
+# ---------------------------------------------------------------- the notes
+
+[break] the-index-keeps-the-engine-of-the-assembly
+rule: The index, the base state and the instruction files ask the permission engine in force, not the one the session was put together with.
+file: crates/cortex-core/src/policy.rs
+in: EnginePolicy::keep_gate
+find:
+    let policy = Arc::downgrade(self);
+    Arc::new(move |path: &AbsPath| {
+        policy
+            .upgrade()
+            .is_some_and(|policy| policy.engine().may_store(path))
+    })
+replace:
+    let engine = self.engine();
+    Arc::new(move |path: &AbsPath| engine.may_store(path))
+caught-by:
+    cortex-core::it index::the_index_follows_the_engine_in_force_after_a_change_of_level

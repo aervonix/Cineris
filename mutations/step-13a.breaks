@@ -379,8 +379,8 @@ caught-by:
 [break] base-state-keeps-everything
 rule: The base state keeps only what the read rules would let the agent read unasked.
 file: crates/cortex-core/src/policy.rs
-find: Arc::new(move |path: &AbsPath| engine.may_store(path))
-replace: Arc::new(move |path: &AbsPath| engine.may_store(path) || true)
+find: .is_some_and(|policy| policy.engine().may_store(path))
+replace: .is_some_and(|policy| policy.engine().may_store(path) || true)
 caught-by:
     cortex-core::it gates::sys_the_base_state_keeps_only_what_the_agent_could_read_unasked
 
