@@ -424,7 +424,15 @@ pub(crate) fn live(arguments: &[String]) -> Result<()> {
         return ignored_test(test, &[(name, &path)]);
     }
     if arguments.first().is_some_and(|first| first == "--headless") {
-        let (provider, tests) = headless_tests(&arguments[1..], |name| std::env::var_os(name))?;
+        let chosen = headless_tests(&arguments[1..], |name| std::env::var_os(name))?;
+        let (provider, tests) = (chosen.provider, &chosen.tests);
+        if chosen.dry_run {
+            print!(
+                "{}",
+                headless_dry_run(&chosen, |name| std::env::var_os(name))
+            );
+            return Ok(());
+        }
         let (name, path) = ledger_variable()?;
         println!(
             "{} headless run(s) of the real binary against {}, with cargo test: no time limit",
@@ -432,11 +440,7 @@ pub(crate) fn live(arguments: &[String]) -> Result<()> {
             provider.name
         );
         for test in tests {
-            run_ignored(
-                &["--package", "cortex-cli", "--test", "system"],
-                test,
-                &[(name, &path)],
-            )?;
+            run_ignored(&HEADLESS_SELECTION, test, &[(name, &path)])?;
         }
         return Ok(());
     }
@@ -463,16 +467,55 @@ pub(crate) fn live(arguments: &[String]) -> Result<()> {
     }
 }
 
-/// What `live --headless [PROVIDER]` runs: every headless live test of
-/// the provider (Anthropic's when none is named). They run under `cargo
-/// test`, not nextest, so a long session is not stopped at a system
-/// test's limit. Without the provider's key file it stops before anything
-/// is built or sent.
+/// The test binary the headless live tests are in.
+const HEADLESS_SELECTION: [&str; 4] = ["--package", "cortex-cli", "--test", "system"];
+
+/// What `live --headless` was asked to run.
+#[derive(Debug)]
+struct Headless {
+    provider: &'static LiveProvider,
+    /// The tests, in the provider's order.
+    tests: Vec<&'static str>,
+    /// Print what would run, and run and send nothing.
+    dry_run: bool,
+}
+
+/// What `live --headless [PROVIDER] [--test NAME]... [--dry-run]` runs:
+/// every headless live test of the provider (Anthropic's when none is
+/// named), or those `--test` names, each by its whole name
+/// (`live::live_headless_compaction`), its name in the module
+/// (`live_headless_compaction`) or the end of it (`compaction`). They run
+/// under `cargo test`, not nextest, so a long session is not stopped at a
+/// system test's limit. Without the provider's key file it stops before
+/// anything is built or sent; a dry run needs none, and says whether it is
+/// named.
 fn headless_tests(
     arguments: &[String],
     var: impl Fn(&str) -> Option<std::ffi::OsString>,
-) -> Result<(&'static LiveProvider, &'static [&'static str])> {
-    let provider = match arguments {
+) -> Result<Headless> {
+    let mut names = Vec::new();
+    let mut wanted = Vec::new();
+    let mut dry_run = false;
+    let mut words = arguments.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "--dry-run" => dry_run = true,
+            "--test" => wanted.push(
+                words
+                    .next()
+                    .ok_or("`--test` needs a test's name: `live --headless --test compaction`")?
+                    .clone(),
+            ),
+            option if option.starts_with('-') => {
+                return Err(format!(
+                    "unknown option `{option}`: `live --headless [PROVIDER] [--test NAME]... \
+                     [--dry-run]`"
+                ));
+            }
+            name => names.push(name),
+        }
+    }
+    let provider = match names.as_slice() {
         [] => &PROVIDERS[0],
         [name] => live_provider(name)?,
         [_, extra, ..] => {
@@ -493,8 +536,89 @@ fn headless_tests(
             with.join(" and ")
         ));
     }
-    require_key_file_in(provider, var)?;
-    Ok((provider, provider.headless))
+    let tests = if wanted.is_empty() {
+        provider.headless.to_vec()
+    } else {
+        let mut tests = Vec::new();
+        for want in &wanted {
+            let found: Vec<&'static str> = provider
+                .headless
+                .iter()
+                .copied()
+                .filter(|test| {
+                    let own = test.rsplit("::").next().unwrap_or(test);
+                    *test == want || own == want || own.ends_with(&format!("_{want}"))
+                })
+                .collect();
+            match found.as_slice() {
+                [one] => {
+                    if !tests.contains(one) {
+                        tests.push(*one);
+                    }
+                }
+                [] => {
+                    return Err(format!(
+                        "no headless live test against {} is called `{want}`: there are {}. \
+                         Nothing was sent.",
+                        provider.name,
+                        provider.headless.join(", ")
+                    ));
+                }
+                many => {
+                    return Err(format!(
+                        "`{want}` names {} headless live tests against {}: {}. Name one. \
+                         Nothing was sent.",
+                        many.len(),
+                        provider.name,
+                        many.join(", ")
+                    ));
+                }
+            }
+        }
+        // In the provider's order, whatever order they were named in.
+        provider
+            .headless
+            .iter()
+            .copied()
+            .filter(|test| tests.contains(test))
+            .collect()
+    };
+    if !dry_run {
+        require_key_file_in(provider, var)?;
+    }
+    Ok(Headless {
+        provider,
+        tests,
+        dry_run,
+    })
+}
+
+/// What a dry run of `live --headless` prints: each command it would run,
+/// and whether the key file's variable is named. It reads no key, builds
+/// nothing and sends nothing.
+fn headless_dry_run(chosen: &Headless, var: impl Fn(&str) -> Option<std::ffi::OsString>) -> String {
+    let variable = format!(
+        "CORTEX_LIVE_{}_KEY_FILE",
+        chosen.provider.name.to_ascii_uppercase()
+    );
+    let mut text = format!(
+        "dry run: {} headless run(s) of the real binary against {}, nothing built or sent.\n",
+        chosen.tests.len(),
+        chosen.provider.name
+    );
+    for test in &chosen.tests {
+        text.push_str(&format!(
+            "  would run: cargo test --locked {} -- --ignored --exact {test} --nocapture\n",
+            HEADLESS_SELECTION.join(" ")
+        ));
+    }
+    text.push_str(&match var(&variable) {
+        Some(_) => format!("  {variable} is set: the key would be read from the file it names.\n"),
+        None => {
+            format!("  {variable} is not set: a real run would stop before anything is sent.\n")
+        }
+    });
+    text
 }
 
 /// `cargo xtask record [--provider PROVIDER] [SCENARIO…]`: record fixtures
@@ -887,16 +1011,86 @@ not a line of the ledger
         let named = |name: &str| {
             (name == "CORTEX_LIVE_ANTHROPIC_KEY_FILE").then(|| std::ffi::OsString::from("k"))
         };
-        let (provider, tests) = super::headless_tests(&[], named).unwrap();
-        assert_eq!(provider.name, "anthropic");
+        let chosen = super::headless_tests(&[], named).unwrap();
+        assert_eq!(chosen.provider.name, "anthropic");
         assert_eq!(
-            tests,
+            chosen.tests,
             [
                 "live::live_headless_run",
                 "live::live_headless_compaction",
                 "live::live_headless_budget_summary"
             ]
         );
+        assert!(!chosen.dry_run);
+    }
+
+    #[test]
+    fn a_headless_test_is_chosen_by_name_and_a_dry_run_sends_nothing() {
+        let strings = |arguments: &[&str]| -> Vec<String> {
+            arguments
+                .iter()
+                .map(|argument| (*argument).to_owned())
+                .collect()
+        };
+        let named = |name: &str| {
+            (name == "CORTEX_LIVE_ANTHROPIC_KEY_FILE").then(|| std::ffi::OsString::from("k"))
+        };
+        let none = |_: &str| None;
+        let tests = |arguments: &[&str]| {
+            super::headless_tests(&strings(arguments), named).map(|chosen| chosen.tests)
+        };
+        // By the end of its name, its name in the module, or its whole
+        // name; in the provider's order whatever order they were named in.
+        assert_eq!(
+            tests(&[
+                "--test",
+                "budget_summary",
+                "--test",
+                "live_headless_compaction"
+            ])
+            .unwrap(),
+            [
+                "live::live_headless_compaction",
+                "live::live_headless_budget_summary"
+            ]
+        );
+        assert_eq!(
+            tests(&["--test", "live::live_headless_run"]).unwrap(),
+            ["live::live_headless_run"]
+        );
+        // A name that is no test, and one that is two, are refused.
+        let error = tests(&["--test", "nothing"]).unwrap_err();
+        assert!(
+            error.contains("no headless live test against anthropic is called `nothing`"),
+            "{error}"
+        );
+        assert!(error.contains("live::live_headless_compaction"), "{error}");
+        let error =
+            super::headless_tests(&strings(&["deepseek", "--test", "x"]), none).unwrap_err();
+        assert!(error.contains("against deepseek"), "{error}");
+        assert!(tests(&["--test"]).is_err());
+        assert!(tests(&["--fast"]).is_err());
+
+        // A dry run needs no key file, and prints the command and that the
+        // key's variable is not set.
+        let chosen =
+            super::headless_tests(&strings(&["--dry-run", "--test", "compaction"]), none).unwrap();
+        assert!(chosen.dry_run);
+        let text = super::headless_dry_run(&chosen, none);
+        assert!(
+            text.contains(
+                "would run: cargo test --locked --package cortex-cli --test system -- --ignored \
+                 --exact live::live_headless_compaction --nocapture"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("nothing built or sent"), "{text}");
+        assert!(
+            text.contains("CORTEX_LIVE_ANTHROPIC_KEY_FILE is not set"),
+            "{text}"
+        );
+        assert!(!text.contains("live_headless_run "), "{text}");
+        assert!(super::headless_dry_run(&chosen, named).contains("is set"));
     }
 
     /// Every ignored test of `cortex-cli`'s `tests/system/live.rs` is one
