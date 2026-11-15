@@ -314,10 +314,24 @@ impl Repo {
         self.head()
     }
 
+    /// The commit `HEAD` names, read from the repository's files: a
+    /// `git rev-parse` a commit costs tens of milliseconds on a Windows
+    /// runner, and these tests make dozens. A repository this test made
+    /// keeps its refs loose: nothing here packs them.
     fn head(&self) -> String {
-        self.git("Someone", &["rev-parse", "HEAD"])
-            .trim()
-            .to_owned()
+        let git = self.dir.join(".git");
+        let head = std::fs::read_to_string(git.join("HEAD")).unwrap();
+        let head = head.trim();
+        let hash = match head.strip_prefix("ref: ") {
+            Some(name) => std::fs::read_to_string(git.join(name)).unwrap(),
+            None => head.to_owned(),
+        };
+        let hash = hash.trim().to_owned();
+        assert!(
+            hash.len() == 40 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "HEAD is not a commit's hash: {hash:?}"
+        );
+        hash
     }
 
     fn update(&self, local_ref: &str, local: &str, remote_ref: &str) -> Update {
