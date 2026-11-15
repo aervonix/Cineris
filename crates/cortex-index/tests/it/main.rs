@@ -16,9 +16,22 @@
 
 mod index;
 mod map;
+mod memory;
 mod outlines;
+mod perf;
 
 use std::path::{Path, PathBuf};
+
+/// The resident memory of this process, in kilobytes, where the system
+/// says (Linux): `VmRSS` now, or `VmHWM`, the most it has been.
+pub(crate) fn resident_kib(field: &str) -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status
+        .lines()
+        .find(|line| line.starts_with(field))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| value.parse().ok())
+}
 
 /// Where the fixture files are.
 pub(crate) fn fixtures() -> PathBuf {

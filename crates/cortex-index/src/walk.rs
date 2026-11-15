@@ -143,8 +143,6 @@ pub(crate) struct Listed {
     pub(crate) relative: String,
     /// How many directories deep it is: 0 at the root.
     pub(crate) depth: usize,
-    /// Where it is, for the file functions.
-    pub(crate) fs_path: PathBuf,
     /// What it looked like when it was listed.
     pub(crate) stamp: Stamp,
 }
@@ -209,6 +207,17 @@ pub(crate) struct Listing {
     pub(crate) dirs: BTreeMap<String, usize>,
     pub(crate) partial: Option<Partial>,
     pub(crate) skipped: Skipped,
+}
+
+/// Where a file of the listing is, for the file functions: the root's path
+/// with the file's names, one by one (on Windows the root's is the
+/// extended-length form, in which only `\\` separates names).
+pub(crate) fn fs_path_of(root_fs: &Path, relative: &str) -> PathBuf {
+    let mut path = root_fs.to_path_buf();
+    for name in relative.split('/') {
+        path.push(name);
+    }
+    path
 }
 
 /// The order a listing and the cache keep files in: name by name, so that
@@ -393,7 +402,6 @@ pub(crate) fn list(
         all.push(Listed {
             relative,
             depth: known.depth,
-            fs_path: entry.path().to_owned(),
             stamp: Stamp::of(&metadata),
         });
     }
