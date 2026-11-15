@@ -91,6 +91,9 @@ test-group = 'system'
 fail-fast = false
 slow-timeout = { period = "60s", terminate-after = 30 }
 
+[profile.perf.junit]
+path = "junit.xml"
+
 [[profile.perf.overrides]]
 filter = 'test(/(^|::)perf_/)'
 slow-timeout = { period = "60s", terminate-after = 30 }

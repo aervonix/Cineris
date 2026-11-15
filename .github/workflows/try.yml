@@ -224,6 +224,7 @@ jobs:
             ${{ runner.temp }}/try-output.log
             target/nextest/ci/junit.xml
             target/nextest/stress/junit.xml
+            target/nextest/perf/junit.xml
             target/ab/*.xml
             target/testkit-profile/
           if-no-files-found: ignore

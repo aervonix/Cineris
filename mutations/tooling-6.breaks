@@ -893,7 +893,7 @@ find: while ends[last].0 - ends[first].0 > WINDOW_MS {
 replace: while ends[last].0 - ends[first].0 > 0 {
 packages: xtask
 caught-by:
-    stall::tests::timeouts_that_end_together_are_a_stall_whatever_time_each_started
+    stall::tests::timeouts_stopped_late_and_together_are_a_stall_whatever_time_each_started
     stall::tests::the_largest_group_is_the_one_named
 
 [break] a-stall-is-judged-by-when-the-tests-started
@@ -904,17 +904,17 @@ find: start + took
 replace: start + took * 0
 packages: xtask
 caught-by:
-    stall::tests::timeouts_that_end_together_are_a_stall_whatever_time_each_started
+    stall::tests::timeouts_stopped_late_and_together_are_a_stall_whatever_time_each_started
 
-[break] tests-that-started-together-are-a-stall
-rule: Timeouts of tests that started together (a bug, or a break, that hangs them) are not a stall: a stall stops tests that started at different times. The full review of the sixth tooling step found that without it, mutate never judged a break that hung several tests.
+[break] a-test-stopped-at-its-own-limit-counts-toward-a-stall
+rule: Only tests stopped late, past their own limits, make a stall: a test that hangs is stopped on time, and tests hung by one break are stopped together whatever their limits. The two reviews of the sixth tooling step found that without it, mutate never judged a break that hung several tests.
 file: xtask/src/stall.rs
 in: find
-find: if last + 1 - first > best.1 - best.0 && started_apart(&ends[first..=last]) {
-replace: if last + 1 - first > best.1 - best.0 {
+find: stopped_late(took).then(
+replace: (took >= 0).then(
 packages: xtask
 caught-by:
-    stall::tests::tests_that_started_together_and_hang_together_are_not_a_stall
+    stall::tests::tests_stopped_at_their_own_limits_are_not_a_stall_whatever_the_limits
 
 [break] a-panic-counts-as-a-timeout
 rule: Only timeouts make a stall: a test that panicked beside them is not one.
@@ -924,7 +924,7 @@ find: .filter(|failure| failure.kind.contains("timeout"))
 replace: .filter(|failure| !failure.kind.is_empty())
 packages: xtask
 caught-by:
-    stall::tests::timeouts_that_end_together_are_a_stall_whatever_time_each_started
+    stall::tests::timeouts_stopped_late_and_together_are_a_stall_whatever_time_each_started
 
 [break] a-stalled-baseline-is-not-run-again
 rule: mutate runs a set of tests with nothing broken that stalled again with one job, and says so.
@@ -1102,3 +1102,12 @@ replace: "--profile", "ci"]
 packages: xtask
 caught-by:
     try_run::tests::perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else
+
+[break] the-generator-does-not-wait-for-the-writer
+rule: The generator waits for the writer before the queue is full, so no event is dropped.
+file: crates/cortex-stats/src/synthetic.rs
+in: Generator::emit
+find: if self.pending >= QUEUE / 2 {
+replace: if self.pending >= QUEUE * 4 {
+caught-by:
+    cortex-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back

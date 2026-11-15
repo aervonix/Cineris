@@ -6,13 +6,14 @@
 //! the machine stopped: step 18 spent an hour on such a run, and
 //! `mutate --jobs 4` lost baselines to it in wave 9.
 //!
-//! **The sign is when they were stopped.** A test that hangs by itself is
-//! stopped at its own limit, counted from its own start. When the machine
-//! stalls, the timers of the test runner are late too, and fire together
-//! when it comes back: the tests are stopped within moments of each other,
-//! whatever time each started. So [`find`] looks for [`AT_LEAST`] timeouts
-//! whose ends (start plus time, from the JUnit report) lie within
-//! [`WINDOW_MS`] of each other. One test's timeout is never a stall.
+//! **The sign is when they were stopped.** A test that hangs, by itself or
+//! on a bug it shares with others, is stopped on time, at its own limit.
+//! When the machine stalls, the timers of the test runner are late too, and
+//! fire together when it comes back: the tests are stopped late, past their
+//! limits, and within moments of each other. So [`find`] looks for
+//! [`AT_LEAST`] timeouts stopped late ([`stopped_late`]) whose ends (start
+//! plus time, from the JUnit report) lie within [`WINDOW_MS`] of each other.
+//! One test's timeout is never a stall.
 //!
 //! **The evidence is the kernel's.** On Linux, `/proc/pressure/io` says
 //! what share of the time tasks waited on I/O, over the last 10 and 60
@@ -28,11 +29,13 @@ use crate::junit::Failure;
 /// How close together, in milliseconds, the ends of the timeouts must lie.
 pub(crate) const WINDOW_MS: i64 = 250;
 
-/// How many timeouts so close together are taken for the machine. Two
-/// tests started in the same moment and both hanging on one bug would
-/// look like a stall; three such is rarer, and the message still shows the
-/// kernel's pressure, which a bug does not move.
+/// How many timeouts so close together are taken for the machine.
 pub(crate) const AT_LEAST: usize = 3;
+
+/// The limits nextest stops a test at, in milliseconds, in the profiles of
+/// `.config/nextest.toml`: tiers 1 and 2, tier 3, the nightly `properties`
+/// run and the `perf` measurements. A test checks them against the file.
+pub(crate) const LIMITS_MS: [i64; 4] = [10_000, 60_000, 300_000, 1_800_000];
 
 /// Timeouts that ended together.
 #[derive(Clone, Debug, PartialEq)]
@@ -43,17 +46,26 @@ pub(crate) struct Stall {
     pub(crate) spread_ms: i64,
 }
 
-/// The largest group of timeouts among `failures` whose ends lie within
-/// [`WINDOW_MS`] of each other and whose starts do not, when it has
-/// [`AT_LEAST`] of them.
+/// Whether a test that ran `took_ms` was stopped late: not within
+/// [`WINDOW_MS`] after one of nextest's limits.
 ///
-/// Tests that started together and hang on one bug are stopped together
-/// too, each at its start plus the same limit: nextest starts its first
-/// tests within moments of each other, and a break that makes a shared
-/// path hang (in `mutate`) ends them all in one breath. What a stall does
-/// that a bug does not is stop tests that started at different times.
+/// A test that hangs by itself, or on a bug it shares with others, is
+/// stopped on time, at its own limit: a break that hangs a crate's tests
+/// stops its system tests at 60 s and a later wave of its other tests at
+/// 10 s, all in one moment, and none of them late. When the machine stalls,
+/// the test runner's own timers are late, and fire when it comes back: the
+/// tests it stops then have run past their limits, each by its own amount.
+pub(crate) fn stopped_late(took_ms: i64) -> bool {
+    !LIMITS_MS
+        .iter()
+        .any(|limit| took_ms >= *limit && took_ms - limit <= WINDOW_MS)
+}
+
+/// The largest group of timeouts among `failures` that were stopped late
+/// ([`stopped_late`]) and whose ends lie within [`WINDOW_MS`] of each
+/// other, when it has [`AT_LEAST`] of them.
 pub(crate) fn find(failures: &[Failure]) -> Option<Stall> {
-    let mut ends: Vec<(i64, i64, String)> = failures
+    let mut ends: Vec<(i64, String)> = failures
         .iter()
         .filter(|failure| failure.kind.contains("timeout"))
         .filter_map(|failure| {
@@ -64,26 +76,18 @@ pub(crate) fn find(failures: &[Failure]) -> Option<Stall> {
                 reason = "a test's time in milliseconds fits an i64"
             )]
             let took = (failure.seconds * 1000.0).round() as i64;
-            Some((
-                start + took,
-                start,
-                format!("{} {}", failure.binary, failure.name),
-            ))
+            stopped_late(took)
+                .then(|| (start + took, format!("{} {}", failure.binary, failure.name)))
         })
         .collect();
     ends.sort();
-    let started_apart = |group: &[(i64, i64, String)]| {
-        let starts = group.iter().map(|(_, start, _)| *start);
-        let (earliest, latest) = (starts.clone().min(), starts.max());
-        matches!((earliest, latest), (Some(earliest), Some(latest)) if latest - earliest > WINDOW_MS)
-    };
     let mut best = (0, 0);
     let mut first = 0;
     for last in 0..ends.len() {
         while ends[last].0 - ends[first].0 > WINDOW_MS {
             first += 1;
         }
-        if last + 1 - first > best.1 - best.0 && started_apart(&ends[first..=last]) {
+        if last + 1 - first > best.1 - best.0 {
             best = (first, last + 1);
         }
     }
@@ -92,7 +96,7 @@ pub(crate) fn find(failures: &[Failure]) -> Option<Stall> {
         return None;
     }
     Some(Stall {
-        tests: group.iter().map(|(_, _, test)| test.clone()).collect(),
+        tests: group.iter().map(|(_, test)| test.clone()).collect(),
         spread_ms: group[group.len() - 1].0 - group[0].0,
     })
 }
@@ -326,16 +330,16 @@ mod tests {
     }
 
     #[test]
-    fn timeouts_that_end_together_are_a_stall_whatever_time_each_started() {
-        // Started across eight seconds, stopped within 200 ms.
+    fn timeouts_stopped_late_and_together_are_a_stall_whatever_time_each_started() {
+        // Started across four seconds, stopped late and within 200 ms.
         let failures = [
-            timeout("a", "2026-11-15T10:00:00.000+00:00", 10.0),
-            timeout("b", "2026-11-15T10:00:03.000+00:00", 7.1),
-            timeout("c", "2026-11-15T10:00:08.000+00:00", 2.2),
+            timeout("a", "2026-11-15T10:00:00.000+00:00", 14.0),
+            timeout("b", "2026-11-15T10:00:02.000+00:00", 12.1),
+            timeout("c", "2026-11-15T10:00:03.900+00:00", 10.3),
             // A panic beside them is not a timeout.
             Failure {
                 kind: "test failure with exit code 101".to_owned(),
-                ..timeout("d", "2026-11-15T10:00:09.900+00:00", 0.2)
+                ..timeout("d", "2026-11-15T10:00:13.900+00:00", 0.2)
             },
         ];
         let stall = find(&failures).expect("a stall");
@@ -344,68 +348,109 @@ mod tests {
     }
 
     #[test]
+    fn tests_stopped_at_their_own_limits_are_not_a_stall_whatever_the_limits() {
+        // A break that hangs a crate's tests: two system tests stopped at
+        // their 60 s, three others started 50 s later stopped at their
+        // 10 s, all in one moment, and every one on time.
+        let on_time = [
+            timeout("sys_a", "2026-11-15T10:00:00.000+00:00", 60.02),
+            timeout("sys_b", "2026-11-15T10:00:00.003+00:00", 60.01),
+            timeout("c", "2026-11-15T10:00:50.010+00:00", 10.01),
+            timeout("d", "2026-11-15T10:00:50.020+00:00", 10.0),
+            timeout("e", "2026-11-15T10:00:50.020+00:00", 10.02),
+        ];
+        assert_eq!(find(&on_time), None);
+        // The same tests stopped late, together: the machine's.
+        let late = [
+            timeout("sys_a", "2026-11-15T10:00:00.000+00:00", 61.5),
+            timeout("sys_b", "2026-11-15T10:00:00.003+00:00", 61.5),
+            timeout("c", "2026-11-15T10:00:50.000+00:00", 11.5),
+            timeout("d", "2026-11-15T10:00:49.000+00:00", 12.5),
+            timeout("e", "2026-11-15T10:00:48.000+00:00", 13.5),
+        ];
+        assert_eq!(find(&late).map(|stall| stall.tests.len()), Some(5));
+    }
+
+    #[test]
+    fn a_test_is_late_only_past_the_window_after_a_limit() {
+        use super::stopped_late;
+        assert!(!stopped_late(10_000));
+        assert!(!stopped_late(10_250));
+        assert!(stopped_late(10_251));
+        assert!(!stopped_late(60_061), "nextest's own 61 ms past the limit");
+        assert!(stopped_late(61_500));
+        assert!(!stopped_late(300_010));
+        assert!(!stopped_late(1_800_100));
+        // Short of every limit: a timeout nextest's limits do not explain.
+        assert!(stopped_late(4_000));
+    }
+
+    #[test]
+    fn the_limits_are_those_nextest_is_given() {
+        let configuration = include_str!("../../.config/nextest.toml");
+        let mut found = Vec::new();
+        for line in configuration.lines() {
+            let Some(rest) = line.trim().strip_prefix("slow-timeout = { period = \"") else {
+                continue;
+            };
+            let (period, rest) = rest.split_once("s\", terminate-after = ").expect("a limit");
+            let count = rest.trim_end_matches(" }");
+            let ms = period.parse::<i64>().unwrap() * 1000 * count.parse::<i64>().unwrap();
+            found.push(ms);
+        }
+        assert!(!found.is_empty());
+        for ms in found {
+            assert!(
+                super::LIMITS_MS.contains(&ms),
+                "nextest stops a test at {ms} ms, which LIMITS_MS does not hold"
+            );
+        }
+    }
+
+    #[test]
     fn one_tests_timeout_is_not_a_stall_nor_are_timeouts_apart() {
         assert_eq!(
-            find(&[timeout("a", "2026-11-15T10:00:00.000+00:00", 10.0)]),
+            find(&[timeout("a", "2026-11-15T10:00:00.000+00:00", 11.0)]),
             None
         );
         // Two together are not enough.
         assert_eq!(
             find(&[
-                timeout("a", "2026-11-15T10:00:00.000+00:00", 10.0),
-                timeout("b", "2026-11-15T10:00:00.100+00:00", 10.0),
+                timeout("a", "2026-11-15T10:00:00.000+00:00", 11.0),
+                timeout("b", "2026-11-15T10:00:00.100+00:00", 11.0),
             ]),
             None
         );
-        // Three, a second apart each: tests that hang, each at its own
-        // limit.
+        // Three, a second apart each.
         assert_eq!(
             find(&[
-                timeout("a", "2026-11-15T10:00:00.000+00:00", 10.0),
-                timeout("b", "2026-11-15T10:00:01.000+00:00", 10.0),
-                timeout("c", "2026-11-15T10:00:02.000+00:00", 10.0),
+                timeout("a", "2026-11-15T10:00:00.000+00:00", 11.0),
+                timeout("b", "2026-11-15T10:00:01.000+00:00", 11.0),
+                timeout("c", "2026-11-15T10:00:02.000+00:00", 11.0),
             ]),
             None
         );
         // Just outside the window.
         assert_eq!(
             find(&[
-                timeout("a", "2026-11-15T10:00:00.000+00:00", 10.0),
-                timeout("b", "2026-11-15T10:00:00.100+00:00", 10.0),
-                timeout("c", "2026-11-15T10:00:00.251+00:00", 10.0),
+                timeout("a", "2026-11-15T10:00:00.000+00:00", 11.0),
+                timeout("b", "2026-11-15T10:00:00.100+00:00", 11.0),
+                timeout("c", "2026-11-15T10:00:00.251+00:00", 11.0),
             ]),
             None
         );
     }
 
     #[test]
-    fn tests_that_started_together_and_hang_together_are_not_a_stall() {
-        // nextest's first tests start within moments of each other; a bug
-        // that hangs them all stops them at the same limit, together.
-        let failures = [
-            timeout("a", "2026-11-15T10:00:00.000+00:00", 10.0),
-            timeout("b", "2026-11-15T10:00:00.004+00:00", 10.0),
-            timeout("c", "2026-11-15T10:00:00.009+00:00", 10.0),
-            timeout("d", "2026-11-15T10:00:00.200+00:00", 10.0),
-        ];
-        assert_eq!(find(&failures), None);
-        // One more, started seconds before and stopped with them: the
-        // machine's, and the group is named.
-        let mut stalled = failures.to_vec();
-        stalled.push(timeout("e", "2026-11-15T10:00:04.000+00:00", 6.1));
-        assert_eq!(find(&stalled).map(|stall| stall.tests.len()), Some(5));
-    }
-
-    #[test]
     fn the_largest_group_is_the_one_named() {
         let failures = [
             timeout("early-1", "2026-11-15T09:59:58.000+00:00", 12.0),
-            timeout("early-2", "2026-11-15T10:00:00.050+00:00", 10.0),
-            timeout("early-3", "2026-11-15T10:00:00.090+00:00", 10.0),
+            timeout("early-2", "2026-11-15T09:59:59.050+00:00", 11.0),
+            timeout("early-3", "2026-11-15T09:59:59.090+00:00", 11.0),
             timeout("late-1", "2026-11-15T10:00:59.000+00:00", 11.0),
-            timeout("late-2", "2026-11-15T10:01:00.010+00:00", 10.0),
-            timeout("late-3", "2026-11-15T10:01:00.020+00:00", 10.0),
-            timeout("late-4", "2026-11-15T10:01:00.249+00:00", 10.0),
+            timeout("late-2", "2026-11-15T10:00:58.010+00:00", 12.0),
+            timeout("late-3", "2026-11-15T10:00:58.020+00:00", 12.0),
+            timeout("late-4", "2026-11-15T10:00:58.249+00:00", 12.0),
         ];
         let stall = find(&failures).expect("a stall");
         assert_eq!(stall.tests.len(), 4);

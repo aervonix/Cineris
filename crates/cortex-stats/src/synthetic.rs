@@ -57,7 +57,14 @@ mod tests;
 
 /// How many events may wait for the writer, and so how many are made before
 /// the generator waits for it.
+#[cfg(not(test))]
 const QUEUE: usize = 16_384;
+
+/// In the crate's own tests, small: the months they make are a day or two,
+/// and with the queue of a real run the generator would never wait for the
+/// writer, so nothing would show that it does.
+#[cfg(test)]
+const QUEUE: usize = 64;
 
 /// A session is compacted when its context passes this many tokens.
 const COMPACT_AT: u64 = 160_000;
