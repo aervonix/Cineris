@@ -25,12 +25,17 @@ pub fn reference_page() -> String {
          \n\
          - **Type.** A length of time is text such as `\"20s\"`, `\"10m\"` or `\"1h30m\"` (units \
          `ms`, `s`, `m`, `h`, `d`). A list marked *joined* is added to by every layer; any other \
-         list, like any other value, is replaced by a higher layer.\n\
+         list, like any other value, is replaced by a higher layer. **A range binds every \
+         file,** the user's own included: a value outside it is an error, and the file is \
+         refused. A wait can be no shorter than its floor anywhere (`retry.max_wait`, for one, is \
+         never below a minute), so that no file can make every request fail.\n\
          - **From a project.** What happens to the key in a project's `.cortex/config.toml` or \
          `.cortex/config.local.toml`. *preference*: applied always. *runs code*, *widens \
          access* and *raises cost*: applied only after the user has trusted the project, and \
          listed for the user until then; until then the user's own value applies. *user only*: \
-         ignored, with a warning. A few keys depend on the value, and say how.\n\
+         ignored, with a warning. *tighten only*: a value at or below the one in effect \
+         applies, and a higher one is ignored, with a warning, trusted or not. A few keys depend \
+         on the value, and say how.\n\
          - **Takes effect.** When a change to the key reaches a running harness: *at once*, at \
          the *next epoch* (it shapes the prompt, the tool list or the model), or after a \
          *restart*.\n\
@@ -85,15 +90,17 @@ pub fn reference_page() -> String {
 
 fn row(key: &KeyInfo) -> String {
     let kind = key.kind.as_ref().map(describe).unwrap_or_default();
-    // A length of time is ranged in milliseconds.
-    let unit = if matches!(key.kind, Some(Kind::Duration)) {
-        " ms"
-    } else {
-        ""
+    // A length of time is ranged in milliseconds, and written as one.
+    let bound = |value: f64| {
+        if matches!(key.kind, Some(Kind::Duration)) {
+            super::milliseconds_as_text(value)
+        } else {
+            plain(value)
+        }
     };
     let range = key
         .range
-        .map(|(low, high)| format!(", {}{unit} to {}{unit}", plain(low), plain(high)))
+        .map(|(low, high)| format!(", {} to {}", bound(low), bound(high)))
         .unwrap_or_default();
     let joined = if key.joined { ", joined" } else { "" };
     let enforced = if key.enforced { " Fails closed." } else { "" };

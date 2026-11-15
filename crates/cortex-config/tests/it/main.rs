@@ -31,6 +31,7 @@ mod provenance;
 mod reloading;
 mod state;
 mod trust;
+mod waits;
 mod workspace;
 
 use std::fs;

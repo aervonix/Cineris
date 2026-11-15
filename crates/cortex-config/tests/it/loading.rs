@@ -292,7 +292,7 @@ fn a_command_line_setting_is_read_as_its_key_wants_it() {
         // A number, a truth value, a length of time, a list.
         "retry.attempts=3",
         "model.speed_fallback=false",
-        "retry.max_wait=45s",
+        "retry.max_wait=90s",
         "sandbox.protect=[\"a\", \"b\"]",
         // Text that happens to read as a number stays text where the key
         // takes text.
@@ -313,7 +313,7 @@ fn a_command_line_setting_is_read_as_its_key_wants_it() {
         ("model.fast", "\"claude-haiku-5-5\""),
         ("retry.attempts", "3"),
         ("model.speed_fallback", "false"),
-        ("retry.max_wait", "\"45s\""),
+        ("retry.max_wait", "\"90s\""),
         ("sandbox.protect", "[\"a\", \"b\"]"),
         ("model.effort", "\"1e3\""),
         ("model.judge", "\"007\""),

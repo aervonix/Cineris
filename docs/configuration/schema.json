@@ -94,10 +94,10 @@
         },
         "background": {
           "default": true,
-          "description": "Whether a summary is prepared in the background from `prepare_at`, on the `fast` role's model (the main model when there is none), so that the compaction need not wait for it.",
+          "description": "Whether a summary is prepared in the background from `prepare_at`, on the `fast` role's model (the main model when there is none), so that the compaction need not wait for it. The user's alone: off, every compaction waits at the trigger for its summary, and a repository's file must not make the sessions in it wait.",
           "type": "boolean",
           "x-cortex-effect": "at once",
-          "x-cortex-trust": "preference"
+          "x-cortex-trust": "user only"
         },
         "compact_at": {
           "default": 0.85,
@@ -490,18 +490,26 @@
         },
         "speed_cooldown": {
           "default": "10m",
-          "description": "How long requests stay at `standard` after a fallback, when the provider does not say when the tier is available again.",
+          "description": "How long requests stay at `standard` after a fallback, when the provider does not say when the tier is available again. From one minute, the window a provider counts its limits in, so that a session does not change speed (and perhaps write its cache again) every few requests; to an hour, past which a tier that keeps refusing is better turned off with `model.speed`.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "at once",
+          "x-cortex-milliseconds": {
+            "maximum": 3600000,
+            "minimum": 60000
+          },
           "x-cortex-trust": "preference"
         },
         "speed_cooldown_min": {
           "default": "1m",
-          "description": "The least time requests stay at `standard` after a fallback when the provider does say when the tier is available again: its time, or this long, whichever is later. `\"0s\"` takes the provider's time as given.",
+          "description": "The least time requests stay at `standard` after a fallback when the provider does say when the tier is available again: its time, or this long, whichever is later. `\"0s\"` takes the provider's time as given. At most an hour, as `speed_cooldown` is.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "at once",
+          "x-cortex-milliseconds": {
+            "maximum": 3600000,
+            "minimum": 0
+          },
           "x-cortex-trust": "preference"
         },
         "speed_fallback": {
@@ -513,11 +521,15 @@
         },
         "speed_wait": {
           "default": "20s",
-          "description": "The longest one request waits in place for a speed tier before it falls back to `standard`. `\"0s\"` never waits.",
+          "description": "The longest one request waits in place for a speed tier before it falls back to `standard`. `\"0s\"` never waits. At most two minutes: past that, `standard` answers sooner than the tier would, whatever keeping it saves. A project's file may lower it and may not raise it: every wait is the session's.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "at once",
-          "x-cortex-trust": "preference"
+          "x-cortex-milliseconds": {
+            "maximum": 120000,
+            "minimum": 0
+          },
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
         }
       },
       "type": "object"
@@ -623,10 +635,14 @@
             "x-cortex-trust": "user only"
           },
           "first_event_timeout": {
-            "description": "How long to wait for the first event of a response. Overrides `retry.first_event_timeout` for this provider.",
+            "description": "How long to wait for the first event of a response. Overrides `retry.first_event_timeout` for this provider, within the same range: 30 seconds to an hour.",
             "pattern": "^([0-9]+(ms|s|m|h|d))+$",
             "type": "string",
             "x-cortex-effect": "at once",
+            "x-cortex-milliseconds": {
+              "maximum": 3600000,
+              "minimum": 30000
+            },
             "x-cortex-trust": "user only"
           },
           "headers": {
@@ -656,10 +672,14 @@
             "x-cortex-trust": "user only"
           },
           "idle_timeout": {
-            "description": "How long a response stream may be silent before the request fails. Overrides `retry.idle_timeout` for this provider.",
+            "description": "How long a response stream may be silent before the request fails. Overrides `retry.idle_timeout` for this provider, within the same range: 30 seconds to an hour.",
             "pattern": "^([0-9]+(ms|s|m|h|d))+$",
             "type": "string",
             "x-cortex-effect": "at once",
+            "x-cortex-milliseconds": {
+              "maximum": 3600000,
+              "minimum": 30000
+            },
             "x-cortex-trust": "user only"
           },
           "key_env": {
@@ -695,19 +715,27 @@
         },
         "backoff_base": {
           "default": "1s",
-          "description": "The wait before the second attempt. Each later wait is this multiplied by `backoff_factor` again, up to `backoff_cap`.",
+          "description": "The wait before the second attempt. Each later wait is this multiplied by `backoff_factor` again, up to `backoff_cap`. From 100 ms, below which the attempts are spent before a brief outage can pass, to a minute. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "at once",
-          "x-cortex-trust": "preference"
+          "x-cortex-milliseconds": {
+            "maximum": 60000,
+            "minimum": 100
+          },
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
         },
         "backoff_cap": {
           "default": "30s",
-          "description": "The longest wait between two attempts.",
+          "description": "The longest wait between two attempts. From a second, so that the attempts span more than a moment, to five minutes, past which a provider is down rather than busy. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "at once",
-          "x-cortex-trust": "preference"
+          "x-cortex-milliseconds": {
+            "maximum": 300000,
+            "minimum": 1000
+          },
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
         },
         "backoff_factor": {
           "default": 2.0,
@@ -720,27 +748,39 @@
         },
         "first_event_timeout": {
           "default": "1m",
-          "description": "How long to wait for the first event of a response.",
+          "description": "How long to wait for the first event of a response. From 30 seconds, below which a long prompt would fail every time, to an hour, past the ten minutes the built-in entries give a local server. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "at once",
-          "x-cortex-trust": "preference"
+          "x-cortex-milliseconds": {
+            "maximum": 3600000,
+            "minimum": 30000
+          },
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
         },
         "idle_timeout": {
           "default": "1m30s",
-          "description": "How long a response stream may be silent before the request fails.",
+          "description": "How long a response stream may be silent before the request fails. From 30 seconds, within which a hosted provider that is still working sends a token or a ping, to an hour, past the five minutes the built-in entries give a local server. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "at once",
-          "x-cortex-trust": "preference"
+          "x-cortex-milliseconds": {
+            "maximum": 3600000,
+            "minimum": 30000
+          },
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
         },
         "max_wait": {
           "default": "2m",
-          "description": "The longest wait a provider may ask for. A longer one ends the turn with the error and the provider's hint.",
+          "description": "The longest wait a provider may ask for. A longer one ends the turn with the error and the provider's hint. From a minute, the window a provider counts its limits in, so that no file can make an ordinary rate limit end a turn, to an hour, past which the wait is a quota and not a rate limit. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "at once",
-          "x-cortex-trust": "preference"
+          "x-cortex-milliseconds": {
+            "maximum": 3600000,
+            "minimum": 60000
+          },
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
         }
       },
       "type": "object"
@@ -853,10 +893,14 @@
         },
         "max_timeout": {
           "default": "30m",
-          "description": "The longest time limit a command may ask for. A project's file may lower it and may not raise it.",
+          "description": "The longest time limit a command may ask for. From ten seconds, below which a build or a test run could never finish, to a day. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "next epoch",
+          "x-cortex-milliseconds": {
+            "maximum": 86400000,
+            "minimum": 10000
+          },
           "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
         },
         "program": {
@@ -867,11 +911,15 @@
         },
         "timeout": {
           "default": "2m",
-          "description": "The time limit of a command that asks for none.",
+          "description": "The time limit of a command that asks for none, held to `max_timeout`. From a second, below which every command would fail, to half an hour, past which a command that hangs holds up its turn too long. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "preference"
+          "x-cortex-milliseconds": {
+            "maximum": 1800000,
+            "minimum": 1000
+          },
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
         }
       },
       "type": "object"

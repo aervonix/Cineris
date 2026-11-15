@@ -39,14 +39,13 @@ fn the_documented_classes_hold() {
             .unwrap_or_else(|| panic!("no key {path}"))
             .trust
     };
-    // Harmless preferences.
+    // Harmless preferences. A cooldown keeps a session at `standard` for a
+    // while: it slows the session and never stalls it.
     for key in [
         "model.reasoning",
         "model.speed_fallback",
-        "model.speed_wait",
-        "retry.backoff_base",
-        "retry.max_wait",
-        "shell.timeout",
+        "model.speed_cooldown",
+        "model.speed_cooldown_min",
     ] {
         assert_eq!(class_of(key), Trust::Preference, "{key}");
     }
@@ -111,6 +110,9 @@ fn the_documented_classes_hold() {
         // repository's file must not make the sessions in it wait (the
         // independent review of step 18).
         "index.map_wait",
+        // Off, every compaction waits at the trigger for its summary (the
+        // owner's decision, 2026-11-15).
+        "context.background",
     ] {
         assert_eq!(class_of(key), Trust::UserOnly, "{key}");
     }
@@ -120,8 +122,19 @@ fn the_documented_classes_hold() {
         "limits.session.tokens",
         "limits.day.requests",
         "limits.day.time",
-        // How long a command may ask to run.
+        // How long a command may ask to run, and how long one that asks
+        // for nothing may.
         "shell.max_timeout",
+        "shell.timeout",
+        // The waits and the stream timeouts: a project's file may shorten
+        // them and may not make a session wait longer (the owner's
+        // decision, 2026-11-15).
+        "retry.backoff_base",
+        "retry.backoff_cap",
+        "retry.max_wait",
+        "retry.idle_timeout",
+        "retry.first_event_timeout",
+        "model.speed_wait",
     ] {
         assert_eq!(class_of(key), Trust::TightenOnly, "{key}");
     }

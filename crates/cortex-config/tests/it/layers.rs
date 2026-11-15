@@ -166,13 +166,13 @@ const CASES: &[Case] = &[
         name: "a scalar replaces",
         managed: "",
         user: "[model]\nspeed_wait = \"5s\"\nspeed_fallback = false",
-        project: "[model]\nspeed_wait = \"1m\"",
+        project: "[model]\nspeed_wait = \"2s\"",
         local: "",
         profile: None,
         env: &[],
         cli: &[],
         expect: &[
-            ("model.speed_wait", "\"1m\"", "project"),
+            ("model.speed_wait", "\"2s\"", "project"),
             ("model.speed_fallback", "false", "user"),
         ],
     },
@@ -264,7 +264,7 @@ const CASES: &[Case] = &[
     },
     Case {
         name: "a lock on a table locks every key in it, set by the managed file or not",
-        managed: "[managed]\nlocked = [\"retry\", \"log.level\"]\n[retry]\nmax_wait = \"30s\"",
+        managed: "[managed]\nlocked = [\"retry\", \"log.level\"]\n[retry]\nmax_wait = \"90s\"",
         user: "[retry]\nattempts = 9\nmax_wait = \"10m\"\n[log]\nlevel = \"trace\"\n[model]\nmain = \"big\"",
         project: "",
         local: "",
@@ -273,7 +273,7 @@ const CASES: &[Case] = &[
         cli: &["retry.attempts=1"],
         expect: &[
             (ATTEMPTS, "5", "default"),
-            ("retry.max_wait", "\"30s\"", "managed"),
+            ("retry.max_wait", "\"90s\"", "managed"),
             ("log.level", "(not set)", "default"),
             // What is not locked is the user's as usual.
             ("model.main", "\"big\"", "user"),

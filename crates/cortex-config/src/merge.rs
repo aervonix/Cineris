@@ -162,7 +162,7 @@ impl Merger {
                     continue;
                 }
                 let class = trust.class(entry, None);
-                if self.admit(source, key, entry, class, &origin) {
+                if self.admit(source, key, entry, trust, class, &origin) {
                     push(&mut self.values, key, entry.clone());
                     self.entry_origins
                         .entry(key.clone())
@@ -178,7 +178,7 @@ impl Merger {
             return;
         }
         let class = trust.class(value, self.current(key));
-        if self.admit(source, key, value, class, &origin) {
+        if self.admit(source, key, value, trust, class, &origin) {
             insert(&mut self.values, key, value.clone());
             self.origins.insert(key.clone(), origin);
         }
@@ -227,6 +227,7 @@ impl Merger {
         source: &Source<'_>,
         key: &KeyPath,
         value: &Value,
+        trust: Trust,
         class: TrustClass,
         origin: &Origin,
     ) -> bool {
@@ -236,15 +237,25 @@ impl Merger {
         match class {
             TrustClass::Preference => true,
             TrustClass::UserOnly => {
+                // A limit or a wait that a project may lower says so, and
+                // says what is in effect.
+                let message = match (trust, self.current(key)) {
+                    (Trust::TightenOnly, Some(current)) => format!(
+                        "a project's configuration may lower this and may not raise it: {value} \
+                         is above the {current} in effect, so it is ignored. Set it in your own \
+                         configuration file if you want it"
+                    ),
+                    _ => "a project's configuration may not set this; it is ignored. Set it in \
+                          your own configuration file if you want it"
+                        .to_owned(),
+                };
                 self.diagnostics.push(Diagnostic {
                     severity: Severity::Warning,
                     layer: Some(source.layer),
                     file: origin.file.clone(),
                     line: origin.line,
                     key: Some(key.clone()),
-                    message: "a project's configuration may not set this; it is ignored. Set it \
-                              in your own configuration file if you want it"
-                        .to_owned(),
+                    message,
                 });
                 false
             }

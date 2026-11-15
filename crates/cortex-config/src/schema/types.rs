@@ -37,6 +37,14 @@ pub(crate) fn magnitude(value: &Value) -> Option<f64> {
     }
 }
 
+/// A number of milliseconds, the unit a length of time is ranged in, written
+/// as a configuration file writes a length of time: `60000` is `1m`.
+pub(crate) fn milliseconds_as_text(milliseconds: f64) -> String {
+    // A range's bounds are whole numbers of milliseconds, not negative.
+    let whole = milliseconds.max(0.0) as u64;
+    format_duration(std::time::Duration::from_millis(whole))
+}
+
 impl Setting for bool {
     fn node() -> Node {
         Node::Leaf(Kind::Bool)
