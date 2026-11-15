@@ -32,9 +32,9 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
+use cortex_base::private;
 #[cfg(test)]
 pub(crate) use cortex_base::private::lock_path;
-use cortex_base::private;
 
 /// Takes the lock of the store at `file`, creating the store's directory
 /// owner-only if it is missing: [`cortex_base::private::hold_lock`]. The

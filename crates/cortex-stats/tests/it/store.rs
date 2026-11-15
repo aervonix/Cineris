@@ -438,7 +438,10 @@ fn a_monthly_file_stays_for_its_retention_and_goes_the_month_after() {
     aggregates
         .sync(&dir, date("2026-11-15"), "2026-11", Some(2))
         .unwrap();
-    assert!(dir.events_file("2026-09").exists(), "two months after its own");
+    assert!(
+        dir.events_file("2026-09").exists(),
+        "two months after its own"
+    );
     assert!(!dir.events_file("2026-08").exists(), "three months after");
 }
 
@@ -474,10 +477,7 @@ fn a_line_still_being_written_is_read_once_it_is_whole() {
         .unwrap();
     let total = aggregates.total();
     assert_eq!(total.unreadable, 0);
-    assert_eq!(
-        total.usage.values().map(|sum| sum.requests).sum::<u64>(),
-        1
-    );
+    assert_eq!(total.usage.values().map(|sum| sum.requests).sum::<u64>(), 1);
 }
 
 /// Day buckets stay days for 400 days, and fold into their month after.
@@ -521,5 +521,118 @@ fn sums_that_would_overflow_stop_at_the_most_a_figure_holds() {
         let sum = counted.usage.values().next().unwrap();
         assert_eq!(sum.input, u64::MAX);
         assert_eq!(sum.metered_nanos, u64::MAX);
+    }
+}
+
+/// The provider's and the model's own words reach the files only when they
+/// are plain: a request's error code, a stop reason the client did not
+/// know, and the name of a tool that does not exist (found by the
+/// independent review of step 16 for the code, and the other two its twins).
+#[test]
+fn a_providers_own_words_are_kept_only_when_plain() {
+    let scratch = scratch("a_providers_own_words");
+    let dir = StatsDir::new(scratch.join("stats"));
+    let recorder = recorder(&dir, Zone::utc(), clock("2026-11-15T10:00:00Z"), 12);
+    let at = "2026-11-15T10:00:00Z";
+    for (error, stop) in [
+        ("rate_limit_exceeded", "openai:queue_full"),
+        (
+            "key sk-live-0123456789 refused",
+            "openai:stopped for key sk-live-0123456789",
+        ),
+    ] {
+        let mut record = request(at, "p", "opus", 1);
+        if let cortex_stats::Record::Request(request) = &mut record {
+            request.error = Some(error.to_owned());
+            stop.clone_into(&mut request.stop);
+        }
+        recorder.record(record);
+    }
+    for name in ["made_up_tool", "Tool sk-live-0123456789"] {
+        let mut record = tool(at, "p", name);
+        if let cortex_stats::Record::Tool(tool) = &mut record {
+            tool.outcome = cortex_stats::ToolOutcome::UnknownTool;
+        }
+        recorder.record(record);
+    }
+    recorder.flush();
+    let text = std::fs::read_to_string(dir.events_file("2026-11")).unwrap();
+    assert!(!text.contains("sk-live"), "{text}");
+    for kept in [
+        r#""error":"rate_limit_exceeded""#,
+        r#""stop":"openai:queue_full""#,
+        r#""tool":"made_up_tool""#,
+        r#""error":"other""#,
+        r#""stop":"other""#,
+        r#""tool":"other""#,
+    ] {
+        assert!(text.contains(kept), "{kept} in {text}");
+    }
+}
+
+/// What saving the aggregates costs the writer, now that the file is
+/// flushed to the disk before it takes its name, beside what it cost
+/// without: at a heavy month's size and at 400 days of day buckets. Run by
+/// hand: `cargo test --release -p cortex-stats --test it perf_saving -- \
+/// --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn perf_saving_the_aggregates() {
+    let scratch = scratch("perf_saving_the_aggregates");
+    let dir = StatsDir::new(scratch.join("stats"));
+    dir.ensure().unwrap();
+    let clock = clock("2026-11-15T10:00:00Z");
+    for days in [30i64, 400] {
+        let mut part = cortex_stats::Part::default();
+        let today = date("2026-11-15");
+        for back in 0..days {
+            let day = today.add_days(-back).to_string();
+            for (model, project) in [("opus", "a"), ("haiku", "b"), ("sonnet", "c")] {
+                for record in [
+                    request(&format!("{day}T10:00:00Z"), project, model, 1),
+                    tool(&format!("{day}T10:00:00Z"), project, "read"),
+                    tool(&format!("{day}T10:00:00Z"), project, "shell"),
+                    turn(&format!("{day}T10:00:00Z"), project),
+                ] {
+                    part.add_line(&cortex_stats::Line {
+                        day: day.clone(),
+                        writer: None,
+                        record,
+                    });
+                }
+            }
+        }
+        let mut aggregates = Aggregates::load(&dir).unwrap();
+        aggregates.kept = part;
+        let bytes = serde_json::to_vec(&aggregates).unwrap();
+        for sync in [false, true] {
+            let options = cortex_base::AtomicWriteOptions {
+                owner_only: true,
+                sync,
+                follow_links: false,
+                ..cortex_base::AtomicWriteOptions::default()
+            };
+            let mut times: Vec<std::time::Duration> = (0..50)
+                .map(|_| {
+                    let started = std::time::Instant::now();
+                    cortex_base::write_atomic(
+                        &dir.aggregates_file(),
+                        &bytes,
+                        &options,
+                        clock.as_ref(),
+                    )
+                    .unwrap();
+                    started.elapsed()
+                })
+                .collect();
+            times.sort();
+            println!(
+                "saving {} KB of aggregates ({days} days), sync {sync}: median {:?}, 95th {:?}, most {:?}",
+                bytes.len() / 1024,
+                times[times.len() / 2],
+                times[times.len() * 95 / 100],
+                times[times.len() - 1]
+            );
+        }
     }
 }

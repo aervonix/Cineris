@@ -11,8 +11,8 @@
 rule: Recording never waits: with the writer stalled and its queue full, an event is dropped and counted.
 file: crates/cortex-stats/src/recorder.rs
 in: Recorder::send
-find: if let Err(TrySendError::Full(_)) = self.queue.try_send(message) {
-replace: if self.queue.send(message).is_err() {
+find: match self.queue.try_send(message) {
+replace: match self.queue.send(message).map_err(|error| TrySendError::Disconnected(error.0)) {
 caught-by:
     cortex-stats recorder::tests::a_stalled_writer_drops_and_counts_and_never_waits
 
@@ -30,9 +30,9 @@ caught-by:
 [break] aggregates-do-not-rebuild-to-the-same-values
 rule: The aggregates are each file read to its last whole line, so a rebuild from the files gives the same values.
 file: crates/cortex-stats/src/store.rs
-in: read_from
-find: entry.offset += read as u64;
-replace: entry.offset += (read as u64).saturating_sub(1);
+in: read_lines
+find: *offset += read as u64;
+replace: *offset += (read as u64).saturating_sub(1);
 caught-by:
     cortex-stats::it store::the_aggregates_rebuild_to_the_same_values_from_the_files
     cortex-stats::it store::two_writers_that_bring_the_aggregates_up_to_date_out_of_order_lose_nothing
@@ -134,8 +134,8 @@ caught-by:
 rule: `usage.refresh` is the user's alone: a project's configuration cannot turn the refresh on.
 file: crates/cortex-config/src/schema/sections.rs
 in: UsageSettings
-find: [UserOnly, Now] pub refresh: Vec<String>
-replace: [Preference, Now] pub refresh: Vec<String>
+find: [UserOnly, Restart] pub refresh: Vec<String>
+replace: [Preference, Restart] pub refresh: Vec<String>
 caught-by:
     cortex-config::it trust::the_documented_classes_hold
     cortex-config::it trust::every_key_has_a_trust_class
@@ -170,7 +170,7 @@ caught-by:
 [break] the-files-are-not-owner-only
 rule: Every statistics file, `limits.json` among them, is owner-only.
 file: crates/cortex-stats/src/store.rs
-in: write_private
+in: write_limits
 find: owner_only: true
 replace: owner_only: false
 packages: cortex-stats, cortex-core
@@ -302,10 +302,11 @@ caught-by:
 
 [break] the-days-earlier-spend-is-forgotten
 rule: A day's limits count what the day's earlier sessions spent, from the statistics.
-file: crates/cortex-core/src/usage.rs
-in: day_account
-find: spent.requests += sum.requests;
+file: crates/cortex-stats/src/day.rs
+in: DayReader::start
+find: spent.add(DaySpent::of_sum(sum));
 replace:
+packages: cortex-core
 caught-by:
     cortex-core::it usage::a_days_limit_counts_the_days_earlier_sessions
 
@@ -332,7 +333,7 @@ caught-by:
 rule: Nothing of a failed refresh's answer reaches its error: a code that is not a plain one is not shown.
 file: crates/cortex-core/src/usage.rs
 in: refresh_one
-find: if !is_plain_code(&data.code) {
+find: if !cortex_protocol::error::code::is_plain(&data.code) {
 replace: if false {
 caught-by:
     cortex-core::it usage::a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer
@@ -366,10 +367,10 @@ caught-by:
 
 [break] the-first-sessions-day-limit-holds-for-all
 rule: Each session holds the day to its own limits, spending from one purse.
-file: crates/cortex-core/src/usage.rs
+file: crates/cortex-core/src/day.rs
 in: day_account
-find: return Some(cortex_agent::Account::draws_on(name, budget, purse));
-replace: return Some(purse.clone());
+find: return Ok(Some(Account::draws_on(name, budget, &open.purse)));
+replace: return Ok(Some(open.purse.clone()));
 caught-by:
     cortex-core::it usage::each_session_holds_the_day_to_its_own_limits
 

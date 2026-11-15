@@ -112,7 +112,9 @@ pub struct RequestRecord {
     /// Where its time went.
     #[serde(default)]
     pub time: RequestTime,
-    /// Why the response ended: the neutral stop reason.
+    /// Why the response ended: the neutral stop reason, or a provider's own
+    /// after its name (`openai:<reason>`) when it is plain, and `other`
+    /// when it is not. The writer keeps no other.
     pub stop: String,
     /// The code of the failure, when it failed: a plain code
     /// (`cortex_protocol::error::code::is_plain`), or `other` where the
@@ -169,7 +171,9 @@ pub struct ToolRecord {
     /// The project's key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<ProjectKey>,
-    /// The tool's name.
+    /// The tool's name. For a tool the model named and that does not exist
+    /// (`unknown_tool`), the name it wrote when that is a plain one, and
+    /// `other` when it is not: the writer keeps no other.
     pub tool: String,
     /// The model that made the call.
     pub model: ModelId,
@@ -337,7 +341,8 @@ pub enum Record {
     Turn(TurnRecord),
     /// What a request held.
     Context(ContextRecord),
-    /// Events the writer could not take, because its queue was full.
+    /// Events and limits updates the writer could not take: its queue was
+    /// full. One count for both.
     Dropped {
         /// When it was written.
         at: Timestamp,

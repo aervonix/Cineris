@@ -94,7 +94,9 @@ impl Variants {
 
     /// The variants an `epoch` entry wrote. `None` when a point is missing
     /// or its choice is not one this build knows: the epoch's variants are
-    /// then not known, and it is not gone on with.
+    /// then not known, and an epoch read so goes on, with the variants in
+    /// force now (a later build's choice cannot arise before a second edit
+    /// format exists; `docs/steps/16/answered.md`, "The full review").
     #[must_use]
     pub fn from_map(map: &std::collections::BTreeMap<String, String>) -> Option<Self> {
         let edit_format = map.get("edit_format")?;

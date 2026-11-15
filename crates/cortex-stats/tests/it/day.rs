@@ -110,7 +110,10 @@ fn a_days_reader_reads_a_new_file_from_its_start() {
     let scratch = scratch("a_days_reader_reads_a_new_file");
     let dir = StatsDir::new(scratch.join("stats"));
     std::fs::create_dir_all(dir.root()).unwrap();
-    append(&dir, &line("2026-11-15", Some("w_theirs"), "s_1", 1).repeat(3));
+    append(
+        &dir,
+        &line("2026-11-15", Some("w_theirs"), "s_1", 1).repeat(3),
+    );
     let (mut reader, before) = start(&dir, "w_mine");
     assert_eq!(before.requests, 3);
     dir.reset().unwrap();
@@ -160,8 +163,7 @@ fn sys_two_processes_write_under_ids_of_their_own() {
         .collect();
     assert_eq!(ids.len(), 2, "{ids:?}");
     assert_ne!(ids[0], ids[1]);
-    let text =
-        std::fs::read_to_string(StatsDir::new(&dir).events_file("2026-11")).unwrap();
+    let text = std::fs::read_to_string(StatsDir::new(&dir).events_file("2026-11")).unwrap();
     for id in &ids {
         assert!(text.contains(&format!(r#""writer":"{id}""#)), "{text}");
     }

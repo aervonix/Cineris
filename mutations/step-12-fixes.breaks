@@ -371,8 +371,8 @@ caught-by:
 rule: Every change to the trust store and the approvals file is made under the store's lock.
 file: crates/cortex-policy/src/store_lock.rs
 in: hold
-find: if let Some(directory) = file
-replace: if true { return Ok(None); } if let Some(directory) = file
+find: private::hold_lock(file)
+replace: if true { return Ok(None); } private::hold_lock(file)
 caught-by:
     store_lock::tests::a_lock_is_held_until_it_is_dropped_and_its_directory_is_made
     trust::tests::every_change_to_the_store_is_made_under_its_lock

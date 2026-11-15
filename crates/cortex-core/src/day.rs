@@ -148,6 +148,33 @@ fn read(mut reader: DayReader, purse: &Account, asks: &mpsc::Receiver<Ask>) {
     }
 }
 
+/// The purse, brought up to date by a reader thread of its own from now on,
+/// its catch-up, and the way to ask that thread.
+fn reading(
+    reader: DayReader,
+    purse: Account,
+    timer: SharedTimer,
+) -> (Account, Arc<Catching>, mpsc::Sender<Ask>) {
+    let (asks, asked) = mpsc::channel();
+    let catching = Arc::new(Catching {
+        asks: asks.clone(),
+        timer,
+        told: AtomicBool::new(false),
+    });
+    let purse = purse.catching_up(Arc::clone(&catching) as Arc<dyn CatchUp>);
+    let read_into = purse.clone();
+    let started = std::thread::Builder::new()
+        .name("cortex-day".to_owned())
+        .spawn(move || read(reader, &read_into, &asked));
+    if let Err(failure) = started {
+        tracing::warn!(
+            error = %failure,
+            "the day's limits cannot read what other processes spend: they hold for this process"
+        );
+    }
+    (purse, catching, asks)
+}
+
 /// The account of today's limits for one session, `[limits.day]`:
 /// requests, tokens and money, across every session of the day in every
 /// process. `None` when no day limit is set. Called when the session is put
@@ -215,29 +242,13 @@ pub(crate) fn day_account(
         .map_err(unreadable)?;
     let (reader, before) =
         DayReader::start(&dir, today, &aggregates, Some(recorder.writer().to_owned()));
-    let (asks, asked) = mpsc::channel();
-    let catching = Arc::new(Catching {
-        asks: asks.clone(),
-        timer: Arc::clone(&inner.options.timer),
-        told: AtomicBool::new(false),
-    });
     let purse = Account::with_spent(
         name.clone(),
         cortex_protocol::lease::Budget::default(),
         clock,
         spent(before),
-    )
-    .catching_up(catching);
-    let reading = purse.clone();
-    let started = std::thread::Builder::new()
-        .name("cortex-day".to_owned())
-        .spawn(move || read(reader, &reading, &asked));
-    if let Err(failure) = started {
-        tracing::warn!(
-            error = %failure,
-            "the day's limits cannot read what other processes spend: they hold for this process"
-        );
-    }
+    );
+    let (purse, _, asks) = reading(reader, purse, Arc::clone(&inner.options.timer));
     let _ = asks.send(Ask::Own(session.clone()));
     let account = Account::draws_on(name, budget, &purse);
     *day = Some(Day {
@@ -250,3 +261,83 @@ pub(crate) fn day_account(
 
 /// The core's purse of the day, while there is one.
 pub(crate) type DaySlot = Mutex<Option<Day>>;
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use cortex_base::{FakeClock, LocalDate};
+    use cortex_stats::{Aggregates, DayReader, StatsDir};
+
+    use super::{Account, CatchUp, reading};
+
+    /// One request line of another process, and the four other lines a
+    /// turn writes beside it, of the day `2026-11-15`.
+    fn a_requests_lines(n: u64) -> String {
+        let request = format!(
+            r#"{{"day":"2026-11-15","writer":"w_other","kind":"request","at":"2026-11-15T10:00:00Z","session":"s_{n}","turn":"t_1","provider":"anthropic","model":"opus","role":"main","variants":{{"edit_format":"replace","tool_schema":"strict","prompt_style":"concise"}},"tokens":{{"input":1200,"cache_read":40000,"output":600}},"cost":{{"usd_nanos":47000000,"basis":"metered"}},"billing":"metered","stop":"tool_calls"}}"#
+        );
+        let other = format!(
+            r#"{{"day":"2026-11-15","kind":"tool","at":"2026-11-15T10:00:00Z","session":"s_{n}","turn":"t_1","tool":"read","model":"opus","variants":{{"edit_format":"replace","tool_schema":"strict","prompt_style":"concise"}},"outcome":"ok","running_ms":12}}"#
+        );
+        format!("{request}\n{other}\n{other}\n{other}\n{other}\n")
+    }
+
+    /// What bringing a day's purse up to date costs a request: the ask to
+    /// the reader thread, its read of what one request of another process
+    /// added (five lines), and the answer. Run by hand: `cargo test
+    /// --release -p cortex-core --lib perf_catching_up -- --ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore = "a measurement, run by hand"]
+    #[expect(
+        clippy::disallowed_methods,
+        clippy::disallowed_types,
+        reason = "a measurement that writes and removes its own directory"
+    )]
+    fn perf_catching_up_before_a_request() {
+        use std::io::Write as _;
+        let root = std::env::temp_dir().join(format!("cortex-perf-day-{}", std::process::id()));
+        let dir = StatsDir::new(root.join("stats"));
+        std::fs::create_dir_all(dir.root()).unwrap();
+        let path = dir.events_file("2026-11");
+        // A heavy day already in the file: 3,000 requests.
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for n in 0..3_000 {
+            file.write_all(a_requests_lines(n).as_bytes()).unwrap();
+        }
+        let day = LocalDate::parse("2026-11-15").unwrap();
+        let mut aggregates = Aggregates::load(&dir).unwrap();
+        aggregates.sync(&dir, day, "2026-11", None).unwrap();
+        let (reader, _) = DayReader::start(&dir, day, &aggregates, Some("w_mine".to_owned()));
+        let clock = std::sync::Arc::new(FakeClock::starting_at("2026-11-15T10:00:00Z").unwrap());
+        let purse = Account::new("the day", cortex_protocol::lease::Budget::default(), clock);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let timer: cortex_base::SharedTimer = std::sync::Arc::new(cortex_llm::TokioTimer);
+        let (purse, catching, _asks) = reading(reader, purse, timer);
+        let mut times: Vec<Duration> = Vec::with_capacity(2_000);
+        for n in 0..2_000 {
+            file.write_all(a_requests_lines(n).as_bytes()).unwrap();
+            let started = Instant::now();
+            runtime.block_on(catching.catch_up());
+            times.push(started.elapsed());
+        }
+        assert_eq!(purse.spent().requests, 2_000);
+        times.sort();
+        println!(
+            "catching a day's purse up before a request: median {:?}, 95th {:?}, 99th {:?}, most {:?}",
+            times[times.len() / 2],
+            times[times.len() * 95 / 100],
+            times[times.len() * 99 / 100],
+            times[times.len() - 1],
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+}

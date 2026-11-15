@@ -177,7 +177,8 @@ pub struct Part {
     /// Outcomes by model, variants and tool: counts by outcome.
     #[serde(default, with = "entries")]
     pub outcomes: BTreeMap<OutcomeKey, BTreeMap<String, u64>>,
-    /// Events the writer dropped because its queue was full.
+    /// Events and limits updates the writer dropped because its queue was
+    /// full.
     #[serde(default)]
     pub dropped: u64,
     /// Lines that could not be read.

@@ -26,10 +26,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use cortex_base::SharedClock;
-use cortex_tools::BoxFuture;
 use cortex_protocol::event::LimitKind;
 use cortex_protocol::lease::{Budget, Lease};
 use cortex_protocol::usage::{RequestUsage, TokenUsage};
+use cortex_tools::BoxFuture;
 
 /// What has been drawn from an account.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
