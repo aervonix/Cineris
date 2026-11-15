@@ -24,3 +24,23 @@ Step 9 filled `cortex-config` (about 10,900 lines, more than half of them tests:
 - **The concurrent-writers test is the slowest of the step:** four writers, each a store of its own, making 28 flushed writes of the credentials file between them. It takes 0.9 s on the desktop with six writers and four rounds, which is why it was cut to four and three. Everything else in the crate is under 0.1 s a test.
 - **The clean build of `cortex-config` alone,** on the desktop pinned to 4 cores: 8.4 to 8.6 s in the `dev` profile and 5.8 s in `release` (two runs each), against 7.1 to 7.5 s and 4.7 to 4.8 s for `cortex-base` alone in step 4. Another session's run may have been active on the desktop at the time.
 - **The release build** gains 6 packages on Linux (the `toml` family) and 13 on Windows (those, the wrapper's 5, and `windows-sys` with `windows-link`).
+
+## Settings a repository could slow a session with (2026-11-15)
+
+The fix's pull request, 57, on `main` at `d050503`. "Main" is main's own run at `d050503` (run 43732658018); the pull request's is run 43772637397, at `d199066`.
+
+| Job | Main, `d050503` | The PR at `d199066` |
+|---|---|---|
+| `lint-linux` | 55 s | 40 s |
+| `test-linux` | 86 s | 116 s |
+| `lint-windows` | 65 s | 77 s |
+| `test-windows` | 194 s | 127 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `d199066` (6 ms) | Windows, main (9 ms) | Windows, `d199066` (6 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 10.2 s | 12.0 s | 18.0 s | 8.1 s |
+| Tier 2, integration (40 s) | 17.8 s | 23.5 s | 35.9 s | 18.8 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 16.0 s | 15.6 s | 58.9 s | 37.6 s |
+
+- **The differences are the runners', not the change's.** The pull request's Linux runner started a test in 6 ms where main's took 4 ms, and its Windows runner in 6 ms where main's took 9 ms, and every tier moves with that, in opposite directions on the two systems. The fix adds 8 tests to `cortex-config` and 2 to `cortex-core`, all without processes: in CI's own build, `cortex-config`'s whole run is 0.5 s of tier 1 and 0.2 s of tier 2 (`cargo xtask ci --tiers -p cortex-config` at the desk). No A/B on one runner was run for a change of that size.
+- **Windows before the pull request:** `try` run 43772439261, `cortex-config`, `cortex-core`, `cortex-cli` and `cortex-rpc`: 352 tests in tiers 1 and 2 and 35 system tests, every one passed (tiers 0.4 s, 6.6 s and 12.8 s above a 7 ms start).
