@@ -20,3 +20,5 @@ language: kotlin
   54   method invoke  | fun invoke(value: Int)
   61 class ParserTest  | class ParserTest
   63   method parses an empty file  | fun `parses an empty file`()
+  67   method doesn't lose what follows  | fun `doesn't lose what follows`()
+  70   method helper  | fun helper()

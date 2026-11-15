@@ -710,13 +710,18 @@ impl Recogniser for Kotlin {
             } else {
                 after
             };
-            // A name in backticks, which may hold spaces and brackets:
-            // ``fun `parses an empty file`()``, after a receiver or not.
+            // A name in backticks, which may hold spaces, brackets and
+            // quotes: ``fun `parses an empty file`()``, after a receiver or
+            // not. The lexer blanks it as a string, so it is read from the
+            // line as written.
             if let Some(tick) = after.find('`')
                 && !after[..tick].contains('(')
             {
-                return match after[tick + 1..].split_once('`') {
-                    Some((name, _)) if !name.is_empty() => {
+                let name = as_written(scope, &after[tick + 1..])
+                    .and_then(|written| written.split_once('`'))
+                    .map(|(name, _)| name);
+                return match name {
+                    Some(name) if !name.trim().is_empty() => {
                         Found::Def(Def::new(function_or_method(scope), name, Body::Opaque))
                     }
                     _ => Found::Nothing,
@@ -1212,10 +1217,17 @@ impl Recogniser for Js {
     }
 }
 
+/// The line as written from where `code` begins, `code` being a part of
+/// the line's code that runs to its end: the same bytes, with the content
+/// of its strings, which the code blanks.
+fn as_written<'a>(scope: &Scope<'a>, code: &str) -> Option<&'a str> {
+    scope.raw.get(scope.raw.len().checked_sub(code.len())?..)
+}
+
 /// The string at the start of `code`, a part of the line's code that runs
 /// to its end, as the line writes it: its quotes and what is between them.
 fn quoted_name(scope: &Scope<'_>, code: &str) -> Option<String> {
-    let raw = scope.raw.get(scope.raw.len().checked_sub(code.len())?..)?;
+    let raw = as_written(scope, code)?;
     let quote = raw.chars().next()?;
     let close = raw[1..].find(quote)? + 1;
     Some(clip(&raw[..=close], NAME_CHARS))

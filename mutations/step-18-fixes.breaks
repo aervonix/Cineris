@@ -486,7 +486,7 @@ caught-by:
 rule: TypeScript's `declare module "name"` is named by its string as the line writes it, not from the code, where a string's content is blanked.
 file: crates/cortex-index/src/extract/langs.rs
 in: quoted_name
-find: let raw = scope.raw.get(scope.raw.len().checked_sub(code.len())?..)?;
+find: let raw = as_written(scope, code)?;
 replace: let raw = code;
 caught-by:
     cortex-index extract::tests::a_typescript_module_declared_by_a_string_is_named_by_the_string
@@ -648,6 +648,15 @@ find: if done.needs_body || nameless {
 replace: if done.needs_body {
 caught-by:
     cortex-index extract::tests::an_outline_is_truncated_only_when_more_definitions_than_the_cap_survive
+
+[break] a-quote-in-a-kotlin-name-in-backticks-opens-a-literal
+rule: Kotlin's lexer blanks a name in backticks as a string, so an apostrophe in it (``fun `doesn't crash`()``) does not open a character literal that blanks the rest of the line and its `{`.
+file: crates/cortex-index/src/lex.rs
+find: quote(b'`', false, false)
+replace: quote(b'"', true, false)
+caught-by:
+    cortex-index extract::tests::a_kotlin_function_named_in_backticks_is_outlined
+    cortex-index::it outlines::kotlin
 
 [break] a-kotlin-name-in-backticks-is-not-read
 rule: A Kotlin function named in backticks is outlined, its name being what is between them.
