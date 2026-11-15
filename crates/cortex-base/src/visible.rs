@@ -294,6 +294,39 @@ mod tests {
         ranges_of(DATA, "Cf ")
     }
 
+    /// The code points where a search through sorted ranges can go wrong:
+    /// the first and the last, each range's ends and the code points on
+    /// either side of them, and the middle of each range and of each gap.
+    /// A few hundred, where walking all 1.1 million took most of a second
+    /// of tier 1 on a runner.
+    fn edges(ranges: &[(u32, u32)]) -> Vec<char> {
+        let mut codes = vec![0, 0x10_FFFF];
+        for (at, &(first, last)) in ranges.iter().enumerate() {
+            codes.extend([
+                first.saturating_sub(1),
+                first,
+                first.midpoint(last),
+                last,
+                last + 1,
+            ]);
+            if let Some(&(next, _)) = ranges.get(at + 1) {
+                codes.push(last.midpoint(next));
+            }
+        }
+        codes.into_iter().filter_map(char::from_u32).collect()
+    }
+
+    /// Whether the search answers as the data says at each of [`edges`].
+    fn searched_as_listed(ranges: &[(u32, u32)], search: fn(char) -> bool) {
+        for character in edges(ranges) {
+            let code = u32::from(character);
+            let listed = ranges
+                .iter()
+                .any(|&(first, last)| (first..=last).contains(&code));
+            assert_eq!(search(character), listed, "U+{code:04X}");
+        }
+    }
+
     /// The table of what renders as nothing is Unicode's, for the version
     /// it names; its failure prints the table to put in its place.
     #[test]
@@ -315,15 +348,7 @@ mod tests {
         );
         let total: u32 = IGNORABLE.iter().map(|(first, last)| last - first + 1).sum();
         assert!(IGNORABLE_DATA.contains(&format!("# Total code points: {total}")));
-        for code in 0..=0x10_FFFF_u32 {
-            let Some(character) = char::from_u32(code) else {
-                continue;
-            };
-            let listed = expected
-                .iter()
-                .any(|&(first, last)| (first..=last).contains(&code));
-            assert_eq!(is_ignorable(character), listed, "U+{code:04X}");
-        }
+        searched_as_listed(&expected, is_ignorable);
     }
 
     /// The independent review of step 18's fixes found these passing:
@@ -404,20 +429,12 @@ mod tests {
         assert!(DATA.contains(&format!("# Total code points: {total}")));
     }
 
-    /// Every code point is a format character exactly when the data says
-    /// so: the search through the table is checked, not only the table.
+    /// A code point is a format character exactly when the data says so:
+    /// the search through the table is checked, not only the table, at
+    /// every edge of a range and of a gap.
     #[test]
     fn a_character_is_a_format_character_exactly_when_unicode_says() {
-        let ranges = from_data();
-        for code in 0..=0x10_FFFF_u32 {
-            let Some(character) = char::from_u32(code) else {
-                continue;
-            };
-            let listed = ranges
-                .iter()
-                .any(|&(first, last)| (first..=last).contains(&code));
-            assert_eq!(is_format(character), listed, "U+{code:04X}");
-        }
+        searched_as_listed(&from_data(), is_format);
     }
 
     #[test]
