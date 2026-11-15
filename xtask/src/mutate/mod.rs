@@ -122,6 +122,29 @@ struct Request {
 /// timeouts that were the machine's.
 const JOBS: usize = 2;
 
+/// The share of the last minute, in percent, in which every task waited on
+/// the disk (`full avg60` of `/proc/pressure/io`), from which a run with
+/// more than one job starts with one. A review's `--jobs 2` on the desk's
+/// side slot lost a baseline to a stall at 66%; one job ran clean.
+const PRESSURE_FOR_ONE_JOB: f64 = 10.0;
+
+/// How many jobs a run asked for `asked` starts with, given the disk's
+/// pressure now (none where it cannot be read), and what to say of it.
+fn jobs_for(asked: usize, pressure: Option<&crate::stall::Pressure>) -> (usize, Option<String>) {
+    match pressure {
+        Some(pressure) if asked > 1 && pressure.full.1 >= PRESSURE_FOR_ONE_JOB => (
+            1,
+            Some(format!(
+                "The disk is busy: every task waited on it {:.1}% of the last minute \
+                 (/proc/pressure/io). Running one job, not {asked}: more would stall the \
+                 tests with nothing broken.",
+                pressure.full.1
+            )),
+        ),
+        _ => (asked, None),
+    }
+}
+
 /// The most jobs a run may ask for: each is a whole build directory.
 const MOST_JOBS: usize = 16;
 
@@ -317,7 +340,12 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     crate::checks::require_nextest()?;
     let started = Instant::now();
     let budget = request.budget;
-    let mut runners: Vec<drive::CargoRunner> = (0..request.jobs)
+    let pressure = crate::stall::read_pressure().ok();
+    let (jobs, note) = jobs_for(request.jobs, pressure.as_ref());
+    if let Some(note) = note {
+        say(&note);
+    }
+    let mut runners: Vec<drive::CargoRunner> = (0..jobs)
         .map(|job| drive::CargoRunner::new(&scratch, job))
         .collect();
     let mut runners: Vec<&mut dyn drive::Runner> = runners
@@ -1365,6 +1393,25 @@ replace: 5
                 .unwrap()
                 .contains("Run the same command without `--again` to carry on."),
         );
+    }
+
+    #[test]
+    fn a_busy_disk_makes_a_run_of_several_jobs_one() {
+        use crate::stall::Pressure;
+        let at = |full_avg60: f64| Pressure {
+            some: (0.0, full_avg60),
+            full: (0.0, full_avg60),
+            some_total: 0,
+            full_total: 0,
+        };
+        let (jobs, note) = super::jobs_for(2, Some(&at(66.0)));
+        assert_eq!(jobs, 1);
+        assert!(note.unwrap().contains("66.0% of the last minute"));
+        assert_eq!(super::jobs_for(4, Some(&at(10.0))).0, 1);
+        // A quiet disk, one job asked, or no pressure to read: as asked.
+        assert_eq!(super::jobs_for(2, Some(&at(9.9))), (2, None));
+        assert_eq!(super::jobs_for(1, Some(&at(66.0))), (1, None));
+        assert_eq!(super::jobs_for(3, None), (3, None));
     }
 
     #[test]
