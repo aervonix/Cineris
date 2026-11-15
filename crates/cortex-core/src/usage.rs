@@ -57,6 +57,66 @@ pub(crate) fn recorder(user: &Loaded, options: &CoreOptions) -> Option<Recorder>
     Some(Recorder::new(recorder_options, Arc::clone(&options.clock)))
 }
 
+/// The account of today's limits, `[limits.day]`: requests, tokens and
+/// money, across every session of the day. It begins with what the day's
+/// statistics hold (read here, when a session with a day limit is put
+/// together, on the blocking pool, and never when there is none), and every
+/// session of this core then draws on the one account. A session that runs
+/// past midnight goes on drawing on the day it began in; the next session
+/// opened begins a new day. `limits.day.time` is not a day's wall-clock
+/// time and is not enforced
+/// (`docs/outstanding/a-days-time-limit.md`).
+pub(crate) fn day_account(
+    inner: &crate::core::Inner,
+    limits: &cortex_config::schema::LimitSet,
+) -> Option<cortex_agent::Account> {
+    if limits.requests.is_none() && limits.tokens.is_none() && limits.cost.is_none() {
+        return None;
+    }
+    let clock = Arc::clone(&inner.options.clock);
+    let zone = inner.options.zone.clone().unwrap_or_else(Zone::system);
+    let today = zone.date_of(clock.now());
+    let mut day = inner
+        .day
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((date, account)) = day.as_ref()
+        && *date == today
+    {
+        return Some(account.clone());
+    }
+    let mut spent = cortex_agent::Spent::default();
+    if let Some(dir) = stats_dir(&inner.user)
+        && let Ok(mut aggregates) = Aggregates::load(&dir)
+    {
+        let now = clock.now();
+        if let Ok(true) = aggregates.sync(
+            &dir,
+            today,
+            &cortex_stats::month_of(now),
+            inner.user.settings.stats.retention,
+        ) {
+            let _ = aggregates.save(&dir, clock.as_ref());
+        }
+        let day_text = today.to_string();
+        for (key, sum) in &aggregates.total().usage {
+            if key.period == day_text {
+                spent.requests += sum.requests;
+                spent.tokens += sum.input + sum.cache_read + sum.cache_write + sum.output;
+                spent.usd_nanos += sum.metered_nanos + sum.estimate_nanos + sum.recorded_nanos;
+            }
+        }
+    }
+    let budget = cortex_protocol::lease::Budget {
+        wall_clock_ms: None,
+        ..crate::assemble::budget(limits)
+    };
+    let account =
+        cortex_agent::Account::with_spent(format!("the day {today}"), budget, clock, spent);
+    *day = Some((today, account.clone()));
+    Some(account)
+}
+
 /// `usage/report`.
 pub(crate) async fn report(
     core: &Core,

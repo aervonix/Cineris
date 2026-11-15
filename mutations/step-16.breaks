@@ -299,3 +299,22 @@ find: out.emit(ModelEvent::Answered).await;
 replace:
 caught-by:
     cortex-llm::it client::the_client_says_when_the_provider_answered_once_an_attempt
+
+[break] the-days-earlier-spend-is-forgotten
+rule: A day's limits count what the day's earlier sessions spent, from the statistics.
+file: crates/cortex-core/src/usage.rs
+in: day_account
+find: spent.requests += sum.requests;
+replace:
+caught-by:
+    cortex-core::it usage::a_days_limit_counts_the_days_earlier_sessions
+
+[break] a-requests-attempts-are-not-on-its-span
+rule: A request's span says how many attempts it took.
+file: crates/cortex-agent/src/turn.rs
+in: Session::request_stat
+find: self.request_span.record("attempts", attempts);
+replace:
+packages: cortex-core
+caught-by:
+    cortex-core::it usage::the_loops_spans_reach_the_subscriber
