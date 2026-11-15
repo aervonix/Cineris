@@ -44,6 +44,20 @@ The owner guard's tests (`xtask`, 6.7 s of tier 3 on a 6 ms runner) start git ab
 
 The test changes alone took Windows' tier 3 from 93.2 to 80.4 s on one 10 to 11 ms runner (`try` 43715195861): 14%, short of the 65 s asked for. Running the system tests two at a time instead of three took 19% more off the same tree on one runner (57.6 to 46.6 s, `try` 43715198613), for 4.1 s more of the system run's wall time (20.1 to 24.2 s; `main`'s last green `test-windows` job took 3 min 42 s, CI run 43707430100). Three at a time was the owner's decision of 2026-11-15, so the coordinator took it to the owner, who **approved two at a time on Windows only** (2026-11-15): a group of its own, `system-windows`, chosen in the `ci` profile by an override for `cfg(windows)`; Linux stays at three. It is recorded as an amendment in [testing-and-ci.md](../../testing-and-ci.md), "Each tier is measured under its own load". What the two together did to `main`'s tree is in [ci.md](ci.md).
 
+## What it came to
+
+| Run | Runner start | Windows tier 3 above the start |
+|---|---|---|
+| `main`'s own CI run, 43707430100 | 11 ms | 93.4 s |
+| The pull request's CI run, 43718965108 | 11 ms | 71.3 s (−24%); `test-windows` 223 s against `main`'s 222 s |
+| `try` 43718003767, the branch against `main` on one runner, 5 rounds | 6 ms | 53.5 → 39.2 s (−27%) |
+
+The 65 s asked for at 10 ms is about what the two A/Bs together give (80.4 s × 46.6 / 57.6 ≈ 65 s); the pull request's run, on a runner a millisecond slower, read 71.3 s. A 12 ms runner, which read every tier about twice a 10 ms one, would put it near 130 s, under the 135 s failure line and over the 90 s warning: the margin is there for the runners CI usually draws, and thin for the slowest. The open item is settled (`windows-tier-three-margin-and-the-powershell-tests`, deleted): it asked for one PowerShell start shared by several cases or tests, which is what the batching does where cases share an encoding or a start (a host shared by tests would test what the product does not do: every PowerShell start in tier 3 is the shell tool's own or the product's shell in a turn).
+
+**The runner estimate** (`ci --tiers --like-runner`) was measured again, since its table was of three system tests at a time on Windows and read that tree's tier 3 at 84 s: from the desk's run of the branch at `5e2866b` against the branch's side of `try` 43718003767. The desk's disk stalled 54% of that run, so the file-heavy crates' factors are low; a quieter desk would make them better. Whole tiers now: Linux 1.4, 1.0 and 1.4; Windows 2.6, 1.8 and 6.4.
+
+**The stall check, on a real stall.** `cargo xtask stress -p cortex-tools -p cortex-base -p cortex-testkit -p cortex-stats -p xtask --count 50` on the desk's side slot: 1,230 tests, 50 times each, and in repeat 1 fourteen file-heavy tests of `cortex-base` timed out together. The command said: "STALL: 13 tests timed out within 4 ms of each other: likely the machine, not the tests", with "During this run's 162 s, some task waited on I/O for 64.4 s, and every task at once for 60.8 s". The report shows them started within 33 ms and stopped 0.83 to 0.86 s past their 10 s limit. Every other repeat of every test passed. `cargo xtask stress -p cortex-agent --count 300`: 303 tests, every one every time. On Windows (`try` 43718006646): `cortex-tools`' shell and process tests, 92 of them, 20 times each, every one every time.
+
 ## The A/B runs
 
 | Run | What | Runner start | Tier 3 above the start, base → head (median of 5) |
@@ -97,7 +111,7 @@ The full review of the whole diff, then a second of the fixes:
 
 ## Gaps
 
-- **Item 1's target:** met with the owner's decision above (the figure is in [ci.md](ci.md)). Without the thread change, about 80 s at 10 ms is the best this step reaches without testing less: nearly every PowerShell start left in tier 3 is the shell tool's own (one process a call, which is what those tests test) or the product's shell in a `cortex-core` or `cortex-cli` turn. Running the process-tree tests on `cmd.exe` instead of the default `pwsh` would save about 5 s more; it changes which shell they test, and was not done or proposed.
+- **Item 1's target:** about 65 s at 10 ms by the two A/Bs together, 71.3 s on the pull request's 11 ms runner ("What it came to", above). Without the thread change, about 80 s at 10 ms is the best this step reaches without testing less: nearly every PowerShell start left in tier 3 is the shell tool's own (one process a call, which is what those tests test) or the product's shell in a `cortex-core` or `cortex-cli` turn. Running the process-tree tests on `cmd.exe` instead of the default `pwsh` would save about 5 s more; it changes which shell they test, and was not done or proposed.
 - **Glue no test holds:** the calls of the stall check in `stress`'s and `ci`'s runs (the check itself, and `mutate`'s use of it, are tested); `./x`'s fallback to the last good copy (a shell script); the move-aside path of the copy on Windows.
 - **`caught-by` names in CI:** checked only where a list of tests is kept; CI keeps none ([caught-by-names-checked-only-at-the-desk](../../outstanding/caught-by-names-checked-only-at-the-desk.md)).
 - **`mutate`'s lock under plain `cargo test`** can be held a moment by another test's child ([the-mutate-lock-and-a-forked-child](../../outstanding/the-mutate-lock-and-a-forked-child.md)).

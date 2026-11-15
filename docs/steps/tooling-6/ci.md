@@ -4,7 +4,24 @@ This step added tools and test support: the stall check, `test --dependents`, `m
 
 ## On the pull request
 
-(Written when the pull request's CI has run.)
+<!-- written by cargo xtask ci-times: it replaces this up to the end mark -->
+Pull request 54, on `main` at `c1e9ea3`. "Main" is main's own run at `c1e9ea3` (run 43707430100).
+The PR's run is 43718965108, at `5e2866b`.
+
+| Job | Main, `c1e9ea3` | The PR at `5e2866b` |
+|---|---|---|
+| `lint-linux` | 58 s | 45 s |
+| `test-linux` | 112 s | 101 s |
+| `lint-windows` | 72 s | 66 s |
+| `test-windows` | 222 s | 223 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `5e2866b` (6 ms) | Windows, main (11 ms) | Windows, `5e2866b` (11 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 14.1 s | 11.1 s | 21.3 s | 17.4 s |
+| Tier 2, integration (40 s) | 29.5 s | 20.1 s | 45.8 s | 35.5 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 19.6 s | 13.2 s | 93.4 s | 71.3 s |
+
+<!-- end of what cargo xtask ci-times wrote -->
 
 ## Windows, both trees on one runner
 

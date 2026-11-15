@@ -114,7 +114,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [names-that-act-unseen-in-tool-results](names-that-act-unseen-in-tool-results.md): `list`, `search` and `read` show a name with a line break or an escape as it is; the map and `outline` escape them. Owner: a later `cortex-tools` step, or step 32.
 - [a-git-look-too-slow-on-a-loaded-windows-runner](a-git-look-too-slow-on-a-loaded-windows-runner.md): The shell's look at changes gave up as too slow on a loaded Windows runner, failing one system test once. Owner: the next step that changes the look, or step 32.
 - [cmd-searches-the-current-directory](cmd-searches-the-current-directory.md): `cmd.exe` finds a program in the working directory before `PATH`, so a workspace `git.bat` runs as `git`. Owner: the owner.
-- [windows-tier-three-margin-and-the-powershell-tests](windows-tier-three-margin-and-the-powershell-tests.md): Windows tier 3 reads 76 to 90 s of its 90 on ordinary runners and failed at 138.8 s on a 12 ms one; `cortex-tools`' PowerShell tests are 76 s of it. Owner: a tooling step early in wave 10.
 
 ### cortex-tui
 
