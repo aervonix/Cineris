@@ -10,11 +10,29 @@
 //! left, most relevant first, each file whole or not at all, and the map
 //! says how many were left out.
 //!
-//! **How files are ranked**, with no model call: the files this session's
-//! tools touched; then the files of recent sessions (from the statistics,
-//! when the core gives them); then the files changed most recently, when
-//! the tree's times say anything (a fresh clone's do not); then files with
-//! definitions before files without, shallower before deeper, and by path.
+//! **How files are ranked**, with no model call, in tiers: the files this
+//! session's tools touched; then the files of recent sessions (from the
+//! statistics, when the core gives them); then the files changed most
+//! recently, when the tree's times say anything (a fresh clone's do not),
+//! the newest first; then the rest. Since the independent review of step
+//! 18, which found this repository's map naming lockfiles, licences and
+//! documents and no source file:
+//!
+//! - **Code first.** In each tier, the files a language's extractor
+//!   outlines come before Markdown's, and those before the files the
+//!   indentation fallback outlines (configuration, data, prose).
+//! - **No noise.** A file Markdown or the fallback outlines and named as a
+//!   lockfile, a licence or notice, a changelog, or a merge's or a patch's
+//!   leftover (`*.orig`, `*.rej`, which is how a published crate keeps its
+//!   original manifest) is never shown: its outline says nothing of the
+//!   code's shape. A code file of such a name (`history.py`) is code.
+//! - **Spread over the tree.** In the last tier, each directory's first
+//!   file comes before any directory's second, and so on, the shallower
+//!   directories first in each round; a directory's files in order of how
+//!   many top-level definitions they have, then by path. So the map shows
+//!   the tree's breadth before one directory's depth.
+//!
+//! A file with no definitions is never shown.
 //!
 //! **Byte-stable.** The same cache and the same request give the same map:
 //! every order is total and ends at the path, the touched files are a set,
@@ -24,8 +42,9 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use crate::cache::{CacheFile, Record};
-use crate::outline::{Entry, Kind, visible};
+use crate::cache::{CacheFile, Record, Shown};
+use crate::language::Language;
+use crate::outline::{Kind, visible};
 use crate::walk::Partial;
 
 /// The map's default budget, in tokens.
@@ -36,11 +55,6 @@ pub const BYTES_PER_TOKEN: usize = 3;
 
 /// The most of the budget the tree may take, in percent.
 pub const TREE_SHARE: usize = 30;
-
-/// How many of a file's top-level definitions are named, and how many of
-/// each one's members.
-const TOP_ENTRIES: usize = 12;
-const MEMBERS: usize = 8;
 
 /// How many files count as changed recently, at most.
 const RECENT_FILES: usize = 30;
@@ -135,10 +149,7 @@ pub(crate) fn render(
     // The files, most relevant first, each whole or not at all. A line is
     // made only when it is tried, so a map of 20,000 files reads the
     // outlines of the few it shows.
-    let showable: Vec<usize> = rank(cache, request)
-        .into_iter()
-        .filter(|&at| cache.records[at].entries > 0)
-        .collect();
+    let showable = rank(cache, request);
     const HEADING: &str = "\nFiles, most relevant first:\n";
     let cut_line = |left: usize| {
         format!(
@@ -300,7 +311,61 @@ fn tree(cache: &CacheFile, room: usize, allowed: &dyn Fn(&str) -> bool) -> Strin
     best
 }
 
-/// The records' positions, most relevant first.
+/// What kind of outline a file has, in the order the map prefers them: a
+/// language's extractor's, Markdown's headings, the indentation fallback's.
+fn class(record: &Record) -> u8 {
+    match record.language {
+        Some(Language::Markdown) => 1,
+        Some(_) => 0,
+        None => 2,
+    }
+}
+
+/// Whether a file is one the map never shows: outlined by Markdown or the
+/// fallback, and named as a lockfile, a licence or a notice, a changelog,
+/// or the leftover of a merge or a patch.
+fn noise(record: &Record) -> bool {
+    if class(record) == 0 {
+        return false;
+    }
+    let name = record
+        .path
+        .rsplit('/')
+        .next()
+        .unwrap_or(&record.path)
+        .to_ascii_lowercase();
+    let lockfile = [
+        ".lock",
+        ".lockb",
+        ".lockfile",
+        ".lock.json",
+        "-lock.json",
+        "-lock.yaml",
+    ]
+    .iter()
+    .any(|end| name.ends_with(end))
+        || matches!(name.as_str(), "go.sum" | "npm-shrinkwrap.json");
+    let leftover = name.ends_with(".orig") || name.ends_with(".rej");
+    // The name before its first `.`, `-` or `_`: `LICENSE-APACHE`,
+    // `CHANGELOG.md`, `COPYING.LESSER`.
+    let stem = name.split(['.', '-', '_']).next().unwrap_or("");
+    let named = matches!(
+        stem,
+        "license"
+            | "licence"
+            | "unlicense"
+            | "copying"
+            | "copyright"
+            | "notice"
+            | "changelog"
+            | "changes"
+            | "history"
+            | "news"
+    );
+    lockfile || leftover || named
+}
+
+/// The positions of the records the map may show, most relevant first.
 fn rank(cache: &CacheFile, request: &MapRequest) -> Vec<usize> {
     let touched: BTreeSet<&str> = request.touched.iter().map(String::as_str).collect();
     let recent: BTreeSet<&str> = request.recent.iter().map(String::as_str).collect();
@@ -337,10 +402,9 @@ fn rank(cache: &CacheFile, request: &MapRequest) -> Vec<usize> {
         changed_rank[at] = rank;
     }
 
-    let mut order: Vec<usize> = (0..cache.records.len()).collect();
-    order.sort_by_cached_key(|&at| {
+    let tier = |at: usize| {
         let record = &cache.records[at];
-        let tier = if touched.contains(record.path.as_str()) {
+        if touched.contains(record.path.as_str()) {
             0
         } else if recent.contains(record.path.as_str()) {
             1
@@ -348,11 +412,46 @@ fn rank(cache: &CacheFile, request: &MapRequest) -> Vec<usize> {
             2
         } else {
             3
-        };
+        }
+    };
+    let mut order: Vec<usize> = (0..cache.records.len())
+        .filter(|&at| cache.records[at].top > 0 && !noise(&cache.records[at]))
+        .collect();
+
+    // The last tier spread over the tree: each file's round is its place
+    // among its directory's files of its class, the most definitions first.
+    let mut round = vec![0usize; cache.records.len()];
+    let mut by_directory: std::collections::BTreeMap<(&str, u8), Vec<usize>> =
+        std::collections::BTreeMap::new();
+    for &at in &order {
+        if tier(at) == 3 {
+            let record = &cache.records[at];
+            let directory = record.path.rsplit_once('/').map_or("", |(dir, _)| dir);
+            by_directory
+                .entry((directory, class(record)))
+                .or_default()
+                .push(at);
+        }
+    }
+    for files in by_directory.values_mut() {
+        files.sort_by(|&one, &other| {
+            cache.records[other]
+                .top
+                .cmp(&cache.records[one].top)
+                .then(one.cmp(&other))
+        });
+        for (place, &at) in files.iter().enumerate() {
+            round[at] = place;
+        }
+    }
+
+    order.sort_by_cached_key(|&at| {
+        let record = &cache.records[at];
         (
-            tier,
+            tier(at),
+            class(record),
             changed_rank[at],
-            usize::from(record.top == 0),
+            round[at],
             record.path.split('/').count(),
             at,
         )
@@ -361,50 +460,38 @@ fn rank(cache: &CacheFile, request: &MapRequest) -> Vec<usize> {
 }
 
 /// A file's line of the map: its path and its main definitions. `None` for
-/// a file with nothing to show (no definitions).
+/// a file with nothing to show (no definitions), or whose definitions'
+/// lines in the cache this build did not write.
 fn file_line(cache: &CacheFile, record: &Record) -> Option<String> {
-    if record.entries == 0 {
+    if record.top == 0 {
         return None;
     }
-    let outline = cache.outline_of(record);
+    let shown = cache.shown(record)?;
     let mut line = format!("{}:", visible(&record.path));
-    let mut top: Vec<(&Entry, Vec<&Entry>)> = Vec::new();
-    for entry in &outline.entries {
-        match entry.depth {
-            0 => top.push((entry, Vec::new())),
-            1 => {
-                if let Some((_, members)) = top.last_mut() {
-                    members.push(entry);
-                }
-            }
-            _ => {}
-        }
-    }
-    let shown = top.len().min(TOP_ENTRIES);
-    for (count, (entry, members)) in top.iter().take(TOP_ENTRIES).enumerate() {
+    for (count, entry) in shown.iter().enumerate() {
         line.push_str(if count == 0 { " " } else { ", " });
         line.push_str(&named(entry));
-        if !members.is_empty() {
+        if entry.members > 0 {
             line.push_str(" {");
-            for (index, member) in members.iter().take(MEMBERS).enumerate() {
+            for (index, member) in entry.names.iter().enumerate() {
                 line.push_str(if index == 0 { " " } else { ", " });
-                line.push_str(&visible(&member.name));
+                line.push_str(&visible(member));
             }
-            if members.len() > MEMBERS {
-                let _ = write!(line, ", +{}", members.len() - MEMBERS);
+            if entry.members > entry.names.len() {
+                let _ = write!(line, ", +{}", entry.members - entry.names.len());
             }
             line.push_str(" }");
         }
     }
-    if top.len() > shown {
-        let _ = write!(line, ", +{} more", top.len() - shown);
+    if record.top > shown.len() {
+        let _ = write!(line, ", +{} more", record.top - shown.len());
     }
     Some(line)
 }
 
 /// A top-level definition as the map names it: its kind's word and its
 /// name, or a heading's text.
-fn named(entry: &Entry) -> String {
+fn named(entry: &Shown) -> String {
     match entry.kind {
         Kind::Section | Kind::Block => visible(&entry.name).into_owned(),
         kind => format!("{} {}", kind.word(), visible(&entry.name)),

@@ -11,11 +11,12 @@ use std::io::Read as _;
 
 use cortex_base::{AbsPath, open_regular};
 
+use crate::cache::CacheFile;
 use crate::extract::extract;
 use crate::language::Language;
 use crate::map::{MapRequest, render};
 use crate::outline::Outline;
-use crate::pass::Index;
+use crate::pass::{Index, Snapshot};
 use crate::text::{BINARY_PROBE, decode, is_binary};
 use crate::walk::Stamp;
 
@@ -51,7 +52,18 @@ impl Index {
     /// kept once it is returned.
     #[must_use]
     pub fn map(&self, request: &MapRequest) -> Option<String> {
-        let cache = self.cache()?;
+        self.map_of(&self.cache()?, request)
+    }
+
+    /// The map of the workspace from the cache a pass left
+    /// ([`Index::pass_and_keep`]), without reading it again: the same map
+    /// as [`Index::map`] gives when that cache is the one on the disk.
+    #[must_use]
+    pub fn map_from(&self, snapshot: &Snapshot, request: &MapRequest) -> Option<String> {
+        self.map_of(snapshot.cache.as_ref()?, request)
+    }
+
+    fn map_of(&self, cache: &CacheFile, request: &MapRequest) -> Option<String> {
         let root = self.root();
         // A path, and every directory above it: the walk goes into no
         // directory the gate refuses.
@@ -61,7 +73,7 @@ impl Index {
                 .chain(std::iter::once(path))
                 .all(|part| root.join(part).is_ok_and(|abs| self.gate().may_index(&abs)))
         };
-        render(&cache, request, self.limits().max_files, &allowed)
+        render(cache, request, self.limits().max_files, &allowed)
     }
 
     /// The outline of the file at `path`, made from the file as it is now.

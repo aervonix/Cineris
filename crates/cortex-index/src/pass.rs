@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use cortex_base::{AbsPath, AtomicWriteOptions, SharedClock, open_regular, private, write_atomic};
 
-use crate::cache::{CacheFile, Flags, Writer};
+use crate::cache::{CacheFile, Flags, Made, Writer};
 use crate::extract::extract;
 use crate::language::Language;
 use crate::outline::Outline;
@@ -101,6 +101,23 @@ pub struct PassReport {
     pub skipped: Skipped,
     /// The size of the cache now, in bytes.
     pub cache_bytes: usize,
+}
+
+/// The cache as a pass left it, read and checked: what [`Index::map_from`]
+/// makes a map of, so that a map asked for with a pass does not read the
+/// cache again (the independent review of step 18). It is the size of the
+/// cache; hold it only while the maps are made.
+#[derive(Debug, Default)]
+pub struct Snapshot {
+    pub(crate) cache: Option<CacheFile>,
+}
+
+impl Snapshot {
+    /// Whether there is no cache to make a map of.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.cache.is_none()
+    }
 }
 
 impl PassReport {
@@ -184,13 +201,25 @@ impl Index {
 
     /// One pass over the workspace. Blocks; runs on the blocking pool.
     ///
-    /// `control` says when to stop between files: the session's end, a
-    /// turn that began, the time.
+    /// `cancel` and `give_way` say when to stop between files: the
+    /// session's end, a turn that began. The time limit is the index's.
     pub fn pass(
         &self,
         cancel: &cortex_base::CancelToken,
         give_way: &(dyn Fn() -> bool + Sync),
     ) -> PassReport {
+        self.pass_and_keep(cancel, give_way).0
+    }
+
+    /// [`Index::pass`], and the cache as the pass left it, for
+    /// [`Index::map_from`]: the one the pass read when it changed nothing,
+    /// the one it made when it did (even if writing it failed: it is the
+    /// workspace as the pass saw it).
+    pub fn pass_and_keep(
+        &self,
+        cancel: &cortex_base::CancelToken,
+        give_way: &(dyn Fn() -> bool + Sync),
+    ) -> (PassReport, Snapshot) {
         // The time limit is the reading's: it starts when the listing ends
         // (`walk::Control::stop_listing`).
         let started = std::sync::Mutex::new(None::<std::time::Duration>);
@@ -249,51 +278,58 @@ impl Index {
             // The listing is not the workspace: writing it would drop the
             // records of the files it did not reach.
             report.indexed = old.as_ref().map_or(0, |cache| cache.records.len());
-            return report;
+            report.cache_bytes = old.as_ref().map_or(0, |cache| cache.text().len());
+            return (report, Snapshot { cache: old });
         }
 
-        let root_fs = self.root.to_fs_path();
-        let mut writer = Writer::new(self.root.as_str());
         // Directories in the order the files are in, so that a directory's
         // subdirectories follow it (`a`, `a/x`, `a-b`), which is what the
         // map's tree draws by indentation.
         let mut dirs: Vec<(&String, &usize)> = listing.dirs.iter().collect();
         dirs.sort_by(|(one, _), (other, _)| walk::path_order(one, other));
+        let held = held_records(old.as_ref(), &listing.files);
+
+        // Nothing to read and nothing gone: the cache is the workspace's
+        // already, and no new one is made.
+        let unchanged = old.as_ref().is_some_and(|old| {
+            held.iter().all(Option::is_some)
+                && old.records.len() == listing.files.len()
+                && old.found == listing.found
+                && old.partial == report.partial
+                && old.dirs.len() == dirs.len()
+                && old
+                    .dirs
+                    .iter()
+                    .zip(&dirs)
+                    .all(|((one, n), (other, m))| one == *other && n == *m)
+        });
+        if unchanged {
+            report.kept = listing.files.len();
+            report.indexed = report.kept;
+            report.cache_bytes = old.as_ref().map_or(0, |old| old.text().len());
+            return (report, Snapshot { cache: old });
+        }
+
+        let root_fs = self.root.to_fs_path();
+        let mut writer = Writer::new(
+            self.root.as_str(),
+            old.as_ref().map_or(0, |old| old.text().len()),
+        );
         for (dir, files) in &dirs {
             writer.dir(dir, **files);
         }
-        // A window of files at a time: what is read is written out before
-        // the next is read, so a pass holds one window's outlines, not the
-        // workspace's.
+        // A window of files at a time: what is read is added to the new
+        // cache before the next is read, so a pass holds one window's
+        // outlines, not the workspace's.
         let mut stopped: Option<Partial> = None;
-        // The listing and the cache's records are both in path order: one
-        // walk through the records serves the whole listing, where a search
-        // for each file would compare paths twenty times over.
-        let mut cursor = 0;
-        for window in listing.files.chunks(WINDOW) {
-            let held: Vec<Option<usize>> = window
-                .iter()
-                .map(|file| {
-                    let old = old.as_ref()?;
-                    while old.records.get(cursor).is_some_and(|record| {
-                        walk::path_order(&record.path, &file.relative).is_lt()
-                    }) {
-                        cursor += 1;
-                    }
-                    let record = old
-                        .records
-                        .get(cursor)
-                        .filter(|record| record.path == file.relative)?;
-                    (record.stamp == file.stamp && !record.flags.unsettled).then_some(cursor)
-                })
-                .collect();
+        for (window, held) in listing.files.chunks(WINDOW).zip(held.chunks(WINDOW)) {
             let wanted: Vec<&Listed> = window
                 .iter()
-                .zip(&held)
+                .zip(held)
                 .filter(|(_, held)| held.is_none())
                 .map(|(file, _)| file)
                 .collect();
-            let read = if stopped.is_none() {
+            let read = if stopped.is_none() && !wanted.is_empty() {
                 let (read, why) =
                     self.read_all(&root_fs, &wanted, &control, now, report.read == 0, threads);
                 stopped = why;
@@ -302,15 +338,15 @@ impl Index {
                 Vec::new()
             };
             let mut read = read.into_iter();
-            for held in &held {
+            for held in held {
                 match (held, &old) {
                     (Some(at), Some(old)) => {
-                        writer.copy(old.lines_of(&old.records[*at]));
+                        writer.keep(old, &old.records[*at]);
                         report.kept += 1;
                     }
                     _ => {
-                        if let Some(Some(record)) = read.next() {
-                            writer.copy(&record);
+                        if let Some(Some(made)) = read.next() {
+                            writer.add(made);
                             report.read += 1;
                         }
                     }
@@ -321,31 +357,19 @@ impl Index {
             report.partial.push(why);
         }
         report.indexed = report.kept + report.read;
-        let text = writer.finish(listing.found, &report.partial);
-        report.cache_bytes = text.len();
-        let unchanged = old.as_ref().is_some_and(|old| {
-            report.read == 0
-                && old.records.len() == report.indexed
-                && old.found == listing.found
-                && old.partial == report.partial
-                && old.dirs.len() == dirs.len()
-                && old
-                    .dirs
-                    .iter()
-                    .zip(&dirs)
-                    .all(|((one, n), (other, m))| one == *other && n == *m)
-        });
-        // The old cache's text goes before the new one is written.
+        // The old cache goes before the new one is finished and written.
         drop(old);
-        if !unchanged {
-            report.written = self.write(&text);
-        }
-        report
+        let cache = writer.finish(listing.found, &report.partial);
+        report.cache_bytes = cache.text().len();
+        report.written = self.write(cache.text());
+        (report, Snapshot { cache: Some(cache) })
     }
 
     /// Reads and outlines each of `files`, on a few threads, and returns
     /// each one's record as the cache writes it (`None` for one that could
     /// not be read), in their order; and why it stopped early, if it did.
+    /// Each record holds only what the cache keeps, so a window's outlines
+    /// are not held past their file.
     fn read_all(
         &self,
         root_fs: &std::path::Path,
@@ -354,10 +378,10 @@ impl Index {
         now: i128,
         first: bool,
         threads: usize,
-    ) -> (Vec<Option<String>>, Option<Partial>) {
+    ) -> (Vec<Option<Made>>, Option<Partial>) {
         let next = AtomicUsize::new(0);
         let stopped: std::sync::Mutex<Option<Partial>> = std::sync::Mutex::new(None);
-        let results: Vec<std::sync::Mutex<Option<String>>> =
+        let results: Vec<std::sync::Mutex<Option<Made>>> =
             files.iter().map(|_| std::sync::Mutex::new(None)).collect();
         let threads = threads.min(files.len()).max(1);
         let work = || {
@@ -460,4 +484,33 @@ impl Index {
         };
         write_atomic(&self.cache_path(), text.as_bytes(), &options, &*self.clock).is_ok()
     }
+}
+
+/// Where each listed file's record is in the old cache, when it holds: the
+/// same stamp, and settled when it was read. The listing and the records
+/// are both in path order, so one walk through the records serves the
+/// whole listing, where a search for each file would compare paths twenty
+/// times over.
+fn held_records(old: Option<&CacheFile>, files: &[Listed]) -> Vec<Option<usize>> {
+    let Some(old) = old else {
+        return vec![None; files.len()];
+    };
+    let mut cursor = 0;
+    files
+        .iter()
+        .map(|file| {
+            while old
+                .records
+                .get(cursor)
+                .is_some_and(|record| walk::path_order(&record.path, &file.relative).is_lt())
+            {
+                cursor += 1;
+            }
+            let record = old
+                .records
+                .get(cursor)
+                .filter(|record| record.path == file.relative)?;
+            (record.stamp == file.stamp && !record.flags.unsettled).then_some(cursor)
+        })
+        .collect()
 }

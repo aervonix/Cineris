@@ -117,12 +117,17 @@ fn touched_files_come_first_then_recent_sessions_then_recent_changes() {
         ["tests/it.rs", "guides/intro.md", "src/hot.rs"],
         "{map}"
     );
-    // Then shallower before deeper.
-    let rest = &order[3..];
-    let depth = |path: &str| path.matches('/').count();
-    assert!(
-        rest.windows(2).all(|pair| depth(pair[0]) <= depth(pair[1])),
-        "{rest:?}"
+    // Then code before documents, each directory's first file before any
+    // directory's second, shallower first.
+    assert_eq!(
+        &order[3..],
+        [
+            "src/lib.rs",
+            "src/parse/mod.rs",
+            "src/parse/expr.rs",
+            "README.md"
+        ],
+        "{map}"
     );
 }
 
@@ -169,10 +174,85 @@ fn a_fresh_clone_has_no_recent_changes_to_rank_by() {
         .split("Files, most relevant first:\n")
         .nth(1)
         .expect("files");
-    // Every file has one time: the order is by depth and path alone.
+    // Every file has one time: the order is the code's first, shallower
+    // first, then the documents'.
     let first = files.lines().next().expect("a line");
-    assert!(
-        first.starts_with("Cargo.toml") || first.starts_with("README.md"),
+    assert!(first.starts_with("src/lib.rs"), "{map}");
+}
+
+/// The files of a map, in its order.
+fn shown_files(map: &str) -> Vec<&str> {
+    map.split("Files, most relevant first:\n")
+        .nth(1)
+        .unwrap_or("")
+        .lines()
+        .filter(|line| !line.starts_with('['))
+        .map(|line| line.split(':').next().unwrap_or(""))
+        .collect()
+}
+
+/// The independent review of step 18 found this repository's map naming
+/// `Cargo.lock`, the licences and the top-level documents, and no source
+/// file. A lockfile, a licence, a changelog and a published crate's
+/// original manifest are never shown; a code file of such a name is code;
+/// and code comes before documents.
+#[test]
+fn noise_is_never_shown_and_code_comes_before_documents() {
+    let tree = Tree::new(cortex_testkit::scratch!(
+        "noise_is_never_shown_and_code_comes_before_documents"
+    ));
+    let paragraphs = "Terms\n  of use\nMore\n  terms\n";
+    tree.write(
+        "Cargo.lock",
+        "[[package]]\nname = \"a\"\ndependencies = [\n  \"b\",\n]\n",
+    );
+    tree.write("package-lock.json", "{\n  \"name\": \"a\"\n}\n");
+    tree.write("LICENSE-APACHE", paragraphs);
+    tree.write("COPYING", paragraphs);
+    tree.write("CHANGELOG.md", "# Changelog\n\n## 1.0\n");
+    tree.write("Cargo.toml.orig", "[package]\n  name = \"a\"\n");
+    tree.write("README.md", "# Demo\n\n## Use\n");
+    tree.write("deep/down/src/lib.rs", &rust_file(&["deep"]));
+    tree.write("src/history.rs", &rust_file(&["record"]));
+    let index = tree.index();
+    tree.pass(&index);
+    let map = index.map(&MapRequest::new()).expect("a map");
+    assert_eq!(
+        shown_files(&map),
+        ["src/history.rs", "deep/down/src/lib.rs", "README.md"],
+        "{map}"
+    );
+    // Left out of the files, not of the counts.
+    assert!(map.contains("9 files indexed."), "{map}");
+}
+
+/// The last tier is spread over the tree: each directory's first file
+/// before any directory's second, so a directory of many files does not
+/// take the map from the others. A directory's first file is the one with
+/// the most top-level definitions.
+#[test]
+fn the_map_shows_the_trees_breadth_before_one_directorys_depth() {
+    let tree = Tree::new(cortex_testkit::scratch!("the_map_shows_the_trees_breadth"));
+    for n in 0..20 {
+        tree.write(&format!("big/f{n:02}.rs"), &rust_file(&["a"]));
+    }
+    tree.write("big/z.rs", &rust_file(&["a", "b", "c"]));
+    tree.write("small/one.rs", &rust_file(&["one"]));
+    tree.write("small/two.rs", &rust_file(&["two"]));
+    tree.write("tiny/only.rs", &rust_file(&["only"]));
+    let index = tree.index();
+    tree.pass(&index);
+    let map = index.map(&MapRequest::new()).expect("a map");
+    assert_eq!(
+        shown_files(&map)[..6],
+        [
+            "big/z.rs",
+            "small/one.rs",
+            "tiny/only.rs",
+            "big/f00.rs",
+            "small/two.rs",
+            "big/f01.rs"
+        ],
         "{map}"
     );
 }

@@ -326,18 +326,46 @@ fn a_corrupt_or_older_cache_is_rebuilt() {
     tree.pass(&index);
     let cache = index.cache_path();
     let good = std::fs::read_to_string(&cache).expect("the cache");
+    let older = good.replacen("cortex-index outlines 2 ", "cortex-index outlines 1 ", 1);
+    assert_ne!(older, good, "the cache's format is 2");
     for broken in [
         "garbage".to_owned(),
         good[..good.len() / 2].to_owned(),
-        good.replacen("cortex-index outlines 1", "cortex-index outlines 0", 1),
-        good.replace("\tfn\t", "\tnot-a-kind\t"),
+        older,
+        // A file with more top-level definitions than lines for them.
+        good.replacen("\trust\t1\n", "\trust\t2\n", 1),
     ] {
+        assert_ne!(broken, good);
         std::fs::write(&cache, broken).expect("break the cache");
         let report = tree.pass(&index);
         assert_eq!((report.read, report.indexed), (2, 2), "{report:?}");
         assert!(report.written);
         assert_eq!(std::fs::read_to_string(&cache).expect("the cache"), good);
     }
+}
+
+/// A definition's line is read when its file is shown, not by every pass
+/// (the independent review of step 18: checking every line of the cache
+/// twice a map cost a warm map most of its time). One this build did not
+/// write leaves its file out of the map, and nothing else.
+#[test]
+fn a_bad_definition_line_leaves_its_file_out_of_the_map() {
+    let tree = Tree::new(cortex_testkit::scratch!(
+        "a_bad_definition_line_leaves_its_file_out_of_the_map"
+    ));
+    tree.write("a.rs", "pub fn alpha() {}\n");
+    tree.write("b.rs", "pub fn beta() {}\n");
+    let index = tree.index();
+    tree.pass(&index);
+    let cache = index.cache_path();
+    let good = std::fs::read_to_string(&cache).expect("the cache");
+    let broken = good.replacen("O\tfn\talpha\t", "O\tnot-a-kind\talpha\t", 1);
+    assert_ne!(broken, good);
+    std::fs::write(&cache, &broken).expect("break the cache");
+    let report = tree.pass(&index);
+    assert_eq!((report.read, report.kept), (0, 2), "{report:?}");
+    let map = index.map(&MapRequest::new()).expect("a map");
+    assert!(map.contains("fn beta") && !map.contains("alpha"), "{map}");
 }
 
 #[test]
