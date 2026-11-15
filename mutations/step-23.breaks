@@ -154,3 +154,15 @@ find: Some(StopReason::Interrupted | StopReason::Error | StopReason::MalformedTo
 replace: Some(StopReason::Paused)
 caught-by:
     app::items::tests::a_stopped_response_runs_none_of_its_calls
+
+[break] an-abort-leaves-the-terminal-raw
+rule: An abort puts the terminal back: SIGABRT is one of the signals whose handler restores it.
+file: crates/cortex-term/src/sys/unix.rs
+find:
+    libc::SIGQUIT,
+    libc::SIGABRT,
+replace:
+    libc::SIGQUIT,
+    libc::SIGQUIT,
+caught-by:
+    cortex-term::it system::sys_the_terminal_is_put_back_after_an_abort

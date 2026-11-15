@@ -208,6 +208,18 @@ fn sys_a_panic_caught_on_another_thread_leaves_the_terminal_to_the_program() {
     restored(&mut session);
 }
 
+/// An abort, which no panic hook sees: the terminal is put back by the
+/// handler of SIGABRT (Unix; on Windows an abort ends the process at once,
+/// `docs/outstanding/terminal-test-gaps.md`).
+#[cfg(unix)]
+#[test]
+fn sys_the_terminal_is_put_back_after_an_abort() {
+    let mut session = start("abort-on=A");
+    first_frame(&mut session);
+    session.send(b"A");
+    restored(&mut session);
+}
+
 #[test]
 fn sys_the_terminal_is_put_back_after_a_signal_or_console_event() {
     let mut session = start("terminate-on=T");
