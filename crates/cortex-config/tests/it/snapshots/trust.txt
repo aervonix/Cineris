@@ -105,6 +105,7 @@ keys.picker                        user only
 keys.toggle                        user only
 keys.search                        user only
 keys.focus                         user only
+keys.dialog                        user only
 keys.global                        user only
 terminal.sync                      user only
 terminal.keyboard                  user only
