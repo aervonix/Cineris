@@ -30,6 +30,7 @@ mod nonblocking;
 mod outside;
 mod owner_guard;
 mod perf;
+mod records;
 mod replace;
 mod rules;
 mod runs;
@@ -70,9 +71,13 @@ Checks and tests
                     NEW and OLD are JUnit reports, run ids of the `ci`
                     workflow (read through gh), or `main`, the main branch's
                     latest successful run (OLD when it is not given).
-  ci-times RUN [--against RUN|main]
+  ci-times RUN [--against RUN|main] [--pr N] [--write FILE]
                     A run's job times and tier times, as tables for a step's
-                    ci.md, read through gh.
+                    ci.md, read through gh; --write puts them in its section
+                    `On the pull request`.
+  ci-times --ab TRY-RUN [--against REF] [--write FILE]
+                    A try A/B run's tiers on both sides, for the section
+                    `Both trees on one runner`, and the PR's CI section.
   rules             The repo-rule checks alone: no home-directory paths, the
                     crate dependency rules, docs/dependencies.md, workflows,
                     links and the layout of the step records.

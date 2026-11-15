@@ -6,7 +6,6 @@
 //! Nothing here writes to GitHub. `gh` must be installed and signed in; it
 //! asks for nothing but reads.
 
-use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -15,7 +14,7 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::junit::{self, TestCase};
-use crate::tiers::{self, Os, Tier};
+use crate::tiers::Os;
 use crate::workspace;
 
 /// Where a report comes from.
@@ -237,6 +236,43 @@ pub(crate) fn junit_of(run: u64, os: Os) -> Result<Option<PathBuf>> {
     }
 }
 
+/// The directory a run's artifact `name` is downloaded into, under
+/// `target/xtask-runs/`, fetched through `gh` the first time. `None` only
+/// when the run made no such artifact; an expired one and a download that
+/// fails are errors, as for [`junit_of`].
+pub(crate) fn artifact_dir(run: u64, name: &str) -> Result<Option<PathBuf>> {
+    let directory = download_root().join(run.to_string()).join(name);
+    // Written once the download is whole: a partial one is not trusted.
+    let whole = directory.join(".downloaded");
+    if whole.is_file() {
+        return Ok(Some(directory));
+    }
+    match kept(&artifacts(run)?, name) {
+        Kept::Yes => {}
+        Kept::Never => return Ok(None),
+        Kept::Expired => {
+            return Err(format!(
+                "run {run}'s `{name}` has expired: a run's artifacts are kept for 14 days"
+            ));
+        }
+    }
+    if directory.exists() {
+        fs::remove_dir_all(&directory)
+            .map_err(|error| format!("could not clear {}: {error}", directory.display()))?;
+    }
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("could not make {}: {error}", directory.display()))?;
+    let run_text = run.to_string();
+    let target = directory.to_string_lossy().into_owned();
+    gh(&[
+        "run", "download", &run_text, "--name", name, "--dir", &target,
+    ])
+    .map_err(|error| format!("run {run}'s `{name}` is there and could not be fetched: {error}"))?;
+    fs::write(&whole, b"")
+        .map_err(|error| format!("could not write {}: {error}", whole.display()))?;
+    Ok(Some(directory))
+}
+
 fn artifact_name(os: Os) -> &'static str {
     match os {
         Os::Linux => "junit-linux",
@@ -357,12 +393,60 @@ fn run_info(run: u64) -> Result<RunInfo> {
 
 /// `cargo xtask ci-times <run> [--against <run>|main]`.
 pub(crate) fn ci_times(arguments: &[String]) -> Result<()> {
-    const USAGE: &str = "usage: cargo xtask ci-times <RUN ID> [--against <RUN ID>|main]";
-    let (run, against) = match arguments {
-        [run] => (run, None),
-        [run, flag, against] if flag == "--against" => (run, Some(against)),
-        _ => return Err(USAGE.to_owned()),
+    const USAGE: &str =
+        "usage: cargo xtask ci-times <RUN ID> [--against <RUN ID>|main] [--pr N] [--write FILE]
+       cargo xtask ci-times --ab <TRY RUN ID> [--against REF] [--write FILE]
+
+The first writes the section \"On the pull request\" of a step's ci.md (with
+--write), and prints it: which pull request and which main, each job's time,
+and each tier's time above the start against its budget. The second does the
+same for the section \"Both trees on one runner\" from a try run made with
+-f against=REF, and prints the pull request's CI section from it.";
+    let mut run = None;
+    let mut ab = None;
+    let mut against = None;
+    let mut pr = None;
+    let mut write = None;
+    let mut rest = arguments.iter();
+    while let Some(argument) = rest.next() {
+        let mut value = || {
+            rest.next()
+                .ok_or_else(|| format!("`{argument}` needs a value\n{USAGE}"))
+        };
+        match argument.as_str() {
+            "--ab" => ab = Some(value()?.clone()),
+            "--against" => against = Some(value()?.clone()),
+            "--pr" => {
+                let text = value()?;
+                pr = Some(
+                    text.parse::<u64>()
+                        .map_err(|_| format!("`--pr {text}`: a number\n{USAGE}"))?,
+                );
+            }
+            "--write" => write = Some(PathBuf::from(value()?)),
+            "--help" | "-h" => return Err(USAGE.to_owned()),
+            other if run.is_none() && !other.starts_with('-') => run = Some(other.to_owned()),
+            other => return Err(format!("`{other}`?\n{USAGE}")),
+        }
+    }
+    if let Some(ab) = ab {
+        if run.is_some() || pr.is_some() {
+            return Err(format!("--ab takes a try run alone\n{USAGE}"));
+        }
+        let Source::Run(id) = Source::parse(&ab) else {
+            return Err(format!("`{ab}` is not a run's id\n{USAGE}"));
+        };
+        return crate::records::ab_times(
+            id,
+            against.as_deref().unwrap_or("main"),
+            write.as_deref(),
+        );
+    }
+    let Some(run) = run else {
+        return Err(USAGE.to_owned());
     };
+    let run = &run;
+    let against = against.as_ref();
     let run = match Source::parse(run) {
         Source::Run(id) => id,
         _ => return Err(format!("`{run}` is not a run's id\n{USAGE}")),
@@ -407,8 +491,7 @@ pub(crate) fn ci_times(arguments: &[String]) -> Result<()> {
             windows: reports[1].take(),
         });
     }
-    print!("{}", tables(&runs));
-    Ok(())
+    crate::records::pr_times(&runs, pr, write.as_deref())
 }
 
 /// A run, and its test jobs' reports where they exist.
@@ -418,116 +501,6 @@ pub(crate) struct Measured {
     pub(crate) windows: Option<Vec<TestCase>>,
 }
 
-/// The two tables of a step's `ci.md`: each job's time, and each tier's
-/// time above the start against its budget, one column for each run (and,
-/// for the tiers, each OS).
-pub(crate) fn tables(runs: &[Measured]) -> String {
-    let short = |sha: &str| sha.chars().take(7).collect::<String>();
-    let mut text = String::new();
-    for measured in runs {
-        let info = &measured.info;
-        let _ = writeln!(
-            text,
-            "Run {} at `{}`: {} on `{}`, {}.",
-            info.id,
-            short(&info.sha),
-            info.event,
-            info.branch,
-            info.date
-        );
-    }
-    text.push('\n');
-
-    let column = |info: &RunInfo| format!("Run {}, `{}`", info.id, short(&info.sha));
-    let _ = write!(text, "| Job |");
-    for measured in runs {
-        let _ = write!(text, " {} |", column(&measured.info));
-    }
-    let _ = writeln!(text, "\n|---|{}", "---|".repeat(runs.len()));
-    let mut names: Vec<&str> = Vec::new();
-    for measured in runs {
-        for (name, _) in &measured.info.jobs {
-            if !names.contains(&name.as_str()) {
-                names.push(name);
-            }
-        }
-    }
-    // Linux's jobs, then Windows', as the steps' pages list them.
-    names.sort_by_key(|name| (name.contains("windows"), *name));
-    for name in names {
-        let _ = write!(text, "| `{name}` |");
-        for measured in runs {
-            let took = measured
-                .info
-                .jobs
-                .iter()
-                .find(|(job, _)| job == name)
-                .and_then(|(_, took)| *took);
-            match took {
-                Some(seconds) => {
-                    let _ = write!(text, " {seconds} s |");
-                }
-                None => text.push_str(" — |"),
-            }
-        }
-        text.push('\n');
-    }
-
-    let mut columns: Vec<(Os, &Measured, &Vec<TestCase>)> = Vec::new();
-    for os in [Os::Linux, Os::Windows] {
-        for measured in runs {
-            let cases = match os {
-                Os::Linux => measured.linux.as_ref(),
-                Os::Windows => measured.windows.as_ref(),
-            };
-            if let Some(cases) = cases {
-                columns.push((os, measured, cases));
-            }
-        }
-    }
-    if columns.is_empty() {
-        text.push_str("\nNo test job of these runs kept a JUnit report.\n");
-        return text;
-    }
-    text.push_str("\n| Time above process start, against the budget |");
-    let starts: Vec<f64> = columns
-        .iter()
-        .map(|(_, _, cases)| tiers::start_of(cases).0)
-        .collect();
-    for ((os, measured, _), start) in columns.iter().zip(&starts) {
-        let os = match os {
-            Os::Linux => "Linux",
-            Os::Windows => "Windows",
-        };
-        let _ = write!(
-            text,
-            " {os}, run {} ({:.0} ms) |",
-            measured.info.id,
-            1000.0 * start
-        );
-    }
-    let _ = writeln!(text, "\n|---|{}", "---|".repeat(columns.len()));
-    for tier in Tier::ALL {
-        let budget = match tier {
-            Tier::System => "60 s on Linux, 90 s on Windows".to_owned(),
-            _ => format!("{:.0} s", tier.budget(Os::Linux)),
-        };
-        let (number, name) = tier.name().split_once(", ").unwrap_or(("", tier.name()));
-        let _ = write!(text, "| Tier {number}, {name} ({budget}) |");
-        for ((_, _, cases), start) in columns.iter().zip(&starts) {
-            let _ = write!(
-                text,
-                " {:.1} s |",
-                tiers::total(cases, tier, *start).above_start
-            );
-        }
-        text.push('\n');
-    }
-    text
-}
-
-/// Where `ci-times` and `--compare` keep what they download: a directory
-/// of its own for each run and artifact, under the build directory.
 fn download_root() -> PathBuf {
     workspace::root().join("target").join("xtask-runs")
 }
@@ -583,7 +556,7 @@ mod artifact_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{Measured, RunInfo, Source, download_root, parse_run, seconds_of, tables};
+    use super::{Measured, RunInfo, Source, download_root, parse_run, seconds_of};
     use crate::junit;
 
     #[test]
@@ -642,7 +615,7 @@ mod tests {
     }
 
     #[test]
-    fn the_tables_are_those_of_a_steps_ci_page() {
+    fn the_tables_are_those_of_a_steps_ci_page_and_name_main_and_the_pr() {
         let main = RunInfo {
             id: 4000,
             sha: "fedcba9876543210".to_owned(),
@@ -671,18 +644,18 @@ mod tests {
             },
         ];
         assert_eq!(
-            tables(&runs),
-            "Run 4000 at `fedcba9`: push on `main`, 2026-11-12.
-Run 4242 at `0123456`: pull_request on `step-x`, 2026-11-13.
+            crate::records::pr_section(&runs, Some(46)),
+            "Pull request 46, on `main` at `fedcba9`. \"Main\" is main's own run at `fedcba9` (run 4000).
+The PR's run is 4242, at `0123456`.
 
-| Job | Run 4000, `fedcba9` | Run 4242, `0123456` |
+| Job | Main, `fedcba9` | The PR at `0123456` |
 |---|---|---|
 | `lint-linux` | 52 s | 48 s |
 | `test-linux` | 68 s | 56 s |
 | `lint-windows` | — | — |
 | `test-windows` | — | 138 s |
 
-| Time above process start, against the budget | Linux, run 4000 (10 ms) | Linux, run 4242 (20 ms) | Windows, run 4242 (200 ms) |
+| Time above process start, against the budget | Linux, main (10 ms) | Linux, `0123456` (20 ms) | Windows, `0123456` (200 ms) |
 |---|---|---|---|
 | Tier 1, unit (20 s) | 1.0 s | 1.2 s | 5.0 s |
 | Tier 2, integration (40 s) | 1.5 s | 3.5 s | 9.2 s |
