@@ -175,6 +175,10 @@ pub struct CoreOptions {
     /// Cancelled when the process is to stop: every session's token is a
     /// child of it.
     pub cancel: CancelToken,
+    /// The time zone the statistics count local days in, in place of the
+    /// system's: a test's. `None`: the system's, read by the statistics'
+    /// writer when it first writes, and by the usage report.
+    pub zone: Option<cortex_base::Zone>,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -223,6 +227,7 @@ impl CoreOptions {
             git: None,
             base_capture: true,
             cancel: CancelToken::new(),
+            zone: None,
         }
     }
 }
@@ -273,6 +278,10 @@ pub(crate) struct Inner {
     shutting_down: AtomicBool,
     /// What the system offers the sandbox, asked once.
     pub(crate) sandbox: crate::sandbox::CoreSandbox,
+    /// The statistics' recorder: `None` when statistics are off
+    /// (`stats.enabled = false`) or there is no state directory. Making it
+    /// touches no file; its writer is started when the first session opens.
+    pub(crate) stats: Option<cortex_stats::Recorder>,
 }
 
 /// What a shell was looked for with: `shell.program` and `shell.args`.
@@ -356,6 +365,7 @@ impl Core {
             filter: Arc::new(std::sync::RwLock::new(cortex_base::SecretFilter::new())),
             key_found: options.key_found.clone(),
         };
+        let stats = crate::usage::recorder(&user, &options);
         let ids = IdGenerator::new(Arc::clone(&options.clock), Box::new(SystemRng::new()));
         let sandbox = crate::sandbox::CoreSandbox::new(
             options
@@ -375,6 +385,7 @@ impl Core {
                 probes: Mutex::new(Vec::new()),
                 shutting_down: AtomicBool::new(false),
                 sandbox,
+                stats,
             }),
         })
     }
@@ -408,6 +419,11 @@ impl Core {
     #[must_use]
     pub fn open_sessions(&self) -> Vec<SessionId> {
         lock(&self.inner.sessions).keys().cloned().collect()
+    }
+
+    /// The live usage of an open session.
+    pub(crate) fn session_usage(&self, session: &SessionId) -> Option<cortex_protocol::usage::SessionUsage> {
+        self.live(session).ok().map(|live| live.handle.usage())
     }
 
     /// The calls of a session that were refused because nobody could be
@@ -477,7 +493,7 @@ impl Core {
     /// a test that orders the loop's work orders the core's as well
     /// (`docs/testing-and-ci.md`, "A seeded order of events"). The work is
     /// not cancelled: what the core starts on the pool, it finishes.
-    async fn blocking<T: Send + 'static>(
+    pub(crate) async fn blocking<T: Send + 'static>(
         work: impl FnOnce() -> Result<T, OpError> + Send + 'static,
     ) -> Result<T, OpError> {
         match cortex_tools::run_blocking(&CancelToken::new(), move |_| work()).await {
@@ -771,6 +787,15 @@ impl Core {
                 for probe in probes {
                     let _ = probe.join();
                 }
+                Ok(())
+            })
+            .await;
+        }
+        // The statistics the sessions recorded are written before the
+        // process goes: its writer is a thread that would die with it.
+        if let Some(recorder) = self.inner.stats.clone() {
+            let _ = Self::blocking(move || {
+                recorder.flush();
                 Ok(())
             })
             .await;
@@ -1188,8 +1213,15 @@ impl Core {
                     usage: live.handle.usage(),
                 }))
             }
-            Op::UsageReport(_) => not_built("The usage report", "statistics (step 16)"),
-            Op::UsageRefresh(_) => not_built("The usage refresh", "statistics (step 16)"),
+            Op::UsageReport(params) => Ok(OpResult::UsageReport(
+                crate::usage::report(self, &params).await?,
+            )),
+            Op::UsageRefresh(params) => {
+                self.require_user(client)?;
+                Ok(OpResult::UsageRefresh(
+                    crate::usage::refresh(self, &params).await,
+                ))
+            }
             Op::ProjectList(_) | Op::ProjectUpdate(_) => {
                 not_built("The project profile", "the project profile (step 17)")
             }
@@ -1264,7 +1296,20 @@ impl Core {
 
     /// Whether the client may change a session, start one or end the
     /// core: an observer only watches.
-    fn may_drive(&self, client: ClientId) -> Result<(), OpError> {
+    /// Only a `user` client: for what only the person at the keyboard may
+    /// cause, such as a request to a provider's usage endpoint.
+    fn require_user(&self, client: ClientId) -> Result<(), OpError> {
+        match self.inner.clients.info(client).map(|info| info.role) {
+            Some(ClientRole::User) => Ok(()),
+            _ => Err(error(
+                ErrorKind::Usage,
+                code::ROLE_NOT_ALLOWED,
+                "Only a `user` client may ask the providers' usage endpoints.",
+            )),
+        }
+    }
+
+    pub(crate) fn may_drive(&self, client: ClientId) -> Result<(), OpError> {
         match self.inner.clients.info(client).map(|info| info.role) {
             Some(ClientRole::User | ClientRole::Supervisor) => Ok(()),
             _ => Err(error(

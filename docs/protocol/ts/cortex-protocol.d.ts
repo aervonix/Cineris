@@ -64,6 +64,8 @@ export interface ClientMethods {
   "turn/start": { params: TurnStartParams; result: TurnStartResult };
   /** Token, cost and cache figures for the session, live. */
   "usage/get": { params: SessionRef; result: UsageGetResult };
+  /** Asks the providers' usage endpoints that the user turned on, with each one's own credential. Only a `user` client. */
+  "usage/refresh": { params: UsageRefreshParams; result: UsageRefreshResult };
   /** Usage and cost for a range, grouped, with limits left. */
   "usage/report": { params: UsageReportParams; result: UsageReport };
   /** Runs the project's checks now. The outcome arrives as events. */
@@ -182,6 +184,18 @@ export interface AssistantMessageItem {
   truncated?: boolean;
   /** What the request used and cost. */
   usage?: RequestUsage | null;
+}
+
+/** An amount of money a provider reported as left, in one currency. */
+export interface Balance {
+  /** The currency as the provider names it: `USD`, `CNY`, or a unit of the provider's own. */
+  currency: string;
+  /** The budget it is left of, where there is one. */
+  limit?: string | null;
+  /** What is left, as an exact decimal number: `110.00`. It may be negative. Absent when the provider reports only a limit or a spend. */
+  remaining?: string | null;
+  /** What has been spent of it, where the provider says. */
+  used?: string | null;
 }
 
 /** How the usage is paid for. */
@@ -831,6 +845,20 @@ export interface ModelInfo {
 /** The job a model is doing. Configuration names one model per role (`docs/architecture/14-adaptation.md`, "Model roles and routing"). */
 export type ModelRole = "main" | "fast" | "judge" | (string & {});
 
+/** The time a model's part of some turns took, in milliseconds. */
+export interface ModelTime {
+  /** From sending a request to the provider's answering it: the connection, the request's upload and the provider's queue. */
+  connect_ms?: number;
+  /** From the answer to the response's first event. */
+  first_byte_ms?: number;
+  /** Waiting to send a failed request again. */
+  retry_ms?: number;
+  /** From the first event to the response's end. */
+  streaming_ms?: number;
+  /** Waiting for a summary, when a compaction could not go on without one. */
+  summary_ms?: number;
+}
+
 /** A session's usage for one provider, model, role and speed. */
 export interface ModelUsage {
   /** The model. */
@@ -1150,6 +1178,12 @@ export type ProviderId = string;
 
 /** The limits one provider last reported. A provider that reports none has no entry, and a front end shows "not available". */
 export interface ProviderLimits {
+  /** Whether the account or key may make calls now, where the provider says. Added in step 16. */
+  available?: boolean | null;
+  /** Money left, one entry a currency, where the provider's usage endpoint reports it (the opt-in refresh). Amounts in different currencies are never added together or converted. Added in step 16. */
+  balances?: Array<Balance>;
+  /** When the provider's next accounting period begins, where it names one without saying which limits it resets (Venice.ai's "epoch"). It is not a limit's reset time. Added in step 16. */
+  next_epoch?: Timestamp | null;
   /** The provider. */
   provider: ProviderId;
   /** When the figures were seen. */
@@ -1206,6 +1240,16 @@ export interface ReasoningPart {
   raw?: RawJson | null;
   /** The visible reasoning or its summary. Often empty. */
   text?: string;
+}
+
+/** What one provider's usage endpoint answered. */
+export interface RefreshOutcome {
+  /** Why it did not. The figures kept from before stay as they were. */
+  error?: ErrorData | null;
+  /** The figures, when the refresh worked. They are also kept, and `usage/report` shows them from then on. */
+  limits?: ProviderLimits | null;
+  /** The provider. */
+  provider: ProviderId;
 }
 
 /** The id that ties a response to its request: a number or a string, chosen by the side that sends the request. */
@@ -1690,6 +1734,24 @@ export interface TextPart {
   text: string;
 }
 
+/** Where the wall time of some turns went, in milliseconds. Every moment of a turn is in exactly one part, so the parts add up to `wall_ms`: a tool that runs while the response is still arriving is in the model's time, and a question to the user while a tool runs is in the tools'. */
+export interface TimeTotals {
+  /** Waiting for the user to answer whether a call may run, with no tool running. */
+  approval_ms?: number;
+  /** The harness's own work: assembling requests, recording, planning. */
+  harness_ms?: number;
+  /** Waiting for a model. */
+  model?: ModelTime;
+  /** Waiting for tools once the response had ended. */
+  tools_ms?: number;
+  /** How many turns. */
+  turns?: number;
+  /** Running the project's checks. */
+  verification_ms?: number;
+  /** Their wall time, from the prompt to `turn.completed`. */
+  wall_ms?: number;
+}
+
 /** A moment in time, in RFC 3339 form in UTC: `2026-11-12T10:15:02Z`. Fractional seconds are allowed. */
 export type Timestamp = string;
 
@@ -1776,6 +1838,22 @@ export interface ToolResultPart {
   content: Array<Part>;
   /** Whether the call failed. A failure is a result, written so the model can correct itself. */
   is_error?: boolean;
+}
+
+/** The time one tool took over some turns, in milliseconds. */
+export interface ToolTime {
+  /** How long its calls waited for the user's answer. */
+  approval_ms?: number;
+  /** How many calls. */
+  calls?: number;
+  /** How long its calls waited, once allowed, before they ran: for a slot, for an earlier call they conflict with, or for the response to end. */
+  queued_ms?: number;
+  /** Its calls' running time, added up. Calls that ran side by side are each counted whole. */
+  running_ms?: number;
+  /** Its part of the turns' tool time (`TimeTotals::tools_ms`): when calls run side by side each has an equal part of that moment. */
+  share_ms?: number;
+  /** The tool's name. */
+  tool: string;
 }
 
 /** `trust/request`: may this project's executable resources be used? */
@@ -1882,6 +1960,18 @@ export type UsageGroup = "provider" | "model" | "project" | "source" | "speed" |
 /** The period a usage report covers. */
 export type UsageRange = "session" | "today" | "week" | "month" | "all" | (string & {});
 
+/** `usage/refresh`: asks the documented usage endpoint of each provider the user turned the refresh on for (`usage.refresh`), with that provider's own credential. Only a `user` client may call it. Added in step 16. */
+export interface UsageRefreshParams {
+  /** Only these providers, each of which must be in `usage.refresh`. Empty: every provider in it. */
+  providers?: Array<ProviderId>;
+}
+
+/** The result of `usage/refresh`: one entry for each provider asked. */
+export interface UsageRefreshResult {
+  /** What each provider answered, in the order of `usage.refresh`. */
+  providers: Array<RefreshOutcome>;
+}
+
 /** Usage and cost over a range: the result of `usage/report`. */
 export interface UsageReport {
   /** The start of the range. Absent for all time. */
@@ -1898,10 +1988,16 @@ export interface UsageReport {
   rows: Array<UsageRow>;
   /** The sources included: `cortex-harness`, and other tools the user turned on. */
   sources?: Array<string>;
+  /** Where the time of the range's turns went, all rows together. Added in step 16. */
+  time?: TimeTotals | null;
   /** The end of the range. */
   to?: Timestamp | null;
+  /** The time each tool took in the range, the most first. Added in step 16. */
+  tools?: Array<ToolTime>;
   /** All rows together. */
   totals: UsageTotals;
+  /** The time zone the days were counted in, as the user is shown it. Added in step 16. */
+  zone?: string | null;
 }
 
 /** `usage/report`. It reads local data only. */
@@ -1930,6 +2026,8 @@ export interface UsageRow {
   source?: string | null;
   /** The speed the requests ran at. */
   speed?: Speed | null;
+  /** Where the time of the turns in the row went: for a report grouped by provider, model or project only, since a turn has no one speed or source. Added in step 16. */
+  time?: TimeTotals | null;
   /** What was used. */
   totals: UsageTotals;
 }

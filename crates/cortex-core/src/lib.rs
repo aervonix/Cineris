@@ -19,6 +19,8 @@
 //! | `redact` | The secret filter to the session log, and the rules for provider blocks. |
 //! | `shell_cache` | The shell's version, kept in the state directory so that a session does not start the shell to ask it. |
 //! | `manage` | The command line's subcommands to the credential store, the stored approvals and the trust store, judged as a session judges them. |
+//! | `stats` | The loop's statistics events to the statistics store's recorder. |
+//! | `usage` | `usage/report` from the aggregates, and `usage/refresh` to the providers' documented usage endpoints. |
 //!
 //! A front end needs [`Core`], [`CoreOptions`], [`ClientInfo`], and the
 //! protocol's own types: an [`Op`](cortex_protocol::methods::Op) in, an
@@ -38,7 +40,9 @@ mod redact;
 mod rules;
 mod sandbox;
 mod shell_cache;
+mod stats;
 mod store;
+mod usage;
 
 pub use crate::clients::{ClientId, ClientInfo};
 pub use crate::core::{Client, Core, CoreOptions, OpError};

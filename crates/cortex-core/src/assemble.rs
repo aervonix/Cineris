@@ -1409,7 +1409,24 @@ pub(crate) fn assemble(
         store: Box::new(LogStore::new(Arc::clone(&log), Arc::clone(&hooks))),
         context,
         events: Arc::clone(&sink) as Arc<dyn cortex_agent::EventSink>,
-        stats: Arc::new(NoStats),
+        stats: match &inner.stats {
+            Some(recorder) => {
+                // The writer starts off the core thread, the first time a
+                // session opens; a later call does nothing.
+                let starting = recorder.clone();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(error) = starting.start() {
+                        tracing::warn!(%error, "the statistics' writer did not start");
+                    }
+                });
+                Arc::new(crate::stats::SessionStats {
+                    recorder: recorder.clone(),
+                    project: root.project_key(),
+                    clock: Arc::clone(&clock),
+                }) as Arc<dyn cortex_agent::Stats>
+            }
+            None => Arc::new(NoStats),
+        },
         verifier: Arc::new(NoVerifier),
         clock,
         cooldowns: inner.providers.cooldowns.clone(),

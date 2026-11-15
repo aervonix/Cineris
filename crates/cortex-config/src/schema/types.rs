@@ -435,6 +435,52 @@ impl Setting for Profiles {
 }
 
 choice! {
+    /// A day of the week.
+    pub enum Weekday {
+        /// Monday.
+        Monday => "monday",
+        /// Tuesday.
+        Tuesday => "tuesday",
+        /// Wednesday.
+        Wednesday => "wednesday",
+        /// Thursday.
+        Thursday => "thursday",
+        /// Friday.
+        Friday => "friday",
+        /// Saturday.
+        Saturday => "saturday",
+        /// Sunday.
+        Sunday => "sunday",
+    }
+}
+
+impl Weekday {
+    /// The day counted from Monday as 0.
+    #[must_use]
+    pub const fn from_monday(self) -> u8 {
+        match self {
+            Self::Monday => 0,
+            Self::Tuesday => 1,
+            Self::Wednesday => 2,
+            Self::Thursday => 3,
+            Self::Friday => 4,
+            Self::Saturday => 5,
+            Self::Sunday => 6,
+        }
+    }
+}
+
+choice! {
+    /// How the usage view's week and month are counted.
+    pub enum UsageRanges {
+        /// The calendar week and month.
+        Calendar => "calendar",
+        /// The last 7 and 30 days.
+        Rolling => "rolling",
+    }
+}
+
+choice! {
     /// How much of a model's reasoning is shown.
     pub enum ReasoningVisibility {
         /// A summary, where the provider can give one.

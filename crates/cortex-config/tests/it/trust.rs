@@ -86,7 +86,12 @@ fn the_documented_classes_hold() {
         "providers.*.key_env",
         "providers.*.protocol",
         "sandbox.enabled",
-        "usage.*",
+        // The refresh is a network request: a project cannot turn it on.
+        "usage.refresh",
+        "usage.week_start",
+        "stats.enabled",
+        "stats.retention",
+        "adapt.variants.*.effort",
         "session.data_dir",
         // A project that could turn flushing off could cost the user
         // their sessions.
@@ -225,7 +230,7 @@ fn an_untrusted_project_gets_its_preferences_and_nothing_that_could_hurt() {
         ("permissions.mode", "\"supervised\""),
         ("hooks.on_start.command", "(not set)"),
         ("mcp.servers.helper.command", "(not set)"),
-        ("usage.refresh", "(not set)"),
+        ("usage.refresh", "[]"),
         ("log.level", "(not set)"),
         ("compat.mcp", "true"),
         // A fast tier costs about twice as much per token, and a model may
@@ -343,7 +348,7 @@ fn trust_turns_on_what_needs_trust_and_never_what_is_the_users_alone() {
         ("session.data_dir", "(not set)"),
         ("sandbox.enabled", "true"),
         ("permissions.mode", "\"supervised\""),
-        ("usage.refresh", "(not set)"),
+        ("usage.refresh", "[]"),
     ] {
         assert_eq!(value(&loaded, key), default, "{key}");
     }
