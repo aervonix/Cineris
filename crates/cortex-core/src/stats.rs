@@ -350,12 +350,53 @@ mod tests {
         }
         times.sort();
         println!(
-            "recording one request's event: median {:?}, 99th {:?}, most {:?}; dropped {}",
+            "recording one request's event, back to back: median {:?}, 99th {:?}, most {:?}; dropped {}",
             times[times.len() / 2],
             times[times.len() * 99 / 100],
             times[times.len() - 1],
             recorder.dropped()
         );
+        recorder.flush();
+        // Spaced as a turn spaces them, so that the writer is parked in
+        // its wait each time and the push must wake it (the independent
+        // review of step 16's note: the burst above measures a writer
+        // that is already awake). The loop's thread is busy between two
+        // events, as a loop is, or asleep; and beside a writer never
+        // started, which nothing wakes, to tell the wake from the rest.
+        let idle = RecorderOptions::new(StatsDir::new(dir.join("idle")));
+        let unstarted = SessionStats {
+            recorder: Recorder::new(idle, Arc::new(FakeClock::default())),
+            project: ProjectKey::new("pk_perf"),
+            clock: Arc::new(FakeClock::default()),
+        };
+        for (what, stats, sleeps) in [
+            ("asleep between, the writer parked", &stats, true),
+            ("busy between, the writer parked", &stats, false),
+            ("busy between, no writer to wake", &unstarted, false),
+        ] {
+            let mut times: Vec<Duration> = Vec::with_capacity(300);
+            for _ in 0..300 {
+                if sleeps {
+                    std::thread::sleep(Duration::from_millis(20));
+                } else {
+                    let until = Instant::now() + Duration::from_millis(20);
+                    while Instant::now() < until {
+                        std::hint::spin_loop();
+                    }
+                }
+                let event = event.clone();
+                let started = Instant::now();
+                stats.record(event);
+                times.push(started.elapsed());
+            }
+            times.sort();
+            println!(
+                "recording one request's event 20 ms apart, {what}: median {:?}, 99th {:?}, most {:?}",
+                times[times.len() / 2],
+                times[times.len() * 99 / 100],
+                times[times.len() - 1],
+            );
+        }
         recorder.flush();
         let _ = std::fs::remove_dir_all(dir);
     }

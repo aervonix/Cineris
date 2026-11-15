@@ -151,7 +151,12 @@ mod tests {
 
     #[test]
     fn only_a_plain_code_is_plain() {
-        for plain in ["invalid_api_key", "rate_limit_exceeded", "a.b-c_1", &"x".repeat(64)] {
+        for plain in [
+            "invalid_api_key",
+            "rate_limit_exceeded",
+            "a.b-c_1",
+            &"x".repeat(64),
+        ] {
             assert!(code::is_plain(plain), "{plain}");
         }
         for not in [

@@ -217,7 +217,7 @@ A stop reason this build does not know is treated as `end`. A response that ends
 ## Loop guards and limits
 
 - **Request limit per turn.** Default 200. Reaching it finishes the turn with a `Limit` notice. Headless mode exposes it as a flag.
-- **Cost and token limits.** Optional per turn, per session and per day, from configuration or flags. Checked in `Preparing`. **The day's** (since step 16) are one account shared by every session of a core, which begins with what the day's statistics hold. A limit is an account in a **ledger**, and several sessions can draw on one account, which is how a group of supervised sessions shares one hard cap ([16-run-engine.md](16-run-engine.md)).
+- **Cost and token limits.** Optional per turn, per session and per day, from configuration or flags. Checked in `Preparing`. **The day's** (since step 16) are one account shared by every session of a core, which begins with what the day's statistics hold; since the fixes after step 16's review it is brought up to date with what other processes spent before each request, so the limit holds across processes ([18-usage.md](18-usage.md), "Limits on one day"). A limit is an account in a **ledger**, and several sessions can draw on one account, which is how a group of supervised sessions shares one hard cap ([16-run-engine.md](16-run-engine.md)).
 - **Repetition guard.** If the model issues the same call with the same arguments and gets the same result three times in a row, the loop appends a notice telling the model the call is repeating without effect. After five, it stops the turn and asks the user. The thresholds are configurable and the guard can be turned off.
 - **Wall-clock limit.** Optional, for headless runs.
 

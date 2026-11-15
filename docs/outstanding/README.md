@@ -17,6 +17,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 - [a-background-summary-past-its-turn-cannot-be-interrupted](a-background-summary-past-its-turn-cannot-be-interrupted.md): `interrupt` on an idle session does not stop a background summary request, which runs on and goes uncounted. Owner: step 23 or step 27.
 - [a-decision-made-before-an-earlier-call-ran](a-decision-made-before-an-earlier-call-ran.md): Policy decides a call when planned, so a later call can pass through a link made earlier. Owner: a small step of its own, agreed with the owner.
+- [an-epoch-read-without-its-variants](an-epoch-read-without-its-variants.md): An epoch from a log before step 16 has no variants and follows the live model's; reload must fix them. Owner: step 24.
 - [a-masked-instruction-notice-is-told-again](a-masked-instruction-notice-is-told-again.md): A masked instruction-file notice hashes differently on reload, so the file is announced as changed after every resume. Owner: a later step on instruction files, or step 32.
 - [a-prompt-past-the-trigger-on-a-small-window](a-prompt-past-the-trigger-on-a-small-window.md): On a small-window model the first estimate exceeds `context.compact_at`, so every turn ends `compaction_failed` unsent. Owner: a later step on local models, or step 33.
 - [a-reasoning-budget-request-past-the-window-on-older-models](a-reasoning-budget-request-past-the-window-on-older-models.md): A main request with a reasoning budget can pass the window with its `max_tokens` on Anthropic's models before Claude 4.5, failing every turn alike. Owner: the step that adds a budget model to the catalog.
@@ -49,7 +50,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 - [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it; one CI flake. Owner: the next step that changes the base capture, or step 32.
 - [a-closed-view-can-still-answer](a-closed-view-can-still-answer.md): After `session/close` a client stays among those an approval request went to, so its answer is still taken. Owner: the owner; before step 27.
-- [a-days-time-limit](a-days-time-limit.md): `limits.day.time` is declared and not enforced, and a session open across midnight draws on the day it began in. Owner: step 37 (task leases' budgets), or a step the owner names.
+- [a-days-time-limit](a-days-time-limit.md): `limits.day.time` is accepted and not enforced, and a session open across midnight draws on the day it began in. Owner: step 37 (task leases' budgets), or a step the owner names.
 - [an-observer-that-ends-a-session](an-observer-that-ends-a-session.md): An observer's `session/close` or disconnect can end a session that has no client left that may drive it. Owner: the owner; before step 27.
 - [config-reload-through-the-core](config-reload-through-the-core.md): `config/reload` answers `not_available`; what a reload applies to a running session, key by key, is not wired. Owner: step 23.
 - [continue-chooses-the-newest-session](continue-chooses-the-newest-session.md): `session/list` orders by session id, so `--continue` takes the newest created, not the last used. Owner: step 23.
@@ -99,6 +100,10 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [an-undo-after-an-incomplete-look](an-undo-after-an-incomplete-look.md): An undo after an incomplete change look does not say what it missed; the checkpoint lacks the flag. Owner: a later step, else step 32.
 - [hashing-large-files-at-a-rounds-end](hashing-large-files-at-a-rounds-end.md): A changed file is hashed whole at round end and on rewind, uncapped, at 0.4 s a gibibyte. Owner: step 33.
 - [private-keys-in-text-artifacts](private-keys-in-text-artifacts.md): Text artifacts are redacted line by line, so a PEM private key is masked on one line only. Owner: step 32.
+
+### cortex-stats
+
+- [a-clock-that-jumps-forward](a-clock-that-jumps-forward.md): A clock set months ahead prunes the raw monthly files early, and one set 400 days ahead folds the day buckets for good. Owner: step 33.
 
 ### cortex-term
 

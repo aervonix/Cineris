@@ -635,12 +635,14 @@ fn read_from(path: &Path, entry: &mut FilePart) -> io::Result<()> {
         return Ok(());
     }
     let part = &mut entry.part;
-    read_lines(file, &mut entry.offset, |line| {
-        match serde_json::from_slice::<Line>(line) {
+    read_lines(
+        file,
+        &mut entry.offset,
+        |line| match serde_json::from_slice::<Line>(line) {
             Ok(parsed) => part.add_line(&parsed),
             Err(_) => part.unreadable = part.unreadable.saturating_add(1),
-        }
-    })
+        },
+    )
 }
 
 /// Reads `file` from `offset` to its last whole line, giving each whole line

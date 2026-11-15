@@ -77,7 +77,20 @@ The statistics store already records one event per model request. For this view 
 
 `cortex usage [--range today|week|month|all] [--by G,…] [--project KEY] [--json] [--refresh]` prints it. `cortex stats [show|reset]` shows or deletes the files. Measured: [../performance-budgets.md](../performance-budgets.md).
 
-**If statistics are disabled** (`stats.enabled = false`), the session range still works, from the session itself, and the other ranges say that recording is off.
+**If statistics are disabled** (`stats.enabled = false`), the session range still works, from the session itself, and the other ranges say that recording is off. A session with a day's limit is refused (below).
+
+**Since the fixes after step 16's independent review.** The session range answers only a client that has the session open (`session_not_open`), as `usage/get` does. A range this build does not know is refused (`unknown_value`), not answered as all time. An aggregates file of a newer build is not read or changed, and the report refuses with `stats_newer` rather than show all time without the pruned months; one that does not parse is moved aside before anything is saved, and `cortex stats` lists where.
+
+## Limits on one day
+
+`[limits.day]` holds requests, tokens and money to a limit for one local day, across every session of every process on the machine ([03-agent-loop.md](03-agent-loop.md), "Loop guards and limits"). Built in step 16 for the sessions of one process, and across processes since its fixes (the independent review found two processes with a limit of one request spending two).
+
+- **The day's spending is the statistics'.** There is no second record of it. A core's first day-limited session of the day reads what the aggregates and the monthly files hold for the day, and opens the day's purse with it. Each session holds the day to its own limits (a project may lower them) and spends from the purse.
+- **Before each request** a day-limited session makes, the purse reads what the monthly files gained since it last looked: the lines of the requests other processes made, a few lines a request. It reads them on a thread of its own, and the request waits for it at most one second; a disk that has stalled costs a request that second, and the request then goes on with the purse as last read (the log says so once).
+- **A process's own spending is counted as it happens,** by the ledger, so its own lines are not read back: each request line says which recorder wrote it (`writer`), and the purse skips its own recorder's lines of the sessions that draw on it. Everything else counts: other processes', this process's sessions without a day's limit, and the lines of builds before `writer` was written.
+- **With statistics off** there is nothing to read another process's spending from, and a day's limit would hold for one process only: a session with one, the user's or a project's, is refused when it opens (`day_limit_needs_stats`), and says how to turn the statistics on or remove the limit (the owner's decision, 2026-11-15). `cortex stats`, `cortex usage` and the configuration commands still work.
+- **How far it can be passed.** Another process's request is in the files once it has ended, and not while it runs. So two processes can both pass the check before either's request ends: a day's limit can be passed by the requests other processes have in flight when it is reached, which is at most two for each session running in another process at that moment (its request, and a summary being prepared in the background), and by the tokens and money those requests use. Within one process the ledger holds it as it holds a session's limit: a token or money limit can be passed by the requests in flight when it is reached. Events the writer dropped (a full queue) never reach the files, and are not seen by other processes.
+- **Not yet built:** `limits.day.time`, and a day that ends while a session runs ([outstanding](../outstanding/a-days-time-limit.md)).
 
 ## Cost, and what kind of number it is
 
@@ -98,7 +111,7 @@ For each provider: how much of its rate limit or allowance remains, and when it 
 
 | Source of the figure | Used? |
 |---|---|
-| Rate-limit headers on responses the harness already receives (limit, remaining and reset time, for requests and tokens) | **Yes.** The agent loop already parses them ([03-agent-loop.md](03-agent-loop.md)). The latest values per provider and credential are kept, with the time they were seen. |
+| Rate-limit headers on responses the harness already receives (limit, remaining and reset time, for requests and tokens) | **Yes.** The agent loop already parses them ([03-agent-loop.md](03-agent-loop.md)). The latest values per provider and source (the headers, or the refresh) are kept, with the time they were seen: a provider has one credential in use at a time, so a second credential's figures replace the first's. |
 | Usage or allowance fields inside those responses | **Yes**, where a provider documents them. |
 | A provider's documented usage endpoint | **Only when the user has turned the refresh on for that provider.** Off by default. See "The opt-in refresh". |
 | A subscription's remaining allowance | **Only** where the provider officially exposes it to third-party tools, in what the harness already receives or through the opt-in refresh. Otherwise "not available". |

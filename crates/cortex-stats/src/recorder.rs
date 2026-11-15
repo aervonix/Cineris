@@ -496,15 +496,7 @@ fn write_record(writer: &Writer, state: &mut State, record: &Record) {
     let at = UtcTime::parse(record.at().as_str()).unwrap_or_else(|_| writer.clock.now());
     let zone = state.zone.get_or_insert_with(Zone::system);
     let mut record = record.clone();
-    if let Record::Request(request) = &mut record
-        && let Some(error) = &mut request.error
-        && !code::is_plain(error)
-    {
-        // A provider's code is its answer's text, which may hold anything,
-        // a secret included: only a plain one is kept (found by the
-        // independent review of step 16), whoever made the record.
-        code::OTHER.clone_into(error);
-    }
+    keep_plain(&mut record);
     let line = Line {
         day: zone.date_of(at).to_string(),
         writer: matches!(record, Record::Request(_)).then(|| writer.id.to_string()),
@@ -529,6 +521,41 @@ fn write_record(writer: &Writer, state: &mut State, record: &Record) {
         state.unsynced = true;
     } else {
         state.appender.close();
+    }
+}
+
+/// Keeps of the provider's and the model's own words only plain ones, and
+/// `other` in place of the rest, whoever made the record: they are the
+/// text of an answer, which may hold anything, a secret included, and the
+/// statistics keep them for months (found by the independent review of
+/// step 16, for an error's code). Three fields hold such words: a
+/// request's error code, its stop reason when it is not one of the neutral
+/// ones (`openai:<the provider's own>`), and the name of a tool the model
+/// called that does not exist.
+pub(crate) fn keep_plain(record: &mut Record) {
+    fn plain_or_other(text: &mut String, plain: bool) {
+        if !plain {
+            code::OTHER.clone_into(text);
+        }
+    }
+    match record {
+        Record::Request(request) => {
+            if let Some(error) = &mut request.error {
+                let plain = code::is_plain(error);
+                plain_or_other(error, plain);
+            }
+            let plain = code::is_plain(&request.stop)
+                || request
+                    .stop
+                    .split_once(':')
+                    .is_some_and(|(provider, own)| code::is_plain(provider) && code::is_plain(own));
+            plain_or_other(&mut request.stop, plain);
+        }
+        Record::Tool(tool) if tool.outcome == crate::ToolOutcome::UnknownTool => {
+            let plain = code::is_plain(&tool.tool);
+            plain_or_other(&mut tool.tool, plain);
+        }
+        _ => {}
     }
 }
 

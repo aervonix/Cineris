@@ -1,0 +1,348 @@
+# Step 16's fixes: what the independent review of step 16 found, each fix
+# broken again on purpose, and the four rules it found no test held.
+#
+# The day's limits across processes, aggregates that are never written over
+# when they cannot be read, the zone reader's counts, a bounded flush at the
+# end, a provider's code kept only when plain, a cut line ended before the
+# next, the limits file's lock, the session range for a client that has the
+# session open, the month's file opened again after a reset, and the notes
+# that were fixed.
+
+# ----------------------------------------------- finding 1: the day's limits
+
+[break] other-processes-spend-is-not-read
+rule: Before each request a day-limited session makes, the day's purse reads what other processes spent.
+file: crates/cortex-agent/src/ledger.rs
+in: Ledger::catch_up
+find: catch_up.catch_up().await;
+replace:
+packages: cortex-core
+caught-by:
+    cortex-core::it day::two_processes_together_hold_the_day_to_its_limit
+    cortex-core::it day::a_line_an_older_build_wrote_counts_as_another_processs
+
+[break] own-lines-are-counted-twice
+rule: A process's own lines for the sessions that draw on its purse are not read back: they were charged as they happened.
+file: crates/cortex-stats/src/day.rs
+in: DayReader::read_month
+find: let mine = line.writer.is_some()
+replace: let mine = false && line.writer.is_some()
+packages: cortex-stats, cortex-core
+caught-by:
+    cortex-stats::it day::a_days_reader_counts_every_other_processs_requests_and_skips_its_own
+    cortex-core::it day::a_processs_own_spending_is_not_counted_twice
+
+[break] the-first-session-is-not-taken-as-own
+rule: The session that opens the day's purse is taken as this process's own.
+file: crates/cortex-core/src/day.rs
+in: day_account
+find: let _ = asks.send(Ask::Own(session.clone()));
+replace:
+caught-by:
+    cortex-core::it day::a_processs_own_spending_is_not_counted_twice
+
+[break] an-older-builds-line-is-skipped
+rule: A request line with no writer, from a build before it was written, counts as another process's.
+file: crates/cortex-stats/src/day.rs
+in: DayReader::read_month
+find: if line.kind != "request" || line.day != *day {
+replace: if line.writer.is_none() || line.kind != "request" || line.day != *day {
+packages: cortex-stats, cortex-core
+caught-by:
+    cortex-stats::it day::a_days_reader_counts_every_other_processs_requests_and_skips_its_own
+    cortex-core::it day::a_line_an_older_build_wrote_counts_as_another_processs
+
+[break] a-request-waits-for-a-stalled-disk
+rule: A request waits for what other processes spent at most a second.
+file: crates/cortex-core/src/day.rs
+in: Catching::catch_up
+find: if sleep.as_mut().poll(context).is_ready() {
+replace: if false {
+caught-by:
+    cortex-core::it day::a_stalled_disk_holds_a_days_request_at_most_a_second
+
+[break] two-recorders-share-an-id
+rule: Each recorder has an id of its own, which no other process's has.
+file: crates/cortex-stats/src/recorder.rs
+in: Recorder::new
+find: .unique("w_")
+replace: .unique("w_").get(..2).unwrap_or_default().to_owned()
+caught-by:
+    cortex-stats::it day::sys_two_processes_write_under_ids_of_their_own
+
+[break] a-request-line-says-no-writer
+rule: A request line says which recorder wrote it.
+file: crates/cortex-stats/src/recorder.rs
+in: write_record
+find: writer: matches!(record, Record::Request(_)).then(|| writer.id.to_string())
+replace: writer: None
+packages: cortex-stats, cortex-core
+caught-by:
+    cortex-stats::it day::a_request_line_says_which_recorder_wrote_it
+    cortex-core::it day::a_processs_own_spending_is_not_counted_twice
+
+[break] statistics-off-records-and-holds-the-day-per-process
+rule: With statistics off nothing is recorded, and a session with a day's limit is refused at open.
+file: crates/cortex-core/src/usage.rs
+in: recorder
+find: if !user.settings.stats.enabled { return None; }
+replace:
+caught-by:
+    cortex-core::it day::a_days_limit_with_statistics_off_is_refused_at_open
+
+# ------------------------------------- finding 2: the aggregates' only copy
+
+[break] a-newer-builds-file-is-saved-over
+rule: Aggregates that did not read the file that is there are not saved over it.
+file: crates/cortex-stats/src/store.rs
+in: Found::may_save
+find: matches!(self, Self::Missing | Self::Read | Self::MovedAside { .. })
+replace: !matches!(self, Self::NotLoaded)
+packages: cortex-stats, cortex-core
+caught-by:
+    cortex-stats::it store::a_newer_builds_aggregates_file_is_left_for_it
+    cortex-stats::it store::aggregates_that_could_not_read_the_file_are_never_saved_over_it
+
+[break] a-newer-version-is-taken-for-a-damaged-file
+rule: A newer build's aggregates file is left for it, not moved aside.
+file: crates/cortex-stats/src/store.rs
+in: read_aggregates
+find: Ok(Version { version }) if version > AGGREGATES_VERSION => Reading::Newer(version),
+replace:
+packages: cortex-stats, cortex-core
+caught-by:
+    cortex-stats::it store::a_newer_builds_aggregates_file_is_left_for_it
+    cortex-core::it usage::the_report_and_cortex_stats_say_what_the_aggregates_file_was
+
+[break] a-damaged-file-is-not-moved-aside
+rule: An aggregates file that does not parse is moved aside before anything is saved.
+file: crates/cortex-stats/src/store.rs
+in: Aggregates::load_for_saving
+find: match move_aside(dir, &bytes, identity, clock) {
+replace: match Ok::<Option<PathBuf>, io::Error>(None) {
+packages: cortex-stats, cortex-core
+caught-by:
+    cortex-stats::it store::an_aggregates_file_that_does_not_parse_is_moved_aside_before_anything_is_saved
+    cortex-core::it usage::the_report_and_cortex_stats_say_what_the_aggregates_file_was
+
+[break] the-file-moved-aside-is-not-private
+rule: The aggregates file moved aside is owner-only.
+file: crates/cortex-stats/src/store.rs
+in: move_aside
+find: owner_only: true
+replace: owner_only: false
+caught-by:
+    cortex-stats::it store::an_aggregates_file_that_does_not_parse_is_moved_aside_before_anything_is_saved
+
+[break] aggregates-that-may-not-be-saved-prune
+rule: Aggregates that may not be saved prune nothing: a pruned file's part lives on only in what is saved.
+file: crates/cortex-stats/src/store.rs
+in: Aggregates::sync
+find: let retention = retention.filter(|_| self.found.may_save());
+replace:
+caught-by:
+    cortex-stats::it store::a_newer_builds_aggregates_file_is_left_for_it
+    cortex-stats::it store::aggregates_that_could_not_read_the_file_are_never_saved_over_it
+
+# ----------------------------------------------- finding 4: the zone's counts
+
+[break] the-zone-reader-allocates-before-it-checks
+rule: The TZif reader allocates nothing for counts the file does not hold.
+file: crates/cortex-base/src/zone/tzif.rs
+in: Transitions::parse
+find: let data_end = header.data_end(start, time_len, bytes.len())?;
+replace: let data_end = start + header.data_len(time_len).unwrap_or(0);
+caught-by:
+    cortex-base::it zone::a_zone_file_that_lies_about_its_counts_is_refused_without_a_large_allocation
+
+[break] the-first-block-is-trusted
+rule: A first block whose counts the file does not hold is refused.
+file: crates/cortex-base/src/zone/tzif.rs
+in: Transitions::parse
+find: let second_at = first.data_end(Header::LEN, 4, bytes.len())?;
+replace: let second_at = Header::LEN + first.data_len(4)?;
+caught-by:
+    cortex-base::it zone::a_zone_file_shorter_than_its_counts_is_refused
+
+# ----------------------------------------------- finding 5: the end's flush
+
+[break] the-end-waits-for-a-stuck-writer
+rule: The end of a process waits for the statistics writer at most two seconds.
+file: crates/cortex-core/src/stats.rs
+in: flush
+find: if sleep.as_mut().poll(context).is_ready() {
+replace: if false {
+caught-by:
+    cortex-core::it usage::a_stuck_statistics_writer_holds_the_end_at_most_two_seconds
+
+[break] a-flush-cannot-be-given-up
+rule: A flush that is given up returns at once.
+file: crates/cortex-stats/src/recorder.rs
+in: GiveUp::now
+find: self.state.end(Ended::GaveUp);
+replace:
+caught-by:
+    cortex-stats recorder::tests::a_flush_given_up_returns_at_once_with_what_was_left
+
+# --------------------------------------------- finding 6: a provider's code
+
+[break] a-providers-text-reaches-the-statistics
+rule: A provider's error code reaches the statistics only when it is a plain one.
+file: crates/cortex-stats/src/recorder.rs
+in: keep_plain
+find: let plain = code::is_plain(error);
+replace: let plain = true;
+packages: cortex-stats, cortex-core
+caught-by:
+    cortex-stats::it store::a_providers_own_words_are_kept_only_when_plain
+    cortex-core::it usage::a_providers_error_code_reaches_the_statistics_only_when_it_is_plain
+
+[break] a-providers-stop-reason-reaches-the-statistics
+rule: A stop reason the client did not know reaches the statistics only when it is plain.
+file: crates/cortex-stats/src/recorder.rs
+in: keep_plain
+find: plain_or_other(&mut request.stop, plain);
+replace:
+caught-by:
+    cortex-stats::it store::a_providers_own_words_are_kept_only_when_plain
+
+[break] a-made-up-tool-name-reaches-the-statistics
+rule: The name of a tool that does not exist reaches the statistics only when it is plain.
+file: crates/cortex-stats/src/recorder.rs
+in: keep_plain
+find: Record::Tool(tool) if tool.outcome == crate::ToolOutcome::UnknownTool => {
+replace: Record::Tool(tool) if false => {
+caught-by:
+    cortex-stats::it store::a_providers_own_words_are_kept_only_when_plain
+
+[break] any-text-is-a-plain-code
+rule: A plain code is lower-case letters, digits, `_`, `.` and `-`, at most 64 of them.
+file: crates/cortex-protocol/src/error.rs
+in: code::is_plain
+find: byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
+replace: !byte.is_ascii_control()
+packages: cortex-protocol, cortex-core
+caught-by:
+    cortex-protocol error::tests::only_a_plain_code_is_plain
+    cortex-core::it usage::a_providers_error_code_reaches_the_statistics_only_when_it_is_plain
+
+# ---------------------------------------- finding 7: a half-written line
+
+[break] a-cut-line-takes-the-next-one
+rule: The next writer ends a last line that was cut short before it appends.
+file: crates/cortex-stats/src/store.rs
+in: open_to_append
+find: if last != *b"\n" {
+replace: if false {
+caught-by:
+    cortex-stats::it store::a_half_written_last_line_does_not_take_the_next_writers_first_line
+
+# ---------------------------------------------- finding 8: the limits' lock
+
+[break] the-limits-file-is-updated-unlocked
+rule: An update of the limits file holds its lock from the read to the write.
+file: crates/cortex-stats/src/store.rs
+in: LimitsFile::update
+find: let _held = private::hold_lock(&path)?;
+replace:
+caught-by:
+    cortex-stats::it limits::an_update_takes_the_files_lock
+
+# ----------------------------------------- finding 9: the session's report
+
+[break] the-session-range-answers-anyone
+rule: The session range of `usage/report` answers only a client that has the session open.
+file: crates/cortex-core/src/usage.rs
+in: session_report
+find: let usage = core.open_for(client, session)?.handle.usage();
+replace: let usage = core.session_usage(session).ok_or_else(|| error(ErrorKind::Usage, "session_not_open", "not open"))?;
+caught-by:
+    cortex-core::it usage::a_client_that_has_not_opened_a_session_gets_no_report_of_it
+
+# --------------------------------------- the reset while a writer runs
+
+[break] the-writer-keeps-a-deleted-file
+rule: The writer appends to the file the month's name gives now, not to one a reset deleted.
+file: crates/cortex-stats/src/store.rs
+in: Appender::append
+find: || FileIdentity::at(&path).map_or(true, |now| now != open.identity)
+replace:
+caught-by:
+    cortex-stats::it store::a_reset_while_a_writer_runs_keeps_the_writers_later_lines
+
+[break] the-days-reader-reads-a-new-file-from-where-the-old-one-ended
+rule: A day's reader reads a file made again under the month's name from its start.
+file: crates/cortex-stats/src/day.rs
+in: DayReader::read_month
+find: if identity != tail.identity {
+replace: if false {
+caught-by:
+    cortex-stats::it day::a_days_reader_reads_a_new_file_from_its_start
+
+# ------------------- the four rules the review found no test held (moved
+# here from its throwaway list)
+
+[break] a-month-too-few-is-kept
+rule: A monthly file stays for `stats.retention` whole months after its own.
+file: crates/cortex-stats/src/store.rs
+in: Aggregates::sync
+find: if number + i64::from(retention) < now {
+replace: if number + i64::from(retention) <= now {
+caught-by:
+    cortex-stats::it store::a_monthly_file_stays_for_its_retention_and_goes_the_month_after
+
+[break] a-line-being-written-is-read
+rule: A line another process is still writing is not read until it is whole.
+file: crates/cortex-stats/src/store.rs
+in: read_lines
+find: if read == 0 || line.last() != Some(&b'\n') {
+replace: if read == 0 {
+caught-by:
+    cortex-stats::it store::a_line_still_being_written_is_read_once_it_is_whole
+
+[break] days-fold-after-forty-days
+rule: Day buckets fold into months only once they are more than 400 days old.
+file: crates/cortex-stats/src/aggregate.rs
+in: DAYS_KEPT
+find: 400
+replace: 40
+caught-by:
+    cortex-stats::it store::days_fold_into_months_after_four_hundred_days
+
+[break] a-limits-file-that-cannot-be-read-is-replaced
+rule: A limits file that cannot be read for any reason but its absence is not written over.
+file: crates/cortex-stats/src/store.rs
+in: LimitsFile::update
+find: Err(error) => return Err(error)
+replace: Err(_) => Self::default()
+caught-by:
+    cortex-stats::it limits::a_limits_file_that_cannot_be_read_is_left_as_it_is
+
+# ----------------------------------------------------- the notes, fixed
+
+[break] a-sum-overflows
+rule: Sums saturate: a provider's huge count stops at the most a figure holds and the writer goes on.
+file: crates/cortex-stats/src/aggregate.rs
+in: UsageSum::add
+find: self.input = self.input.saturating_add(other.input);
+replace: self.input += other.input;
+caught-by:
+    cortex-stats::it store::sums_that_would_overflow_stop_at_the_most_a_figure_holds
+
+[break] a-stopped-writer-is-invisible
+rule: An event sent to a writer that has stopped is dropped and counted.
+file: crates/cortex-stats/src/recorder.rs
+in: Recorder::send
+find: Err(TrySendError::Disconnected(_)) => { self.queued.fetch_sub(1, Ordering::Relaxed); self.dropped.fetch_add(1, Ordering::Relaxed); self.tell_stopped(); }
+replace: Err(TrySendError::Disconnected(_)) => { self.queued.fetch_sub(1, Ordering::Relaxed); }
+caught-by:
+    cortex-stats recorder::tests::a_writer_that_stopped_is_counted_not_hidden
+
+[break] an-unknown-range-is-all-time
+rule: A range this build does not know is refused, not answered as all time.
+file: crates/cortex-core/src/usage.rs
+in: report
+find: if let UsageRange::Unknown(other) = &params.range {
+replace: if let UsageRange::Unknown(other) = &params.range && false {
+caught-by:
+    cortex-core::it usage::a_range_this_build_does_not_know_is_refused

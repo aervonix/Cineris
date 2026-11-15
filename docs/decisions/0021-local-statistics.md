@@ -20,7 +20,8 @@ Storing and querying statistics pulls against three budgets: start-up (nothing m
 ## Decision
 
 - Events are appended as JSON lines, one file per month, by a writer thread. (**Amended in step 16:** a thread of the statistics' own, not the log's: the two queues fill at different rates, and a log line dropped is not an event dropped. Each is a bounded queue that drops and counts.)
-- A small aggregates file (counts and sums keyed by model, variant, tool and project) is rebuilt incrementally and is the only thing adaptive decisions read.
+- A small aggregates file (counts and sums keyed by model, variant, tool and project) is rebuilt incrementally and is the only thing adaptive decisions read. (**Amended after the independent review of step 16:** "rebuilt" holds for the monthly files still on the disk, not for `kept`, the part of the months already pruned, which the file alone holds. So it is flushed to the disk before it takes its name, a file of a newer version is left alone, and one that does not parse is moved aside before anything is saved. Saving and pruning check what was found, so no caller can forget to.)
+- (**Added after the independent review of step 16:** the day's limits count every process's spending from the monthly files: before each request a day-limited session reads what they gained, and each request line says which recorder wrote it, so a process skips its own. With statistics off a session with a day's limit is refused. [architecture/18-usage.md](../architecture/18-usage.md), "Limits on one day".)
 - Nothing is read at start-up. The aggregates are loaded on first use.
 - Old months are folded into the aggregates and deleted after a retention period.
 - `cortex stats` shows, resets and disables.

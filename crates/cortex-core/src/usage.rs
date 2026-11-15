@@ -65,22 +65,20 @@ pub(crate) async fn report(
     params: &UsageReportParams,
 ) -> Result<UsageReport, OpError> {
     let inner = &core.inner;
-    match &params.range {
-        UsageRange::Session => return session_report(core, client, params),
-        UsageRange::Today | UsageRange::Week | UsageRange::Month | UsageRange::All => {}
-        // A newer client's range is not answered as some other one (the
-        // independent review of step 16's note: it was answered as all
-        // time).
-        other => {
-            return Err(error(
-                ErrorKind::Usage,
-                cortex_protocol::error::code::UNKNOWN_VALUE,
-                format!(
-                    "The range `{other}` is not one this build knows: `session`, `today`, \
-                     `week`, `month` or `all`."
-                ),
-            ));
-        }
+    // A newer client's range is not answered as some other one (the
+    // independent review of step 16's note: it was answered as all time).
+    if let UsageRange::Unknown(other) = &params.range {
+        return Err(error(
+            ErrorKind::Usage,
+            cortex_protocol::error::code::UNKNOWN_VALUE,
+            format!(
+                "The range `{other}` is not one this build knows: `session`, `today`, `week`, \
+                 `month` or `all`."
+            ),
+        ));
+    }
+    if params.range == UsageRange::Session {
+        return session_report(core, client, params);
     }
     let settings = &inner.user.settings;
     let recording = settings.stats.enabled;
@@ -518,7 +516,8 @@ pub struct StatsSummary {
     pub turns: u64,
     /// Tool calls on record, all time.
     pub tool_calls: u64,
-    /// Events dropped because the writer's queue was full.
+    /// Events and limits updates dropped because the writer's queue was
+    /// full.
     pub dropped: u64,
     /// Lines that could not be read.
     pub unreadable: u64,

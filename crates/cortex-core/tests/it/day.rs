@@ -90,7 +90,8 @@ fn a_processs_own_spending_is_not_counted_twice() {
         // second request reads the files.
         let mut written = false;
         for _ in 0..1_000_000 {
-            if std::fs::read_to_string(&file).is_ok_and(|text| text.contains(r#""kind":"request""#)) {
+            if std::fs::read_to_string(&file).is_ok_and(|text| text.contains(r#""kind":"request""#))
+            {
                 written = true;
                 break;
             }

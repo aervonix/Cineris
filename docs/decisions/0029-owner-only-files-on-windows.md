@@ -57,6 +57,10 @@ Steps 8 (sessions) and 9 (configuration and credentials) both promise owner-only
 
 The module was reviewed independently before its first push, block by block against Microsoft's documentation and the `windows-sys` source: who allocates and who frees, what a failure returns, whether an error is read before anything can overwrite it, the sizes and alignment of every buffer, and whether a file can exist without its list. It found no memory-safety defect, no allocation leaked or freed twice, and no error read out of order. It could not settle by reading two things that only Windows can answer, and the tests on the Windows CI job answer both: that the descriptor string is accepted as written, and that the "protected" flag survives the creation of the file. It also pointed out the two limits above, and that the user is read from the process, not from the thread: a thread that impersonated someone else would create a file for the process's user. The harness never impersonates.
 
+## Amended after the review of step 16: and a file's identity
+
+`private::windows` gained `file_identity`: the volume's serial number and the file's index on it, from one call (`GetFileInformationByHandle`) that fills a structure of plain numbers the function owns, with a `// SAFETY:` comment. It is what `cortex_base::FileIdentity` is on Windows, as a device and an inode number are on Linux; the standard library's `file_index` is not stable. The statistics' writer needs it to notice that the month's file it holds open is no longer the one at the name (`cortex stats reset` deleted it), where a creation time is no help: NTFS gives a file made again under a name within seconds the old file's creation time. The rule about where `unsafe` may be written does not change.
+
 ## Amended in step 10: the module also reads a reparse tag
 
 Accepted by the owner on 2026-11-13.

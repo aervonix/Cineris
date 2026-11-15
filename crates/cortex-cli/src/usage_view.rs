@@ -340,7 +340,7 @@ pub(crate) fn stats(summary: &StatsSummary) -> String {
     if summary.dropped > 0 {
         let _ = writeln!(
             out,
-            "Dropped: {} events, when the writer could not keep up.",
+            "Dropped: {} events and limits updates, when the writer could not keep up.",
             summary.dropped
         );
     }
