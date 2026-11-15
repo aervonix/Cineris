@@ -49,6 +49,13 @@
 //! - **Read strictly.** A key this build does not know, or a newer
 //!   `version`, refuses the whole file, and then **nothing is trusted**: a
 //!   file that cannot be read in full must not be read in part.
+//! - **A project the user will never trust** (since step 23, the owner's
+//!   answer of 2026-11-15) is a `[[refused]]` table with its key, root and
+//!   time: the interactive application does not ask about it at later
+//!   starts. A project is never both: trusting it clears the refusal, and
+//!   refusing it takes its trust away. A build from before step 23 does not
+//!   know the table, and so reads such a file as trusting nothing, which
+//!   fails safe.
 
 #![allow(
     clippy::disallowed_methods,
@@ -215,12 +222,24 @@ struct Project {
     pinned: Vec<Pin>,
 }
 
+/// A project the user said never to trust.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Refused {
+    key: ProjectKey,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    root: String,
+    refused_at: Timestamp,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct File {
     version: u32,
     #[serde(default, rename = "project", skip_serializing_if = "Vec::is_empty")]
     projects: Vec<Project>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    refused: Vec<Refused>,
 }
 
 /// What the user has trusted of one project, read once: a value to ask
@@ -228,6 +247,7 @@ struct File {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProjectTrust {
     project: Option<Project>,
+    refused: bool,
 }
 
 impl ProjectTrust {
@@ -241,6 +261,13 @@ impl ProjectTrust {
     #[must_use]
     pub fn is_trusted(&self) -> bool {
         self.project.is_some()
+    }
+
+    /// Whether the user said never to trust the project: it is not asked
+    /// about (since step 23).
+    #[must_use]
+    pub fn is_refused(&self) -> bool {
+        self.refused
     }
 
     /// How a definition stands.
@@ -309,11 +336,13 @@ impl TrustStore {
     /// caller treats the project as not trusted, and shows the error.
     pub fn project(&self, key: &ProjectKey) -> Result<ProjectTrust, TrustError> {
         let file = self.read()?;
+        let refused = file.refused.iter().any(|refused| refused.key == *key);
         Ok(ProjectTrust {
             project: file
                 .projects
                 .into_iter()
                 .find(|project| project.key == *key),
+            refused,
         })
     }
 
@@ -333,6 +362,8 @@ impl TrustStore {
     ) -> Result<ProjectTrust, TrustError> {
         self.update(|file| {
             file.projects.retain(|project| project.key != *key);
+            // Trusting a project the user had refused lifts the refusal.
+            file.refused.retain(|refused| refused.key != *key);
             let project = Project {
                 key: key.clone(),
                 root: root.to_owned(),
@@ -343,6 +374,7 @@ impl TrustStore {
             Ok((
                 ProjectTrust {
                     project: Some(project),
+                    refused: false,
                 },
                 true,
             ))
@@ -378,10 +410,63 @@ impl TrustStore {
             Ok((
                 ProjectTrust {
                     project: Some(project.clone()),
+                    refused: false,
                 },
                 true,
             ))
         })
+    }
+
+    /// Marks a project as one the user will never trust: it is not asked
+    /// about again, and any trust it had is taken away. `root` is for
+    /// showing a person which project it is.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be read, is not understood, or cannot be
+    /// written.
+    pub fn refuse(&self, key: &ProjectKey, root: &str) -> Result<(), TrustError> {
+        self.update(|file| {
+            file.projects.retain(|project| project.key != *key);
+            file.refused.retain(|refused| refused.key != *key);
+            file.refused.push(Refused {
+                key: key.clone(),
+                root: root.to_owned(),
+                refused_at: self.clock.now().to_timestamp(),
+            });
+            Ok(((), true))
+        })
+    }
+
+    /// Forgets what the user said of a project, trust and refusal alike, so
+    /// that it is asked about again. Says whether there was anything.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be read, is not understood, or cannot be
+    /// written.
+    pub fn forget(&self, key: &ProjectKey) -> Result<bool, TrustError> {
+        self.update(|file| {
+            let before = file.projects.len() + file.refused.len();
+            file.projects.retain(|project| project.key != *key);
+            file.refused.retain(|refused| refused.key != *key);
+            let changed = file.projects.len() + file.refused.len() != before;
+            Ok((changed, changed))
+        })
+    }
+
+    /// The projects the user said never to trust, as their key and root.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be read or is not understood.
+    pub fn refused(&self) -> Result<Vec<(ProjectKey, String)>, TrustError> {
+        Ok(self
+            .read()?
+            .refused
+            .into_iter()
+            .map(|refused| (refused.key, refused.root))
+            .collect())
     }
 
     /// Takes trust away from a project. Says whether it was trusted.
@@ -452,6 +537,7 @@ impl TrustStore {
                 return Ok(File {
                     version: VERSION,
                     projects: Vec::new(),
+                    refused: Vec::new(),
                 });
             }
             Err(error) => return Err(read_error(error)),
@@ -520,7 +606,43 @@ mod tests {
                 trusted_at: Timestamp::new("2026-11-13T10:00:00Z"),
                 pinned: pins_of(definitions),
             }),
+            refused: false,
         }
+    }
+
+    #[test]
+    fn a_refused_project_is_known_as_such_until_trusted_or_forgotten() {
+        let dir = std::env::temp_dir().join(format!(
+            "cortex-policy-refused-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let clock: SharedClock =
+            std::sync::Arc::new(cortex_base::FakeClock::starting_at("2026-11-15T10:00:00Z").unwrap());
+        let store = TrustStore::new(dir.join("trust.toml"), clock);
+        let key = ProjectKey::new("k");
+        assert!(!store.project(&key).unwrap().is_refused());
+        // Refusing takes trust away.
+        store.trust(&key, "~/app", &[]).unwrap();
+        store.refuse(&key, "~/app").unwrap();
+        let refused = store.project(&key).unwrap();
+        assert!(refused.is_refused() && !refused.is_trusted());
+        assert_eq!(store.refused().unwrap().len(), 1);
+        // It survives a new store over the same file: a restart.
+        let again = TrustStore::new(store.path().to_owned(), std::sync::Arc::new(cortex_base::SystemClock::new()));
+        assert!(again.project(&key).unwrap().is_refused());
+        // Trusting lifts it.
+        again.trust(&key, "~/app", &[]).unwrap();
+        let trusted = again.project(&key).unwrap();
+        assert!(trusted.is_trusted() && !trusted.is_refused());
+        // Forgetting clears both.
+        again.refuse(&key, "~/app").unwrap();
+        assert!(again.forget(&key).unwrap());
+        let forgotten = again.project(&key).unwrap();
+        assert!(!forgotten.is_trusted() && !forgotten.is_refused());
+        assert!(!again.forget(&key).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
