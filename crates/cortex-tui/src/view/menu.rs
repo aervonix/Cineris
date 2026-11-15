@@ -41,7 +41,7 @@ pub fn menu(input: &Input, look: &Look, width: usize) -> Option<Vec<Line>> {
     if matches!(menu.kind, Kind::Picker(_)) && !menu.filter.is_empty() {
         lines.push(fit(
             Line::from(Span::plain(" ".repeat(INDENT + 2))).with(Span::new(
-                shown(&menu.filter),
+                super::one_line(&menu.filter),
                 look.theme.style(Token::Hint),
             )),
             width,
@@ -74,7 +74,7 @@ pub fn menu(input: &Input, look: &Look, width: usize) -> Option<Vec<Line>> {
         };
         let mut line = Line::from(Span::plain(" ".repeat(INDENT + 2)))
             .with(Span::new(
-                format!("{key}{}", shown(&toggle.label)),
+                format!("{key}{}", super::one_line(&toggle.label)),
                 look.theme.style(Token::Key),
             ))
             .with(Span::plain(" ".repeat(GAP)))
@@ -82,7 +82,7 @@ pub fn menu(input: &Input, look: &Look, width: usize) -> Option<Vec<Line>> {
         if !toggle.note.is_empty() {
             line.push(Span::plain(" ".repeat(GAP)));
             line.push(Span::new(
-                shown(&toggle.note),
+                super::one_line(&toggle.note),
                 look.theme.style(Token::Hint),
             ));
         }
@@ -96,7 +96,7 @@ fn rows(menu: &Menu, look: &Look, width: usize, lines: &mut Vec<Line>) {
     let visible = menu.visible();
     let labels: Vec<String> = visible
         .clone()
-        .map(|at| shown(&menu.rows[at].label))
+        .map(|at| super::one_line(&menu.rows[at].label))
         .collect();
     // The label column: the widest label in view, leaving the notes at
     // least a little room.
@@ -136,7 +136,10 @@ fn rows(menu: &Menu, look: &Look, width: usize, lines: &mut Vec<Line>) {
         }
         if !row.detail.is_empty() {
             line.push(Span::plain(" ".repeat(GAP)));
-            line.push(Span::new(shown(&row.detail), look.theme.style(Token::Hint)));
+            line.push(Span::new(
+                super::one_line(&row.detail),
+                look.theme.style(Token::Hint),
+            ));
         }
         lines.push(fit(line, width, look));
     }
@@ -164,7 +167,7 @@ fn search_line(input: &Input, query: &str, look: &Look, width: usize) -> Line {
     let mut line = Line::from(Span::plain(" ".repeat(INDENT)))
         .with(Span::new(key, look.theme.style(Token::Key)))
         .with(Span::plain(" "))
-        .with(Span::plain(shown(query)));
+        .with(Span::plain(super::one_line(query)));
     line.push(Span::plain(" ".repeat(GAP)));
     match input.search_found() {
         Some(found) => {
@@ -175,7 +178,7 @@ fn search_line(input: &Input, query: &str, look: &Look, width: usize) -> Line {
                 ""
             };
             line.push(Span::new(
-                format!("{}{more}", shown(first)),
+                format!("{}{more}", super::one_line(first)),
                 look.theme.style(Token::Hint),
             ));
         }
@@ -183,13 +186,6 @@ fn search_line(input: &Input, query: &str, look: &Look, width: usize) -> Line {
         None => line.push(Span::new("no match", look.theme.style(Token::Hint))),
     }
     fit(line, width, look)
-}
-
-/// Text from outside made safe for a menu's one line: control characters
-/// as visible symbols, and tabs and line breaks, which `sanitize` keeps, as
-/// spaces.
-fn shown(text: &str) -> String {
-    cortex_term::sanitize(text).replace(['\t', '\n'], " ")
 }
 
 fn fit(line: Line, width: usize, look: &Look) -> Line {
