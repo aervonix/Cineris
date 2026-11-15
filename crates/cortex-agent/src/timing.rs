@@ -272,6 +272,47 @@ mod tests {
         );
     }
 
+    /// What the loop's spans cost when no subscriber listens: a span made
+    /// and its future polled, and a change of what the turn's time is spent
+    /// on. Run by hand: `cargo test --release -p cortex-agent --lib
+    /// perf_spans -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, run by hand"]
+    fn perf_spans_with_no_subscriber() {
+        use std::future::Future as _;
+        use tracing::Instrument as _;
+        let waker = std::task::Waker::noop();
+        let mut context = std::task::Context::from_waker(waker);
+        let rounds = 1_000_000u32;
+        let started = std::time::Instant::now();
+        for n in 0..rounds {
+            let span = tracing::info_span!("tool", tool = %"read", call = %n);
+            let mut future = std::pin::pin!(std::future::ready(n).instrument(span));
+            let _ = future.as_mut().poll(&mut context);
+        }
+        let spanned = started.elapsed();
+        let started = std::time::Instant::now();
+        for n in 0..rounds {
+            let mut future = std::pin::pin!(std::future::ready(n));
+            let _ = future.as_mut().poll(&mut context);
+        }
+        let bare = started.elapsed();
+        println!(
+            "a span made and its future polled, with no subscriber: {:?} each ({:?} without the span)",
+            spanned / rounds,
+            bare / rounds
+        );
+        let mut clock = TurnClock::new(Duration::ZERO);
+        let started = std::time::Instant::now();
+        for n in 0..rounds {
+            clock.enter(Duration::from_micros(u64::from(n)), Spend::Streaming);
+        }
+        println!(
+            "a change of what the turn's time is spent on: {:?} each",
+            started.elapsed() / rounds
+        );
+    }
+
     #[test]
     fn milliseconds_add_up_however_the_parts_fall() {
         // Parts of a fraction of a millisecond each still add up to the

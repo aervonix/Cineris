@@ -207,3 +207,102 @@ impl Stats for SessionStats {
         self.recorder.record(record);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use cortex_agent::{RequestPurpose, RequestStat, StatEvent, Stats};
+    use cortex_base::{FakeClock, UtcTime};
+    use cortex_protocol::model::ModelRole;
+    use cortex_protocol::usage::{Billing, Cost, CostBasis, ModelTime, RequestUsage, TokenUsage};
+    use cortex_protocol::{ModelId, ProjectKey, ProviderId, SessionId, Speed, StopReason, TurnId};
+    use cortex_stats::{Recorder, RecorderOptions, StatsDir};
+
+    use super::SessionStats;
+
+    /// What one request's event costs the loop's thread: the conversion
+    /// and the push, with the writer running. Run by hand: `cargo test
+    /// --release -p cortex-core --lib perf_recording -- --ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore = "a measurement, run by hand"]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a measurement that removes its own directory"
+    )]
+    fn perf_recording_an_event_on_the_loop() {
+        let dir = std::env::temp_dir().join(format!("cortex-perf-stats-{}", std::process::id()));
+        let clock = Arc::new(FakeClock::starting_at("2026-11-15T10:00:00Z").unwrap());
+        let mut options = RecorderOptions::new(StatsDir::new(dir.clone()));
+        options.zone = Some(cortex_base::Zone::utc());
+        let recorder = Recorder::new(options, clock.clone());
+        recorder.start().unwrap();
+        let stats = SessionStats {
+            recorder: recorder.clone(),
+            project: ProjectKey::new("pk_perf"),
+            clock,
+        };
+        let event = StatEvent::Request(RequestStat {
+            session: SessionId::new("s_01JCX4T9Q2"),
+            turn: TurnId::new("t_7"),
+            at: UtcTime::parse("2026-11-15T10:00:00Z").unwrap(),
+            provider: ProviderId::new("anthropic"),
+            model: ModelId::new("claude-opus-5-5"),
+            role: ModelRole::Main,
+            purpose: RequestPurpose::Turn,
+            started_in: None,
+            variants: cortex_testkit::fixtures::model().variants.clone(),
+            effort: Some("high".to_owned()),
+            usage: Some(RequestUsage {
+                provider: ProviderId::new("anthropic"),
+                model: ModelId::new("claude-opus-5-5"),
+                role: ModelRole::Main,
+                speed: Speed::Standard,
+                speed_requested: None,
+                tokens: TokenUsage {
+                    input: 1200,
+                    cache_read: 40_000,
+                    cache_write: 900,
+                    output: 600,
+                    ..TokenUsage::default()
+                },
+                cost: Some(Cost {
+                    usd_nanos: 47_000_000,
+                    basis: CostBasis::Metered,
+                }),
+                catalog_version: Some("2026-11-13".to_owned()),
+                billing: Billing::Metered,
+                time_to_first_token_ms: Some(900),
+                duration_ms: Some(10_000),
+                raw: None,
+            }),
+            time: ModelTime::default(),
+            stop: StopReason::ToolCalls,
+            error: None,
+            retries: 0,
+        });
+        let mut times: Vec<Duration> = Vec::with_capacity(20_000);
+        for round in 0..20_000 {
+            let event = event.clone();
+            let started = Instant::now();
+            stats.record(event);
+            times.push(started.elapsed());
+            if round % 2_000 == 0 {
+                // The writer keeps up, as it does at a loop's pace.
+                recorder.flush();
+            }
+        }
+        times.sort();
+        println!(
+            "recording one request's event: median {:?}, 99th {:?}, most {:?}; dropped {}",
+            times[times.len() / 2],
+            times[times.len() * 99 / 100],
+            times[times.len() - 1],
+            recorder.dropped()
+        );
+        recorder.flush();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

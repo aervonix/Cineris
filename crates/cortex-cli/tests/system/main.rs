@@ -43,6 +43,7 @@ mod runs;
 mod sandbox;
 mod signals;
 mod tools;
+mod usage;
 
 use std::ffi::OsString;
 use std::fs;
