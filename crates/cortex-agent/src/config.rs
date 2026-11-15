@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cortex_base::{PathResolver, SharedClock};
-use cortex_llm::{ModelClient, ModelEntry, Reasoning};
+use cortex_llm::{ModelClient, ModelEntry, Reasoning, Variants};
 use cortex_protocol::lease::Level;
 use cortex_protocol::model::ModelRole;
 use cortex_protocol::session::SandboxStatus;
@@ -32,13 +32,21 @@ pub struct RoleModel {
     pub max_output: Option<u64>,
     /// How the role's usage is paid for.
     pub billing: Billing,
+    /// The choice at each variant point the model is addressed with: the
+    /// catalog's defaults, with the user's overrides for the model
+    /// (`docs/architecture/14-adaptation.md`, "Adapting to the model").
+    /// The main role's are fixed for a context epoch: a request uses the
+    /// epoch's, and these apply from the next epoch that builds a prompt.
+    pub variants: Variants,
 }
 
 impl RoleModel {
     /// A role served by `client` with the model `entry`: the model's
-    /// default reasoning, its own output limit, and usage billed per token.
+    /// default reasoning, its own output limit, usage billed per token, and
+    /// the catalog's variants.
     #[must_use]
     pub fn new(client: Arc<dyn ModelClient>, entry: Arc<ModelEntry>) -> Self {
+        let variants = entry.variants.clone();
         Self {
             client,
             entry,
@@ -46,6 +54,36 @@ impl RoleModel {
             effort: None,
             max_output: None,
             billing: Billing::Metered,
+            variants,
+        }
+    }
+}
+
+/// A call the harness makes for itself, outside the agent's own turns, and
+/// the role it goes to (`docs/architecture/14-adaptation.md`, "Model roles
+/// and routing").
+///
+/// | Call | Role | When the role has no model of its own | When its model refuses or fails |
+/// |---|---|---|---|
+/// | A compaction summary, in the background or not | `fast` | `main` | `main`, once, for the rest of the epoch |
+///
+/// The other utility calls the design names (session titles, summaries of
+/// long output, proposed profile entries) are not built yet; each goes to
+/// `fast` when it is. The `judge` role has no call before the run engine
+/// (after the first release): its model is resolved, priced and shown, and
+/// falls back to `main` in the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UtilityCall {
+    /// A compaction summary.
+    Summary,
+}
+
+impl UtilityCall {
+    /// The role the call goes to.
+    #[must_use]
+    pub const fn role(self) -> ModelRole {
+        match self {
+            Self::Summary => ModelRole::Fast,
         }
     }
 }
@@ -97,6 +135,17 @@ impl Models {
     #[must_use]
     pub fn main(&self) -> &RoleModel {
         &self.main
+    }
+
+    /// The model a utility call goes to: its role's, and the main model when
+    /// the role has none.
+    #[must_use]
+    pub fn for_call(&self, call: UtilityCall) -> (ModelRole, &RoleModel) {
+        let role = call.role();
+        match self.others.get(&role) {
+            Some(model) => (role, model),
+            None => (ModelRole::Main, &self.main),
+        }
     }
 
     /// The model of a role, when it has one of its own. `main` always has.

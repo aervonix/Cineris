@@ -158,6 +158,10 @@ pub struct EpochStart {
     /// gone on with when the session is read again. Set by the store when
     /// it reads the log; never written.
     pub altered: bool,
+    /// The variants the epoch's requests are made with, fixed for it
+    /// (since step 16). `None` in an epoch written before, which takes the
+    /// main model's.
+    pub variants: Option<cortex_llm::Variants>,
 }
 
 /// A compaction summary, and the state carried across it.

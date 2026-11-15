@@ -767,16 +767,21 @@ fn the_trigger_waits_for_a_summary_still_under_way() {
     assert!(all_text(&world.provider.requests()[2].messages[0]).contains("Goal: read."));
 }
 
+/// A summary the `fast` role's model failed in the background is asked for
+/// again at the trigger, of the main model: a role whose model fails falls
+/// back to `main` for the rest of the epoch (since step 16).
 #[test]
-fn a_summary_that_failed_in_the_background_is_asked_for_again_at_the_trigger() {
-    let world = World::new("background_failed", filling());
+fn a_summary_that_failed_in_the_background_is_asked_of_the_main_model_at_the_trigger() {
+    let mut responses = filling();
+    responses.insert(2, says("Goal: the second try."));
+    let world = World::new("background_failed", responses);
     let fast = ScriptedProvider::new([
         Response::new().error(cortex_llm::error::ProviderError::new(
             cortex_base::ErrorKind::Provider,
             "invalid_request",
             "No.",
         )),
-        says("Goal: the second try."),
+        says("Not asked."),
     ]);
     let rig = with_fast(&world, &fast);
     world.run(async {
@@ -784,16 +789,27 @@ fn a_summary_that_failed_in_the_background_is_asked_for_again_at_the_trigger() {
         rig.events.turns(1).await;
     });
     assert_eq!(rig.events.ends()[0].outcome, TurnOutcome::Completed);
-    assert_eq!(fast.requests().len(), 2);
-    let third = &world.provider.requests()[2];
-    assert!(all_text(&third.messages[0]).contains("Goal: the second try."));
+    assert_eq!(fast.requests().len(), 1, "the fast role is not asked again");
+    let main = world.provider.requests();
+    assert_eq!(main[2].role, ModelRole::Main);
+    assert!(all_text(main[2].messages.last().unwrap()).contains("summary"));
+    let fourth = &main[3];
+    assert!(all_text(&fourth.messages[0]).contains("Goal: the second try."));
     // Asked for now, it covers everything: nothing is replayed after it.
-    assert_eq!(third.messages.len(), 1);
+    assert_eq!(fourth.messages.len(), 1);
 }
 
 #[test]
 fn when_every_summary_fails_the_turn_ends_and_nothing_is_recorded() {
-    let world = World::new("summary_fails", filling());
+    let mut responses = filling();
+    // The main model fails the summary too, when it is asked after the
+    // `fast` role's model.
+    responses[2] = Response::new().error(cortex_llm::error::ProviderError::new(
+        cortex_base::ErrorKind::Provider,
+        "invalid_request",
+        "No.",
+    ));
+    let world = World::new("summary_fails", responses);
     let fast = ScriptedProvider::new([]);
     let rig = with_fast(&world, &fast);
     world.run(async {
@@ -807,7 +823,9 @@ fn when_every_summary_fails_the_turn_ends_and_nothing_is_recorded() {
     assert_eq!(error.kind, cortex_protocol::ErrorKind::ContextOverflow);
     assert!(rig.store.summaries().is_empty());
     assert_eq!(rig.store.epochs().len(), 1);
-    assert_eq!(world.provider.requests().len(), 2);
+    // The turn's two, and the summary the main model was asked for.
+    assert_eq!(world.provider.requests().len(), 3);
+    assert_eq!(fast.requests().len(), 1);
 }
 
 #[test]
@@ -1214,6 +1232,7 @@ fn resumed(world: &World, system: &str) -> (Rig, MemorySessionStore) {
                 base: None,
                 instructions: vec![("AGENTS.md".to_owned(), ContentHash::of(b"x"))],
                 altered: false,
+                variants: None,
             }),
         ),
     );

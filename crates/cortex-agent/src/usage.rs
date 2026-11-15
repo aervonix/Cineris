@@ -127,19 +127,24 @@ impl UsageBook {
         self.usage.last_request = Some(request.clone());
     }
 
-    /// Records the limits a provider reported with a response.
+    /// Records the limits a provider reported with a response, and returns
+    /// them as kept.
     pub(crate) fn set_limits(
         &mut self,
         provider: &ProviderId,
         windows: Vec<LimitWindow>,
         seen_at: UtcTime,
-    ) {
+    ) -> ProviderLimits {
         let limits = ProviderLimits {
             provider: provider.clone(),
             windows,
             seen_at: seen_at.to_timestamp(),
             source: LimitSource::Headers,
+            balances: Vec::new(),
+            available: None,
+            next_epoch: None,
         };
+        let kept = limits.clone();
         match self
             .usage
             .limits
@@ -149,6 +154,7 @@ impl UsageBook {
             Some(known) => *known = limits,
             None => self.usage.limits.push(limits),
         }
+        kept
     }
 }
 

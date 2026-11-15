@@ -166,11 +166,15 @@ fn tier_refusal(status: u16, code: &str) -> Reply {
     ))
 }
 
-/// One name per event, for asserting on the shape of a stream.
+/// One name per event, for asserting on the shape of a stream. The client's
+/// word that the provider answered is left out: it is timing, and comes
+/// before each attempt's response (`answered` counts them).
 fn names(events: &[ModelEvent]) -> Vec<&'static str> {
     events
         .iter()
+        .filter(|event| !matches!(event, ModelEvent::Answered))
         .map(|event| match event {
+            ModelEvent::Answered => "answered",
             ModelEvent::Start { .. } => "start",
             ModelEvent::BlockStart { .. } => "block_start",
             ModelEvent::TextDelta { .. } => "text",

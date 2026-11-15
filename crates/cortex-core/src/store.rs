@@ -102,6 +102,11 @@ fn epoch_body(epoch: EpochStart) -> Body {
             .into_iter()
             .map(|(path, hash)| InstructionMark { path, hash })
             .collect(),
+        variants: epoch
+            .variants
+            .as_ref()
+            .map(cortex_llm::Variants::to_map)
+            .unwrap_or_default(),
     })
 }
 
@@ -131,6 +136,7 @@ fn epoch_start(epoch: &Epoch, redacted: bool) -> EpochStart {
             })
             .collect(),
         reason: epoch.reason.as_deref().and_then(EpochReason::from_name),
+        variants: cortex_llm::Variants::from_map(&epoch.variants),
         base: epoch.base,
         instructions: epoch
             .instructions
@@ -768,6 +774,7 @@ mod tests {
             base: Some(cortex_base::ContentHash::of(b"base")),
             instructions: vec![("AGENTS.md".to_owned(), cortex_base::ContentHash::of(b"x"))],
             altered: false,
+            variants: None,
         };
         let entries = [
             entry(epoch_body(epoch.clone())),

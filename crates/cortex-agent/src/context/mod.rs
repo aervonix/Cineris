@@ -54,7 +54,7 @@ pub use instructions::{
     NoInstructionFiles, is_instruction_name,
 };
 pub use prefix::{PrefixDifference, check_prefix};
-pub use prompt::{CORE_INSTRUCTIONS, Environment};
+pub use prompt::{CORE_INSTRUCTIONS, Environment, GUIDED_NOTES};
 
 pub(crate) use budget::{Budget, Pressure, fraction_of, pressure, summary_room};
 pub(crate) use compact::{ARTIFACT_ROUNDS, Carried, SUMMARY_CUT, Touched, instructions_message};

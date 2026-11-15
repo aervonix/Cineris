@@ -84,6 +84,7 @@ fn epoch(system: &str) -> EpochStart {
         base: None,
         instructions: vec![("AGENTS.md".to_owned(), ContentHash::of(b"Use tabs."))],
         altered: false,
+        variants: None,
     }
 }
 

@@ -427,6 +427,7 @@ mod tests {
         events
             .iter()
             .map(|event| match event {
+                ModelEvent::Answered => "answered",
                 ModelEvent::Start { .. } => "start",
                 ModelEvent::BlockStart { .. } => "block_start",
                 ModelEvent::TextDelta { .. } => "text",

@@ -17,6 +17,9 @@ cortex-llm.workspace = true
 cortex-tools.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# The `turn`, `request` and `tool` spans (docs/architecture/02-runtime.md,
+# "Logging and tracing"). With no subscriber, a span is a check of one atomic.
+tracing.workspace = true
 # `rt` for tasks (a tool call, a plan, a question each run as one), `sync`
 # for the channel they report on and for waking an idle session.
 tokio = { workspace = true, features = ["rt", "sync"] }

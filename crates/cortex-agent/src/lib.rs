@@ -48,6 +48,7 @@
 mod assistant;
 mod guarded;
 mod round;
+mod timing;
 mod usage;
 
 pub mod config;
@@ -65,9 +66,9 @@ pub mod toolset;
 pub mod turn;
 pub mod verify;
 
-pub use config::{LoopConfig, Models, RoleModel, SessionInfo, Workspace};
+pub use config::{LoopConfig, Models, RoleModel, SessionInfo, UtilityCall, Workspace};
 pub use context::{
-    Assembled, CORE_INSTRUCTIONS, ContextError, ContextParts, ContextSettings, Environment,
+    Assembled, CORE_INSTRUCTIONS, ContextError, ContextParts, ContextSettings, Environment, GUIDED_NOTES,
     FileText, InstructionFiles, MemoryInstructionFiles, NOTICE_LEAD, NoInstructionFiles,
     PrefixDifference, SUMMARY_INSTRUCTIONS, check_prefix,
 };
@@ -79,8 +80,8 @@ pub use session::{HistoryChange, SessionHandle};
 pub use speed::SpeedSettings;
 pub use state::{Observer, TRANSITIONS, TurnState};
 pub use stats::{
-    ContextSources, ContextStat, NoStats, RequestStat, StatEvent, Stats, ToolCallStat,
-    ToolStatOutcome, TurnStat,
+    ContextSources, ContextStat, NoStats, RequestPurpose, RequestStat, StatEvent, Stats,
+    ToolCallStat, ToolStatOutcome, TurnStat, TurnTimes,
 };
 pub use store::{
     Attempt, EpochReason, EpochStart, MemorySessionStore, Opened, Record, SessionStore, StoreError,

@@ -490,6 +490,11 @@ pub struct Epoch {
     /// told the model as a notice, measured against this. Added in step 15.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instructions: Vec<InstructionMark>,
+    /// The choice at each variant point the epoch's requests are made with
+    /// (`edit_format`, `tool_schema`, `prompt_style`), fixed for the epoch.
+    /// Added in step 16; absent before.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub variants: std::collections::BTreeMap<String, String>,
 }
 
 /// An instruction file as an epoch's system prompt holds it.
@@ -1322,6 +1327,9 @@ mod tests {
                 path: "AGENTS.md".into(),
                 hash: ContentHash::of(b"be brief"),
             }],
+            variants: [("tool_schema".to_owned(), "loose".to_owned())]
+                .into_iter()
+                .collect(),
         }));
         round_trip(Body::Session(Header {
             session: "s_1".into(),

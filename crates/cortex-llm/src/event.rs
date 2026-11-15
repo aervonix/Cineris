@@ -44,6 +44,14 @@ pub enum BlockKind {
 /// **The last event** is `End` or `Error`, exactly one of them.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModelEvent {
+    /// The provider answered: the response's headers arrived, with a
+    /// success status. What came before it was the connection, the
+    /// request's upload and the provider's queue; what follows, up to the
+    /// first event, is the wait for the first byte of the answer. Said by
+    /// the client once an attempt, before anything of that attempt's
+    /// response; a stream from elsewhere may never say it. Added in step 16,
+    /// for where a turn's time goes.
+    Answered,
     /// A response began.
     Start {
         /// The provider's id for the response.
