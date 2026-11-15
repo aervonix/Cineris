@@ -93,10 +93,12 @@ fn a_limits_file_that_cannot_be_read_is_left_as_it_is() {
     )
     .unwrap();
     let before = std::fs::read(dir.limits_file()).unwrap();
-    std::fs::set_permissions(dir.limits_file(), std::fs::Permissions::from_mode(0o000)).unwrap();
+    // Write-only: it cannot be read, and could be replaced (a file that
+    // cannot be written either is refused by the atomic write itself).
+    std::fs::set_permissions(dir.limits_file(), std::fs::Permissions::from_mode(0o200)).unwrap();
     if std::fs::File::open(dir.limits_file()).is_ok() {
         // Root reads anything: nothing here can be unreadable.
-        println!("skipped: this user reads a file of mode 000");
+        println!("skipped: this user reads a file of mode 200");
         return;
     }
     let refused = LimitsFile::update(
