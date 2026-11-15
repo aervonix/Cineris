@@ -2,7 +2,7 @@
 //! `ci test`, so the commands here are the definition of what CI runs
 //! (`docs/testing-and-ci.md`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::Result;
@@ -173,23 +173,184 @@ pub(crate) fn require_nextest() -> Result<()> {
 /// The blocking test job: tiers 1 to 3, in nextest's `ci` profile, built with
 /// cargo's `ci` profile (third-party crates unoptimised, so that a cold cache
 /// still fits the time budget). Building and running are separate steps so
-/// that their times are reported separately.
+/// that their times are reported separately, and so are the job's two runs
+/// ([`ci_runs`]).
 fn ci_test_steps() -> Vec<Step> {
-    let run = ci_run(&[]);
-    let mut build = run.clone();
+    let mut build = ci_run(&[]);
     build.push("--no-run".to_owned());
-    vec![
+    let mut all = vec![
         // The last run's report is not this run's. If the build fails, the
         // tier report then says there is nothing to read.
         Step::closure("build tests", move || {
-            workspace::forget_report(&tiers::ci_report_path())?;
+            forget_reports(&workspace::root())?;
             steps::cargo(&build)
         }),
-        Step::cargo_owned("run tests", run),
-        // Each test has its own limit in .config/nextest.toml. This checks
-        // what the tests of each tier took together.
-        Step::function("tier budgets", tiers::check_ci_report),
-    ]
+    ];
+    all.extend(run_steps(ci_runs(&[], &[], true)));
+    // Each test has its own limit in .config/nextest.toml. This checks
+    // what the tests of each tier took together.
+    all.push(Step::function("tier budgets", tiers::check_ci_report));
+    all
+}
+
+/// The system tests, tier 3, as `.config/nextest.toml` picks them: by name.
+pub(crate) const SYSTEM_TESTS: &str = "test(/(^|::)sys_/)";
+
+/// The start of the line of `.config/nextest.toml` that gives the job's
+/// second run, the system tests, a group of its own. A tree without it is
+/// from before the job ran in two (`ab`'s base can be), and its job is one
+/// run.
+const SYSTEM_GROUP: &str = "system = { max-threads";
+
+/// Whether the blocking test job of the tree at `root` is two runs, by its
+/// own `.config/nextest.toml`.
+pub(crate) fn splits(root: &Path) -> bool {
+    std::fs::read_to_string(root.join(".config").join("nextest.toml"))
+        .is_ok_and(|text| text.lines().any(|line| line.starts_with(SYSTEM_GROUP)))
+}
+
+/// The blocking test job's runs, in order, for the packages named (empty:
+/// the workspace), with `rest` (more arguments for nextest) given to each.
+///
+/// Split, by the owner's decision of 2026-11-15, tiers 1 and 2 run first,
+/// and then the system tests alone, three at a time (the `ci` profile's
+/// `system` group), so that each tier is measured under its own load and
+/// not beside the others' (docs/testing-and-ci.md, "The tiers"). nextest
+/// takes a test that matches any of its filtersets, so a filterset in
+/// `rest` is joined to each run's own with `and`, not given beside it.
+pub(crate) fn ci_runs(packages: &[String], rest: &[String], split: bool) -> Vec<Vec<String>> {
+    if !split {
+        let mut run = ci_run(packages);
+        run.extend(rest.iter().cloned());
+        return vec![run];
+    }
+    let (given, rest) = filtersets(rest);
+    [format!("not {SYSTEM_TESTS}"), SYSTEM_TESTS.to_owned()]
+        .into_iter()
+        .map(|own| {
+            let filter = match &given {
+                Some(given) => format!("({given}) and ({own})"),
+                None => own,
+            };
+            let mut run = ci_run(packages);
+            // A crate may have no system test, or nothing but.
+            run.extend(["--no-tests=pass".to_owned(), "-E".to_owned(), filter]);
+            run.extend(rest.iter().cloned());
+            run
+        })
+        .collect()
+}
+
+/// The filtersets among arguments for nextest, joined with `or` as nextest
+/// joins them, and the other arguments.
+fn filtersets(arguments: &[String]) -> (Option<String>, Vec<String>) {
+    const NAMES: [&str; 3] = ["-E", "--filterset", "--filter-expr"];
+    let mut found = Vec::new();
+    let mut rest = Vec::new();
+    let mut words = arguments.iter();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            rest.push(word.clone());
+            rest.extend(words.by_ref().cloned());
+            break;
+        }
+        if NAMES.contains(&word.as_str()) {
+            if let Some(value) = words.next() {
+                found.push(value.clone());
+            }
+            continue;
+        }
+        let joined = NAMES
+            .iter()
+            .find_map(|name| word.strip_prefix(&format!("{name}=")));
+        match joined {
+            Some(value) => found.push(value.to_owned()),
+            None => rest.push(word.clone()),
+        }
+    }
+    let joined = match found.as_slice() {
+        [] => None,
+        [one] => Some(one.clone()),
+        many => Some(
+            many.iter()
+                .map(|one| format!("({one})"))
+                .collect::<Vec<_>>()
+                .join(" or "),
+        ),
+    };
+    (joined, rest)
+}
+
+/// The steps that run `runs` in this tree, and leave one report of them all
+/// where one run would leave its own.
+fn run_steps(runs: Vec<Vec<String>>) -> Vec<Step> {
+    if runs.len() == 1 {
+        return runs
+            .into_iter()
+            .map(|run| Step::cargo_owned("run tests", run))
+            .collect();
+    }
+    let names = ["run tiers 1 and 2", "run the system tests"];
+    let last = runs.len() - 1;
+    runs.into_iter()
+        .enumerate()
+        .map(|(index, run)| {
+            Step::closure(names[index.min(1)], move || {
+                let ran = steps::cargo(&run);
+                let root = workspace::root();
+                if index == last {
+                    bring_together(&root)?;
+                } else {
+                    set_aside(&root)?;
+                }
+                ran
+            })
+        })
+        .collect()
+}
+
+/// Where the first run's report waits for the second's, beside it.
+fn aside_path(root: &Path) -> PathBuf {
+    workspace::nextest_report(root, "ci").with_file_name("junit-tiers-1-and-2.xml")
+}
+
+/// Removes the reports of an earlier run of the job in the tree at `root`.
+pub(crate) fn forget_reports(root: &Path) -> Result<()> {
+    workspace::forget_report(&workspace::nextest_report(root, "ci"))?;
+    workspace::forget_report(&aside_path(root))
+}
+
+/// After a run of the job that is not its last: its report, moved out of
+/// the next run's way.
+pub(crate) fn set_aside(root: &Path) -> Result<()> {
+    let (report, aside) = (workspace::nextest_report(root, "ci"), aside_path(root));
+    workspace::forget_report(&aside)?;
+    if report.is_file() {
+        std::fs::rename(&report, &aside)
+            .map_err(|error| format!("could not move {}: {error}", report.display()))?;
+    }
+    Ok(())
+}
+
+/// After the job's last run: the report set aside and the last run's, as
+/// one report in the last's place.
+pub(crate) fn bring_together(root: &Path) -> Result<()> {
+    let (report, aside) = (workspace::nextest_report(root, "ci"), aside_path(root));
+    if !aside.is_file() {
+        return Ok(());
+    }
+    let read = |path: &Path| {
+        std::fs::read_to_string(path)
+            .map_err(|error| format!("could not read {}: {error}", path.display()))
+    };
+    let merged = if report.is_file() {
+        crate::junit::merge(&read(&aside)?, &read(&report)?)?
+    } else {
+        read(&aside)?
+    };
+    std::fs::write(&report, merged)
+        .map_err(|error| format!("could not write {}: {error}", report.display()))?;
+    workspace::forget_report(&aside)
 }
 
 /// `cargo nextest run` as the blocking test job runs it, for the whole
@@ -378,7 +539,9 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
         let side = |os| -> Result<Vec<crate::junit::TestCase>> {
             let sides = crate::records::ab_reports(*run, os)?
                 .ok_or_else(|| format!("run {run} kept no report for {os:?}"))?;
-            Ok(crate::ab::medians(&sides.base))
+            // The head: the tree whose job this `xtask` runs, in its own
+            // layout. An A/A run's two sides are one tree.
+            Ok(crate::ab::medians(&sides.head))
         };
         print!(
             "{}",
@@ -409,18 +572,20 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
         return Ok(());
     }
     require_nextest()?;
-    let mut run = ci_run(&request.packages);
-    let threads_given = request
-        .rest
+    let mut rest = request.rest.clone();
+    let threads_given = rest
         .iter()
         .any(|word| word.starts_with("--test-threads") || word == "-j");
     if request.like_runner && !threads_given {
-        run.extend([
-            "--test-threads".to_owned(),
-            crate::like_runner::RUNNER_THREADS.to_owned(),
-        ]);
+        rest.splice(
+            0..0,
+            [
+                "--test-threads".to_owned(),
+                crate::like_runner::RUNNER_THREADS.to_owned(),
+            ],
+        );
     }
-    run.extend(request.rest.iter().cloned());
+    let runs = ci_runs(&request.packages, &rest, true);
     let like_runner = request.like_runner;
     let mut build = ci_run(&request.packages);
     build.push("--no-run".to_owned());
@@ -434,24 +599,20 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
             chosen.join(" ")
         )
     };
-    steps::run(
-        &title,
-        vec![
-            Step::closure("build tests", move || {
-                workspace::forget_report(&tiers::ci_report_path())?;
-                steps::cargo(&build)
-            }),
-            Step::cargo_owned("run tests", run),
-            Step::closure("tier budgets", move || {
-                let checked = tiers::check_report(&tiers::ci_report_path(), os, top);
-                if like_runner {
-                    let cases = crate::junit::read(&tiers::ci_report_path())?;
-                    print!("{}", crate::like_runner::estimate(&cases));
-                }
-                checked
-            }),
-        ],
-    )
+    let mut all = vec![Step::closure("build tests", move || {
+        forget_reports(&workspace::root())?;
+        steps::cargo(&build)
+    })];
+    all.extend(run_steps(runs));
+    all.push(Step::closure("tier budgets", move || {
+        let checked = tiers::check_report(&tiers::ci_report_path(), os, top);
+        if like_runner {
+            let cases = crate::junit::read(&tiers::ci_report_path())?;
+            print!("{}", crate::like_runner::estimate(&cases));
+        }
+        checked
+    }));
+    steps::run(&title, all)
 }
 
 #[cfg(test)]
@@ -555,6 +716,145 @@ mod tests {
         assert!(!other.contains("--features"), "{other}");
         // The whole workspace turns it on through cortex-core.
         assert!(!test_command(&[]).join(" ").contains("--features"));
+    }
+
+    #[test]
+    fn the_job_runs_tiers_one_and_two_and_then_the_system_tests() {
+        let runs = super::ci_runs(&[], &[], true);
+        let base = "nextest run --workspace --locked --cargo-profile ci --profile ci";
+        assert_eq!(
+            runs.iter().map(|run| run.join(" ")).collect::<Vec<_>>(),
+            [
+                format!("{base} --no-tests=pass -E not test(/(^|::)sys_/)"),
+                format!("{base} --no-tests=pass -E test(/(^|::)sys_/)"),
+            ]
+        );
+        // A tree from before the split: one run, as its own job had it.
+        assert_eq!(
+            super::ci_runs(
+                &strings(&["cortex-llm"]),
+                &strings(&["--test-threads", "4"]),
+                false
+            ),
+            [strings(&[
+                "nextest",
+                "run",
+                "-p",
+                "cortex-llm",
+                "--locked",
+                "--cargo-profile",
+                "ci",
+                "--profile",
+                "ci",
+                "--test-threads",
+                "4"
+            ])]
+        );
+    }
+
+    #[test]
+    fn a_filterset_given_narrows_each_run_and_is_not_added_beside_it() {
+        // nextest runs a test that matches any of its filtersets: given
+        // beside a run's own, `-E 'test(x)'` would run every test of the
+        // other tier too.
+        let rest = strings(&[
+            "-E",
+            "package(cortex-tui)",
+            "--filterset=test(a)",
+            "--test-threads",
+            "4",
+            "--",
+            "-E",
+            "not mine",
+        ]);
+        let runs = super::ci_runs(&[], &rest, true);
+        let tail = |run: &Vec<String>| run[8..].to_vec();
+        assert_eq!(
+            tail(&runs[0]),
+            strings(&[
+                "--no-tests=pass",
+                "-E",
+                "((package(cortex-tui)) or (test(a))) and (not test(/(^|::)sys_/))",
+                "--test-threads",
+                "4",
+                "--",
+                "-E",
+                "not mine",
+            ])
+        );
+        assert_eq!(
+            tail(&runs[1])[2],
+            "((package(cortex-tui)) or (test(a))) and (test(/(^|::)sys_/))"
+        );
+        assert_eq!(
+            super::filtersets(&strings(&["--filter-expr", "a"]))
+                .0
+                .as_deref(),
+            Some("a")
+        );
+        assert_eq!(super::filtersets(&strings(&["x"])), (None, strings(&["x"])));
+    }
+
+    #[test]
+    fn this_trees_job_is_two_runs_and_a_tree_without_the_group_is_one() {
+        assert!(super::splits(&crate::workspace::root()));
+        let root = std::env::temp_dir().join(format!("xtask-splits-{}", std::process::id()));
+        let config = root.join(".config");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(
+            config.join("nextest.toml"),
+            "[test-groups]\nprocess = { max-threads = 2 }\n# system = { max-threads = 3 }\n",
+        )
+        .unwrap();
+        let before = super::splits(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(!before);
+    }
+
+    #[test]
+    fn the_first_runs_report_is_set_aside_and_merged_with_the_last() {
+        let root = std::env::temp_dir().join(format!("xtask-reports-{}", std::process::id()));
+        let report = crate::workspace::nextest_report(&root, "ci");
+        std::fs::create_dir_all(report.parent().unwrap()).unwrap();
+        let one = |name: &str| {
+            format!(
+                "<testsuites name=\"nextest-run\" tests=\"1\">\n<testsuite name=\"a\"><testcase \
+                 name=\"{name}\" classname=\"a\" time=\"1\"/></testsuite>\n</testsuites>\n"
+            )
+        };
+        let names = |path: &std::path::Path| -> Vec<String> {
+            crate::junit::read(path)
+                .unwrap()
+                .into_iter()
+                .map(|case| case.name)
+                .collect()
+        };
+        // A report a run before this one left, which must not be merged.
+        std::fs::write(super::aside_path(&root), one("stale")).unwrap();
+        super::forget_reports(&root).unwrap();
+        let stale_left = super::aside_path(&root).exists();
+        std::fs::write(&report, one("first")).unwrap();
+        super::set_aside(&root).unwrap();
+        let moved = !report.exists();
+        std::fs::write(&report, one("second")).unwrap();
+        super::bring_together(&root).unwrap();
+        let both = names(&report);
+        let aside_left = super::aside_path(&root).exists();
+        // A last run that wrote nothing leaves the first's report alone.
+        std::fs::write(&report, one("only")).unwrap();
+        super::set_aside(&root).unwrap();
+        super::bring_together(&root).unwrap();
+        let alone = names(&report);
+        std::fs::remove_dir_all(&root).unwrap();
+
+        assert!(
+            !stale_left,
+            "the build forgets a report set aside by an earlier run"
+        );
+        assert!(moved);
+        assert_eq!(both, ["first", "second"]);
+        assert!(!aside_left);
+        assert_eq!(alone, ["only"]);
     }
 
     #[test]

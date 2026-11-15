@@ -220,20 +220,37 @@ fn target_of(tree: &Path) -> PathBuf {
     tree.join("target")
 }
 
-/// `cargo nextest run` in `tree`, as the blocking test job runs it.
-fn nextest(tree: &Path, request: &Request, build_only: bool) -> Command {
+/// `cargo nextest run` in `tree` with `arguments`: the build of the
+/// blocking test job's tests, or one of its runs.
+fn nextest(tree: &Path, arguments: &[String]) -> Command {
     let mut command = Command::new(workspace::cargo());
     command
         .current_dir(tree)
         .env("CARGO_TARGET_DIR", target_of(tree))
         .env_remove("CARGO_BUILD_TARGET_DIR")
-        .args(crate::checks::ci_run(&request.packages));
-    if build_only {
-        command.arg("--no-run");
-    } else {
-        command.args(&request.rest);
-    }
+        .args(arguments);
     command
+}
+
+/// The blocking test job's runs in `tree`, as that tree's own job runs
+/// them: a base from before the job ran in two is run in one
+/// (`checks::splits`), so that an A/B of the change compares the two jobs.
+/// One report of them all is left where one run leaves its own.
+fn run_job(tree: &Path, request: &Request) -> Result<()> {
+    let split = crate::checks::splits(tree);
+    let runs = crate::checks::ci_runs(&request.packages, &request.rest, split);
+    crate::checks::forget_reports(tree)?;
+    let last = runs.len() - 1;
+    for (index, run) in runs.iter().enumerate() {
+        let ran = run_in(tree, nextest(tree, run), "the tests");
+        if index == last {
+            crate::checks::bring_together(tree)?;
+        } else {
+            crate::checks::set_aside(tree)?;
+        }
+        ran?;
+    }
+    Ok(())
 }
 
 fn run_in(tree: &Path, mut command: Command, what: &str) -> Result<()> {
@@ -273,13 +290,11 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         .unwrap_or_else(|| base.display().to_string());
     let tree = |which: Which| if which == Which::Base { &base } else { &head };
 
+    let mut build = crate::checks::ci_run(&request.packages);
+    build.push("--no-run".to_owned());
     for which in [Which::Base, Which::Head] {
         println!("== building the {} ==", name(which, &label));
-        run_in(
-            tree(which),
-            nextest(tree(which), &request, true),
-            "the build",
-        )?;
+        run_in(tree(which), nextest(tree(which), &build), "the build")?;
     }
     let mut runs: [Vec<Vec<TestCase>>; 2] = [Vec::new(), Vec::new()];
     for round in 0..request.rounds {
@@ -292,8 +307,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             );
             let at = tree(which);
             let report = workspace::nextest_report(at, "ci");
-            workspace::forget_report(&report)?;
-            run_in(at, nextest(at, &request, false), "the tests")?;
+            run_job(at, &request)?;
             let cases = junit::read(&report)?;
             // Each round's report, kept where the head's run keeps its own
             // (the `try` workflow uploads the folder).

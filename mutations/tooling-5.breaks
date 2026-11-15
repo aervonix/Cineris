@@ -349,3 +349,69 @@ find: if rounds == 0 {
 replace: if false {
 caught-by:
     records::tests::only_the_rounds_both_sides_finished_are_compared
+
+# ----------------------------------------- the test job in two runs (the split)
+
+[break] the-job-runs-everything-at-once
+rule: The blocking test job runs tiers 1 and 2 first and the system tests after, each run filtered to its own tests.
+file: xtask/src/checks.rs
+in: ci_runs
+find: [format!("not {SYSTEM_TESTS}"), SYSTEM_TESTS.to_owned()]
+replace: ["all()".to_owned(), SYSTEM_TESTS.to_owned()]
+caught-by:
+    checks::tests::the_job_runs_tiers_one_and_two_and_then_the_system_tests
+    checks::tests::a_filterset_given_narrows_each_run_and_is_not_added_beside_it
+
+[break] a-given-filterset-is-added-beside-the-runs-own
+rule: A filterset given to the job is joined to each run's own with and, since nextest takes a test that matches any filterset.
+file: xtask/src/checks.rs
+in: ci_runs
+find: Some(given) => format!("({given}) and ({own})"),
+replace: Some(given) => format!("({given}) or ({own})"),
+caught-by:
+    checks::tests::a_filterset_given_narrows_each_run_and_is_not_added_beside_it
+
+[break] a-tree-from-before-the-split-is-split
+rule: A tree whose nextest configuration has no system group is run in one, as its own job ran.
+file: xtask/src/checks.rs
+in: splits
+find: .is_ok_and(|text| text.lines().any(|line| line.starts_with(SYSTEM_GROUP)))
+replace: .is_ok_and(|text| text.contains(SYSTEM_GROUP))
+caught-by:
+    checks::tests::this_trees_job_is_two_runs_and_a_tree_without_the_group_is_one
+
+[break] the-first-runs-report-is-lost
+rule: The first run's report is set aside and merged with the last's, so that the tier budgets read every tier.
+file: xtask/src/checks.rs
+in: bring_together
+find: crate::junit::merge(&read(&aside)?, &read(&report)?)?
+replace: read(&report)?
+caught-by:
+    checks::tests::the_first_runs_report_is_set_aside_and_merged_with_the_last
+
+[break] a-stale-report-is-merged
+rule: The job's build forgets the report an earlier run set aside.
+file: xtask/src/checks.rs
+in: forget_reports
+find: workspace::forget_report(&aside_path(root))
+replace: Ok(())
+caught-by:
+    checks::tests::the_first_runs_report_is_set_aside_and_merged_with_the_last
+
+[break] a-merged-report-keeps-the-first-runs-counts
+rule: A merged report's root counts are the two runs' summed.
+file: xtask/src/junit.rs
+in: merge
+find: open = with_attribute(&open, name, &(one + other).to_string());
+replace: open = with_attribute(&open, name, &one.to_string());
+caught-by:
+    junit::tests::two_runs_reports_merge_into_one_with_every_case_and_the_counts_summed
+
+[break] a-merged-report-drops-the-second-runs-cases
+rule: A merged report holds both runs' cases.
+file: xtask/src/junit.rs
+in: merge
+find: Ok(format!("{open}{first_body}{second_body}</testsuites>\n"))
+replace: Ok(format!("{open}{first_body}</testsuites>\n"))
+caught-by:
+    junit::tests::two_runs_reports_merge_into_one_with_every_case_and_the_counts_summed

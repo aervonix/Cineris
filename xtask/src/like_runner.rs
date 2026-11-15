@@ -20,9 +20,9 @@
 //! `cargo xtask ci --tiers --from DESK.xml --factors-from TRY-RUN` measures
 //! the table again: `DESK.xml` is the desk's report of a run with
 //! `--like-runner` (or `-- --test-threads 4`), and `TRY-RUN` a `try` run
-//! of the same tree with `-f against=…` (an A/A run, or any A/B, whose base
-//! side is read), whose rounds give each test's median on each runner. It
-//! prints the table to paste here.
+//! of the same tree with `-f against=…` (an A/A run, or any A/B, whose head
+//! side, this tree, is read), whose rounds give each test's median on each
+//! runner. It prints the table to paste here.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
