@@ -293,6 +293,7 @@ fn a_resumed_sessions_first_change_of_model_warns_that_it_is_resent_uncached() {
             state: opened.session,
             seen: std::cell::RefCell::default(),
             answered: std::cell::RefCell::default(),
+            answering: std::cell::RefCell::default(),
             core: core.clone(),
             client,
         };

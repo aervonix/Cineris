@@ -281,6 +281,7 @@ fn a_session_resumed_after_a_compaction_begins_from_its_summary() {
             state: opened.session,
             seen: std::cell::RefCell::default(),
             answered: std::cell::RefCell::default(),
+            answering: std::cell::RefCell::default(),
         };
         front.turn("again").await;
         front.close().await;

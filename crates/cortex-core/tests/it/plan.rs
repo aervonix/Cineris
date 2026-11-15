@@ -344,6 +344,7 @@ fn a_rewind_or_a_fork_at_a_plan_calls_result_keeps_the_plan_that_call_made() {
             state: forked.session,
             seen: std::cell::RefCell::default(),
             answered: std::cell::RefCell::default(),
+            answering: std::cell::RefCell::default(),
             core: front.core.clone(),
             client: front.client.clone(),
         };

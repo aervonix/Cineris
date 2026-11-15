@@ -191,6 +191,7 @@ fn a_stored_session_is_listed_resumed_and_carries_on() {
             state: opened.session,
             seen: std::cell::RefCell::new(Vec::new()),
             answered: std::cell::RefCell::new(Vec::new()),
+            answering: std::cell::RefCell::new(crate::Answering::default()),
         };
         front.turn("two").await;
         assert_eq!(front.last_text(), "Second answer.");
@@ -297,6 +298,7 @@ fn a_fork_is_a_new_session_with_the_same_conversation() {
             state: forked.session,
             seen: std::cell::RefCell::new(Vec::new()),
             answered: std::cell::RefCell::new(Vec::new()),
+            answering: std::cell::RefCell::new(crate::Answering::default()),
         };
         fork.turn("two").await;
         let request = world.provider.requests().pop().unwrap();
@@ -342,6 +344,7 @@ fn a_session_with_no_log_runs_the_same_and_leaves_nothing_behind() {
             state: result.session,
             seen: std::cell::RefCell::new(Vec::new()),
             answered: std::cell::RefCell::new(Vec::new()),
+            answering: std::cell::RefCell::new(crate::Answering::default()),
         };
         let end = front.turn("go").await;
         assert_eq!(end.outcome, TurnOutcome::Completed);

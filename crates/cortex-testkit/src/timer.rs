@@ -146,9 +146,19 @@ impl Timer for FakeTimer {
         for waker in watchers {
             waker.wake();
         }
+        // Named for the timeout report while it runs: a test that waits
+        // for something behind a wait nobody ends would otherwise be
+        // stopped at its limit with nothing to say what it waited for.
+        let doing = crate::watch::doing(format!(
+            "a wait of {} on the manual fake timer, made when the fake clock read {} (it ends \
+             only when the test moves the clock past it, with `FakeTimer::advance`)",
+            seconds(duration),
+            self.clock.now()
+        ));
         Box::pin(ManualSleep {
             timer: self.clone(),
             id,
+            doing: Some(doing),
         })
     }
 }
@@ -175,24 +185,39 @@ impl Future for AutoSleep {
 }
 
 /// A wait of a manual timer.
+/// A wait of a manual timer.
 struct ManualSleep {
     timer: FakeTimer,
     id: u64,
+    /// What the timeout report says while the wait runs.
+    doing: Option<crate::watch::Doing>,
+}
+
+/// A wait's length as the timeout report writes it.
+fn seconds(duration: Duration) -> String {
+    if duration.subsec_nanos() == 0 {
+        format!("{} s", duration.as_secs())
+    } else {
+        format!("{:.3} s", duration.as_secs_f64())
+    }
 }
 
 impl Future for ManualSleep {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
-        let now = self.timer.clock.monotonic();
-        let mut state = self.timer.lock();
-        let Some(index) = state.running.iter().position(|wait| wait.id == self.id) else {
+        let this = self.get_mut();
+        let now = this.timer.clock.monotonic();
+        let mut state = this.timer.lock();
+        let Some(index) = state.running.iter().position(|wait| wait.id == this.id) else {
             // Finished on an earlier poll.
             return Poll::Ready(());
         };
         if state.running[index].ends <= now {
             let wait = state.running.swap_remove(index);
             state.slept.push(wait.length);
+            drop(state);
+            this.doing = None;
             Poll::Ready(())
         } else {
             state.running[index].waker = Some(context.waker().clone());
@@ -292,6 +317,32 @@ mod tests {
         assert_eq!(poll(&mut long), Poll::Ready(()));
         assert_eq!(timer.sleeps(), [secs(10), secs(90)]);
         assert_eq!(clock.monotonic(), secs(90));
+    }
+
+    #[test]
+    fn a_running_wait_is_named_for_the_timeout_report_until_it_ends() {
+        let clock = FakeClock::default();
+        let timer = FakeTimer::manual(&clock);
+        let mut wait = timer.sleep(secs(4321));
+        let given_up = timer.sleep(Duration::from_millis(1500));
+        assert_eq!(poll(&mut wait), Poll::Pending);
+        let waits = crate::watch::waits();
+        assert!(
+            waits.contains(
+                "a wait of 4321 s on the manual fake timer, made when the fake clock read \
+                 2026-01-01T00:00:00Z"
+            ),
+            "{waits}"
+        );
+        assert!(waits.contains("a wait of 1.500 s on the manual"), "{waits}");
+
+        drop(given_up);
+        timer.advance(secs(4321));
+        assert_eq!(poll(&mut wait), Poll::Ready(()));
+        // Ended, though the future is still held: not a wait any more.
+        let waits = crate::watch::waits();
+        assert!(!waits.contains("4321 s"), "{waits}");
+        assert!(!waits.contains("1.500 s"), "{waits}");
     }
 
     #[test]
