@@ -34,7 +34,7 @@ The coordinator approved all six as proposed on 2026-11-15.
 | **`[index]` is declared:** `map`, `map_tokens`, `map_wait`, `max_files`, `max_file_bytes`, `pass_time`. The budget and the caps are tighten-only; the caps take effect at a restart. | The section was reserved for this step. The map's budget was planned under `[adapt]`; it sits with the map. | [architecture/08-configuration.md](../../architecture/08-configuration.md); [configuration/reference.md](../../configuration/reference.md) |
 | **The core's test rig has no index unless a test asks** (`CoreOptions::repo_index`). | A late map arrives at a boundary of its own timing, which tests of exact requests do not want. The real binary's system tests run with the index on. | `crates/cortex-core/tests/it/main.rs` |
 | **A directory's outline gives each file at most 30 definitions.** | One large file in path order would otherwise take the whole result and leave the directory's other files out. | 05, "`outline`" |
-| **The toolbox the binary sends now has `outline`**, and its recorded fixtures do not. | A recording is a paid call: [outstanding](../../outstanding/the-toolbox-fixtures-without-outline.md). The system test that compares them warns and does not fail. | — |
+| **The toolbox the binary sends now has `outline`**, and its recorded fixtures do not. | A recording is a paid call; the sixth tooling step recorded them again ([answered](../tooling-6/answered.md)). The system test that compares them warns and does not fail. | — |
 
 ## Ranking's statistics signal
 
