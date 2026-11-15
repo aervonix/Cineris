@@ -3,15 +3,15 @@
 //! - **Text.** UTF-8, and every position is a grapheme cluster boundary:
 //!   moving and deleting go a whole cluster at a time, and an edit that
 //!   joins two clusters moves the cursor out of the one it made
-//!   ([`cluster`]).
+//!   (`cluster`).
 //! - **Chips.** A paste too long to show is one [`Chip`], drawn as its
-//!   label and sent as what it holds ([`buffer`]).
+//!   label and sent as what it holds (`buffer`).
 //! - **Undo.** Typing is grouped into words; a paste, a yank, a kill, a
-//!   completion and a line break are each a step of their own ([`undo`]).
+//!   completion and a line break are each a step of their own (`undo`).
 //! - **Kill and yank.** One slot. Kills one after another add to it, so
 //!   `Ctrl+W Ctrl+W Ctrl+Y` gives both words back.
 //! - **Rows.** The text wraps at a width the caller gives, and the cursor
-//!   moves up and down by row ([`layout`]).
+//!   moves up and down by row (`layout`).
 //!
 //! The editor knows nothing of keys: the key map turns keys into
 //! [`Action`](crate::keys::Action)s, and the input calls the methods here.
