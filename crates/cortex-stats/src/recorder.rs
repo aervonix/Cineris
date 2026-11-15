@@ -102,8 +102,6 @@ struct Writer {
     receiver: Receiver<Message>,
     options: RecorderOptions,
     clock: SharedClock,
-    /// The recorder's id, written on its request lines.
-    id: Arc<str>,
     /// Events taken and not yet written.
     queued: Arc<AtomicU64>,
 }
@@ -266,15 +264,15 @@ impl Recorder {
                 receiver,
                 options,
                 clock,
-                id: Arc::clone(&id),
                 queued,
             }))),
             id,
         }
     }
 
-    /// The id this recorder writes on its request lines (`w_…`): what tells
-    /// a day's limits this process's own spending from other processes'.
+    /// This recorder's id (`w_…`), unique to it among every process's: what
+    /// the day's purse of its process makes its own id from, which the
+    /// request lines that purse counted carry.
     #[must_use]
     pub fn writer(&self) -> &str {
         &self.id
@@ -499,7 +497,6 @@ fn write_record(writer: &Writer, state: &mut State, record: &Record) {
     keep_plain(&mut record);
     let line = Line {
         day: zone.date_of(at).to_string(),
-        writer: matches!(record, Record::Request(_)).then(|| writer.id.to_string()),
         record,
     };
     let Ok(mut bytes) = serde_json::to_vec(&line) else {

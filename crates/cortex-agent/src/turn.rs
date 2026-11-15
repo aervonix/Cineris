@@ -255,6 +255,11 @@ struct Live {
     /// The turn's model time when the request was sent: the request's own
     /// is what it has grown by at its end.
     model_before: [Duration; 4],
+    /// What the attempts given up so far used, which the ledger was charged
+    /// as each was given up: the request's statistics event carries it with
+    /// the last attempt's, so that the statistics hold what the ledger was
+    /// charged, and other processes' day limits see it.
+    voided: Option<RequestUsage>,
 }
 
 /// A response that ended.
@@ -886,6 +891,7 @@ impl Session {
             sent,
             first_content: None,
             model_before,
+            voided: None,
         };
         let mut round = Round::new(
             Arc::clone(&self.env),
@@ -1122,9 +1128,14 @@ impl Session {
         round: &mut Round,
         error: ErrorData,
     ) -> Result<(), StoreError> {
-        // What the provider said the attempt used was used.
+        // What the provider said the attempt used was used: charged now,
+        // and carried into the request's statistics event.
         if let Some(usage) = live.usage.take() {
-            self.account(turn, model, usage, live);
+            let record = self.account(turn, model, usage, live);
+            live.voided = Some(match live.voided.take() {
+                Some(before) => crate::usage::together(before, &record),
+                None => record,
+            });
         }
         if live.shown {
             self.emit(
@@ -1177,11 +1188,16 @@ impl Session {
             // again. With automatic compaction off it stops and asks. The
             // request is recorded first, its context record with it: the
             // estimate that was wrong is what explains the refusal (since
-            // step 16).
+            // step 16), with what the provider said it used, which is
+            // charged here.
+            let usage = live
+                .usage
+                .take()
+                .map(|usage| self.account(turn, model, usage, &live));
             self.request_stat(
                 turn,
                 model,
-                None,
+                usage,
                 StopReason::ContextOverflow,
                 Some(data.clone()),
                 &live,
@@ -1629,6 +1645,18 @@ impl Session {
                 .usage
                 .take()
                 .map(|usage| self.account(turn, &model, usage, &live));
+            // The request was sent and charged: its statistics event says
+            // so, with what it used, so that what the ledger was charged is
+            // in the statistics, where other processes' day limits read it
+            // (found by the review of step 16's fixes).
+            self.record_request(
+                turn,
+                &model,
+                usage.clone(),
+                StopReason::Interrupted,
+                None,
+                &live,
+            );
             // The calls whose arguments were complete each get a result:
             // what a run that had started returns, or "interrupted".
             round.interrupt();
@@ -1977,6 +2005,8 @@ impl Session {
         self.emit(turn, Event::UsageUpdated(UsageUpdated { usage }));
     }
 
+    /// The statistics event of a request that ended, its context record
+    /// with it, and the request's prefix kept for the next one's.
     fn request_stat(
         &mut self,
         turn: &Turn,
@@ -1987,6 +2017,29 @@ impl Session {
         live: &Live,
     ) {
         let tokens = usage.as_ref().map(|usage| usage.tokens.clone());
+        self.record_request(turn, model, usage, stop, error, live);
+        self.settle_sent();
+        if let Some(mut context) = self.pending_context.take() {
+            context.usage = tokens;
+            self.stats.record(StatEvent::Context(context));
+        }
+    }
+
+    /// The statistics event of a request, and nothing else: with what its
+    /// attempts given up used added to what its last used.
+    fn record_request(
+        &mut self,
+        turn: &Turn,
+        model: &RoleModel,
+        usage: Option<RequestUsage>,
+        stop: StopReason,
+        error: Option<ErrorData>,
+        live: &Live,
+    ) {
+        let usage = match (usage, live.voided.clone()) {
+            (Some(last), Some(voided)) => Some(crate::usage::together(voided, &last)),
+            (usage, voided) => usage.or(voided),
+        };
         let after = self.times.model_time(self.clock.monotonic());
         let spent = |at: usize| millis(after[at].saturating_sub(live.model_before[at]));
         let attempts = live.attempt;
@@ -2018,12 +2071,8 @@ impl Session {
             stop,
             error,
             retries: attempts.saturating_sub(1),
+            charged_to: self.ledger.charged_to(),
         }));
-        self.settle_sent();
-        if let Some(mut context) = self.pending_context.take() {
-            context.usage = tokens;
-            self.stats.record(StatEvent::Context(context));
-        }
     }
 
     /// A request runs, or ran, at another speed than its role is set to.

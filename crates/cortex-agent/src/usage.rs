@@ -50,6 +50,28 @@ pub(crate) fn add_request(totals: &mut UsageTotals, usage: &RequestUsage) {
     }
 }
 
+/// One request's usage with another's of the same request added to it: an
+/// attempt given up and the one that counted. The tokens are added class
+/// by class; the cost is added when both are of one basis, as two attempts
+/// of one model are, and otherwise the later one's is kept, since amounts
+/// of two bases are never added. The rest is the later one's.
+pub(crate) fn together(earlier: RequestUsage, later: &RequestUsage) -> RequestUsage {
+    let mut tokens = earlier.tokens;
+    add_tokens(&mut tokens, &later.tokens);
+    let cost = match (earlier.cost, &later.cost) {
+        (Some(earlier), Some(later)) if earlier.basis == later.basis => Some(Cost {
+            usd_nanos: earlier.usd_nanos.saturating_add(later.usd_nanos),
+            basis: later.basis.clone(),
+        }),
+        (earlier, later) => later.clone().or(earlier),
+    };
+    RequestUsage {
+        tokens,
+        cost,
+        ..later.clone()
+    }
+}
+
 /// Every input token a request sent: fresh, read from the cache and
 /// written to it.
 fn input_sent(tokens: &TokenUsage) -> u64 {

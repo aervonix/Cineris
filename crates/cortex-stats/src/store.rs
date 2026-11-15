@@ -303,11 +303,21 @@ pub enum Found {
 }
 
 impl Found {
-    /// Whether aggregates loaded so may be saved, and may prune what they
-    /// save.
+    /// Whether aggregates loaded so may be saved.
     #[must_use]
     pub const fn may_save(&self) -> bool {
         matches!(self, Self::Missing | Self::Read | Self::MovedAside { .. })
+    }
+
+    /// Whether aggregates loaded so may prune: only those read from the
+    /// file. Aggregates that started from nothing are saved first and prune
+    /// at the next sync, from what they saved: two processes that both
+    /// started from nothing (a first run, or a file moved aside) could
+    /// otherwise each prune a month the other's save then leaves out
+    /// (found by the review of step 16's fixes).
+    #[must_use]
+    pub const fn may_prune(&self) -> bool {
+        matches!(self, Self::Read)
     }
 }
 
@@ -332,8 +342,8 @@ enum Reading {
     Missing,
     Parsed(Aggregates),
     Newer(u32),
-    /// What it held, and which file it was.
-    Unparsed(Vec<u8>, Option<FileIdentity>),
+    /// Which file it was.
+    Unparsed(Option<FileIdentity>),
 }
 
 impl Aggregates {
@@ -387,13 +397,13 @@ impl Aggregates {
         // Twice at most: once more when another process replaced the file
         // between the read and the move.
         for _ in 0..2 {
-            let (bytes, identity) = match read_aggregates(dir)? {
+            let identity = match read_aggregates(dir)? {
                 Reading::Missing => return Ok(Self::fresh(Found::Missing)),
                 Reading::Parsed(read) => return Ok(read),
                 Reading::Newer(version) => return Ok(Self::fresh(Found::Newer { version })),
-                Reading::Unparsed(bytes, identity) => (bytes, identity),
+                Reading::Unparsed(identity) => identity,
             };
-            match move_aside(dir, &bytes, identity, clock) {
+            match move_aside(dir, identity, clock) {
                 Ok(Some(to)) => {
                     tracing::warn!(
                         moved_to = %to.display(),
@@ -429,8 +439,9 @@ impl Aggregates {
     /// from where it was last read to its last whole line, keeps the part
     /// of a file someone else deleted, prunes files more than `retention`
     /// months older than `this_month` (with `retention` given, and only
-    /// when these aggregates may be saved: `None` only reads, for a caller
-    /// that will not save what it read), and folds old days into months.
+    /// when these aggregates were read from the file: `None` only reads, for
+    /// a caller that will not save what it read), and folds old days into
+    /// months.
     /// Returns whether anything changed.
     ///
     /// # Errors
@@ -444,8 +455,8 @@ impl Aggregates {
         retention: Option<u32>,
     ) -> io::Result<bool> {
         // A pruned file's part lives on only in what is saved: aggregates
-        // that may not be saved prune nothing.
-        let retention = retention.filter(|_| self.found.may_save());
+        // that were not read from the file prune nothing.
+        let retention = retention.filter(|_| self.found.may_prune());
         let before = self.clone();
         let months = dir.months()?;
         // A file in the aggregates that is gone was pruned by another
@@ -575,20 +586,20 @@ fn read_aggregates(dir: &StatsDir) -> io::Result<Reading> {
                     read.found = Found::Read;
                     Reading::Parsed(read)
                 }
-                Err(_) => Reading::Unparsed(text, identity),
+                Err(_) => Reading::Unparsed(identity),
             }
         }
-        _ => Reading::Unparsed(text, identity),
+        _ => Reading::Unparsed(identity),
     })
 }
 
 /// Moves the aggregates file aside, when it is still the file that was
-/// read (`identity`), to a name of its own with the time in it. Returns
-/// where, or `None` when another file has the name now. The copy is
-/// owner-only whatever the file was.
+/// read (`identity`), to a name of its own with the time in it, by a
+/// rename: nothing is deleted, whatever another process does meanwhile.
+/// Returns where, or `None` when another file had the name. The file moved
+/// is owner-only afterwards, whatever it was.
 fn move_aside(
     dir: &StatsDir,
-    bytes: &[u8],
     identity: Option<FileIdentity>,
     clock: &dyn Clock,
 ) -> io::Result<Option<PathBuf>> {
@@ -603,17 +614,27 @@ fn move_aside(
         to = dir.root().join(format!("{SET_ASIDE}{stamp}-{n}"));
         n += 1;
     }
-    let options = AtomicWriteOptions {
-        owner_only: true,
-        sync: true,
-        follow_links: false,
-        ..AtomicWriteOptions::default()
-    };
-    write_atomic(&to, bytes, &options, clock).map_err(io::Error::other)?;
-    // The copy is safe; the file it was made from goes, unless another
-    // process has replaced it meanwhile.
-    if FileIdentity::at(&path).ok() == identity {
-        remove_if_there(&path)?;
+    std::fs::rename(&path, &to)?;
+    if !private::is_private(&to).unwrap_or(false) {
+        let mut bytes = Vec::new();
+        open_to_read(&to)?.read_to_end(&mut bytes)?;
+        let options = AtomicWriteOptions {
+            owner_only: true,
+            sync: true,
+            follow_links: false,
+            ..AtomicWriteOptions::default()
+        };
+        write_atomic(&to, &bytes, &options, clock).map_err(io::Error::other)?;
+    }
+    if FileIdentity::at(&to).ok() != identity {
+        // Another process wrote the file between the look and the rename:
+        // it is kept where it went, and the user is told of it as of any
+        // file moved aside. Nothing was lost.
+        tracing::warn!(
+            moved_to = %to.display(),
+            "an aggregates file another process had just written was moved aside with the \
+             unreadable one it replaced"
+        );
     }
     Ok(Some(to))
 }
@@ -621,7 +642,7 @@ fn move_aside(
 /// Reads a monthly file from `entry.offset` to its last whole line, adding
 /// each line to the entry's part.
 fn read_from(path: &Path, entry: &mut FilePart) -> io::Result<()> {
-    let file = match open_to_read(path) {
+    let mut file = match open_to_read(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
@@ -636,7 +657,7 @@ fn read_from(path: &Path, entry: &mut FilePart) -> io::Result<()> {
     }
     let part = &mut entry.part;
     read_lines(
-        file,
+        &mut file,
         &mut entry.offset,
         |line| match serde_json::from_slice::<Line>(line) {
             Ok(parsed) => part.add_line(&parsed),
@@ -650,7 +671,7 @@ fn read_from(path: &Path, entry: &mut FilePart) -> io::Result<()> {
 /// line with no newline yet is left for later: another process may still
 /// be writing it.
 pub(crate) fn read_lines(
-    mut file: File,
+    file: &mut File,
     offset: &mut u64,
     mut each: impl FnMut(&[u8]),
 ) -> io::Result<()> {
@@ -665,6 +686,12 @@ pub(crate) fn read_lines(
             break;
         }
         *offset += read as u64;
+        // A line break with nothing before it is not a line: two writers
+        // that both ended a cut line, or one that saw a line crossing a
+        // page as cut, leave one.
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
         each(&line);
     }
     Ok(())

@@ -54,10 +54,10 @@ use windows_sys::Win32::Security::{
     SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS,
-    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    FileAttributeTagInfo, GetFileInformationByHandle, GetFileInformationByHandleEx, READ_CONTROL,
+    CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
+    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_128,
+    FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo,
+    FileIdInfo, GetFileInformationByHandleEx, READ_CONTROL,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -439,29 +439,45 @@ pub(crate) fn reparse_tag(file: &File) -> io::Result<u32> {
     Ok(info.ReparseTag)
 }
 
-/// The serial number of the volume an open file is on, and the file's index
+/// The serial number of the volume an open file is on, and the file's id
 /// on that volume: together what tells one file from another, as a device
 /// and an inode number do on Linux. For [`crate::nofollow::FileIdentity`],
 /// which the standard library cannot give on Windows (its `file_index` is
-/// not stable). Like [`reparse_tag`], a question about a file this module
-/// asks for another.
+/// not stable). The id is the 128-bit one (`FileIdInfo`), which ReFS keeps
+/// unique where the older 64-bit index is not. Like [`reparse_tag`], a
+/// question about a file this module asks for another.
 ///
 /// # Errors
 ///
 /// When Windows refuses to report the handle's information.
-pub(crate) fn file_identity(file: &File) -> io::Result<(u32, u64)> {
-    // SAFETY: `BY_HANDLE_FILE_INFORMATION` is plain numbers and two
-    // `FILETIME`s of plain numbers, for which all zeros is a valid value.
-    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-    // SAFETY: `file` is an open handle, alive for the call, and `info` is a
-    // live, writable `BY_HANDLE_FILE_INFORMATION`, the structure the call
-    // fills and nothing more.
-    let filled = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) };
+pub(crate) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
+    let mut info = FILE_ID_INFO {
+        VolumeSerialNumber: 0,
+        FileId: FILE_ID_128 {
+            Identifier: [0; 16],
+        },
+    };
+    // The structure is a number and sixteen bytes: its size always fits.
+    let size = u32::try_from(size_of::<FILE_ID_INFO>()).unwrap_or(u32::MAX);
+    // SAFETY: `file` is an open handle, alive for the call. `info` is a
+    // live, writable `FILE_ID_INFO`, which is the structure the class
+    // `FileIdInfo` fills, and `size` is its size, so the call writes inside
+    // it and nowhere else.
+    let filled = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&raw mut info).cast::<c_void>(),
+            size,
+        )
+    };
     if filled == 0 {
         return Err(io::Error::last_os_error());
     }
-    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
-    Ok((info.dwVolumeSerialNumber, index))
+    Ok((
+        info.VolumeSerialNumber,
+        u128::from_le_bytes(info.FileId.Identifier),
+    ))
 }
 
 /// Reads the owner and the access list of the file or directory at `path`.

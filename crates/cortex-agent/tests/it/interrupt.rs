@@ -516,3 +516,41 @@ fn closing_a_session_interrupts_its_turn_and_ends_its_loop() {
         .unwrap_err();
     assert_eq!(refused.code, code::SESSION_NOT_OPEN);
 }
+
+/// A request that was interrupted was sent and charged: its statistics
+/// event says so, with what it used, so that other processes' day limits
+/// see it (found by the review of step 16's fixes: it wrote no event).
+#[test]
+fn an_interrupted_request_is_recorded_with_what_it_used() {
+    let used = cortex_protocol::usage::TokenUsage {
+        input: 300,
+        output: 9,
+        ..cortex_protocol::usage::TokenUsage::default()
+    };
+    let (world, rig) = Rig::one(
+        "int_recorded",
+        [Response::new().tokens(used).usage().text("Half").stall()],
+    );
+    world.run(async {
+        rig.prompt("go");
+        rig.events.seen("delta:text", 1).await;
+        assert!(rig.handle.interrupt().interrupted);
+        rig.events.turns(1).await;
+    });
+    let requests: Vec<cortex_agent::RequestStat> = rig
+        .stats
+        .all()
+        .into_iter()
+        .filter_map(|event| match event {
+            cortex_agent::StatEvent::Request(request) => Some(request),
+            _ => None,
+        })
+        .collect();
+    let [request] = requests.as_slice() else {
+        panic!("one event for the request: {requests:#?}");
+    };
+    assert_eq!(request.stop, StopReason::Interrupted);
+    let tokens = &request.usage.as_ref().expect("its usage").tokens;
+    assert_eq!((tokens.input, tokens.output), (300, 9));
+    assert_eq!(rig.handle.usage().totals.tokens.input, 300);
+}

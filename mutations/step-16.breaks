@@ -313,7 +313,7 @@ caught-by:
 [break] a-requests-attempts-are-not-on-its-span
 rule: A request's span says how many attempts it took.
 file: crates/cortex-agent/src/turn.rs
-in: Session::request_stat
+in: Session::record_request
 find: span.record("attempts", attempts);
 replace:
 packages: cortex-core
@@ -324,7 +324,7 @@ caught-by:
 rule: A request refused as too long is recorded, with its context record, before the compaction.
 file: crates/cortex-agent/src/turn.rs
 in: Session::failed
-find: self.request_stat(turn, model, None, StopReason::ContextOverflow, Some(data.clone()), &live);
+find: self.request_stat(turn, model, usage, StopReason::ContextOverflow, Some(data.clone()), &live);
 replace:
 caught-by:
     cortex-agent::it roles::a_request_refused_as_too_long_keeps_its_context_record
@@ -377,7 +377,7 @@ caught-by:
 [break] a-request-span-closes-late
 rule: A request's span closes as its request ends, not when the next request replaces it.
 file: crates/cortex-agent/src/turn.rs
-in: Session::request_stat
+in: Session::record_request
 find: let span = std::mem::replace(&mut self.request_span, tracing::Span::none());
 replace: let span = self.request_span.clone();
 packages: cortex-core

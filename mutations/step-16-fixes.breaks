@@ -22,35 +22,63 @@ caught-by:
     cortex-core::it day::a_line_an_older_build_wrote_counts_as_another_processs
 
 [break] own-lines-are-counted-twice
-rule: A process's own lines for the sessions that draw on its purse are not read back: they were charged as they happened.
+rule: A purse's own requests' lines are not read back: they were charged as they were made.
 file: crates/cortex-stats/src/day.rs
 in: DayReader::read_month
-find: let mine = line.writer.is_some()
-replace: let mine = false && line.writer.is_some()
+find: let counted = line.charged_to.is_some() && line.charged_to == *purse;
+replace: let counted = false;
 packages: cortex-stats, cortex-core
 caught-by:
-    cortex-stats::it day::a_days_reader_counts_every_other_processs_requests_and_skips_its_own
+    cortex-stats::it day::a_days_reader_counts_every_request_but_its_own_purses
     cortex-core::it day::a_processs_own_spending_is_not_counted_twice
 
-[break] the-first-session-is-not-taken-as-own
-rule: The session that opens the day's purse is taken as this process's own.
-file: crates/cortex-core/src/day.rs
-in: day_account
-find: let _ = asks.send(Ask::Own(session.clone()));
-replace:
+[break] a-request-says-no-purse
+rule: A request's statistics event says which day's purse it was charged to.
+file: crates/cortex-agent/src/turn.rs
+in: record_request
+find: charged_to: self.ledger.charged_to()
+replace: charged_to: None
+packages: cortex-core
 caught-by:
     cortex-core::it day::a_processs_own_spending_is_not_counted_twice
 
+[break] two-processes-share-a-purse-id
+rule: A day's purse has an id no other process's purse has: its recorder's, and the day.
+file: crates/cortex-core/src/day.rs
+in: day_account
+find: let id = format!("{}/{today}", recorder.writer());
+replace: let id = format!("w/{today}");
+caught-by:
+    cortex-core::it day::two_processes_together_hold_the_day_to_its_limit
+
 [break] an-older-builds-line-is-skipped
-rule: A request line with no writer, from a build before it was written, counts as another process's.
+rule: A request line that says no purse, from a build before it was written, counts as another process's.
 file: crates/cortex-stats/src/day.rs
 in: DayReader::read_month
 find: if line.kind != "request" || line.day != *day {
-replace: if line.writer.is_none() || line.kind != "request" || line.day != *day {
+replace: if line.charged_to.is_none() || line.kind != "request" || line.day != *day {
 packages: cortex-stats, cortex-core
 caught-by:
-    cortex-stats::it day::a_days_reader_counts_every_other_processs_requests_and_skips_its_own
+    cortex-stats::it day::a_days_reader_counts_every_request_but_its_own_purses
     cortex-core::it day::a_line_an_older_build_wrote_counts_as_another_processs
+
+[break] an-interrupted-request-is-not-recorded
+rule: A request interrupted part-way has a statistics event, with what it used.
+file: crates/cortex-agent/src/turn.rs
+in: interrupted
+find: self.record_request(turn, &model, usage.clone(), StopReason::Interrupted, None, &live);
+replace:
+caught-by:
+    cortex-agent::it interrupt::an_interrupted_request_is_recorded_with_what_it_used
+
+[break] a-voided-attempts-usage-is-not-recorded
+rule: A request's statistics event carries what its attempts given up used.
+file: crates/cortex-agent/src/turn.rs
+in: record_request
+find: (Some(last), Some(voided)) => Some(crate::usage::together(voided, &last)),
+replace: (Some(last), Some(_)) => Some(last),
+caught-by:
+    cortex-agent::it retries::what_a_discarded_attempt_used_is_still_counted
 
 [break] a-request-waits-for-a-stalled-disk
 rule: A request waits for what other processes spent at most a second.
@@ -68,18 +96,7 @@ in: Recorder::new
 find: .unique("w_")
 replace: .unique("w_").get(..2).unwrap_or_default().to_owned()
 caught-by:
-    cortex-stats::it day::sys_two_processes_write_under_ids_of_their_own
-
-[break] a-request-line-says-no-writer
-rule: A request line says which recorder wrote it.
-file: crates/cortex-stats/src/recorder.rs
-in: write_record
-find: writer: matches!(record, Record::Request(_)).then(|| writer.id.to_string())
-replace: writer: None
-packages: cortex-stats, cortex-core
-caught-by:
-    cortex-stats::it day::a_request_line_says_which_recorder_wrote_it
-    cortex-core::it day::a_processs_own_spending_is_not_counted_twice
+    cortex-stats::it day::sys_two_processes_have_recorders_of_their_own
 
 [break] statistics-off-records-and-holds-the-day-per-process
 rule: With statistics off nothing is recorded, and a session with a day's limit is refused at open.
@@ -118,7 +135,7 @@ caught-by:
 rule: An aggregates file that does not parse is moved aside before anything is saved.
 file: crates/cortex-stats/src/store.rs
 in: Aggregates::load_for_saving
-find: match move_aside(dir, &bytes, identity, clock) {
+find: match move_aside(dir, identity, clock) {
 replace: match Ok::<Option<PathBuf>, io::Error>(None) {
 packages: cortex-stats, cortex-core
 caught-by:
@@ -134,11 +151,29 @@ replace: owner_only: false
 caught-by:
     cortex-stats::it store::an_aggregates_file_that_does_not_parse_is_moved_aside_before_anything_is_saved
 
+[break] aggregates-that-started-from-nothing-prune
+rule: Only aggregates read from the file prune: ones that started from nothing are saved first.
+file: crates/cortex-stats/src/store.rs
+in: Found::may_prune
+find: matches!(self, Self::Read)
+replace: self.may_save()
+caught-by:
+    cortex-stats::it store::aggregates_that_start_from_nothing_prune_only_once_saved
+
+[break] a-blank-line-is-unreadable
+rule: A line break with nothing before it is not a line.
+file: crates/cortex-stats/src/store.rs
+in: read_lines
+find: if line.iter().all(u8::is_ascii_whitespace) { continue; }
+replace:
+caught-by:
+    cortex-stats::it store::a_blank_line_is_not_counted_as_unreadable
+
 [break] aggregates-that-may-not-be-saved-prune
 rule: Aggregates that may not be saved prune nothing: a pruned file's part lives on only in what is saved.
 file: crates/cortex-stats/src/store.rs
 in: Aggregates::sync
-find: let retention = retention.filter(|_| self.found.may_save());
+find: let retention = retention.filter(|_| self.found.may_prune());
 replace:
 caught-by:
     cortex-stats::it store::a_newer_builds_aggregates_file_is_left_for_it
@@ -274,10 +309,19 @@ caught-by:
 rule: A day's reader reads a file made again under the month's name from its start.
 file: crates/cortex-stats/src/day.rs
 in: DayReader::read_month
-find: if identity != tail.identity {
-replace: if false {
+find: Ok(now) if tail.file.as_ref().is_some_and(|(_, held)| *held == now) => {}
+replace: Ok(_) if tail.file.is_some() => {}
 caught-by:
     cortex-stats::it day::a_days_reader_reads_a_new_file_from_its_start
+
+[break] a-file-cut-back-is-read-again
+rule: A file cut back in place is not read again from where it was cut.
+file: crates/cortex-stats/src/day.rs
+in: DayReader::read_month
+find: tail.offset = length; return Ok(());
+replace: tail.offset = 0;
+caught-by:
+    cortex-stats::it day::a_days_reader_counts_nothing_twice_when_a_file_is_cut_back
 
 # ------------------- the four rules the review found no test held (moved
 # here from its throwaway list)
