@@ -182,6 +182,32 @@ fn sys_the_terminal_is_put_back_after_a_panic() {
     assert!(started.elapsed() < LIMIT);
 }
 
+/// A panic another thread catches leaves the terminal the program's: the
+/// demo goes on drawing in raw mode, keys reach it, and the terminal is put
+/// back when it ends (`docs/outstanding/a-caught-panic-leaves-the-terminal.md`,
+/// closed in step 23).
+#[test]
+fn sys_a_panic_caught_on_another_thread_leaves_the_terminal_to_the_program() {
+    let mut session = start("caught-panic-on=K");
+    first_frame(&mut session);
+    session.send(b"K");
+    // The demo types `!` once the other thread's panic was caught.
+    session.wait_for(LIMIT, "the caught panic's mark", |t| {
+        t.screen().iter().any(|row| row.contains("> !"))
+    });
+    session.send(b"x");
+    last_key(&mut session, "x");
+    assert!(
+        session.screen().shows("> !x"),
+        "a key after the caught panic did not reach the demo:\n{}",
+        session.screen().dump()
+    );
+    // Still in raw mode: the panic's message, printed by the default hook,
+    // did not put the terminal back, so the demo's own Ctrl+C ends it.
+    session.send(b"\x03");
+    restored(&mut session);
+}
+
 #[test]
 fn sys_the_terminal_is_put_back_after_a_signal_or_console_event() {
     let mut session = start("terminate-on=T");

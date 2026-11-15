@@ -11,8 +11,16 @@
 //!
 //! - **A normal exit:** [`Terminal::leave`], or dropping the terminal, turns
 //!   off what was turned on and puts the modes back.
-//! - **A panic:** a panic hook, installed once, does the same before the
-//!   panic's message is printed, then calls the hook that was there before.
+//! - **A panic on the thread that entered the terminal:** a panic hook,
+//!   installed once, does the same before the panic's message is printed,
+//!   then calls the hook that was there before. A panic on any other thread
+//!   is left to the program: the hook runs before anything can catch the
+//!   panic, and the program catches some (a tool's, which becomes that
+//!   call's error), so putting the terminal back then would leave a program
+//!   that goes on drawing on a terminal it no longer holds. A program whose
+//!   other thread dies of a panic nobody catches learns of it from that
+//!   thread, and leaves the terminal itself (step 23; this closed
+//!   `docs/outstanding/a-caught-panic-leaves-the-terminal.md`).
 //! - **A signal** (SIGTERM, SIGHUP, SIGINT, SIGQUIT) **or a console event**
 //!   (Ctrl+Break, the console closing, logging off, shutting down): a handler
 //!   does the same, and then lets the signal or the event end the process as
@@ -33,7 +41,8 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::io;
-use std::sync::{Arc, Once};
+use std::sync::{Arc, Mutex, Once, PoisonError};
+use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 use crate::caps::{Capabilities, Overrides, Platform};
@@ -191,6 +200,16 @@ pub fn is_terminal() -> bool {
 
 static PANIC_HOOK: Once = Once::new();
 
+/// The thread that entered the terminal last: the one whose panic puts it
+/// back.
+static ENTERED_ON: Mutex<Option<ThreadId>> = Mutex::new(None);
+
+/// Whether a panic on the calling thread puts the terminal back: whether it
+/// is the thread that entered the terminal.
+fn restores_on_panic() -> bool {
+    *ENTERED_ON.lock().unwrap_or_else(PoisonError::into_inner) == Some(std::thread::current().id())
+}
+
 /// While this lives, the keys that interrupt a program at the terminal do
 /// nothing to this process: SIGINT and SIGQUIT on Unix (`Ctrl+C`,
 /// `Ctrl+\`), and `Ctrl+C` on Windows. For a child that has been handed the
@@ -280,10 +299,14 @@ impl Terminal<System> {
                 "this terminal (TERM=dumb) cannot show the interactive interface",
             ));
         }
+        *ENTERED_ON.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some(std::thread::current().id());
         PANIC_HOOK.call_once(|| {
             let previous = std::panic::take_hook();
             std::panic::set_hook(Box::new(move |info| {
-                sys::emergency();
+                if restores_on_panic() {
+                    sys::emergency();
+                }
                 previous(info);
             }));
         });
