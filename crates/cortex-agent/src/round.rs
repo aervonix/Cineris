@@ -1165,22 +1165,29 @@ impl Round {
         // turn's or the request's (`docs/architecture/02-runtime.md`,
         // "Spans").
         let span = tracing::info_span!("tool", tool = %name, call = %call.call_id);
-        self.spawn(token, &name, tracing::Instrument::instrument(async move {
-            let started = clock.monotonic();
-            let result = execute(tool.as_ref(), plan, &cx, &mut out).await;
-            let stat = match result.outcome() {
-                ToolOutcome::Success => ToolStatOutcome::Ok,
-                ToolOutcome::Denied => ToolStatOutcome::Denied,
-                ToolOutcome::Interrupted => ToolStatOutcome::Interrupted,
-                _ => ToolStatOutcome::Failed,
-            };
-            Report::Finished {
-                token,
-                result,
-                duration: clock.monotonic().saturating_sub(started),
-                stat,
-            }
-        }, span));
+        self.spawn(
+            token,
+            &name,
+            tracing::Instrument::instrument(
+                async move {
+                    let started = clock.monotonic();
+                    let result = execute(tool.as_ref(), plan, &cx, &mut out).await;
+                    let stat = match result.outcome() {
+                        ToolOutcome::Success => ToolStatOutcome::Ok,
+                        ToolOutcome::Denied => ToolStatOutcome::Denied,
+                        ToolOutcome::Interrupted => ToolStatOutcome::Interrupted,
+                        _ => ToolStatOutcome::Failed,
+                    };
+                    Report::Finished {
+                        token,
+                        result,
+                        duration: clock.monotonic().saturating_sub(started),
+                        stat,
+                    }
+                },
+                span,
+            ),
+        );
     }
 
     /// The response these calls came from no longer counts: it failed and

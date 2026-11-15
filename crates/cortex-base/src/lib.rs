@@ -88,6 +88,6 @@ pub use redact::SecretFilter;
 pub use rng::{Rng, SeededRng, SystemRng};
 pub use secret::Secret;
 pub use time::{TimeError, UtcTime};
-pub use zone::{LocalDate, Zone};
 pub use timer::{SharedTimer, Sleep, Timer};
 pub use watch::{FileStamp, TimedStamp, WatchList};
+pub use zone::{LocalDate, Zone};

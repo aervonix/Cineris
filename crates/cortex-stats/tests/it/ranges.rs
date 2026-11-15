@@ -45,19 +45,43 @@ fn the_days_of_each_range() {
         (first.to_string(), last.to_string())
     };
     let pair = |first: &str, last: &str| (first.to_owned(), last.to_owned());
-    assert_eq!(range(UsageRange::Today, 0, false), pair("2026-11-15", "2026-11-15"));
+    assert_eq!(
+        range(UsageRange::Today, 0, false),
+        pair("2026-11-15", "2026-11-15")
+    );
     // A week from Monday, and from Sunday when it starts on Sunday.
-    assert_eq!(range(UsageRange::Week, 0, false), pair("2026-11-09", "2026-11-15"));
-    assert_eq!(range(UsageRange::Week, 6, false), pair("2026-11-15", "2026-11-15"));
-    assert_eq!(range(UsageRange::Month, 0, false), pair("2026-11-01", "2026-11-15"));
-    assert_eq!(range(UsageRange::Week, 0, true), pair("2026-11-09", "2026-11-15"));
-    assert_eq!(range(UsageRange::Month, 0, true), pair("2026-10-17", "2026-11-15"));
+    assert_eq!(
+        range(UsageRange::Week, 0, false),
+        pair("2026-11-09", "2026-11-15")
+    );
+    assert_eq!(
+        range(UsageRange::Week, 6, false),
+        pair("2026-11-15", "2026-11-15")
+    );
+    assert_eq!(
+        range(UsageRange::Month, 0, false),
+        pair("2026-11-01", "2026-11-15")
+    );
+    assert_eq!(
+        range(UsageRange::Week, 0, true),
+        pair("2026-11-09", "2026-11-15")
+    );
+    assert_eq!(
+        range(UsageRange::Month, 0, true),
+        pair("2026-10-17", "2026-11-15")
+    );
     assert!(days_of(&UsageRange::All, today, 0, false).is_none());
 }
 
 #[test]
 fn a_range_ends_at_the_local_midnight_on_either_side() {
-    let part = part_of(&["2026-10-31", "2026-11-01", "2026-11-08", "2026-11-09", "2026-11-15"]);
+    let part = part_of(&[
+        "2026-10-31",
+        "2026-11-01",
+        "2026-11-08",
+        "2026-11-09",
+        "2026-11-15",
+    ]);
     let utc = Zone::utc();
     let now = "2026-11-15T23:59:59Z";
     assert_eq!(requests(&part, UsageRange::Today, &utc, now), 1);
@@ -67,7 +91,10 @@ fn a_range_ends_at_the_local_midnight_on_either_side() {
     assert_eq!(requests(&part, UsageRange::Month, &utc, now), 4);
     assert_eq!(requests(&part, UsageRange::All, &utc, now), 5);
     // One second later it is the 16th: today has nothing yet.
-    assert_eq!(requests(&part, UsageRange::Today, &utc, "2026-11-16T00:00:00Z"), 0);
+    assert_eq!(
+        requests(&part, UsageRange::Today, &utc, "2026-11-16T00:00:00Z"),
+        0
+    );
 }
 
 #[test]
@@ -78,10 +105,24 @@ fn today_is_the_users_today_not_utcs() {
     let now = "2026-11-16T01:00:00Z";
     let west = Zone::fixed(-5 * 3600);
     let east = Zone::fixed(9 * 3600);
-    let today_west = report(&part, &query(UsageRange::Today), &west, time(now), &[], true);
+    let today_west = report(
+        &part,
+        &query(UsageRange::Today),
+        &west,
+        time(now),
+        &[],
+        true,
+    );
     assert_eq!(today_west.totals.requests, 1);
     assert_eq!(today_west.from.unwrap().as_str(), "2026-11-15T05:00:00Z");
-    let today_east = report(&part, &query(UsageRange::Today), &east, time(now), &[], true);
+    let today_east = report(
+        &part,
+        &query(UsageRange::Today),
+        &east,
+        time(now),
+        &[],
+        true,
+    );
     assert_eq!(today_east.totals.requests, 1);
     assert_eq!(today_east.from.unwrap().as_str(), "2026-11-15T15:00:00Z");
     // Across a change of offset the month begins at its own midnight.
@@ -111,7 +152,14 @@ fn rows_group_by_what_was_asked_and_time_goes_with_them() {
     });
     let mut by_project = query(UsageRange::Today);
     by_project.group_by = vec![UsageGroup::Project];
-    let report = report(&part, &by_project, &Zone::utc(), time("2026-11-15T13:00:00Z"), &[], true);
+    let report = report(
+        &part,
+        &by_project,
+        &Zone::utc(),
+        time("2026-11-15T13:00:00Z"),
+        &[],
+        true,
+    );
     let projects: Vec<&str> = report
         .rows
         .iter()
@@ -128,7 +176,14 @@ fn rows_group_by_what_was_asked_and_time_goes_with_them() {
     // By speed there is no time: a turn has no one speed.
     let mut by_speed = query(UsageRange::Today);
     by_speed.group_by = vec![UsageGroup::Speed];
-    let report = cortex_stats::report(&part, &by_speed, &Zone::utc(), crate::time("2026-11-15T13:00:00Z"), &[], true);
+    let report = cortex_stats::report(
+        &part,
+        &by_speed,
+        &Zone::utc(),
+        crate::time("2026-11-15T13:00:00Z"),
+        &[],
+        true,
+    );
     assert!(report.rows.iter().all(|row| row.time.is_none()));
     assert_eq!(report.totals.requests, 2);
 }

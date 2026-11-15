@@ -355,13 +355,7 @@ fn after_a_refusal_the_summary_request_is_held_to_half_the_limit() {
 /// sent whole, and the `fast` model is not asked again in the epoch.
 #[test]
 fn a_background_summary_refused_as_too_long_teaches_the_fast_roles_budget_alone() {
-    let world = World::new(
-        "summary_background_refused",
-        [
-            says("One."),
-            says("Two."),
-        ],
-    );
+    let world = World::new("summary_background_refused", [says("One."), says("Two.")]);
     let fast = ScriptedProvider::new([overflow()]);
     let mut setup = Setup::new(&world);
     setup.utility = Some(RoleModel::new(Arc::new(fast.clone()), fixtures::model()));

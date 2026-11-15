@@ -245,7 +245,11 @@ mod tests {
         clock.enter(ms(1740), Spend::Streaming);
         clock.enter(ms(1800), Spend::Harness);
         // Two tools side by side, then one alone, then a question.
-        clock.round(ms(1801), vec!["read".to_owned(), "search".to_owned()], false);
+        clock.round(
+            ms(1801),
+            vec!["read".to_owned(), "search".to_owned()],
+            false,
+        );
         clock.round(ms(1901), vec!["read".to_owned()], true);
         clock.round(ms(1951), Vec::new(), true);
         clock.round(ms(2951), Vec::new(), false);
@@ -274,12 +278,21 @@ mod tests {
         // wall time rounded down.
         let mut clock = TurnClock::new(Duration::ZERO);
         let mut now = Duration::ZERO;
-        let kinds = [Spend::Connect, Spend::Streaming, Spend::Harness, Spend::Verification];
+        let kinds = [
+            Spend::Connect,
+            Spend::Streaming,
+            Spend::Harness,
+            Spend::Verification,
+        ];
         for step in 0..997u32 {
             now += Duration::from_micros(333 + u64::from(step % 7));
             clock.enter(now, kinds[step as usize % kinds.len()]);
             if step % 5 == 0 {
-                clock.round(now, vec!["a".to_owned(), "b".to_owned(), "c".to_owned()], false);
+                clock.round(
+                    now,
+                    vec!["a".to_owned(), "b".to_owned(), "c".to_owned()],
+                    false,
+                );
             }
         }
         let times = clock.finish(now);

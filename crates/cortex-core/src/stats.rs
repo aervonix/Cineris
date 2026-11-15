@@ -50,7 +50,8 @@ impl SessionStats {
                 clippy::cast_precision_loss,
                 reason = "a rate: the counts are far below 2^52"
             )]
-            let rate = (streaming > 0).then(|| usage.tokens.output as f64 * 1000.0 / streaming as f64);
+            let rate =
+                (streaming > 0).then(|| usage.tokens.output as f64 * 1000.0 / streaming as f64);
             rate
         });
         Record::Request(RequestRecord {
@@ -69,7 +70,9 @@ impl SessionStats {
                 .as_ref()
                 .map(|usage| usage.speed.clone())
                 .unwrap_or_default(),
-            speed_requested: usage.as_ref().and_then(|usage| usage.speed_requested.clone()),
+            speed_requested: usage
+                .as_ref()
+                .and_then(|usage| usage.speed_requested.clone()),
             variants: variants(&stat.variants, stat.effort.as_ref()),
             tokens: usage
                 .as_ref()
@@ -86,7 +89,9 @@ impl SessionStats {
                 .map_or(cortex_protocol::usage::Billing::Unspecified, |usage| {
                     usage.billing.clone()
                 }),
-            ttft_ms: usage.as_ref().and_then(|usage| usage.time_to_first_token_ms),
+            ttft_ms: usage
+                .as_ref()
+                .and_then(|usage| usage.time_to_first_token_ms),
             tokens_per_second,
             time: stat.time,
             stop: stat.stop.as_str().to_owned(),

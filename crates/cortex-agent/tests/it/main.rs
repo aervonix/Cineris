@@ -51,9 +51,9 @@ pub mod sessions;
 mod settings;
 mod speed;
 mod steering;
-mod timing;
 mod streaming;
 mod summaries;
+mod timing;
 mod transitions;
 
 use std::collections::{BTreeMap, VecDeque};

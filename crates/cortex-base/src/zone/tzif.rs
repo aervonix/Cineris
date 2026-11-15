@@ -124,7 +124,10 @@ impl Transitions {
     #[must_use]
     pub fn offset_at(&self, secs: i64) -> i32 {
         match self.changes.last() {
-            None => self.tail.as_ref().map_or(self.initial, |rule| rule.offset_at(secs)),
+            None => self
+                .tail
+                .as_ref()
+                .map_or(self.initial, |rule| rule.offset_at(secs)),
             Some((last, _)) if secs >= *last && self.tail.is_some() => self
                 .tail
                 .as_ref()

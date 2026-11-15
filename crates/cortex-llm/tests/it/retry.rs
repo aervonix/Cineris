@@ -14,9 +14,8 @@ use cortex_testkit::{Reply, block_on, fixtures, join};
 use serde_json::json;
 
 use crate::{
-    next_event,
     HELLO, Harness, START, assert_kind, assert_well_formed, at, failure, final_error, hello, names,
-    retries, secs,
+    next_event, retries, secs,
 };
 
 /// A stream that waited once and then succeeded.

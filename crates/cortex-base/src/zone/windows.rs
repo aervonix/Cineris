@@ -12,8 +12,7 @@
 
 use windows_sys::Win32::Foundation::SYSTEMTIME;
 use windows_sys::Win32::System::Time::{
-    DYNAMIC_TIME_ZONE_INFORMATION, GetDynamicTimeZoneInformation,
-    SystemTimeToTzSpecificLocalTimeEx,
+    DYNAMIC_TIME_ZONE_INFORMATION, GetDynamicTimeZoneInformation, SystemTimeToTzSpecificLocalTimeEx,
 };
 
 use crate::time::{civil_from_days, days_from_civil};

@@ -33,11 +33,7 @@ fn an_event_goes_to_its_month_with_the_local_day_it_fell_on() {
     assert!(text.contains(r#""day":"2026-11-30""#), "{text}");
     assert!(text.contains(r#""kind":"request""#), "{text}");
     let total = Aggregates::load(&dir).unwrap().total();
-    let periods: Vec<&str> = total
-        .usage
-        .keys()
-        .map(|key| key.period.as_str())
-        .collect();
+    let periods: Vec<&str> = total.usage.keys().map(|key| key.period.as_str()).collect();
     assert_eq!(periods, ["2026-11-30"]);
 }
 
@@ -48,14 +44,22 @@ fn every_file_is_owner_only() {
     let clock = clock("2026-11-15T10:00:00Z");
     let recorder = recorder(&dir, Zone::utc(), clock.clone(), 12);
     recorder.record(request("2026-11-15T10:00:00Z", "p", "opus", 1));
-    recorder.limits(crate::limits::headers_limits("anthropic", "2026-11-15T10:00:00Z", 5));
+    recorder.limits(crate::limits::headers_limits(
+        "anthropic",
+        "2026-11-15T10:00:00Z",
+        5,
+    ));
     recorder.flush();
     for path in [
         dir.events_file("2026-11"),
         dir.aggregates_file(),
         dir.limits_file(),
     ] {
-        assert!(cortex_base::private::is_private(&path).unwrap(), "{}", path.display());
+        assert!(
+            cortex_base::private::is_private(&path).unwrap(),
+            "{}",
+            path.display()
+        );
     }
 }
 
@@ -64,7 +68,12 @@ fn the_aggregates_rebuild_to_the_same_values_from_the_files() {
     let scratch = scratch("the_aggregates_rebuild");
     let dir = StatsDir::new(scratch.join("stats"));
     let clock = clock("2026-09-01T00:00:00Z");
-    let recorder = recorder(&dir, Zone::posix("GMT0BST,M3.5.0/1,M10.5.0").unwrap(), clock.clone(), 1);
+    let recorder = recorder(
+        &dir,
+        Zone::posix("GMT0BST,M3.5.0/1,M10.5.0").unwrap(),
+        clock.clone(),
+        1,
+    );
     // Three months of events, brought up to date at odd moments in between,
     // with the first month's file pruned on the way.
     let mut n = 0u64;
@@ -72,7 +81,12 @@ fn the_aggregates_rebuild_to_the_same_values_from_the_files() {
         for day in 1..=days {
             let at = format!("{month}-{day:02}T23:30:00Z");
             clock.set_now(time(&at));
-            recorder.record(request(&at, if day % 2 == 0 { "a" } else { "b" }, "opus", 1000 + n));
+            recorder.record(request(
+                &at,
+                if day % 2 == 0 { "a" } else { "b" },
+                "opus",
+                1000 + n,
+            ));
             recorder.record(tool(&at, "a", if day % 3 == 0 { "shell" } else { "read" }));
             recorder.record(turn(&at, "b"));
             n += 1;
@@ -110,11 +124,19 @@ fn two_writers_that_bring_the_aggregates_up_to_date_out_of_order_lose_nothing() 
     aggregates
         .sync(&dir, date("2026-11-15"), "2026-11", 12)
         .unwrap();
-    let requests: u64 = aggregates.total().usage.values().map(|sum| sum.requests).sum();
+    let requests: u64 = aggregates
+        .total()
+        .usage
+        .values()
+        .map(|sum| sum.requests)
+        .sum();
     assert_eq!(requests, 2);
     assert_eq!(
         aggregates.total(),
-        aggregates.rebuild(&dir, date("2026-11-15")).unwrap().total()
+        aggregates
+            .rebuild(&dir, date("2026-11-15"))
+            .unwrap()
+            .total()
     );
 }
 

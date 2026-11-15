@@ -39,7 +39,9 @@ fn a_stalled_writer_drops_and_counts_and_never_waits() {
     let text = std::fs::read_to_string(scratch.join("stats").join("events-2026-11.jsonl")).unwrap();
     assert_eq!(text.lines().count(), 5, "{text}");
     assert_eq!(
-        text.lines().filter(|line| line.contains(r#""count":6"#)).count(),
+        text.lines()
+            .filter(|line| line.contains(r#""count":6"#))
+            .count(),
         1,
         "{text}"
     );

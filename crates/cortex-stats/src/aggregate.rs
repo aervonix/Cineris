@@ -191,7 +191,9 @@ impl Part {
     pub fn add_line(&mut self, line: &Line) {
         let period = line.day.clone();
         let project = |key: &Option<cortex_protocol::ProjectKey>| {
-            key.as_ref().map(|key| key.as_str().to_owned()).unwrap_or_default()
+            key.as_ref()
+                .map(|key| key.as_str().to_owned())
+                .unwrap_or_default()
         };
         match &line.record {
             Record::Request(request) => {
@@ -342,24 +344,36 @@ impl Part {
             let date = LocalDate::parse(period)?;
             (date < oldest_kept).then(|| date.month_text())
         };
-        fold_map(&mut self.usage, |key| {
-            month_of(&key.period).map(|period| UsageKey {
-                period,
-                ..key.clone()
-            })
-        }, UsageSum::add);
-        fold_map(&mut self.time, |key| {
-            month_of(&key.period).map(|period| TimeKey {
-                period,
-                ..key.clone()
-            })
-        }, add_time);
-        fold_map(&mut self.tools, |key| {
-            month_of(&key.period).map(|period| ToolKey {
-                period,
-                ..key.clone()
-            })
-        }, add_tool);
+        fold_map(
+            &mut self.usage,
+            |key| {
+                month_of(&key.period).map(|period| UsageKey {
+                    period,
+                    ..key.clone()
+                })
+            },
+            UsageSum::add,
+        );
+        fold_map(
+            &mut self.time,
+            |key| {
+                month_of(&key.period).map(|period| TimeKey {
+                    period,
+                    ..key.clone()
+                })
+            },
+            add_time,
+        );
+        fold_map(
+            &mut self.tools,
+            |key| {
+                month_of(&key.period).map(|period| ToolKey {
+                    period,
+                    ..key.clone()
+                })
+            },
+            add_tool,
+        );
     }
 }
 
