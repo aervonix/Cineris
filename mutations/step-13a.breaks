@@ -202,8 +202,8 @@ caught-by:
 [break] every-approver-is-asked
 rule: Only `user` clients that answer approvals are asked whether a call may run.
 file: crates/cortex-core/src/clients.rs
-find: entry.info.role == ClientRole::User && entry.info.capabilities.approvals
-replace: entry.info.capabilities.approvals
+find: entry.info.role == ClientRole::User && kind.declared(&entry.info.capabilities)
+replace: kind.declared(&entry.info.capabilities)
 caught-by:
     cortex-core clients::tests::an_answer_counts_only_from_a_user_client_that_was_asked
     cortex-core::it approvals::only_a_user_client_is_asked_and_only_its_answer_counts
@@ -703,11 +703,8 @@ caught-by:
 [break] any-late-client-asked
 rule: Only a client that may answer is put a waiting request when it joins.
 file: crates/cortex-core/src/clients.rs
-find:
-    if self.approvers(&[client.0]).is_empty() {
-        return;
-    }
-replace:
+find: if self.askable(&[client.0], Kind::of(&open.request)).is_empty() {
+replace: if false {
 caught-by:
     cortex-core clients::tests::a_user_client_that_joins_is_put_what_is_waiting
     cortex-core::it approvals::a_user_who_joins_while_a_question_waits_is_put_it_and_may_answer
