@@ -1028,10 +1028,18 @@ impl Session {
         // A summary given up was paid for, as far as it went: one that
         // finished, and one stopped part-way, whose task returns what the
         // provider had said it used.
+        // One the log cannot take does not keep the others from being
+        // counted: the first failure is returned once all are.
+        let mut failed = None;
         for handle in std::mem::take(&mut self.given_up) {
-            if let Ok(summarized) = handle.await {
-                self.out_of_band(turn, &summarized).await?;
+            if let Ok(summarized) = handle.await
+                && let Err(error) = self.out_of_band(turn, &summarized).await
+            {
+                failed.get_or_insert(error);
             }
+        }
+        if let Some(error) = failed {
+            return Err(error);
         }
         let finished =
             matches!(&self.background, Some(Background::Running(job)) if job.handle.is_finished());

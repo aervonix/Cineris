@@ -318,3 +318,12 @@ replace:
 packages: cortex-core
 caught-by:
     cortex-core::it usage::the_loops_spans_reach_the_subscriber
+
+[break] an-overflowed-request-leaves-no-context-record
+rule: A request refused as too long is recorded, with its context record, before the compaction.
+file: crates/cortex-agent/src/turn.rs
+in: Session::failed
+find: self.request_stat(turn, model, None, StopReason::ContextOverflow, Some(data.clone()), &live);
+replace:
+caught-by:
+    cortex-agent::it roles::a_request_refused_as_too_long_keeps_its_context_record

@@ -223,8 +223,7 @@ fn a_second_refusal_ends_the_turn_and_the_next_turns_summary_is_cut() {
 /// the summary: the main model is asked, and since step 16, when each role
 /// has a budget of its own, as the main model's own estimate allows. Its
 /// requests at this size were just accepted: the refusal was the `fast`
-/// model's (`docs/outstanding/a-fast-roles-refusal-cuts-the-main-models-summary.md`,
-/// settled).
+/// model's (the item step 15 left open, settled in step 16).
 #[test]
 fn a_summary_the_fast_role_refused_is_asked_of_the_main_model() {
     let world = World::new(
