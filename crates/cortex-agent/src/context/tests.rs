@@ -624,3 +624,92 @@ fn the_files_the_branch_touched_since_its_summary_are_carried_when_the_table_nev
         ]
     );
 }
+
+fn map_notice(id: &str, text: &str) -> Item {
+    Item::Notice(NoticeItem {
+        id: ItemId::new(id),
+        source: NoticeSource::Map,
+        text: text.to_owned(),
+        created_at: None,
+    })
+}
+
+/// The repository map of an epoch is not replayed after its summary, live
+/// or read again from the log, and the new epoch's own map is kept: the
+/// history read back is the one built live
+/// (`docs/architecture/07-sessions-and-context.md`, the seams map).
+#[test]
+fn an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again() {
+    // The map came late, as a notice after the first answer, so that it is
+    // in what the summary does not cover.
+    let items = vec![
+        Item::UserMessage(UserMessageItem {
+            id: ItemId::new("i_1"),
+            parts: vec![Part::text("go")],
+            delivery: None,
+            created_at: Some("2026-11-12T09:00:00Z".into()),
+        }),
+        thinking_answer("i_2", None),
+        map_notice("i_3", "OLD MAP"),
+        user("i_4", "more"),
+        thinking_answer("i_5", None),
+    ];
+    let mut live = context();
+    for item in &items {
+        live.push(item);
+    }
+    assert!(live.history.has_map());
+    let summary = Item::Summary(SummaryItem {
+        id: ItemId::new("i_6"),
+        text: "The summary.".to_owned(),
+        covers_through: Some(ItemId::new("i_2")),
+        usage: None,
+        created_at: None,
+    });
+    let mut replayed = History::default();
+    replayed.push(&summary);
+    replayed.extend_projected(&live.history, 2);
+    assert!(!replayed.has_map(), "the old epoch's map is not replayed");
+    // The new epoch is given its own.
+    let new_map = map_notice("i_7", "NEW MAP");
+    replayed.push(&new_map);
+    assert!(replayed.has_map());
+
+    let mut compaction = epoch("one");
+    compaction.reason = Some(EpochReason::Compaction);
+    let mut read = context();
+    let mut logged = items.clone();
+    logged.push(summary);
+    logged.push(new_map);
+    read.load(&Opened {
+        items: logged,
+        epochs: vec![(0, epoch("one")), (6, compaction)],
+        ..Opened::default()
+    });
+    assert_eq!(replayed.messages(), read.history.messages());
+    assert_eq!(replayed.fingerprints(), read.history.fingerprints());
+    let text: String = read
+        .history
+        .messages()
+        .iter()
+        .flat_map(|message| &message.parts)
+        .filter_map(|part| match part {
+            Part::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(!text.contains("OLD MAP") && text.contains("NEW MAP"), "{text}");
+}
+
+/// A resume and a change of model keep the history, and the map in it.
+#[test]
+fn a_reloaded_epoch_keeps_the_map_its_history_holds() {
+    let mut read = context();
+    read.load(&Opened {
+        items: vec![map_notice("i_1", "MAP"), user("i_2", "go"), thinking_answer("i_3", None)],
+        epochs: vec![(0, epoch("one"))],
+        ..Opened::default()
+    });
+    assert!(read.history.has_map());
+    assert_eq!(read.history.len(), 3);
+}

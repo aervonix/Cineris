@@ -33,6 +33,7 @@ mod budget;
 mod compact;
 mod history;
 mod instructions;
+mod map;
 mod prefix;
 mod prompt;
 
@@ -53,6 +54,7 @@ pub use instructions::{
     DEFAULT_CAP, DEFAULT_NAMES, FileText, InstructionFiles, MemoryInstructionFiles,
     NoInstructionFiles, is_instruction_name,
 };
+pub use map::{MapAnswer, MapPending, MapSource, RepoMap};
 pub use prefix::{PrefixDifference, check_prefix};
 pub use prompt::{CORE_INSTRUCTIONS, Environment, GUIDED_NOTES};
 
@@ -169,6 +171,8 @@ pub struct ContextParts {
     /// A key that stays the same for the session, for providers that route
     /// requests with one key to one cache.
     pub cache_key: Option<String>,
+    /// Where the repository map comes from. `None` gives no map.
+    pub map: Option<RepoMap>,
 }
 
 impl ContextParts {
@@ -184,6 +188,7 @@ impl ContextParts {
             settings: ContextSettings::default(),
             plan: None,
             cache_key: None,
+            map: None,
         }
     }
 }
@@ -364,6 +369,13 @@ impl Context {
         if let (Some(at), Some((first, rest))) = (summary, held.split_first()) {
             self.history.push(&items[*first]);
             for &index in rest {
+                // The old epoch's map is not replayed: the new epoch has its
+                // own (`History::extend_projected`).
+                if index < at
+                    && matches!(&items[index], Item::Notice(notice) if notice.source == NoticeSource::Map)
+                {
+                    continue;
+                }
                 // The turns the summary did not cover are replayed after it,
                 // without their reasoning.
                 if index > at && index >= since {

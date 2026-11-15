@@ -16,6 +16,7 @@
 //! budget, compaction) is in [`epochs`].
 
 mod epochs;
+mod map;
 
 use std::future::Future;
 use std::pin::pin;
@@ -185,6 +186,8 @@ pub struct Session {
     /// The span of the request in flight: its attempts are recorded on it
     /// when its record is made.
     request_span: tracing::Span,
+    /// The repository map asked for, and the epochs it was given in.
+    map: map::MapState,
 }
 
 impl std::fmt::Debug for Session {
@@ -457,6 +460,7 @@ impl Session {
             last_turn: None,
             summary_role: ModelRole::Main,
             request_span: tracing::Span::none(),
+            map: map::MapState::default(),
         };
         Ok((session, SessionHandle { shared }))
     }
@@ -667,6 +671,7 @@ impl Session {
         };
         self.ledger.begin_turn();
         self.guard.reset();
+        self.map_turn_started();
         self.enter(TurnState::Preparing);
         self.emit(&turn, Event::TurnStarted(TurnStarted {}));
 
@@ -708,9 +713,14 @@ impl Session {
                 Phase::Deciding(response) => self.decide(&mut turn, *response).await,
                 Phase::ToolRound(round) => self.tool_round(&mut turn, *round).await,
                 Phase::Verifying => self.verify(&mut turn).await,
-                Phase::Finishing(end) => return self.finish(&turn, end).await,
+                Phase::Finishing(end) => {
+                    let next = self.finish(&turn, end).await;
+                    self.map_turn_ended();
+                    return next;
+                }
                 Phase::Interrupted(partial) => {
                     self.interrupted(&mut turn, partial).await;
+                    self.map_turn_ended();
                     return None;
                 }
             };
@@ -742,6 +752,8 @@ impl Session {
             self.manual_focus = focus;
             return Ok(());
         }
+        // The epoch's map, before the prompt, when it is ready by then.
+        self.give_map(turn).await?;
         let item = Item::UserMessage(UserMessageItem {
             id: self.item_ids.next_id(),
             parts: prompt.input,
@@ -793,6 +805,11 @@ impl Session {
         // of it starts a context epoch, before anything else is sent.
         self.refresh_main();
         if let Err(error) = self.context_before_request(turn).await {
+            return Phase::Finishing(End::store(&error));
+        }
+        // A safe boundary: the epoch's map, if it has none and one is
+        // ready (or, at its first chance, comes within the wait).
+        if let Err(error) = self.give_map(turn).await {
             return Phase::Finishing(End::store(&error));
         }
         if let Err(error) = self.collect_background(turn).await {

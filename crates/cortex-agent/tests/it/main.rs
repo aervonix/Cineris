@@ -40,6 +40,7 @@ mod denials;
 mod early;
 mod interrupt;
 mod limits;
+mod map;
 mod measure;
 mod order;
 mod plan;
@@ -964,6 +965,8 @@ pub struct Setup {
     /// a twin's ([`Rig::fill`]), which must be where its instruction files
     /// are.
     pub root: Option<PathBuf>,
+    /// Where the repository map comes from, when the session has one.
+    pub map: Option<cortex_agent::context::RepoMap>,
 }
 
 /// One session, with everything it does remembered.
@@ -1002,6 +1005,7 @@ impl Setup {
             plan: None,
             verifier: None,
             root: None,
+            map: None,
         }
     }
 
@@ -1036,6 +1040,7 @@ impl Setup {
             instructions: Arc::clone(&self.instructions) as Arc<dyn cortex_agent::InstructionFiles>,
             user_dir: self.user_dir,
             plan: self.plan,
+            map: self.map,
             ..ContextParts::new()
         };
         let parts = SessionParts {

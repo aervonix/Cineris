@@ -80,6 +80,9 @@ open_enum! {
         Limit => "limit",
         /// Something else the model needs to know.
         Harness => "harness",
+        /// The repository map: an epoch's view of the workspace, given once
+        /// in it.
+        Map => "map",
     }
 }
 
