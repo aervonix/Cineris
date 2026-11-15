@@ -58,7 +58,11 @@ const PROVIDERS: &[LiveProvider] = &[
         key_file: "CORTEX_LIVE_ANTHROPIC_KEY_FILE",
         smoke: "anthropic::live::live_smoke",
         record: "anthropic::live::live_record",
-        headless: &["live::live_headless_run", "live::live_headless_compaction"],
+        headless: &[
+            "live::live_headless_run",
+            "live::live_headless_compaction",
+            "live::live_headless_budget_summary",
+        ],
     },
     LiveProvider {
         name: "openrouter",
@@ -863,7 +867,11 @@ not a line of the ledger
         assert_eq!(provider.name, "anthropic");
         assert_eq!(
             tests,
-            ["live::live_headless_run", "live::live_headless_compaction"]
+            [
+                "live::live_headless_run",
+                "live::live_headless_compaction",
+                "live::live_headless_budget_summary"
+            ]
         );
     }
 

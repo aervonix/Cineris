@@ -186,6 +186,26 @@ fn logs_under(dir: &Path) -> Vec<PathBuf> {
 
 /// One headless run of the compaction session's machine.
 fn compaction_run(machine: &Machine, key: &str, prompt: &str, requests: &str) -> Value {
+    run_on(
+        machine,
+        key,
+        prompt,
+        requests,
+        COMPACTION_MODEL,
+        "live_headless_compaction",
+    )
+}
+
+/// One headless run of a machine, on `model`, its spend in the ledger as
+/// `test`'s.
+fn run_on(
+    machine: &Machine,
+    key: &str,
+    prompt: &str,
+    requests: &str,
+    model: &str,
+    test: &str,
+) -> Value {
     let output = machine
         .command(&["-p", prompt, "--output", "json", "--max-requests", requests])
         .env("ANTHROPIC_API_KEY", key)
@@ -199,13 +219,7 @@ fn compaction_run(machine: &Machine, key: &str, prompt: &str, requests: &str) ->
     eprintln!("cortex -p … --output json wrote:\n{}", run.stdout);
     eprintln!("and on standard error:\n{}", run.stderr);
     let record = run.expect_code(0).json();
-    ledger(
-        &record,
-        "anthropic",
-        COMPACTION_MODEL,
-        key,
-        "live_headless_compaction",
-    );
+    ledger(&record, "anthropic", model, key, test);
     record
 }
 
@@ -317,4 +331,114 @@ fn live_headless_compaction() {
             );
         }
     }
+}
+
+/// The cheapest Anthropic model whose reasoning is a token budget, which
+/// no entry of the built-in catalog is: a user's catalog entry describes
+/// it, with the shape the review of step 15 found every summary refused on
+/// (a budget of 1,024 to 64,000 tokens, an output of 64,000).
+const BUDGET_MODEL: &str = "claude-haiku-4-5";
+const BUDGET_LIMIT: f64 = 200_000.0 - 32_768.0 - 4_000.0;
+const BUDGET_ENTRY: &str = "[models.haiku45]
+provider = \"anthropic\"
+id = \"claude-haiku-4-5\"
+name = \"Claude Haiku 4.5\"
+protocol = \"anthropic-messages\"
+context_window = 200_000
+max_output = 64_000
+input = [\"text\"]
+
+[models.haiku45.prices]
+input = 1.00
+output = 5.00
+cache_read = 0.10
+cache_write = [{ class = \"5m\", price = 1.25 }]
+
+[models.haiku45.reasoning]
+min_tokens = 1_024
+max_tokens = 64_000
+";
+
+/// Finding 2 of the review of step 15, against the real API: on a model
+/// whose reasoning is a budget of 16,384 tokens, one compaction, whose
+/// summary request asks for its output on top of the budget and is
+/// accepted. Run by hand (`cargo xtask live --headless`), with the
+/// owner's allowance for it (`docs/steps/15/answered.md`).
+#[test]
+#[ignore = "talks to Anthropic's API and costs money: run by hand, `docs/steps/15/answered.md`"]
+fn live_headless_budget_summary() {
+    let key = key_from("CORTEX_LIVE_ANTHROPIC_KEY_FILE");
+    let machine = Machine::new("live_headless_budget_summary");
+    let test = "live_headless_budget_summary";
+    let config = |extra: &str| {
+        machine.raw_user_config(&format!(
+            "session.durability = \"never\"\ncredentials.store = \"file\"\nmodel.main = \
+             \"{BUDGET_MODEL}\"\nmodel.effort = \"16384\"\ncontext.background = false\n\
+             {extra}\n{BUDGET_ENTRY}"
+        ));
+    };
+    // What the prompt and the tools come to, asked of the model itself.
+    config("");
+    let measured = run_on(
+        &machine,
+        &key,
+        "Reply with the word ready.",
+        "2",
+        BUDGET_MODEL,
+        test,
+    );
+    let usage = &measured["usage"];
+    let base = ["input", "cache_read", "cache_write"]
+        .iter()
+        .map(|class| usage[class].as_u64().unwrap_or(0))
+        .sum::<u64>();
+    eprintln!("the prompt and the tools: {base} tokens");
+    // Four files of about 2,500 tokens each; the trigger is past the third.
+    for name in ["a", "b", "c", "d"] {
+        let lines: String = (1..=300)
+            .map(|line| format!("{name}{line:03}: the quick brown fox jumps over the lazy dog\n"))
+            .collect();
+        fs::write(machine.workspace.join(format!("{name}.txt")), lines).unwrap();
+    }
+    #[expect(clippy::cast_precision_loss, reason = "a fraction of a limit")]
+    let compact_at = (base + 9_500) as f64 / BUDGET_LIMIT;
+    config(&format!("context.compact_at = {compact_at:.6}\n"));
+    let record = run_on(
+        &machine,
+        &key,
+        "Read the files a.txt, b.txt, c.txt and d.txt with the read tool, one call at a time \
+         and in that order. Then reply with the first line of each file, and nothing else.",
+        "10",
+        BUDGET_MODEL,
+        test,
+    );
+    assert_eq!(record["outcome"], "completed", "{record}");
+    let logs = logs_under(&machine.home);
+    let log = logs
+        .iter()
+        .max_by_key(|path| fs::metadata(path).map(|meta| meta.len()).unwrap_or(0))
+        .expect("the session has a log");
+    let lines: Vec<Value> = fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let summaries = lines
+        .iter()
+        .filter(|line| line["kind"] == "summary")
+        .count();
+    let compactions = lines
+        .iter()
+        .filter(|line| line["kind"] == "epoch" && line["reason"] == "compaction")
+        .count();
+    let summary_usage: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "usage")
+        .map(|line| &line["usage"]["tokens"])
+        .collect();
+    eprintln!("summary requests' usage: {summary_usage:?}");
+    eprintln!("the run's record: {}", record["usage"]);
+    eprintln!("its cost: {}", record["costs"]);
+    assert!(summaries >= 1, "the session compacted");
+    assert_eq!(compactions, summaries, "each summary began an epoch");
 }
