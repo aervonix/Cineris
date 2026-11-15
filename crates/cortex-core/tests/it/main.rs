@@ -41,6 +41,7 @@ mod shell;
 mod start;
 mod trust;
 mod turns;
+mod usage;
 
 use std::ffi::OsString;
 use std::future::Future;
