@@ -14,11 +14,13 @@
 //!   block) is opaque in the same way.
 //! - **A signature over several lines** is read until its brackets close,
 //!   and its head is those lines joined.
+//! - **A brace that opens no definition is counted,** not kept: a line of
+//!   a million `{` costs a number, not a million frames.
 
 use super::docs::{DocStyle, Docs};
-use super::{Builder, line_number};
+use super::{Builder, LINE_BYTES, line_number, prefix};
 use crate::lex::{Lexer, Syntax};
-use crate::outline::{Entry, HEAD_CHARS, Kind, clip, squeeze};
+use crate::outline::{Entry, HEAD_CHARS, Kind, NAME_CHARS, clip, squeeze};
 
 /// What a definition's body holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,10 +44,12 @@ pub(crate) struct Def {
 }
 
 impl Def {
-    pub(crate) fn new(kind: Kind, name: impl Into<String>, body: Body) -> Self {
+    /// A definition, its name clipped to [`NAME_CHARS`] (a recogniser's
+    /// name is a slice of its line, which can be megabytes long).
+    pub(crate) fn new(kind: Kind, name: impl AsRef<str>, body: Body) -> Self {
         Self {
             kind,
-            name: name.into(),
+            name: clip(name.as_ref(), NAME_CHARS),
             body,
             needs_body: false,
         }
@@ -80,6 +84,9 @@ pub(crate) struct Scope<'a> {
     pub(crate) container: Option<(Kind, &'a str)>,
     /// The code of the last line before this one that had code on it.
     pub(crate) previous: &'a str,
+    /// The line as it is written, at the same bytes as its code: where a
+    /// string's content is read (a TypeScript `declare module "name"`).
+    pub(crate) raw: &'a str,
 }
 
 /// A language for this engine.
@@ -97,7 +104,9 @@ pub(crate) trait Recogniser {
     }
 }
 
-/// An open brace and what it opened.
+/// An open brace and what it opened. A brace that opened no definition
+/// (an `Opaque` frame with no entry) is not kept as a frame: the reader
+/// counts it.
 #[derive(Debug, Clone, Copy)]
 enum Frame {
     /// A definition's body that holds others.
@@ -141,7 +150,14 @@ const HEAD_LINES: usize = 4;
 /// The state of one file's reading.
 struct Reader<'o> {
     out: &'o mut Builder,
-    stack: Vec<Frame>,
+    /// The open braces that opened a definition (or an `extern "C" {`
+    /// block), innermost last, each with the number of braces that opened
+    /// nothing open just below it.
+    stack: Vec<(Frame, usize)>,
+    /// The braces that opened nothing, open above the innermost frame of
+    /// `stack`.
+    anonymous: usize,
+    /// The `Opaque` frames open, counted ones included.
     opaque: usize,
     /// The entries of the `Holds` frames on the stack, innermost last:
     /// kept as frames are pushed and popped, so that a file nested a
@@ -157,15 +173,27 @@ impl Reader<'_> {
 
     fn push(&mut self, frame: Frame) {
         match frame {
+            Frame::Opaque { entry: None } => {
+                self.opaque += 1;
+                self.anonymous += 1;
+                return;
+            }
             Frame::Opaque { .. } => self.opaque += 1,
             Frame::Holds { entry } => self.holds.push(entry),
             Frame::Transparent => {}
         }
-        self.stack.push(frame);
+        let below = std::mem::take(&mut self.anonymous);
+        self.stack.push((frame, below));
     }
 
     fn pop(&mut self) -> Option<Frame> {
-        let frame = self.stack.pop()?;
+        if self.anonymous > 0 {
+            self.anonymous -= 1;
+            self.opaque = self.opaque.saturating_sub(1);
+            return Some(Frame::Opaque { entry: None });
+        }
+        let (frame, below) = self.stack.pop()?;
+        self.anonymous = below;
         match frame {
             Frame::Opaque { .. } => self.opaque = self.opaque.saturating_sub(1),
             Frame::Holds { .. } => {
@@ -176,14 +204,21 @@ impl Reader<'_> {
         Some(frame)
     }
 
-    /// Ends the definition waiting for its body: it has none.
+    /// Ends the definition waiting for its body: it has none. One that
+    /// needed a body, or whose name was to come at its body's close, is
+    /// taken out again.
     fn without_body(&mut self) {
         if let Some(done) = self.pending.take() {
             self.set_head(&done);
-            if done.needs_body
-                && let Some(entry) = done.entry
-            {
-                self.out.drop_last(entry);
+            if let Some(entry) = done.entry {
+                let nameless = self
+                    .out
+                    .entries
+                    .get(entry)
+                    .is_some_and(|entry| entry.name.is_empty());
+                if done.needs_body || nameless {
+                    self.out.drop_last(entry);
+                }
             }
         }
     }
@@ -223,6 +258,7 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
     let mut reader = Reader {
         out,
         stack: Vec::new(),
+        anonymous: 0,
         opaque: 0,
         holds: Vec::new(),
         pending: None,
@@ -241,6 +277,8 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
         let start = code_line.len() - code_line.trim_start().len();
         let end = start + code.len();
         let part = raw.get(start..end).unwrap_or(code);
+        // What a head is made of: a line of megabytes is not copied whole.
+        let head_part = prefix(part, LINE_BYTES);
 
         // A signature still open: this line goes on with it.
         let continuing = reader
@@ -252,7 +290,7 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
             if continuing && pending.lines < HEAD_LINES {
                 pending.line_part = Some(pending.head.len() + 1);
                 pending.head.push(' ');
-                pending.head.push_str(part);
+                pending.head.push_str(head_part);
             }
         }
         if !continuing && reader.opaque == 0 {
@@ -264,6 +302,7 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
             let scope = Scope {
                 container,
                 previous: &previous,
+                raw: part,
             };
             match language.recognise(code, &scope) {
                 Found::Def(def) => {
@@ -284,7 +323,7 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
                         transparent: false,
                         brackets: 0,
                         lines: 0,
-                        head: part.to_owned(),
+                        head: head_part.to_owned(),
                         line_part: Some(0),
                     });
                 }
@@ -365,8 +404,10 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
                         Frame::Opaque { entry } | Frame::Holds { entry } => entry,
                         Frame::Transparent => None,
                     };
-                    // `typedef struct { … } Name;`: the name comes last.
-                    if let Some(entry) = entry.and_then(|entry| reader.out.get_mut(entry))
+                    // `typedef struct { … } Name;`: the name comes last, or
+                    // never, and then the definition is taken out again.
+                    if let Some(index) = entry
+                        && let Some(entry) = reader.out.get_mut(index)
                         && entry.name.is_empty()
                     {
                         let name: String = code_line[at + 1..]
@@ -374,10 +415,13 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
                             .trim_start_matches('*')
                             .chars()
                             .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .take(NAME_CHARS + 1)
                             .collect();
-                        if !name.is_empty() {
+                        if name.is_empty() {
+                            reader.out.drop_last(index);
+                        } else {
                             entry.head = clip(&format!("{} {name}", entry.head), HEAD_CHARS);
-                            entry.name = name;
+                            entry.name = clip(&name, NAME_CHARS);
                         }
                     }
                 }

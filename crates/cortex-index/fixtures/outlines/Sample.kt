@@ -57,3 +57,9 @@ fun interface Callback {
 private val raw = """
 fun notReal() {
 """
+
+class ParserTest {
+    @Test
+    fun `parses an empty file`() {
+    }
+}

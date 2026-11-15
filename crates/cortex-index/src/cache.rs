@@ -63,7 +63,7 @@ pub(crate) const FORMAT: u32 = 2;
 /// The version of the extractors. Raised whenever an extractor finds
 /// something else in the same text, so that outlines cached by an older
 /// build are made again.
-pub(crate) const EXTRACTORS: u32 = 1;
+pub(crate) const EXTRACTORS: u32 = 2;
 
 const HEADER: &str = "cortex-index outlines";
 

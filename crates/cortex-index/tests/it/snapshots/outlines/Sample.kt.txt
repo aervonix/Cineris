@@ -18,3 +18,5 @@ language: kotlin
   51 type Users  | typealias Users = List<User>
   53 interface Callback  | fun interface Callback
   54   method invoke  | fun invoke(value: Int)
+  61 class ParserTest  | class ParserTest
+  63   method parses an empty file  | fun `parses an empty file`()

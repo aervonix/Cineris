@@ -2,9 +2,9 @@
 //! and Ruby, and the fallback for every file no extractor reads.
 
 use super::docs::{DocStyle, Docs};
-use super::{Builder, indent_of, line_number};
+use super::{Builder, LINE_BYTES, indent_of, line_number, name_of, prefix};
 use crate::lex::{Lexer, Syntax};
-use crate::outline::{DOC_CHARS, Entry, HEAD_CHARS, Kind, clip, squeeze};
+use crate::outline::{DOC_CHARS, Entry, HEAD_CHARS, Kind, NAME_CHARS, clip, squeeze};
 
 /// An open block: its indentation, and what it does with what is in it.
 #[derive(Debug, Clone, Copy)]
@@ -76,6 +76,12 @@ fn is_constant(name: &str) -> bool {
         && name.starts_with(|c: char| c.is_ascii_uppercase())
 }
 
+/// Whether a line of Python code begins a `def` or a `class`.
+fn defines(code: &str) -> bool {
+    let rest = word(code, "async").unwrap_or(code);
+    word(rest, "def").is_some() || word(code, "class").is_some()
+}
+
 /// The net count of open brackets in a line of code.
 fn brackets(code: &str) -> i32 {
     code.bytes().fold(0, |depth, byte| match byte {
@@ -106,6 +112,8 @@ pub(crate) fn python(text: &str, out: &mut Builder) {
     };
     let mut blocks = Blocks::default();
     let mut depth = 0i32;
+    // The indentation of the line that opened the brackets still open.
+    let mut opener = 0usize;
     // The definition whose header is still open (its brackets), and the
     // one whose docstring may come next.
     let mut header: Option<(usize, String)> = None;
@@ -132,12 +140,29 @@ pub(crate) fn python(text: &str, out: &mut Builder) {
             }
             continue;
         }
-        let continuing = depth > 0;
+        let mut continuing = depth > 0;
+        // A bracket never closed (a file in mid-edit) would hide the rest
+        // of the file: a `def` or a `class` no further in than the line
+        // that opened it cannot be inside it, and ends it.
+        if continuing && indent_of(raw) <= opener && defines(code) {
+            if let Some((entry, head)) = header.take() {
+                finish_head(out, entry, &head);
+            }
+            depth = 0;
+            continuing = false;
+        }
         depth = (depth + brackets(code)).max(0);
+        if !continuing && depth > 0 {
+            opener = indent_of(raw);
+        }
         if continuing {
             if let Some((entry, head)) = &mut header {
-                head.push(' ');
-                head.push_str(raw.trim());
+                // A header of many lines is joined up to a bound: it is
+                // cut to its first characters anyway.
+                if head.len() < LINE_BYTES {
+                    head.push(' ');
+                    head.push_str(prefix(raw.trim(), LINE_BYTES - head.len()));
+                }
                 if depth == 0 {
                     finish_head(out, *entry, head);
                     wants_doc = Some(*entry);
@@ -174,17 +199,17 @@ pub(crate) fn python(text: &str, out: &mut Builder) {
                 } else {
                     Kind::Function
                 };
-                (kind, name.to_owned(), true)
+                (kind, clip(name, NAME_CHARS), true)
             })
         } else if let Some(after) = word(rest, "class") {
-            ident(after).map(|(name, _)| (Kind::Class, name.to_owned(), false))
+            ident(after).map(|(name, _)| (Kind::Class, clip(name, NAME_CHARS), false))
         } else if blocks.open.is_empty()
             && let Some((name, tail)) = ident(code)
             && is_constant(name)
             && tail.trim_start().starts_with(['=', ':'])
             && !tail.trim_start().starts_with("==")
         {
-            Some((Kind::Const, name.to_owned(), false))
+            Some((Kind::Const, clip(name, NAME_CHARS), false))
         } else {
             None
         };
@@ -212,7 +237,7 @@ pub(crate) fn python(text: &str, out: &mut Builder) {
             transparent: false,
         });
         if depth > 0 {
-            header = Some((entry, raw.trim().to_owned()));
+            header = Some((entry, prefix(raw.trim(), LINE_BYTES).to_owned()));
         } else {
             finish_head(out, entry, raw.trim());
             wants_doc = Some(entry);
@@ -227,7 +252,7 @@ pub(crate) fn python(text: &str, out: &mut Builder) {
 /// without a comment after it.
 fn finish_head(out: &mut Builder, entry: usize, head: &str) {
     if let Some(entry) = out.get_mut(entry) {
-        let head = super::brace::tidy(head);
+        let head = super::brace::tidy(prefix(head, LINE_BYTES));
         let head = head.split(" #").next().unwrap_or(&head);
         let head = head.strip_suffix(':').unwrap_or(head).trim_end();
         entry.head = clip(head, HEAD_CHARS);
@@ -260,10 +285,7 @@ pub(crate) fn ruby(text: &str, out: &mut Builder) {
             None
         } else if let Some(after) = word(code, "def") {
             // `def name`, `def self.name`, `def name=(value)`, `def ==(other)`.
-            let name: String = after
-                .chars()
-                .take_while(|c| !c.is_whitespace() && *c != '(' && *c != ';')
-                .collect();
+            let name = name_of(after, |c| !c.is_whitespace() && c != '(' && c != ';');
             let kind = if blocks.in_type() {
                 Kind::Method
             } else {
@@ -282,23 +304,17 @@ pub(crate) fn ruby(text: &str, out: &mut Builder) {
                 docs.clear();
                 continue;
             }
-            let name: String = after
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':')
-                .collect();
+            let name = name_of(after, |c| c.is_alphanumeric() || c == '_' || c == ':');
             (!name.is_empty()).then_some((Kind::Class, name, false, false))
         } else if let Some(after) = word(code, "module") {
-            let name: String = after
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':')
-                .collect();
+            let name = name_of(after, |c| c.is_alphanumeric() || c == '_' || c == ':');
             (!name.is_empty()).then_some((Kind::Module, name, false, false))
         } else if let Some((name, tail)) = ident(code)
             && is_constant(name)
             && tail.trim_start().starts_with('=')
             && !tail.trim_start().starts_with("==")
         {
-            Some((Kind::Const, name.to_owned(), false, true))
+            Some((Kind::Const, clip(name, NAME_CHARS), false, true))
         } else {
             None
         };
@@ -306,7 +322,7 @@ pub(crate) fn ruby(text: &str, out: &mut Builder) {
             docs.clear();
             continue;
         };
-        let head = squeeze(raw.trim());
+        let head = squeeze(prefix(raw.trim(), LINE_BYTES));
         let head = head.strip_suffix("; end").unwrap_or(&head);
         let _ = out.push(Entry {
             line: line_number(index),
@@ -336,16 +352,17 @@ const FALLBACK_DEPTH: u8 = 2;
 /// The outline of a file no extractor reads: each line with more indented
 /// lines right under it is a block.
 pub(crate) fn fallback(text: &str, out: &mut Builder) {
-    let lines: Vec<(usize, &str)> = text
+    // The non-blank lines, each looked at with the next: none is kept.
+    let mut lines = text
         .lines()
         .enumerate()
         .filter(|(_, line)| !line.trim().is_empty())
-        .collect();
+        .peekable();
     let mut blocks = Blocks::default();
-    for (position, &(index, raw)) in lines.iter().enumerate() {
+    while let Some((index, raw)) = lines.next() {
         let indent = indent_of(raw);
         blocks.close_to(indent);
-        let Some(&(_, next)) = lines.get(position + 1) else {
+        let Some(&(_, next)) = lines.peek() else {
             break;
         };
         if indent_of(next) <= indent {
@@ -365,7 +382,7 @@ pub(crate) fn fallback(text: &str, out: &mut Builder) {
         if comment || depth >= FALLBACK_DEPTH {
             continue;
         }
-        let head = clip(&squeeze(line), 80);
+        let head = clip(&squeeze(prefix(line, LINE_BYTES)), NAME_CHARS);
         let _ = out.push(Entry {
             line: line_number(index),
             depth,

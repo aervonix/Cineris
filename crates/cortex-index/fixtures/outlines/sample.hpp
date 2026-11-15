@@ -46,3 +46,14 @@ int c_api_version(void);
 std::vector<shop::Line> shop::Order::lines() const {
     return lines_;
 }
+
+// A function with C linkage and its body: not an `extern "C" {` block.
+extern "C" int plugin_init(int argc) {
+    Widget w(argc);
+    return 0;
+}
+
+extern "C"
+{
+int c_api_flags(void);
+}

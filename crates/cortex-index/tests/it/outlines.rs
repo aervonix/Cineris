@@ -130,3 +130,79 @@ fn markdown() {
 fn fallback() {
     check("sample.yaml");
 }
+
+// What one outline of a hostile file costs in memory: before the fixes to
+// step 18, an extractor kept a frame for each `{`, every heading and every
+// line, and a name of the file's size, up to 26 times the file in all.
+
+/// The most one outline of a file of 1 MiB may raise the process's peak
+/// resident memory, in KiB. What the extractors keep is bounded; what is
+/// left is the lexer's copy of the line being read and the line before
+/// it, which is twice the longest line.
+const PEAK_KIB: u64 = 4096;
+
+/// Outlines `text` and checks how far that raised the process's peak
+/// resident memory. Each test runs in a process of its own under nextest,
+/// so the peak is this test's; it is reset to what is resident now just
+/// before (`/proc/self/clear_refs`), so that making the text does not
+/// hide what the outline costs. Measured where the system says it
+/// (Linux).
+fn check_peak(language: Option<Language>, file: &str, text: &str) {
+    let reset = std::fs::write("/proc/self/clear_refs", "5").is_ok();
+    let Some(before) = super::resident_kib("VmHWM:") else {
+        if cfg!(target_os = "linux") {
+            panic!("Linux says its peak resident memory");
+        }
+        return;
+    };
+    let outline = extract(language, file, text);
+    let after = super::resident_kib("VmHWM:").expect("the figure again");
+    assert!(!outline.entries.is_empty() || language.is_none());
+    let grew = after.saturating_sub(before);
+    assert!(
+        grew <= PEAK_KIB,
+        "outlining {} KiB of {file} raised the peak by {grew} KiB (the peak was reset first: \
+         {reset})",
+        text.len() / 1024
+    );
+}
+
+/// `unit` repeated to 1 MiB, with `head` before it and `tail` after,
+/// made in one allocation.
+fn mebibyte(head: &str, unit: &str, tail: &str) -> String {
+    let mut text = String::with_capacity(head.len() + (1 << 20) + tail.len());
+    text.push_str(head);
+    while text.len() + unit.len() <= head.len() + (1 << 20) {
+        text.push_str(unit);
+    }
+    text.push_str(tail);
+    text
+}
+
+#[test]
+fn outlining_a_line_of_a_million_open_braces_takes_little_memory() {
+    check_peak(
+        Some(Language::Rust),
+        "a.rs",
+        &mebibyte("fn f() ", "{", "\n"),
+    );
+}
+
+#[test]
+fn outlining_a_name_of_a_megabyte_takes_little_memory() {
+    check_peak(
+        Some(Language::Rust),
+        "a.rs",
+        &mebibyte("fn ", "a", "() {}\n"),
+    );
+}
+
+#[test]
+fn outlining_a_megabyte_of_headings_takes_little_memory() {
+    check_peak(Some(Language::Markdown), "a.md", &mebibyte("", "# a\n", ""));
+}
+
+#[test]
+fn outlining_a_megabyte_of_short_lines_takes_little_memory() {
+    check_peak(None, "a.txt", &mebibyte("", "a\n", ""));
+}

@@ -37,3 +37,9 @@ exports.helper = (x) => x * 2;
 describe("store", () => {
   it("works", () => {});
 });
+
+export function trim(p) {
+  return p.replace(/\/*$/, "");
+}
+
+export function afterTrim() {}

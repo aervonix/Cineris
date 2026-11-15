@@ -6,3 +6,5 @@ language: javascript
   19   method dispatch  | dispatch(action)
   25   method of  | static of(reducer)
   35 fn helper  | exports.helper = (x) => x * 2
+  41 fn trim  | export function trim(p)
+  45 fn afterTrim  | export function afterTrim()

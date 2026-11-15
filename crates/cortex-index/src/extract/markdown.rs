@@ -3,10 +3,35 @@
 //! ATX headings (`## Title`) and setext ones (a line of `=` or `-` under
 //! a paragraph's line), outside fenced code blocks and front matter. The
 //! shallowest level in the file is depth 0, so a file that starts at `##`
-//! is not shown one level in.
+//! is not shown one level in. Only the first [`MAX_ENTRIES`] headings are
+//! kept, each cut as it is found, but the shallowest level is the whole
+//! file's.
 
-use super::{Builder, line_number};
-use crate::outline::{Entry, HEAD_CHARS, Kind, clip, squeeze};
+use super::{Builder, LINE_BYTES, line_number, prefix};
+use crate::outline::{Entry, HEAD_CHARS, Kind, MAX_ENTRIES, clip, squeeze};
+
+/// The headings found so far.
+#[derive(Debug, Default)]
+struct Headings {
+    /// The first ones: each one's line, level and text, cut.
+    kept: Vec<(usize, usize, String)>,
+    /// The shallowest level of all of them, kept or not.
+    shallowest: Option<usize>,
+    /// More were found than are kept.
+    more: bool,
+}
+
+impl Headings {
+    fn add(&mut self, index: usize, level: usize, text: &str) {
+        self.shallowest = Some(self.shallowest.map_or(level, |least| least.min(level)));
+        if self.kept.len() < MAX_ENTRIES {
+            let text = clip(&squeeze(prefix(text, LINE_BYTES)), HEAD_CHARS);
+            self.kept.push((index, level, text));
+        } else {
+            self.more = true;
+        }
+    }
+}
 
 /// The fence that opens a code block: its character and its length.
 fn fence(line: &str) -> Option<(char, usize)> {
@@ -64,7 +89,7 @@ fn paragraph(line: &str) -> bool {
 }
 
 pub(crate) fn markdown(text: &str, out: &mut Builder) {
-    let mut found: Vec<(usize, usize, String)> = Vec::new();
+    let mut found = Headings::default();
     let mut open_fence: Option<(char, usize)> = None;
     let mut front_matter = false;
     let mut previous: Option<(usize, &str)> = None;
@@ -96,7 +121,7 @@ pub(crate) fn markdown(text: &str, out: &mut Builder) {
         }
         if let Some((level, heading)) = atx(line) {
             if !heading.is_empty() {
-                found.push((index, level, heading.to_owned()));
+                found.add(index, level, heading);
             }
             previous = None;
             continue;
@@ -104,15 +129,14 @@ pub(crate) fn markdown(text: &str, out: &mut Builder) {
         if let Some(level) = underline(line)
             && let Some((above, text)) = previous
         {
-            found.push((above, level, text.trim().to_owned()));
+            found.add(above, level, text.trim());
             previous = None;
             continue;
         }
         previous = paragraph(line).then_some((index, line));
     }
-    let shallowest = found.iter().map(|(_, level, _)| *level).min().unwrap_or(1);
-    for (index, level, heading) in found {
-        let heading = clip(&squeeze(&heading), HEAD_CHARS);
+    let shallowest = found.shallowest.unwrap_or(1);
+    for (index, level, heading) in found.kept {
         let depth = u8::try_from(level - shallowest).unwrap_or(u8::MAX);
         let _ = out.push(Entry {
             line: line_number(index),
@@ -122,5 +146,8 @@ pub(crate) fn markdown(text: &str, out: &mut Builder) {
             head: clip(&format!("{} {heading}", "#".repeat(level)), HEAD_CHARS),
             doc: None,
         });
+    }
+    if found.more {
+        out.cut();
     }
 }

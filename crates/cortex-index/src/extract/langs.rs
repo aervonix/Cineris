@@ -4,12 +4,16 @@
 //! there. It sees only that line and where the line is (the definition
 //! that holds it, the line of code before it): that is the whole of
 //! "approximate".
+//!
+//! A recogniser never calls itself: a chain of prefixes is stripped in a
+//! loop (see [`super`]).
 
 use super::brace::{Body, Def, Found, Recogniser, Scope};
 use super::docs::DocStyle;
+use super::{LINE_BYTES, name_of, prefix};
 use crate::language::Language;
 use crate::lex::Syntax;
-use crate::outline::Kind;
+use crate::outline::{Kind, NAME_CHARS, clip, squeeze};
 
 /// The recogniser of a brace language. `header` says a C or C++ file is a
 /// header, where prototypes are the interface and are outlined.
@@ -185,7 +189,7 @@ fn c_style(code: &str, container: Option<&str>, allow_bare: bool) -> Option<Stri
     if kind_part.is_empty() {
         let last = bare.rsplit("::").next().unwrap_or(bare);
         if container.is_some_and(|container| container == last) || allow_bare {
-            return Some(name.to_owned());
+            return Some(clip(name, NAME_CHARS));
         }
         return None;
     }
@@ -195,12 +199,12 @@ fn c_style(code: &str, container: Option<&str>, allow_bare: bool) -> Option<Stri
     }
     kind_part
         .ends_with(|c: char| is_ident(c) || matches!(c, '>' | ']' | '?' | '*' | '&'))
-        .then(|| name.to_owned())
+        .then(|| clip(name, NAME_CHARS))
 }
 
 /// The name after a keyword: an identifier, or nothing.
 fn named(rest: &str) -> Option<String> {
-    ident(rest).map(|(name, _)| name.to_owned())
+    ident(rest).map(|(name, _)| clip(name, NAME_CHARS))
 }
 
 /// A type-like definition: `class Name`, with `kind` and `body`.
@@ -325,15 +329,11 @@ impl Recogniser for Rust {
             let target = target
                 .split_once(" where")
                 .map_or(target, |(target, _)| target);
-            let name = crate::outline::squeeze(target);
+            let name = squeeze(prefix(target, LINE_BYTES));
             if name.is_empty() {
                 return Found::Nothing;
             }
-            return Found::Def(Def::new(
-                Kind::Impl,
-                crate::outline::clip(&name, 80),
-                Body::Holds,
-            ));
+            return Found::Def(Def::new(Kind::Impl, name, Body::Holds));
         }
         Found::Nothing
     }
@@ -412,7 +412,11 @@ impl Recogniser for Go {
                 return match ident(rest) {
                     Some((name, _)) => Found::Def(Def::new(
                         Kind::Method,
-                        format!("{receiver_type}.{name}"),
+                        format!(
+                            "{}.{}",
+                            clip(receiver_type, NAME_CHARS),
+                            clip(name, NAME_CHARS)
+                        ),
                         Body::Opaque,
                     )),
                     None => Found::Nothing,
@@ -573,10 +577,7 @@ impl Recogniser for CSharp {
         }
         let rest = strip_words(code, CSHARP_MODIFIERS);
         if let Some(after) = word(rest, "namespace") {
-            let name: String = after
-                .chars()
-                .take_while(|c| is_ident(*c) || *c == '.')
-                .collect();
+            let name = name_of(after, |c| is_ident(c) || c == '.');
             if name.is_empty() {
                 return Found::Nothing;
             }
@@ -709,6 +710,18 @@ impl Recogniser for Kotlin {
             } else {
                 after
             };
+            // A name in backticks, which may hold spaces and brackets:
+            // ``fun `parses an empty file`()``, after a receiver or not.
+            if let Some(tick) = after.find('`')
+                && !after[..tick].contains('(')
+            {
+                return match after[tick + 1..].split_once('`') {
+                    Some((name, _)) if !name.is_empty() => {
+                        Found::Def(Def::new(function_or_method(scope), name, Body::Opaque))
+                    }
+                    _ => Found::Nothing,
+                };
+            }
             // An extension function: `fun String.shout()`.
             let before_paren = after.split('(').next().unwrap_or(after);
             let name = before_paren
@@ -826,10 +839,7 @@ impl Recogniser for Swift {
             }
         }
         if let Some(after) = word(rest, "func") {
-            let name: String = after
-                .chars()
-                .take_while(|c| !c.is_whitespace() && *c != '(' && *c != '<')
-                .collect();
+            let name = name_of(after, |c| !c.is_whitespace() && c != '(' && c != '<');
             if name.is_empty() {
                 return Found::Nothing;
             }
@@ -854,10 +864,7 @@ impl Recogniser for Swift {
             }
         }
         if let Some(after) = word(rest, "extension") {
-            let target: String = after
-                .chars()
-                .take_while(|c| is_ident(*c) || *c == '.' || *c == '<' || *c == '>')
-                .collect();
+            let target = name_of(after, |c| is_ident(c) || matches!(c, '.' | '<' | '>'));
             if target.is_empty() {
                 return Found::Nothing;
             }
@@ -904,52 +911,59 @@ impl Recogniser for Cish {
 
     fn recognise(&mut self, code: &str, scope: &Scope<'_>) -> Found {
         let top = scope.container.is_none_or(|(kind, _)| kind == Kind::Module);
-        if let Some(directive) = code.strip_prefix('#') {
-            let directive = directive.trim_start();
-            if top && let Some(after) = word(directive, "define") {
-                let Some((name, rest)) = ident(after) else {
-                    return Found::Nothing;
-                };
-                // An include guard defines a name to nothing.
-                if rest.trim().is_empty() && !rest.starts_with('(') {
-                    return Found::Nothing;
+        // `template<…>` and `extern "…"` before a declaration, any number of
+        // them in any order, are stripped one after another: a line of a
+        // megabyte of them is one pass over it, with no recursion and no
+        // second look at what follows each.
+        let mut code = code;
+        loop {
+            if let Some(directive) = code.strip_prefix('#') {
+                let directive = directive.trim_start();
+                if top && let Some(after) = word(directive, "define") {
+                    let Some((name, rest)) = ident(after) else {
+                        return Found::Nothing;
+                    };
+                    // An include guard defines a name to nothing.
+                    if rest.trim().is_empty() && !rest.starts_with('(') {
+                        return Found::Nothing;
+                    }
+                    return Found::Def(Def::new(Kind::Macro, name, Body::Opaque));
                 }
-                return Found::Def(Def::new(Kind::Macro, name, Body::Opaque));
-            }
-            return Found::Attribute;
-        }
-        if let Some(after) = word(code, "template") {
-            let rest = skip_group(after, '<', '>').unwrap_or("");
-            if rest.is_empty() {
                 return Found::Attribute;
             }
-            return self.recognise(rest, scope);
-        }
-        if code.ends_with(':') && ["public:", "private:", "protected:"].contains(&code) {
-            return Found::Nothing;
-        }
-        if let Some(after) = word(code, "extern")
-            && after.starts_with('"')
-        {
-            return if after.contains('{') {
-                Found::Transparent
-            } else {
-                // `extern "C" int f(void);`
-                self.recognise(
-                    after
-                        .split_once('"')
-                        .map_or("", |(_, r)| r)
-                        .split_once('"')
-                        .map_or("", |(_, r)| r.trim_start()),
-                    scope,
-                )
-            };
+            if let Some(after) = word(code, "template") {
+                let rest = skip_group(after, '<', '>').unwrap_or("");
+                if rest.is_empty() {
+                    return Found::Attribute;
+                }
+                code = rest;
+                continue;
+            }
+            if code.ends_with(':') && ["public:", "private:", "protected:"].contains(&code) {
+                return Found::Nothing;
+            }
+            if let Some(after) = word(code, "extern")
+                && let Some(quoted) = after.strip_prefix('"')
+            {
+                // The quotes stay in the code; the linkage's name is blanked.
+                let Some((_, rest)) = quoted.split_once('"') else {
+                    return Found::Nothing;
+                };
+                let rest = rest.trim_start();
+                // `extern "C" {`, or its brace on the next line, is a block
+                // whose contents are at the level outside it. Anything else
+                // is one declaration with that linkage: `extern "C" int
+                // f(void);`, or a function with its body.
+                if rest.is_empty() || rest.starts_with('{') {
+                    return Found::Transparent;
+                }
+                code = rest;
+                continue;
+            }
+            break;
         }
         if let Some(after) = word(code, "namespace") {
-            let name: String = after
-                .chars()
-                .take_while(|c| is_ident(*c) || *c == ':')
-                .collect();
+            let name = name_of(after, |c| is_ident(c) || c == ':');
             if name.is_empty() {
                 return Found::Transparent;
             }
@@ -970,7 +984,7 @@ impl Recogniser for Cish {
                         .filter(|(_, rest)| {
                             rest.trim_start().starts_with('{') || rest.trim().is_empty()
                         })
-                        .map_or_else(String::new, |(name, _)| name.to_owned());
+                        .map_or_else(String::new, |(name, _)| clip(name, NAME_CHARS));
                     return Found::Def(Def::new(kind, name, Body::Opaque));
                 }
             }
@@ -1096,19 +1110,22 @@ impl Recogniser for Js {
     }
 
     fn recognise(&mut self, code: &str, scope: &Scope<'_>) -> Found {
-        if code.starts_with('@') {
+        let code = if code.starts_with('@') {
             let rest = strip_annotations(code);
             if rest.is_empty() {
                 return Found::Attribute;
             }
-            // An `@` that is not an annotation (`@"`): nothing, rather than
-            // the same line again (found by the property test of step 18's
-            // review, as a stack overflow).
-            if rest.len() == code.len() {
+            // An `@` that is not an annotation (`@"`), alone or after
+            // annotations: nothing. (Reading the same line again was a
+            // stack overflow, found by the property test of step 18's
+            // review.)
+            if rest.starts_with('@') {
                 return Found::Nothing;
             }
-            return self.recognise(rest, scope);
-        }
+            rest
+        } else {
+            code
+        };
         if inside_type(scope) {
             return Self::member(code, scope);
         }
@@ -1139,14 +1156,17 @@ impl Recogniser for Js {
         }
         for keyword in ["namespace", "module"] {
             if let Some(after) = word(rest, keyword) {
-                let name: String = after
-                    .chars()
-                    .take_while(|c| {
-                        is_ident(*c) || *c == '.' || *c == '"' || *c == '\'' || *c == ' '
-                    })
-                    .collect::<String>()
-                    .trim()
-                    .to_owned();
+                let name = if after.starts_with(['"', '\'']) {
+                    // `declare module "express"`: a string's content is
+                    // blanked in the code, so its name is read from the
+                    // line as written, at the same bytes.
+                    match quoted_name(scope, after) {
+                        Some(name) => name,
+                        None => return Found::Nothing,
+                    }
+                } else {
+                    name_of(after, |c| is_ident(c) || c == '.')
+                };
                 // `module.exports` is not a module declaration.
                 if name.is_empty() || after.starts_with('.') {
                     continue;
@@ -1192,6 +1212,15 @@ impl Recogniser for Js {
     }
 }
 
+/// The string at the start of `code`, a part of the line's code that runs
+/// to its end, as the line writes it: its quotes and what is between them.
+fn quoted_name(scope: &Scope<'_>, code: &str) -> Option<String> {
+    let raw = scope.raw.get(scope.raw.len().checked_sub(code.len())?..)?;
+    let quote = raw.chars().next()?;
+    let close = raw[1..].find(quote)? + 1;
+    Some(clip(&raw[..=close], NAME_CHARS))
+}
+
 impl Js {
     /// A member of a class or an interface.
     fn member(code: &str, scope: &Scope<'_>) -> Found {
@@ -1199,11 +1228,11 @@ impl Js {
         let rest = rest.trim_start_matches('*').trim_start();
         let (name, tail) = match rest.strip_prefix('#') {
             Some(private) => match ident(private) {
-                Some((name, tail)) => (format!("#{name}"), tail),
+                Some((name, tail)) => (format!("#{}", clip(name, NAME_CHARS)), tail),
                 None => return Found::Nothing,
             },
             None => match ident(rest) {
-                Some((name, tail)) => (name.to_owned(), tail),
+                Some((name, tail)) => (clip(name, NAME_CHARS), tail),
                 None => return Found::Nothing,
             },
         };
@@ -1247,10 +1276,7 @@ impl Recogniser for Php {
         }
         let code = code.strip_prefix("<?php").map_or(code, str::trim_start);
         if let Some(after) = word(code, "namespace") {
-            let name: String = after
-                .chars()
-                .take_while(|c| is_ident(*c) || *c == '\\')
-                .collect();
+            let name = name_of(after, |c| is_ident(c) || c == '\\');
             if name.is_empty() {
                 return Found::Nothing;
             }
@@ -1296,6 +1322,15 @@ impl Recogniser for Php {
 
 struct Shell;
 
+/// A shell function's name at the start of `text`, and what follows it.
+fn shell_name(text: &str) -> Option<(&str, &str)> {
+    let end = text
+        .char_indices()
+        .find(|(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':')))
+        .map_or(text.len(), |(at, _)| at);
+    (end > 0).then(|| (&text[..end], text[end..].trim_start()))
+}
+
 impl Recogniser for Shell {
     fn syntax(&self) -> Syntax {
         Syntax::SHELL
@@ -1312,13 +1347,6 @@ impl Recogniser for Shell {
         if scope.container.is_some() {
             return Found::Nothing;
         }
-        let shell_name = |text: &str| -> Option<(String, String)> {
-            let end = text
-                .char_indices()
-                .find(|(_, c)| !(c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':')))
-                .map_or(text.len(), |(at, _)| at);
-            (end > 0).then(|| (text[..end].to_owned(), text[end..].trim_start().to_owned()))
-        };
         if let Some(after) = word(code, "function") {
             return match shell_name(after) {
                 Some((name, _)) => Found::Def(Def::new(Kind::Function, name, Body::Opaque)),

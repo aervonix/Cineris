@@ -17,3 +17,8 @@ language: typescript
   63   fn area  | export function area(): number
   68 fn ids  | function* ids()
   72 fn legacy  | module.exports.legacy = function ()
+  74 mod "express"  | declare module "express"
+  75   fn json  | export function json(): void
+  78 class Links  | class Links
+  79   method check  | check(u: string)
+  85   method after  | after()

@@ -10,8 +10,12 @@
 //! state.
 //!
 //! It is approximate in the ways the extractors are: no escapes inside a
-//! template literal's `${…}`, no C++ raw strings, and a heredoc's tag must
-//! look like one.
+//! template literal's `${…}`, no C++ raw strings, a heredoc's tag must
+//! look like one, and a JavaScript `/` is a regular expression's only
+//! where an expression begins and when it closes on its line.
+//!
+//! It is linear: each byte is looked at a bounded number of times, and no
+//! scan is begun again from every position of a line.
 
 /// A kind of quote, and how a string it opens behaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +74,9 @@ pub(crate) struct Syntax {
     pub(crate) heredocs: Heredocs,
     /// Ruby's `=begin` … `=end`.
     pub(crate) ruby_docs: bool,
+    /// JavaScript's regular expression literals (`/a\/b/g`), whose content
+    /// is blanked as a string's is.
+    pub(crate) regex: bool,
 }
 
 impl Syntax {
@@ -85,6 +92,7 @@ impl Syntax {
         verbatim_at: false,
         heredocs: Heredocs::None,
         ruby_docs: false,
+        regex: false,
     };
 
     /// C, C++, Java, C#, JavaScript, TypeScript and Go share most of this.
@@ -117,6 +125,7 @@ impl Syntax {
             quote(b'\'', true, false),
             quote(b'`', true, true),
         ],
+        regex: true,
         ..Self::C_LIKE
     };
     pub(crate) const GO: Self = Self {
@@ -197,6 +206,10 @@ pub(crate) struct Lexer {
     state: State,
     /// A heredoc opened on the line being read: its body starts on the next.
     next_heredoc: Option<(String, bool)>,
+    /// A `/` on the line being read looked like a regular expression's
+    /// start and did not close: no later `/` of the line is tried, so a
+    /// line of them is not scanned to its end from each.
+    no_regex: bool,
 }
 
 impl Lexer {
@@ -205,6 +218,7 @@ impl Lexer {
             syntax,
             state: State::Code,
             next_heredoc: None,
+            no_regex: false,
         }
     }
 
@@ -226,6 +240,7 @@ impl Lexer {
         };
         let bytes = line.as_bytes();
         let mut code = vec![b' '; bytes.len()];
+        self.no_regex = false;
 
         // Whole-line states first.
         match &self.state {
@@ -372,6 +387,27 @@ impl Lexer {
                     return bytes.len();
                 }
             }
+            // A regular expression: what is between its slashes is blanked,
+            // so a `//`, a `/*`, a quote or a brace in it is not taken for
+            // one. (A `/` followed by `/` or `*` is a comment, above.)
+            if syntax.regex && byte == b'/' && !self.no_regex && regex_may_start(&code[..at]) {
+                if let Some(end) = regex_end(bytes, at) {
+                    code[at] = b'/';
+                    code[end] = b'/';
+                    at = end + 1;
+                    continue;
+                }
+                // It does not close on its line: a division.
+                self.no_regex = true;
+            }
+            // A shell's here-string, `<<<word`, is not a heredoc: its three
+            // `<` are code together, so that its second is not read as a
+            // heredoc's start.
+            if syntax.heredocs == Heredocs::Shell && rest.starts_with(b"<<<") {
+                code[at..at + 3].copy_from_slice(b"<<<");
+                at += 3;
+                continue;
+            }
             // Heredocs. `<` is ASCII, so `at` is on a character's start.
             if byte == b'<'
                 && let Some((tag, indented, len)) = heredoc_at(syntax.heredocs, &line[at..])
@@ -446,6 +482,103 @@ pub(crate) fn is_ident_char(character: char) -> bool {
     character.is_alphanumeric() || character == '_'
 }
 
+/// The words after which a JavaScript expression begins, so that a `/`
+/// after one is a regular expression's start: `return /a/.test(s)`.
+const BEFORE_REGEX: &[&str] = &[
+    "return",
+    "typeof",
+    "case",
+    "do",
+    "else",
+    "in",
+    "of",
+    "new",
+    "delete",
+    "void",
+    "throw",
+    "instanceof",
+    "yield",
+    "await",
+];
+
+/// Whether a `/` after `before`, the code of its line so far, begins a
+/// regular expression and not a division: at the line's start, after an
+/// operator or an opening bracket, or after a word of [`BEFORE_REGEX`].
+///
+/// Not after `<` or `}`, though a regular expression may follow either: in
+/// JSX, `</div>` closes a tag and `<input value={v} />` closes itself, and
+/// a regular expression read from there to the next `/` of the line would
+/// blank whatever braces are between (`/>{items.map(…)}</ul>`). A regular
+/// expression after either is rare in code; a JSX tag after either is not.
+fn regex_may_start(before: &[u8]) -> bool {
+    let Some(last) = before
+        .iter()
+        .rposition(|byte| !matches!(byte, b' ' | b'\t'))
+    else {
+        return true;
+    };
+    if matches!(
+        before[last],
+        b'(' | b','
+            | b'='
+            | b':'
+            | b'['
+            | b'!'
+            | b'&'
+            | b'|'
+            | b'?'
+            | b'{'
+            | b';'
+            | b'+'
+            | b'-'
+            | b'*'
+            | b'%'
+            | b'>'
+            | b'~'
+            | b'^'
+    ) {
+        return true;
+    }
+    // The word that ends there, looked at no further back than the
+    // longest of the words is long.
+    let word_byte = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$';
+    let longest = BEFORE_REGEX
+        .iter()
+        .map(|word| word.len())
+        .max()
+        .unwrap_or(0);
+    let mut start = last + 1;
+    while start > 0 && last + 1 - start <= longest && word_byte(before[start - 1]) {
+        start -= 1;
+    }
+    if start > 0 && word_byte(before[start - 1]) {
+        return false;
+    }
+    let word = &before[start..=last];
+    BEFORE_REGEX
+        .iter()
+        .any(|candidate| candidate.as_bytes() == word)
+}
+
+/// Where the regular expression whose opening `/` is at `open` closes, on
+/// the same line: a backslash escapes the next byte, and a `/` inside a
+/// class (`[/]`) does not close it.
+fn regex_end(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut at = open + 1;
+    let mut class = false;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\\' => at += 1,
+            b'[' => class = true,
+            b']' => class = false,
+            b'/' if !class => return Some(at),
+            _ => {}
+        }
+        at += 1;
+    }
+    None
+}
+
 /// A Rust raw string's opening (`r"`, `r#"`, `br##"`) at `at`: the number
 /// of `#` and the opening's length.
 fn rust_raw_at(bytes: &[u8], at: usize) -> Option<(usize, usize)> {
@@ -470,8 +603,9 @@ fn rust_raw_at(bytes: &[u8], at: usize) -> Option<(usize, usize)> {
 /// lifetime.
 fn rust_char_len(bytes: &[u8]) -> Option<usize> {
     if bytes.get(1) == Some(&b'\\') {
-        let close = bytes.iter().skip(3).position(|&b| b == b'\'')?;
-        return (close <= 10).then_some(close + 4);
+        // Looked for no further than the longest escape, `\u{10FFFF}`.
+        let close = bytes.iter().skip(3).take(11).position(|&b| b == b'\'')?;
+        return Some(close + 4);
     }
     // One character, of up to four bytes, then the quote.
     (2..=5)
@@ -600,6 +734,56 @@ mod tests {
         let lines = lex(Syntax::RUBY, "=begin\ndef no\n=end\ndef yes");
         assert_eq!(lines[1].trim(), "");
         assert_eq!(lines[3], "def yes");
+        // A shell's here-string is code, not a heredoc from its second `<`.
+        let lines = lex(
+            Syntax::SHELL,
+            "base64 -d <<<SGVsbG8=\nf() {\nSGVsbG8\ng() {",
+        );
+        assert_eq!(lines[0], "base64 -d <<<SGVsbG8=");
+        assert_eq!(lines[1], "f() {");
+    }
+
+    #[test]
+    fn a_regular_expression_is_blanked_as_a_string_and_a_division_is_code() {
+        let cases = [
+            // What a regular expression holds is not a comment, a quote or
+            // a brace; the slashes stay.
+            ("x = /a{'b/g; // c", "x = /    /g;"),
+            (
+                "if (/^https?:\\/\\//.test(u)) {",
+                "if (/            /.test(u)) {",
+            ),
+            (
+                "return p.replace(/\\/*$/, \"\");",
+                "return p.replace(/    /, \"\");",
+            ),
+            ("return /a/.test(s)", "return / /.test(s)"),
+            ("x = typeof /a/", "x = typeof / /"),
+            // A `/` inside a class does not close it.
+            ("x = /[/{]/", "x = /    /"),
+            // At the line's start.
+            ("/a{/.exec(s)", "/  /.exec(s)"),
+            // A division: after a name, a number, a closing bracket, a
+            // string, or a word that is not a keyword.
+            ("a = b / c / d;", "a = b / c / d;"),
+            ("n = (a) / 2 / 1;", "n = (a) / 2 / 1;"),
+            ("x = 'a' / 'b' /", "x = ' ' / ' ' /"),
+            ("x = returned / 2 / 1", "x = returned / 2 / 1"),
+            // One that does not close on its line is a division, and no
+            // later `/` of the line is tried.
+            ("x = /[ (/a/", "x = /[ (/a/"),
+            // JSX: a closing tag and a tag that closes itself.
+            ("<p>{a}</p>{b && <i/>}", "<p>{a}</p>{b && <i/>}"),
+            (
+                "<input value={v} />{list.map(f)}<br/>",
+                "<input value={v} />{list.map(f)}<br/>",
+            ),
+        ];
+        for (line, code) in cases {
+            assert_eq!(lex(Syntax::JS, line)[0].trim_end(), code, "{line}");
+        }
+        // Only JavaScript's lexer knows them.
+        assert_eq!(lex(Syntax::C, "x = /a{/")[0], "x = /a{/");
     }
 
     #[test]
