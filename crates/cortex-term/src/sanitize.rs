@@ -176,7 +176,7 @@ mod tests {
             assert!(KEEP.contains(&c), "{code:#x} is not kept");
         }
         let others: Vec<char> = KEEP.iter().copied().filter(|c| !c.is_control()).collect();
-        assert_eq!(others, ['\u{200d}', '\u{200c}']);
+        assert_eq!(others, ['\u{200c}', '\u{200d}']);
     }
 
     #[test]

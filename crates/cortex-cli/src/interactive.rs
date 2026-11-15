@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn the_folder_is_shown_from_the_home_directory() {
-        let home = Path::new(if cfg!(windows) { "C:\\Users\\u" } else { "/home/u" });
+        let home = Path::new(if cfg!(windows) { "D:\\people\\u" } else { "/srv/people/u" });
         let inside = home.join("src").join("app");
         assert_eq!(shown_folder(&inside, Some(home)), "~/src/app");
         assert_eq!(shown_folder(home, Some(home)), "~");
