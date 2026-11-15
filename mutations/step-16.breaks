@@ -14,7 +14,7 @@ in: Recorder::send
 find: if let Err(TrySendError::Full(_)) = self.queue.try_send(message) {
 replace: if self.queue.send(message).is_err() {
 caught-by:
-    cortex-stats::lib recorder::tests::a_stalled_writer_drops_and_counts_and_never_waits
+    cortex-stats recorder::tests::a_stalled_writer_drops_and_counts_and_never_waits
 
 [break] a-file-read-at-start-up
 rule: Making a recorder reads nothing: the aggregates are read when they are asked for.
@@ -105,7 +105,7 @@ find: let local = time.unix_secs() + i64::from(self.offset_at(time));
 replace: let local = time.unix_secs();
 packages: cortex-base, cortex-stats
 caught-by:
-    cortex-base::lib zone::tests::a_fixed_zone_moves_the_date_at_its_own_midnight
+    cortex-base zone::tests::a_fixed_zone_moves_the_date_at_its_own_midnight
     cortex-stats::it store::an_event_goes_to_its_month_with_the_local_day_it_fell_on
     cortex-stats::it ranges::today_is_the_users_today_not_utcs
 
@@ -117,7 +117,7 @@ find: if in_dst { dst_offset } else { self.std_offset }
 replace: self.std_offset
 packages: cortex-base, cortex-stats
 caught-by:
-    cortex-base::lib zone::tests::a_posix_rule_changes_offset_on_its_days
+    cortex-base zone::tests::a_posix_rule_changes_offset_on_its_days
     cortex-stats::it ranges::today_is_the_users_today_not_utcs
 
 [break] the-refresh-asks-with-the-list-empty
@@ -205,7 +205,7 @@ in: Session::compacting
 find: let fast_failed = !refusal && self.summary_role != ModelRole::Main && !fast_retried;
 replace: let fast_failed = false;
 caught-by:
-    cortex-agent::it context::when_every_summary_fails_the_turn_ends_and_nothing_is_recorded
+    cortex-agent::it roles::a_summary_the_fast_role_fails_at_the_trigger_is_asked_of_the_main_model
 
 [break] one-budget-for-every-role
 rule: Each role has a budget of its own: the `fast` model's refusal marks only its own, and the main model's retry is not cut for it.
@@ -261,7 +261,7 @@ find: self.totals[Spend::Connect.index()] += spent - waited;
 replace: let _ = spent - waited;
 caught-by:
     cortex-agent::it timing::a_retrys_wait_is_its_own_part
-    cortex-agent::lib timing::tests::every_moment_is_in_one_part_and_the_parts_add_up
+    cortex-agent timing::tests::every_moment_is_in_one_part_and_the_parts_add_up
 
 [break] milliseconds-rounded-apart
 rule: The parts' milliseconds add up to the turn's: each is rounded where the parts are laid end to end.
@@ -270,7 +270,7 @@ in: TurnClock::finish
 find: ms[spend.index()] = millis(at) - millis(begin);
 replace: ms[spend.index()] = millis(self.totals[spend.index()]);
 caught-by:
-    cortex-agent::lib timing::tests::milliseconds_add_up_however_the_parts_fall
+    cortex-agent timing::tests::milliseconds_add_up_however_the_parts_fall
 
 [break] the-first-byte-is-the-connection
 rule: The provider's answer ends the connection's part and begins the wait for the first byte.
@@ -289,7 +289,7 @@ find: } else if asking { Spend::Approval
 replace: } else if asking { Spend::Harness
 caught-by:
     cortex-agent::it timing::a_turns_time_is_cut_into_parts_that_add_up_to_its_wall_time
-    cortex-agent::lib timing::tests::every_moment_is_in_one_part_and_the_parts_add_up
+    cortex-agent timing::tests::every_moment_is_in_one_part_and_the_parts_add_up
 
 [break] the-client-never-says-the-provider-answered
 rule: The client says once an attempt when the provider answered, before the response.
