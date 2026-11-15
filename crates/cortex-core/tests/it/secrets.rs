@@ -100,6 +100,7 @@ fn resume(world: &World, core: &Core, session: &cortex_protocol::SessionId) -> F
             state: opened.session,
             seen: std::cell::RefCell::new(Vec::new()),
             answered: std::cell::RefCell::new(Vec::new()),
+            answering: std::cell::RefCell::new(crate::Answering::default()),
         }
     })
 }

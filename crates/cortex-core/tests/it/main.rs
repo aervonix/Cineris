@@ -372,6 +372,36 @@ impl Drop for World {
     }
 }
 
+/// What a [`Front`] does with an approval request that arrives while it
+/// waits for a turn to end and that the test has not taken up with
+/// [`Front::approval`].
+#[derive(Clone, Default)]
+pub enum Answering {
+    /// Fail the test at once, naming the request: a turn that asks what
+    /// the test did not expect would otherwise wait for an answer for ever.
+    #[default]
+    Unexpected,
+    /// Answer each one with what the function chooses.
+    With(std::rc::Rc<dyn Fn(&ApprovalRequest) -> ApprovalChoice>),
+}
+
+impl Answering {
+    /// Allow every call that is asked about, once.
+    pub fn allow_all() -> Self {
+        Self::With(std::rc::Rc::new(|_| ApprovalChoice::AllowOnce))
+    }
+
+    /// Refuse every call that is asked about.
+    pub fn deny_all() -> Self {
+        Self::With(std::rc::Rc::new(|_| ApprovalChoice::Deny))
+    }
+
+    /// Answer with what `choose` says of the request.
+    pub fn with(choose: impl Fn(&ApprovalRequest) -> ApprovalChoice + 'static) -> Self {
+        Self::With(std::rc::Rc::new(choose))
+    }
+}
+
 /// A front end: a client of a core, with a session open.
 pub struct Front {
     pub core: Core,
@@ -382,6 +412,9 @@ pub struct Front {
     pub seen: std::cell::RefCell<Vec<Outgoing>>,
     /// The approval requests it has taken up.
     pub answered: std::cell::RefCell<Vec<RequestId>>,
+    /// What it does with an approval nobody took up while it waits for a
+    /// turn's end ([`Front::turns`]).
+    pub answering: std::cell::RefCell<Answering>,
 }
 
 impl Front {
@@ -423,6 +456,7 @@ impl Front {
             state: result.session,
             seen: std::cell::RefCell::new(Vec::new()),
             answered: std::cell::RefCell::new(Vec::new()),
+            answering: std::cell::RefCell::new(Answering::default()),
         })
     }
 
@@ -449,6 +483,7 @@ impl Front {
             state: result.session,
             seen: std::cell::RefCell::new(Vec::new()),
             answered: std::cell::RefCell::new(Vec::new()),
+            answering: std::cell::RefCell::new(Answering::default()),
         }
     }
 
@@ -507,10 +542,64 @@ impl Front {
         }
     }
 
-    /// Waits until `count` turns have completed.
+    /// Says what to do with an approval nobody takes up while this front
+    /// waits for a turn to end. Without it, such an approval fails the test
+    /// at once.
+    pub fn answering(&self, answering: Answering) {
+        *self.answering.borrow_mut() = answering;
+    }
+
+    /// The first approval request not taken up, if there is one.
+    fn open_approval(&self) -> Option<(RequestId, ApprovalRequest)> {
+        let answered = self.answered.borrow();
+        requests_in(&self.seen.borrow())
+            .into_iter()
+            .find(|(id, _)| !answered.contains(id))
+    }
+
+    /// Waits until `count` turns have completed. An approval that arrives
+    /// meanwhile, and that the test has not taken up, is answered by the
+    /// front's [`Answering`]; with none, and once nothing else is on its
+    /// way, the test fails naming it: a turn waiting for an answer that
+    /// never comes would otherwise hang the test until it is stopped.
     pub async fn turns(&self, count: usize) {
         let _waiting = cortex_testkit::profile::phase("wait for the turn to end");
-        self.until(|seen| ends_in(seen).len() >= count).await;
+        loop {
+            self.until(|seen| ends_in(seen).len() >= count || self.open_approval().is_some())
+                .await;
+            if self.ends().len() >= count {
+                return;
+            }
+            let Some((id, request)) = self.open_approval() else {
+                continue;
+            };
+            let answering = self.answering.borrow().clone();
+            match answering {
+                Answering::With(choose) => {
+                    self.answered.borrow_mut().push(id.clone());
+                    self.answer(&id, choose(&request))
+                        .expect("the approval is answered");
+                }
+                Answering::Unexpected => {
+                    // What is already on its way (the turn's end, an
+                    // interruption's) goes first.
+                    settle().await;
+                    self.drain();
+                    if self.ends().len() >= count {
+                        return;
+                    }
+                    panic!(
+                        "the turn asked for an approval the test did not expect, and would wait \
+                         for its answer for ever: tool `{}`, {:?}. Take it up with \
+                         `front.approval()` and `front.answer(…)`, or say how to answer it with \
+                         `front.answering(Answering::allow_all())` (or `deny_all()`, or \
+                         `with(…)`).",
+                        request.tool,
+                        cortex_testkit::brief(&format!("{request:?}"))
+                    );
+                }
+            }
+        }
     }
 
     /// Sends a prompt and waits for its turn to end.

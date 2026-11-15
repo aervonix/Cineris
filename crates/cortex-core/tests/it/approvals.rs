@@ -824,3 +824,71 @@ fn with_fail_on_denial_a_later_call_waits_for_the_open_question() {
         |options| options.fail_on_denial = true
     ));
 }
+
+/// The rig's own promise: a turn that asks what the test did not expect
+/// fails the test at once, naming what it asked, instead of waiting for an
+/// answer until the test is stopped at its limit.
+#[test]
+fn an_approval_the_test_did_not_expect_fails_it_at_once_naming_the_call() {
+    let world = World::new("unexpected", [protected_write("c1"), says("Done.")]);
+    let core = world.core();
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            front.turn("set up CI").await;
+        });
+    }));
+    let message = failed.expect_err("the turn waited for an answer nobody gives");
+    let message = message
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        message.contains("the turn asked for an approval the test did not expect")
+            && message.contains("tool `write`")
+            && message.contains("front.answering(Answering::allow_all())"),
+        "{message}"
+    );
+    assert_eq!(world.read(PROTECTED), None);
+}
+
+#[test]
+fn a_front_answers_by_its_policy_what_the_test_did_not_take_up() {
+    for (name, answering, written, outcome) in [
+        (
+            "allow_all",
+            crate::Answering::allow_all(),
+            Some("on: push\n"),
+            "success",
+        ),
+        ("deny_all", crate::Answering::deny_all(), None, "denied"),
+    ] {
+        let world = World::new(name, [protected_write("c1"), says("Done.")]);
+        let core = world.core();
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            front.answering(answering);
+            front.turn("set up CI").await;
+            assert_eq!(world.read(PROTECTED).as_deref(), written, "{name}");
+            assert_eq!(front.results()[0].1, outcome, "{name}");
+            assert_eq!(front.answered.borrow().len(), 1, "{name}");
+            front.close().await;
+        });
+    }
+    // A function sees each request, and chooses.
+    let world = World::new("with", [protected_write("c1"), says("Done.")]);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = std::rc::Rc::clone(&asked);
+        front.answering(crate::Answering::with(move |request| {
+            seen.borrow_mut().push(request.call_id.as_str().to_owned());
+            ApprovalChoice::Deny
+        }));
+        front.turn("set up CI").await;
+        assert_eq!(*asked.borrow(), ["c1"]);
+        assert_eq!(front.results()[0].1, "denied");
+        front.close().await;
+    });
+}

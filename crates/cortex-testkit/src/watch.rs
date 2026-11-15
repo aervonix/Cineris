@@ -271,7 +271,7 @@ fn report_text(ran: Duration, limit: Duration, why: &str) -> String {
 }
 
 /// What each thread said it is doing, longest first.
-fn waits() -> String {
+pub(crate) fn waits() -> String {
     let entries = lock();
     let mut lines: Vec<(Duration, String)> = entries
         .iter()
