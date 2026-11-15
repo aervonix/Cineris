@@ -39,6 +39,11 @@ use std::time::{Duration, Instant};
 /// The variable that turns the profile on.
 pub const VARIABLE: &str = "CORTEX_TESTKIT_PROFILE";
 
+/// A directory to write each test's report to as well, a file a test, for
+/// a run whose passing tests' output is not kept (a `try` run on a hosted
+/// runner uploads the directory). Empty or unset: standard error only.
+pub const DIRECTORY: &str = "CORTEX_TESTKIT_PROFILE_DIR";
+
 /// What kind of time a span is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -232,7 +237,31 @@ impl Drop for Report {
         let mut error = std::io::stderr().lock();
         let _ = std::io::Write::write_all(&mut error, text.as_bytes());
         let _ = std::io::Write::flush(&mut error);
+        drop(error);
+        if let Some(directory) = std::env::var_os(DIRECTORY).filter(|value| !value.is_empty()) {
+            let directory = std::path::PathBuf::from(directory);
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the report is written as the test ends, on its own thread"
+            )]
+            {
+                let _ = std::fs::create_dir_all(&directory);
+                let _ = std::fs::write(directory.join(file_name(&self.test)), text.as_bytes());
+            }
+        }
     }
+}
+
+/// The file a test's report is written to: nextest's binary and test
+/// names where it gives them, and the process, so that no two collide.
+fn file_name(test: &str) -> String {
+    let binary = std::env::var("NEXTEST_BINARY_ID").unwrap_or_default();
+    let name = std::env::var("NEXTEST_TEST_NAME").unwrap_or_else(|_| test.to_owned());
+    let plain: String = format!("{binary}__{name}")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .collect();
+    format!("{plain}__{}.txt", std::process::id())
 }
 
 /// What a report is made from.

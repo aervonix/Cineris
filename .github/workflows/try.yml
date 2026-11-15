@@ -11,6 +11,7 @@
 #   gh workflow run try --ref <branch> -f os=linux-22.04 -f command="test -p cortex-sandbox"
 #   gh workflow run try --ref <branch> -f os=linux-22.04 -f command=partial-landlock
 #   gh workflow run try --ref <branch> -f os=linux -f command=ci
+#   gh workflow run try --ref <branch> -f os=windows -f command=test -f testkit=profile
 #   ci-wait --workflow try                    (from the branch, for its head commit)
 #
 # The inputs reach `cargo xtask try` as arguments, through the environment,
@@ -59,6 +60,11 @@ on:
         description: "A ref to compare the branch with, both run in turn on one runner (count rounds). Empty: no comparison."
         required: false
         default: ""
+      testkit:
+        description: "A test-kit switch for the tests: profile (CORTEX_TESTKIT_PROFILE, each test's report kept as a file). none: nothing set."
+        type: choice
+        options: [none, profile]
+        default: none
 
 permissions:
   contents: read
@@ -163,6 +169,9 @@ jobs:
           TRY_CORES: ${{ inputs.cores }}
           TRY_FILTER: ${{ inputs.filter }}
           TRY_AGAINST: ${{ inputs.against }}
+          # The test kit's switches, from a list: each is set or left empty.
+          CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && '1' || '' }}
+          CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && format('{0}/target/testkit-profile', github.workspace) || '' }}
         run: |
           set -o pipefail
           cargo run --locked --quiet --package xtask -- try \
@@ -181,6 +190,8 @@ jobs:
           TRY_CORES: ${{ inputs.cores }}
           TRY_FILTER: ${{ inputs.filter }}
           TRY_AGAINST: ${{ inputs.against }}
+          CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && '1' || '' }}
+          CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && format('{0}\target\testkit-profile', github.workspace) || '' }}
         run: |
           # A line cargo writes to its standard error is not an error here.
           $ErrorActionPreference = 'Continue'
@@ -213,5 +224,6 @@ jobs:
             target/nextest/ci/junit.xml
             target/nextest/stress/junit.xml
             target/ab/*.xml
+            target/testkit-profile/
           if-no-files-found: ignore
           retention-days: 14
