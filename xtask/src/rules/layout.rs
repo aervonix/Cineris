@@ -334,14 +334,20 @@ mod tests {
             "{listed:#?}"
         );
         // A link in fenced code or a comment lists nothing.
-        let hidden = found(&[
-            (
-                "docs/outstanding/README.md",
-                "```text\n- [a-flag](a-flag.md)\n```\n<!-- [a-flag](a-flag.md) -->\n",
-            ),
-            ("docs/outstanding/a-flag.md", ITEM),
-        ]);
-        assert_eq!(hidden.len(), 1, "{hidden:#?}");
+        for index in [
+            "```text\n- [a-flag](a-flag.md)\n```\n",
+            "<!-- [a-flag](a-flag.md) -->\n",
+        ] {
+            let hidden = found(&[
+                ("docs/outstanding/README.md", index),
+                ("docs/outstanding/a-flag.md", ITEM),
+            ]);
+            assert_eq!(hidden.len(), 1, "{index:?}: {hidden:#?}");
+            assert!(
+                hidden[0].contains("is not in the index"),
+                "{index:?}: {hidden:#?}"
+            );
+        }
         // A link to a file of the same name elsewhere does not count.
         let elsewhere = found(&[
             ("docs/outstanding/README.md", "- [a](../steps/a-flag.md)\n"),

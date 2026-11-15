@@ -125,6 +125,9 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### The tooling and CI
 
+- [a-retried-tests-standard-error-in-the-report](a-retried-tests-standard-error-in-the-report.md): `xtask` reads a retried test's standard error from its first attempt, not the last. Owner: a later tooling step.
+- [replace-and-the-comments-beside-a-match](replace-and-the-comments-beside-a-match.md): `replace` stacks a `--to`'s doc comment on the file's, and can leave a read-only file's temporary copy on Windows. Owner: a later tooling step.
+- [tests-the-fifth-tooling-step-left-unwritten](tests-the-fifth-tooling-step-left-unwritten.md): Seven behaviours of the fifth tooling step's tools that work and that no test or break holds yet. Owner: a later tooling step.
 - [running-the-system-tests-after-tiers-one-and-two](running-the-system-tests-after-tiers-one-and-two.md): Running the system tests after tiers 1 and 2, three at a time, cuts Windows tier 2 by a fifth. Owner: the owner.
 
 - [actionlint-in-the-checks](actionlint-in-the-checks.md): The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary. Owner: the owner.
