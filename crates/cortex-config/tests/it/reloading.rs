@@ -133,7 +133,7 @@ fn a_valid_change_is_applied_and_says_when_each_part_takes_effect() {
         &machine,
         LayerKind::User,
         "[model]\nmain = \"second\"\nspeed = \"fast\"\n[retry]\nattempts = 2\n\
-         [session]\ndata_dir = \"~/elsewhere\"\n[tui]\ntheme = \"dusk\"\n",
+         [session]\ndata_dir = \"~/elsewhere\"\n[tui]\ntheme = \"dusk\"\n[rpc]\nsocket = \"x\"\n",
         30,
     );
     let Some(Reload::Applied { previous, changes }) = live.check() else {
@@ -150,9 +150,10 @@ fn a_valid_change_is_applied_and_says_when_each_part_takes_effect() {
             ("model.main".to_owned(), Effect::NextEpoch),
             ("model.speed".to_owned(), Effect::Now),
             ("retry.attempts".to_owned(), Effect::Now),
-            ("session.data_dir".to_owned(), Effect::Restart),
             // A section whose keys are not declared yet: the cautious answer.
-            ("tui.theme".to_owned(), Effect::NextEpoch),
+            ("rpc.socket".to_owned(), Effect::NextEpoch),
+            ("session.data_dir".to_owned(), Effect::Restart),
+            ("tui.theme".to_owned(), Effect::Now),
         ]
     );
     let current = live.current();
@@ -170,7 +171,7 @@ fn a_valid_change_is_applied_and_says_when_each_part_takes_effect() {
     let Some(Reload::Applied { changes, .. }) = live.check() else {
         panic!("expected the change to be applied");
     };
-    assert_eq!(changes.len(), 4);
+    assert_eq!(changes.len(), 5);
     assert_eq!(live.current().settings.retry.attempts, 5);
 }
 

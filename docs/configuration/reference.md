@@ -184,6 +184,42 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | `usage.ranges` | `"calendar"`, `"rolling"` | `"calendar"` | user only | restart | `calendar` weeks and months, or `rolling`: the last 7 and 30 days. |
 | `usage.refresh` | list of text | `[]` | user only | restart | The providers whose documented usage endpoint `cortex usage --refresh` may ask, with that provider's own key: `["openrouter"]`. Empty, nothing is ever asked. Only when the user asks, never on its own. The user's alone: a project's file cannot turn it on. |
 
+## `[tui]`
+
+| Key | Type | Default | From a project | Takes effect | What it is |
+|---|---|---|---|---|---|
+| `tui.prose_width` | whole number, 20 to 1000 | `80` | user only | at once | The widest prose may be, in columns, its indent included. The window's width when that is less. |
+| `tui.tool_detail` | whole number, 1 to 1000 | `12` | user only | at once | The most diff lines a tool's box opens on by itself, and the most rows of detail an open box shows while its round runs. |
+| `tui.tool_output` | `"auto"`, `"always"`, `"never"` | `"auto"` | user only | at once | Which tool detail starts open: `auto` (a failure's output and a diff of up to `tool_detail` lines), `always` or `never`. |
+| `tui.reasoning` | `"summary"`, `"duration"` | `"summary"` | user only | at once | What finished reasoning leaves in the transcript: its `summary`, or only how long it took (`duration`). |
+| `tui.density` | `"comfortable"`, `"compact"` | `"comfortable"` | user only | at once | A blank line between blocks (`comfortable`), or only between turns (`compact`). |
+| `tui.turn_summary` | `true` or `false` | `false` | user only | at once | A dim line after each turn with its time, tokens and cost. |
+| `tui.reduced_motion` | `true` or `false` | `false` | user only | at once | A still mark in place of the spinner. |
+| `tui.glyphs` | `"auto"`, `"unicode"`, `"ascii"` | `"auto"` | user only | at once | The glyph set: `auto` (Unicode where the terminal can show it), `unicode` or `ascii`. `ascii` suits a terminal that draws the box's edges and the marks of East Asian ambiguous width wide. |
+| `tui.theme` | text | `"auto"` | user only | at once | The theme: `auto` (dark or light, from the terminal's background), `dark` or `light`. A name the interface does not know is said, and `auto` is used. |
+
+## `[keys]`
+
+| Key | Type | Default | From a project | Takes effect | What it is |
+|---|---|---|---|---|---|
+| `keys.editor` | table of list of text | not set | user only | at once | The editor's actions: `submit`, `new_line`, `undo`, and the rest. |
+| `keys.menu` | table of list of text | not set | user only | at once | A completion menu's. |
+| `keys.picker` | table of list of text | not set | user only | at once | A picker's. |
+| `keys.toggle` | table of list of text | not set | user only | at once | The `/effort` picker's fast-mode toggle. |
+| `keys.search` | table of list of text | not set | user only | at once | The history search's. |
+| `keys.focus` | table of list of text | not set | user only | at once | A focused tool box's or panel's. |
+| `keys.global` | table of list of text | not set | user only | at once | Those looked up last, whatever has the keyboard: `interrupt`, `redraw`, `suspend`, and the rest. |
+
+## `[terminal]`
+
+| Key | Type | Default | From a project | Takes effect | What it is |
+|---|---|---|---|---|---|
+| `terminal.sync` | `true` or `false` | not set | user only | restart | Synchronized updates: each frame shown at once. |
+| `terminal.keyboard` | `true` or `false` | not set | user only | restart | The enhanced keyboard protocol, which tells `Shift+Enter` from `Enter`. |
+| `terminal.color` | `"none"`, `"16"`, `"256"`, `"truecolor"` | not set | user only | restart | How many colours: `none`, `16`, `256` or `truecolor`. |
+| `terminal.hyperlinks` | `true` or `false` | not set | user only | restart | Links in text. |
+| `terminal.unicode` | `true` or `false` | not set | user only | restart | Unicode, or ASCII only. |
+
 ## Reserved sections
 
 These sections belong to parts of the harness that are not built yet. A file may already hold them: what is in them is kept and not checked. The build step that owns a section declares its keys, and they then move into the tables above. Until then a project's file cannot set anything in a section marked *user only*, and a section marked *runs code* waits for trust.
@@ -196,9 +232,6 @@ These sections belong to parts of the harness that are not built yet. A file may
 | `[tools]` | user only | Enabled tools, output limits and per-tool settings. |
 | `[verify]` | runs code | The verification mode, commands and time limits. |
 | `[runs]` | user only | The run engine: concurrency, workspaces, budgets. |
-| `[tui]` | user only | The terminal UI: presenter, theme, density. |
-| `[keys]` | user only | Key bindings by mode. |
-| `[terminal]` | user only | Terminal capability overrides. |
 | `[rpc]` | user only | The RPC server: socket path, token, client timeouts. |
 | `[hooks]` | runs code | Hooks by name. |
 | `[extensions]` | runs code | Extensions by name. |

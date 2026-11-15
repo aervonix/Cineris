@@ -13,7 +13,8 @@ use cortex_protocol::lease::{NetworkAccess, Rule};
 use cortex_protocol::{Level, ModelRole, Speed};
 
 use super::types::{
-    Headers, Profiles, ReasoningVisibility, Reserved, SessionDurability, StoreChoice, UsageRanges,
+    Bindings, ColorChoice, DensityChoice, GlyphChoice, Headers, Profiles, ReasoningShown,
+    ReasoningVisibility, Reserved, SessionDurability, StoreChoice, ToolOutputChoice, UsageRanges,
     Weekday,
 };
 use super::{CONFIG_VERSION, settings};
@@ -117,15 +118,17 @@ settings! {
         /// The usage view: week start, ranges and the opt-in refresh.
         [nested]
         pub usage: UsageSettings,
-        /// The terminal UI: presenter, theme, density.
-        [reserved UserOnly]
-        pub tui: Reserved,
-        /// Key bindings by mode.
-        [reserved UserOnly]
-        pub keys: Reserved,
-        /// Terminal capability overrides.
-        [reserved UserOnly]
-        pub terminal: Reserved,
+        /// The terminal UI: how the transcript is drawn.
+        [nested]
+        pub tui: TuiSettings,
+        /// The terminal UI's key bindings, by the context an action
+        /// belongs to: `[keys] editor.new_line = ["shift+enter", "ctrl+j"]`.
+        [nested]
+        pub keys: KeySettings,
+        /// What the terminal can do, in place of detecting it. Each is
+        /// detected when it is not set.
+        [nested]
+        pub terminal: TerminalSettings,
         /// The RPC server: socket path, token, client timeouts.
         [reserved UserOnly]
         pub rpc: Reserved,
@@ -674,6 +677,106 @@ settings! {
         /// cannot turn it on.
         [UserOnly, Restart]
         pub refresh: Vec<String>,
+    }
+}
+
+settings! {
+    /// The terminal UI: how the transcript is drawn
+    /// (`docs/architecture/09-tui.md`). Every key is the user's own: a
+    /// repository does not choose how the user's terminal looks.
+    pub struct TuiSettings {
+        /// The widest prose may be, in columns, its indent included. The
+        /// window's width when that is less.
+        [UserOnly, Now, 20..=1000]
+        pub prose_width: u64 = 80,
+        /// The most diff lines a tool's box opens on by itself, and the most
+        /// rows of detail an open box shows while its round runs.
+        [UserOnly, Now, 1..=1000]
+        pub tool_detail: u64 = 12,
+        /// Which tool detail starts open: `auto` (a failure's output and a
+        /// diff of up to `tool_detail` lines), `always` or `never`.
+        [UserOnly, Now]
+        pub tool_output: ToolOutputChoice = ToolOutputChoice::Auto,
+        /// What finished reasoning leaves in the transcript: its `summary`,
+        /// or only how long it took (`duration`).
+        [UserOnly, Now]
+        pub reasoning: ReasoningShown = ReasoningShown::Summary,
+        /// A blank line between blocks (`comfortable`), or only between
+        /// turns (`compact`).
+        [UserOnly, Now]
+        pub density: DensityChoice = DensityChoice::Comfortable,
+        /// A dim line after each turn with its time, tokens and cost.
+        [UserOnly, Now]
+        pub turn_summary: bool = false,
+        /// A still mark in place of the spinner.
+        [UserOnly, Now]
+        pub reduced_motion: bool = false,
+        /// The glyph set: `auto` (Unicode where the terminal can show it),
+        /// `unicode` or `ascii`. `ascii` suits a terminal that draws the
+        /// box's edges and the marks of East Asian ambiguous width wide.
+        [UserOnly, Now]
+        pub glyphs: GlyphChoice = GlyphChoice::Auto,
+        /// The theme: `auto` (dark or light, from the terminal's
+        /// background), `dark` or `light`. A name the interface does not
+        /// know is said, and `auto` is used.
+        [UserOnly, Now]
+        pub theme: String = "auto".to_owned(),
+    }
+}
+
+settings! {
+    /// The terminal UI's key bindings, by the context an action belongs to
+    /// (`docs/architecture/09-tui.md`, "The editor as built"). Each table
+    /// holds action names and the keys bound to them; a list replaces the
+    /// action's defaults and an empty one unbinds it. An entry the
+    /// interface cannot use is said, and the action keeps its defaults.
+    pub struct KeySettings {
+        /// The editor's actions: `submit`, `new_line`, `undo`, and the rest.
+        [UserOnly, Now]
+        pub editor: Bindings,
+        /// A completion menu's.
+        [UserOnly, Now]
+        pub menu: Bindings,
+        /// A picker's.
+        [UserOnly, Now]
+        pub picker: Bindings,
+        /// The `/effort` picker's fast-mode toggle.
+        [UserOnly, Now]
+        pub toggle: Bindings,
+        /// The history search's.
+        [UserOnly, Now]
+        pub search: Bindings,
+        /// A focused tool box's or panel's.
+        [UserOnly, Now]
+        pub focus: Bindings,
+        /// Those looked up last, whatever has the keyboard: `interrupt`,
+        /// `redraw`, `suspend`, and the rest.
+        [UserOnly, Now]
+        pub global: Bindings,
+    }
+}
+
+settings! {
+    /// What the terminal can do, in place of detecting it
+    /// (`docs/architecture/09-tui.md`, "Terminal layer"). A key that is not
+    /// set is detected.
+    pub struct TerminalSettings {
+        /// Synchronized updates: each frame shown at once.
+        [UserOnly, Restart]
+        pub sync: Option<bool>,
+        /// The enhanced keyboard protocol, which tells `Shift+Enter` from
+        /// `Enter`.
+        [UserOnly, Restart]
+        pub keyboard: Option<bool>,
+        /// How many colours: `none`, `16`, `256` or `truecolor`.
+        [UserOnly, Restart]
+        pub color: Option<ColorChoice>,
+        /// Links in text.
+        [UserOnly, Restart]
+        pub hyperlinks: Option<bool>,
+        /// Unicode, or ASCII only.
+        [UserOnly, Restart]
+        pub unicode: Option<bool>,
     }
 }
 

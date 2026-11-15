@@ -75,8 +75,8 @@ model.main = "claude-haiku-5-5"
 theme = "dusk"
 density = "comfortable"
 
-[keys.normal]
-"ctrl+p" = "palette"
+[keys.editor]
+submit = ["ctrl+s"]
 "#;
 
 const PROJECT: &str = r#"[model]

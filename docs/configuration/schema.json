@@ -245,10 +245,95 @@
       "type": "object"
     },
     "keys": {
-      "description": "Key bindings by mode.",
-      "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "additionalProperties": true,
+      "description": "The terminal UI's key bindings, by the context an action belongs to: `[keys] editor.new_line = [\"shift+enter\", \"ctrl+j\"]`.",
+      "properties": {
+        "editor": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "The editor's actions: `submit`, `new_line`, `undo`, and the rest.",
+          "type": "object",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "focus": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "A focused tool box's or panel's.",
+          "type": "object",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "global": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "Those looked up last, whatever has the keyboard: `interrupt`, `redraw`, `suspend`, and the rest.",
+          "type": "object",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "menu": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "A completion menu's.",
+          "type": "object",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "picker": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "A picker's.",
+          "type": "object",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "search": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "The history search's.",
+          "type": "object",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "toggle": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "The `/effort` picker's fast-mode toggle.",
+          "type": "object",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        }
+      },
+      "type": "object"
     },
     "limits": {
       "additionalProperties": false,
@@ -954,10 +1039,46 @@
       "type": "object"
     },
     "terminal": {
-      "description": "Terminal capability overrides.",
-      "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "additionalProperties": true,
+      "description": "What the terminal can do, in place of detecting it. Each is detected when it is not set.",
+      "properties": {
+        "color": {
+          "description": "How many colours: `none`, `16`, `256` or `truecolor`.",
+          "enum": [
+            "none",
+            "16",
+            "256",
+            "truecolor"
+          ],
+          "x-cortex-effect": "restart",
+          "x-cortex-trust": "user only"
+        },
+        "hyperlinks": {
+          "description": "Links in text.",
+          "type": "boolean",
+          "x-cortex-effect": "restart",
+          "x-cortex-trust": "user only"
+        },
+        "keyboard": {
+          "description": "The enhanced keyboard protocol, which tells `Shift+Enter` from `Enter`.",
+          "type": "boolean",
+          "x-cortex-effect": "restart",
+          "x-cortex-trust": "user only"
+        },
+        "sync": {
+          "description": "Synchronized updates: each frame shown at once.",
+          "type": "boolean",
+          "x-cortex-effect": "restart",
+          "x-cortex-trust": "user only"
+        },
+        "unicode": {
+          "description": "Unicode, or ASCII only.",
+          "type": "boolean",
+          "x-cortex-effect": "restart",
+          "x-cortex-trust": "user only"
+        }
+      },
+      "type": "object"
     },
     "tools": {
       "description": "Enabled tools, output limits and per-tool settings.",
@@ -966,10 +1087,92 @@
       "x-cortex-trust": "user only"
     },
     "tui": {
-      "description": "The terminal UI: presenter, theme, density.",
-      "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "additionalProperties": true,
+      "description": "The terminal UI: how the transcript is drawn.",
+      "properties": {
+        "density": {
+          "default": "comfortable",
+          "description": "A blank line between blocks (`comfortable`), or only between turns (`compact`).",
+          "enum": [
+            "comfortable",
+            "compact"
+          ],
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "glyphs": {
+          "default": "auto",
+          "description": "The glyph set: `auto` (Unicode where the terminal can show it), `unicode` or `ascii`. `ascii` suits a terminal that draws the box's edges and the marks of East Asian ambiguous width wide.",
+          "enum": [
+            "auto",
+            "unicode",
+            "ascii"
+          ],
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "prose_width": {
+          "default": 80,
+          "description": "The widest prose may be, in columns, its indent included. The window's width when that is less.",
+          "maximum": 1000,
+          "minimum": 20,
+          "type": "integer",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "reasoning": {
+          "default": "summary",
+          "description": "What finished reasoning leaves in the transcript: its `summary`, or only how long it took (`duration`).",
+          "enum": [
+            "summary",
+            "duration"
+          ],
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "reduced_motion": {
+          "default": false,
+          "description": "A still mark in place of the spinner.",
+          "type": "boolean",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "theme": {
+          "default": "auto",
+          "description": "The theme: `auto` (dark or light, from the terminal's background), `dark` or `light`. A name the interface does not know is said, and `auto` is used.",
+          "type": "string",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "tool_detail": {
+          "default": 12,
+          "description": "The most diff lines a tool's box opens on by itself, and the most rows of detail an open box shows while its round runs.",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "tool_output": {
+          "default": "auto",
+          "description": "Which tool detail starts open: `auto` (a failure's output and a diff of up to `tool_detail` lines), `always` or `never`.",
+          "enum": [
+            "auto",
+            "always",
+            "never"
+          ],
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "turn_summary": {
+          "default": false,
+          "description": "A dim line after each turn with its time, tokens and cost.",
+          "type": "boolean",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        }
+      },
+      "type": "object"
     },
     "usage": {
       "additionalProperties": true,
