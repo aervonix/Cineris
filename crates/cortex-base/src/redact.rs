@@ -502,6 +502,18 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
+/// Whether a provider's code may be kept, shown or logged: a plain one
+/// (`cortex_protocol::error::code::is_plain`: lower-case letters, digits,
+/// `_`, `.` and `-`, at most 64), in which the filter finds no credential
+/// of a known format. A code is the text of a provider's answer, and an
+/// endpoint that echoes a key there (`sk-…` is plain in its shape) must not
+/// have it kept (the review of step 16's fixes). The refresh's errors and
+/// the statistics both hold codes to this one rule.
+#[must_use]
+pub fn is_plain_code(code: &str) -> bool {
+    cortex_protocol::error::code::is_plain(code) && !SecretFilter::new().finds(code)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -799,5 +811,18 @@ mod tests {
             mib / elapsed.as_secs_f64(),
             elapsed.as_nanos() as f64 / lines as f64,
         );
+    }
+}
+
+#[cfg(test)]
+mod plain_code_tests {
+    use super::is_plain_code;
+
+    #[test]
+    fn a_code_in_the_shape_of_a_key_is_not_plain() {
+        assert!(is_plain_code("rate_limit_exceeded"));
+        assert!(is_plain_code("invalid_api_key"));
+        assert!(!is_plain_code("sk-0123456789abcdef0123456789abcdef"));
+        assert!(!is_plain_code("Refused: key sk-live"));
     }
 }

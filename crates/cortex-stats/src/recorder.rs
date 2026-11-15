@@ -42,6 +42,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use cortex_base::redact::is_plain_code;
 use cortex_base::{IdGenerator, SharedClock, SystemRng, UtcTime, Zone};
 use cortex_protocol::error::code;
 use cortex_protocol::usage::ProviderLimits;
@@ -538,18 +539,18 @@ pub(crate) fn keep_plain(record: &mut Record) {
     match record {
         Record::Request(request) => {
             if let Some(error) = &mut request.error {
-                let plain = code::is_plain(error);
+                let plain = is_plain_code(error);
                 plain_or_other(error, plain);
             }
-            let plain = code::is_plain(&request.stop)
+            let plain = is_plain_code(&request.stop)
                 || request
                     .stop
                     .split_once(':')
-                    .is_some_and(|(provider, own)| code::is_plain(provider) && code::is_plain(own));
+                    .is_some_and(|(provider, own)| is_plain_code(provider) && is_plain_code(own));
             plain_or_other(&mut request.stop, plain);
         }
         Record::Tool(tool) if tool.outcome == crate::ToolOutcome::UnknownTool => {
-            let plain = code::is_plain(&tool.tool);
+            let plain = is_plain_code(&tool.tool);
             plain_or_other(&mut tool.tool, plain);
         }
         _ => {}
@@ -574,13 +575,17 @@ fn settle(writer: &Writer, state: &mut State) {
                 );
                 state.told = Some(found);
             }
-            // Aggregates that may not be saved neither prune nor save.
-            if let Ok(true) = aggregates.sync(
-                dir,
-                zone.date_of(now),
-                &month_of(now),
-                Some(writer.options.retention),
-            ) && aggregates.found().may_save()
+            // Aggregates that may not be saved are not brought up to date
+            // at all: they would read every monthly file from its start
+            // each time, to throw what they read away (found by the review
+            // of step 16's fixes).
+            if aggregates.found().may_save()
+                && let Ok(true) = aggregates.sync(
+                    dir,
+                    zone.date_of(now),
+                    &month_of(now),
+                    Some(writer.options.retention),
+                )
             {
                 let _ = aggregates.save(dir, writer.clock.as_ref());
             }

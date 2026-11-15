@@ -187,3 +187,31 @@ fn rows_group_by_what_was_asked_and_time_goes_with_them() {
     assert!(report.rows.iter().all(|row| row.time.is_none()));
     assert_eq!(report.totals.requests, 2);
 }
+
+/// A report adds the day buckets of its range with the aggregates' own
+/// sums, which saturate: a provider's huge count stops at the most a
+/// figure holds (the review of step 16's fixes found the report's own
+/// copies of the sums, which overflowed).
+#[test]
+fn a_reports_sums_stop_at_the_most_a_figure_holds() {
+    let mut part = Part::default();
+    for day in ["2026-11-14", "2026-11-15"] {
+        let mut record = request(&format!("{day}T12:00:00Z"), "p", "opus", u64::MAX - 1);
+        if let cortex_stats::Record::Request(request) = &mut record {
+            request.tokens.input = u64::MAX - 1;
+        }
+        part.add_line(&Line {
+            day: day.to_owned(),
+            record,
+        });
+    }
+    let week = report(
+        &part,
+        &query(UsageRange::Week),
+        &Zone::utc(),
+        time("2026-11-15T13:00:00Z"),
+        &[],
+        true,
+    );
+    assert_eq!(week.totals.tokens.input, u64::MAX);
+}

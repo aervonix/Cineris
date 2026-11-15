@@ -8,8 +8,8 @@ use cortex_protocol::session::SessionSettings;
 
 use crate::{Front, World, says};
 
-/// A request line of the world's day, as a build before the writer was
-/// recorded writes one: it has no `writer`, so it is another process's.
+/// A request line of the world's day, as a build before the purse's mark
+/// writes one: it has no `charged_to`, so it is another process's.
 const OLD_BUILDS_LINE: &str = r#"{"day":"2026-11-13","kind":"request","at":"2026-11-13T09:00:00Z","session":"s_old","turn":"t_1","provider":"anthropic","model":"opus","role":"main","variants":{"edit_format":"replace","tool_schema":"strict","prompt_style":"concise"},"tokens":{"input":10,"output":5},"billing":"metered","stop":"end"}"#;
 
 fn stats_dir(world: &World) -> std::path::PathBuf {

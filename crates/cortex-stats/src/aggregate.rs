@@ -73,7 +73,7 @@ pub struct UsageSum {
 }
 
 impl UsageSum {
-    fn add(&mut self, other: &Self) {
+    pub(crate) fn add(&mut self, other: &Self) {
         self.requests = self.requests.saturating_add(other.requests);
         self.input = self.input.saturating_add(other.input);
         self.cache_read = self.cache_read.saturating_add(other.cache_read);
@@ -136,7 +136,7 @@ pub struct OutcomeKey {
     pub tool: String,
 }
 
-fn add_time(into: &mut TimeTotals, other: &TimeTotals) {
+pub(crate) fn add_time(into: &mut TimeTotals, other: &TimeTotals) {
     into.turns = into.turns.saturating_add(other.turns);
     into.wall_ms = into.wall_ms.saturating_add(other.wall_ms);
     add_model_time(&mut into.model, &other.model);

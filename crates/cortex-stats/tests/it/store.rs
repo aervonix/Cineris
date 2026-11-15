@@ -575,6 +575,11 @@ fn a_providers_own_words_are_kept_only_when_plain() {
             "key sk-live-0123456789 refused",
             "openai:stopped for key sk-live-0123456789",
         ),
+        // Plain in its shape, and a key all the same.
+        (
+            "sk-live0123456789abcdef0123456789",
+            "openai:sk-live0123456789abcdef0123",
+        ),
     ] {
         let mut record = request(at, "p", "opus", 1);
         if let cortex_stats::Record::Request(request) = &mut record {
@@ -693,4 +698,27 @@ fn a_blank_line_is_not_counted_as_unreadable() {
     let total = aggregates.total();
     assert_eq!(total.unreadable, 0);
     assert_eq!(total.usage.values().map(|sum| sum.requests).sum::<u64>(), 1);
+}
+
+/// Beside a newer build's aggregates file the writer does not bring
+/// aggregates it may not save up to date: it would read every monthly file
+/// from its start every few seconds, and throw it away (found by the review
+/// of step 16's fixes).
+#[test]
+fn beside_a_newer_file_the_writer_reads_no_monthly_file() {
+    let scratch = scratch("beside_a_newer_file");
+    let dir = StatsDir::new(scratch.join("stats"));
+    std::fs::create_dir_all(dir.root()).unwrap();
+    std::fs::write(dir.aggregates_file(), br#"{"version":2}"#).unwrap();
+    let recorder = recorder(&dir, Zone::utc(), clock("2026-11-15T10:00:00Z"), 12);
+    recorder.record(request("2026-11-15T10:00:00Z", "p", "opus", 1));
+    recorder.flush();
+    let before = reads(&dir);
+    recorder.record(request("2026-11-15T10:01:00Z", "p", "opus", 1));
+    recorder.flush();
+    assert_eq!(
+        reads(&dir) - before,
+        1,
+        "the aggregates file alone is read, to see it is still a newer build's"
+    );
 }

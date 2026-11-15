@@ -333,7 +333,7 @@ caught-by:
 rule: Nothing of a failed refresh's answer reaches its error: a code that is not a plain one is not shown.
 file: crates/cortex-core/src/usage.rs
 in: refresh_one
-find: if !cortex_protocol::error::code::is_plain(&data.code) {
+find: if !cortex_base::redact::is_plain_code(&data.code) {
 replace: if false {
 caught-by:
     cortex-core::it usage::a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer

@@ -568,21 +568,35 @@ fn a_range_this_build_does_not_know_is_refused() {
     assert!(refused.message.contains("fortnight"), "{}", refused.message);
 }
 
-/// The end of a process waits for a writer stuck on its disk at most two
-/// seconds (a FIFO with nobody at its other end stands in for the disk),
-/// where it waited for as long as the writer was stuck (found by the
-/// independent review of step 16).
-#[cfg(target_os = "linux")]
+/// The end of a process waits for a writer that is stuck at most two
+/// seconds, where it waited for as long as the writer was stuck (found by
+/// the independent review of step 16). The writer is held for real: another
+/// process (the test) holds the limits file's lock and does not let it go,
+/// so the writer, which keeps the latest limits a response reported, waits
+/// in the lock with the end's flush waiting on it.
 #[test]
 fn a_stuck_statistics_writer_holds_the_end_at_most_two_seconds() {
-    let world = World::new("stuck_writer", [says("One.")]);
-    let dir = world.dirs().state.unwrap().join("stats");
-    std::fs::create_dir_all(&dir).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(dir.join("events-2026-11.jsonl"))
-        .status()
-        .unwrap();
-    assert!(made.success());
+    let window = cortex_protocol::usage::LimitWindow {
+        measure: cortex_protocol::usage::LimitMeasure::Requests,
+        speed: None,
+        limit: Some(100),
+        remaining: Some(99),
+        resets_at: None,
+    };
+    let response = cortex_testkit::Response::new()
+        .event(cortex_llm::ModelEvent::Limits(vec![window]))
+        .text("One.")
+        .end(cortex_protocol::StopReason::End);
+    let world = World::new("stuck_writer", [response]);
+    let limits = world
+        .dirs()
+        .state
+        .unwrap()
+        .join("stats")
+        .join("limits.json");
+    let held = cortex_base::private::hold_lock(&limits)
+        .unwrap()
+        .expect("this file system locks");
     let core = world.core_with(|options| options.zone = Some(cortex_base::Zone::utc()));
     world.run(async {
         let front = Front::start(&world, &core).await;
@@ -598,6 +612,12 @@ fn a_stuck_statistics_writer_holds_the_end_at_most_two_seconds() {
         .await;
     });
     assert!(world.timer.sleeps().contains(&Duration::from_secs(2)));
+    assert!(
+        !limits.exists(),
+        "the writer was not stuck: it wrote the limits under another's lock"
+    );
+    // Let the writer go, so that its thread can end with the process.
+    drop(held);
 }
 
 /// A newer build's aggregates are not reported as if they were the

@@ -479,7 +479,7 @@ async fn refresh_one(
             // nothing else of the answer reaches the user, a client or a
             // log (found by the early review of the refresh).
             let mut data = failure.to_error_data_at(now);
-            if !cortex_protocol::error::code::is_plain(&data.code) {
+            if !cortex_base::redact::is_plain_code(&data.code) {
                 data.code = "refresh_refused".to_owned();
             }
             data.request_id = None;
