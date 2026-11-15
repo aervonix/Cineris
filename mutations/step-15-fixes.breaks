@@ -18,7 +18,7 @@ find: self.budget_for_mut(&summarized.role) .overflowed(summarized.bytes, summar
 replace:
 caught-by:
     cortex-agent::it summaries::a_second_refusal_ends_the_turn_and_the_next_turns_summary_is_cut
-    cortex-agent::it summaries::a_background_summary_refused_as_too_long_teaches_the_budget
+    cortex-agent::it summaries::a_background_summary_refused_as_too_long_teaches_the_fast_roles_budget_alone
     cortex-agent::it summaries::a_summary_request_refused_as_too_long_is_cut_and_tried_again
 
 [break] summary-refusal-teaches-a-wrong-ratio
