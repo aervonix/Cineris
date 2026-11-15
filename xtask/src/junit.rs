@@ -54,6 +54,54 @@ pub(crate) fn read(report: &Path) -> Result<Vec<TestCase>> {
     Ok(cases)
 }
 
+/// One report of two runs' reports, as if one run had written both: the
+/// second's suites after the first's, under the first's root, whose counts
+/// and time are summed. The blocking test job runs tiers 1 and 2 and then
+/// the system tests (`checks::ci_runs`), and what reads its report reads
+/// one.
+pub(crate) fn merge(first: &str, second: &str) -> Result<String> {
+    let (open, first_body) = root(first)?;
+    let (second_open, second_body) = root(second)?;
+    let mut open = open.to_owned();
+    for name in ["tests", "skipped", "failures", "errors"] {
+        let count = |tag: &str| attribute(tag, name).and_then(|value| value.parse::<u64>().ok());
+        if let (Some(one), Some(other)) = (count(&open), count(second_open)) {
+            open = with_attribute(&open, name, &(one + other).to_string());
+        }
+    }
+    let time = |tag: &str| attribute(tag, "time").and_then(|value| value.parse::<f64>().ok());
+    if let (Some(one), Some(other)) = (time(&open), time(second_open)) {
+        open = with_attribute(&open, "time", &format!("{:.3}", one + other));
+    }
+    Ok(format!("{open}{first_body}{second_body}</testsuites>\n"))
+}
+
+/// A report up to the end of its `<testsuites …>` tag, and what lies
+/// between that tag and `</testsuites>`.
+fn root(xml: &str) -> Result<(&str, &str)> {
+    let refused = || "a JUnit report without its <testsuites> element".to_owned();
+    let start = xml.find("<testsuites").ok_or_else(refused)?;
+    let open_end = start + xml[start..].find('>').ok_or_else(refused)? + 1;
+    let close = xml.rfind("</testsuites>").ok_or_else(refused)?;
+    if close < open_end {
+        return Err(refused());
+    }
+    Ok((&xml[..open_end], &xml[open_end..close]))
+}
+
+/// `tag` with the value of its attribute `name` replaced by `value`, which
+/// needs no escape (a number).
+fn with_attribute(tag: &str, name: &str, value: &str) -> String {
+    let Some(old) = attribute(tag, name) else {
+        return tag.to_owned();
+    };
+    tag.replacen(
+        &format!(" {name}=\"{old}\""),
+        &format!(" {name}=\"{value}\""),
+        1,
+    )
+}
+
 /// Reads the `<testcase>` elements of a report.
 pub(crate) fn parse(xml: &str) -> Vec<TestCase> {
     let mut cases = Vec::new();
@@ -472,5 +520,41 @@ lost the race</stackTrace><system-out>running 1 test</system-out><system-err>noi
         let report = r#"<testsuite name="a"><testcase name="tests::a&amp;lt;b" classname="a" time="1"/></testsuite>"#;
 
         assert_eq!(parse(report)[0].name, "tests::a&lt;b");
+    }
+
+    #[test]
+    fn two_runs_reports_merge_into_one_with_every_case_and_the_counts_summed() {
+        let second = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="1" failures="1" errors="0" time="2.5">
+    <testsuite name="cortex-tui::it" tests="1" disabled="0" errors="0" failures="1">
+        <testcase name="children::sys_the_shell_restores" classname="cortex-tui::it" time="2.5">
+            <failure type="test timeout"/>
+        </testcase>
+    </testsuite>
+</testsuites>
+"#;
+        let merged = super::merge(REPORT, second).unwrap();
+
+        let mut expected = parse(REPORT);
+        expected.extend(parse(second));
+        assert_eq!(parse(&merged), expected);
+        assert_eq!(
+            super::failures(&merged).len(),
+            super::failures(REPORT).len() + 1
+        );
+        let open = merged.lines().nth(1).unwrap();
+        assert_eq!(
+            open,
+            r#"<testsuites name="nextest-run" tests="8" failures="3" errors="0" time="3.400">"#
+        );
+        assert!(merged.starts_with(r#"<?xml version="1.0""#));
+        assert_eq!(merged.matches("<testsuites").count(), 1);
+        assert!(merged.trim_end().ends_with("</testsuites>"));
+    }
+
+    #[test]
+    fn a_report_without_its_root_is_not_merged() {
+        assert!(super::merge(REPORT, "<testsuite name=\"a\"></testsuite>").is_err());
+        assert!(super::merge("", REPORT).is_err());
     }
 }

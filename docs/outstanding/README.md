@@ -17,10 +17,13 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 - [a-background-summary-past-its-turn-cannot-be-interrupted](a-background-summary-past-its-turn-cannot-be-interrupted.md): `interrupt` on an idle session does not stop a background summary request, which runs on and goes uncounted. Owner: step 23 or step 27.
 - [a-decision-made-before-an-earlier-call-ran](a-decision-made-before-an-earlier-call-ran.md): Policy decides a call when planned, so a later call can pass through a link made earlier. Owner: a small step of its own, agreed with the owner.
+- [a-fast-roles-refusal-cuts-the-main-models-summary](a-fast-roles-refusal-cuts-the-main-models-summary.md): A summary the `fast` role's model refused is retried on the main model cut to half its limit, since every role shares the main model's budget. Owner: step 16.
 - [a-masked-instruction-notice-is-told-again](a-masked-instruction-notice-is-told-again.md): A masked instruction-file notice hashes differently on reload, so the file is announced as changed after every resume. Owner: a later step on instruction files, or step 32.
 - [a-prompt-past-the-trigger-on-a-small-window](a-prompt-past-the-trigger-on-a-small-window.md): On a small-window model the first estimate exceeds `context.compact_at`, so every turn ends `compaction_failed` unsent. Owner: a later step on local models, or step 33.
+- [a-reasoning-budget-request-past-the-window-on-older-models](a-reasoning-budget-request-past-the-window-on-older-models.md): A main request with a reasoning budget can pass the window with its `max_tokens` on Anthropic's models before Claude 4.5, failing every turn alike. Owner: the step that adds a budget model to the catalog.
+- [a-summary-cut-off-at-the-output-limit](a-summary-cut-off-at-the-output-limit.md): A summary cut off at the output limit is marked only in its text, not in the log's `summary` entry. Owner: a later step on compaction, with the owner for the format.
 - [a-summary-stopped-or-left-is-not-counted](a-summary-stopped-or-left-is-not-counted.md): Usage of a summary request stopped mid-run, or finishing after its session closed, is in no usage record. Owner: step 16.
-- [automatic-compaction-off-and-the-overflow-fallback](automatic-compaction-off-and-the-overflow-fallback.md): With `context.auto_compact = false`, the overflow fallback still compacts once instead of ending the turn `compaction_needed`. Owner: the owner, then a later step; before step 23.
+- [an-instruction-file-left-out-for-the-cap](an-instruction-file-left-out-for-the-cap.md): An instruction file left out of the prompt for `context.instructions_cap` is still listed in the epoch as given. Owner: a later step on instruction files, with the owner for the format.
 - [session-compact-after-a-turns-last-request](session-compact-after-a-turns-last-request.md): `session/compact` during a turn's last request waits for the next turn instead of running a compaction-only turn. Owner: step 23 or step 27.
 - [spans-in-the-agent-loop](spans-in-the-agent-loop.md): The `turn`, `request` and `tool` tracing spans are not opened, since `cortex-agent` does not link `tracing`. Owner: step 16, or step 33 at the latest.
 - [stopping-at-a-task-lease-edge](stopping-at-a-task-lease-edge.md): At a task lease's edge the loop should stop and report, then fall back to the standing lease. Owner: step 37.
@@ -55,6 +58,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [log-level-from-configuration-in-headless-mode](log-level-from-configuration-in-headless-mode.md): A headless run starts the log before configuration is read, so `log.level` is ignored. Owner: step 23 or step 27.
 - [secret-filter-on-what-clients-are-sent](secret-filter-on-what-clients-are-sent.md): Events, approval requests and in-progress items sent to clients skip the secret filter applied to disk writes. Owner: the owner; before step 27.
 - [shutdown-and-a-session-being-put-together](shutdown-and-a-session-being-put-together.md): `Core::shutdown` returns before a session still being put together has ended itself. Owner: step 27.
+- [the-shell-version-after-a-shell-update](the-shell-version-after-a-shell-update.md): The first session after a shell is installed or updated has no shell version in its prompt, so the next resume is a `resume` epoch. Owner: step 33.
 
 ### cortex-llm
 
@@ -118,6 +122,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [highlighted-code-drawn-again](highlighted-code-drawn-again.md): `Markdown::render` draws code plain when a finished answer is redrawn at another width. Owner: step 25.
 - [highlighting-the-line-in-progress](highlighting-the-line-in-progress.md): The streaming code line is drawn plain until it commits; colouring it a frame behind is the alternative. Owner: the owner, then step 23; before step 25.
 - [signals-and-a-graceful-shutdown](signals-and-a-graceful-shutdown.md): Terminal signal handlers end the process without flushing the session log, and writes after an emergency restore fail. Owner: step 23.
+- [the-bincode-advisory-ignored-for-syntect](the-bincode-advisory-ignored-for-syntect.md): `deny.toml` ignores RUSTSEC-2025-0141, `bincode` unmaintained, reached only through `syntect`'s loading of its packed grammars; drop it when `syntect` moves off `bincode` or a flaw is named. Owner: the next step that touches highlighting, otherwise step 25.
 - [the-default-editor-on-windows-11](the-default-editor-on-windows-11.md): Windows 11's tabbed Notepad may exit at once, so `Ctrl+G` removes the prompt's folder while it is open. Owner: the owner, by hand, after step 23.
 - [the-input-box-while-a-turn-runs](the-input-box-while-a-turn-runs.md): `view::input` has one placeholder; the reference screens need two more states, a turn running and a focused panel. Owner: step 23; before step 25.
 
@@ -128,14 +133,12 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### The tooling and CI
 
 - [a-retried-tests-standard-error-in-the-report](a-retried-tests-standard-error-in-the-report.md): `xtask` reads a retried test's standard error from its first attempt, not the last. Owner: a later tooling step.
-- [replace-and-the-comments-beside-a-match](replace-and-the-comments-beside-a-match.md): `replace` stacks a `--to`'s doc comment on the file's, and can leave a read-only file's temporary copy on Windows. Owner: a later tooling step.
-- [tests-the-fifth-tooling-step-left-unwritten](tests-the-fifth-tooling-step-left-unwritten.md): Seven behaviours of the fifth tooling step's tools that work and that no test or break holds yet. Owner: a later tooling step.
-- [running-the-system-tests-after-tiers-one-and-two](running-the-system-tests-after-tiers-one-and-two.md): Running the system tests after tiers 1 and 2, three at a time, cuts Windows tier 2 by a fifth. Owner: the owner.
-
 - [actionlint-in-the-checks](actionlint-in-the-checks.md): The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary. Owner: the owner.
 - [an-ab-run-ends-at-a-failing-test](an-ab-run-ends-at-a-failing-test.md): `cargo xtask ab` stops at the first round with a failing test and loses the rounds already measured. Owner: a later tooling step.
 - [cortex-llm-optimised-in-the-ci-build](cortex-llm-optimised-in-the-ci-build.md): Whether to build `cortex-llm` at `opt-level = 1` in the `ci` profile to speed its integration tests. Owner: the owner.
 - [perf-in-the-main-workflow](perf-in-the-main-workflow.md): `cargo xtask perf` is not yet run in the `main` workflow on both systems with stored baselines. Owner: a tooling step, or step 33.
+- [replace-and-the-comments-beside-a-match](replace-and-the-comments-beside-a-match.md): `replace` stacks a `--to`'s doc comment on the file's, and can leave a read-only file's temporary copy on Windows. Owner: a later tooling step.
+- [tests-the-fifth-tooling-step-left-unwritten](tests-the-fifth-tooling-step-left-unwritten.md): Seven behaviours of the fifth tooling step's tools that work and that no test or break holds yet. Owner: a later tooling step.
 - [the-start-cost-of-a-tier-report](the-start-cost-of-a-tier-report.md): The tier report's start-cost subtraction hides a cost shared by all test processes, with no warning. Owner: a later tooling step.
 - [timeout-report-for-tests-without-the-test-kit](timeout-report-for-tests-without-the-test-kit.md): A test using none of the test kit's waits gets no timeout report, since nextest lacks pre-timeout scripts. Owner: a later tooling step.
 - [typed-values-in-composite-actions](typed-values-in-composite-actions.md): The repo rule against event values in scripts reads `.github/workflows/` only, not composite actions under `.github/actions/`. Owner: a later tooling step.

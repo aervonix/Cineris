@@ -7,7 +7,9 @@
 #
 #   cargo xtask test                  everything (the default profile)
 #   cargo xtask test --profile fast   tiers 1 and 2
-#   cargo xtask test --profile ci     what the blocking CI jobs run
+#   cargo xtask test --profile ci     the blocking CI job's settings, in one
+#                                     run; `cargo xtask ci test` runs tiers 1
+#                                     and 2 and then tier 3, as the job does
 #   cargo xtask test --profile properties
 #                                     tiers 1 and 2 for the nightly run with
 #                                     scaled property counts
@@ -16,8 +18,14 @@ nextest-version = "0.9.100"
 
 # Process and pseudo-terminal tests, two at a time, so they do not starve each
 # other on a 4-core runner.
+#
+# `system` is the blocking test job's: it runs tiers 1 and 2 first and then
+# the system tests alone (`cargo xtask ci test`), where three at a time is the
+# fastest a 4-core runner went (docs/testing-and-ci.md, "The tiers"). `xtask`
+# reads that a tree's job is two runs from this line: keep its start as it is.
 [test-groups]
 process = { max-threads = 2 }
+system = { max-threads = 3 }
 
 # The limits on one test come from the tier budgets in docs/testing-and-ci.md
 # and hold in every profile. After a CI run, `cargo xtask ci test` also checks
@@ -67,6 +75,13 @@ failure-output = "immediate-final"
 
 [profile.ci.junit]
 path = "junit.xml"
+
+# The system tests in the job's own group. Their limits are the default
+# profile's above: nextest takes each setting from the first override that
+# sets it, the profile's own first.
+[[profile.ci.overrides]]
+filter = 'test(/(^|::)sys_/)'
+test-group = 'system'
 
 # `cargo xtask mutate` and `cargo xtask stress` read which tests failed from
 # the JUnit report, so each has a profile that writes one, runs every test

@@ -1165,6 +1165,7 @@ async fn reopened(core: &cortex_core::Core, session: &cortex_protocol::SessionId
         state: opened.session,
         seen: std::cell::RefCell::default(),
         answered: std::cell::RefCell::default(),
+        answering: std::cell::RefCell::default(),
     }
 }
 
