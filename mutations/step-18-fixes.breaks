@@ -114,7 +114,7 @@ replace: .is_err() && false
 caught-by:
     cortex-base visible::tests::a_character_is_a_format_character_exactly_when_unicode_says
     cortex-base visible::tests::tag_characters_are_written_as_escapes
-    cortex-tools::it outline::tag_characters_and_line_breaks_are_escapes_in_names_and_outline_lines
+    cortex-tools::it outline::tag_characters_are_escapes_in_names_and_outline_lines
 
 [break] the-tag-block-is-left-out-of-the-table
 rule: The table of format characters is Unicode's, the tag characters included.
@@ -150,7 +150,7 @@ in: outline_directory
 find: let line = format!("  {}", limits.clip(&visible(line)));
 replace: let line = format!("  {}", limits.clip(line));
 caught-by:
-    cortex-tools::it outline::tag_characters_and_line_breaks_are_escapes_in_names_and_outline_lines
+    cortex-tools::it outline::tag_characters_are_escapes_in_names_and_outline_lines
 
 [break] a-listed-path-is-raw
 rule: list, search and outline show a listed path with every character that would act unseen as an escape.

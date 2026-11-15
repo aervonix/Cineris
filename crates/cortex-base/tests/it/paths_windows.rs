@@ -192,7 +192,7 @@ fn names_that_windows_would_read_as_another_file_are_refused() {
         "TOKEN=1",
         "Windows drops the trailing dot"
     );
-    let stream = format!("{}::$DATA", secret.data());
+    let stream = format!("{}::$DATA", secret.display());
     assert_eq!(
         fs::read_to_string(&stream).unwrap(),
         "TOKEN=1",
@@ -231,7 +231,7 @@ fn names_that_windows_would_read_as_another_file_are_refused() {
     }
     // The absolute spellings are refused the same way.
     for suffix in [".", " ", "::$DATA", ":s"] {
-        let written = format!("{}{suffix}", secret.data());
+        let written = format!("{}{suffix}", secret.display());
         assert!(resolver.resolve(&written).is_err(), "{written:?}");
     }
     assert_eq!(scratch.listing("ws"), ["secret.env"]);
