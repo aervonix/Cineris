@@ -24,6 +24,7 @@ mod combine;
 mod compare;
 mod decide;
 mod junit;
+mod like_runner;
 mod load;
 mod mutate;
 mod nonblocking;

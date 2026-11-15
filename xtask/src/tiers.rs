@@ -26,7 +26,7 @@ use crate::workspace;
 const SLOWEST_IN_CI: usize = 5;
 
 /// A test tier that blocks pull requests.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Tier {
     Unit,
     Integration,
