@@ -105,25 +105,23 @@ caught-by:
 # -------------------------------------------------------- findings 3 to 5
 
 [break] a-format-character-acts-seen
-rule: Every format character (Unicode's Cf), the tag characters among them, is written as an escape.
+rule: Every format character (Unicode's Cf) is written as an escape, the ones that do not render as nothing (U+FFF9, U+0600) too.
 file: crates/cortex-base/src/visible.rs
-packages: cortex-base, cortex-tools
 in: is_format
-find: .is_ok()
-replace: .is_err() && false
+find: listed(&FORMAT, u32::from(character))
+replace: false
 caught-by:
     cortex-base visible::tests::a_character_is_a_format_character_exactly_when_unicode_says
-    cortex-base visible::tests::tag_characters_are_written_as_escapes
-    cortex-tools::it outline::tag_characters_are_escapes_in_names_and_outline_lines
+    cortex-base visible::tests::what_would_act_unseen_is_written_as_an_escape
 
 [break] the-tag-block-is-left-out-of-the-table
 rule: The table of format characters is Unicode's, the tag characters included.
 file: crates/cortex-base/src/visible.rs
 find: (0xE0020, 0xE007F)
+occurrence: 1
 replace: (0xE0020, 0xE0020)
 caught-by:
     cortex-base visible::tests::the_table_of_format_characters_is_unicodes_for_its_version
-    cortex-base visible::tests::tag_characters_are_written_as_escapes
 
 [break] the-outline-tools-directory-name-is-raw
 rule: The outline tool writes a directory's name as an escape in its headers and its messages.
@@ -198,11 +196,11 @@ caught-by:
     cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
 
 [break] read-names-close-matches-raw
-rule: The names read gives as close matches to a missing file are escapes.
+rule: The names read gives as close matches to a missing file are escapes, and are compared with the name asked for in that form.
 file: crates/cortex-tools/src/read.rs
-in: missing
-find: .map(|name| cortex_base::visible(name).into_owned())
-replace: .map(|name| name.clone())
+in: close_matches
+find: .map(|name| cortex_base::visible(&name).into_owned())
+replace: .map(|name| name)
 caught-by:
     cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
 
@@ -306,8 +304,8 @@ caught-by:
 rule: An instruction file's name, in the system prompt, in notices and as the key of what the model was given, is an escape.
 file: crates/cortex-agent/src/context/instructions.rs
 in: shown
-find: cortex_base::visible(&text).into_owned()
-replace: text
+find: cortex_base::visible(&relative(root, path)).into_owned()
+replace: relative(root, path)
 caught-by:
     cortex-agent context::instructions::tests::a_name_that_acts_unseen_is_shown_as_an_escape
 
@@ -338,3 +336,78 @@ replace:
     Arc::new(move |path: &AbsPath| engine.may_store(path))
 caught-by:
     cortex-core::it index::the_index_follows_the_engine_in_force_after_a_change_of_level
+
+# --------------------------------------- the early review of the escaping
+
+[break] a-name-shown-escaped-leads-nowhere
+rule: A name the model was shown escaped leads back to its file: the path resolver reads the escapes back when the path as written leads to nothing.
+file: crates/cortex-base/src/path/resolve.rs
+in: PathResolver::resolve
+find: if !matches!(&literal, Ok(found) if found.exists())
+replace: if false
+packages: cortex-base, cortex-tools
+caught-by:
+    cortex-base::it paths::a_name_shown_escaped_resolves_to_its_file
+    cortex-tools::it read::a_file_is_read_by_the_escaped_name_it_is_shown_by
+
+[break] what-renders-as-nothing-is-shown
+rule: A character that renders as nothing (Default_Ignorable_Code_Point), the Hangul fillers and the unassigned tag plane among them, is written as an escape.
+file: crates/cortex-base/src/visible.rs
+in: acts_unseen
+find: || (is_ignorable(character) && !is_selector(character))
+replace: || false
+caught-by:
+    cortex-base visible::tests::what_renders_as_nothing_is_written_as_an_escape
+
+[break] a-run-of-variation-selectors-is-kept
+rule: A variation selector is kept only right after a character shown as it is; a run of them carries bytes unseen and is an escape.
+file: crates/cortex-base/src/visible.rs
+in: visible_keeping
+find: let escape = if is_selector(character) { !base } else {
+replace: let escape = if is_selector(character) { false } else {
+caught-by:
+    cortex-base visible::tests::a_variation_selector_is_kept_after_a_character_and_a_run_is_escaped
+
+[break] the-sandboxs-line-names-paths-raw
+rule: The sandbox's line after a command's output, which the model reads, writes its paths as escapes.
+file: crates/cortex-sandbox/src/explain.rs
+in: explain
+find: line(policy, code, output).map(|line| cortex_base::visible(&line).into_owned())
+replace: line(policy, code, output)
+caught-by:
+    cortex-sandbox explain::tests::a_path_the_line_names_is_written_as_an_escape
+
+[break] an-instruction-files-key-is-joined-as-shown
+rule: The key of an instruction file the model was given is its name as shown, escaped, and leads to the file read back.
+file: crates/cortex-agent/src/turn/epochs.rs
+find: root.join(&cortex_base::unescape(shown))
+replace: root.join(shown)
+caught-by:
+    cortex-agent::it context::a_nested_instruction_file_under_a_name_shown_escaped_is_not_told_removed
+
+[break] the-workspace-in-the-system-prompt-is-raw
+rule: The workspace's path in the system prompt is written as an escape.
+file: crates/cortex-agent/src/context/prompt.rs
+find: cortex_base::visible(&self.workspace)
+replace: &self.workspace
+caught-by:
+    cortex-agent context::prompt::tests::the_workspace_is_named_as_an_escape
+
+[break] the-continuity-note-names-a-path-raw
+rule: The note on a protected path changed between two commands names it as an escape.
+file: crates/cortex-core/src/checkpoints.rs
+in: continuity_note
+find: cortex_base::visible(&path.to_string_lossy())
+replace: path.to_string_lossy()
+caught-by:
+    cortex-core checkpoints::tests::the_continuity_note_names_its_paths_as_escapes
+
+[break] a-skipped-entrys-reason-is-raw
+rule: What the walk says of an entry it stepped past names it as an escape, and a line break in it does not cut it short.
+file: crates/cortex-tools/src/walk.rs
+in: Skipped::unreadable
+find: let escaped = cortex_base::visible(reason);
+replace: let escaped = reason.lines().next().unwrap_or("");
+caught-by:
+    cortex-tools walk::tests::a_skipped_entrys_reason_names_it_as_an_escape
+    cortex-tools walk::tests::what_was_skipped_is_said_once_per_kind

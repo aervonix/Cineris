@@ -121,6 +121,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-tools
 
+- [names-that-escape-to-the-same-text](names-that-escape-to-the-same-text.md): Two names that are one text once escaped are counted twice and shown once by `list`, and share their matches in `search`. Owner: a later `cortex-tools` step, or step 32.
 - [a-git-look-too-slow-on-a-loaded-windows-runner](a-git-look-too-slow-on-a-loaded-windows-runner.md): The shell's look at changes gave up as too slow on a loaded Windows runner, failing one system test once. Owner: the next step that changes the look, or step 32.
 - [cmd-searches-the-current-directory](cmd-searches-the-current-directory.md): `cmd.exe` finds a program in the working directory before `PATH`, so a workspace `git.bat` runs as `git`. Owner: the owner.
 

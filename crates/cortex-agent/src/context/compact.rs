@@ -18,7 +18,7 @@ use cortex_tools::SeenFile;
 use serde_json::{Value, json};
 
 use super::history::NOTICE_LEAD;
-use super::instructions::{date_text, shown};
+use super::instructions::{date_text, relative};
 
 /// What the model is asked, at the end of the epoch, for its summary.
 /// Written for this project.
@@ -183,7 +183,7 @@ impl Carried {
             let path = root
                 .join(named)
                 .or_else(|_| AbsPath::parse(named, root.style()))
-                .map_or_else(|_| named.clone(), |abs| shown(root, &abs));
+                .map_or_else(|_| named.clone(), |abs| relative(root, &abs));
             match files.iter_mut().find(|known| known.path == path) {
                 Some(known) => {
                     known.read |= read;
@@ -199,7 +199,7 @@ impl Carried {
             }
         }
         for seen in table {
-            let path = shown(root, &seen.path);
+            let path = relative(root, &seen.path);
             let file = CarriedFile {
                 path: path.clone(),
                 read: seen.read,

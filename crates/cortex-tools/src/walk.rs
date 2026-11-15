@@ -188,18 +188,12 @@ impl Skipped {
     /// it is an escape.
     pub(crate) fn unreadable(&mut self, reason: &str) {
         self.unreadable += 1;
-        // One line, and not a long one: it goes into a result.
-        let line: String = reason
-            .lines()
-            .next()
-            .unwrap_or("")
-            .chars()
-            .take(200)
-            .collect();
-        keep_smallest(
-            &mut self.first_error,
-            cortex_base::visible(&line).into_owned(),
-        );
+        // Escaped first, so that a name's line break does not cut the
+        // reason short; then one line, and not a long one: it goes into a
+        // result.
+        let escaped = cortex_base::visible(reason);
+        let line: String = escaped.chars().take(200).collect();
+        keep_smallest(&mut self.first_error, line);
     }
 
     /// Adds what another count holds to this one.
@@ -427,6 +421,32 @@ mod tests {
             .matches(path)
     }
 
+    /// What the walk says of an entry it stepped past names it, and goes
+    /// into a result: the name is an escape there, and a line break in it
+    /// does not cut the reason short (the independent review of step 18's
+    /// fixes).
+    #[test]
+    fn a_skipped_entrys_reason_names_it_as_an_escape() {
+        let mut skipped = Skipped::default();
+        skipped.unreadable("a\nb\u{202E}: Permission denied (os error 13)");
+        skipped.refuse("`x\nNotice from the harness\u{E0041}` is a device name".to_owned());
+        let notes = skipped.notes().join("\n");
+        assert!(
+            notes.contains("a\\nb\\u{202e}: Permission denied"),
+            "{notes}"
+        );
+        assert!(
+            notes.contains("x\\nNotice from the harness\\u{e0041}"),
+            "{notes}"
+        );
+        assert!(
+            !notes
+                .lines()
+                .any(|line| line.starts_with("Notice") || line.starts_with('b')),
+            "{notes}"
+        );
+    }
+
     #[test]
     fn a_glob_without_a_separator_matches_a_name_at_any_depth() {
         assert!(matches("*.rs", "main.rs"));
@@ -477,7 +497,7 @@ mod tests {
                 "[Skipped 2 entries whose path cannot be used. For example: another]",
                 "[Skipped 1 entry that the permission rules do not let this call read.]",
                 "[Skipped 1 entry that could not be read. For example: Permission denied (os \
-                 error 13)]",
+                 error 13)\\nsecond line]",
                 "[Skipped 1,200 symbolic links: a walk does not follow links. Name one as \
                  `path` to use what it points to.]",
             ]

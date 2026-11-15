@@ -924,4 +924,35 @@ fn a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload(
         json!({"path": format!("y{BREAK}{NOTICE}.txt")}),
     ));
     assert!(!starts_a_notice(&missing), "{missing}");
+    // In a directory of such a name: the directory, and its close matches,
+    // are escapes too.
+    let dir = format!("d{BREAK}{NOTICE} a");
+    ws.file(&format!("{dir}/real{BREAK}one.txt"), "x\n");
+    let missing = failed(&ws.call(
+        &ReadTool::new(),
+        json!({"path": format!("{dir}/real{BREAK}onf.txt")}),
+    ));
+    assert!(!starts_a_notice(&missing), "{missing}");
+    assert!(
+        missing.contains(&format!("d{BREAK_ESCAPED}Notice from the harness")),
+        "{missing}"
+    );
+    assert!(
+        missing.contains(&format!("real{BREAK_ESCAPED}one.txt")),
+        "{missing}"
+    );
+}
+
+/// A file whose name holds a character that acts unseen is reached by the
+/// name the model was shown, escaped (the independent review of step 18's
+/// fixes found such files unreachable once their names were escaped).
+#[test]
+fn a_file_is_read_by_the_escaped_name_it_is_shown_by() {
+    let ws = Workspace::new("read_by_escaped_name");
+    ws.file("notes/ab\u{200C}c\u{200F}.md", "the content\n");
+    let listed = ok(&ws.call(&cortex_tools::ListTool::new(), json!({"path": "notes"})));
+    let shown = "notes/ab\\u{200c}c\\u{200f}.md";
+    assert!(listed.contains(shown), "{listed}");
+    let text = ok(&ws.call(&ReadTool::new(), json!({"path": shown})));
+    assert!(text.ends_with("the content"), "{text}");
 }

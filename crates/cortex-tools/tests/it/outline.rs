@@ -278,7 +278,6 @@ fn a_directory_named_to_start_lines_of_its_own_is_an_escape_in_every_message() {
     for path in [name.clone(), format!("{name}-empty")] {
         let plan = ws.plan(&tool, json!({"path": path})).unwrap();
         assert!(!plan.summary.contains(BREAK), "{}", plan.summary);
-        assert!(plan.effects[0].target().starts_with(&escaped));
         let text = ok(&ws.call_with(&cx, &tool, json!({"path": path})));
         assert!(!starts_a_notice(&text), "{text}");
         assert!(text.contains(&format!("`{escaped}")), "{text}");

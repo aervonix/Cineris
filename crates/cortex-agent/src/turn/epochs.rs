@@ -262,7 +262,7 @@ impl Session {
                 turn,
                 Notice::Instructions(InstructionsNotice {
                     message: message.clone(),
-                    files: discovered.warned.clone(),
+                    files: data_names(&discovered.warned),
                 }),
             );
         }
@@ -401,7 +401,12 @@ impl Session {
             if checked.iter().any(|place| &place.shown == shown) {
                 continue;
             }
-            if let Ok(path) = root.join(shown) {
+            // The key is the name the model was shown, escaped: a name that
+            // held a character that acts unseen leads to its file read back
+            // (the independent review of step 18's fixes). The loop looks at
+            // no file, so the name read back is taken; one that held `\n` as
+            // two characters reads as a line break, as it is shown.
+            if let Ok(path) = root.join(&cortex_base::unescape(shown)) {
                 checked.push(Place {
                     dir: path.parent().unwrap_or_else(|| root.clone()),
                     path,
@@ -486,7 +491,7 @@ impl Session {
                 turn,
                 Notice::Instructions(InstructionsNotice {
                     message: format!("The instruction file {shown} {said}."),
-                    files: vec![shown],
+                    files: data_names(std::slice::from_ref(&shown)),
                 }),
             );
         }
@@ -582,7 +587,7 @@ impl Session {
                 turn,
                 Notice::Instructions(InstructionsNotice {
                     message: format!("The instruction file {shown} could not be read: {error}"),
-                    files: vec![shown],
+                    files: data_names(std::slice::from_ref(&shown)),
                 }),
             );
         }
@@ -629,7 +634,7 @@ impl Session {
                         crate::context::cap_text(cap),
                         left_out.join(", ")
                     ),
-                    files: left_out,
+                    files: data_names(&left_out),
                 }),
             );
         }
@@ -1806,4 +1811,14 @@ impl Session {
             ),
         ))
     }
+}
+
+/// Instruction files' names as a notice's `files` gives them to a client:
+/// data, as the files are named, not as the model is shown them (the keys
+/// the loop holds are escaped where they are made).
+fn data_names(shown: &[String]) -> Vec<String> {
+    shown
+        .iter()
+        .map(|name| cortex_base::unescape(name).into_owned())
+        .collect()
 }

@@ -252,7 +252,27 @@ impl PathResolver {
     ///   The part that does not exist yet is kept as written, name-checked.
     /// - A path that leads outside the workspace is not an error. It
     ///   resolves, and [`ResolvedPath::is_inside_workspace`] says so.
+    /// - **A name the model was shown escaped** ([`ResolvedPath::shown`],
+    ///   [`crate::visible`]) leads back to its file: when the path as written
+    ///   leads to nothing, the same path with the escapes read back
+    ///   ([`crate::unescape`]) is tried, and taken when it leads to
+    ///   something. A file named with a zero-width joiner or a right-to-left
+    ///   mark, which is shown as `\u{200d}` or `\u{200f}`, is reached by that
+    ///   spelling (found by the independent review of step 18's fixes).
     pub fn resolve(&self, input: &str) -> Result<ResolvedPath, PathError> {
+        let literal = self.resolve_written(input);
+        if !matches!(&literal, Ok(found) if found.exists())
+            && let std::borrow::Cow::Owned(unescaped) = crate::visible::unescape(input)
+            && let Ok(found) = self.resolve_written(&unescaped)
+            && found.exists()
+        {
+            return Ok(found);
+        }
+        literal
+    }
+
+    /// [`PathResolver::resolve`] of the path exactly as written.
+    fn resolve_written(&self, input: &str) -> Result<ResolvedPath, PathError> {
         let style = PathStyle::NATIVE;
         let (root, mut parts) = steps(input, style)?;
         let start = match root {

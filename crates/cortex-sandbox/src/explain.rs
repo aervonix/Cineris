@@ -63,8 +63,16 @@ const LEAVE: &str = "To run it outside the sandbox, call `shell` again with `\"s
                      the user is asked first.";
 
 /// The line for a command that ended with `code` after printing `output`.
+/// It goes into the command's result, which the model reads, after the
+/// output is shaped; the paths in it come from the output and the policy,
+/// so every character that would act unseen in it is an escape
+/// (`cortex_base::visible`; the independent review of step 18's fixes).
 #[must_use]
 pub fn explain(policy: &Policy, code: Option<i32>, output: &str) -> Option<String> {
+    line(policy, code, output).map(|line| cortex_base::visible(&line).into_owned())
+}
+
+fn line(policy: &Policy, code: Option<i32>, output: &str) -> Option<String> {
     if code == Some(0) {
         return None;
     }
@@ -184,6 +192,24 @@ mod tests {
             assert!(line.contains("/work, /tmp/cx-s1"), "{line}");
             assert!(line.contains("\"sandbox\": false"), "{line}");
         }
+    }
+
+    /// The line goes into the result the model reads: a path from the
+    /// output or a root that holds a character that would act unseen is an
+    /// escape there (the independent review of step 18's fixes).
+    #[test]
+    fn a_path_the_line_names_is_written_as_an_escape() {
+        let mut policy = policy(Network::Off);
+        policy.write.push(PathBuf::from("/work/r\u{202E}t"));
+        let line = explain(
+            &policy,
+            Some(1),
+            "touch: cannot touch '/srv/x\u{E0041}y': Permission denied",
+        )
+        .expect("a line");
+        assert!(line.contains("/srv/x\\u{e0041}y"), "{line}");
+        assert!(line.contains("/work/r\\u{202e}t"), "{line}");
+        assert!(!line.chars().any(cortex_base::acts_unseen), "{line:?}");
     }
 
     #[test]

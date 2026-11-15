@@ -212,7 +212,7 @@ caught-by:
 [break] the-wrong-path-is-named
 rule: The model is told the path a refused write was for, not the program that reported it.
 file: crates/cortex-sandbox/src/explain.rs
-in: explain
+in: line
 find: paths.into_iter().rev().find(|path| outside(policy, path))
 replace: paths.into_iter().find(|path| outside(policy, path))
 caught-by:
