@@ -44,6 +44,9 @@ struct LiveProvider {
     /// Its smoke test and its recorder: ignored tests of `cortex-llm`.
     smoke: &'static str,
     record: &'static str,
+    /// The free check of its usage endpoint, `live --refresh`: an ignored
+    /// test of `cortex-llm`. `None` for a provider with no endpoint.
+    refresh: Option<&'static str>,
     /// Headless runs of the real binary against it: ignored tests of
     /// `cortex-cli`'s system tests (`tests/system/live.rs`). `live` runs
     /// the first after the smoke test; `live --headless` runs them all.
@@ -58,6 +61,7 @@ const PROVIDERS: &[LiveProvider] = &[
         key_file: "CORTEX_LIVE_ANTHROPIC_KEY_FILE",
         smoke: "anthropic::live::live_smoke",
         record: "anthropic::live::live_record",
+        refresh: None,
         headless: &[
             "live::live_headless_run",
             "live::live_headless_compaction",
@@ -69,6 +73,7 @@ const PROVIDERS: &[LiveProvider] = &[
         key_file: "CORTEX_LIVE_OPENROUTER_KEY_FILE",
         smoke: "openai_chat::live::live_smoke_openrouter",
         record: "openai_chat::live::live_record_openrouter",
+        refresh: Some("openai_chat::live::live_refresh_openrouter"),
         headless: &[],
     },
     LiveProvider {
@@ -76,6 +81,7 @@ const PROVIDERS: &[LiveProvider] = &[
         key_file: "CORTEX_LIVE_DEEPSEEK_KEY_FILE",
         smoke: "openai_chat::live::live_smoke_deepseek",
         record: "openai_chat::live::live_record_deepseek",
+        refresh: Some("openai_chat::live::live_refresh_deepseek"),
         headless: &["live::live_headless_run_deepseek"],
     },
     LiveProvider {
@@ -83,6 +89,7 @@ const PROVIDERS: &[LiveProvider] = &[
         key_file: "CORTEX_LIVE_VENICE_KEY_FILE",
         smoke: "openai_chat::live::live_smoke_venice",
         record: "openai_chat::live::live_record_venice",
+        refresh: Some("openai_chat::live::live_refresh_venice"),
         headless: &[],
     },
 ];
@@ -398,6 +405,23 @@ pub(crate) fn live(arguments: &[String]) -> Result<()> {
         println!("The spend ledger, {}:", path.display());
         print!("{}", spent(&text, since));
         return Ok(());
+    }
+    if arguments.first().is_some_and(|first| first == "--refresh") {
+        // One request to the provider's usage endpoint, which costs
+        // nothing: no model is asked.
+        let provider = match &arguments[1..] {
+            [name] => live_provider(name)?,
+            _ => return Err("usage: cargo xtask live --refresh PROVIDER".to_owned()),
+        };
+        let Some(test) = provider.refresh else {
+            return Err(format!(
+                "`{}` documents no usage endpoint that a key for model calls can ask",
+                provider.name
+            ));
+        };
+        require_key_file(provider)?;
+        let (name, path) = ledger_variable()?;
+        return ignored_test(test, &[(name, &path)]);
     }
     if arguments.first().is_some_and(|first| first == "--headless") {
         let (provider, tests) = headless_tests(&arguments[1..], |name| std::env::var_os(name))?;

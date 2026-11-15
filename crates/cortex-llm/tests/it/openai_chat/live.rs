@@ -458,6 +458,95 @@ fn record(server: &Server, more: &[&str]) {
     ));
 }
 
+/// One request to the provider's documented usage endpoint, and nothing
+/// else: the free check of the refresh (step 16). What is printed is the
+/// answer's shape (which figures it had, in which currencies, how many
+/// limits of which kinds), never an amount, an id or the answer itself.
+fn refresh(server: &Server) {
+    let mut live = Live::start(target(server));
+    if crate::live::dry_run() {
+        live.say("dry run: the usage endpoint is not asked");
+        return;
+    }
+    let request = account::request(&live.target.provider)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .expect("the provider's entry names a usage endpoint");
+    live.say(&format!(
+        "refresh: GET {} with no body",
+        request.url.rsplit_once('/').map_or("", |(_, path)| path)
+    ));
+    let (status, headers, body) = live.fetch(request);
+    let now = SystemClock::new().now();
+    let usage = account::read(&live.target.provider, status, &headers, &body, now).unwrap_or_else(
+        |error| {
+            let said = format!("the usage endpoint: {} ({})", error.message, error.code);
+            match live.scrubber.printable(&said) {
+                Ok(said) => panic!("{said}"),
+                Err(refused) => panic!("{refused}"),
+            }
+        },
+    );
+    let present = |value: &Option<i64>| if value.is_some() { "present" } else { "absent" };
+    live.say(&format!(
+        "  status {status}; available {}",
+        usage.available.map_or("absent", |_| "present")
+    ));
+    for balance in &usage.balances {
+        live.say(&format!(
+            "  balance in {}: remaining {}, limit {}, used {}",
+            balance.currency,
+            present(&balance.remaining),
+            present(&balance.limit),
+            present(&balance.used)
+        ));
+    }
+    let mut kinds = std::collections::BTreeMap::new();
+    for limit in &usage.limits {
+        let key = format!(
+            "{:?} per {:?}{}{}",
+            limit.window.measure,
+            limit.per,
+            if limit.model.is_some() {
+                ", one model"
+            } else {
+                ", the key"
+            },
+            if limit.window.remaining.is_some() {
+                ", with what is left"
+            } else {
+                ""
+            }
+        );
+        *kinds.entry(key).or_insert(0u32) += 1;
+    }
+    for (kind, count) in kinds {
+        live.say(&format!("  {count} limit(s): {kind}"));
+    }
+    live.say(&format!(
+        "  next epoch {}",
+        usage.next_epoch.as_ref().map_or("absent", |_| "present")
+    ));
+    live.say("done. The usage endpoint costs nothing.");
+}
+
+#[test]
+#[ignore = "tier 5: asks the real usage endpoint; run it with `cargo xtask live --refresh openrouter`"]
+fn live_refresh_openrouter() {
+    refresh(&OPENROUTER);
+}
+
+#[test]
+#[ignore = "tier 5: asks the real usage endpoint; run it with `cargo xtask live --refresh deepseek`"]
+fn live_refresh_deepseek() {
+    refresh(&DEEPSEEK);
+}
+
+#[test]
+#[ignore = "tier 5: asks the real usage endpoint; run it with `cargo xtask live --refresh venice`"]
+fn live_refresh_venice() {
+    refresh(&VENICE);
+}
+
 #[test]
 #[ignore = "tier 5: sends requests to the real API; run it with `cargo xtask live openrouter`"]
 fn live_smoke_openrouter() {
