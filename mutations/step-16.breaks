@@ -32,7 +32,7 @@ rule: The aggregates are each file read to its last whole line, so a rebuild fro
 file: crates/cortex-stats/src/store.rs
 in: read_lines
 find: *offset += read as u64;
-replace: *offset += (read as u64).saturating_sub(1);
+replace: *offset += (read as u64).saturating_sub(2);
 caught-by:
     cortex-stats::it store::the_aggregates_rebuild_to_the_same_values_from_the_files
     cortex-stats::it store::two_writers_that_bring_the_aggregates_up_to_date_out_of_order_lose_nothing
