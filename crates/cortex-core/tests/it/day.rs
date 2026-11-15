@@ -98,6 +98,40 @@ fn a_processs_own_spending_is_not_counted_twice() {
     assert_eq!(world.provider.requests().len(), 2);
 }
 
+/// A request this process made before the day's purse began (a session
+/// with no day's limit) was charged to no purse: the purse counts its line
+/// once, and only once.
+#[test]
+fn a_line_written_before_the_days_purse_began_counts_once() {
+    let world = World::new(
+        "day_before_the_purse",
+        [says("One."), says("Two."), says("Not sent.")],
+    );
+    let core = utc(&world);
+    let file = stats_dir(&world).join("events-2026-11.jsonl");
+    world.run(async {
+        let first = Front::start(&world, &core).await;
+        first.turn("one").await;
+        first.close().await;
+        // (The writer is a thread of its own, which this waits for.)
+        while !std::fs::read_to_string(&file).is_ok_and(|text| text.contains(r#""kind":"request""#))
+        {
+            std::thread::yield_now();
+        }
+    });
+    // A project's day's limit of two: one is spent already.
+    world.project_config("[limits.day]\nrequests = 2\n");
+    world.run(async {
+        let second = Front::start(&world, &core).await;
+        let two = second.turn("two").await;
+        assert_eq!(two.outcome, TurnOutcome::Completed, "{:?}", two.error);
+        let three = second.turn("three").await;
+        assert_eq!(three.outcome, TurnOutcome::Limit, "{:?}", three.error);
+        second.close().await;
+    });
+    assert_eq!(world.provider.requests().len(), 2);
+}
+
 /// With statistics off there is nothing to count another process's
 /// spending from: a session with a day's limit, the user's or a project's,
 /// is refused at open, and nothing is read, pruned or written (the

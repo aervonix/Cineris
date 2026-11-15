@@ -104,6 +104,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cortex-stats
 
 - [a-clock-that-jumps-forward](a-clock-that-jumps-forward.md): A clock set months ahead prunes the raw monthly files early, and one set 400 days ahead folds the day buckets for good. Owner: step 33.
+- [a-reset-during-a-writers-settle](a-reset-during-a-writers-settle.md): A writer that loaded the aggregates just before `cortex stats reset` saves their part back. Owner: the step that next changes the reset, or step 33.
 
 ### cortex-term
 
