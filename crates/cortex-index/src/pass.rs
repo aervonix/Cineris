@@ -51,6 +51,14 @@ pub const CACHE_FILE: &str = "outlines";
 /// The most threads a pass reads files on: it is background work.
 const MAX_THREADS: usize = 4;
 
+/// How many files of the listing a pass takes at a time: their outlines
+/// are written out before the next ones are read.
+const WINDOW: usize = 512;
+
+/// A window with fewer files to read than this is read on the pass's own
+/// thread: starting threads would cost more than they save.
+const SMALL_WINDOW: usize = 16;
+
 /// A project's index: where its workspace is, where its cache is, and
 /// what a pass may do. It holds no outlines: each use reads the cache.
 #[derive(Clone)]
@@ -110,12 +118,6 @@ impl PassReport {
             .iter()
             .any(|why| matches!(why, Partial::Time | Partial::Stopped))
     }
-}
-
-/// A file a pass must read, and what it found.
-struct Work<'a> {
-    file: &'a Listed,
-    found: Option<(Stamp, Flags, Outline)>,
 }
 
 impl Index {
@@ -208,58 +210,66 @@ impl Index {
         }
 
         let old = self.cache();
-        // Which files keep their record, and which must be read.
-        let mut kept: Vec<Option<usize>> = Vec::with_capacity(listing.files.len());
-        let mut work: Vec<Work<'_>> = Vec::new();
-        for file in &listing.files {
-            let held = old.as_ref().and_then(|old| {
-                let at = old
-                    .records
-                    .binary_search_by(|record| walk::path_order(&record.path, &file.relative))
-                    .ok()?;
-                let record = &old.records[at];
-                (record.stamp == file.stamp && !record.flags.unsettled).then_some(at)
-            });
-            if held.is_none() {
-                work.push(Work { file, found: None });
-            }
-            kept.push(held);
-        }
-
-        let stopped = self.read_all(&mut work, &control, now);
-        if let Some(why) = stopped {
-            report.partial.push(why);
-        }
-
-        // The new cache, in the listing's order.
-        let indexed = kept.iter().filter(|held| held.is_some()).count()
-            + work.iter().filter(|work| work.found.is_some()).count();
-        let mut writer = Writer::new(self.root.as_str(), listing.found, indexed, &report.partial);
+        let root_fs = self.root.to_fs_path();
+        let mut writer = Writer::new(self.root.as_str());
         for (dir, files) in &listing.dirs {
             writer.dir(dir, *files);
         }
-        let mut done = work.iter();
-        for (file, held) in listing.files.iter().zip(&kept) {
-            match (held, &old) {
-                (Some(at), Some(old)) => {
-                    writer.copy(old.lines_of(&old.records[*at]));
-                    report.kept += 1;
-                }
-                _ => {
-                    let Some(work) = done.next() else { continue };
-                    if let Some((stamp, flags, outline)) = &work.found {
-                        writer.file(&file.relative, stamp, *flags, outline);
-                        report.read += 1;
+        // A window of files at a time: what is read is written out before
+        // the next is read, so a pass holds one window's outlines, not the
+        // workspace's.
+        let mut stopped: Option<Partial> = None;
+        for window in listing.files.chunks(WINDOW) {
+            let held: Vec<Option<usize>> = window
+                .iter()
+                .map(|file| {
+                    let old = old.as_ref()?;
+                    let at = old
+                        .records
+                        .binary_search_by(|record| walk::path_order(&record.path, &file.relative))
+                        .ok()?;
+                    let record = &old.records[at];
+                    (record.stamp == file.stamp && !record.flags.unsettled).then_some(at)
+                })
+                .collect();
+            let wanted: Vec<&Listed> = window
+                .iter()
+                .zip(&held)
+                .filter(|(_, held)| held.is_none())
+                .map(|(file, _)| file)
+                .collect();
+            let read = if stopped.is_none() {
+                let (read, why) = self.read_all(&root_fs, &wanted, &control, now);
+                stopped = why;
+                read
+            } else {
+                Vec::new()
+            };
+            let mut read = read.into_iter();
+            for held in &held {
+                match (held, &old) {
+                    (Some(at), Some(old)) => {
+                        writer.copy(old.lines_of(&old.records[*at]));
+                        report.kept += 1;
+                    }
+                    _ => {
+                        if let Some(Some(record)) = read.next() {
+                            writer.copy(&record);
+                            report.read += 1;
+                        }
                     }
                 }
             }
         }
-        report.indexed = indexed;
-        let text = writer.finish();
+        if let Some(why) = stopped {
+            report.partial.push(why);
+        }
+        report.indexed = report.kept + report.read;
+        let text = writer.finish(listing.found, &report.partial);
         report.cache_bytes = text.len();
         let unchanged = old.as_ref().is_some_and(|old| {
             report.read == 0
-                && old.records.len() == indexed
+                && old.records.len() == report.indexed
                 && old.found == listing.found
                 && old.partial == report.partial
                 && old.dirs.len() == listing.dirs.len()
@@ -269,57 +279,81 @@ impl Index {
                     .zip(&listing.dirs)
                     .all(|((one, n), (other, m))| one == other && n == m)
         });
+        // The old cache's text goes before the new one is written.
+        drop(old);
         if !unchanged {
             report.written = self.write(&text);
         }
         report
     }
 
-    /// Reads and outlines each file of `work`, on a few threads. Returns
-    /// why it stopped early, if it did.
-    fn read_all(&self, work: &mut [Work<'_>], control: &Control<'_>, now: i128) -> Option<Partial> {
+    /// Reads and outlines each of `files`, on a few threads, and returns
+    /// each one's record as the cache writes it (`None` for one that could
+    /// not be read), in their order; and why it stopped early, if it did.
+    fn read_all(
+        &self,
+        root_fs: &std::path::Path,
+        files: &[&Listed],
+        control: &Control<'_>,
+        now: i128,
+    ) -> (Vec<Option<String>>, Option<Partial>) {
         let next = AtomicUsize::new(0);
         let stopped: std::sync::Mutex<Option<Partial>> = std::sync::Mutex::new(None);
-        let results: Vec<std::sync::Mutex<Option<(Stamp, Flags, Outline)>>> =
-            work.iter().map(|_| std::sync::Mutex::new(None)).collect();
-        let threads = self.threads.min(work.len()).max(1);
-        std::thread::scope(|scope| {
-            for _ in 0..threads {
-                scope.spawn(|| {
-                    loop {
-                        if let Some(why) = control.stop() {
-                            let mut stopped = stopped
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            stopped.get_or_insert(why);
-                            return;
-                        }
-                        let at = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(item) = work.get(at) else { return };
-                        let found = self.read_one(item.file, now);
-                        if let Some(slot) = results.get(at) {
-                            *slot
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner) = found;
-                        }
-                    }
+        let results: Vec<std::sync::Mutex<Option<String>>> =
+            files.iter().map(|_| std::sync::Mutex::new(None)).collect();
+        let threads = self.threads.min(files.len()).max(1);
+        let work = || {
+            loop {
+                if let Some(why) = control.stop() {
+                    let mut stopped = stopped
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    stopped.get_or_insert(why);
+                    return;
+                }
+                let at = next.fetch_add(1, Ordering::Relaxed);
+                let Some(file) = files.get(at) else { return };
+                let found = self.read_one(root_fs, file, now).map(|(stamp, flags, outline)| {
+                    crate::cache::record(&file.relative, &stamp, flags, &outline)
                 });
+                if let Some(slot) = results.get(at) {
+                    *slot
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = found;
+                }
             }
-        });
-        for (item, slot) in work.iter_mut().zip(results) {
-            item.found = slot
-                .into_inner()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        };
+        if threads == 1 || files.len() < SMALL_WINDOW {
+            work();
+        } else {
+            std::thread::scope(|scope| {
+                for _ in 0..threads {
+                    scope.spawn(work);
+                }
+            });
         }
-        stopped
+        let read = results
+            .into_iter()
+            .map(|slot| {
+                slot.into_inner()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            })
+            .collect();
+        let stopped = stopped
             .into_inner()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (read, stopped)
     }
 
     /// Reads one file and outlines it. `None` when it could not be opened
     /// as a regular file: it vanished, it is a link now, it is not readable.
-    fn read_one(&self, file: &Listed, now: i128) -> Option<(Stamp, Flags, Outline)> {
-        let (handle, metadata) = open_regular(&file.fs_path).ok()?;
+    fn read_one(
+        &self,
+        root_fs: &std::path::Path,
+        file: &Listed,
+        now: i128,
+    ) -> Option<(Stamp, Flags, Outline)> {
+        let (handle, metadata) = open_regular(&walk::fs_path_of(root_fs, &file.relative)).ok()?;
         let stamp = Stamp::of(&metadata);
         let window = i128::try_from(UNSETTLED.as_nanos()).unwrap_or(i128::MAX);
         let mut flags = Flags {

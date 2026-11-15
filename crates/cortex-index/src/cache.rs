@@ -7,15 +7,16 @@
 //! ```text
 //! cortex-index outlines <format> <extractors>
 //! R  <the workspace root it was made for>
-//! S  <files found>  <files indexed>  <why it is partial, or ->
 //! D  <directory>  <files under it>                       one per directory
 //! F  <path>  <size>  <modified>  <change>  <flags>  <language>  <entries>
 //! O  <line>  <depth>  <kind>  <name>  <head>  <doc>          its entries
+//! S  <files found>  <files indexed>  <why it is partial, or ->
 //! E  <files>
 //! ```
 //!
 //! - **The files are in [`path_order`]**, so a pass reads the cache and the
-//!   listing side by side, and a lookup is a binary search.
+//!   listing side by side, and a lookup is a binary search. The summary
+//!   comes after them, so that a pass writes the file as it goes.
 //! - **A cache this build cannot trust is no cache:** another format or
 //!   another version of the extractors, another root, a record out of
 //!   order, an entry count that does not add up, or no `E` line (cut
@@ -193,32 +194,19 @@ impl CacheFile {
         if unescape(root_line.strip_prefix("R\t")?)? != root {
             return None;
         }
-        let (summary, _) = lines.next()?;
-        let mut fields = summary.strip_prefix("S\t")?.split('\t');
-        let found: usize = fields.next()?.parse().ok()?;
-        let indexed: usize = fields.next()?.parse().ok()?;
-        let partial_text = fields.next()?;
-        let partial: Vec<Partial> = if partial_text == "-" {
-            Vec::new()
-        } else {
-            partial_text
-                .chars()
-                .map(Partial::from_letter)
-                .collect::<Option<_>>()?
-        };
-        if fields.next().is_some() {
-            return None;
-        }
-
         let mut dirs = Vec::new();
         let mut records: Vec<Record> = Vec::new();
         let mut open: Option<(Record, usize)> = None;
+        let mut summary: Option<(usize, usize, Vec<Partial>)> = None;
         let mut ended = false;
         while let Some((line, range)) = lines.next() {
             if ended {
                 return None;
             }
             let (kind, rest) = line.split_once('\t')?;
+            if summary.is_some() && kind != "E" {
+                return None;
+            }
             match kind {
                 "D" if records.is_empty() && open.is_none() => {
                     let (dir, count) = rest.split_once('\t')?;
@@ -272,21 +260,38 @@ impl CacheFile {
                 "O" => {
                     let (record, left) = open.as_mut()?;
                     *left = left.checked_sub(1)?;
-                    let entry = parse_entry(rest)?;
-                    if entry.depth == 0 {
+                    if check_entry(rest)? == 0 {
                         record.top += 1;
                     }
                     record.lines.end = range.end;
                     record.outline.end = range.end;
                 }
-                "E" => {
+                "S" => {
                     if let Some((record, left)) = open.take() {
                         if left != 0 {
                             return None;
                         }
                         records.push(record);
                     }
-                    if rest.parse::<usize>().ok()? != records.len() {
+                    let mut fields = rest.split('\t');
+                    let found: usize = fields.next()?.parse().ok()?;
+                    let indexed: usize = fields.next()?.parse().ok()?;
+                    let partial_text = fields.next()?;
+                    let partial: Vec<Partial> = if partial_text == "-" {
+                        Vec::new()
+                    } else {
+                        partial_text
+                            .chars()
+                            .map(Partial::from_letter)
+                            .collect::<Option<_>>()?
+                    };
+                    if fields.next().is_some() || indexed != records.len() {
+                        return None;
+                    }
+                    summary = Some((found, indexed, partial));
+                }
+                "E" => {
+                    if summary.is_none() || rest.parse::<usize>().ok()? != records.len() {
                         return None;
                     }
                     ended = true;
@@ -297,6 +302,7 @@ impl CacheFile {
         if !ended {
             return None;
         }
+        let (found, indexed, partial) = summary?;
         Some(Self {
             text,
             found,
@@ -333,6 +339,35 @@ impl CacheFile {
             truncated: record.flags.truncated,
         }
     }
+}
+
+/// An entry's line checked without reading its texts: its depth, or
+/// `None` when it is not an entry this build wrote. The texts are read
+/// when an outline is asked for ([`parse_entry`]).
+fn check_entry(rest: &str) -> Option<u8> {
+    let mut fields = rest.split('\t');
+    let _line: u32 = fields.next()?.parse().ok()?;
+    let depth: u8 = fields.next()?.parse().ok()?;
+    Kind::from_word(fields.next()?)?;
+    for _ in 0..3 {
+        let text = fields.next()?;
+        // A backslash only begins one of the four escapes.
+        let mut escaped = false;
+        for byte in text.bytes() {
+            if escaped {
+                if !matches!(byte, b'\\' | b't' | b'n' | b'r') {
+                    return None;
+                }
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            }
+        }
+        if escaped {
+            return None;
+        }
+    }
+    fields.next().is_none().then_some(depth)
 }
 
 fn parse_entry(rest: &str) -> Option<Entry> {
@@ -381,26 +416,53 @@ impl<'a> Iterator for LineIter<'a> {
     }
 }
 
-/// A cache being written.
+/// A cache being written, as a pass goes.
 #[derive(Debug)]
 pub(crate) struct Writer {
     text: String,
     files: usize,
 }
 
+/// A file's record as the cache writes it, from what a pass found.
+pub(crate) fn record(path: &str, stamp: &Stamp, flags: Flags, outline: &Outline) -> String {
+    let mut text = String::new();
+    text.push_str("F\t");
+    escape(path, &mut text);
+    let _ = writeln!(
+        text,
+        "\t{}\t{}\t{}\t{}",
+        stamp_text(stamp),
+        flags.text(),
+        outline.language.map_or("-", Language::name),
+        outline.entries.len()
+    );
+    for entry in &outline.entries {
+        let _ = write!(
+            text,
+            "O\t{}\t{}\t{}\t",
+            entry.line,
+            entry.depth,
+            entry.kind.word()
+        );
+        escape(&entry.name, &mut text);
+        text.push('\t');
+        escape(&entry.head, &mut text);
+        text.push('\t');
+        if let Some(doc) = &entry.doc {
+            escape(doc, &mut text);
+        }
+        text.push('\n');
+    }
+    text
+}
+
 impl Writer {
-    pub(crate) fn new(root: &str, found: usize, indexed: usize, partial: &[Partial]) -> Self {
+    pub(crate) fn new(root: &str) -> Self {
         let mut text = String::new();
         let _ = writeln!(text, "{HEADER} {FORMAT} {EXTRACTORS}");
         text.push_str("R\t");
         escape(root, &mut text);
         text.push('\n');
-        let partial: String = if partial.is_empty() {
-            "-".to_owned()
-        } else {
-            partial.iter().map(|why| why.letter()).collect()
-        };
-        let _ = writeln!(text, "S\t{found}\t{indexed}\t{partial}");
         Self { text, files: 0 }
     }
 
@@ -411,44 +473,26 @@ impl Writer {
     }
 
     /// A file's record, written from what a pass found.
+    #[cfg(test)]
     pub(crate) fn file(&mut self, path: &str, stamp: &Stamp, flags: Flags, outline: &Outline) {
-        self.files += 1;
-        self.text.push_str("F\t");
-        escape(path, &mut self.text);
-        let _ = writeln!(
-            self.text,
-            "\t{}\t{}\t{}\t{}",
-            stamp_text(stamp),
-            flags.text(),
-            outline.language.map_or("-", Language::name),
-            outline.entries.len()
-        );
-        for entry in &outline.entries {
-            let _ = write!(
-                self.text,
-                "O\t{}\t{}\t{}\t",
-                entry.line,
-                entry.depth,
-                entry.kind.word()
-            );
-            escape(&entry.name, &mut self.text);
-            self.text.push('\t');
-            escape(&entry.head, &mut self.text);
-            self.text.push('\t');
-            if let Some(doc) = &entry.doc {
-                escape(doc, &mut self.text);
-            }
-            self.text.push('\n');
-        }
+        self.copy(&record(path, stamp, flags, outline));
     }
 
-    /// A file's record, copied from the cache it was read from.
+    /// A file's record, as text already made: [`record`]'s, or the lines
+    /// of the cache it was read from.
     pub(crate) fn copy(&mut self, lines: &str) {
         self.files += 1;
         self.text.push_str(lines);
     }
 
-    pub(crate) fn finish(mut self) -> String {
+    /// The cache's text, with what the pass found in all.
+    pub(crate) fn finish(mut self, found: usize, partial: &[Partial]) -> String {
+        let partial: String = if partial.is_empty() {
+            "-".to_owned()
+        } else {
+            partial.iter().map(|why| why.letter()).collect()
+        };
+        let _ = writeln!(self.text, "S\t{found}\t{}\t{partial}", self.files);
         let _ = writeln!(self.text, "E\t{}", self.files);
         self.text
     }
@@ -468,7 +512,7 @@ mod tests {
     }
 
     fn written() -> String {
-        let mut writer = Writer::new("/w", 3, 2, &[Partial::Files]);
+        let mut writer = Writer::new("/w");
         writer.dir("", 3);
         writer.dir("src", 2);
         writer.file(
@@ -500,7 +544,7 @@ mod tests {
             },
             &Outline::default(),
         );
-        writer.finish()
+        writer.finish(3, &[Partial::Files])
     }
 
     #[test]
@@ -541,10 +585,10 @@ mod tests {
         // A count that does not add up, and records out of order.
         let wrong = text.replacen("\t1\nO", "\t2\nO", 1);
         assert!(CacheFile::parse(wrong, "/w").is_none());
-        let mut writer = Writer::new("/w", 2, 2, &[]);
+        let mut writer = Writer::new("/w");
         writer.file("b", &stamp(1), Flags::default(), &Outline::default());
         writer.file("a", &stamp(1), Flags::default(), &Outline::default());
-        assert!(CacheFile::parse(writer.finish(), "/w").is_none());
+        assert!(CacheFile::parse(writer.finish(2, &[]), "/w").is_none());
         // Something after the end.
         assert!(CacheFile::parse(format!("{text}F\tz\n"), "/w").is_none());
     }

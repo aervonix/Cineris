@@ -291,23 +291,26 @@ fn rank(cache: &CacheFile, request: &MapRequest) -> Vec<usize> {
             .then_with(|| crate::walk::path_order(&one.path, &other.path))
     });
     changed.truncate(RECENT_FILES);
-    let changed_rank = |at: usize| changed.iter().position(|&known| known == at);
+    let mut changed_rank = vec![usize::MAX; cache.records.len()];
+    for (rank, &at) in changed.iter().enumerate() {
+        changed_rank[at] = rank;
+    }
 
     let mut order: Vec<usize> = (0..cache.records.len()).collect();
-    order.sort_by_key(|&at| {
+    order.sort_by_cached_key(|&at| {
         let record = &cache.records[at];
         let tier = if touched.contains(record.path.as_str()) {
             0
         } else if recent.contains(record.path.as_str()) {
             1
-        } else if changed_rank(at).is_some() {
+        } else if changed_rank[at] != usize::MAX {
             2
         } else {
             3
         };
         (
             tier,
-            changed_rank(at).unwrap_or(usize::MAX),
+            changed_rank[at],
             usize::from(record.top == 0),
             record.path.split('/').count(),
             at,
