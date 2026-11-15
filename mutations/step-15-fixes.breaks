@@ -21,6 +21,15 @@ caught-by:
     cortex-agent::it summaries::a_background_summary_refused_as_too_long_teaches_the_budget
     cortex-agent::it summaries::a_summary_request_refused_as_too_long_is_cut_and_tried_again
 
+[break] summary-refusal-teaches-a-wrong-ratio
+rule: A summary refusal teaches the ratio its own request's bytes over its model's window show, so the retry fits.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::counted
+find: .overflowed(summarized.bytes, summarized.window);
+replace: .overflowed(summarized.bytes.saturating_mul(1000), summarized.window);
+caught-by:
+    cortex-agent::it summaries::after_a_refusal_the_summary_request_is_held_to_half_the_limit
+
 [break] refused-summary-not-tried-again
 rule: A summary request refused as too long is answered by one more try, cut to half the limit.
 file: crates/cortex-agent/src/turn/epochs.rs
@@ -58,9 +67,11 @@ file: crates/cortex-agent/src/turn/epochs.rs
 in: Session::summary_model
 find: && self.fast_refused != Some(self.context.epoch_number)
 replace:
+# The refusal's lesson alone moves the estimate past a fast model's limit
+# where its window is the one it refused at; this test's fast model holds
+# the estimate after it (a window smaller than its catalog says).
 caught-by:
-    cortex-agent::it summaries::a_summary_the_fast_role_refused_is_asked_of_the_main_model
-    cortex-agent::it summaries::a_background_summary_refused_as_too_long_teaches_the_budget
+    cortex-agent::it summaries::a_summary_the_fast_role_refused_is_not_asked_of_it_again_in_the_epoch
 
 [break] refusal-forgotten-before-a-count
 rule: After a refusal, and until the provider counts a request again, a summary request is cut to half the limit.
@@ -68,10 +79,10 @@ file: crates/cortex-agent/src/context/budget.rs
 in: Budget::refused
 find: self.refused
 replace: false
+# A cut to nine tenths also says the earlier part is left out: only the
+# size of the retry tells the two apart.
 caught-by:
-    cortex-agent::it summaries::a_summary_request_refused_as_too_long_is_cut_and_tried_again
-    cortex-agent::it summaries::a_second_refusal_ends_the_turn_and_the_next_turns_summary_is_cut
-    cortex-agent::it context::after_an_overflow_the_summary_request_is_cut_to_fit_what_the_provider_showed
+    cortex-agent::it summaries::after_a_refusal_the_summary_request_is_held_to_half_the_limit
     cortex-agent context::budget::tests::an_overflow_brings_the_ratio_down_to_what_it_shows
 
 [break] a-count-does-not-clear-the-refusal
@@ -299,7 +310,6 @@ find: in_flight.at_standard = true;
 replace: let _ = in_flight;
 caught-by:
     cortex-agent::it speed::the_context_record_compares_requests_at_the_speed_they_were_sent_at
-    cortex-agent::it context::the_loops_check_holds_a_request_to_the_one_before_at_the_speed_it_was_sent_at
 
 [break] check-skips-the-standard-speed
 rule: The debug build's check holds a request to the one before at standard too, where the one before was sent at standard.
@@ -426,3 +436,41 @@ find: if found.text.len() > room {
 replace: if false {
 caught-by:
     cortex-agent::it context::nested_instruction_files_at_one_boundary_are_held_to_the_cap
+
+# ---------------------------- the review of these fixes, before the push
+
+[break] nested-left-out-never-tried-again
+rule: A nested instruction file left out for the cap is looked at again at the next boundary of the epoch.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::nested_instructions
+find: self.context.given.looked.remove(&crate::context::shown_in(&root, &found.place.dir));
+replace:
+caught-by:
+    cortex-agent::it context::a_nested_instruction_file_left_out_for_the_cap_is_given_at_a_later_boundary
+
+[break] cap-under-a-kib-said-as-kib
+rule: A cap under 1 KiB is said in bytes, not as 0 KiB.
+file: crates/cortex-agent/src/context/instructions.rs
+in: cap_text
+find: if cap >= 1024 && cap.is_multiple_of(1024) {
+replace: if true {
+caught-by:
+    cortex-agent::it context::a_nested_instruction_file_left_out_for_the_cap_is_given_at_a_later_boundary
+
+[break] summary-writes-past-the-new-epochs-room
+rule: A summary writes at most half of what the trigger leaves beyond the prompt and the tools.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::summary_limit
+find: let cap = self.context.parts.settings.summary_max_output.min(share);
+replace: let cap = self.context.parts.settings.summary_max_output; let _ = share;
+caught-by:
+    cortex-agent::it summaries::a_summary_writes_no_more_than_the_new_epoch_has_room_for
+
+[break] budget-summary-reserve-capped
+rule: A summary request with a reasoning budget keeps its whole output in reserve, so that its input and its output fit the window.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::summary_limit
+find: let limit = if budget.is_some() {
+replace: let limit = if false {
+caught-by:
+    cortex-agent::it summaries::a_summary_with_a_reasoning_budget_keeps_its_whole_output_in_reserve

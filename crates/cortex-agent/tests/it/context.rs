@@ -493,6 +493,75 @@ fn nested_instruction_files_at_one_boundary_are_held_to_the_cap() {
     assert_eq!(warned[0].1, ["b/AGENTS.md"]);
 }
 
+/// A nested instruction file left out for the cap is given at a later
+/// boundary of the epoch. After a compaction the first boundary looks again
+/// under every directory the session's tools touched, all at once, so the
+/// cap leaves some out there; a file left out for good would never reach
+/// the model in that epoch, where a resumed session would give it. Found
+/// by the review of the fixes after step 15's review.
+#[test]
+fn a_nested_instruction_file_left_out_for_the_cap_is_given_at_a_later_boundary() {
+    let read = |id: &str, path: &str| calls(&[(id, "read", json!({"path": path, "record": true}))]);
+    let world = World::new(
+        "instructions_nested_later",
+        [
+            read("c1", "a/x.rs"),
+            read("c2", "b/y.rs"),
+            says("Both read."),
+            says("Goal: the summary."),
+            read("c3", "b/z.rs"),
+            read("c4", "b/w.rs"),
+            says("Done."),
+        ],
+    );
+    let mut setup = Setup::new(&world);
+    setup.context = ContextSettings {
+        instructions_cap: 100,
+        background: false,
+        ..ContextSettings::default()
+    };
+    let rig = setup.start(&world);
+    rig.instructions
+        .set(&root_file(&rig, "a/AGENTS.md"), "a".repeat(60));
+    rig.instructions
+        .set(&root_file(&rig, "b/AGENTS.md"), "b".repeat(60));
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+        rig.handle.compact(None).map_err(|error| *error).unwrap();
+        rig.events.turns(2).await;
+        rig.prompt("after");
+        rig.events.turns(3).await;
+    });
+    // Each file was given once in each epoch.
+    let given: Vec<String> = notice_texts(&rig)
+        .into_iter()
+        .filter_map(|text| text.split('`').nth(1).map(str::to_owned))
+        .collect();
+    assert_eq!(
+        given,
+        ["a/AGENTS.md", "b/AGENTS.md", "a/AGENTS.md", "b/AGENTS.md"],
+        "{given:#?}"
+    );
+    let warned: Vec<String> = rig
+        .events
+        .notices()
+        .into_iter()
+        .filter_map(|notice| match notice {
+            Notice::Instructions(notice) if notice.message.contains("left out") => {
+                Some(notice.message)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(
+        warned
+            .iter()
+            .all(|message| message.contains("than the 100 bytes")),
+        "{warned:#?}"
+    );
+}
+
 #[test]
 fn instruction_files_over_the_cap_are_cut_and_the_user_is_told() {
     let world = World::new("instructions_cap", [says("Hello.")]);
