@@ -17,17 +17,13 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 - [a-background-summary-past-its-turn-cannot-be-interrupted](a-background-summary-past-its-turn-cannot-be-interrupted.md): `interrupt` on an idle session does not stop a background summary request, which runs on and goes uncounted. Owner: step 23 or step 27.
 - [a-decision-made-before-an-earlier-call-ran](a-decision-made-before-an-earlier-call-ran.md): Policy decides a call when planned, so a later call can pass through a link made earlier. Owner: a small step of its own, agreed with the owner.
-- [a-fast-roles-refusal-cuts-the-main-models-summary](a-fast-roles-refusal-cuts-the-main-models-summary.md): A summary the `fast` role's model refused is retried on the main model cut to half its limit, since every role shares the main model's budget. Owner: step 16.
 - [a-masked-instruction-notice-is-told-again](a-masked-instruction-notice-is-told-again.md): A masked instruction-file notice hashes differently on reload, so the file is announced as changed after every resume. Owner: a later step on instruction files, or step 32.
 - [a-prompt-past-the-trigger-on-a-small-window](a-prompt-past-the-trigger-on-a-small-window.md): On a small-window model the first estimate exceeds `context.compact_at`, so every turn ends `compaction_failed` unsent. Owner: a later step on local models, or step 33.
 - [a-reasoning-budget-request-past-the-window-on-older-models](a-reasoning-budget-request-past-the-window-on-older-models.md): A main request with a reasoning budget can pass the window with its `max_tokens` on Anthropic's models before Claude 4.5, failing every turn alike. Owner: the step that adds a budget model to the catalog.
 - [a-summary-cut-off-at-the-output-limit](a-summary-cut-off-at-the-output-limit.md): A summary cut off at the output limit is marked only in its text, not in the log's `summary` entry. Owner: a later step on compaction, with the owner for the format.
-- [a-summary-stopped-or-left-is-not-counted](a-summary-stopped-or-left-is-not-counted.md): Usage of a summary request stopped mid-run, or finishing after its session closed, is in no usage record. Owner: step 16.
 - [an-instruction-file-left-out-for-the-cap](an-instruction-file-left-out-for-the-cap.md): An instruction file left out of the prompt for `context.instructions_cap` is still listed in the epoch as given. Owner: a later step on instruction files, with the owner for the format.
 - [session-compact-after-a-turns-last-request](session-compact-after-a-turns-last-request.md): `session/compact` during a turn's last request waits for the next turn instead of running a compaction-only turn. Owner: step 23 or step 27.
-- [spans-in-the-agent-loop](spans-in-the-agent-loop.md): The `turn`, `request` and `tool` tracing spans are not opened, since `cortex-agent` does not link `tracing`. Owner: step 16, or step 33 at the latest.
 - [stopping-at-a-task-lease-edge](stopping-at-a-task-lease-edge.md): At a task lease's edge the loop should stop and report, then fall back to the standing lease. Owner: step 37.
-- [the-context-record-of-an-overflowed-request](the-context-record-of-an-overflowed-request.md): A request refused as too long leaves no `StatEvent::Context` record, so the wrong estimate is not stored. Owner: step 16 or step 44.
 - [the-token-counting-endpoint-near-the-limit](the-token-counting-endpoint-near-the-limit.md): The provider's token-counting endpoint is never asked near the limit; needs a `Protocol` method and loop call. Owner: a later step that touches the budget, or step 33.
 
 ### cortex-base
@@ -52,6 +48,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 - [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it; one CI flake. Owner: the next step that changes the base capture, or step 32.
 - [a-closed-view-can-still-answer](a-closed-view-can-still-answer.md): After `session/close` a client stays among those an approval request went to, so its answer is still taken. Owner: the owner; before step 27.
+- [a-days-time-limit](a-days-time-limit.md): `limits.day.time` is declared and not enforced, and a session open across midnight draws on the day it began in. Owner: step 37 (task leases' budgets), or a step the owner names.
 - [an-observer-that-ends-a-session](an-observer-that-ends-a-session.md): An observer's `session/close` or disconnect can end a session that has no client left that may drive it. Owner: the owner; before step 27.
 - [config-reload-through-the-core](config-reload-through-the-core.md): `config/reload` answers `not_available`; what a reload applies to a running session, key by key, is not wired. Owner: step 23.
 - [continue-chooses-the-newest-session](continue-chooses-the-newest-session.md): `session/list` orders by session id, so `--continue` takes the newest created, not the last used. Owner: step 23.
@@ -62,7 +59,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-llm
 
-- [a-balance-in-the-usage-view](a-balance-in-the-usage-view.md): Whether `usage/report` carries a money balance from the OpenRouter, DeepSeek and Venice.ai usage endpoints, including non-dollar units. Owner: step 16.
 - [a-price-that-depends-on-the-time-of-day](a-price-that-depends-on-the-time-of-day.md): The catalog's single rate card records DeepSeek's off-peak requests at the peak price, an upper bound. Owner: the owner, with step 16.
 - [account-in-the-replay-rule](account-in-the-replay-rule.md): Whether a request carries its account, so a provider tying reasoning to an account never gets another's. Owner: the first step that adds such a provider, or step 53.
 - [fuzz-targets-for-later-decoders](fuzz-targets-for-later-decoders.md): Each later provider protocol's decoder needs a fuzz target in `fuzz/` and a line in `xtask/src/outside.rs`. Owner: steps 31, 35 and 36.

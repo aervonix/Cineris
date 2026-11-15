@@ -165,6 +165,38 @@ fn a_summary_left_running_when_the_session_closes_is_counted() {
     assert_eq!(recorded[0].usage.as_ref().unwrap().tokens.input, 500);
 }
 
+/// A request the provider refused as too long is recorded with its context
+/// record before the compaction: the estimate that was wrong is what
+/// explains the refusal.
+#[test]
+fn a_request_refused_as_too_long_keeps_its_context_record() {
+    let world = World::new(
+        "overflow_record",
+        [
+            Response::events([cortex_llm::ModelEvent::Error(crate::transitions::overflow())]),
+            says("A summary."),
+            says("Hello."),
+        ],
+    );
+    let rig = Setup::new(&world).start(&world);
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    let stats = rig.stats.all();
+    let contexts = stats
+        .iter()
+        .filter(|event| matches!(event, StatEvent::Context(_)))
+        .count();
+    let refused = stats.iter().any(|event| {
+        matches!(event, StatEvent::Request(request)
+            if request.stop == cortex_protocol::StopReason::ContextOverflow)
+    });
+    assert!(refused, "{stats:#?}");
+    // The refused request's, and the one sent again after the compaction.
+    assert_eq!(contexts, 2, "{stats:#?}");
+}
+
 /// A variant override changes the request, is recorded in the epoch and
 /// with every outcome, and the `guided` style gives the prompt its notes.
 #[test]

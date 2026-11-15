@@ -1149,7 +1149,18 @@ impl Session {
         if error.kind == cortex_base::ErrorKind::ContextOverflow && !prep.overflowed {
             // The provider says the request does not fit: the budget
             // learns from it, and the loop compacts, once, and sends it
-            // again. With automatic compaction off it stops and asks.
+            // again. With automatic compaction off it stops and asks. The
+            // request is recorded first, its context record with it: the
+            // estimate that was wrong is what explains the refusal (since
+            // step 16).
+            self.request_stat(
+                turn,
+                model,
+                None,
+                StopReason::ContextOverflow,
+                Some(data.clone()),
+                &live,
+            );
             if let Err(error) = self.void(turn, model, &mut live, &mut round, data).await {
                 return self.abandon(round, End::store(&error)).await;
             }
