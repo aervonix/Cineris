@@ -32,8 +32,8 @@
 [0m  stops before the [0;96m_[0m and returns [0;96m1[0m. A separator has to be[0m
 [0m  followed by a digit, so the other case becomes an error:[0m
 [0m
-[0m  [0;95mif[0m c == [0;92m'_'[0m {[0m
-[0m  [0m    [0;95mif[0m ![0;96mself[0m.peek_next().is_some_and(|d| d.is_ascii_digi[0m…[0m
+[0m  [0;94mif[0m c == [0;92m'_'[0m {[0m
+[0m      [0;94mif[0m ![0;96mself[0m.peek_next().is_some_and(|d| d.is_ascii_digi…[0m
 [0m          return Err(self.error("digit separator mu[0m
 [0m
 [0;90m╭─────────────────────────────────────────────────────────╮[0m

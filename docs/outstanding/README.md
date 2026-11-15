@@ -108,7 +108,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cortex-tui
 
 - [ambiguous-width-glyphs](ambiguous-width-glyphs.md): Fourteen East Asian ambiguous-width glyphs, box edges among them, break box layout in terminals that draw them wide. Owner: step 23, with the owner; before step 25.
-- [default-colours-under-the-text-target](default-colours-under-the-text-target.md): Some default-theme colours (red, green, yellow, muted, keyword) fall under the 4.5 to 1 contrast target. Owner: the owner; before step 25.
 - [editor-cost-on-very-large-text](editor-cost-on-very-large-text.md): The prompt editor lays out all its text on every key; a shortened `@` query refilters all paths. Owner: step 33.
 - [external-editor-test-gaps](external-editor-test-gaps.md): Parts of the external editor (umask, ConPTY modes, failed hand-over, `.cmd` editors, interrupt guard) are untested. Owner: step 32.
 - [file-completion-on-a-large-workspace](file-completion-on-a-large-workspace.md): Filtering an `@` menu over about 100,000 paths on the key's path can miss the idle key budget. Owner: step 23.

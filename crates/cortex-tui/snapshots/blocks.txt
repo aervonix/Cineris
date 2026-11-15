@@ -88,8 +88,8 @@
 {fg=#7A3CFB b}◆{} {b}1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.|
 {fg=a8}·{} {fg=a8}Context compacted in the background: 148.2k → 23.6k tokens (a 3.1k summary,|
   {fg=a8}the last 6 turns kept).|
-{fg=a1}✗{} {fg=a1}The request failed after 5 attempts: the connection to the provider was|
-  {fg=a1}reset.|
+{fg=a1 b}✗{} {fg=a1 b}The request failed after 5 attempts: the connection to the provider was|
+  {fg=a1 b}reset.|
   {fg=a8}Press enter to try the turn again, or pick another model with /model.|
 {fg=a8}∴ Reasoned for 6s|
   {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal. Check whether a|
@@ -116,8 +116,8 @@
 {fg=a5 b}◆{} {b}1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.|
 {fg=a8}·{} {fg=a8}Context compacted in the background: 148.2k → 23.6k tokens (a 3.1k summary,|
   {fg=a8}the last 6 turns kept).|
-{fg=a1}✗{} {fg=a1}The request failed after 5 attempts: the connection to the provider was|
-  {fg=a1}reset.|
+{fg=a1 b}✗{} {fg=a1 b}The request failed after 5 attempts: the connection to the provider was|
+  {fg=a1 b}reset.|
   {fg=a8}Press enter to try the turn again, or pick another model with /model.|
 {fg=a8}∴ Reasoned for 6s|
   {fg=a8 i}The loop breaks on any non-digit, so _ ends the literal. Check whether a|

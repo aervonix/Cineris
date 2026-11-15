@@ -221,7 +221,18 @@ pub struct Palette {
     pub code: Color,
     /// Inline code is bold as well: where its colour alone is under the
     /// contrast target for text.
+    /// Inline code is bold as well: where its colour alone is under the
+    /// contrast target for text.
     pub code_bold: bool,
+    /// Text in red, green or yellow is bold as well (success, warnings,
+    /// errors, a diff's colours and code's strings and numbers): where those
+    /// colours alone are under the contrast target for text, as the normal
+    /// colours are on a light background (decision 0033's amendment).
+    pub warm_bold: bool,
+    /// [`warm_bold`](Self::warm_bold) reaches code's strings and numbers,
+    /// and a changed line drawn in its colour where there is no tint, as
+    /// well as success, warnings, errors and a diff's signs.
+    pub warm_bold_code_and_lines: bool,
     /// Success.
     pub success: Color,
     /// Warnings.
@@ -263,6 +274,8 @@ impl Palette {
             muted: Color::Ansi(8),
             code: Color::Ansi(14),
             code_bold: false,
+            warm_bold: false,
+            warm_bold_code_and_lines: false,
             success: Color::Ansi(10),
             warning: Color::Ansi(11),
             error: Color::Ansi(9),
@@ -271,7 +284,9 @@ impl Palette {
             diff_add_tint: (0x2e, 0xa0, 0x43),
             diff_del_tint: (0xe0, 0x3e, 0x3e),
             diff_tint_percent: 20,
-            syntax_keyword: Color::Ansi(13),
+            // Bright blue, 5.0 to 1 on Campbell, where bright magenta was 3.2
+            // (decision 0033's amendment).
+            syntax_keyword: Color::Ansi(12),
             syntax_type: Color::Ansi(14),
             syntax_string: Color::Ansi(10),
             syntax_number: Color::Ansi(11),
@@ -280,7 +295,8 @@ impl Palette {
     }
 
     /// The default theme's colours on a light background: the normal colours
-    /// of the terminal's palette, and inline code bold.
+    /// of the terminal's palette, with inline code and text in red, green or
+    /// yellow bold.
     #[must_use]
     pub const fn light() -> Self {
         Self {
@@ -290,6 +306,8 @@ impl Palette {
             muted: Color::Ansi(8),
             code: Color::Ansi(6),
             code_bold: true,
+            warm_bold: true,
+            warm_bold_code_and_lines: true,
             success: Color::Ansi(2),
             warning: Color::Ansi(3),
             error: Color::Ansi(1),
@@ -390,7 +408,43 @@ impl Theme {
 }
 
 /// The style of one token. See [`Token`] for what each is.
+/// The style of one token. See [`Token`] for what each is.
 fn resolve(
+    token: Token,
+    palette: &Palette,
+    depth: ColorDepth,
+    background: Background,
+    background_rgb: Rgb,
+    reported: bool,
+) -> Style {
+    let style = resolve_colour(token, palette, depth, background, background_rgb, reported);
+    // Text in one of the palette's reds, greens and yellows, where those
+    // are under the target alone. The tints behind a diff's lines are
+    // backgrounds, and are not text.
+    let warm = [
+        palette.success,
+        palette.warning,
+        palette.error,
+        palette.diff_add,
+        palette.diff_del,
+        palette.syntax_string,
+        palette.syntax_number,
+    ]
+    .map(|color| color.for_depth(depth));
+    let wide = matches!(
+        token,
+        Token::DiffAddLine | Token::DiffDelLine | Token::SyntaxString | Token::SyntaxNumber
+    );
+    let reached = !wide || palette.warm_bold_code_and_lines;
+    if palette.warm_bold && reached && depth != ColorDepth::Mono && warm.contains(&style.fg) {
+        style.bold()
+    } else {
+        style
+    }
+}
+
+/// The style of one token before [`Palette::warm_bold`].
+fn resolve_colour(
     token: Token,
     palette: &Palette,
     depth: ColorDepth,
