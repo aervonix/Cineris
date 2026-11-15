@@ -580,6 +580,9 @@ pub struct ScriptedPolicy {
     /// question fails the test, naming the call: a default answer could hide
     /// a question that should not have been asked, or one that was.
     unscripted: Mutex<Option<Verdict>>,
+    /// The calls that were asked about with no answer scripted, by their
+    /// plan's summary: each fails the test when its rig goes.
+    unscripted_asked: Mutex<Vec<String>>,
     /// The calls it was shown to decide, by their plan's summary, in order.
     decided: Mutex<Vec<String>>,
     /// A session to interrupt at the moment a question is answered, so
@@ -687,6 +690,19 @@ struct OpenQuestion {
     withdrawn: Arc<Mutex<Vec<String>>>,
 }
 
+impl Drop for Rig {
+    fn drop(&mut self) {
+        let asked = lock(&self.policy.unscripted_asked).clone();
+        if !asked.is_empty() && !std::thread::panicking() {
+            panic!(
+                "the loop asked about {asked:?}, and the test scripted no answer: give one with \
+                 `policy.answer_for(tool, …)`, or answer every question with \
+                 `policy.answer_all(…)`"
+            );
+        }
+    }
+}
+
 impl Drop for OpenQuestion {
     fn drop(&mut self) {
         if let Some(summary) = self.summary.take() {
@@ -746,15 +762,16 @@ impl Policy for ScriptedPolicy {
                 .get_mut(&tool)
                 .and_then(VecDeque::pop_front);
             let unscripted = lock(&self.unscripted).clone();
-            match scripted.or(unscripted) {
-                Some(verdict) => verdict,
-                None => panic!(
-                    "the loop asked about `{}` ({}), and the test scripted no answer: give one \
-                     with `policy.answer_for(\"{tool}\", …)`, or answer every question with \
-                     `policy.answer_all(…)`",
-                    call.plan.summary, tool
-                ),
-            }
+            // A panic here would be the call's error and nothing more (the
+            // loop turns a question's panic into one), so the question is
+            // refused, nothing runs, and the rig fails the test when it
+            // goes ([`Rig`]'s `Drop`).
+            scripted.or(unscripted).unwrap_or_else(|| {
+                lock(&self.unscripted_asked).push(call.plan.summary.clone());
+                Verdict::Deny {
+                    note: Some("the test scripted no answer".to_owned()),
+                }
+            })
         })
     }
 }

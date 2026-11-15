@@ -95,5 +95,5 @@ GitHub Actions used by the workflows, each pinned by commit hash in the workflow
 |---|---|---|
 | `actions/checkout` | v7.0.1 | Checking out the repository. |
 | `Swatinem/rust-cache` | v2.9.3 | Caching the registry and the built dependencies. |
-| `taiki-e/install-action` | v2.90.3 | Installing cargo-nextest, cargo-deny and cargo-machete as checksummed prebuilt binaries, and cargo-fuzz through `cargo-binstall`. |
+| `taiki-e/install-action` | v2.90.3 | Installing cargo-nextest, cargo-deny and cargo-machete as checksummed prebuilt binaries, and cargo-fuzz through `cargo-binstall`. What this version installs from a checksummed manifest of its own is the 106 files of its `manifests/` at the pinned commit (read with `gh api "repos/taiki-e/install-action/contents/manifests?ref=<commit>"`): among them cargo-nextest, cargo-deny, cargo-machete, cargo-binstall, cargo-hack, cargo-llvm-cov, cargo-mutants, cargo-xwin, cargo-udeps, shellcheck, typos, zizmor, just and taplo. **actionlint is not among them,** at this version or any other ([outstanding/actionlint-in-the-checks.md](outstanding/actionlint-in-the-checks.md)); a tool not listed falls back to `cargo-binstall`, which needs a crate of that name. |
 | `actions/upload-artifact` | v7.0.2 | Keeping the size and crate-count record of each `main` and `nightly` run. Not used by the blocking workflow. |
