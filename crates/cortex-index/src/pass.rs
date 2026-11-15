@@ -184,8 +184,9 @@ impl Index {
     }
 
     /// What may be indexed and named.
-    pub(crate) fn gate(&self) -> &dyn Gate {
-        &*self.gate
+    /// The gate as one pass or one map asks it ([`Gate::for_pass`]).
+    pub(crate) fn gate_for_pass(&self) -> Arc<dyn Gate> {
+        walk::for_pass(&self.gate)
     }
 
     /// The cache file.
@@ -261,7 +262,7 @@ impl Index {
             .is_some_and(|cache| cache.partial.contains(&Partial::Listing));
         let listing = walk::list(
             &self.root,
-            &self.gate,
+            &walk::for_pass(&self.gate),
             &self.limits,
             &control,
             threads,

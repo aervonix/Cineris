@@ -319,4 +319,20 @@ fn a_name_shown_escaped_resolves_to_its_file() {
         .expect("it resolves");
     assert!(!new.exists());
     assert!(new.data().ends_with(".md"));
+    // A new file in a directory shown escaped goes in that directory, not
+    // in a new one named by the escape (on Windows, where `\\` parts a
+    // path, in `a/u{200c}b`).
+    scratch.file("ws/docs/a\u{200C}b/old.md", "x");
+    let new = resolver
+        .resolve("docs/a\\u{200c}b/new.md")
+        .expect("it resolves");
+    assert!(!new.exists());
+    assert_eq!(new.data(), "docs/a\u{200C}b/new.md");
+    assert_eq!(new.shown(), "docs/a\\u{200c}b/new.md");
+    // Where the written spelling reaches as far, it is kept.
+    let deep = resolver
+        .resolve("nowhere/a\\u{200c}b/new.md")
+        .expect("it resolves");
+    assert!(!deep.data().contains('\u{200C}'), "{}", deep.data());
+    assert!(deep.data().ends_with("u{200c}b/new.md"), "{}", deep.data());
 }

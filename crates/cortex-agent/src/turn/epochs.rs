@@ -396,6 +396,9 @@ impl Session {
             parts.user_dir.as_ref(),
             &parts.settings.instruction_names,
         );
+        // For each place, the name as written when it differs from the
+        // place's: tried first.
+        let mut as_written: Vec<Option<AbsPath>> = vec![None; checked.len()];
         // The nested files the model was given.
         for shown in self.context.given.files.keys() {
             if checked.iter().any(|place| &place.shown == shown) {
@@ -403,10 +406,15 @@ impl Session {
             }
             // The key is the name the model was shown, escaped: a name that
             // held a character that acts unseen leads to its file read back
-            // (the independent review of step 18's fixes). The loop looks at
-            // no file, so the name read back is taken; one that held `\n` as
-            // two characters reads as a line break, as it is shown.
-            if let Ok(path) = root.join(&cortex_base::unescape(shown)) {
+            // (the independent review of step 18's fixes). A name that held
+            // `\n` as two characters is the key as it is, which is tried
+            // first, on the blocking pool, since the loop looks at no file.
+            let unescaped = cortex_base::unescape(shown);
+            if let Ok(path) = root.join(&unescaped) {
+                as_written.push(match unescaped {
+                    std::borrow::Cow::Owned(_) => root.join(shown).ok(),
+                    std::borrow::Cow::Borrowed(_) => None,
+                });
                 checked.push(Place {
                     dir: path.parent().unwrap_or_else(|| root.clone()),
                     path,
@@ -420,7 +428,18 @@ impl Session {
         let read = run_blocking(&CancelToken::new(), move |_| {
             checked
                 .into_iter()
-                .map(|place| {
+                .zip(as_written)
+                .map(|(place, as_written)| {
+                    if let Some(path) = as_written {
+                        let written = Place {
+                            dir: path.parent().unwrap_or_else(|| place.dir.clone()),
+                            path,
+                            ..place.clone()
+                        };
+                        if let Ok(Some(found)) = read_one(&*io, &written, cap) {
+                            return (written, Ok(Some(found)));
+                        }
+                    }
                     let found = read_one(&*io, &place, cap);
                     (place, found)
                 })

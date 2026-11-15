@@ -514,7 +514,13 @@ mod tests {
                 }
                 before = Some(character);
             }
-            assert_eq!(unescape(&shown), text, "{text:?}");
+            // Read back, it is the text again, when the text held no
+            // backslash: one that held `\u{a}` as five characters reads
+            // back as a line break, which is why a caller tries a name as
+            // it is first.
+            if !text.contains('\\') {
+                assert_eq!(unescape(&shown), text, "{text:?}");
+            }
         }
     }
 }

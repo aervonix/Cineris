@@ -1357,11 +1357,10 @@ pub(crate) fn assemble(
                 index_settings.max_file_bytes,
                 index_settings.pass_time,
             );
-            let keep = policy.keep_gate();
             let gate: Arc<dyn cortex_index::Gate> = options
                 .index_gate
                 .clone()
-                .unwrap_or_else(|| Arc::new(move |path: &AbsPath| keep.may_keep(path)));
+                .unwrap_or_else(|| policy.index_gate());
             let index = cortex_index::Index::new(
                 root.clone(),
                 dir.clone(),

@@ -187,6 +187,20 @@ impl EnginePolicy {
         })
     }
 
+    /// The repository index's gate: [`EnginePolicy::keep_gate`]'s answer, with
+    /// the engine in force taken once for each pass and each map rather
+    /// than for each path. Taking it costs a lock and two counts shared
+    /// by the pass's threads, which under four of them came to 0.55 µs a
+    /// path, a pass at its cap of 100,000 entries 14 ms (found by the
+    /// independent review of step 18's fixes). What is approved or refused
+    /// after a change of level is still the next pass's and the next
+    /// map's.
+    pub(crate) fn index_gate(self: &Arc<Self>) -> Arc<dyn cortex_index::Gate> {
+        Arc::new(IndexGate {
+            policy: Arc::downgrade(self),
+        })
+    }
+
     fn outcome(&self, call: &PlannedCall<'_>) -> Outcome {
         let Some(accesses) = accesses(call) else {
             // The engine cannot be shown the whole of what the call does,
@@ -496,5 +510,25 @@ struct EngineGate(Arc<Engine>);
 impl ReadGate for EngineGate {
     fn may_read(&self, path: &AbsPath) -> bool {
         self.0.may_read(path)
+    }
+}
+
+/// [`EnginePolicy::index_gate`].
+struct IndexGate {
+    policy: std::sync::Weak<EnginePolicy>,
+}
+
+impl cortex_index::Gate for IndexGate {
+    fn may_index(&self, path: &AbsPath) -> bool {
+        self.policy
+            .upgrade()
+            .is_some_and(|policy| policy.engine().may_store(path))
+    }
+
+    fn for_pass(&self) -> Option<Arc<dyn cortex_index::Gate>> {
+        let engine = self.policy.upgrade().map(|policy| policy.engine());
+        Some(Arc::new(move |path: &AbsPath| {
+            engine.as_ref().is_some_and(|engine| engine.may_store(path))
+        }))
     }
 }

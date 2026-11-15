@@ -323,4 +323,12 @@ fn a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_reso
         let text = ok(&ws.call(&ListTool::new(), json!({"path": "."})));
         assert!(text.contains("li\\u{202e}nk/"), "{text}");
     }
+    // A glob that copies a name as it was shown finds it: in a glob `\u` is
+    // a `u` and `{200c}` a choice of one, so it is also read with its
+    // escapes read back (the independent review of step 18's fixes).
+    ws.file("docs/a\u{200C}b.md", "a\n");
+    for glob in ["a\\u{200c}b.md", "docs/a\\u{200c}*", "**/*\\u{200c}b.md"] {
+        let text = ok(&ws.call(&ListTool::new(), json!({"glob": glob})));
+        assert!(text.contains("\ndocs/a\\u{200c}b.md"), "{glob}: {text}");
+    }
 }

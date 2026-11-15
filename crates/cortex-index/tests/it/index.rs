@@ -727,6 +727,64 @@ fn the_map_asks_its_own_sessions_gate_again_whatever_the_cache_holds() {
     }
 }
 
+/// A gate that is taken once for each pass and each map, and never asked
+/// itself: what the permission engine's does, so that finding the engine
+/// in force is paid once a pass and not for every path (the independent
+/// review of step 18's fixes).
+struct TakenOnce {
+    taken: Arc<AtomicU64>,
+    asked: Arc<AtomicU64>,
+}
+
+impl Gate for TakenOnce {
+    fn may_index(&self, path: &AbsPath) -> bool {
+        panic!("the gate itself was asked about {path}");
+    }
+
+    fn for_pass(&self) -> Option<Arc<dyn Gate>> {
+        self.taken.fetch_add(1, Ordering::SeqCst);
+        let asked = Arc::clone(&self.asked);
+        Some(Arc::new(move |path: &AbsPath| {
+            asked.fetch_add(1, Ordering::SeqCst);
+            !path.as_str().ends_with("/hidden.rs")
+        }))
+    }
+}
+
+#[test]
+fn a_pass_and_a_map_each_take_the_gate_once() {
+    let tree = Tree::new(cortex_testkit::scratch!(
+        "a_pass_and_a_map_each_take_the_gate_once"
+    ));
+    for n in 0..5 {
+        tree.write(&format!("src/f{n}.rs"), &rust_file(&format!("f{n}")));
+    }
+    tree.write("src/hidden.rs", &rust_file("hidden"));
+    let taken = Arc::new(AtomicU64::new(0));
+    let asked = Arc::new(AtomicU64::new(0));
+    let index = tree.index_with(
+        Limits::default(),
+        Arc::new(TakenOnce {
+            taken: Arc::clone(&taken),
+            asked: Arc::clone(&asked),
+        }),
+    );
+    let (report, snapshot) = index.pass_and_keep(&CancelToken::new(), &|| false);
+    assert_eq!(report.found, 5, "{report:?}");
+    assert_eq!(taken.load(Ordering::SeqCst), 1);
+    let listed = asked.load(Ordering::SeqCst);
+    assert!(listed >= 6, "{listed}");
+    let map = index
+        .map_from(&snapshot, &MapRequest::new())
+        .expect("a map");
+    assert!(
+        map.contains("src/f4.rs") && !map.contains("hidden"),
+        "{map}"
+    );
+    assert_eq!(taken.load(Ordering::SeqCst), 2);
+    assert!(asked.load(Ordering::SeqCst) > listed);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_file_rewritten_with_its_old_size_and_time_is_known_by_its_change_time() {

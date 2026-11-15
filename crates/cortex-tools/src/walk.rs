@@ -46,9 +46,17 @@ pub(crate) struct WalkSpec<'a> {
 /// A pattern with no `/` in it matches a name at any depth (`*.rs`). A
 /// pattern with one matches the whole relative path (`src/**/*.rs`). `*`
 /// never crosses a `/`; `**` does.
+///
+/// A pattern that holds a name as the model was shown it, escaped
+/// (`a\u{200c}b.md`), matches that name too: in a glob `\u` is a `u` and
+/// `{200c}` a choice of one, so the pattern is also read with the escapes
+/// read back ([`cortex_base::unescape`]), and an entry matches either (the
+/// independent review of step 18's fixes).
 #[derive(Debug, Clone)]
 pub(crate) struct GlobFilter {
     matcher: GlobMatcher,
+    /// The pattern with its escapes read back, when that differs.
+    unescaped: Option<GlobMatcher>,
     name_only: bool,
 }
 
@@ -56,29 +64,45 @@ impl GlobFilter {
     /// Reads a glob. A pattern that is not a glob is refused, with the
     /// reason.
     pub(crate) fn new(pattern: &str) -> Result<Self, ToolError> {
-        // On Windows a model may write the separator either way.
-        let pattern = if cfg!(windows) {
-            pattern.replace('\\', "/")
-        } else {
-            pattern.to_owned()
+        // On Windows a model may write the separator either way. The
+        // escapes are read back first, while each `\` is still one.
+        let normal = |pattern: &str| {
+            let pattern = if cfg!(windows) {
+                pattern.replace('\\', "/")
+            } else {
+                pattern.to_owned()
+            };
+            match pattern.strip_prefix("./") {
+                Some(rest) => rest.to_owned(),
+                None => pattern,
+            }
         };
-        let pattern = pattern.strip_prefix("./").unwrap_or(&pattern);
+        let build = |pattern: &str| {
+            GlobBuilder::new(pattern)
+                .literal_separator(true)
+                .case_insensitive(cfg!(windows))
+                .build()
+        };
+        let unescaped = match cortex_base::unescape(pattern) {
+            std::borrow::Cow::Owned(unescaped) => build(&normal(&unescaped))
+                .ok()
+                .map(|glob| glob.compile_matcher()),
+            std::borrow::Cow::Borrowed(_) => None,
+        };
+        let pattern = normal(pattern);
         if pattern.is_empty() {
             return Err(ToolError::invalid("`glob` must not be empty."));
         }
-        let glob = GlobBuilder::new(pattern)
-            .literal_separator(true)
-            .case_insensitive(cfg!(windows))
-            .build()
-            .map_err(|error| {
-                ToolError::invalid(format!(
-                    "`glob` is not a valid glob: {}. Use `*` for part of a name, `**` for any \
-                     directories, `{{a,b}}` for alternatives.",
-                    error.kind()
-                ))
-            })?;
+        let glob = build(&pattern).map_err(|error| {
+            ToolError::invalid(format!(
+                "`glob` is not a valid glob: {}. Use `*` for part of a name, `**` for any \
+                 directories, `{{a,b}}` for alternatives.",
+                error.kind()
+            ))
+        })?;
         Ok(Self {
             matcher: glob.compile_matcher(),
+            unescaped,
             name_only: !pattern.contains('/'),
         })
     }
@@ -92,6 +116,10 @@ impl GlobFilter {
             relative
         };
         self.matcher.is_match(candidate)
+            || self
+                .unescaped
+                .as_ref()
+                .is_some_and(|matcher| matcher.is_match(candidate))
     }
 }
 

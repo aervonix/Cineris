@@ -17,6 +17,8 @@
 //! It is linear: each byte is looked at a bounded number of times, and no
 //! scan is begun again from every position of a line.
 
+use crate::outline::NAME_CHARS;
+
 /// A kind of quote, and how a string it opens behaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Quote {
@@ -223,6 +225,35 @@ pub(crate) struct Lexer {
     /// start and did not close: no later `/` of the line is tried, so a
     /// line of them is not scanned to its end from each.
     no_regex: bool,
+    /// A shell's arithmetic on the line being read: the `((` and the `))`
+    /// counted so far, and up to where. Each pair is counted once, as the
+    /// reading passes it.
+    arithmetic: Arithmetic,
+}
+
+/// A shell's `((` and `))` on a line, counted up to a point of it.
+#[derive(Debug, Default)]
+struct Arithmetic {
+    counted: usize,
+    opened: usize,
+    closed: usize,
+}
+
+impl Arithmetic {
+    /// Whether the code of the line before `at` has opened an arithmetic
+    /// expression (`((` or `$((`) and not closed it. `code[..at]` is read
+    /// for the first time from where the last call stopped.
+    fn open_at(&mut self, code: &[u8], at: usize) -> bool {
+        for end in self.counted.max(1)..at {
+            match &code[end - 1..=end] {
+                b"((" => self.opened += 1,
+                b"))" => self.closed += 1,
+                _ => {}
+            }
+        }
+        self.counted = self.counted.max(at);
+        self.opened > self.closed
+    }
 }
 
 impl Lexer {
@@ -232,6 +263,7 @@ impl Lexer {
             state: State::Code,
             next_heredoc: None,
             no_regex: false,
+            arithmetic: Arithmetic::default(),
         }
     }
 
@@ -254,6 +286,7 @@ impl Lexer {
         let bytes = line.as_bytes();
         let mut code = vec![b' '; bytes.len()];
         self.no_regex = false;
+        self.arithmetic = Arithmetic::default();
 
         // Whole-line states first.
         match &self.state {
@@ -421,8 +454,10 @@ impl Lexer {
                 at += 3;
                 continue;
             }
-            // Heredocs. `<` is ASCII, so `at` is on a character's start.
+            // Heredocs. `<` is ASCII, so `at` is on a character's start. In
+            // a shell's arithmetic, `$(( 1<<bits ))`, `<<` is a shift.
             if byte == b'<'
+                && !(syntax.heredocs == Heredocs::Shell && self.arithmetic.open_at(code, at))
                 && let Some((tag, indented, len)) = heredoc_at(syntax.heredocs, &line[at..])
             {
                 code[at..at + len].copy_from_slice(&bytes[at..at + len]);
@@ -518,11 +553,15 @@ const BEFORE_REGEX: &[&str] = &[
 /// regular expression and not a division: at the line's start, after an
 /// operator or an opening bracket, or after a word of [`BEFORE_REGEX`].
 ///
-/// Not after `<` or `}`, though a regular expression may follow either: in
-/// JSX, `</div>` closes a tag and `<input value={v} />` closes itself, and
-/// a regular expression read from there to the next `/` of the line would
-/// blank whatever braces are between (`/>{items.map(…)}</ul>`). A regular
-/// expression after either is rare in code; a JSX tag after either is not.
+/// Not after `<`, `>` or `}`, though a regular expression may follow any of
+/// them: in JSX, `</div>` closes a tag, `<input value={v} />` closes itself
+/// and `<li>Home</li> / {x}` is text, and a regular expression read from
+/// there to the next `/` of the line would blank whatever braces are
+/// between (`/>{items.map(…)}</ul>`). A regular expression after one of
+/// them is rare in code; a JSX tag is not. `=>` is an arrow, and is not
+/// JSX. Not after `++` or `--`, which end an operand (`n++ / 2`), a `!`
+/// right after a name or a closing bracket (TypeScript's `total! / n`), or
+/// a word of [`BEFORE_REGEX`] after a `.`, which is a property (`x.in / 2`).
 fn regex_may_start(before: &[u8]) -> bool {
     let Some(last) = before
         .iter()
@@ -530,27 +569,18 @@ fn regex_may_start(before: &[u8]) -> bool {
     else {
         return true;
     };
-    if matches!(
-        before[last],
-        b'(' | b','
-            | b'='
-            | b':'
-            | b'['
-            | b'!'
-            | b'&'
-            | b'|'
-            | b'?'
-            | b'{'
-            | b';'
-            | b'+'
-            | b'-'
-            | b'*'
-            | b'%'
-            | b'>'
-            | b'~'
-            | b'^'
-    ) {
-        return true;
+    let previous = last.checked_sub(1).map(|at| before[at]);
+    match before[last] {
+        b'(' | b',' | b'=' | b':' | b'[' | b'&' | b'|' | b'?' | b'{' | b';' | b'*' | b'%'
+        | b'~' | b'^' => return true,
+        b'+' | b'-' => return previous != Some(before[last]),
+        b'!' => {
+            return !previous.is_some_and(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b')' | b']')
+            });
+        }
+        b'>' => return previous == Some(b'='),
+        _ => {}
     }
     // The word that ends there, looked at no further back than the
     // longest of the words is long.
@@ -564,7 +594,7 @@ fn regex_may_start(before: &[u8]) -> bool {
     while start > 0 && last + 1 - start <= longest && word_byte(before[start - 1]) {
         start -= 1;
     }
-    if start > 0 && word_byte(before[start - 1]) {
+    if start > 0 && (word_byte(before[start - 1]) || before[start - 1] == b'.') {
         return false;
     }
     let word = &before[start..=last];
@@ -658,7 +688,13 @@ fn heredoc_at(kind: Heredocs, rest: &str) -> Option<(String, bool, usize)> {
     let tag: String = after_quote
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .take(NAME_CHARS + 1)
         .collect();
+    // A tag longer than a name is not one: the lexer would hold it for every
+    // line after.
+    if tag.len() > NAME_CHARS {
+        return None;
+    }
     let first = tag.chars().next()?;
     // A tag looks like one: a letter or `_` first, and in Ruby a capital
     // unless quoted, so that `a << b` and `1<<2` are not heredocs.
@@ -730,9 +766,22 @@ mod tests {
         let lines = lex(Syntax::SHELL, "cat <<EOF\nf() {\nEOF\ng() {");
         assert_eq!(lines[1].trim(), "");
         assert_eq!(lines[3], "g() {");
-        // An arithmetic shift is not a heredoc.
+        // An arithmetic shift is not a heredoc, by a number or by a name.
         let lines = lex(Syntax::SHELL, "x=$((1<<2))\nf() {");
         assert_eq!(lines[1], "f() {");
+        let lines = lex(Syntax::SHELL, "mask=$(( 1<<bits ))\nf() {\nbits\ng() {");
+        assert_eq!(lines[1], "f() {");
+        let lines = lex(Syntax::SHELL, "(( n <<= 2 ))\nf() {");
+        assert_eq!(lines[1], "f() {");
+        // A heredoc after an arithmetic expression that closed is one.
+        let lines = lex(Syntax::SHELL, "echo $((1)) <<EOF\nf() {\nEOF\ng() {");
+        assert_eq!(lines[1].trim(), "");
+        assert_eq!(lines[3], "g() {");
+        // A tag longer than a name is not one.
+        let long = format!("cat <<{}\nf() {{", "A".repeat(NAME_CHARS + 1));
+        assert_eq!(lex(Syntax::SHELL, &long)[1], "f() {");
+        let longest = format!("cat <<{}\nf() {{", "A".repeat(NAME_CHARS));
+        assert_eq!(lex(Syntax::SHELL, &longest)[1].trim(), "");
         let lines = lex(Syntax::RUBY, "x = <<~SQL\n  def no\n  SQL\ndef yes");
         assert_eq!(lines[1].trim(), "");
         assert_eq!(lines[3], "def yes");
@@ -785,8 +834,24 @@ mod tests {
             // One that does not close on its line is a division, and no
             // later `/` of the line is tried.
             ("x = /[ (/a/", "x = /[ (/a/"),
-            // JSX: a closing tag and a tag that closes itself.
+            // JSX: a closing tag and a tag that closes itself, and text
+            // after a tag.
             ("<p>{a}</p>{b && <i/>}", "<p>{a}</p>{b && <i/>}"),
+            (
+                "<li>Home</li> / {open && <b>x</b>}",
+                "<li>Home</li> / {open && <b>x</b>}",
+            ),
+            // After an arrow or a `!` that negates, a regular expression.
+            ("f = (a) => /a{/.test(a)", "f = (a) => /  /.test(a)"),
+            ("if (!/a{/.test(s)) {", "if (!/  /.test(s)) {"),
+            ("x = a + /a{/", "x = a + /  /"),
+            // An operand's end: `++`, `--`, TypeScript's `!`, a property
+            // named as a keyword.
+            ("y = n++ / 2 + {} / 1;", "y = n++ / 2 + {} / 1;"),
+            ("y = i-- / 2 + {} / 1;", "y = i-- / 2 + {} / 1;"),
+            ("y = total! / n + {} / 1;", "y = total! / n + {} / 1;"),
+            ("y = f()! / n + {} / 1;", "y = f()! / n + {} / 1;"),
+            ("y = x.in / 2 + {} / 1;", "y = x.in / 2 + {} / 1;"),
             (
                 "<input value={v} />{list.map(f)}<br/>",
                 "<input value={v} />{list.map(f)}<br/>",
