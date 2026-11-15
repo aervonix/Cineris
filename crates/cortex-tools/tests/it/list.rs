@@ -320,6 +320,14 @@ fn a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_reso
     {
         ws.dir("real");
         std::os::unix::fs::symlink(ws.root().join("real"), ws.root().join("li\u{202E}nk")).unwrap();
+        // Its twin, whose name holds the escape as text, leads to a file:
+        // each link is resolved by its own name, not by the text shown.
+        ws.file("target.txt", "x\n");
+        std::os::unix::fs::symlink(
+            ws.root().join("target.txt"),
+            ws.root().join("li\\u{202e}nk"),
+        )
+        .unwrap();
         let text = ok(&ws.call(&ListTool::new(), json!({"path": "."})));
         assert!(text.contains("li\\u{202e}nk/"), "{text}");
     }
