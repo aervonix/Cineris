@@ -99,6 +99,99 @@ pub(crate) fn parse(xml: &str) -> Vec<TestCase> {
     cases
 }
 
+/// What a failed case of a report says about its failure.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Failure {
+    pub(crate) binary: String,
+    pub(crate) name: String,
+    pub(crate) repeat: Option<u32>,
+    /// The failure's text as nextest kept it: the panic's message for a
+    /// test that panicked, empty for a timeout.
+    pub(crate) text: String,
+    /// The failure's kind as nextest names it: `test failure with exit
+    /// code 101`, `test timeout`.
+    pub(crate) kind: String,
+    /// What the test wrote to its standard error: where the timeout report
+    /// of `cortex_testkit::watch` is.
+    pub(crate) stderr: String,
+}
+
+/// The failures of a report, in its order: every case with a `<failure>`,
+/// an `<error>` or, for a test that passed on its retry, a
+/// `<flakyFailure>` or `<flakyError>`, with the first of them.
+pub(crate) fn failures(xml: &str) -> Vec<Failure> {
+    let mut found = Vec::new();
+    for suite in xml.split("<testsuite ").skip(1) {
+        let suite_tag = suite.split('>').next().unwrap_or(suite);
+        let repeat = attribute(suite_tag, "name").and_then(|name| {
+            let (_, number) = name.rsplit_once("@stress-")?;
+            number.parse().ok()
+        });
+        for element in suite.split("<testcase ").skip(1) {
+            let tag = element.split('>').next().unwrap_or(element);
+            if tag.ends_with('/') {
+                continue;
+            }
+            let after_tag = &element[tag.len()..];
+            let children = after_tag.split("</testcase>").next().unwrap_or(after_tag);
+            let first = ["failure", "error", "flakyFailure", "flakyError"]
+                .iter()
+                .filter_map(|child| {
+                    // `<failure` must not be the start of `<failures`.
+                    let at = children
+                        .find(&format!("<{child} "))
+                        .into_iter()
+                        .chain(children.find(&format!("<{child}>")))
+                        .chain(children.find(&format!("<{child}/")))
+                        .min()?;
+                    Some((at, *child))
+                })
+                .min();
+            let Some((at, child)) = first else {
+                continue;
+            };
+            let (kind, text) = child_text(&children[at..], child);
+            let stderr = children
+                .find("<system-err>")
+                .map(|at| child_text(&children[at..], "system-err").1)
+                .unwrap_or_default();
+            if let (Some(name), Some(binary)) =
+                (attribute(tag, "name"), attribute(tag, "classname"))
+            {
+                found.push(Failure {
+                    binary: unescape(binary),
+                    name: unescape(name),
+                    repeat,
+                    text,
+                    kind,
+                    stderr,
+                });
+            }
+        }
+    }
+    found
+}
+
+/// The `type` of the element `child` that `element` begins with, and its
+/// text, or its `message` when it has no text.
+fn child_text(element: &str, child: &str) -> (String, String) {
+    let tag = element.split('>').next().unwrap_or(element);
+    let kind = attribute(tag, "type").map(unescape).unwrap_or_default();
+    let message = attribute(tag, "message").map(unescape).unwrap_or_default();
+    let text = if tag.ends_with('/') {
+        String::new()
+    } else {
+        let body = element.get(tag.len() + 1..).unwrap_or_default();
+        unescape(body.split(&format!("</{child}>")).next().unwrap_or(body))
+    };
+    let text = if text.trim().is_empty() {
+        message
+    } else {
+        text
+    };
+    (kind, text)
+}
+
 /// The value of `name="..."` in a start tag.
 fn attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     let mut rest = tag;
@@ -311,6 +404,45 @@ pub(crate) mod tests {
             .collect();
 
         assert_eq!(retried, ["timing_sensitive::sys_passes_the_second_time"]);
+    }
+
+    #[test]
+    fn a_failures_text_kind_and_standard_error_are_read_and_a_pass_has_none() {
+        let failures = super::failures(REPORT);
+        let seen: Vec<(&str, &str, &str)> = failures
+            .iter()
+            .map(|failure| {
+                (
+                    failure.name.as_str(),
+                    failure.kind.as_str(),
+                    failure.text.lines().next().unwrap_or(""),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            seen,
+            [
+                (
+                    "loop_::stops_at_the_refused_call",
+                    "test failure with exit code 101",
+                    "assertion `left == right` failed"
+                ),
+                ("loop_::never_ends", "test timeout", ""),
+                (
+                    "timing_sensitive::sys_passes_the_second_time",
+                    "test failure with exit code 101",
+                    "no"
+                ),
+            ]
+        );
+        assert!(failures[0].text.contains(" right: [\"a\", \"b\"]"));
+        // No text: the message stands in for it.
+        let xml = r#"<testsuite name="a"><testcase name="x" classname="a"><error message="could not start" type="error"></error><system-err>the end
+</system-err></testcase></testsuite>"#;
+        let failure = &super::failures(xml)[0];
+        assert_eq!(failure.text, "could not start");
+        assert_eq!(failure.stderr, "the end\n");
     }
 
     #[test]

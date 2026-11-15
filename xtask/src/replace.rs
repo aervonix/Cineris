@@ -25,6 +25,8 @@ usage: cargo xtask replace FILE (--from CODE | --from-file PATH)
                                 [--in ITEM] [--occurrence N] [--dry-run]
        cargo xtask replace FILE --text (--from TEXT | --from-file PATH)
                                        (--to TEXT | --to-file PATH) [--dry-run]
+       cargo xtask replace --script FILE [--dry-run]   (many edits, all or none:
+                                                         `--script --help`)
 
 Replaces the code that --from matches, by its tokens, with --to, as text.
 White space and comments do not count in the match, so it holds however
@@ -225,8 +227,290 @@ fn edit(source: &str, request: &Request, shown_as: &str) -> Result<(String, Stri
     Ok(replaced(source, range, &request.to, shown_as))
 }
 
+const SCRIPT_USAGE: &str = "\
+usage: cargo xtask replace --script FILE [--dry-run]
+
+Makes every edit of FILE, in order, or none of them. An edit is:
+
+    @@ file: crates/cortex-tui/src/theme.rs
+    @@ in: Theme::light          (optional, Rust only)
+    @@ occurrence: 2             (optional, Rust only)
+    @@ text                      (optional: exact text in a .rs file too)
+    @@ from
+    the code or text to find, its lines as they are
+    @@ to
+    what to put there
+    @@ end
+
+A `.rs` file is matched by tokens, as `replace FILE --from` does; any other
+file, or one with `@@ text`, by exact text. Each edit's --from must be in its
+file exactly once, as the edits before it left the file. If any edit cannot
+be made, the command names it and writes nothing. Lines outside an edit that
+begin with `#`, and empty ones, are comments.";
+
+/// One edit of a script, and where it was written.
+#[derive(Debug, PartialEq)]
+struct ScriptEdit {
+    /// Its number in the script, from 1, and its first line.
+    number: usize,
+    line: usize,
+    request: Request,
+}
+
+/// Reads a script of edits ([`SCRIPT_USAGE`]).
+fn parse_script(script: &str) -> Result<Vec<ScriptEdit>> {
+    #[derive(PartialEq)]
+    enum In {
+        Between,
+        Header,
+        From,
+        To,
+    }
+    let mut edits = Vec::new();
+    let mut state = In::Between;
+    let (mut from, mut to) = (Vec::<&str>::new(), Vec::<&str>::new());
+    let mut current: Option<ScriptEdit> = None;
+    let mut forced_text = false;
+    for (index, line) in script.lines().enumerate() {
+        let at = index + 1;
+        let marker = line.strip_prefix("@@ ").map(str::trim_end);
+        let fail = |what: &str| Err(format!("the script's line {at}: {what}\n\n{SCRIPT_USAGE}"));
+        match (&state, marker) {
+            (In::Between, None) => {
+                if !(line.trim().is_empty() || line.starts_with('#')) {
+                    return fail("text outside an edit: begin one with `@@ file: PATH`");
+                }
+            }
+            (In::Between, Some(marker)) => {
+                let Some(path) = marker.strip_prefix("file:").map(str::trim) else {
+                    return fail("an edit begins with `@@ file: PATH`");
+                };
+                if path.is_empty() {
+                    return fail("`@@ file:` names no file");
+                }
+                current = Some(ScriptEdit {
+                    number: edits.len() + 1,
+                    line: at,
+                    request: Request {
+                        file: PathBuf::from(path),
+                        ..Request::default()
+                    },
+                });
+                forced_text = false;
+                state = In::Header;
+            }
+            (In::Header, Some(marker)) => {
+                let Some(edit) = current.as_mut() else {
+                    return fail("an edit has no `@@ file:` line");
+                };
+                if marker == "from" {
+                    state = In::From;
+                } else if marker == "text" {
+                    forced_text = true;
+                } else if let Some(item) = marker.strip_prefix("in:") {
+                    edit.request.within = Some(item.trim().to_owned());
+                } else if let Some(number) = marker.strip_prefix("occurrence:") {
+                    edit.request.occurrence = Some(
+                        number
+                            .trim()
+                            .parse()
+                            .ok()
+                            .filter(|number| *number > 0)
+                            .ok_or_else(|| {
+                                format!("the script's line {at}: an occurrence is a number from 1")
+                            })?,
+                    );
+                } else {
+                    return fail(&format!(
+                        "`@@ {marker}`: an edit's header is `in:`, `occurrence:`, `text` and \
+                         then `from`"
+                    ));
+                }
+            }
+            (In::Header, None) => return fail("an edit's header is followed by `@@ from`"),
+            (In::From, Some("to")) => state = In::To,
+            (In::To, Some("end")) => {
+                let Some(mut edit) = current.take() else {
+                    return fail("an edit has no `@@ file:` line");
+                };
+                edit.request.from = from.join("\n");
+                edit.request.to = to.join("\n");
+                let rust = edit
+                    .request
+                    .file
+                    .extension()
+                    .is_some_and(|extension| extension == "rs");
+                edit.request.text = forced_text || !rust;
+                if edit.request.text
+                    && (edit.request.within.is_some() || edit.request.occurrence.is_some())
+                {
+                    return Err(format!(
+                        "edit {} (the script's line {}): `in:` and `occurrence:` are for Rust \
+                         code matched by its tokens",
+                        edit.number, edit.line
+                    ));
+                }
+                edits.push(edit);
+                from.clear();
+                to.clear();
+                state = In::Between;
+            }
+            (In::From | In::To, Some(other))
+                if ["file:", "in:", "occurrence:", "text", "from", "to", "end"]
+                    .iter()
+                    .any(|known| other.starts_with(known)) =>
+            {
+                return fail(&format!(
+                    "`@@ {other}` inside an edit's text: `@@ from` is followed by `@@ to`, and \
+                     `@@ to` by `@@ end`"
+                ));
+            }
+            (In::From, _) => from.push(line),
+            (In::To, _) => to.push(line),
+        }
+    }
+    if state != In::Between {
+        return Err(format!(
+            "the script ends inside edit {}: end each edit with `@@ end`\n\n{SCRIPT_USAGE}",
+            edits.len() + 1
+        ));
+    }
+    if edits.is_empty() {
+        return Err(format!("the script has no edit in it\n\n{SCRIPT_USAGE}"));
+    }
+    Ok(edits)
+}
+
+/// The files the edits leave, each with its new text, in the order the
+/// script first names them, and what to print; or the first edit that
+/// cannot be made, named. `read` gives a file's text as it is now.
+fn apply_script(
+    edits: &[ScriptEdit],
+    mut read: impl FnMut(&Path) -> Result<String>,
+) -> Result<(Vec<(PathBuf, String)>, String)> {
+    let mut files: Vec<(PathBuf, String)> = Vec::new();
+    let mut shown = String::new();
+    for step in edits {
+        let path = &step.request.file;
+        let index = match files.iter().position(|(known, _)| known == path) {
+            Some(index) => index,
+            None => {
+                let text = read(path).map_err(|error| {
+                    format!(
+                        "edit {} of the script (its line {}): {error}. The script was not \
+                         applied: no file was written.",
+                        step.number, step.line
+                    )
+                })?;
+                files.push((path.clone(), text));
+                files.len() - 1
+            }
+        };
+        let (edited, lines) = edit(&files[index].1, &step.request, &path.display().to_string())
+            .map_err(|error| {
+                format!(
+                    "edit {} of the script (its line {}): {error} The script was not applied: \
+                     no file was written.",
+                    step.number, step.line
+                )
+            })?;
+        files[index].1 = edited;
+        shown.push_str(&format!("edit {}: {lines}", step.number));
+    }
+    Ok((files, shown))
+}
+
+/// `cargo xtask replace --script FILE [--dry-run]`
+fn run_script(arguments: &[String]) -> Result<()> {
+    let mut script = None;
+    let mut dry_run = false;
+    let mut rest = arguments.iter();
+    while let Some(argument) = rest.next() {
+        match argument.as_str() {
+            "--script" => {
+                script = Some(
+                    rest.next()
+                        .ok_or_else(|| format!("`--script` needs a file\n\n{SCRIPT_USAGE}"))?,
+                );
+            }
+            "--dry-run" => dry_run = true,
+            "--help" | "-h" => return Err(SCRIPT_USAGE.to_owned()),
+            other => {
+                return Err(format!(
+                    "`{other}`: a script names its files and edits itself\n\n{SCRIPT_USAGE}"
+                ));
+            }
+        }
+    }
+    let script = script.ok_or_else(|| SCRIPT_USAGE.to_owned())?;
+    let text = fs::read_to_string(script)
+        .map_err(|error| format!("could not read the script {script}: {error}"))?;
+    let edits = parse_script(&text)?;
+    let (files, shown) = apply_script(&edits, |path| {
+        fs::read_to_string(path)
+            .map_err(|error| format!("could not read {}: {error}", path.display()))
+    })?;
+    print!("{shown}");
+    if dry_run {
+        println!(
+            "(a dry run: {} edit(s) of {} file(s) can all be made; nothing was written)",
+            edits.len(),
+            files.len()
+        );
+        return Ok(());
+    }
+    write_all(&files)?;
+    println!("{} edit(s) made, in {} file(s).", edits.len(), files.len());
+    Ok(())
+}
+
+/// Writes every file, each first beside itself and then moved into place,
+/// so that a file that cannot be written leaves every file as it was.
+fn write_all(files: &[(PathBuf, String)]) -> Result<()> {
+    let beside = |path: &Path| {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(".replace-new");
+        path.with_file_name(name)
+    };
+    for (index, (path, text)) in files.iter().enumerate() {
+        if let Err(error) = fs::write(beside(path), text) {
+            for (written, _) in &files[..=index] {
+                let _ = fs::remove_file(beside(written));
+            }
+            return Err(format!(
+                "could not write beside {}: {error}. No file was changed.",
+                path.display()
+            ));
+        }
+    }
+    for (index, (path, _)) in files.iter().enumerate() {
+        if let Err(error) = fs::rename(beside(path), path) {
+            let changed: Vec<String> = files[..index]
+                .iter()
+                .map(|(path, _)| path.display().to_string())
+                .collect();
+            for (left, _) in &files[index..] {
+                let _ = fs::remove_file(beside(left));
+            }
+            return Err(format!(
+                "could not replace {}: {error}. Changed before it: {}",
+                path.display(),
+                if changed.is_empty() {
+                    "none".to_owned()
+                } else {
+                    changed.join(", ")
+                }
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `cargo xtask replace …`
 pub(crate) fn run(arguments: &[String]) -> Result<()> {
+    if arguments.iter().any(|argument| argument == "--script") {
+        return run_script(arguments);
+    }
     let request = Request::parse(arguments)?;
     let path: &Path = &request.file;
     let source = fs::read_to_string(path)
@@ -242,7 +526,9 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Request, edit};
+    use std::path::{Path, PathBuf};
+
+    use super::{Request, apply_script, edit, parse_script};
 
     /// One function as written by hand, and as `rustfmt` lays it out.
     const BEFORE_FORMAT: &str = "fn budget(tier: Tier, os: Os) -> f64 { match (tier, os) { (Tier::Unit, _) => 20.0, (Tier::System, Os::Windows) => 90.0, _ => 60.0 } }\n";
@@ -414,5 +700,227 @@ fn budget(tier: Tier, os: Os) -> f64 {
             let error = Request::parse(&strings(words)).unwrap_err();
             assert!(error.contains(expected), "{words:?}: {error}");
         }
+    }
+
+    /// A script of three edits over two files: Rust by tokens, Markdown by
+    /// its text, and a second edit of the first file.
+    const SCRIPT: &str = "\
+# The budgets move.
+@@ file: budget.rs
+@@ in: budget
+@@ from
+(Tier::System,
+    Os::Windows) => 90.0
+@@ to
+(Tier::System, Os::Windows) => 120.0
+@@ end
+
+@@ file: notes.md
+@@ from
+90 s on Windows
+@@ to
+120 s on Windows
+@@ end
+@@ file: budget.rs
+@@ from
+_ => 60.0
+@@ to
+_ => 61.0
+@@ end
+";
+
+    fn files(listed: &[(&str, &str)]) -> impl FnMut(&Path) -> crate::Result<String> {
+        let listed: Vec<(PathBuf, String)> = listed
+            .iter()
+            .map(|(path, text)| (PathBuf::from(path), (*text).to_owned()))
+            .collect();
+        move |path: &Path| {
+            listed
+                .iter()
+                .find(|(known, _)| known == path)
+                .map(|(_, text)| text.clone())
+                .ok_or_else(|| format!("no file {}", path.display()))
+        }
+    }
+
+    #[test]
+    fn a_script_is_read_into_its_edits() {
+        let edits = parse_script(SCRIPT).unwrap();
+
+        assert_eq!(edits.len(), 3);
+        assert_eq!(edits[0].line, 2);
+        assert_eq!(edits[0].request.within.as_deref(), Some("budget"));
+        assert!(!edits[0].request.text, "a .rs file is matched by tokens");
+        assert_eq!(
+            edits[0].request.from,
+            "(Tier::System,\n    Os::Windows) => 90.0"
+        );
+        assert!(edits[1].request.text, "any other file by its text");
+        assert_eq!(edits[1].request.to, "120 s on Windows");
+        assert_eq!(edits[2].number, 3);
+        // `@@ text` makes a Rust file's match exact.
+        let forced =
+            parse_script("@@ file: a.rs\n@@ text\n@@ from\nx\n@@ to\ny\n@@ end\n").unwrap();
+        assert!(forced[0].request.text);
+    }
+
+    #[test]
+    fn every_edit_of_a_script_is_made_in_order() {
+        let edits = parse_script(SCRIPT).unwrap();
+        let (files, shown) = apply_script(
+            &edits,
+            files(&[
+                ("budget.rs", AFTER_FORMAT),
+                (
+                    "notes.md",
+                    "The system tier: 60 s on Linux, 90 s on Windows.\n",
+                ),
+            ]),
+        )
+        .unwrap();
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].0, PathBuf::from("budget.rs"));
+        assert!(files[0].1.contains("(Tier::System, Os::Windows) => 120.0,"));
+        assert!(files[0].1.contains("_ => 61.0,"));
+        assert_eq!(
+            files[1].1,
+            "The system tier: 60 s on Linux, 120 s on Windows.\n"
+        );
+        assert!(shown.starts_with("edit 1: budget.rs: lines"), "{shown}");
+        assert!(shown.contains("edit 3: budget.rs"), "{shown}");
+    }
+
+    #[test]
+    fn a_script_with_one_edit_that_cannot_be_made_is_refused_whole_and_names_it() {
+        let edits = parse_script(SCRIPT).unwrap();
+        for (notes, expected) in [
+            ("No budget here.\n", "--from is not in notes.md as text"),
+            (
+                "90 s on Windows, and 90 s on Windows again.\n",
+                "--from is in notes.md 2 times",
+            ),
+        ] {
+            let error = apply_script(
+                &edits,
+                files(&[("budget.rs", AFTER_FORMAT), ("notes.md", notes)]),
+            )
+            .unwrap_err();
+
+            assert!(
+                error.starts_with("edit 2 of the script (its line 11): "),
+                "{error}"
+            );
+            assert!(error.contains(expected), "{error}");
+            assert!(error.contains("no file was written"), "{error}");
+        }
+        // A file that is not there is named the same way.
+        let error = apply_script(&edits, files(&[("budget.rs", AFTER_FORMAT)])).unwrap_err();
+        assert!(error.starts_with("edit 2 of the script (its line 11): no file notes.md"));
+    }
+
+    #[test]
+    fn an_edit_sees_what_the_edits_before_it_left() {
+        // The second edit finds what the first put there.
+        let script = "@@ file: a.md\n@@ from\none\n@@ to\ntwo\n@@ end\n@@ file: a.md\n@@ \
+                      from\ntwo\n@@ to\nthree\n@@ end\n";
+        let (files, _) =
+            apply_script(&parse_script(script).unwrap(), files(&[("a.md", "one\n")])).unwrap();
+        assert_eq!(files[0].1, "three\n");
+    }
+
+    #[test]
+    fn a_script_that_is_not_well_formed_is_refused_with_its_line() {
+        for (script, expected) in [
+            ("stray\n", "line 1: text outside an edit"),
+            (
+                "@@ from\nx\n",
+                "line 1: an edit begins with `@@ file: PATH`",
+            ),
+            (
+                "@@ file: a.rs\nx\n",
+                "line 2: an edit's header is followed by `@@ from`",
+            ),
+            (
+                "@@ file: a.rs\n@@ from\nx\n@@ end\n",
+                "line 4: `@@ end` inside an edit's text",
+            ),
+            (
+                "@@ file: a.rs\n@@ from\nx\n@@ to\ny\n",
+                "ends inside edit 1",
+            ),
+            ("# only a comment\n", "has no edit in it"),
+            (
+                "@@ file: a.md\n@@ in: x\n@@ from\nx\n@@ to\ny\n@@ end\n",
+                "`in:` and `occurrence:` are for Rust",
+            ),
+            (
+                "@@ file: a.rs\n@@ occurrence: 0\n",
+                "line 2: an occurrence is a number from 1",
+            ),
+        ] {
+            let error = parse_script(script).unwrap_err();
+            assert!(error.contains(expected), "{script:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_script_on_real_files_writes_all_of_them_or_none() {
+        let dir = std::env::temp_dir().join(format!("cortex-xtask-replace-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.rs");
+        let b = dir.join("b.md");
+        let script = dir.join("edits");
+        let write_script = |b_from: &str| {
+            std::fs::write(
+                &script,
+                format!(
+                    "@@ file: {}\n@@ from\nlet x = 1;\n@@ to\nlet x = 2;\n@@ end\n@@ file: \
+                     {}\n@@ from\n{b_from}\n@@ to\nnew\n@@ end\n",
+                    a.display(),
+                    b.display()
+                ),
+            )
+            .unwrap();
+        };
+        let run = || super::run(&["--script".to_owned(), script.display().to_string()]);
+        std::fs::write(&a, "fn f() { let x = 1; }\n").unwrap();
+        std::fs::write(&b, "old\n").unwrap();
+
+        // The second edit finds nothing: the first file is left as it was.
+        write_script("missing");
+        assert!(run().unwrap_err().contains("edit 2 of the script"));
+        assert_eq!(
+            std::fs::read_to_string(&a).unwrap(),
+            "fn f() { let x = 1; }\n"
+        );
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "old\n");
+        // A dry run writes nothing either.
+        write_script("old");
+        super::run(&[
+            "--script".to_owned(),
+            script.display().to_string(),
+            "--dry-run".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&a).unwrap(),
+            "fn f() { let x = 1; }\n"
+        );
+
+        run().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&a).unwrap(),
+            "fn f() { let x = 2; }\n"
+        );
+        assert_eq!(std::fs::read_to_string(&b).unwrap(), "new\n");
+        // Nothing is left beside them.
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a.rs", "b.md", "edits"]);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
