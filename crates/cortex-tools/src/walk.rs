@@ -55,8 +55,10 @@ pub(crate) struct WalkSpec<'a> {
 #[derive(Debug, Clone)]
 pub(crate) struct GlobFilter {
     matcher: GlobMatcher,
-    /// The pattern with its escapes read back, when that differs.
-    unescaped: Option<GlobMatcher>,
+    /// The pattern with its escapes read back, when that differs, and
+    /// whether that one matches a name: on Windows the pattern as written
+    /// may have a `/` (made from the `\` of an escape) that it has not.
+    unescaped: Option<(GlobMatcher, bool)>,
     name_only: bool,
 }
 
@@ -84,9 +86,12 @@ impl GlobFilter {
                 .build()
         };
         let unescaped = match cortex_base::unescape(pattern) {
-            std::borrow::Cow::Owned(unescaped) => build(&normal(&unescaped))
-                .ok()
-                .map(|glob| glob.compile_matcher()),
+            std::borrow::Cow::Owned(unescaped) => {
+                let unescaped = normal(&unescaped);
+                build(&unescaped)
+                    .ok()
+                    .map(|glob| (glob.compile_matcher(), !unescaped.contains('/')))
+            }
             std::borrow::Cow::Borrowed(_) => None,
         };
         let pattern = normal(pattern);
@@ -110,16 +115,15 @@ impl GlobFilter {
     /// Whether an entry matches: `relative` is its path under the directory
     /// walked, with `/` between names.
     pub(crate) fn matches(&self, relative: &str) -> bool {
-        let candidate = if self.name_only {
-            relative.rsplit('/').next().unwrap_or(relative)
-        } else {
-            relative
+        let name = relative.rsplit('/').next().unwrap_or(relative);
+        let matches = |matcher: &GlobMatcher, name_only: bool| {
+            matcher.is_match(if name_only { name } else { relative })
         };
-        self.matcher.is_match(candidate)
+        matches(&self.matcher, self.name_only)
             || self
                 .unescaped
                 .as_ref()
-                .is_some_and(|matcher| matcher.is_match(candidate))
+                .is_some_and(|(matcher, name_only)| matches(matcher, *name_only))
     }
 }
 

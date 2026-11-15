@@ -670,10 +670,13 @@ fn heredoc_at(kind: Heredocs, rest: &str) -> Option<(String, bool, usize)> {
             if after.starts_with('<') {
                 return None;
             }
-            match after.strip_prefix('-') {
+            let (after, indented, open_len) = match after.strip_prefix('-') {
                 Some(after) => (after, true, 3),
                 None => (after, false, 2),
-            }
+            };
+            // `cat << EOF`: the tag may follow spaces.
+            let tag = after.trim_start_matches([' ', '\t']);
+            (tag, indented, open_len + after.len() - tag.len())
         }
         Heredocs::Ruby => {
             let after = rest.strip_prefix("<<")?;
@@ -775,6 +778,13 @@ mod tests {
         assert_eq!(lines[1], "f() {");
         // A heredoc after an arithmetic expression that closed is one.
         let lines = lex(Syntax::SHELL, "echo $((1)) <<EOF\nf() {\nEOF\ng() {");
+        assert_eq!(lines[1].trim(), "");
+        assert_eq!(lines[3], "g() {");
+        // A tag after spaces, as `cat << EOF` writes it.
+        let lines = lex(Syntax::SHELL, "cat << EOF\nf() {\nEOF\ng() {");
+        assert_eq!(lines[1].trim(), "");
+        assert_eq!(lines[3], "g() {");
+        let lines = lex(Syntax::SHELL, "cat <<- 'EOF'\nf() {\n\tEOF\ng() {");
         assert_eq!(lines[1].trim(), "");
         assert_eq!(lines[3], "g() {");
         // A tag longer than a name is not one.

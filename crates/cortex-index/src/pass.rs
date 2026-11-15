@@ -183,8 +183,8 @@ impl Index {
         &self.limits
     }
 
-    /// What may be indexed and named.
-    /// The gate as one pass or one map asks it ([`Gate::for_pass`]).
+    /// What may be indexed and named, as one pass or one map asks it
+    /// ([`Gate::for_pass`]).
     pub(crate) fn gate_for_pass(&self) -> Arc<dyn Gate> {
         walk::for_pass(&self.gate)
     }

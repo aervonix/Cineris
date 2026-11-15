@@ -941,6 +941,12 @@ fn a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload(
         missing.contains(&format!("real{BREAK_ESCAPED}one.txt")),
         "{missing}"
     );
+    // A name asked for as it is, with a character whose escape is long, is
+    // close to its file's (the second review of step 18's fixes found the
+    // two compared in different forms).
+    ws.file("e/real\u{202E}one.txt", "x\n");
+    let missing = failed(&ws.call(&ReadTool::new(), json!({"path": "e/real\u{202E}onf.txt"})));
+    assert!(missing.contains("real\\u{202e}one.txt"), "{missing}");
 }
 
 /// A file whose name holds a character that acts unseen is reached by the

@@ -254,24 +254,27 @@ impl PathResolver {
     ///   resolves, and [`ResolvedPath::is_inside_workspace`] says so.
     /// - **A name the model was shown escaped** ([`ResolvedPath::shown`],
     ///   [`crate::visible`]) leads back to its file: when the path as written
-    ///   leads to nothing, the same path with the escapes read back
-    ///   ([`crate::unescape`]) is tried, and taken when more of it exists:
-    ///   all of it, or more of its leading directories than of the path as
-    ///   written. A file named with a zero-width joiner or a right-to-left
-    ///   mark, which is shown as `\u{200d}` or `\u{200f}`, is reached by that
+    ///   leads to nothing, or is refused, the same path with the escapes
+    ///   read back ([`crate::unescape`]) is tried, and taken when all of it
+    ///   exists, when it reaches further into directories that exist than
+    ///   the path as written does, or when the path as written was refused.
+    ///   A file named with a zero-width joiner or a right-to-left mark,
+    ///   which is shown as `\u{200d}` or `\u{200f}`, is reached by that
     ///   spelling, and so is a new file in a directory so named (found by
-    ///   the independent review of step 18's fixes).
+    ///   the independent review of step 18's fixes). How far each reaches
+    ///   is counted in the names of its real location, not in the names
+    ///   missing: on Windows `\` parts the path as written, so it has more
+    ///   names than the path read back.
     pub fn resolve(&self, input: &str) -> Result<ResolvedPath, PathError> {
         let literal = self.resolve_written(input);
-        let literal_missing = match &literal {
-            Ok((_, 0)) => None,
-            Ok((_, missing)) => Some(*missing),
-            Err(_) => Some(usize::MAX),
+        let literal_reach = match &literal {
+            Ok((found, _)) if found.exists() => return literal.map(|(found, _)| found),
+            Ok((_, reach)) => Some(*reach),
+            Err(_) => None,
         };
-        if let Some(literal_missing) = literal_missing
-            && let std::borrow::Cow::Owned(unescaped) = crate::visible::unescape(input)
-            && let Ok((found, missing)) = self.resolve_written(&unescaped)
-            && (missing == 0 || missing < literal_missing)
+        if let std::borrow::Cow::Owned(unescaped) = crate::visible::unescape(input)
+            && let Ok((found, reach)) = self.resolve_written(&unescaped)
+            && (found.exists() || literal_reach.is_none_or(|literal| reach > literal))
         {
             return Ok(found);
         }
@@ -279,7 +282,8 @@ impl PathResolver {
     }
 
     /// [`PathResolver::resolve`] of the path exactly as written, with how
-    /// many of its last names do not exist.
+    /// far it reaches into what exists: the number of names of the real
+    /// location of its part that exists.
     fn resolve_written(&self, input: &str) -> Result<(ResolvedPath, usize), PathError> {
         let style = PathStyle::NATIVE;
         let (root, mut parts) = steps(input, style)?;
@@ -315,6 +319,7 @@ impl PathResolver {
                 .collect();
             RelPath::from_text(style, names.join("/"))
         });
+        let reach = real.names().count();
         let mut abs = real;
         for name in &missing {
             // Each name was checked when the path was read.
@@ -327,7 +332,7 @@ impl PathResolver {
                 exists,
                 names_a_directory,
             },
-            missing.len(),
+            reach,
         ))
     }
 }

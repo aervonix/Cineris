@@ -321,7 +321,16 @@ caught-by:
 # ---------------------------------------------------------------- the notes
 
 [break] the-index-keeps-the-engine-of-the-assembly
-rule: The index, the base state and the instruction files ask the permission engine in force, not the one the session was put together with.
+rule: The index asks the permission engine in force, not the one the session was put together with.
+file: crates/cortex-core/src/policy.rs
+in: EnginePolicy::index_gate
+find: now: Box::new(move || policy.upgrade().map(|policy| policy.engine()))
+replace: now: { let engine = self.engine(); Box::new(move || { let _ = &policy; Some(Arc::clone(&engine)) }) }
+caught-by:
+    cortex-core::it index::the_index_follows_the_engine_in_force_after_a_change_of_level
+
+[break] the-base-state-keeps-the-engine-of-the-assembly
+rule: The base state and the instruction files ask the permission engine in force, not the one the session was put together with.
 file: crates/cortex-core/src/policy.rs
 in: EnginePolicy::keep_gate
 find:
@@ -343,7 +352,7 @@ caught-by:
 rule: A name the model was shown escaped leads back to its file: the path resolver reads the escapes back when the path as written leads to nothing.
 file: crates/cortex-base/src/path/resolve.rs
 in: PathResolver::resolve
-find: && (missing == 0 || missing < literal_missing)
+find: && (found.exists() || literal_reach.is_none_or(|literal| reach > literal))
 replace: && false
 packages: cortex-base, cortex-tools
 caught-by:
@@ -675,8 +684,8 @@ caught-by:
 rule: A path whose escapes read back reach further into directories that exist is taken that way: a new file goes into the directory the model was shown escaped, not a new one named by the escape.
 file: crates/cortex-base/src/path/resolve.rs
 in: PathResolver::resolve
-find: && (missing == 0 || missing < literal_missing)
-replace: && missing == 0
+find: && (found.exists() || literal_reach.is_none_or(|literal| reach > literal))
+replace: && found.exists()
 caught-by:
     cortex-base::it paths::a_name_shown_escaped_resolves_to_its_file
 
@@ -765,7 +774,54 @@ caught-by:
 rule: A glob that holds a name as the model was shown it, escaped, matches that name.
 file: crates/cortex-tools/src/walk.rs
 in: GlobFilter::matches
-find: .is_some_and(|matcher| matcher.is_match(candidate))
+find: .is_some_and(|(matcher, name_only)| matches(matcher, *name_only))
 replace: .is_some_and(|_| false)
 caught-by:
     cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
+
+# ---------------------------------------- the second review of the fixes
+
+[break] the-index-gate-is-asked-for-each-path
+rule: The core's index gate gives a pass and a map what is in force, taken once (`Gate::for_pass`).
+file: crates/cortex-core/src/policy.rs
+in: InForce::for_pass
+find: let taken = (self.now)();
+replace: return None; let taken = (self.now)();
+caught-by:
+    cortex-core policy::tests::the_index_gate_takes_what_is_in_force_once_a_pass
+
+[break] an-escaped-name-glob-matches-whole-paths
+rule: A glob read back with its escapes matches a name when it has no `/` itself, whatever the glob as written has.
+file: crates/cortex-tools/src/walk.rs
+in: GlobFilter::new
+find: .map(|glob| (glob.compile_matcher(), !unescaped.contains('/')))
+replace: .map(|glob| (glob.compile_matcher(), false))
+caught-by:
+    cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
+
+[break] close-matches-compare-a-raw-name-with-escaped-ones
+rule: `read`'s close matches compare the name asked for and the directory's names in the same form, escaped.
+file: crates/cortex-tools/src/read.rs
+in: close_matches
+find: let wanted = cortex_base::visible(wanted);
+replace: let wanted = std::borrow::Cow::Borrowed(wanted);
+caught-by:
+    cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
+
+[break] an-instruction-name-that-does-not-read-back-is-dropped
+rule: A nested instruction file whose name does not join read back is followed by its name as it is.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: instruction_changes
+find: (Err(_), Some(written)) => (written, None),
+replace: (Err(_), Some(_)) => continue,
+caught-by:
+    cortex-agent::it context::a_nested_instruction_file_whose_name_does_not_read_back_is_still_followed
+
+[break] a-heredoc-tag-after-a-space-is-not-read
+rule: A shell heredoc's tag may follow spaces (`cat << EOF`).
+file: crates/cortex-index/src/lex.rs
+in: heredoc_at
+find: let tag = after.trim_start_matches([' ', '\t']);
+replace: let tag = after;
+caught-by:
+    cortex-index lex::tests::heredocs_are_skipped_to_their_tag
