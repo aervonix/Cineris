@@ -161,8 +161,12 @@ fn reading(
         timer,
         told: AtomicBool::new(false),
     });
-    let purse = purse.catching_up(Arc::clone(&catching) as Arc<dyn CatchUp>);
+    // The thread adds to the purse through an account of its own that
+    // shares what was spent and has no catch-up, so that it holds no way to
+    // ask itself: once the day's last asker is gone its channel closes, and
+    // it ends.
     let read_into = purse.clone();
+    let purse = purse.catching_up(Arc::clone(&catching) as Arc<dyn CatchUp>);
     let started = std::thread::Builder::new()
         .name("cortex-day".to_owned())
         .spawn(move || read(reader, &read_into, &asked));
