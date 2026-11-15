@@ -307,7 +307,7 @@ in: list_in_order
 find: if let Some(why) = control.stop_listing() {
 replace: if let Some(why) = control.stop() {
 caught-by:
-    cortex-index::it index::a_listing_longer_than_the_time_limit_still_ends_and_the_reading_carries_on
+    cortex-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads
 
 [break] a-pass-out-of-time-reads-nothing
 rule: Every pass reads one file at least, whatever its time limit, so that the passes make progress between them.
@@ -390,13 +390,14 @@ caught-by:
     cortex-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads
 
 [break] a-nested-ignore-file-is-missed-on-threads
-rule: The walk on several threads honours the same ignore files, at every level, and the same gate as the walk on one.
+rule: The walk on the pass's threads honours a .gitignore at every level, as `search` and `list` do.
 file: crates/cortex-index/src/walk.rs
 in: list_on_threads
 find: walker(root_fs, root, gate)
-replace: WalkBuilder::new(root_fs)
+replace: walker(root_fs, root, gate).git_ignore(false)
 caught-by:
     cortex-index::it index::the_listing_on_several_threads_is_the_listing_on_one
+    cortex-index walk::tests::the_walk_in_name_order_lists_what_the_walk_on_threads_lists
 
 [break] the-threads-of-a-listing-do-not-give-way
 rule: Each thread of a listing on several threads looks before each entry whether to give way to a turn, so that a pass on several threads stops as one on one thread does.
@@ -434,3 +435,12 @@ find: if control.stop_listing().is_some() {
 replace: if control.stop().is_some() {
 caught-by:
     cortex-index::it index::a_listing_longer_than_the_time_limit_still_ends_and_the_reading_carries_on
+
+[break] a-capped-workspace-is-walked-on-threads-first
+rule: A workspace whose cache says its last listing met the cap is listed in name order at once, without a walk on threads to throw away.
+file: crates/cortex-index/src/walk.rs
+in: list
+find: if !capped
+replace: if true
+caught-by:
+    cortex-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads

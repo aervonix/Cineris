@@ -48,7 +48,8 @@ const UNSETTLED: Duration = Duration::from_secs(2);
 /// The name of the cache file in its directory.
 pub const CACHE_FILE: &str = "outlines";
 
-/// The most threads a pass reads files on: it is background work.
+/// The most threads a pass lists and reads files on: it is background work,
+/// and takes half the cores at most.
 const MAX_THREADS: usize = 4;
 
 /// How many files of the listing a pass takes at a time: their outlines
@@ -69,8 +70,6 @@ pub struct Index {
     gate: Arc<dyn Gate>,
     clock: SharedClock,
     threads: usize,
-    /// Whether the last whole listing met its cap on entries.
-    capped: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl std::fmt::Debug for Index {
@@ -144,11 +143,11 @@ impl Index {
             gate,
             clock,
             threads,
-            capped: Arc::default(),
         }
     }
 
-    /// Lists the workspace and reads its files on this many threads.
+    /// Lists the workspace and reads its files on this many threads, in place
+    /// of half the cores and four at most: for tests, and measurements.
     #[must_use]
     pub fn with_threads(mut self, threads: usize) -> Self {
         self.threads = threads.max(1);
@@ -223,20 +222,22 @@ impl Index {
         } else {
             self.threads
         };
-        // A workspace whose last listing met its cap is listed on one thread
-        // at once: the walk on several would meet it too, and be made again.
-        let capped = self.capped.load(Ordering::Relaxed);
+        // The cache as the last pass left it, read before the listing: a
+        // workspace whose last listing met its cap is listed in name order at
+        // once, since the walk on the pass's threads would meet the cap too
+        // and be made again.
+        let old = self.cache();
+        let capped = old
+            .as_ref()
+            .is_some_and(|cache| cache.partial.contains(&Partial::Listing));
         let listing = walk::list(
             &self.root,
             &self.gate,
             &self.limits,
             &control,
-            if capped { 1 } else { threads },
+            threads,
+            capped,
         );
-        if listing.partial != Some(Partial::Stopped) {
-            self.capped
-                .store(listing.partial == Some(Partial::Listing), Ordering::Relaxed);
-        }
         let _ = out_of_time();
         let mut report = PassReport {
             found: listing.found,
@@ -247,11 +248,10 @@ impl Index {
         if matches!(listing.partial, Some(Partial::Time | Partial::Stopped)) {
             // The listing is not the workspace: writing it would drop the
             // records of the files it did not reach.
-            report.indexed = self.cache().map_or(0, |cache| cache.records.len());
+            report.indexed = old.as_ref().map_or(0, |cache| cache.records.len());
             return report;
         }
 
-        let old = self.cache();
         let root_fs = self.root.to_fs_path();
         let mut writer = Writer::new(self.root.as_str());
         // Directories in the order the files are in, so that a directory's
