@@ -4,8 +4,10 @@
 //!
 //! A client has a role and capabilities, which it states when it
 //! connects, and a queue ([`EventQueue`]) that everything for it goes
-//! into. A request to the user (an approval) goes to every client that may
-//! answer it, and the first answer wins.
+//! into. A request to the user (an approval, a question, trust) goes to
+//! every client that may answer that kind, and the first answer wins. An
+//! answer of another kind than its request is refused (since step 23, when
+//! questions and trust began to be asked).
 //!
 //! **Who may answer.** Only a client with the `user` role. A `supervisor`
 //! is another session's orchestration layer, which may answer within its
@@ -19,7 +21,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cortex_protocol::error::code;
 use cortex_protocol::jsonrpc::RequestId;
-use cortex_protocol::methods::{ApprovalResponse, ClientCapabilities, ClientRole, ServerRequest};
+use cortex_protocol::methods::{
+    ClientCapabilities, ClientRole, ServerRequest, ServerResponse,
+};
 use cortex_protocol::{ErrorData, ErrorKind, SessionId};
 use tokio::sync::oneshot;
 
@@ -100,7 +104,46 @@ struct Open {
     asked: Vec<u64>,
     /// What they were sent, for a client that joins while it is open.
     request: ServerRequest,
-    answer: oneshot::Sender<ApprovalResponse>,
+    answer: oneshot::Sender<ServerResponse>,
+}
+
+/// The kinds of request, by the capability a client declares to be put
+/// one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// `approval/request`: the `approvals` capability.
+    Approval,
+    /// `question/ask`: `questions`.
+    Question,
+    /// `trust/request`: `trust`.
+    Trust,
+}
+
+impl Kind {
+    fn of(request: &ServerRequest) -> Self {
+        match request {
+            ServerRequest::Approval(_) => Self::Approval,
+            ServerRequest::Question(_) => Self::Question,
+            ServerRequest::Trust(_) => Self::Trust,
+        }
+    }
+
+    fn answers(self, response: &ServerResponse) -> bool {
+        matches!(
+            (self, response),
+            (Self::Approval, ServerResponse::Approval(_))
+                | (Self::Question, ServerResponse::Question(_))
+                | (Self::Trust, ServerResponse::Trust(_))
+        )
+    }
+
+    fn declared(self, capabilities: &ClientCapabilities) -> bool {
+        match self {
+            Self::Approval => capabilities.approvals,
+            Self::Question => capabilities.questions,
+            Self::Trust => capabilities.trust,
+        }
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -167,13 +210,19 @@ impl Clients {
     /// Which of `candidates` may be asked whether a tool call may run: the
     /// `user` clients that said they answer approvals.
     pub(crate) fn approvers(&self, candidates: &[u64]) -> Vec<u64> {
+        self.askable(candidates, Kind::Approval)
+    }
+
+    /// Which of `candidates` may be put a request of `kind`: the `user`
+    /// clients that declared that they answer it.
+    pub(crate) fn askable(&self, candidates: &[u64], kind: Kind) -> Vec<u64> {
         let clients = lock(&self.clients);
         candidates
             .iter()
             .copied()
             .filter(|client| {
                 clients.get(client).is_some_and(|entry| {
-                    entry.info.role == ClientRole::User && entry.info.capabilities.approvals
+                    entry.info.role == ClientRole::User && kind.declared(&entry.info.capabilities)
                 })
             })
             .collect()
@@ -186,7 +235,7 @@ impl Clients {
         session: &SessionId,
         asked: &[u64],
         request: impl Fn(&RequestId) -> ServerRequest,
-    ) -> (RequestId, oneshot::Receiver<ApprovalResponse>) {
+    ) -> (RequestId, oneshot::Receiver<ServerResponse>) {
         let number = self.next_request.fetch_add(1, Ordering::Relaxed) + 1;
         let id = RequestId::Number(i64::try_from(number).unwrap_or(i64::MAX));
         let (answer, receiver) = oneshot::channel();
@@ -216,13 +265,13 @@ impl Clients {
     /// to a session at any time and answer what is waiting. A question
     /// whose askers have all gone waits for this.
     pub(crate) fn join(&self, session: &SessionId, client: ClientId) {
-        if self.approvers(&[client.0]).is_empty() {
-            return;
-        }
         let Some(queue) = self.queue(client) else {
             return;
         };
         for (id, open) in lock(&self.open).iter_mut() {
+            if self.askable(&[client.0], Kind::of(&open.request)).is_empty() {
+                continue;
+            }
             if open.session == *session && !open.asked.contains(&client.0) {
                 open.asked.push(client.0);
                 queue.push_request(id.clone(), open.request.clone());
@@ -236,24 +285,25 @@ impl Clients {
         lock(&self.open).remove(id).is_some()
     }
 
-    /// Takes a client's answer to an approval request.
+    /// Takes a client's answer to a request it was put.
     ///
     /// # Errors
     ///
     /// `role_not_allowed` when the client is not a `user` client or was not
-    /// asked, and an error of kind `usage` when no such request is open: it
-    /// was answered by another client, timed out or was withdrawn.
+    /// asked, and an error of kind `usage` (`request_not_open`) when no
+    /// such request is open (it was answered by another client, timed out
+    /// or was withdrawn) or the answer is of another kind than the request.
     pub(crate) fn answer(
         &self,
         client: ClientId,
         id: &RequestId,
-        response: ApprovalResponse,
+        response: ServerResponse,
     ) -> Result<SessionId, Box<ErrorData>> {
         let role = self.info(client).map(|info| info.role);
         if role != Some(ClientRole::User) {
             return Err(refused(
                 code::ROLE_NOT_ALLOWED,
-                "Only a `user` client may answer an approval request.",
+                "Only a `user` client may answer a request.",
             ));
         }
         let mut open = lock(&self.open);
@@ -272,6 +322,12 @@ impl Clients {
                 format!("The request `{id}` was not put to this client."),
             ));
         }
+        if !Kind::of(&request.request).answers(&response) {
+            return Err(refused(
+                "request_not_open",
+                format!("No request `{id}` of that kind is waiting for an answer."),
+            ));
+        }
         let Some(request) = open.remove(id) else {
             return Err(refused("request_not_open", "The request is gone."));
         };
@@ -285,7 +341,7 @@ impl Clients {
 
 #[cfg(test)]
 mod tests {
-    use cortex_protocol::methods::{ApprovalChoice, QuestionRequest};
+    use cortex_protocol::methods::{ApprovalChoice, ApprovalResponse, QuestionRequest};
 
     use super::*;
     use crate::Outgoing;
@@ -300,10 +356,16 @@ mod tests {
         })
     }
 
-    fn allow() -> ApprovalResponse {
-        ApprovalResponse {
-            choice: ApprovalChoice::AllowOnce,
-            note: None,
+    fn allow() -> ServerResponse {
+        ServerResponse::Question(cortex_protocol::methods::QuestionResponse {
+            answer: Some("yes".to_owned()),
+        })
+    }
+
+    fn answer_of(response: ServerResponse) -> Option<String> {
+        match response {
+            ServerResponse::Question(question) => question.answer,
+            _ => None,
         }
     }
 
@@ -345,8 +407,21 @@ mod tests {
         assert!(answer.try_recv().is_err(), "a refused answer was delivered");
 
         // The one it was put to answers it, once.
+        // An answer of another kind is not one.
+        let wrong = clients
+            .answer(
+                user,
+                &id,
+                ServerResponse::Approval(ApprovalResponse {
+                    choice: ApprovalChoice::AllowOnce,
+                    note: None,
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(wrong.code, "request_not_open");
+        assert!(answer.try_recv().is_err(), "an answer of another kind was delivered");
         assert_eq!(clients.answer(user, &id, allow()).unwrap(), session);
-        assert_eq!(answer.try_recv().unwrap().choice, ApprovalChoice::AllowOnce);
+        assert_eq!(answer_of(answer.try_recv().unwrap()).as_deref(), Some("yes"));
         let late = clients.answer(user, &id, allow()).unwrap_err();
         assert_eq!(late.code, "request_not_open");
         assert!(!clients.close(&id), "an answered request is closed");
@@ -387,7 +462,7 @@ mod tests {
         let refused = clients.answer(late, &elsewhere, allow()).unwrap_err();
         assert_eq!(refused.code, code::ROLE_NOT_ALLOWED);
         assert_eq!(clients.answer(late, &id, allow()).unwrap(), session);
-        assert_eq!(answer.try_recv().unwrap().choice, ApprovalChoice::AllowOnce);
+        assert_eq!(answer_of(answer.try_recv().unwrap()).as_deref(), Some("yes"));
     }
 
     #[test]

@@ -486,7 +486,8 @@ impl Core {
             .unwrap_or_default()
     }
 
-    /// Takes a client's answer to a request the core put to it.
+    /// Takes a client's answer to a request the core put to it: an
+    /// approval, a question or trust (since step 23).
     ///
     /// # Errors
     ///
@@ -499,17 +500,8 @@ impl Core {
         request: &RequestId,
         response: ServerResponse,
     ) -> Result<(), OpError> {
-        match response {
-            ServerResponse::Approval(response) => {
-                self.inner.clients.answer(client, request, response)?;
-                Ok(())
-            }
-            _ => Err(error(
-                ErrorKind::Usage,
-                "request_not_open",
-                format!("No request `{request}` of that kind is waiting for an answer."),
-            )),
-        }
+        self.inner.clients.answer(client, request, response)?;
+        Ok(())
     }
 
     fn live(&self, session: &SessionId) -> Result<Arc<Live>, OpError> {
