@@ -13,6 +13,11 @@
 //! folded into their month (`2025-09`), so that all-time figures outlive the
 //! raw files; folding is the same whenever it is done
 //! ([`fold_days`](Part::fold_days)).
+//!
+//! **Sums saturate.** Token counts are the provider's word, and a sum that
+//! overflowed would panic the writer in a debug build, which loses every
+//! later event, or wrap in a release one: a figure stops at `u64::MAX`
+//! instead, as the ledger's do.
 
 use std::collections::BTreeMap;
 
@@ -69,16 +74,16 @@ pub struct UsageSum {
 
 impl UsageSum {
     fn add(&mut self, other: &Self) {
-        self.requests += other.requests;
-        self.input += other.input;
-        self.cache_read += other.cache_read;
-        self.cache_write += other.cache_write;
-        self.output += other.output;
-        self.reasoning += other.reasoning;
-        self.metered_nanos += other.metered_nanos;
-        self.estimate_nanos += other.estimate_nanos;
-        self.recorded_nanos += other.recorded_nanos;
-        self.unpriced += other.unpriced;
+        self.requests = self.requests.saturating_add(other.requests);
+        self.input = self.input.saturating_add(other.input);
+        self.cache_read = self.cache_read.saturating_add(other.cache_read);
+        self.cache_write = self.cache_write.saturating_add(other.cache_write);
+        self.output = self.output.saturating_add(other.output);
+        self.reasoning = self.reasoning.saturating_add(other.reasoning);
+        self.metered_nanos = self.metered_nanos.saturating_add(other.metered_nanos);
+        self.estimate_nanos = self.estimate_nanos.saturating_add(other.estimate_nanos);
+        self.recorded_nanos = self.recorded_nanos.saturating_add(other.recorded_nanos);
+        self.unpriced = self.unpriced.saturating_add(other.unpriced);
     }
 
     /// The tokens, as the protocol counts them.
@@ -132,29 +137,29 @@ pub struct OutcomeKey {
 }
 
 fn add_time(into: &mut TimeTotals, other: &TimeTotals) {
-    into.turns += other.turns;
-    into.wall_ms += other.wall_ms;
+    into.turns = into.turns.saturating_add(other.turns);
+    into.wall_ms = into.wall_ms.saturating_add(other.wall_ms);
     add_model_time(&mut into.model, &other.model);
-    into.tools_ms += other.tools_ms;
-    into.approval_ms += other.approval_ms;
-    into.verification_ms += other.verification_ms;
-    into.harness_ms += other.harness_ms;
+    into.tools_ms = into.tools_ms.saturating_add(other.tools_ms);
+    into.approval_ms = into.approval_ms.saturating_add(other.approval_ms);
+    into.verification_ms = into.verification_ms.saturating_add(other.verification_ms);
+    into.harness_ms = into.harness_ms.saturating_add(other.harness_ms);
 }
 
 pub(crate) fn add_model_time(into: &mut ModelTime, other: &ModelTime) {
-    into.connect_ms += other.connect_ms;
-    into.first_byte_ms += other.first_byte_ms;
-    into.streaming_ms += other.streaming_ms;
-    into.retry_ms += other.retry_ms;
-    into.summary_ms += other.summary_ms;
+    into.connect_ms = into.connect_ms.saturating_add(other.connect_ms);
+    into.first_byte_ms = into.first_byte_ms.saturating_add(other.first_byte_ms);
+    into.streaming_ms = into.streaming_ms.saturating_add(other.streaming_ms);
+    into.retry_ms = into.retry_ms.saturating_add(other.retry_ms);
+    into.summary_ms = into.summary_ms.saturating_add(other.summary_ms);
 }
 
 pub(crate) fn add_tool(into: &mut ToolTime, other: &ToolTime) {
-    into.calls += other.calls;
-    into.share_ms += other.share_ms;
-    into.running_ms += other.running_ms;
-    into.queued_ms += other.queued_ms;
-    into.approval_ms += other.approval_ms;
+    into.calls = into.calls.saturating_add(other.calls);
+    into.share_ms = into.share_ms.saturating_add(other.share_ms);
+    into.running_ms = into.running_ms.saturating_add(other.running_ms);
+    into.queued_ms = into.queued_ms.saturating_add(other.queued_ms);
+    into.approval_ms = into.approval_ms.saturating_add(other.approval_ms);
 }
 
 /// What some lines add up to.
@@ -250,12 +255,13 @@ impl Part {
                     variants: tool.variants.key(),
                     tool: tool.tool.clone(),
                 };
-                *self
+                let count = self
                     .outcomes
                     .entry(key)
                     .or_default()
                     .entry(tool.outcome.as_str().to_owned())
-                    .or_default() += 1;
+                    .or_default();
+                *count = count.saturating_add(1);
             }
             Record::Turn(turn) => {
                 let key = TimeKey {
@@ -282,27 +288,26 @@ impl Part {
                         project: project(&turn.project),
                         tool: share.tool.clone(),
                     };
-                    self.tools
-                        .entry(key)
-                        .or_insert_with(|| ToolTime {
-                            tool: share.tool.clone(),
-                            ..ToolTime::default()
-                        })
-                        .share_ms += share.ms;
+                    let time = self.tools.entry(key).or_insert_with(|| ToolTime {
+                        tool: share.tool.clone(),
+                        ..ToolTime::default()
+                    });
+                    time.share_ms = time.share_ms.saturating_add(share.ms);
                 }
                 let key = OutcomeKey {
                     model: turn.model.as_str().to_owned(),
                     variants: turn.variants.key(),
                     tool: String::new(),
                 };
-                *self
+                let count = self
                     .outcomes
                     .entry(key)
                     .or_default()
                     .entry(turn.outcome.as_str().to_owned())
-                    .or_default() += 1;
+                    .or_default();
+                *count = count.saturating_add(1);
             }
-            Record::Dropped { count, .. } => self.dropped += count,
+            Record::Dropped { count, .. } => self.dropped = self.dropped.saturating_add(*count),
             // The context record is kept in the raw files for the context
             // profiler, which reads them; nothing of it is summed here.
             Record::Context(_) => {}
@@ -329,11 +334,12 @@ impl Part {
         for (key, counts) in &other.outcomes {
             let into = self.outcomes.entry(key.clone()).or_default();
             for (outcome, count) in counts {
-                *into.entry(outcome.clone()).or_default() += count;
+                let into = into.entry(outcome.clone()).or_default();
+                *into = into.saturating_add(*count);
             }
         }
-        self.dropped += other.dropped;
-        self.unreadable += other.unreadable;
+        self.dropped = self.dropped.saturating_add(other.dropped);
+        self.unreadable = self.unreadable.saturating_add(other.unreadable);
     }
 
     /// Folds the day buckets more than [`DAYS_KEPT`] days before `today`

@@ -5,8 +5,10 @@
 //! | File | What it holds |
 //! |---|---|
 //! | `events-YYYY-MM.jsonl` | One event a line, appended, by the month (UTC) it happened in. |
-//! | `aggregates.json` | Each monthly file's [`Part`] and how far it was read, and the part of the files already pruned. |
+//! | `aggregates.json` | Each monthly file's [`Part`] and how far it was read, and the part of the files already pruned (`kept`). |
+//! | `aggregates.json.unreadable-…` | An aggregates file this build could not read, moved aside with the time it was moved (`2026-11-15T10-00-00Z`), owner-only, for the user to keep. |
 //! | `limits.json` | The latest limits and balances each provider reported, with when and how. |
+//! | `limits.json.lock` | The lock its writers take ([`cortex_base::private::hold_lock`]). |
 //!
 //! **The aggregates are brought up to date from the files.** Each monthly
 //! file's part records the byte it was read to. [`Aggregates::sync`] reads
@@ -16,6 +18,12 @@
 //! file that is "kept + every monthly file read to some point", which the
 //! next sync carries on from. So [`Aggregates::rebuild`] from the files
 //! gives the same values.
+//!
+//! **`kept` is the one copy of every pruned month,** so the aggregates file
+//! is flushed to the disk before it takes its name, and a file this build
+//! cannot read is never written over ([`Found`]; found by the independent
+//! review of step 16): one of a newer version is left as it is, and one
+//! that does not parse is moved aside before anything is saved.
 //!
 //! **Every file is owner-only**, written through `cortex_base::private`,
 //! and the aggregates and the limits are replaced atomically.
@@ -34,16 +42,21 @@ use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
-use cortex_base::{AtomicWriteOptions, Clock, LocalDate, UtcTime, private, write_atomic};
+use cortex_base::{
+    AtomicWriteOptions, Clock, FileIdentity, LocalDate, UtcTime, private, write_atomic,
+};
 use cortex_protocol::usage::ProviderLimits;
 use serde::{Deserialize, Serialize};
 
 use crate::aggregate::Part;
 use crate::record::Line;
 
-/// The version of the aggregates file this build writes. A file of another
-/// version is rebuilt from the monthly files.
+/// The version of the aggregates file this build writes. A file of a
+/// newer version is left as it is ([`Found::Newer`]).
 pub const AGGREGATES_VERSION: u32 = 1;
+
+/// The start of the name an unreadable aggregates file is moved aside to.
+const SET_ASIDE: &str = "aggregates.json.unreadable-";
 
 /// How many times a statistics file was opened for reading in this
 /// process, by directory: what the test that nothing is read at start-up
@@ -61,7 +74,7 @@ pub fn reads(dir: &StatsDir) -> u64 {
         .unwrap_or(0)
 }
 
-fn open_to_read(path: &Path) -> io::Result<File> {
+pub(crate) fn open_to_read(path: &Path) -> io::Result<File> {
     if let Some(dir) = path.parent() {
         *READS
             .lock()
@@ -125,15 +138,10 @@ impl StatsDir {
     ///
     /// When the directory cannot be listed. A missing one has none.
     pub fn months(&self) -> io::Result<Vec<String>> {
-        let entries = match std::fs::read_dir(&self.root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error),
-        };
-        let mut months: Vec<String> = entries
-            .filter_map(Result::ok)
-            .filter_map(|entry| {
-                let name = entry.file_name().into_string().ok()?;
+        let mut months: Vec<String> = self
+            .names()?
+            .iter()
+            .filter_map(|name| {
                 let month = name.strip_prefix("events-")?.strip_suffix(".jsonl")?;
                 is_month(month).then(|| month.to_owned())
             })
@@ -142,7 +150,38 @@ impl StatsDir {
         Ok(months)
     }
 
-    /// Deletes every statistics file: `cortex stats reset`.
+    /// The aggregates files that could not be read and were moved aside,
+    /// oldest first: each still holds the part of the months pruned before
+    /// it was.
+    ///
+    /// # Errors
+    ///
+    /// When the directory cannot be listed. A missing one has none.
+    pub fn set_aside(&self) -> io::Result<Vec<PathBuf>> {
+        let mut names: Vec<String> = self
+            .names()?
+            .into_iter()
+            .filter(|name| name.starts_with(SET_ASIDE))
+            .collect();
+        names.sort();
+        Ok(names.iter().map(|name| self.root.join(name)).collect())
+    }
+
+    fn names(&self) -> io::Result<Vec<String>> {
+        let entries = match std::fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        Ok(entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect())
+    }
+
+    /// Deletes every statistics file: `cortex stats reset`. The aggregates
+    /// files moved aside go with the rest; the lock file stays, as another
+    /// process may hold it.
     ///
     /// # Errors
     ///
@@ -153,7 +192,9 @@ impl StatsDir {
             remove_if_there(&self.events_file(&month))?;
             removed += 1;
         }
-        for path in [self.aggregates_file(), self.limits_file()] {
+        let mut paths = vec![self.aggregates_file(), self.limits_file()];
+        paths.extend(self.set_aside()?);
+        for path in paths {
             if remove_if_there(&path)? {
                 removed += 1;
             }
@@ -172,6 +213,7 @@ impl StatsDir {
             .collect();
         paths.push(self.aggregates_file());
         paths.push(self.limits_file());
+        paths.extend(self.set_aside().unwrap_or_default());
         paths
             .iter()
             .filter_map(|path| std::fs::metadata(path).ok())
@@ -222,6 +264,53 @@ pub struct FilePart {
     pub part: Part,
 }
 
+/// What [`Aggregates::load`] found where the aggregates file is, which
+/// decides whether the aggregates may be saved and may prune.
+///
+/// `kept` holds the only copy of every pruned month, so aggregates that
+/// started from nothing because the file could not be read must never be
+/// saved over it: saving and pruning check this, so no caller can forget
+/// to (found by the independent review of step 16).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Found {
+    /// Aggregates that were not loaded from a directory: never saved.
+    #[default]
+    NotLoaded,
+    /// No file: the aggregates start from nothing.
+    Missing,
+    /// The file, read.
+    Read,
+    /// A file of a version this build does not read (a newer build's), left
+    /// as it is, with the part of every pruned month in it. These
+    /// aggregates are the monthly files' alone, and are neither saved nor
+    /// pruned.
+    Newer {
+        /// The file's version.
+        version: u32,
+    },
+    /// A file that could not be read as aggregates, left as it is by a
+    /// caller that only reads ([`Aggregates::load`]). These start from the
+    /// monthly files, and are neither saved nor pruned.
+    Unreadable,
+    /// A file that could not be read, moved aside to `to`, owner-only: the
+    /// part of the months already pruned is in it. These aggregates start
+    /// from the monthly files, and may be saved.
+    MovedAside {
+        /// Where it is now.
+        to: PathBuf,
+    },
+}
+
+impl Found {
+    /// Whether aggregates loaded so may be saved, and may prune what they
+    /// save.
+    #[must_use]
+    pub const fn may_save(&self) -> bool {
+        matches!(self, Self::Missing | Self::Read | Self::MovedAside { .. })
+    }
+}
+
 /// The aggregates file.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Aggregates {
@@ -233,6 +322,18 @@ pub struct Aggregates {
     /// What the files already pruned added up to.
     #[serde(default)]
     pub kept: Part,
+    /// What was there when these were loaded.
+    #[serde(skip)]
+    found: Found,
+}
+
+/// What reading the aggregates file gave.
+enum Reading {
+    Missing,
+    Parsed(Aggregates),
+    Newer(u32),
+    /// What it held, and which file it was.
+    Unparsed(Vec<u8>, Option<FileIdentity>),
 }
 
 impl Aggregates {
@@ -246,39 +347,80 @@ impl Aggregates {
         total
     }
 
-    /// Reads the aggregates file. A missing file is empty aggregates; a
-    /// file that cannot be read, or of another version, gives empty
-    /// aggregates too, which [`sync`](Self::sync) then fills from the
-    /// monthly files (the part of files already pruned is lost, and
-    /// `unreadable` says so).
+    /// What was there when these were loaded.
+    #[must_use]
+    pub fn found(&self) -> &Found {
+        &self.found
+    }
+
+    /// Reads the aggregates file, changing nothing on the disk: for a caller
+    /// that reads (`cortex stats`, a report with statistics off, a day's
+    /// limits). A missing file is empty aggregates. A file of a newer
+    /// version, or one that does not parse, gives empty aggregates too,
+    /// which [`sync`](Self::sync) fills from the monthly files, and which
+    /// may not be saved ([`Found`]).
     ///
     /// # Errors
     ///
-    /// When the file is there and cannot be opened.
+    /// When the file is there and cannot be opened or read.
     pub fn load(dir: &StatsDir) -> io::Result<Self> {
-        let path = dir.aggregates_file();
-        let mut file = match open_to_read(&path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(Self::fresh());
-            }
-            Err(error) => return Err(error),
-        };
-        let mut text = Vec::new();
-        file.read_to_end(&mut text)?;
-        match serde_json::from_slice::<Self>(&text) {
-            Ok(read) if read.version == AGGREGATES_VERSION => Ok(read),
-            _ => {
-                let mut fresh = Self::fresh();
-                fresh.kept.unreadable = 1;
-                Ok(fresh)
-            }
-        }
+        Ok(match read_aggregates(dir)? {
+            Reading::Missing => Self::fresh(Found::Missing),
+            Reading::Parsed(read) => read,
+            Reading::Newer(version) => Self::fresh(Found::Newer { version }),
+            Reading::Unparsed(..) => Self::fresh(Found::Unreadable),
+        })
     }
 
-    fn fresh() -> Self {
+    /// Reads the aggregates file for a caller that will save what it reads:
+    /// the writer, and a report with statistics on. As [`load`](Self::load),
+    /// except that a file that does not parse is first moved aside
+    /// (`aggregates.json.unreadable-<when>`, owner-only, with what it held),
+    /// so that saving cannot lose it, and the log says where. A file of a
+    /// newer version is still left alone: the newer build reads it.
+    ///
+    /// # Errors
+    ///
+    /// When the file is there and cannot be opened or read. A file that
+    /// cannot be moved aside gives aggregates that may not be saved.
+    pub fn load_for_saving(dir: &StatsDir, clock: &dyn Clock) -> io::Result<Self> {
+        // Twice at most: once more when another process replaced the file
+        // between the read and the move.
+        for _ in 0..2 {
+            let (bytes, identity) = match read_aggregates(dir)? {
+                Reading::Missing => return Ok(Self::fresh(Found::Missing)),
+                Reading::Parsed(read) => return Ok(read),
+                Reading::Newer(version) => return Ok(Self::fresh(Found::Newer { version })),
+                Reading::Unparsed(bytes, identity) => (bytes, identity),
+            };
+            match move_aside(dir, &bytes, identity, clock) {
+                Ok(Some(to)) => {
+                    tracing::warn!(
+                        moved_to = %to.display(),
+                        "the statistics' aggregates file could not be read, and was moved aside: \
+                         the months pruned before are in it"
+                    );
+                    return Ok(Self::fresh(Found::MovedAside { to }));
+                }
+                // Not the file that was read any more: read again.
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        "the statistics' aggregates file could not be read or moved aside, so it \
+                         is left as it is and not written"
+                    );
+                    return Ok(Self::fresh(Found::Unreadable));
+                }
+            }
+        }
+        Ok(Self::fresh(Found::Unreadable))
+    }
+
+    fn fresh(found: Found) -> Self {
         Self {
             version: AGGREGATES_VERSION,
+            found,
             ..Self::default()
         }
     }
@@ -286,9 +428,10 @@ impl Aggregates {
     /// Brings the aggregates up to date with the monthly files: reads each
     /// from where it was last read to its last whole line, keeps the part
     /// of a file someone else deleted, prunes files more than `retention`
-    /// months older than `this_month` (with `retention` given; `None` only
-    /// reads, for a caller that will not save what it read), and folds old
-    /// days into months. Returns whether anything changed.
+    /// months older than `this_month` (with `retention` given, and only
+    /// when these aggregates may be saved: `None` only reads, for a caller
+    /// that will not save what it read), and folds old days into months.
+    /// Returns whether anything changed.
     ///
     /// # Errors
     ///
@@ -300,6 +443,9 @@ impl Aggregates {
         this_month: &str,
         retention: Option<u32>,
     ) -> io::Result<bool> {
+        // A pruned file's part lives on only in what is saved: aggregates
+        // that may not be saved prune nothing.
+        let retention = retention.filter(|_| self.found.may_save());
         let before = self.clone();
         let months = dir.months()?;
         // A file in the aggregates that is gone was pruned by another
@@ -321,16 +467,18 @@ impl Aggregates {
         }
         // Retention: a file stays for `retention` whole months after its
         // own.
-        let now = month_number(this_month).unwrap_or(i64::MAX);
-        for month in months.iter().filter(|_| retention.is_some()) {
-            let Some(number) = month_number(month) else {
-                continue;
-            };
-            if number + i64::from(retention.unwrap_or(u32::MAX)) < now {
-                if let Some(file) = self.files.remove(month) {
-                    self.kept.merge(&file.part);
+        if let Some(retention) = retention {
+            let now = month_number(this_month).unwrap_or(i64::MAX);
+            for month in &months {
+                let Some(number) = month_number(month) else {
+                    continue;
+                };
+                if number + i64::from(retention) < now {
+                    if let Some(file) = self.files.remove(month) {
+                        self.kept.merge(&file.part);
+                    }
+                    remove_if_there(&dir.events_file(month))?;
                 }
-                remove_if_there(&dir.events_file(month))?;
             }
         }
         self.kept.fold_days(today);
@@ -352,6 +500,7 @@ impl Aggregates {
             version: AGGREGATES_VERSION,
             files: BTreeMap::new(),
             kept: self.kept.clone(),
+            found: self.found.clone(),
         };
         for month in dir.months()? {
             let mut entry = FilePart::default();
@@ -363,22 +512,116 @@ impl Aggregates {
         Ok(rebuilt)
     }
 
-    /// Writes the aggregates file, owner-only and atomically.
+    /// Writes the aggregates file, owner-only and atomically, flushed to
+    /// the disk before it takes its name: a power cut cannot leave it
+    /// empty, and `kept` with it.
     ///
     /// # Errors
     ///
-    /// When it cannot be written.
+    /// When it cannot be written, and when these aggregates may not be
+    /// saved ([`Found::may_save`]): they did not read the file that is
+    /// there, which is left as it is.
     pub fn save(&self, dir: &StatsDir, clock: &dyn Clock) -> io::Result<()> {
+        if !self.found.may_save() {
+            return Err(io::Error::other(format!(
+                "the aggregates were not saved: {}",
+                match &self.found {
+                    Found::Newer { version } => format!(
+                        "the file is a newer build's (version {version}), and is left for it"
+                    ),
+                    Found::Unreadable => {
+                        "the file could not be read, and is left as it is".to_owned()
+                    }
+                    _ => "they were not loaded from the directory".to_owned(),
+                }
+            )));
+        }
         dir.ensure()?;
         let text = serde_json::to_vec(self).map_err(io::Error::other)?;
-        write_private(&dir.aggregates_file(), &text, clock)
+        let options = AtomicWriteOptions {
+            owner_only: true,
+            // `kept` is the one copy of every pruned month: no rename
+            // before the content is on the disk.
+            sync: true,
+            follow_links: false,
+            ..AtomicWriteOptions::default()
+        };
+        write_atomic(&dir.aggregates_file(), &text, &options, clock).map_err(io::Error::other)
     }
+}
+
+/// Reads the aggregates file, and says what it is.
+fn read_aggregates(dir: &StatsDir) -> io::Result<Reading> {
+    let path = dir.aggregates_file();
+    let mut file = match open_to_read(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Reading::Missing),
+        Err(error) => return Err(error),
+    };
+    let identity = FileIdentity::of(&file).ok();
+    let mut text = Vec::new();
+    file.read_to_end(&mut text)?;
+    // The version first, from a file that may be a later build's whole
+    // other shape.
+    #[derive(Deserialize)]
+    struct Version {
+        version: u32,
+    }
+    Ok(match serde_json::from_slice::<Version>(&text) {
+        Ok(Version { version }) if version > AGGREGATES_VERSION => Reading::Newer(version),
+        Ok(Version { version }) if version == AGGREGATES_VERSION => {
+            match serde_json::from_slice::<Aggregates>(&text) {
+                Ok(mut read) => {
+                    read.found = Found::Read;
+                    Reading::Parsed(read)
+                }
+                Err(_) => Reading::Unparsed(text, identity),
+            }
+        }
+        _ => Reading::Unparsed(text, identity),
+    })
+}
+
+/// Moves the aggregates file aside, when it is still the file that was
+/// read (`identity`), to a name of its own with the time in it. Returns
+/// where, or `None` when another file has the name now. The copy is
+/// owner-only whatever the file was.
+fn move_aside(
+    dir: &StatsDir,
+    bytes: &[u8],
+    identity: Option<FileIdentity>,
+    clock: &dyn Clock,
+) -> io::Result<Option<PathBuf>> {
+    let path = dir.aggregates_file();
+    if identity.is_none() || FileIdentity::at(&path).ok() != identity {
+        return Ok(None);
+    }
+    let stamp = clock.now().to_string().replace(':', "-");
+    let mut to = dir.root().join(format!("{SET_ASIDE}{stamp}"));
+    let mut n = 2;
+    while to.exists() {
+        to = dir.root().join(format!("{SET_ASIDE}{stamp}-{n}"));
+        n += 1;
+    }
+    let options = AtomicWriteOptions {
+        owner_only: true,
+        sync: true,
+        follow_links: false,
+        ..AtomicWriteOptions::default()
+    };
+    write_atomic(&to, bytes, &options, clock).map_err(io::Error::other)?;
+    // The copy is safe; the file it was made from goes, unless another
+    // process has replaced it meanwhile.
+    if FileIdentity::at(&path).ok() == identity {
+        remove_if_there(&path)?;
+    }
+    Ok(Some(to))
 }
 
 /// Reads a monthly file from `entry.offset` to its last whole line, adding
 /// each line to the entry's part.
 fn read_from(path: &Path, entry: &mut FilePart) -> io::Result<()> {
-    let mut file = match open_to_read(path) {
+    let file = match open_to_read(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
@@ -391,7 +634,25 @@ fn read_from(path: &Path, entry: &mut FilePart) -> io::Result<()> {
         entry.offset = length;
         return Ok(());
     }
-    file.seek(SeekFrom::Start(entry.offset))?;
+    let part = &mut entry.part;
+    read_lines(file, &mut entry.offset, |line| {
+        match serde_json::from_slice::<Line>(line) {
+            Ok(parsed) => part.add_line(&parsed),
+            Err(_) => part.unreadable = part.unreadable.saturating_add(1),
+        }
+    })
+}
+
+/// Reads `file` from `offset` to its last whole line, giving each whole line
+/// (its newline included) to `each` and moving `offset` past it. A last
+/// line with no newline yet is left for later: another process may still
+/// be writing it.
+pub(crate) fn read_lines(
+    mut file: File,
+    offset: &mut u64,
+    mut each: impl FnMut(&[u8]),
+) -> io::Result<()> {
+    file.seek(SeekFrom::Start(*offset))?;
     let mut reader = BufReader::new(file);
     let mut line = Vec::new();
     loop {
@@ -401,21 +662,18 @@ fn read_from(path: &Path, entry: &mut FilePart) -> io::Result<()> {
             // The end, or a line another process is still writing.
             break;
         }
-        entry.offset += read as u64;
-        match serde_json::from_slice::<Line>(&line) {
-            Ok(parsed) => entry.part.add_line(&parsed),
-            Err(_) => entry.part.unreadable += 1,
-        }
+        *offset += read as u64;
+        each(&line);
     }
     Ok(())
 }
 
-/// Replaces a file's content, owner-only and atomically.
-pub(crate) fn write_private(path: &Path, contents: &[u8], clock: &dyn Clock) -> io::Result<()> {
+/// Replaces the limits file's content, owner-only and atomically. Not
+/// flushed to the disk first: the limits are asked again by the next
+/// request, so a power cut costs nothing that is not told again.
+fn write_limits(path: &Path, contents: &[u8], clock: &dyn Clock) -> io::Result<()> {
     let options = AtomicWriteOptions {
         owner_only: true,
-        // Both files can be rebuilt (the aggregates) or asked again (the
-        // limits): no flush to the disk for them.
         sync: false,
         follow_links: false,
         ..AtomicWriteOptions::default()
@@ -426,35 +684,77 @@ pub(crate) fn write_private(path: &Path, contents: &[u8], clock: &dyn Clock) -> 
 /// Appends lines to monthly files, one open file at a time.
 #[derive(Debug, Default)]
 pub(crate) struct Appender {
-    open: Option<(String, File)>,
+    open: Option<Open>,
+}
+
+#[derive(Debug)]
+struct Open {
+    month: String,
+    file: File,
+    /// Which file it is: when the name names another, or none, the file is
+    /// opened again.
+    identity: FileIdentity,
 }
 
 impl Appender {
     /// Appends one whole line, newline included, to `month`'s file.
+    ///
+    /// The file is the one the name gives now. One held open that is no
+    /// longer it, because `cortex stats reset` deleted it or something
+    /// replaced it, is let go first, so that no line goes to a file nobody
+    /// can read (found by the independent review of step 16). On Windows a
+    /// file deleted while this writer held it cannot be looked at until it
+    /// is let go, which this does.
     pub(crate) fn append(&mut self, dir: &StatsDir, month: &str, line: &[u8]) -> io::Result<()> {
-        if self.open.as_ref().is_none_or(|(open, _)| open != month) {
-            dir.ensure()?;
-            let path = dir.events_file(month);
-            // A new file is made private as it is made; one that is there
-            // keeps what it was given.
-            match private::create_new(&path) {
-                Ok(file) => drop(file),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => return Err(error),
-            }
-            let file = OpenOptions::new().append(true).open(&path)?;
-            self.open = Some((month.to_owned(), file));
+        let path = dir.events_file(month);
+        if let Some(open) = &self.open
+            && (open.month != month
+                || FileIdentity::at(&path).map_or(true, |now| now != open.identity))
+        {
+            self.open = None;
         }
-        if let Some((_, file)) = &mut self.open {
-            file.write_all(line)?;
-        }
-        Ok(())
+        let open = match &mut self.open {
+            Some(open) => open,
+            None => self.open.insert(open_to_append(dir, month, &path)?),
+        };
+        open.file.write_all(line)
     }
 
     /// Lets the open file go.
     pub(crate) fn close(&mut self) {
         self.open = None;
     }
+}
+
+/// Opens `month`'s file to append to it, making it private if it is new.
+/// A last line cut short (a full disk, a power cut) is ended first, so
+/// that it does not take this writer's first line with it (found by the
+/// independent review of step 16): it stays one unreadable line.
+fn open_to_append(dir: &StatsDir, month: &str, path: &Path) -> io::Result<Open> {
+    dir.ensure()?;
+    // A new file is made private as it is made; one that is there keeps
+    // what it was given.
+    match private::create_new(path) {
+        Ok(file) => drop(file),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let mut file = OpenOptions::new().read(true).append(true).open(path)?;
+    let identity = FileIdentity::of(&file)?;
+    let length = file.metadata()?.len();
+    if length > 0 {
+        let mut last = [0u8; 1];
+        file.seek(SeekFrom::Start(length - 1))?;
+        file.read_exact(&mut last)?;
+        if last != *b"\n" {
+            file.write_all(b"\n")?;
+        }
+    }
+    Ok(Open {
+        month: month.to_owned(),
+        file,
+        identity,
+    })
 }
 
 /// The limits file: the latest figures of each provider, by where they
@@ -503,19 +803,26 @@ impl LimitsFile {
         });
     }
 
-    /// Reads the file, takes `newer` into it, and writes it back.
+    /// Reads the file, takes `newer` into it, and writes it back, holding
+    /// the file's lock from before the read until after the write, so that
+    /// another process's update between the two is not written over (found
+    /// by the independent review of step 16).
     ///
     /// # Errors
     ///
-    /// When it cannot be read for any reason but its not being there (it
-    /// is then left as it is, so that a passing failure to read it cannot
-    /// lose the other providers' figures), or cannot be written.
+    /// When the lock cannot be taken, when the file cannot be read for any
+    /// reason but its not being there (it is then left as it is, so that a
+    /// passing failure to read it cannot lose the other providers'
+    /// figures), or when it cannot be written.
     pub fn update(
         dir: &StatsDir,
         newer: impl IntoIterator<Item = ProviderLimits>,
         clock: &dyn Clock,
     ) -> io::Result<()> {
-        let mut file = match open_to_read(&dir.limits_file()) {
+        dir.ensure()?;
+        let path = dir.limits_file();
+        let _held = private::hold_lock(&path)?;
+        let mut file = match open_to_read(&path) {
             Ok(mut opened) => {
                 let mut text = Vec::new();
                 opened.read_to_end(&mut text)?;
@@ -527,9 +834,8 @@ impl LimitsFile {
             Err(error) => return Err(error),
         };
         file.merge(newer);
-        dir.ensure()?;
         let text = serde_json::to_vec(&file).map_err(io::Error::other)?;
-        write_private(&dir.limits_file(), &text, clock)
+        write_limits(&path, &text, clock)
     }
 }
 

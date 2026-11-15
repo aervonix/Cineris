@@ -75,7 +75,7 @@ pub use context::{
 };
 pub use events::EventSink;
 pub use guard::RepetitionLimits;
-pub use ledger::{Account, Ledger, LimitReached, Spent};
+pub use ledger::{Account, CatchUp, Ledger, LimitReached, Spent};
 pub use policy::{AllowAll, Decision, PlannedCall, Policy, Verdict};
 pub use session::{HistoryChange, SessionHandle};
 pub use speed::SpeedSettings;

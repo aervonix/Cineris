@@ -16,11 +16,17 @@
 //!
 //! Each turn also has an account of its own, with the limits one turn may
 //! not pass. The request limit per turn is one of them.
+//!
+//! **An account may be spent where the loop cannot see it.** A day's is
+//! spent by every process on the machine: such an account has a
+//! [`CatchUp`], which the loop awaits before each request it charges, and
+//! which adds what was spent elsewhere ([`Account::add_spent`]).
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use cortex_base::SharedClock;
+use cortex_tools::BoxFuture;
 use cortex_protocol::event::LimitKind;
 use cortex_protocol::lease::{Budget, Lease};
 use cortex_protocol::usage::{RequestUsage, TokenUsage};
@@ -34,6 +40,16 @@ pub struct Spent {
     pub tokens: u64,
     /// Requests to a model.
     pub requests: u64,
+}
+
+/// What brings an account up to date with what was spent where the loop
+/// cannot see it: a day's, with what other processes spent
+/// (`docs/architecture/18-usage.md`, "Limits on one day").
+pub trait CatchUp: Send + Sync + std::fmt::Debug {
+    /// Adds what was spent elsewhere since the last time to the account it
+    /// was made for. The request waits for it, so it must end within a
+    /// time limit of its own, whatever its disk does.
+    fn catch_up(&self) -> BoxFuture<'_, ()>;
 }
 
 /// One limit: a budget and what has been spent of it.
@@ -56,6 +72,9 @@ struct Inner {
     /// What has been spent: shared with every account that
     /// [`draws_on`](Account::draws_on) this one.
     spent: Arc<Mutex<Spent>>,
+    /// What brings `spent` up to date before a request, when it is spent
+    /// elsewhere too.
+    catch_up: Option<Arc<dyn CatchUp>>,
 }
 
 /// An account refused a request.
@@ -126,6 +145,7 @@ impl Account {
                 clock,
                 opened,
                 spent: Arc::new(Mutex::new(Spent::default())),
+                catch_up: None,
             }),
         }
     }
@@ -147,7 +167,8 @@ impl Account {
     /// An account with a budget of its own that spends from `other`'s
     /// purse: what one spends the other has spent. A day's limits, where
     /// each session may hold the day to a lower budget of its own and every
-    /// session's spending is the day's.
+    /// session's spending is the day's. It is brought up to date as
+    /// `other` is.
     #[must_use]
     pub fn draws_on(name: impl Into<String>, budget: Budget, other: &Self) -> Self {
         Self {
@@ -157,8 +178,34 @@ impl Account {
                 clock: Arc::clone(&other.inner.clock),
                 opened: other.inner.opened,
                 spent: Arc::clone(&other.inner.spent),
+                catch_up: other.inner.catch_up.clone(),
             }),
         }
+    }
+
+    /// This account, brought up to date by `catch_up` before each request
+    /// it is charged for: one spent elsewhere too.
+    #[must_use]
+    pub fn catching_up(self, catch_up: Arc<dyn CatchUp>) -> Self {
+        let inner = &self.inner;
+        Self {
+            inner: Arc::new(Inner {
+                name: inner.name.clone(),
+                budget: inner.budget.clone(),
+                clock: Arc::clone(&inner.clock),
+                opened: inner.opened,
+                spent: Arc::clone(&inner.spent),
+                catch_up: Some(catch_up),
+            }),
+        }
+    }
+
+    /// Adds what was spent elsewhere: a [`CatchUp`]'s figures.
+    pub fn add_spent(&self, more: Spent) {
+        let mut spent = self.lock();
+        spent.requests = spent.requests.saturating_add(more.requests);
+        spent.tokens = spent.tokens.saturating_add(more.tokens);
+        spent.usd_nanos = spent.usd_nanos.saturating_add(more.usd_nanos);
     }
 
     /// The account of a lease: its budget, under the lease's id.
@@ -322,8 +369,23 @@ impl Ledger {
         ));
     }
 
+    /// Brings every account that is spent elsewhere up to date, each once:
+    /// what the loop awaits before it charges a request.
+    pub(crate) async fn catch_up(&self) {
+        let mut done: Vec<&Arc<dyn CatchUp>> = Vec::new();
+        for account in &self.accounts {
+            if let Some(catch_up) = &account.inner.catch_up
+                && !done.iter().any(|seen| Arc::ptr_eq(seen, catch_up))
+            {
+                catch_up.catch_up().await;
+                done.push(catch_up);
+            }
+        }
+    }
+
     /// Charges one request to every account, before it is sent. When an
-    /// account refuses, nothing is charged to any.
+    /// account refuses, nothing is charged to any. The accounts are as up
+    /// to date as the last [`catch_up`](Self::catch_up) left them.
     pub(crate) fn take_request(&self) -> Result<(), LimitReached> {
         let mut taken: Vec<&Account> = Vec::new();
         for account in self.turn.iter().chain(&self.accounts) {

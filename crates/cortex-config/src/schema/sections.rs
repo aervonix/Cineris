@@ -364,7 +364,12 @@ settings! {
         /// Limits on one session.
         [nested]
         pub session: LimitSet,
-        /// Limits on one day, across sessions.
+        /// Limits on one local day, across every session of every process
+        /// on this machine, counted from the statistics: with
+        /// `stats.enabled = false` a session with a day's limit is refused
+        /// when it opens. Another process's requests are counted once they
+        /// end, so the ones in flight when the limit is reached can pass
+        /// it (`docs/architecture/18-usage.md`, "Limits on one day").
         [nested]
         pub day: LimitSet,
     }
@@ -382,7 +387,9 @@ settings! {
         /// Money, in US dollars.
         [TightenOnly, Now, 0..=1_000_000_000]
         pub cost: Option<f64>,
-        /// Wall-clock time.
+        /// Wall-clock time. Held for a turn and a session; a day's is
+        /// accepted and not held yet
+        /// (`docs/outstanding/a-days-time-limit.md`).
         [TightenOnly, Now]
         pub time: Option<Duration>,
     }
@@ -604,8 +611,9 @@ settings! {
         /// How many months a monthly file of events stays after its own
         /// month: 3 by default. What it added up to stays in the
         /// aggregates, every all-time figure with it, so only the raw
-        /// events go (a heavy user's are about 90 MB a month).
-        [UserOnly, Now, 1..=1200]
+        /// events go (a heavy user's are about 90 MB a month). Read when
+        /// the harness starts.
+        [UserOnly, Restart, 1..=1200]
         pub retention: u32 = 3,
     }
 }
@@ -614,18 +622,18 @@ settings! {
     /// The usage view (`docs/architecture/18-usage.md`).
     pub struct UsageSettings {
         /// The first day of a week: `monday` to `sunday`.
-        [UserOnly, Now]
+        [UserOnly, Restart]
         pub week_start: Weekday = Weekday::Monday,
         /// `calendar` weeks and months, or `rolling`: the last 7 and 30
         /// days.
-        [UserOnly, Now]
+        [UserOnly, Restart]
         pub ranges: UsageRanges = UsageRanges::Calendar,
         /// The providers whose documented usage endpoint
         /// `cortex usage --refresh` may ask, with that provider's own key:
         /// `["openrouter"]`. Empty, nothing is ever asked. Only when the
         /// user asks, never on its own. The user's alone: a project's file
         /// cannot turn it on.
-        [UserOnly, Now]
+        [UserOnly, Restart]
         pub refresh: Vec<String>,
     }
 }

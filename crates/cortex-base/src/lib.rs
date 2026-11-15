@@ -39,7 +39,7 @@
 //!
 //! Two modules of this crate may use `unsafe`, both on Windows only:
 //! `private::windows`, which sets access lists through the Windows API, and
-//! reads the reparse tag of an open file for [`nofollow`]
+//! reads the reparse tag and the identity of an open file for [`nofollow`]
 //! (`docs/decisions/0029-owner-only-files-on-windows.md`); and
 //! `zone::windows`, which reads the system's time zone, which only that API
 //! can give. Everywhere else in the crate the workspace's
@@ -79,7 +79,7 @@ pub use framing::{FrameDecoder, FrameError, FrameReader, FrameWriter, StreamErro
 pub use git::{GIT_ENV, GIT_HARDENING};
 pub use hash::{ContentHash, ContentHasher};
 pub use id::{IdCounter, IdGenerator};
-pub use nofollow::{OpenError, open_regular};
+pub use nofollow::{FileIdentity, OpenError, open_regular};
 pub use path::{
     AbsPath, PathError, PathOptions, PathResolver, PathStyle, RelPath, ResolvedPath,
     location_within, same_location, strip_location_prefix,

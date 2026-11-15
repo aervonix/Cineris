@@ -26,6 +26,7 @@ mod paths_unix;
 mod paths_windows;
 mod private;
 mod watch;
+mod zone;
 
 use std::fs;
 use std::path::{Path, PathBuf};

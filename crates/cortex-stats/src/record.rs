@@ -114,7 +114,9 @@ pub struct RequestRecord {
     pub time: RequestTime,
     /// Why the response ended: the neutral stop reason.
     pub stop: String,
-    /// The code of the failure, when it failed.
+    /// The code of the failure, when it failed: a plain code
+    /// (`cortex_protocol::error::code::is_plain`), or `other` where the
+    /// provider's was not one. The writer keeps no other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     /// Attempts given up before the one that counted.
@@ -364,6 +366,14 @@ impl Record {
 pub struct Line {
     /// The local date, `YYYY-MM-DD`.
     pub day: String,
+    /// On a request's line, the recorder that wrote it
+    /// ([`Recorder::writer`](crate::Recorder::writer)): what tells a day's
+    /// limits this process's own spending, which they count as it happens,
+    /// from other processes' ([`DayReader`](crate::DayReader)). Absent from
+    /// other lines, and from lines of builds before it was added, which
+    /// count as another process's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer: Option<String>,
     /// The event.
     #[serde(flatten)]
     pub record: Record,

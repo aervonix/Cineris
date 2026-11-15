@@ -354,6 +354,7 @@ dependencies = [
  "cortex-testkit",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

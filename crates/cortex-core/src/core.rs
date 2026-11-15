@@ -300,7 +300,7 @@ pub(crate) struct Inner {
     /// every session of the core, and the local day it is for: made the
     /// first time a session with a day limit opens, from what the day's
     /// statistics already hold.
-    pub(crate) day: Mutex<Option<(cortex_base::LocalDate, cortex_agent::Account)>>,
+    pub(crate) day: crate::day::DaySlot,
 }
 
 /// What a shell was looked for with: `shell.program` and `shell.args`.
@@ -498,7 +498,11 @@ impl Core {
     }
 
     /// The session, when `client` has it open.
-    fn open_for(&self, client: ClientId, session: &SessionId) -> Result<Arc<Live>, OpError> {
+    pub(crate) fn open_for(
+        &self,
+        client: ClientId,
+        session: &SessionId,
+    ) -> Result<Arc<Live>, OpError> {
         let live = self.live(session)?;
         if live.sink.subscribers().contains(&client.0) {
             Ok(live)
@@ -822,13 +826,19 @@ impl Core {
             .await;
         }
         // The statistics the sessions recorded are written before the
-        // process goes: its writer is a thread that would die with it.
+        // process goes: its writer is a thread that would die with it. A
+        // writer stuck on its disk is waited for only so long.
         if let Some(recorder) = self.inner.stats.clone() {
-            let _ = Self::blocking(move || {
-                recorder.flush();
-                Ok(())
-            })
-            .await;
+            let flushed = crate::stats::flush(recorder.clone(), &self.inner.options.timer).await;
+            if flushed != cortex_stats::Flushed::Done {
+                tracing::warn!(
+                    unwritten = flushed.unwritten(),
+                    dropped = recorder.dropped(),
+                    outcome = ?flushed,
+                    "the statistics writer did not finish before the end: these events are not \
+                     recorded"
+                );
+            }
         }
     }
 
@@ -1244,7 +1254,7 @@ impl Core {
                 }))
             }
             Op::UsageReport(params) => Ok(OpResult::UsageReport(
-                crate::usage::report(self, &params).await?,
+                crate::usage::report(self, client, &params).await?,
             )),
             Op::UsageRefresh(params) => {
                 self.require_user(client)?;

@@ -30,62 +30,29 @@
 
 use std::fs::File;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use cortex_base::{OpenError, open_regular, private};
-
-/// The lock file of the store at `file`.
-pub(crate) fn lock_path(file: &Path) -> PathBuf {
-    let mut name = file.as_os_str().to_owned();
-    name.push(".lock");
-    PathBuf::from(name)
-}
+#[cfg(test)]
+pub(crate) use cortex_base::private::lock_path;
+use cortex_base::private;
 
 /// Takes the lock of the store at `file`, creating the store's directory
-/// owner-only if it is missing. The lock is held until the returned value
-/// is dropped. Waits while another process holds it, which is for one read
-/// and one write of a small file.
+/// owner-only if it is missing: [`cortex_base::private::hold_lock`]. The
+/// lock is held until the returned value is dropped. Waits while another
+/// process holds it, which is for one read and one write of a small file.
 ///
 /// # Errors
 ///
 /// When the directory or the lock file cannot be made or opened, or a link
 /// stands at the lock file's name.
 pub(crate) fn hold(file: &Path) -> io::Result<Option<File>> {
-    if let Some(directory) = file
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        private::create_dir_all(directory)?;
-    }
-    let path = lock_path(file);
-    let refused = |error: OpenError| match error {
-        OpenError::Io(source) => source,
-        other => io::Error::other(format!("the lock file {}: {other}", path.display())),
-    };
-    let lock = match open_regular(&path) {
-        Ok((lock, _)) => lock,
-        Err(OpenError::NotFound) => {
-            match private::create_new(&path) {
-                Ok(_) => {}
-                // Another process made it first, or something else did: the
-                // open says which. A link there is not followed.
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => return Err(error),
-            }
-            open_regular(&path).map(|(lock, _)| lock).map_err(refused)?
-        }
-        Err(error) => return Err(refused(error)),
-    };
-    match lock.lock() {
-        Ok(()) => Ok(Some(lock)),
-        Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(None),
-        Err(error) => Err(error),
-    }
+    private::hold_lock(file)
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use std::fs::TryLockError;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;

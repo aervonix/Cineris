@@ -122,4 +122,46 @@ pub mod code {
     /// not know. It is refused whole: a restriction that is not understood
     /// cannot be enforced, and must not be dropped.
     pub const LEASE_NOT_UNDERSTOOD: &str = "lease_not_understood";
+
+    /// What a code that is not a plain one is kept as, where a provider's
+    /// code would be kept: the statistics.
+    pub const OTHER: &str = "other";
+
+    /// Whether `code` is a plain one (`invalid_api_key`,
+    /// `rate_limit_exceeded`): lower-case ASCII letters, digits, `_`, `.`
+    /// and `-`, at most 64 of them.
+    ///
+    /// A provider's error code is the text of its answer, which may be
+    /// anything, a secret included: a code is kept, shown or logged only
+    /// when it is plain (the early review of step 16's refresh, and the
+    /// independent review's twin in the statistics).
+    #[must_use]
+    pub fn is_plain(code: &str) -> bool {
+        !code.is_empty()
+            && code.len() <= 64
+            && code.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::code;
+
+    #[test]
+    fn only_a_plain_code_is_plain() {
+        for plain in ["invalid_api_key", "rate_limit_exceeded", "a.b-c_1", &"x".repeat(64)] {
+            assert!(code::is_plain(plain), "{plain}");
+        }
+        for not in [
+            "",
+            "Refused",
+            "your prompt 'sk-live-0123' was refused",
+            "tab\there",
+            &"x".repeat(65),
+        ] {
+            assert!(!code::is_plain(not), "{not}");
+        }
+    }
 }

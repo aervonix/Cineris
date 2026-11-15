@@ -6,7 +6,10 @@
 //! bounded queue. When the queue is full, because the writer is behind or
 //! stalled on a slow disk, the event is dropped and counted, and the count
 //! is written as an event of its own when there is room again. A record
-//! that says it lost events is better than a loop that stalls.
+//! that says it lost events is better than a loop that stalls. A writer
+//! whose thread has ended (it panicked) takes nothing more: every event
+//! after it is dropped and counted too, and the log says once that it
+//! stopped.
 //!
 //! **Nothing is done at start-up.** Making a recorder makes the queue and
 //! nothing else: no thread, no directory, no file. The thread is started
@@ -20,6 +23,11 @@
 //! appends it to its month's file, and every few seconds (and when asked to
 //! flush) brings the aggregates up to date from the files and writes the
 //! latest limits.
+//!
+//! **A flush can be given up** ([`Recorder::flush_until`]): the end of a
+//! process waits for the writer only so long, since a writer stuck on its
+//! disk would otherwise hold the process's exit for as long as it is stuck
+//! (found by the independent review of step 16).
 
 #![allow(
     clippy::disallowed_methods,
@@ -29,16 +37,17 @@
 
 use std::collections::BTreeMap;
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use cortex_base::{SharedClock, UtcTime, Zone};
+use cortex_base::{IdGenerator, SharedClock, SystemRng, UtcTime, Zone};
+use cortex_protocol::error::code;
 use cortex_protocol::usage::ProviderLimits;
 
 use crate::record::{Line, Record};
-use crate::store::{Aggregates, Appender, LimitsFile, StatsDir, month_of};
+use crate::store::{Aggregates, Appender, Found, LimitsFile, StatsDir, month_of};
 
 /// How many events may wait for the writer.
 pub const QUEUE: usize = 4096;
@@ -86,13 +95,17 @@ enum Message {
     Record(Box<Record>),
     Limits(Box<ProviderLimits>),
     /// Write what is queued, bring the aggregates up to date, and answer.
-    Flush(SyncSender<()>),
+    Flush(Answer),
 }
 
 struct Writer {
     receiver: Receiver<Message>,
     options: RecorderOptions,
     clock: SharedClock,
+    /// The recorder's id, written on its request lines.
+    id: Arc<str>,
+    /// Events taken and not yet written.
+    queued: Arc<AtomicU64>,
 }
 
 /// Takes statistics events and writes them off the calling thread. Clones
@@ -101,32 +114,170 @@ struct Writer {
 pub struct Recorder {
     queue: SyncSender<Message>,
     dropped: Arc<AtomicU64>,
+    /// Events taken and not yet written: what a flush that did not finish
+    /// says was left.
+    queued: Arc<AtomicU64>,
+    /// Whether the log has been told that the writer stopped.
+    stopped_told: Arc<AtomicBool>,
     /// The writer, until it is started.
-    waiting: Arc<Mutex<Option<Writer>>>,
+    unstarted: Arc<Mutex<Option<Writer>>>,
+    id: Arc<str>,
 }
 
 impl std::fmt::Debug for Recorder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Recorder")
+            .field("writer", &self.id)
             .field("dropped", &self.dropped())
             .finish_non_exhaustive()
     }
 }
 
+/// What a flush came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Flushed {
+    /// Everything taken before it is written, and the aggregates and the
+    /// limits are up to date.
+    Done,
+    /// The writer was never started: nothing was waited for, and
+    /// `waiting` events are still in its queue.
+    NotStarted {
+        /// Events not written.
+        waiting: u64,
+    },
+    /// It was given up before the writer finished: `waiting` events had not
+    /// been written then.
+    GaveUp {
+        /// Events not written.
+        waiting: u64,
+    },
+    /// The writer's thread has ended: nothing more is written, and
+    /// `waiting` events were still in its queue.
+    Stopped {
+        /// Events not written.
+        waiting: u64,
+    },
+}
+
+impl Flushed {
+    /// The events left unwritten: none when it is done.
+    #[must_use]
+    pub const fn unwritten(self) -> u64 {
+        match self {
+            Self::Done => 0,
+            Self::NotStarted { waiting } | Self::GaveUp { waiting } | Self::Stopped { waiting } => {
+                waiting
+            }
+        }
+    }
+}
+
+/// How a flush ended, as its waiter learns it.
+#[derive(Debug, Clone, Copy)]
+enum Ended {
+    Written,
+    GaveUp,
+    Stopped,
+}
+
+#[derive(Debug, Default)]
+struct FlushState {
+    ended: Mutex<Option<Ended>>,
+    changed: Condvar,
+}
+
+impl FlushState {
+    fn lock(&self) -> MutexGuard<'_, Option<Ended>> {
+        self.ended.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Ends the flush, unless it has ended already.
+    fn end(&self, how: Ended) {
+        let mut ended = self.lock();
+        if ended.is_none() {
+            *ended = Some(how);
+        }
+        drop(ended);
+        self.changed.notify_all();
+    }
+}
+
+/// What stops a [`Recorder::flush_until`] that is waiting: [`GiveUp::now`],
+/// from any thread, at whatever time limit its owner keeps (the core's, on
+/// its timer). One for each flush.
+#[derive(Debug, Clone, Default)]
+pub struct GiveUp {
+    state: Arc<FlushState>,
+}
+
+impl GiveUp {
+    /// A handle that has not given up.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Stops the wait: the flush returns [`Flushed::GaveUp`], unless it has
+    /// ended already. The writer goes on with what it was doing.
+    pub fn now(&self) {
+        self.state.end(Ended::GaveUp);
+    }
+}
+
+/// The writer's answer to a flush. Given when everything before it is
+/// written; given as "stopped" when it is dropped unanswered, which is what
+/// a writer thread that panicked does with it.
+struct Answer(Arc<FlushState>);
+
+impl Answer {
+    fn written(&self) {
+        self.0.end(Ended::Written);
+    }
+}
+
+impl Drop for Answer {
+    fn drop(&mut self) {
+        self.0.end(Ended::Stopped);
+    }
+}
+
 impl Recorder {
     /// A recorder: its queue, and a writer that is not started yet.
+    ///
+    /// Its [`writer`](Self::writer) id is made here, as a unique id is
+    /// (`cortex_base::IdGenerator`): the time in milliseconds and 60 random
+    /// bits from a generator seeded by the operating system in each
+    /// process, so two recorders' ids are the same only if they are made in
+    /// one millisecond and draw the same 60 bits.
     #[must_use]
     pub fn new(options: RecorderOptions, clock: SharedClock) -> Self {
         let (queue, receiver) = sync_channel(options.queue.max(1));
+        let id: Arc<str> = IdGenerator::new(Arc::clone(&clock), Box::new(SystemRng::new()))
+            .unique("w_")
+            .into();
+        let queued = Arc::new(AtomicU64::new(0));
         Self {
             queue,
             dropped: Arc::new(AtomicU64::new(0)),
-            waiting: Arc::new(Mutex::new(Some(Writer {
+            queued: Arc::clone(&queued),
+            stopped_told: Arc::new(AtomicBool::new(false)),
+            unstarted: Arc::new(Mutex::new(Some(Writer {
                 receiver,
                 options,
                 clock,
+                id: Arc::clone(&id),
+                queued,
             }))),
+            id,
         }
+    }
+
+    /// The id this recorder writes on its request lines (`w_…`): what tells
+    /// a day's limits this process's own spending from other processes'.
+    #[must_use]
+    pub fn writer(&self) -> &str {
+        &self.id
     }
 
     /// Starts the writer thread, once. Calling it again does nothing.
@@ -137,7 +288,7 @@ impl Recorder {
     /// are dropped and counted once it is full.
     pub fn start(&self) -> io::Result<()> {
         let Some(writer) = self
-            .waiting
+            .unstarted
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()
@@ -151,8 +302,8 @@ impl Recorder {
             .map(drop)
     }
 
-    /// Takes one event. Never waits: with the queue full it is dropped and
-    /// counted.
+    /// Takes one event. Never waits: with the queue full, or the writer
+    /// stopped, it is dropped and counted.
     pub fn record(&self, record: Record) {
         self.send(Message::Record(Box::new(record)));
     }
@@ -164,33 +315,102 @@ impl Recorder {
     }
 
     fn send(&self, message: Message) {
-        if let Err(TrySendError::Full(_)) = self.queue.try_send(message) {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
+        self.queued.fetch_add(1, Ordering::Relaxed);
+        match self.queue.try_send(message) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                self.queued.fetch_sub(1, Ordering::Relaxed);
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.queued.fetch_sub(1, Ordering::Relaxed);
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+                self.tell_stopped();
+            }
         }
     }
 
-    /// How many events were dropped and not yet written as a count.
+    /// Says once in the log that the writer has stopped.
+    fn tell_stopped(&self) {
+        if !self.stopped_told.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                "the statistics writer has stopped: events from now on are dropped and counted, \
+                 and not written"
+            );
+        }
+    }
+
+    /// How many events were dropped and not yet written as a count: those
+    /// of a full queue, and those that came after the writer stopped.
     #[must_use]
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
 
     /// Waits until everything taken so far is written and the aggregates
-    /// are up to date. For a command's end and for tests: never on the core
-    /// thread while a session runs. Returns at once when the writer was
-    /// never started.
-    pub fn flush(&self) {
+    /// are up to date, however long the writer takes: for tests, and for
+    /// commands that end with their own writes. The end of a process uses
+    /// [`flush_until`](Self::flush_until).
+    pub fn flush(&self) -> Flushed {
+        self.flush_until(&GiveUp::new())
+    }
+
+    /// As [`flush`](Self::flush), until `give_up` says to stop waiting.
+    /// Never on the core thread while a session runs. Returns at once when
+    /// the writer was never started, and as soon as the writer is found to
+    /// have stopped.
+    pub fn flush_until(&self, give_up: &GiveUp) -> Flushed {
+        let waiting = || self.queued.load(Ordering::Relaxed);
         let started = self
-            .waiting
+            .unstarted
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .is_none();
         if !started {
-            return;
+            return Flushed::NotStarted { waiting: waiting() };
         }
-        let (done, wait) = sync_channel(1);
-        if self.queue.send(Message::Flush(done)).is_ok() {
-            let _ = wait.recv();
+        let state = &give_up.state;
+        let mut message = Message::Flush(Answer(Arc::clone(state)));
+        loop {
+            match self.queue.try_send(message) {
+                Ok(()) => break,
+                Err(TrySendError::Full(back)) => {
+                    // The writer makes room as it takes events: look again
+                    // shortly, unless given up meanwhile.
+                    let ended = state.lock();
+                    let (ended, _) = state
+                        .changed
+                        .wait_timeout(ended, Duration::from_millis(5))
+                        .unwrap_or_else(PoisonError::into_inner);
+                    if ended.is_some() {
+                        return Flushed::GaveUp { waiting: waiting() };
+                    }
+                    drop(ended);
+                    message = back;
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    self.tell_stopped();
+                    return Flushed::Stopped { waiting: waiting() };
+                }
+            }
+        }
+        let mut ended = state.lock();
+        loop {
+            match *ended {
+                Some(Ended::Written) => return Flushed::Done,
+                Some(Ended::GaveUp) => return Flushed::GaveUp { waiting: waiting() },
+                Some(Ended::Stopped) => {
+                    drop(ended);
+                    self.tell_stopped();
+                    return Flushed::Stopped { waiting: waiting() };
+                }
+                None => {
+                    ended = state
+                        .changed
+                        .wait(ended)
+                        .unwrap_or_else(PoisonError::into_inner);
+                }
+            }
         }
     }
 }
@@ -204,6 +424,9 @@ struct State {
     unsynced: bool,
     /// When they were, on the monotonic clock.
     settled_at: Duration,
+    /// What the aggregates file was found to be when it could not be
+    /// saved, once said in the log.
+    told: Option<Found>,
 }
 
 fn run(writer: &Writer, dropped: &AtomicU64) {
@@ -213,6 +436,7 @@ fn run(writer: &Writer, dropped: &AtomicU64) {
         limits: BTreeMap::new(),
         unsynced: false,
         settled_at: writer.clock.monotonic(),
+        told: None,
     };
     loop {
         let message = if state.unsynced || !state.limits.is_empty() {
@@ -231,6 +455,7 @@ fn run(writer: &Writer, dropped: &AtomicU64) {
             Some(Message::Record(record)) => {
                 write_dropped(writer, &mut state, dropped);
                 write_record(writer, &mut state, &record);
+                writer.queued.fetch_sub(1, Ordering::Relaxed);
                 // Events that never stop arriving still reach the
                 // aggregates every so often.
                 let since = writer.clock.monotonic().saturating_sub(state.settled_at);
@@ -244,11 +469,12 @@ fn run(writer: &Writer, dropped: &AtomicU64) {
                     limits.source.as_str().to_owned(),
                 );
                 state.limits.insert(key, *limits);
+                writer.queued.fetch_sub(1, Ordering::Relaxed);
             }
-            Some(Message::Flush(done)) => {
+            Some(Message::Flush(answer)) => {
                 write_dropped(writer, &mut state, dropped);
                 settle(writer, &mut state);
-                let _ = done.send(());
+                answer.written();
             }
             None => settle(writer, &mut state),
         }
@@ -269,9 +495,20 @@ fn write_dropped(writer: &Writer, state: &mut State, dropped: &AtomicU64) {
 fn write_record(writer: &Writer, state: &mut State, record: &Record) {
     let at = UtcTime::parse(record.at().as_str()).unwrap_or_else(|_| writer.clock.now());
     let zone = state.zone.get_or_insert_with(Zone::system);
+    let mut record = record.clone();
+    if let Record::Request(request) = &mut record
+        && let Some(error) = &mut request.error
+        && !code::is_plain(error)
+    {
+        // A provider's code is its answer's text, which may hold anything,
+        // a secret included: only a plain one is kept (found by the
+        // independent review of step 16), whoever made the record.
+        code::OTHER.clone_into(error);
+    }
     let line = Line {
         day: zone.date_of(at).to_string(),
-        record: record.clone(),
+        writer: matches!(record, Record::Request(_)).then(|| writer.id.to_string()),
+        record,
     };
     let Ok(mut bytes) = serde_json::to_vec(&line) else {
         return;
@@ -303,15 +540,26 @@ fn settle(writer: &Writer, state: &mut State) {
         state.unsynced = false;
         let now = writer.clock.now();
         let zone = state.zone.get_or_insert_with(Zone::system);
-        if let Ok(mut aggregates) = Aggregates::load(dir)
-            && let Ok(true) = aggregates.sync(
+        if let Ok(mut aggregates) = Aggregates::load_for_saving(dir, writer.clock.as_ref()) {
+            let found = aggregates.found().clone();
+            if !found.may_save() && state.told.as_ref() != Some(&found) {
+                tracing::warn!(
+                    aggregates = ?found,
+                    "the statistics' aggregates file is not one this build may write: events are \
+                     still recorded in the monthly files, and the aggregates are left as they are"
+                );
+                state.told = Some(found);
+            }
+            // Aggregates that may not be saved neither prune nor save.
+            if let Ok(true) = aggregates.sync(
                 dir,
                 zone.date_of(now),
                 &month_of(now),
                 Some(writer.options.retention),
-            )
-        {
-            let _ = aggregates.save(dir, writer.clock.as_ref());
+            ) && aggregates.found().may_save()
+            {
+                let _ = aggregates.save(dir, writer.clock.as_ref());
+            }
         }
     }
     if !state.limits.is_empty() {
