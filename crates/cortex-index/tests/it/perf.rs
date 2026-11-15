@@ -371,3 +371,214 @@ fn perf_a_real_tree() {
     println!("real tree warm pass and map: median {:.1} ms", median(warm));
     println!("--- the map ---\n{map}--- end ---");
 }
+
+/// The process's memory in KiB: the most it has been resident, and what it
+/// is now. Linux says it in `/proc`; on Windows PowerShell is asked for the
+/// process's peak and current working set, which std has no call for.
+fn memory_kib() -> Option<(u64, u64)> {
+    if let (Some(peak), Some(now)) = (crate::resident_kib("VmHWM:"), crate::resident_kib("VmRSS:"))
+    {
+        return Some((peak, now));
+    }
+    if !cfg!(windows) {
+        return None;
+    }
+    let script = format!(
+        "$p = Get-Process -Id {}; Write-Output \"$($p.PeakWorkingSet64) $($p.WorkingSet64)\"",
+        std::process::id()
+    );
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut numbers = text.split_whitespace().map(|n| n.parse::<u64>().ok());
+    Some((numbers.next()?? / 1024, numbers.next()?? / 1024))
+}
+
+/// Where the cargo registry's sources are: `$CARGO_HOME/registry/src`, or
+/// `~/.cargo/registry/src`.
+fn registry_sources() -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| std::path::PathBuf::from(home).join(".cargo"))
+        })?;
+    let src = home.join("registry").join("src");
+    src.is_dir().then_some(src)
+}
+
+/// The first `want` `.rs` files under `dir`, in name order, name by name.
+fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, want: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        if out.len() >= want {
+            return;
+        }
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            rust_files(&entry.path(), out, want);
+        } else if kind.is_file() && entry.path().extension().is_some_and(|e| e == "rs") {
+            out.push(entry.path());
+        }
+    }
+}
+
+/// The path of the `n`th file of a measured tree: a hundred to a
+/// directory, ten directories to a parent.
+fn tree_file(n: usize) -> String {
+    let dir = n / 100;
+    format!("ws/d{:03}/s{dir:04}/f{n}.rs", dir / 10)
+}
+
+/// **The measurement of record for the warm map**
+/// (`docs/performance-budgets.md`, "Data paths"), since the independent
+/// review of step 18 found the generated tree about ten times lighter than
+/// real code: a tree of 20,000 files of real Rust code, the first `.rs`
+/// files of the cargo registry's sources in name order
+/// (`CORTEX_PERF_SOURCE` names another directory), a hundred to a
+/// directory. Where the registry holds fewer (a hosted runner's has the
+/// workspace's own dependencies, about 7,300), they are taken again in turn
+/// under other names, so the tree is always the same size. Each file is a
+/// hard link to its source where the two are on one volume (a hosted
+/// runner), and otherwise a copy dated an hour back.
+///
+/// It prints the cache's size per file, the cold passes, the warm pass and
+/// the map apart (with nothing changed, and with one file changed, which
+/// writes the cache again), where a warm pass's time goes, and the
+/// process's peak and remaining memory; then the map.
+///
+/// Named as a system test: it starts PowerShell on Windows for the memory
+/// figures, and making and indexing a tree of real code takes longer than
+/// tier 2's ten seconds on a hosted runner.
+#[test]
+#[ignore = "a measurement, run by hand in a release build: see the module documentation"]
+fn sys_perf_a_tree_of_real_code() {
+    let files = number_from_env("CORTEX_PERF_FILES", 20_000);
+    let source = std::env::var_os("CORTEX_PERF_SOURCE")
+        .map(std::path::PathBuf::from)
+        .or_else(registry_sources);
+    let Some(source) = source else {
+        println!("no cargo registry and no CORTEX_PERF_SOURCE: no tree of real code measured");
+        return;
+    };
+    let mut found = Vec::new();
+    rust_files(&source, &mut found, files);
+    assert!(!found.is_empty(), "no .rs file under {}", source.display());
+    let tree = Tree::new(cortex_testkit::scratch!("sys_perf_a_tree_of_real_code"));
+    let hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+    let (mut bytes, mut linked) = (0u64, 0usize);
+    let made = Instant::now();
+    for n in 0..files {
+        let from = &found[n % found.len()];
+        let to = tree.scratch.join(tree_file(n));
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        bytes += std::fs::metadata(from).unwrap().len();
+        if std::fs::hard_link(from, &to).is_ok() {
+            linked += 1;
+            continue;
+        }
+        std::fs::copy(from, &to).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&to)
+            .and_then(|file| file.set_modified(hour_ago))
+            .unwrap();
+    }
+    println!(
+        "tree: {files} files from {} sources, {:.1} MB of source, {linked} hard links; made in {:.0} ms",
+        found.len(),
+        bytes as f64 / 1e6,
+        ms(made.elapsed())
+    );
+    if cfg!(unix) {
+        // The copies on the disk, so that the cold pass's write is not held
+        // back behind them.
+        let _ = std::process::Command::new("sync").status();
+    }
+    let index = system_index(tree.root.clone(), tree.cache_dir(), Limits::default());
+    let before = memory_kib();
+
+    let start = Instant::now();
+    let mut cold = Vec::new();
+    for _ in 0..8 {
+        let pass = Instant::now();
+        let report = index.pass(&CancelToken::new(), &|| false);
+        cold.push((
+            ms(pass.elapsed()).round(),
+            report.read,
+            report.partial.clone(),
+        ));
+        if !report.unfinished() {
+            break;
+        }
+    }
+    let cold_ms = ms(start.elapsed());
+    let cache = std::fs::metadata(index.cache_path()).map_or(0, |m| m.len());
+    println!(
+        "cold: {cold_ms:.0} ms in {} passes (ms, read, partial: {cold:?}); cache {:.1} MB, {:.2} KiB a file",
+        cold.len(),
+        cache as f64 / 1e6,
+        cache as f64 / 1024.0 / files as f64
+    );
+    let after_cold = memory_kib();
+
+    let mut map = String::new();
+    let mut round = |changed: Option<usize>| {
+        if let Some(n) = changed {
+            // A new file in the place of a link: the source is left alone.
+            let path = tree.scratch.join(tree_file(n));
+            let _ = std::fs::remove_file(&path);
+            std::fs::write(&path, format!("pub fn changed_{n}() {{}}\n")).unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|file| {
+                    file.set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+                })
+                .unwrap();
+        }
+        let start = Instant::now();
+        let report = index.pass(&CancelToken::new(), &|| false);
+        let passed = start.elapsed();
+        map = index.map(&MapRequest::new()).expect("a map");
+        let total = start.elapsed();
+        assert!(report.read <= 1, "{report:?}");
+        (ms(passed), ms(total - passed), ms(total))
+    };
+    let mut table = Vec::new();
+    for (label, changes) in [
+        ("nothing changed", [None; 10]),
+        (
+            "one file changed",
+            std::array::from_fn(|n| Some(n * 1_000 % files)),
+        ),
+    ] {
+        let rounds: Vec<_> = changes.into_iter().map(&mut round).collect();
+        table.push(format!(
+            "warm, {label}: pass {:.1} ms, map {:.1} ms, together {:.1} ms (medians of {}); slowest together {:.1} ms",
+            median(rounds.iter().map(|r| r.0).collect()),
+            median(rounds.iter().map(|r| r.1).collect()),
+            median(rounds.iter().map(|r| r.2).collect()),
+            rounds.len(),
+            rounds.iter().map(|r| r.2).fold(0.0, f64::max)
+        ));
+    }
+    for line in table {
+        println!("{line}");
+    }
+    breakdown(&tree);
+    println!(
+        "memory (KiB, peak and now): before {before:?}, after the cold passes {after_cold:?}, at the end {:?}",
+        memory_kib()
+    );
+    println!("--- the map ---\n{map}--- end ---");
+}
