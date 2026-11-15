@@ -30,13 +30,17 @@ fn map_notices(front: &Front) -> Vec<String> {
 
 /// The start-up file-access check for the index: a gated index has done
 /// nothing when the session opens, and its first request goes without a
-/// map it would have had to wait for.
+/// map it would have had to wait for. Neither a use the opening waits for
+/// (held at the gate) nor a pass the opening starts and does not wait for
+/// (noted as it starts: the independent review of step 18 started one
+/// while the session was put together, and the check had passed) comes
+/// before the session's loop runs.
 #[test]
 fn the_index_is_not_touched_until_the_session_is_open() {
     let world = World::new("index_untouched", [says("Done.")]);
     world.put("src/lib.rs", "pub fn hello() {}\n");
     let watch = Arc::new(Untouched::new());
-    let touch = Arc::clone(&watch);
+    let (touch, note, open) = (Arc::clone(&watch), Arc::clone(&watch), Arc::clone(&watch));
     let core = world.core_with(|options| {
         options.repo_index = true;
         options.map_wait = Duration::ZERO;
@@ -44,6 +48,8 @@ fn the_index_is_not_touched_until_the_session_is_open() {
             touch.touch();
             true
         }));
+        options.index_started = Some(Arc::new(move || note.note()));
+        options.session_running = Some(Arc::new(move || open.open()));
     });
     world.run(async {
         // Opening the session would wait at the watch if it used the index.
@@ -65,6 +71,11 @@ fn the_index_is_not_touched_until_the_session_is_open() {
         "the index started after the session opened"
     );
     assert_eq!(watch.early(), 0, "the start-up path touched the index");
+    assert_eq!(
+        watch.before_open(),
+        0,
+        "the index started while the session was being opened"
+    );
 }
 
 #[test]

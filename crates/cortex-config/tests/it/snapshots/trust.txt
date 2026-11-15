@@ -82,7 +82,7 @@ stats.enabled                      user only
 stats.retention                    user only
 index.map                          preference
 index.map_tokens                   tighten only: a lower limit is a preference, a higher one user only
-index.map_wait                     preference
+index.map_wait                     user only
 index.max_files                    tighten only: a lower limit is a preference, a higher one user only
 index.max_file_bytes               tighten only: a lower limit is a preference, a higher one user only
 index.pass_time                    tighten only: a lower limit is a preference, a higher one user only

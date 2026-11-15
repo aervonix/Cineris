@@ -85,9 +85,15 @@ pub fn reference_page() -> String {
 
 fn row(key: &KeyInfo) -> String {
     let kind = key.kind.as_ref().map(describe).unwrap_or_default();
+    // A length of time is ranged in milliseconds.
+    let unit = if matches!(key.kind, Some(Kind::Duration)) {
+        " ms"
+    } else {
+        ""
+    };
     let range = key
         .range
-        .map(|(low, high)| format!(", {} to {}", plain(low), plain(high)))
+        .map(|(low, high)| format!(", {}{unit} to {}{unit}", plain(low), plain(high)))
         .unwrap_or_default();
     let joined = if key.joined { ", joined" } else { "" };
     let enforced = if key.enforced { " Fails closed." } else { "" };

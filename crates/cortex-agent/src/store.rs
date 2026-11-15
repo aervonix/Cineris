@@ -309,6 +309,13 @@ impl MemorySessionStore {
         inner.masked = true;
     }
 
+    /// Keeps the first `records` records and drops the rest: the history as
+    /// a rewind to that point leaves it. The id counters go on from where
+    /// they were, as a rewind's do.
+    pub fn keep_first(&self, records: usize) {
+        self.lock().records.truncate(records);
+    }
+
     /// Every record appended so far, with its turn, in order.
     #[must_use]
     pub fn records(&self) -> Vec<(TurnId, Record)> {

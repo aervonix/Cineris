@@ -107,6 +107,10 @@ fn the_documented_classes_hold() {
         // Proxy and certificate settings.
         "http.*",
         "models.*",
+        // How long every epoch's first request waits for the map: a
+        // repository's file must not make the sessions in it wait (the
+        // independent review of step 18).
+        "index.map_wait",
     ] {
         assert_eq!(class_of(key), Trust::UserOnly, "{key}");
     }

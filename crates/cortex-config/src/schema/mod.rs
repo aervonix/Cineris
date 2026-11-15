@@ -50,6 +50,7 @@ pub use sections::{
     RoleSettings, SandboxSettings, SessionSettings, Settings, StatsSettings, UsageSettings,
     VariantSettings,
 };
+pub(crate) use types::magnitude;
 pub use types::{
     EnvText, Headers, Profiles, ReasoningVisibility, Reserved, SessionDurability, StoreChoice,
     UsageRanges, Weekday,

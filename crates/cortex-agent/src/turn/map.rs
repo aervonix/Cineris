@@ -4,10 +4,17 @@
 use cortex_protocol::item::NoticeSource;
 
 use super::{Session, Turn};
+use crate::context::Answered;
 use crate::context::MapPending;
 use crate::store::StoreError;
 
-/// What the loop keeps of the map between boundaries.
+/// How many requests of one epoch may be dropped unanswered (a pass that
+/// failed) before the epoch is taken to have no map.
+const DROPPED: u32 = 3;
+
+/// What the loop keeps of the map between boundaries. Each part is for one
+/// epoch, by its number; a change of history forgets them all, since the
+/// number may come again for another history (`Session::reload`).
 #[derive(Debug, Default)]
 pub(super) struct MapState {
     /// The map asked for, and the epoch it was asked for.
@@ -16,6 +23,8 @@ pub(super) struct MapState {
     waited: Option<u64>,
     /// The epoch the source said has no map: it is not asked again in it.
     none: Option<u64>,
+    /// The epoch whose requests were dropped unanswered, and how many.
+    dropped: Option<(u64, u32)>,
 }
 
 /// Waits for whichever of two futures ends first.
@@ -76,7 +85,7 @@ impl Session {
                 // boundary.
                 let sleep = map.timer.sleep(map.wait);
                 turn.cancel
-                    .race(first(pending.wait(), sleep))
+                    .race(first(pending.answered(), sleep))
                     .await
                     .flatten()
             }
@@ -85,16 +94,36 @@ impl Session {
         match answer {
             // Not ready: a later boundary takes it.
             None => Ok(()),
-            Some(None) => {
+            Some(Answered::NoMap) => {
                 self.map.pending = None;
                 self.map.none = Some(epoch);
                 Ok(())
             }
-            Some(Some(text)) => {
+            // A pass that failed: a later boundary asks again, a few times
+            // at most.
+            Some(Answered::Dropped) => {
+                self.map.pending = None;
+                let dropped = match self.map.dropped {
+                    Some((at, count)) if at == epoch => count + 1,
+                    _ => 1,
+                };
+                self.map.dropped = Some((epoch, dropped));
+                if dropped >= DROPPED {
+                    self.map.none = Some(epoch);
+                }
+                Ok(())
+            }
+            Some(Answered::Map(text)) => {
                 self.map.pending = None;
                 self.record_notice(turn, NoticeSource::Map, text).await
             }
         }
+    }
+
+    /// Forgets what the loop knew of the map: the history changed, and the
+    /// epoch's number may come again for another history.
+    pub(super) fn forget_map(&mut self) {
+        self.map = MapState::default();
     }
 
     /// Tells the map's source that a turn began, so that its work in the

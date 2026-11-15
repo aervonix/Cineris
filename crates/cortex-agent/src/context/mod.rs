@@ -54,6 +54,7 @@ pub use instructions::{
     DEFAULT_CAP, DEFAULT_NAMES, FileText, InstructionFiles, MemoryInstructionFiles,
     NoInstructionFiles, is_instruction_name,
 };
+pub(crate) use map::Answered;
 pub use map::{MapAnswer, MapPending, MapSource, RepoMap};
 pub use prefix::{PrefixDifference, check_prefix};
 pub use prompt::{CORE_INSTRUCTIONS, Environment, GUIDED_NOTES};

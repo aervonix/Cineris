@@ -344,6 +344,48 @@ fn a_corrupt_or_older_cache_is_rebuilt() {
     }
 }
 
+/// The map asked for with a pass is made from the cache the pass kept, the
+/// one it read when nothing changed and the one it made when something
+/// did, without reading it again: the same map as one read from the disk,
+/// and a map even when the cache could not be written.
+#[test]
+fn the_map_after_a_pass_is_made_from_what_the_pass_kept() {
+    let tree = Tree::new(cortex_testkit::scratch!(
+        "the_map_after_a_pass_is_made_from_what_the_pass_kept"
+    ));
+    tree.write("a.rs", "pub fn alpha() {}\n");
+    tree.write(
+        "b.rs",
+        "pub struct Beta;\nimpl Beta {\n    pub fn go(&self) {}\n}\n",
+    );
+    let index = tree.index();
+    for round in 0..2 {
+        let (report, snapshot) = index.pass_and_keep(&CancelToken::new(), &|| false);
+        assert!(!snapshot.is_empty());
+        assert_eq!(report.written, round == 0, "{report:?}");
+        let kept = index.map_from(&snapshot, &MapRequest::new());
+        assert_eq!(kept, index.map(&MapRequest::new()), "round {round}");
+        assert!(
+            kept.expect("a map")
+                .contains("b.rs: struct Beta, impl Beta { go }")
+        );
+    }
+    // The cache cannot be written where its directory is a file: the map
+    // comes from what the pass kept, and there is none on the disk.
+    let blocked = Tree::new(cortex_testkit::scratch!("the_map_after_a_pass_blocked"));
+    blocked.write("a.rs", "pub fn alpha() {}\n");
+    std::fs::create_dir_all(blocked.cache_dir().parent().expect("a parent")).expect("dirs");
+    std::fs::write(blocked.cache_dir(), "not a directory").expect("a file in its place");
+    let index = blocked.index();
+    let (report, snapshot) = index.pass_and_keep(&CancelToken::new(), &|| false);
+    assert!(!report.written, "{report:?}");
+    let map = index
+        .map_from(&snapshot, &MapRequest::new())
+        .expect("a map");
+    assert!(map.contains("a.rs: fn alpha"), "{map}");
+    assert_eq!(index.map(&MapRequest::new()), None);
+}
+
 /// A definition's line is read when its file is shown, not by every pass
 /// (the independent review of step 18: checking every line of the cache
 /// twice a map cost a warm map most of its time). One this build did not

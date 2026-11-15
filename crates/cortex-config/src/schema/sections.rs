@@ -486,8 +486,12 @@ settings! {
         /// How long the first request of an epoch waits for the map when it
         /// is not ready yet; past it, the map follows as a notice at the next
         /// boundary where it is. Unset, 150 ms in the interactive app and
-        /// none in a headless run, whose start it would otherwise slow.
-        [Preference, NextEpoch]
+        /// none in a headless run, whose start it would otherwise slow. At
+        /// most one second. The user's alone: the wait is paid by every
+        /// epoch's first request, and a repository's file must not make
+        /// the sessions in it wait (found by the independent review of step
+        /// 18).
+        [UserOnly, NextEpoch, 0..=1_000]
         pub map_wait: Option<Duration>,
         /// The most files the index reads. Past it, the files nearest the
         /// top of the tree are indexed, and the map says it is partial.
