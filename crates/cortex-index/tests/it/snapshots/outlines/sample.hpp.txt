@@ -1,0 +1,15 @@
+language: cpp
+   6 mod shop  | namespace shop
+   9   struct Line  | struct Line  — A line of an order.
+  14   class Order  | class Order final : public Base
+  17     method Order  | explicit Order(int id)  — Makes an empty order.
+  18     method ~Order  | ~Order()
+  20     method lines  | std::vector<Line> lines() const
+  22     method each  | void each(F&& f) const
+  25     method empty  | static Order empty()
+  32   type Orders  | using Orders = std::vector<Order>
+  34   fn total  | int total(const Orders& orders)
+  36   mod detail  | namespace detail
+  37     fn clamp  | inline int clamp(int value)
+  43 fn c_api_version  | int c_api_version(void)
+  46 method shop::Order::lines  | std::vector<shop::Line> shop::Order::lines() const

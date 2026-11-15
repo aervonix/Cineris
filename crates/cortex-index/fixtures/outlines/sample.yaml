@@ -1,0 +1,11 @@
+# A configuration file, outlined by indentation.
+server:
+  port: 8080
+  tls:
+    cert: a.pem
+    key: a.key
+clients:
+  - name: one
+    retries:
+      max: 3
+logging: info

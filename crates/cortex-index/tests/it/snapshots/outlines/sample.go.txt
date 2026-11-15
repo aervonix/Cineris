@@ -1,0 +1,14 @@
+language: go
+   9 const MaxBody  | const MaxBody = 1 << 20  — MaxBody is the largest request body.
+  12 const ModeA  | ModeA Mode = iota
+  13 const ModeB  | ModeB
+  21 struct Server  | type Server struct  — Server serves requests.
+  27 interface Handler  | type Handler interface  — Handler handles one request.
+  28   method Serve  | Serve(ctx context.Context, r *http.Request) error
+  32 type Mode  | type Mode int
+  35 type Option  | Option func(*Server)
+  36 struct List  | List[T any] struct
+  42 fn New  | func New(addr string, opts ...Option) *Server  — New makes a server.
+  49 method Server.Start  | func (s *Server) Start(ctx context.Context) error  — Start starts it.
+  53 method List.Len  | func (l List[T]) Len() int
+  55 fn Map  | func Map[T, U any](in []T, f func(T) U) []U

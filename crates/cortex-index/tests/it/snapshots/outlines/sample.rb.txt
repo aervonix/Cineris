@@ -1,0 +1,11 @@
+language: ruby
+   6 mod Config  | module Config  — Parses configuration files.
+   7   const VERSION  | VERSION = "1.2.0"
+  10   class Loader  | class Loader < Base  — A loaded configuration.
+  13     method initialize  | def initialize(path)
+  18     method self.read  | def self.read(path)  — Reads the file.
+  24     method load!  | def load!
+  32     method ==  | def ==(other) = path == other.path
+  35     method default  | def default
+  42     method secret  | def secret
+  51 fn top_level_helper  | def top_level_helper

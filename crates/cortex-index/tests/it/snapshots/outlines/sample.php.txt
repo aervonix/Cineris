@@ -1,0 +1,13 @@
+language: php
+   3 mod App\Billing  | namespace App\Billing
+  10 class InvoiceService  | final class InvoiceService implements Billable  — Works out invoices.
+  12   const LIMIT  | public const LIMIT = 10
+  16   method __construct  | public function __construct(private Logger $logger)  — Makes a service.
+  20   method create  | public static function create(Order $order): Invoice
+  29   method reference  | protected function &reference(): array
+  35 interface Billable  | interface Billable
+  37   method bill  | public function bill(): void
+  40 interface Logs  | trait Logs
+  42   method log  | function log(string $message)
+  45 enum Status  | enum Status: string
+  50 fn helper  | function helper($x)

@@ -1,0 +1,24 @@
+language: rust
+   6 const MAX_FRAME  | pub const MAX_FRAME: usize = 64 * 1024  — The largest size a frame may have.
+   8 const GREETING  | static GREETING: &str = "fn not_a_function() { }"
+  12 struct Parser  | pub struct Parser<'a>  — A parser of frames.
+  18 enum Error  | pub enum Error  — What went wrong.
+  24 type Result  | pub(crate) type Result<T> = std::result::Result<T, Error>
+  26 impl Parser<'a>  | impl<'a> Parser<'a>
+  28   method new  | pub fn new(input: &'a str) -> Self  — Makes a parser over `input`.
+  34   method next_frame  | pub fn next_frame(&mut self, limit: usize) -> Result<&'a str>  — Reads the next frame.
+  43   method width  | const fn width(&self) -> usize
+  46 impl fmt::Display for Parser<'_>  | impl fmt::Display for Parser<'_>
+  47   method fmt  | fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result
+  52 interface Source  | pub trait Source
+  54   method read  | fn read(&mut self, into: &mut [u8]) -> usize  — Reads bytes.
+  56   method name  | fn name(&self) -> &str
+  61 impl Source for Vec<T>  | impl<T> Source for Vec<T>
+  65   method read  | fn read(&mut self, _into: &mut [u8]) -> usize
+  70 macro frame  | macro_rules! frame
+  74 mod wire  | pub mod wire
+  75   struct Header  | pub struct Header
+  77   fn decode  | pub async unsafe fn decode(raw: &[u8])
+  81 fn c_side  | fn c_side(x: i32) -> i32
+  85 mod tests  | mod tests
+  87   fn parses  | fn parses()

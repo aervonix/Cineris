@@ -12,5 +12,8 @@ doctest = false
 [dependencies]
 cortex-base.workspace = true
 
+[dev-dependencies]
+cortex-testkit.workspace = true
+
 [lints]
 workspace = true

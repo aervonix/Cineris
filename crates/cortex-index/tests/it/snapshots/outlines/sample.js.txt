@@ -1,0 +1,8 @@
+language: javascript
+   4 fn createStore  | function createStore(reducer, initial)  — Makes a store.
+  12 const VERSION  | export const VERSION = "1.0"
+  14 class Store  | class Store
+  15   method constructor  | constructor(reducer)
+  19   method dispatch  | dispatch(action)
+  25   method of  | static of(reducer)
+  35 fn helper  | exports.helper = (x) => x * 2

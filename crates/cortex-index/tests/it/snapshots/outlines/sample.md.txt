@@ -1,0 +1,7 @@
+language: markdown
+   5 section Guide  | # Guide
+   9   section Install  | ## Install
+  15     section On Linux  | ### On Linux
+  17   section Setext title  | ## Setext title
+  24   section Use  | ## Use
+  26 section Another  | # Another

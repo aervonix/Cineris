@@ -1,0 +1,12 @@
+language: c
+   6 macro MAX_ITEMS  | #define MAX_ITEMS 64
+   7 macro SQUARE  | #define SQUARE(x) ((x) * (x))
+  10 struct point_t  | typedef struct point_t
+  15 type node_t  | typedef struct node node_t
+  17 type handler_t  | typedef void (*handler_t)(int signal)
+  19 struct list  | struct list
+  24 enum color  | enum color
+  29 fn point_add  | point_t point_add(point_t a, point_t b)  — Adds two points.
+  37 fn helper  | helper (int a)
+  45 fn list_new  | struct list *list_new(void)
+  49 fn main  | int main(int argc, char **argv)
