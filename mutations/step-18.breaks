@@ -104,7 +104,7 @@ caught-by:
 rule: A pass stops at its time limit and the next carries on from what it wrote.
 file: crates/cortex-index/src/pass.rs
 in: Index::pass
-find: clock.monotonic().saturating_sub(started) >= limit
+find: now.saturating_sub(began) >= limit
 replace: false
 caught-by:
     cortex-index::it index::a_pass_out_of_time_writes_what_it_read_and_the_next_carries_on
@@ -168,7 +168,7 @@ caught-by:
 rule: The map is never larger than its budget.
 file: crates/cortex-index/src/map.rs
 in: render
-find: if text.len() + all <= budget {
+find: if body.len() + line.len() + 1 + reserve <= room {
 replace: if true {
 caught-by:
     cortex-index::it map::a_map_at_exactly_its_budget_is_whole_and_one_byte_less_says_what_it_left_out
@@ -252,3 +252,68 @@ replace:
     &mut || {
 caught-by:
     cortex-tools::it outline::a_directorys_outline_is_its_files_in_order_down_to_its_depth_past_the_gate
+
+# What the independent review of step 18 found, broken again.
+
+[break] the-map-trusts-another-sessions-cache
+rule: The map asks its own session's gate again, for a file and every directory above it: the cache is the project's, and another session's rules may have let more in.
+file: crates/cortex-index/src/map.rs
+in: render
+find: allowed(&record.path)
+replace: true
+caught-by:
+    cortex-index::it index::the_map_asks_its_own_sessions_gate_again_whatever_the_cache_holds
+
+[break] the-tree-is-in-byte-order
+rule: A directory's subdirectories follow it in the cache and are drawn under it in the map, whatever characters its neighbours' names hold.
+file: crates/cortex-index/src/pass.rs
+in: Index::pass
+find: dirs.sort_by(|(one, _), (other, _)| walk::path_order(one, other));
+replace:
+caught-by:
+    cortex-index::it tree_order::subdirectories_are_drawn_under_their_own_directory
+
+[break] a-name-starts-a-line-of-its-own-in-the-map
+rule: A name with a line break or another character that acts unseen is written as an escape in the map, which is the harness's notice.
+file: crates/cortex-index/src/map.rs
+in: file_line
+find: let mut line = format!("{}:", visible(&record.path));
+replace: let mut line = format!("{}:", record.path);
+caught-by:
+    cortex-index::it index::a_name_with_a_line_break_is_written_as_an_escape_in_the_map
+
+[break] a-reload-takes-the-date-from-any-notice
+rule: A history read again tells the date the harness's own date notice gave, not one an instruction file or the repository map happens to state.
+file: crates/cortex-agent/src/context/mod.rs
+in: Context::load
+find: if notice.source == NoticeSource::Harness
+replace: if true
+caught-by:
+    cortex-agent context::tests::a_reload_takes_the_date_from_the_harnesss_own_notice_only
+
+[break] a-pass-that-panics-stops-the-index
+rule: A pass that panics answers who waits with no map, and leaves the index able to start another.
+file: crates/cortex-core/src/repo_map.rs
+in: Shared::work
+find: let Ok(report) = passed else {
+replace: let Ok(report) = Ok::<_, ()>(passed.unwrap_or_else(|panic| std::panic::resume_unwind(panic))) else {
+caught-by:
+    cortex-core repo_map::tests::a_pass_that_panics_answers_who_waits_and_lets_the_next_one_start
+
+[break] a-listing-is-cut-by-the-time
+rule: A listing is bounded by its cap on entries and not by the time, so that a pass whose listing outlasts its time still ends and writes.
+file: crates/cortex-index/src/walk.rs
+in: list
+find: if let Some(why) = control.stop_listing() {
+replace: if let Some(why) = control.stop() {
+caught-by:
+    cortex-index::it index::a_listing_longer_than_the_time_limit_still_ends_and_the_reading_carries_on
+
+[break] a-pass-out-of-time-reads-nothing
+rule: Every pass reads one file at least, whatever its time limit, so that the passes make progress between them.
+file: crates/cortex-index/src/pass.rs
+in: Index::read_all
+find: Some(Partial::Time) if !started_reading => {}
+replace: Some(Partial::Time) if !started_reading && false => {}
+caught-by:
+    cortex-index::it index::a_listing_longer_than_the_time_limit_still_ends_and_the_reading_carries_on

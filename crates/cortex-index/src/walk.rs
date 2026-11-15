@@ -154,7 +154,7 @@ pub enum Partial {
     Files,
     /// The listing stopped at its cap on entries.
     Listing,
-    /// The pass ran out of time; the next carries on.
+    /// The pass ran out of time while reading; the next carries on.
     Time,
     /// The pass was stopped (the session ended, or a turn began).
     Stopped,
@@ -246,6 +246,14 @@ impl std::fmt::Debug for Control<'_> {
 }
 
 impl Control<'_> {
+    /// Why a listing should stop now, if it should: the session's end, or a
+    /// turn to give way to. Not the time: a listing is bounded by its cap on
+    /// entries, and one cut by the time would be begun again by every pass,
+    /// and so never finish.
+    pub(crate) fn stop_listing(&self) -> Option<Partial> {
+        (self.cancel.is_cancelled() || (self.give_way)()).then_some(Partial::Stopped)
+    }
+
     /// Why the pass should stop now, if it should.
     pub(crate) fn stop(&self) -> Option<Partial> {
         if self.cancel.is_cancelled() || (self.give_way)() {
@@ -308,7 +316,10 @@ pub(crate) fn list(
         .git_exclude(true)
         .parents(true)
         .require_git(false)
-        .git_global(false);
+        .git_global(false)
+        // In name order, so that a listing cut at its cap is the same one
+        // on every machine, whatever order a directory gives its entries.
+        .sort_by_file_name(std::ffi::OsStr::cmp);
     let gate_root = root.clone();
     let root_for_filter = root_fs.clone();
     let filter_gate = Arc::clone(gate);
@@ -335,7 +346,7 @@ pub(crate) fn list(
     let mut parent: Option<Parent> = None;
     let mut entries = 0usize;
     for entry in builder.build() {
-        if let Some(why) = control.stop() {
+        if let Some(why) = control.stop_listing() {
             listing.partial = Some(why);
             break;
         }

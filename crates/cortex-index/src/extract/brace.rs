@@ -143,15 +143,37 @@ struct Reader<'o> {
     out: &'o mut Builder,
     stack: Vec<Frame>,
     opaque: usize,
+    /// The entries of the `Holds` frames on the stack, innermost last:
+    /// kept as frames are pushed and popped, so that a file nested a
+    /// hundred thousand deep costs no more a line than a flat one.
+    holds: Vec<Option<usize>>,
     pending: Option<Pending>,
 }
 
 impl Reader<'_> {
     fn holds_depth(&self) -> usize {
-        self.stack
-            .iter()
-            .filter(|frame| matches!(frame, Frame::Holds { .. }))
-            .count()
+        self.holds.len()
+    }
+
+    fn push(&mut self, frame: Frame) {
+        match frame {
+            Frame::Opaque { .. } => self.opaque += 1,
+            Frame::Holds { entry } => self.holds.push(entry),
+            Frame::Transparent => {}
+        }
+        self.stack.push(frame);
+    }
+
+    fn pop(&mut self) -> Option<Frame> {
+        let frame = self.stack.pop()?;
+        match frame {
+            Frame::Opaque { .. } => self.opaque = self.opaque.saturating_sub(1),
+            Frame::Holds { .. } => {
+                self.holds.pop();
+            }
+            Frame::Transparent => {}
+        }
+        Some(frame)
     }
 
     /// Ends the definition waiting for its body: it has none.
@@ -202,6 +224,7 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
         out,
         stack: Vec::new(),
         opaque: 0,
+        holds: Vec::new(),
         pending: None,
     };
 
@@ -233,11 +256,7 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
             }
         }
         if !continuing && reader.opaque == 0 {
-            let container = reader.stack.iter().rev().find_map(|frame| match frame {
-                Frame::Holds { entry } => Some(*entry),
-                _ => None,
-            });
-            let container = container.map(|entry| {
+            let container = reader.holds.last().copied().map(|entry| {
                 entry
                     .and_then(|entry| reader.out.entries.get(entry))
                     .map_or((Kind::Block, ""), |entry| (entry.kind, entry.name.as_str()))
@@ -327,10 +346,7 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
                         }
                         None => Frame::Opaque { entry: None },
                     };
-                    if matches!(frame, Frame::Opaque { .. }) {
-                        reader.opaque += 1;
-                    }
-                    reader.stack.push(frame);
+                    reader.push(frame);
                 }
                 b'}' => {
                     // A definition still waiting for a body inside the block
@@ -342,15 +358,11 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
                     {
                         reader.without_body();
                     }
-                    let Some(frame) = reader.stack.pop() else {
+                    let Some(frame) = reader.pop() else {
                         continue;
                     };
                     let entry = match frame {
-                        Frame::Opaque { entry } => {
-                            reader.opaque = reader.opaque.saturating_sub(1);
-                            entry
-                        }
-                        Frame::Holds { entry } => entry,
+                        Frame::Opaque { entry } | Frame::Holds { entry } => entry,
                         Frame::Transparent => None,
                     };
                     // `typedef struct { … } Name;`: the name comes last.

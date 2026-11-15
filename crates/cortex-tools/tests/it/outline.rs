@@ -211,3 +211,41 @@ fn without_an_index_the_tool_says_there_are_no_outlines() {
         "{text}"
     );
 }
+
+#[test]
+fn a_directorys_files_are_in_path_order_name_by_name() {
+    let ws = Workspace::new("outline_dir_order");
+    ws.file("a/x.rs", "fn x() {}\n");
+    ws.file("a-b.rs", "fn ab() {}\n");
+    let (cx, _) = with_outliner(&ws);
+    let text = ok(&ws.call_with(&cx, &OutlineTool::new(), json!({"path": ".", "depth": 2})));
+    let x = text.find("a/x.rs:").expect("a/x.rs");
+    let ab = text.find("a-b.rs:").expect("a-b.rs");
+    assert!(x < ab, "{text}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_out_of_the_workspace_is_refused_and_a_name_with_a_line_break_is_escaped() {
+    let ws = Workspace::new("outline_link_out");
+    let outside = ws.dir.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("far.rs"), "fn far() {}\n").unwrap();
+    std::os::unix::fs::symlink(&outside, ws.root().join("linked")).unwrap();
+    ws.file("odd\nname.rs", "fn odd() {}\n");
+    let (cx, outliner) = with_outliner(&ws);
+    let tool = OutlineTool::new();
+    let text = failed(&ws.call_with(&cx, &tool, json!({"path": "linked"})));
+    assert!(text.contains("outside the workspace"), "{text}");
+    let listed = ok(&ws.call_with(&cx, &tool, json!({"path": "."})));
+    assert!(listed.contains("odd\\nname.rs:"), "{listed}");
+    assert!(!listed.contains("far"), "{listed}");
+    assert!(
+        !outliner
+            .asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|name| name == "far.rs")
+    );
+}

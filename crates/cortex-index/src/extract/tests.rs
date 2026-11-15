@@ -234,3 +234,124 @@ fn the_fallback_finds_blocks_two_levels_deep() {
         vec![entry(0, Kind::Block, "a:"), entry(1, Kind::Block, "b:")]
     );
 }
+
+#[test]
+fn deep_nesting_costs_no_more_a_line_than_a_flat_file() {
+    // A hundred thousand nested modules, and as many blocks whose contents
+    // are at the level outside them: each line's depth and container are
+    // known without walking the stack (the review of step 18). Before, this
+    // took seconds; the test's own time limit is the check.
+    let nested = "mod a {\n".repeat(100_000) + &"}\n".repeat(100_000);
+    let outline = extract(Some(Language::Rust), "a.rs", &nested);
+    assert_eq!(outline.entries.len(), MAX_ENTRIES);
+    assert_eq!(
+        outline.entries.last().map(|entry| entry.depth),
+        Some(u8::try_from(MAX_ENTRIES - 1).unwrap_or(u8::MAX))
+    );
+    let transparent = "extern \"C\" {\n".repeat(100_000) + "fn inside();\n";
+    let outline = extract(Some(Language::Rust), "a.rs", &transparent);
+    assert_eq!(outline.entries.len(), 1);
+}
+
+/// Text made of the pieces the lexer and the recognisers look for, in any
+/// order: quotes, comment markers, braces, keywords, heredocs, line breaks
+/// and characters outside ASCII.
+fn soup(rng: &mut cortex_testkit::SeededRng) -> String {
+    const PIECES: &[&str] = &[
+        "{",
+        "}",
+        "(",
+        ")",
+        "[",
+        "]",
+        ";",
+        ":",
+        ",",
+        "\"",
+        "'",
+        "`",
+        "\"\"\"",
+        "'''",
+        "/*",
+        "*/",
+        "//",
+        "#",
+        "#[",
+        "<<EOF",
+        "<<~TAG",
+        "<<<X",
+        "EOF",
+        "=begin",
+        "=end",
+        "r#\"",
+        "\"#",
+        "@\"",
+        "\\",
+        "\n",
+        "\r\n",
+        "\t",
+        "    ",
+        " ",
+        "fn ",
+        "def ",
+        "class ",
+        "impl ",
+        "struct ",
+        "func ",
+        "function ",
+        "type ",
+        "const ",
+        "mod ",
+        "interface ",
+        "enum ",
+        "extern \"C\" ",
+        "namespace ",
+        "template <",
+        ">",
+        "=",
+        "=>",
+        "é",
+        "\u{202e}",
+        "\u{0}",
+        "x",
+        "y1",
+        "_",
+        "```",
+        "---",
+        "===",
+        "## ",
+        "*",
+    ];
+    let count = cortex_testkit::cases::small(rng, 200);
+    (0..count)
+        .map(|_| *cortex_testkit::cases::pick(rng, PIECES))
+        .collect()
+}
+
+#[test]
+fn property_no_extractor_panics_or_passes_its_caps_on_any_text() {
+    let mut languages: Vec<Option<Language>> = Language::ALL.into_iter().map(Some).collect();
+    languages.push(None);
+    cortex_testkit::cases::check("extractors_on_any_text", 400, soup, |text| {
+        for language in &languages {
+            for file in ["a", "a.h"] {
+                let outline = extract(*language, file, text);
+                if outline.entries.len() > MAX_ENTRIES {
+                    return Err("too many entries".into());
+                }
+                for entry in &outline.entries {
+                    if entry.head.chars().count() > crate::outline::HEAD_CHARS {
+                        return Err(format!("a head too long: {entry:?}").into());
+                    }
+                    if entry.name.is_empty() {
+                        return Err(format!("an empty name: {entry:?}").into());
+                    }
+                    if entry.head.contains('\n') {
+                        return Err(format!("a head of two lines: {entry:?}").into());
+                    }
+                }
+            }
+        }
+        Ok(())
+    });
+}

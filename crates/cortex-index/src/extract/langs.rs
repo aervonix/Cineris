@@ -1101,6 +1101,12 @@ impl Recogniser for Js {
             if rest.is_empty() {
                 return Found::Attribute;
             }
+            // An `@` that is not an annotation (`@"`): nothing, rather than
+            // the same line again (found by the property test of step 18's
+            // review, as a stack overflow).
+            if rest.len() == code.len() {
+                return Found::Nothing;
+            }
             return self.recognise(rest, scope);
         }
         if inside_type(scope) {

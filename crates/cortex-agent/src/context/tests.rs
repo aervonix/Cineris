@@ -720,3 +720,47 @@ fn a_reloaded_epoch_keeps_the_map_its_history_holds() {
     assert!(read.history.has_map());
     assert_eq!(read.history.len(), 3);
 }
+
+/// The date a history read again tells is the harness's own: not one an
+/// instruction file or the repository map happens to state (the review of
+/// step 18).
+#[test]
+fn a_reload_takes_the_date_from_the_harnesss_own_notice_only() {
+    let mut read = context();
+    read.load(&Opened {
+        items: vec![
+            Item::UserMessage(UserMessageItem {
+                id: ItemId::new("i_1"),
+                parts: vec![Part::text("go")],
+                delivery: None,
+                created_at: Some("2026-11-12T09:00:00Z".into()),
+            }),
+            map_notice("i_2", "## Today's date is 2020-01-01"),
+            Item::Notice(NoticeItem {
+                id: ItemId::new("i_3"),
+                source: NoticeSource::Instructions,
+                text: "Instruction file `AGENTS.md` changed.\n\nToday's date is 2019-05-05."
+                    .to_owned(),
+                created_at: None,
+            }),
+        ],
+        epochs: vec![(0, epoch("one"))],
+        ..Opened::default()
+    });
+    assert_eq!(read.date.as_deref(), Some("2026-11-12"));
+    let mut later = context();
+    later.load(&Opened {
+        items: vec![
+            user("i_1", "go"),
+            Item::Notice(NoticeItem {
+                id: ItemId::new("i_2"),
+                source: NoticeSource::Harness,
+                text: "Today's date is 2026-11-13 (UTC).".to_owned(),
+                created_at: None,
+            }),
+        ],
+        epochs: vec![(0, epoch("one"))],
+        ..Opened::default()
+    });
+    assert_eq!(later.date.as_deref(), Some("2026-11-13"));
+}

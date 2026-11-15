@@ -170,11 +170,11 @@ impl Outline {
                 "{:>width$}  {:indent$}{}",
                 entry.line,
                 "",
-                entry.head,
+                visible(&entry.head),
                 indent = usize::from(entry.depth) * 2
             );
             if let Some(doc) = &entry.doc {
-                let _ = write!(text, "  — {doc}");
+                let _ = write!(text, "  — {}", visible(doc));
             }
             text.push('\n');
         }
@@ -186,6 +186,40 @@ impl Outline {
         }
         text
     }
+}
+
+/// Whether a character would change how the text around it reads without
+/// being seen: a control character (a line break, an escape) or one that
+/// reorders text (the bidirectional controls).
+fn hidden(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+/// `text` with every character that would act unseen written as an
+/// escape (`\n`, `\u{1b}`): a file named with a line break must not start
+/// a line of its own in the map, which is the harness's notice.
+#[must_use]
+pub fn visible(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.chars().any(hidden) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    for character in text.chars() {
+        match character {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other if hidden(other) => {
+                let _ = write!(out, "\\u{{{:x}}}", u32::from(other));
+            }
+            other => out.push(other),
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// Cuts `text` to at most `chars` characters, marking a cut with `…`.
@@ -224,6 +258,13 @@ mod tests {
             assert_eq!(Kind::from_word(kind.word()), Some(kind));
         }
         assert_eq!(Kind::from_word("nothing"), None);
+    }
+
+    #[test]
+    fn what_would_act_unseen_is_written_as_an_escape() {
+        assert_eq!(visible("plain é"), "plain é");
+        assert_eq!(visible("a\nb\tc\u{1b}[0m"), "a\\nb\\tc\\u{1b}[0m");
+        assert_eq!(visible("x\u{202E}y"), "x\\u{202e}y");
     }
 
     #[test]

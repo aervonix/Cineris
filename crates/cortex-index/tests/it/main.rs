@@ -19,6 +19,7 @@ mod map;
 mod memory;
 mod outlines;
 mod perf;
+mod tree_order;
 
 use std::path::{Path, PathBuf};
 

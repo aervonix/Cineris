@@ -671,7 +671,6 @@ impl Session {
         };
         self.ledger.begin_turn();
         self.guard.reset();
-        self.map_turn_started();
         self.enter(TurnState::Preparing);
         self.emit(&turn, Event::TurnStarted(TurnStarted {}));
 
@@ -685,6 +684,10 @@ impl Session {
             Ok(()) => self.begin(&turn, prompt).await,
             Err(error) => Err(error),
         };
+        // After the turn's start has asked for the epoch's map, if it had
+        // none: a pass in the background that gave way now would only run
+        // again for that request (the review of step 18).
+        self.map_turn_started();
         let mut phase = match begun {
             Ok(()) if only => Phase::Compacting(Prep {
                 only: true,

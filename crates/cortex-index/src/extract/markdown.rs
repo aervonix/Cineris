@@ -119,7 +119,7 @@ pub(crate) fn markdown(text: &str, out: &mut Builder) {
             depth,
             kind: Kind::Section,
             name: heading.clone(),
-            head: format!("{} {heading}", "#".repeat(level)),
+            head: clip(&format!("{} {heading}", "#".repeat(level)), HEAD_CHARS),
             doc: None,
         });
     }
