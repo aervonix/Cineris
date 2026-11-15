@@ -127,9 +127,15 @@ pub(crate) fn is_the_copy(exe: &Path) -> bool {
 /// Keeps `exe`, which has just run a command to its end, as the last good
 /// copy, unless it is the one already kept. Returns whether it was copied.
 ///
-/// `now` is the time in seconds since the epoch, and `commit` what to say of
-/// the tree the binary was built from.
-pub(crate) fn refresh(root: &Path, exe: &Path, now: u64, commit: &str) -> Result<bool> {
+/// `now` is the time in seconds since the epoch, and `commit` says what the
+/// tree the binary was built from is: asked only when a copy is made, since
+/// it starts git twice.
+pub(crate) fn refresh(
+    root: &Path,
+    exe: &Path,
+    now: u64,
+    commit: impl FnOnce() -> String,
+) -> Result<bool> {
     let dir = copy_dir(root);
     let stamp_path = dir.join(STAMP);
     let (length, built_nanos) = fingerprint(exe)?;
@@ -160,7 +166,7 @@ pub(crate) fn refresh(root: &Path, exe: &Path, now: u64, commit: &str) -> Result
         length,
         built_nanos,
         copied: now,
-        commit: commit.to_owned(),
+        commit: commit(),
     };
     let new_stamp = dir.join(format!("{STAMP}.new-{pid}"));
     fs::write(&new_stamp, stamp.text())
@@ -415,19 +421,24 @@ pub(crate) fn announce(root: &Path, exe: &Path, command: Option<&str>) -> Result
     }
 }
 
+/// Whether a run of `exe` keeps a copy of itself. Not the copy itself, and
+/// never on a CI runner (`in_actions`): a runner's build is never used
+/// again, a copy would only be cached, and every job would pay for it.
+fn keeps_a_copy(exe: &Path, in_actions: bool) -> bool {
+    !in_actions && !is_the_copy(exe)
+}
+
 /// Called when a command has ended well: keeps this binary as the last good
 /// copy. A failure to do so is a note, not a failure of the command.
 pub(crate) fn keep_after_success() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    // A runner's build is never used again, and its copy would only be
-    // cached.
-    if is_the_copy(&exe) || std::env::var_os("GITHUB_ACTIONS").is_some() {
+    if !keeps_a_copy(&exe, std::env::var_os("GITHUB_ACTIONS").is_some()) {
         return;
     }
     let root = workspace::root();
-    if let Err(message) = refresh(&root, &exe, now(), &describe_tree(&root)) {
+    if let Err(message) = refresh(&root, &exe, now(), || describe_tree(&root)) {
         eprintln!("xtask: note: the last good copy of xtask was not refreshed: {message}");
     }
 }
@@ -439,9 +450,18 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use super::{
-        FOLDER, Stamp, age, copy_dir, copy_name, is_the_copy, newer_than, refresh, refusal, utc,
-        warning,
+        FOLDER, Stamp, age, copy_dir, copy_name, is_the_copy, keeps_a_copy, newer_than, refresh,
+        refusal, utc, warning,
     };
+
+    #[test]
+    fn no_copy_is_kept_on_a_ci_runner_nor_of_the_copy() {
+        let built = Path::new("target").join("debug").join("xtask");
+        assert!(keeps_a_copy(&built, false));
+        assert!(!keeps_a_copy(&built, true), "a CI job keeps no copy");
+        let copy = Path::new("target").join(FOLDER).join("xtask");
+        assert!(!keeps_a_copy(&copy, false));
+    }
 
     /// A fresh folder under the system's temporary directory.
     fn scratch(name: &str) -> PathBuf {
@@ -495,7 +515,7 @@ mod tests {
     fn a_good_run_keeps_its_binary_and_the_same_build_is_not_copied_twice() {
         let root = scratch("refresh");
         let exe = binary(&root, "build one", 1_000);
-        assert!(refresh(&root, &exe, 5_000, "abc1234").unwrap());
+        assert!(refresh(&root, &exe, 5_000, || "abc1234".to_owned()).unwrap());
         let dir = copy_dir(&root);
         let kept = dir.join(copy_name());
         assert_eq!(fs::read_to_string(&kept).unwrap(), "build one");
@@ -504,8 +524,10 @@ mod tests {
         assert_eq!(stamp.copied, 5_000);
         assert_eq!(stamp.built_nanos, 1_000 * 1_000_000_000);
 
-        // The same build again: nothing is copied, the stamp stays.
-        assert!(!refresh(&root, &exe, 9_000, "def5678").unwrap());
+        // The same build again: nothing is copied, the stamp stays, and
+        // the tree is not described (that starts git twice).
+        let described = |_: ()| -> String { panic!("the tree was described for no copy") };
+        assert!(!refresh(&root, &exe, 9_000, || described(())).unwrap());
         let again = Stamp::parse(&fs::read_to_string(dir.join("xtask.stamp")).unwrap()).unwrap();
         assert_eq!(again, stamp);
 
@@ -516,13 +538,13 @@ mod tests {
 
         // A build of the same size and another time is another build.
         let exe = binary(&root, "build ONE", 1_500);
-        assert!(refresh(&root, &exe, 7_000, "abc1234").unwrap());
+        assert!(refresh(&root, &exe, 7_000, || "abc1234".to_owned()).unwrap());
         assert_eq!(fs::read_to_string(&kept).unwrap(), "build ONE");
 
         // A new build replaces the copy and the stamp, and leaves no
         // half-written file beside them.
         let exe = binary(&root, "build two, longer", 2_000);
-        assert!(refresh(&root, &exe, 9_000, "def5678").unwrap());
+        assert!(refresh(&root, &exe, 9_000, || "def5678".to_owned()).unwrap());
         assert_eq!(fs::read_to_string(&kept).unwrap(), "build two, longer");
         let stamp = Stamp::parse(&fs::read_to_string(dir.join("xtask.stamp")).unwrap()).unwrap();
         assert_eq!((stamp.commit.as_str(), stamp.copied), ("def5678", 9_000));
@@ -541,9 +563,9 @@ mod tests {
     fn a_missing_copy_is_made_again_though_the_stamp_is_there() {
         let root = scratch("missing");
         let exe = binary(&root, "build", 1_000);
-        assert!(refresh(&root, &exe, 5, "abc").unwrap());
+        assert!(refresh(&root, &exe, 5, || "abc".to_owned()).unwrap());
         fs::remove_file(copy_dir(&root).join(copy_name())).unwrap();
-        assert!(refresh(&root, &exe, 6, "abc").unwrap());
+        assert!(refresh(&root, &exe, 6, || "abc".to_owned()).unwrap());
         assert!(copy_dir(&root).join(copy_name()).is_file());
         drop(fs::remove_dir_all(&root));
     }

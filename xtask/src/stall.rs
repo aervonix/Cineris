@@ -44,9 +44,16 @@ pub(crate) struct Stall {
 }
 
 /// The largest group of timeouts among `failures` whose ends lie within
-/// [`WINDOW_MS`] of each other, when it has [`AT_LEAST`] of them.
+/// [`WINDOW_MS`] of each other and whose starts do not, when it has
+/// [`AT_LEAST`] of them.
+///
+/// Tests that started together and hang on one bug are stopped together
+/// too, each at its start plus the same limit: nextest starts its first
+/// tests within moments of each other, and a break that makes a shared
+/// path hang (in `mutate`) ends them all in one breath. What a stall does
+/// that a bug does not is stop tests that started at different times.
 pub(crate) fn find(failures: &[Failure]) -> Option<Stall> {
-    let mut ends: Vec<(i64, String)> = failures
+    let mut ends: Vec<(i64, i64, String)> = failures
         .iter()
         .filter(|failure| failure.kind.contains("timeout"))
         .filter_map(|failure| {
@@ -57,17 +64,26 @@ pub(crate) fn find(failures: &[Failure]) -> Option<Stall> {
                 reason = "a test's time in milliseconds fits an i64"
             )]
             let took = (failure.seconds * 1000.0).round() as i64;
-            Some((start + took, format!("{} {}", failure.binary, failure.name)))
+            Some((
+                start + took,
+                start,
+                format!("{} {}", failure.binary, failure.name),
+            ))
         })
         .collect();
     ends.sort();
+    let started_apart = |group: &[(i64, i64, String)]| {
+        let starts = group.iter().map(|(_, start, _)| *start);
+        let (earliest, latest) = (starts.clone().min(), starts.max());
+        matches!((earliest, latest), (Some(earliest), Some(latest)) if latest - earliest > WINDOW_MS)
+    };
     let mut best = (0, 0);
     let mut first = 0;
     for last in 0..ends.len() {
         while ends[last].0 - ends[first].0 > WINDOW_MS {
             first += 1;
         }
-        if last + 1 - first > best.1 - best.0 {
+        if last + 1 - first > best.1 - best.0 && started_apart(&ends[first..=last]) {
             best = (first, last + 1);
         }
     }
@@ -76,7 +92,7 @@ pub(crate) fn find(failures: &[Failure]) -> Option<Stall> {
         return None;
     }
     Some(Stall {
-        tests: group.iter().map(|(_, test)| test.clone()).collect(),
+        tests: group.iter().map(|(_, _, test)| test.clone()).collect(),
         spread_ms: group[group.len() - 1].0 - group[0].0,
     })
 }
@@ -363,12 +379,30 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_started_together_and_hang_together_are_not_a_stall() {
+        // nextest's first tests start within moments of each other; a bug
+        // that hangs them all stops them at the same limit, together.
+        let failures = [
+            timeout("a", "2026-11-15T10:00:00.000+00:00", 10.0),
+            timeout("b", "2026-11-15T10:00:00.004+00:00", 10.0),
+            timeout("c", "2026-11-15T10:00:00.009+00:00", 10.0),
+            timeout("d", "2026-11-15T10:00:00.200+00:00", 10.0),
+        ];
+        assert_eq!(find(&failures), None);
+        // One more, started seconds before and stopped with them: the
+        // machine's, and the group is named.
+        let mut stalled = failures.to_vec();
+        stalled.push(timeout("e", "2026-11-15T10:00:04.000+00:00", 6.1));
+        assert_eq!(find(&stalled).map(|stall| stall.tests.len()), Some(5));
+    }
+
+    #[test]
     fn the_largest_group_is_the_one_named() {
         let failures = [
-            timeout("early-1", "2026-11-15T10:00:00.000+00:00", 10.0),
+            timeout("early-1", "2026-11-15T09:59:58.000+00:00", 12.0),
             timeout("early-2", "2026-11-15T10:00:00.050+00:00", 10.0),
             timeout("early-3", "2026-11-15T10:00:00.090+00:00", 10.0),
-            timeout("late-1", "2026-11-15T10:01:00.000+00:00", 10.0),
+            timeout("late-1", "2026-11-15T10:00:59.000+00:00", 11.0),
             timeout("late-2", "2026-11-15T10:01:00.010+00:00", 10.0),
             timeout("late-3", "2026-11-15T10:01:00.020+00:00", 10.0),
             timeout("late-4", "2026-11-15T10:01:00.249+00:00", 10.0),

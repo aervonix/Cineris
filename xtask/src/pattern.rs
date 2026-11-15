@@ -274,8 +274,53 @@ impl Matcher<'_> {
     fn sequence(&self, pieces: &[Piece], at: usize, then: &mut dyn FnMut(usize) -> bool) -> bool {
         match pieces.split_first() {
             None => then(at),
-            Some((first, rest)) => self.repeat(first, rest, at, 0, then),
+            Some((first, rest)) => match self.one_char(&first.atom) {
+                Some(matches) => self.repeat_char(first, &matches, rest, at, then),
+                None => self.repeat(first, rest, at, 0, then),
+            },
         }
+    }
+
+    /// What one character must be, for an atom that is one character.
+    fn one_char<'b>(&'b self, atom: &'b Atom) -> Option<Box<dyn Fn(char) -> bool + 'b>> {
+        match atom {
+            Atom::Any => Some(Box::new(|_| true)),
+            Atom::Char(wanted) => Some(Box::new(move |c| self.same(c, *wanted))),
+            Atom::Class { negated, items } => {
+                Some(Box::new(move |c| self.in_class(items, c) != *negated))
+            }
+            Atom::Group(_) | Atom::Start | Atom::End => None,
+        }
+    }
+
+    /// A repeat of a one-character atom, with a loop and not a call for each
+    /// character: it counts how far the atom matches, up to its most, then
+    /// gives characters back one at a time until the rest matches. A call
+    /// for each repetition overflowed the stack on a line of 20,000
+    /// characters (`a.*x`; on Windows' smaller stack, about 2,500).
+    fn repeat_char(
+        &self,
+        piece: &Piece,
+        matches: &dyn Fn(char) -> bool,
+        rest: &[Piece],
+        at: usize,
+        then: &mut dyn FnMut(usize) -> bool,
+    ) -> bool {
+        let most = piece.max.unwrap_or(usize::MAX);
+        let mut count = 0;
+        while count < most && self.text.get(at + count).is_some_and(|c| matches(*c)) {
+            count += 1;
+        }
+        while count >= piece.min {
+            if self.sequence(rest, at + count, then) {
+                return true;
+            }
+            if count == 0 {
+                break;
+            }
+            count -= 1;
+        }
+        false
     }
 
     /// `piece` has matched `count` times; match it again as far as it goes
@@ -406,6 +451,22 @@ mod tests {
         assert!(matches("(?i)error", "an ERROR here"));
         assert!(matches("(?i)[a-c]x", "BX"));
         assert!(!matches("error", "an ERROR here"));
+    }
+
+    #[test]
+    fn a_long_line_is_searched_without_running_out_of_stack() {
+        // A call for each repetition overflowed the stack here at 20,000
+        // characters, and would on Windows at about 2,500.
+        let long = format!("x{}y", "z".repeat(100_000));
+        assert!(matches("x.*y", &long));
+        assert!(matches("^x[a-z]+y$", &long));
+        assert!(matches("z{3,}y", &long));
+        assert!(!matches("x.*q", &long));
+        // Repeats still give characters back for what follows.
+        assert!(matches("^a.*b.*c$", "a-b-b-c"));
+        assert!(matches("^\\d+\\d{2}$", "12345"));
+        assert!(!matches("^\\d{6,}$", "12345"));
+        assert!(matches("^x?x$", "x"));
     }
 
     #[test]

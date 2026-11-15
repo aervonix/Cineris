@@ -478,7 +478,7 @@ caught-by:
 rule: The stamp says which commit the copy was built from.
 file: xtask/src/last_good.rs
 in: refresh
-find: commit: commit.to_owned()
+find: commit: commit()
 replace: commit: String::new()
 caught-by:
     last_good::tests::a_good_run_keeps_its_binary_and_the_same_build_is_not_copied_twice
@@ -899,11 +899,21 @@ caught-by:
 rule: A stall is told by when the tests were stopped (start plus time), whatever time each started.
 file: xtask/src/stall.rs
 in: find
-find: Some((start + took, format!("{} {}", failure.binary, failure.name)))
-replace: Some((start + took * 0, format!("{} {}", failure.binary, failure.name)))
+find: start + took
+replace: start + took * 0
 packages: xtask
 caught-by:
     stall::tests::timeouts_that_end_together_are_a_stall_whatever_time_each_started
+
+[break] tests-that-started-together-are-a-stall
+rule: Timeouts of tests that started together (a bug, or a break, that hangs them) are not a stall: a stall stops tests that started at different times. The full review of the sixth tooling step found that without it, mutate never judged a break that hung several tests.
+file: xtask/src/stall.rs
+in: find
+find: if last + 1 - first > best.1 - best.0 && started_apart(&ends[first..=last]) {
+replace: if last + 1 - first > best.1 - best.0 {
+packages: xtask
+caught-by:
+    stall::tests::tests_that_started_together_and_hang_together_are_not_a_stall
 
 [break] a-panic-counts-as-a-timeout
 rule: Only timeouts make a stall: a test that panicked beside them is not one.
@@ -1040,3 +1050,54 @@ replace: command.env_clear()
 caught-by:
     cortex-tools::it shell::bash::sys_the_environment_the_directory_and_the_input
     cortex-tools::it shell::sh::sys_the_environment_the_directory_and_the_input
+
+# ------------------------------------- the fixes of the full review
+
+[break] a-repeat-of-one-character-gives-nothing-back
+rule: A repeat of a one-character atom gives characters back until what follows matches (`^a.*b.*c$` matches `a-b-b-c`).
+file: xtask/src/pattern.rs
+in: Matcher::repeat_char
+find: count -= 1;
+replace: break;
+packages: xtask
+caught-by:
+    pattern::tests::a_long_line_is_searched_without_running_out_of_stack
+
+[break] a-ci-runner-keeps-a-copy-of-xtask
+rule: No CI job keeps a last good copy of xtask: it would cost every job a copy of the binary and two git commands.
+file: xtask/src/last_good.rs
+in: keeps_a_copy
+find: !in_actions && !is_the_copy(exe)
+replace: !is_the_copy(exe)
+packages: xtask
+caught-by:
+    last_good::tests::no_copy_is_kept_on_a_ci_runner_nor_of_the_copy
+
+[break] the-tree-is-described-when-nothing-is-copied
+rule: The tree is described (two git commands) only when a copy is made.
+file: xtask/src/last_good.rs
+in: refresh
+find: let dir = copy_dir(root);
+replace: let commit_now = commit(); let commit = move || commit_now; let dir = copy_dir(root);
+packages: xtask
+caught-by:
+    last_good::tests::a_good_run_keeps_its_binary_and_the_same_build_is_not_copied_twice
+
+[break] two-file-lists-of-one-name-are-taken
+rule: Two lists given with `--file` may not have one name: their breaks would share names and results.
+file: xtask/src/mutate/mod.rs
+in: load_files
+find: && !given.insert(name.to_owned())
+replace: && !given.insert(name.to_owned()) && false
+packages: xtask
+caught-by:
+    mutate::tests::a_list_from_anywhere_is_read_and_may_not_take_a_lists_name
+
+[break] perf-tests-run-under-tier-twos-limit
+rule: The perf preset runs in nextest's `perf` profile, whose limit is half an hour, not tier 2's 10 s.
+file: xtask/src/try_run.rs
+find: "--profile", "perf"]
+replace: "--profile", "ci"]
+packages: xtask
+caught-by:
+    try_run::tests::perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else

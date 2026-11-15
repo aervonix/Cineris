@@ -83,6 +83,18 @@ path = "junit.xml"
 filter = 'test(/(^|::)sys_/)'
 test-group = 'system'
 
+# Measurements: a crate's ignored `perf_` tests, one at a time, as
+# `try -f command="perf -p CRATE"` runs them. A measurement takes as long as
+# it takes (step 18's tree of 100,000 files ran out of tier 2's 10 s making
+# its files): reported as slow at 60 s, stopped at 30 minutes.
+[profile.perf]
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 30 }
+
+[[profile.perf.overrides]]
+filter = 'test(/(^|::)perf_/)'
+slow-timeout = { period = "60s", terminate-after = 30 }
+
 # `cargo xtask mutate` and `cargo xtask stress` read which tests failed from
 # the JUnit report, so each has a profile that writes one, runs every test
 # whatever fails, and prints only the failures.
