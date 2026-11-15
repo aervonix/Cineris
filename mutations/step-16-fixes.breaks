@@ -225,7 +225,7 @@ caught-by:
 rule: A provider's error code reaches the statistics only when it is a plain one.
 file: crates/cortex-stats/src/recorder.rs
 in: keep_plain
-find: let plain = code::is_plain(error);
+find: let plain = is_plain_code(error);
 replace: let plain = true;
 packages: cortex-stats, cortex-core
 caught-by:
@@ -390,3 +390,43 @@ find: if let UsageRange::Unknown(other) = &params.range {
 replace: if let UsageRange::Unknown(other) = &params.range && false {
 caught-by:
     cortex-core::it usage::a_range_this_build_does_not_know_is_refused
+
+# ------------------------------------------- the full review of the fixes
+
+[break] a-reports-sums-overflow
+rule: A report adds its range's buckets with sums that saturate.
+file: crates/cortex-stats/src/query.rs
+in: add_sum
+find: into.add(other);
+replace: into.input += other.input;
+caught-by:
+    cortex-stats::it ranges::a_reports_sums_stop_at_the_most_a_figure_holds
+
+[break] the-writer-reads-everything-beside-a-newer-file
+rule: Aggregates that may not be saved are not brought up to date by the writer.
+file: crates/cortex-stats/src/recorder.rs
+in: settle
+find: if aggregates.found().may_save() && let Ok(true) = aggregates.sync(
+replace: if let Ok(true) = aggregates.sync(
+caught-by:
+    cortex-stats::it store::beside_a_newer_file_the_writer_reads_no_monthly_file
+
+[break] a-key-shaped-code-is-kept
+rule: A provider's code in which the secret filter finds a credential is not kept.
+file: crates/cortex-base/src/redact.rs
+in: is_plain_code
+find: && !SecretFilter::new().finds(code)
+replace:
+packages: cortex-base, cortex-stats
+caught-by:
+    cortex-base redact::plain_code_tests::a_code_in_the_shape_of_a_key_is_not_plain
+    cortex-stats::it store::a_providers_own_words_are_kept_only_when_plain
+
+[break] mixed-bases-lose-a-cost
+rule: A retried request's line carries every attempt's cost, whatever its basis.
+file: crates/cortex-agent/src/usage.rs
+in: together
+find: (Some(earlier), Some(later)) => Some(Cost {
+replace: (Some(earlier), Some(later)) if earlier.basis == later.basis => Some(Cost {
+caught-by:
+    cortex-agent usage::together_tests::two_attempts_together_keep_everything_the_ledger_was_charged

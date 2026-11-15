@@ -102,27 +102,14 @@ fn totals(sum: &UsageSum) -> UsageTotals {
     }
 }
 
+/// The aggregates' own sums, which saturate (found by the review of step
+/// 16's fixes: the report had copies of its own that overflowed).
 fn add_sum(into: &mut UsageSum, other: &UsageSum) {
-    into.requests += other.requests;
-    into.input += other.input;
-    into.cache_read += other.cache_read;
-    into.cache_write += other.cache_write;
-    into.output += other.output;
-    into.reasoning += other.reasoning;
-    into.metered_nanos += other.metered_nanos;
-    into.estimate_nanos += other.estimate_nanos;
-    into.recorded_nanos += other.recorded_nanos;
-    into.unpriced += other.unpriced;
+    into.add(other);
 }
 
 fn add_time(into: &mut TimeTotals, other: &TimeTotals) {
-    into.turns += other.turns;
-    into.wall_ms += other.wall_ms;
-    crate::aggregate::add_model_time(&mut into.model, &other.model);
-    into.tools_ms += other.tools_ms;
-    into.approval_ms += other.approval_ms;
-    into.verification_ms += other.verification_ms;
-    into.harness_ms += other.harness_ms;
+    crate::aggregate::add_time(into, other);
 }
 
 /// Answers a query from the aggregates. `now` and `zone` place today; the

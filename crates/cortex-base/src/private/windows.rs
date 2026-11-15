@@ -54,10 +54,11 @@ use windows_sys::Win32::Security::{
     SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_128,
-    FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo,
-    FileIdInfo, GetFileInformationByHandleEx, READ_CONTROL,
+    BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_128, FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FileAttributeTagInfo, FileIdInfo, GetFileInformationByHandle,
+    GetFileInformationByHandleEx, READ_CONTROL,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -444,8 +445,9 @@ pub(crate) fn reparse_tag(file: &File) -> io::Result<u32> {
 /// and an inode number do on Linux. For [`crate::nofollow::FileIdentity`],
 /// which the standard library cannot give on Windows (its `file_index` is
 /// not stable). The id is the 128-bit one (`FileIdInfo`), which ReFS keeps
-/// unique where the older 64-bit index is not. Like [`reparse_tag`], a
-/// question about a file this module asks for another.
+/// unique where the older 64-bit index is not; a volume that does not give
+/// it (some file systems and network shares) gives the older index. Like
+/// [`reparse_tag`], a question about a file this module asks for another.
 ///
 /// # Errors
 ///
@@ -471,13 +473,24 @@ pub(crate) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
             size,
         )
     };
+    if filled != 0 {
+        return Ok((
+            info.VolumeSerialNumber,
+            u128::from_le_bytes(info.FileId.Identifier),
+        ));
+    }
+    // SAFETY: `BY_HANDLE_FILE_INFORMATION` is plain numbers and two
+    // `FILETIME`s of plain numbers, for which all zeros is a valid value.
+    let mut older: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `file` is an open handle, alive for the call, and `older` is a
+    // live, writable `BY_HANDLE_FILE_INFORMATION`, the structure the call
+    // fills and nothing more.
+    let filled = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut older) };
     if filled == 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok((
-        info.VolumeSerialNumber,
-        u128::from_le_bytes(info.FileId.Identifier),
-    ))
+    let index = (u64::from(older.nFileIndexHigh) << 32) | u64::from(older.nFileIndexLow);
+    Ok((u64::from(older.dwVolumeSerialNumber), u128::from(index)))
 }
 
 /// Reads the owner and the access list of the file or directory at `path`.

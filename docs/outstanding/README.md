@@ -105,6 +105,8 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 - [a-clock-that-jumps-forward](a-clock-that-jumps-forward.md): A clock set months ahead prunes the raw monthly files early, and one set 400 days ahead folds the day buckets for good. Owner: step 33.
 - [a-reset-during-a-writers-settle](a-reset-during-a-writers-settle.md): A writer that loaded the aggregates just before `cortex stats reset` saves their part back. Owner: the step that next changes the reset, or step 33.
+- [tests-the-step-16-fixes-left-thin](tests-the-step-16-fixes-left-thin.md): The limits lock held through an update, the flushed save, two races of moving a file aside, the reader thread's end and the 64-bit index on Windows are seen only by reading. Owner: step 33.
+- [waits-on-the-statistics-without-a-limit](waits-on-the-statistics-without-a-limit.md): A day's purse's first read at session open, and the refresh behind `limits.json`'s lock, wait with no time limit of their own. Owner: step 27.
 
 ### cortex-term
 

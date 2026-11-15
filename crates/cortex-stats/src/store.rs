@@ -615,6 +615,7 @@ fn move_aside(
         n += 1;
     }
     std::fs::rename(&path, &to)?;
+    let moved = FileIdentity::at(&to).ok();
     if !private::is_private(&to).unwrap_or(false) {
         let mut bytes = Vec::new();
         open_to_read(&to)?.read_to_end(&mut bytes)?;
@@ -626,7 +627,7 @@ fn move_aside(
         };
         write_atomic(&to, &bytes, &options, clock).map_err(io::Error::other)?;
     }
-    if FileIdentity::at(&to).ok() != identity {
+    if moved != identity {
         // Another process wrote the file between the look and the rename:
         // it is kept where it went, and the user is told of it as of any
         // file moved aside. Nothing was lost.

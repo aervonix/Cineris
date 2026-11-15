@@ -52,14 +52,15 @@ pub(crate) fn add_request(totals: &mut UsageTotals, usage: &RequestUsage) {
 
 /// One request's usage with another's of the same request added to it: an
 /// attempt given up and the one that counted. The tokens are added class
-/// by class; the cost is added when both are of one basis, as two attempts
-/// of one model are, and otherwise the later one's is kept, since amounts
-/// of two bases are never added. The rest is the later one's.
+/// by class, and the costs whatever their bases, as the ledger charged them
+/// (two attempts of one model have one basis; were they to differ, the sum
+/// is told under the later one's rather than a part of it lost). The rest
+/// is the later one's.
 pub(crate) fn together(earlier: RequestUsage, later: &RequestUsage) -> RequestUsage {
     let mut tokens = earlier.tokens;
     add_tokens(&mut tokens, &later.tokens);
     let cost = match (earlier.cost, &later.cost) {
-        (Some(earlier), Some(later)) if earlier.basis == later.basis => Some(Cost {
+        (Some(earlier), Some(later)) => Some(Cost {
             usd_nanos: earlier.usd_nanos.saturating_add(later.usd_nanos),
             basis: later.basis.clone(),
         }),
@@ -69,6 +70,51 @@ pub(crate) fn together(earlier: RequestUsage, later: &RequestUsage) -> RequestUs
         tokens,
         cost,
         ..later.clone()
+    }
+}
+
+#[cfg(test)]
+mod together_tests {
+    use cortex_protocol::model::ModelRole;
+    use cortex_protocol::usage::{Billing, CostBasis};
+    use cortex_protocol::{ModelId, Speed};
+
+    use super::*;
+
+    fn attempt(input: u64, usd_nanos: u64, basis: CostBasis) -> RequestUsage {
+        RequestUsage {
+            provider: ProviderId::new("p"),
+            model: ModelId::new("m"),
+            role: ModelRole::Main,
+            speed: Speed::Standard,
+            speed_requested: None,
+            tokens: TokenUsage {
+                input,
+                ..TokenUsage::default()
+            },
+            cost: Some(Cost { usd_nanos, basis }),
+            catalog_version: None,
+            billing: Billing::Metered,
+            time_to_first_token_ms: None,
+            duration_ms: None,
+            raw: None,
+        }
+    }
+
+    #[test]
+    fn two_attempts_together_keep_everything_the_ledger_was_charged() {
+        let both = together(
+            attempt(5, 7, CostBasis::Metered),
+            &attempt(3, 11, CostBasis::Metered),
+        );
+        assert_eq!(both.tokens.input, 8);
+        assert_eq!(both.cost.as_ref().map(|cost| cost.usd_nanos), Some(18));
+        // Bases that differ lose nothing either.
+        let mixed = together(
+            attempt(5, 7, CostBasis::Metered),
+            &attempt(3, 11, CostBasis::Estimate),
+        );
+        assert_eq!(mixed.cost.map(|cost| cost.usd_nanos), Some(18));
     }
 }
 
