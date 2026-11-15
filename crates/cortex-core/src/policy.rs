@@ -75,6 +75,9 @@ pub(crate) struct EnginePolicy {
     /// takes.
     timeout: Option<Duration>,
     fail_on_denial: bool,
+    /// The front end can stop the turn from a question: the interactive
+    /// application's interrupt key (`CoreOptions::answers_may_stop`).
+    stops_from_questions: bool,
     /// Whether commands run confined: what an approval's detail says. It
     /// follows the session's level, since nothing is confined at
     /// `unrestricted`.
@@ -103,6 +106,7 @@ pub(crate) struct PolicyParts {
     pub(crate) timer: SharedTimer,
     pub(crate) timeout: Option<Duration>,
     pub(crate) fail_on_denial: bool,
+    pub(crate) stops_from_questions: bool,
     pub(crate) sandboxed: bool,
 }
 
@@ -116,6 +120,7 @@ impl EnginePolicy {
             timer: parts.timer,
             timeout: parts.timeout,
             fail_on_denial: parts.fail_on_denial,
+            stops_from_questions: parts.stops_from_questions,
             sandboxed: std::sync::atomic::AtomicBool::new(parts.sandboxed),
             stopped: Mutex::new(None),
             denials: Mutex::new(Vec::new()),
@@ -499,7 +504,11 @@ impl Policy for EnginePolicy {
         // While commands are confined, a command may stop the turn while a
         // question is open, and the answer is then to stop (found by the
         // second review of step 26).
-        self.fail_on_denial || self.sandboxed.load(std::sync::atomic::Ordering::Acquire)
+        // A front end that can stop the turn from a question (step 23's
+        // interrupt key in a dialog) says so too.
+        self.fail_on_denial
+            || self.stops_from_questions
+            || self.sandboxed.load(std::sync::atomic::Ordering::Acquire)
     }
 
     fn read_gate(&self) -> Arc<dyn ReadGate> {

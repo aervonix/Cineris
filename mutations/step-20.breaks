@@ -94,7 +94,7 @@ caught-by:
 [break] sanitize-keeps-escape
 rule: The sanitising function makes every control character but the line feed and the tab visible.
 file: crates/cortex-term/src/sanitize.rs
-in: sanitize
+in: pictures
 find: '\n' | '\t' => out.push(c)
 replace: '\n' | '\t' | '\u{1b}' => out.push(c)
 caught-by:

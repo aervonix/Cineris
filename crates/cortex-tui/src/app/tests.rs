@@ -394,7 +394,7 @@ fn steering_that_was_never_delivered_comes_back_into_the_editor() {
 }
 
 #[test]
-fn a_dialog_takes_only_keys_read_after_it_was_drawn() {
+fn a_dialog_that_appears_while_the_person_types_takes_keys_only_after_a_grace() {
     let now = Instant::now();
     let (mut app, link) = app(now);
     opened(&mut app, &link, now);
@@ -424,6 +424,22 @@ fn a_dialog_takes_only_keys_read_after_it_was_drawn() {
             })
         )]
     );
+}
+
+#[test]
+fn a_dialog_that_appears_while_nobody_types_takes_keys_at_once() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    // The last key was long before the dialog.
+    type_text(&mut app, "x", now);
+    let later = now + Duration::from_secs(5);
+    link.give(Inbound::Request(RequestId::Number(8), approval("c_1")));
+    drain(&mut app, later);
+    let _ = app.frame(later);
+    app.drawn(later);
+    key(&mut app, "y", later);
+    assert_eq!(link.script().answers.len(), 1);
 }
 
 fn shown_dialog(app: &mut App, link: &Scripted, id: i64, now: Instant) -> Instant {

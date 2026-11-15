@@ -829,6 +829,17 @@ fn with_fail_on_denial_a_later_call_waits_for_the_open_question() {
     ));
 }
 
+/// The interactive application can stop the turn from a dialog (its
+/// interrupt key), so with `answers_may_stop` nothing after an open
+/// question that changes anything starts until it is answered (step 23).
+#[test]
+fn with_answers_may_stop_a_later_call_waits_for_the_open_question() {
+    assert!(!later_write_ran_while_the_question_was_open(
+        "behind_question_tui",
+        |options| options.answers_may_stop = true
+    ));
+}
+
 /// The rig's own promise: a turn that asks what the test did not expect
 /// fails the test at once, naming what it asked, instead of waiting for an
 /// answer until the test is stopped at its limit.

@@ -198,6 +198,17 @@ pub struct CoreOptions {
     /// system's: a test's. `None`: the system's, read by the statistics'
     /// writer when it first writes, and by the usage report.
     pub zone: Option<cortex_base::Zone>,
+    /// The user's configuration, loaded by the caller with this core's
+    /// `env`, `dirs`, `profile` and `overrides`, and no workspace: used in
+    /// place of loading it again. The interactive application reads its
+    /// own settings from it before the terminal is entered (step 23).
+    pub loaded: Option<cortex_config::Loaded>,
+    /// Whether an answer to a question the core puts may stop the turn:
+    /// the interactive application's, whose interrupt key stops it from a
+    /// dialog (`docs/architecture/03-agent-loop.md`, "Approve"). With it,
+    /// no call with side effects that the model wrote after an asked call
+    /// starts while the question is open.
+    pub answers_may_stop: bool,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -252,6 +263,8 @@ impl CoreOptions {
             session_running: None,
             cancel: CancelToken::new(),
             zone: None,
+            loaded: None,
+            answers_may_stop: false,
         }
     }
 }
@@ -351,20 +364,25 @@ impl Core {
     /// When the user's configuration is invalid, or an entry of the user's
     /// model catalog cannot be read: the error names the file, the entry
     /// and what is wrong with it, and nothing is started.
-    pub fn start(options: CoreOptions) -> Result<Self, OpError> {
-        let mut load = LoadOptions::new(options.env.clone());
-        if let Some(dirs) = &options.dirs {
-            load.dirs = dirs.clone();
-        }
-        load.profile.clone_from(&options.profile);
-        load.overrides.clone_from(&options.overrides);
-        let user = cortex_config::load(&load).map_err(|failure| {
-            error(
-                ErrorKind::Config,
-                "invalid_configuration",
-                failure.render(&options.env),
-            )
-        })?;
+    pub fn start(mut options: CoreOptions) -> Result<Self, OpError> {
+        let user = match options.loaded.take() {
+            Some(loaded) => loaded,
+            None => {
+                let mut load = LoadOptions::new(options.env.clone());
+                if let Some(dirs) = &options.dirs {
+                    load.dirs = dirs.clone();
+                }
+                load.profile.clone_from(&options.profile);
+                load.overrides.clone_from(&options.overrides);
+                cortex_config::load(&load).map_err(|failure| {
+                    error(
+                        ErrorKind::Config,
+                        "invalid_configuration",
+                        failure.render(&options.env),
+                    )
+                })?
+            }
+        };
         let catalog = provider::catalog(&user, &options.env)?;
         let store = cortex_config::open_store(
             user.settings.credentials.store,

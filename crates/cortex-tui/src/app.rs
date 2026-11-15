@@ -43,7 +43,11 @@ use std::time::{Duration, Instant};
 
 use cortex_protocol::session::SessionSettings;
 use cortex_protocol::{ErrorData, SessionId};
-use cortex_term::{Capabilities, Device, Event, Frame, Inline, Scheduler, Terminal, Wake};
+use cortex_term::{Device, Event, Frame, Inline, Scheduler, Terminal, Wake};
+/// What the binary hands the terminal layer, through this crate: the
+/// `[terminal]` overrides, the colour depth they name, the waker a link
+/// calls, and what the terminal can do.
+pub use cortex_term::{Capabilities, ColorDepth, Overrides, Waker};
 
 pub use link::{Inbound, Link, Ticket};
 pub use state::{App, Drained, Effect, SECOND_INTERRUPT};
@@ -246,6 +250,40 @@ pub fn look(settings: &Settings, caps: &Capabilities) -> Look {
     look.reduced_motion = settings.reduced_motion;
     look.hyperlinks = caps.hyperlinks;
     look
+}
+
+/// The interactive mode's whole life on the interface's thread: enters the
+/// terminal with `overrides`, makes the link and what the application is
+/// started with (`make`, given the terminal's waker and what it can do),
+/// runs it, and puts the terminal back whatever happened.
+///
+/// # Errors
+///
+/// When the terminal cannot be entered (standard input or output is not a
+/// terminal, `TERM=dumb`, a console that cannot process escape sequences),
+/// or read or written.
+pub fn interactive(
+    overrides: Overrides,
+    make: impl FnOnce(&Waker, &Capabilities) -> (Box<dyn Link>, Start),
+) -> io::Result<Exit> {
+    let mut terminal = Terminal::enter(overrides)?;
+    let waker = terminal.waker();
+    let caps = *terminal.caps();
+    let (link, start) = make(&waker, &caps);
+    let (cols, rows) = terminal.size()?;
+    let mut app = App::new(
+        link,
+        start,
+        &caps,
+        usize::from(cols).saturating_sub(1),
+        usize::from(rows),
+        Instant::now(),
+    );
+    let ran = run(&mut terminal, &mut app);
+    let left = terminal.leave();
+    ran?;
+    left?;
+    Ok(app.exit().cloned().unwrap_or(Exit::Quit))
 }
 
 /// Runs the application on `terminal` until it ends: the interface's

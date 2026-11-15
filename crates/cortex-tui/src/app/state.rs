@@ -102,6 +102,9 @@ pub struct App {
     /// When the running turn began, from this app's point of view.
     running: Option<Instant>,
     last_interrupt: Option<Instant>,
+    /// When the last key was read: a dialog that appears while the person
+    /// is typing waits before it takes keys.
+    last_key: Option<Instant>,
     /// The last turn's cost and the session's, shown until the next prompt.
     last_cost: Option<(String, String)>,
     /// Whether this session has had a turn, here or before.
@@ -173,6 +176,7 @@ impl App {
             dialogs: VecDeque::new(),
             running: None,
             last_interrupt: None,
+            last_key: None,
             last_cost: None,
             had_turn: false,
             effects: Vec::new(),
@@ -212,10 +216,8 @@ impl App {
         if let Some(open) = self.open.take() {
             self.send_open(open);
         }
-        if let Some(dialog) = self.dialogs.front_mut()
-            && dialog.shown.is_none()
-        {
-            dialog.shown = Some(at);
+        if let Some(dialog) = self.dialogs.front_mut() {
+            dialog.drawn(at, self.last_key);
         }
     }
 
@@ -268,6 +270,9 @@ impl App {
     pub fn terminal(&mut self, event: &TermEvent, at: Instant) -> bool {
         match event {
             TermEvent::Key(key) => {
+                // When the person last typed: a dialog drawn soon after
+                // waits before it takes keys.
+                self.last_key = Some(at);
                 if let Some(dialog) = self.dialogs.front_mut() {
                     match dialog.key(*key, at, self.input.keymap()) {
                         Keyed::Pass => {}
