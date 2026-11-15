@@ -13,6 +13,22 @@
 //! event at a time, and only when the reader asks, so the order in which a
 //! test sees things is the order of the script.
 //!
+//! # The output limit
+//!
+//! A real provider stops a response at the request's `max_output`. So does
+//! this one, unless it is told not to
+//! ([`without_output_limit`](ScriptedProvider::without_output_limit)): a
+//! script that says more than the request allows is cut where the limit
+//! falls, and ends as a provider ends it, with [`StopReason::MaxOutput`] and
+//! a usage whose output is the limit. Output is counted as the loop counts a
+//! request before a provider has counted it, at [`BYTES_PER_OUTPUT_TOKEN`]
+//! bytes to the token, over the text, the reasoning and the arguments of the
+//! tool calls. The limit is the request's `max_output`, or the model's own
+//! most when the request sets none, and never more than the model's most.
+//! A block that was open when the limit fell is closed with what had
+//! arrived of it, as the real decoders close it; a tool call so cut has
+//! arguments that are not JSON.
+//!
 //! ```text
 //! let provider = ScriptedProvider::new([
 //!     Response::new().text("Reading it.").tool_call("c1", "read", &json!({"path": "a"})).end(StopReason::ToolCalls),
@@ -20,7 +36,7 @@
 //! ]);
 //! ```
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -35,6 +51,11 @@ use cortex_protocol::{RawJson, Speed, StopReason};
 use serde_json::{Value, json};
 
 use crate::gate::Gate;
+
+/// Bytes to an output token, as the agent loop counts before a provider has
+/// counted a request (`cortex_agent::context::DEFAULT_RATIO`: a test of
+/// `cortex-agent` holds the two together).
+pub const BYTES_PER_OUTPUT_TOKEN: u64 = 3;
 
 /// One scripted response.
 #[derive(Debug, Clone, Default)]
@@ -263,6 +284,9 @@ pub struct ScriptedProvider {
 struct State {
     responses: VecDeque<Response>,
     requests: Vec<ModelRequest>,
+    /// Set by [`ScriptedProvider::without_output_limit`]: the default is to
+    /// cut a response at the request's `max_output`.
+    unlimited: bool,
 }
 
 impl ScriptedProvider {
@@ -281,6 +305,24 @@ impl ScriptedProvider {
     pub fn with_timer(mut self, timer: Arc<dyn Timer>) -> Self {
         self.timer = Some(timer);
         self
+    }
+
+    /// The same provider, which no longer cuts a response at the request's
+    /// `max_output`: for a test whose script is longer than the request
+    /// allows and that means it to be played whole. Like the script, the
+    /// setting is shared by every clone, so a test can change the provider
+    /// of a rig that is already made.
+    #[must_use]
+    pub fn without_output_limit(self) -> Self {
+        self.set_output_limit(false);
+        self
+    }
+
+    /// Turns the cut at the request's `max_output` on or off, for every
+    /// clone ([`without_output_limit`](Self::without_output_limit) is this
+    /// at construction).
+    pub fn set_output_limit(&self, on: bool) {
+        self.lock().unlimited = !on;
     }
 
     /// Adds a response to the end of the script.
@@ -306,6 +348,119 @@ impl ScriptedProvider {
     }
 }
 
+/// A block that has begun and not ended, with what it has said so far.
+#[derive(Debug, Default)]
+struct Open {
+    kind: Option<BlockKind>,
+    said: String,
+    id: String,
+    name: String,
+}
+
+/// The room a response has, in bytes, and what it has used.
+#[derive(Debug)]
+struct OutputLimit {
+    /// The limit in tokens: the usage of a response cut at it.
+    tokens: u64,
+    left: u64,
+    open: BTreeMap<u32, Open>,
+}
+
+impl OutputLimit {
+    fn new(tokens: u64) -> Self {
+        Self {
+            tokens,
+            left: tokens.saturating_mul(BYTES_PER_OUTPUT_TOKEN),
+            open: BTreeMap::new(),
+        }
+    }
+
+    /// Whether the response goes on past `event`. `None` passes the event
+    /// as it was scripted. `Some` is the events to send in its place, because
+    /// the limit fell inside it: what fits of it, then the close of every
+    /// block still open, after which the response ends at the limit.
+    fn admit(&mut self, event: &ModelEvent) -> Option<Vec<ModelEvent>> {
+        match event {
+            ModelEvent::BlockStart { index, kind } => {
+                self.open.insert(
+                    *index,
+                    Open {
+                        kind: Some(*kind),
+                        ..Open::default()
+                    },
+                );
+            }
+            ModelEvent::ToolCallStart { index, id, name } => {
+                let open = self.open.entry(*index).or_default();
+                open.id.clone_from(id);
+                open.name.clone_from(name);
+            }
+            ModelEvent::BlockEnd { index, .. } => {
+                self.open.remove(index);
+            }
+            ModelEvent::TextDelta { index, text }
+            | ModelEvent::ReasoningDelta { index, text }
+            | ModelEvent::ToolArgsDelta { index, json: text } => {
+                if text.len() as u64 <= self.left {
+                    self.left -= text.len() as u64;
+                    self.open.entry(*index).or_default().said.push_str(text);
+                    return None;
+                }
+                return Some(self.cut(event));
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// The events that stand for `delta` once the limit has fallen inside
+    /// it: what fits of it, then the close of each open block with what it
+    /// had said.
+    fn cut(&mut self, delta: &ModelEvent) -> Vec<ModelEvent> {
+        let room = usize::try_from(self.left).unwrap_or(usize::MAX);
+        let mut events = Vec::new();
+        let (ModelEvent::TextDelta { index, text }
+        | ModelEvent::ReasoningDelta { index, text }
+        | ModelEvent::ToolArgsDelta { index, json: text }) = delta
+        else {
+            unreachable!("only a delta is cut");
+        };
+        let fits = (0..=room.min(text.len()))
+            .rev()
+            .find(|at| text.is_char_boundary(*at))
+            .unwrap_or(0);
+        if fits > 0 {
+            let piece = text[..fits].to_owned();
+            self.open.entry(*index).or_default().said.push_str(&piece);
+            let index = *index;
+            events.push(match delta {
+                ModelEvent::TextDelta { .. } => ModelEvent::TextDelta { index, text: piece },
+                ModelEvent::ReasoningDelta { .. } => {
+                    ModelEvent::ReasoningDelta { index, text: piece }
+                }
+                _ => ModelEvent::ToolArgsDelta { index, json: piece },
+            });
+        }
+        self.left = 0;
+        for (index, open) in std::mem::take(&mut self.open) {
+            let raw = match open.kind {
+                Some(BlockKind::Reasoning) => {
+                    json!({"type": "reasoning", "text": open.said, "signature": "scripted"})
+                }
+                Some(BlockKind::ToolCall) => json!({
+                    "type": "tool_call", "id": open.id, "name": open.name, "arguments": open.said,
+                }),
+                _ => json!({"type": "text", "text": open.said}),
+            };
+            events.push(ModelEvent::BlockEnd {
+                index,
+                raw: RawJson::new(raw.to_string()),
+            });
+        }
+        events
+    }
+}
+
 impl ModelClient for ScriptedProvider {
     fn stable_prefix(&self, request: &ModelRequest) -> Option<Vec<u8>> {
         Some(crate::protocol::neutral_prefix(request))
@@ -316,6 +471,15 @@ impl ModelClient for ScriptedProvider {
         ModelStream::generate(move |out| async move {
             let model = request.model.info.id.to_string();
             let requested = request.speed.clone();
+            let max_output = request.model.info.max_output;
+            let unlimited = provider.lock().unlimited;
+            let mut limit = (!unlimited).then(|| {
+                OutputLimit::new(
+                    request
+                        .max_output
+                        .map_or(max_output, |asked| asked.min(max_output)),
+                )
+            });
             let response = {
                 let mut state = provider.lock();
                 state.requests.push(request);
@@ -371,9 +535,35 @@ impl ModelClient for ScriptedProvider {
                     }
                     Step::Event(event) => {
                         let last = event.is_terminal();
-                        out.emit(event).await;
-                        if last {
-                            return;
+                        let Some(limit) = limit.as_mut() else {
+                            out.emit(event).await;
+                            if last {
+                                return;
+                            }
+                            continue;
+                        };
+                        match limit.admit(&event) {
+                            None => {
+                                out.emit(event).await;
+                                if last {
+                                    return;
+                                }
+                            }
+                            Some(events) => {
+                                for event in events {
+                                    out.emit(event).await;
+                                }
+                                let mut tokens = response.tokens.clone();
+                                tokens.output = limit.tokens;
+                                out.emit(ModelEvent::End {
+                                    raw_stop: StopReason::MaxOutput.as_str().to_owned(),
+                                    stop: StopReason::MaxOutput,
+                                    stop_detail: None,
+                                    usage: usage(&tokens),
+                                })
+                                .await;
+                                return;
+                            }
                         }
                     }
                     Step::Usage => out.emit(ModelEvent::Usage(usage(&response.tokens))).await,
@@ -684,5 +874,166 @@ mod tests {
         ];
         let provider = ScriptedProvider::new([Response::events(events.clone())]);
         assert_eq!(play(&provider), events);
+    }
+
+    /// The events of `provider`'s next response to a request that allows
+    /// `max_output` tokens (the model's own most when `None`).
+    fn play_limited(provider: &ScriptedProvider, max_output: Option<u64>) -> Vec<ModelEvent> {
+        let mut request = fixtures::request(fixtures::model());
+        request.max_output = max_output;
+        block_on(provider.stream(request, CancelToken::new()).collect())
+    }
+
+    fn ended(events: &[ModelEvent]) -> (StopReason, u64) {
+        let Some(ModelEvent::End { stop, usage, .. }) = events.last() else {
+            panic!("{events:?}");
+        };
+        (stop.clone(), usage.tokens.output)
+    }
+
+    fn block_ends(events: &[ModelEvent]) -> Vec<Value> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ModelEvent::BlockEnd { raw, .. } => {
+                    Some(serde_json::from_str(raw.as_str()).unwrap())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit() {
+        // Two tokens are six bytes.
+        let provider = ScriptedProvider::new([Response::new()
+            .text("abcdefghij")
+            .text("never said")
+            .tokens(TokenUsage {
+                input: 50,
+                output: 99,
+                ..TokenUsage::default()
+            })
+            .end(StopReason::End)]);
+        let events = play_limited(&provider, Some(2));
+        assert_eq!(
+            names(&events),
+            ["start", "block_start", "text", "block_end", "end"]
+        );
+        assert_eq!(
+            events[2],
+            ModelEvent::TextDelta {
+                index: 0,
+                text: "abcdef".to_owned()
+            }
+        );
+        assert_eq!(
+            block_ends(&events),
+            [json!({"type": "text", "text": "abcdef"})]
+        );
+        let ModelEvent::End {
+            raw_stop, usage, ..
+        } = events.last().unwrap()
+        else {
+            panic!("{events:?}");
+        };
+        assert_eq!(raw_stop, "max_output");
+        assert_eq!(
+            (usage.tokens.output, usage.tokens.input),
+            (2, 50),
+            "the usage says the limit was reached, and keeps what else it said"
+        );
+    }
+
+    #[test]
+    fn an_answer_that_fits_exactly_is_played_whole() {
+        let provider =
+            ScriptedProvider::new([Response::new().text("abc").text("def").end(StopReason::End)]);
+        let events = play_limited(&provider, Some(2));
+        assert_eq!(ended(&events), (StopReason::End, 0));
+        assert_eq!(block_ends(&events).len(), 2);
+    }
+
+    #[test]
+    fn text_reasoning_and_arguments_all_count_and_the_cut_closes_the_open_block() {
+        let provider = ScriptedProvider::new([Response::new()
+            .reasoning("abc")
+            .text("de")
+            .tool_call_in(
+                "c1",
+                "write",
+                &["{\"path\": ", "\"a.txt\", \"content\": \"long\"}"],
+            )
+            .text("never said")
+            .end(StopReason::ToolCalls)]);
+        // Four tokens are twelve bytes: 3 + 2, and 7 of the arguments' first piece.
+        let events = play_limited(&provider, Some(4));
+        assert_eq!(ended(&events), (StopReason::MaxOutput, 4));
+        let ends = block_ends(&events);
+        assert_eq!(ends.len(), 3, "{events:?}");
+        assert_eq!(ends[0]["text"], "abc");
+        assert_eq!(ends[1]["text"], "de");
+        assert_eq!(
+            ends[2],
+            json!({
+                "type": "tool_call", "id": "c1", "name": "write",
+                "arguments": "{\"path\""
+            }),
+            "a call cut in its arguments, which are not JSON"
+        );
+        // Nothing after the cut was played.
+        assert_eq!(
+            names(&events)
+                .iter()
+                .filter(|name| **name == "text")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_cut_never_splits_a_character() {
+        let provider = ScriptedProvider::new([Response::new().text("aé€xyz").end(StopReason::End)]);
+        // Six bytes of "aé€": the euro sign takes bytes 3 to 5, so a limit of
+        // one token (three bytes) falls inside it.
+        let events = play_limited(&provider, Some(1));
+        assert_eq!(block_ends(&events), [json!({"type": "text", "text": "aé"})]);
+    }
+
+    #[test]
+    fn a_request_with_no_limit_is_held_to_the_models_most_and_never_past_it() {
+        // `test-model` writes at most 8,000 tokens: 24,000 bytes.
+        let at_most = "x".repeat(24_000);
+        for (asked, text, stop) in [
+            (None, at_most.clone(), StopReason::End),
+            (None, format!("{at_most}x"), StopReason::MaxOutput),
+            (
+                Some(1_000_000),
+                format!("{at_most}x"),
+                StopReason::MaxOutput,
+            ),
+        ] {
+            let provider =
+                ScriptedProvider::new([Response::new().text(&text).end(StopReason::End)]);
+            assert_eq!(
+                ended(&play_limited(&provider, asked)).0,
+                stop,
+                "asked {asked:?}, {} bytes",
+                text.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_provider_without_the_output_limit_plays_every_answer_whole() {
+        let provider =
+            ScriptedProvider::new([Response::new().text("abcdefghij").end(StopReason::End)])
+                .without_output_limit();
+        let events = play_limited(&provider, Some(1));
+        assert_eq!(ended(&events), (StopReason::End, 0));
+        assert_eq!(
+            block_ends(&events),
+            [json!({"type": "text", "text": "abcdefghij"})]
+        );
     }
 }

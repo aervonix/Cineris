@@ -132,7 +132,7 @@ fn past_the_trigger_with(
     });
     let first = first_estimate(&rig.stats.all());
     assert!(first < 2_500, "the first request is small: {first}");
-    rig.bulk(usize::try_from((3_400 - first) * 3).unwrap());
+    rig.fill_next(Fill::Compacting, "second");
     world.run(async {
         rig.prompt("second");
         rig.events.turns(2).await;

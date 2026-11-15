@@ -22,6 +22,8 @@ use std::time::{Duration, Instant};
 use cortex_base::{AbsPath, CancelToken, PathOptions, PathResolver, SystemClock};
 use cortex_index::{Index, Language, Limits, MapRequest, OpenGate, extract};
 
+use cortex_testkit::Phases;
+
 use super::fixtures;
 use super::index::Tree;
 
@@ -110,14 +112,15 @@ fn system_index(root: AbsPath, dir: std::path::PathBuf, limits: Limits) -> Index
 #[test]
 #[ignore = "a measurement, run by hand in a release build: see the module documentation"]
 fn perf_a_cold_index_a_warm_one_and_a_warm_map() {
+    let phases = Phases::new("perf_a_cold_index_a_warm_one_and_a_warm_map");
     let files = number_from_env("CORTEX_PERF_FILES", 20_000);
-    let tree = generated("perf_cold_warm", files);
+    let tree = phases.measure("generate the tree", || generated("perf_cold_warm", files));
     let dir = tree.cache_dir();
     let index = system_index(tree.root.clone(), dir, Limits::default());
     let rss_before = crate::resident_kib("VmRSS:");
 
     let start = Instant::now();
-    let cold = index.pass(&CancelToken::new(), &|| false);
+    let cold = phases.measure("cold pass", || index.pass(&CancelToken::new(), &|| false));
     let cold_ms = ms(start.elapsed());
     println!(
         "cold pass of {files} files: {cold_ms:.0} ms, read {}, indexed {}, partial {:?}, cache {} bytes ({:.1} KiB a file)",
@@ -139,21 +142,25 @@ fn perf_a_cold_index_a_warm_one_and_a_warm_map() {
     let mut warm = Vec::new();
     let mut maps = Vec::new();
     for round in 0..15 {
-        let changed = tree.scratch.file(
-            format!("ws/d000/s0000/f{round}.rs"),
-            format!("pub fn changed_{round}() {{}}\n"),
-        );
-        std::fs::File::options()
-            .write(true)
-            .open(&changed)
-            .and_then(|file| {
-                file.set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
-            })
-            .unwrap();
+        phases.measure("change a file", || {
+            let changed = tree.scratch.file(
+                format!("ws/d000/s0000/f{round}.rs"),
+                format!("pub fn changed_{round}() {{}}\n"),
+            );
+            std::fs::File::options()
+                .write(true)
+                .open(&changed)
+                .and_then(|file| {
+                    file.set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+                })
+                .unwrap();
+        });
         let start = Instant::now();
-        let report = index.pass(&CancelToken::new(), &|| false);
+        let report = phases.measure("warm pass", || index.pass(&CancelToken::new(), &|| false));
         let passed = start.elapsed();
-        let map = index.map(&MapRequest::new()).expect("a map");
+        let map = phases
+            .measure("warm map", || index.map(&MapRequest::new()))
+            .expect("a map");
         warm.push(ms(start.elapsed()));
         maps.push(ms(start.elapsed() - passed));
         assert!(report.read <= 1, "{report:?}");
@@ -165,7 +172,11 @@ fn perf_a_cold_index_a_warm_one_and_a_warm_map() {
         median(maps),
         warm.iter().copied().fold(0.0, f64::max)
     );
-    breakdown(&tree);
+    phases.measure("breakdown of a warm pass", || breakdown(&tree));
+    phases.mark("tear-down");
+    drop(index);
+    drop(tree);
+    phases.end();
 }
 
 /// Where a warm pass's time goes: the listing as a pass makes it, the same

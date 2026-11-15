@@ -335,7 +335,7 @@ See [../security.md](../security.md).
 
 ## Invariants to test
 
-What a review of this page's code should try to break ([testing-and-ci.md](../testing-and-ci.md), "Invariants to test"). `Rig::fill` in `cortex-agent`'s rig puts a session's first request at a named pressure without counting bytes by hand.
+What a review of this page's code should try to break ([testing-and-ci.md](../testing-and-ci.md), "Invariants to test"). `Rig::fill` in `cortex-agent`'s rig puts a session's first request at a named pressure without counting bytes by hand, and `Rig::fill_next` and `Rig::fill_after` a later turn's first request and a later request of a turn ([testing-and-ci.md](../testing-and-ci.md), "Sizing a context test by pressure").
 
 | Invariant | How a review breaks it | Held by |
 |---|---|---|

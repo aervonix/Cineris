@@ -22,6 +22,7 @@
 //! | [`protocol`] | [`TestProtocol`]: a wire dialect made for tests. |
 //! | [`server`] | [`SseServer`]: a provider's HTTP endpoint on the loopback interface. For tests of the real HTTP client, and of the real binary. |
 //! | [`fixtures`] | Made-up models with every shape of speed tier, and requests to them. |
+//! | [`phases`] | [`Phases`]: where a `perf_` test's time went, by named phase, printed as a breakdown with each phase's time and share. Always on. |
 //! | [`profile`] | Where a test's time went, by phase and wait, with `CORTEX_TESTKIT_PROFILE=1`. Nothing when it is off. |
 //! | [`watch`] | What a test was doing when it ran out of time: its waits and its process tree, written to its standard error before nextest stops it. And `CORTEX_TESTKIT_PAUSE_MS`, which widens the scripted server's races on purpose. |
 //! | [`fixture`] | Recorded provider responses: [`Fixture`](fixture::Fixture), the files one is made of, and [`Scrubber`](fixture::Scrubber), which takes credentials and identifiers out of a recording and refuses one that holds the key. |
@@ -50,6 +51,7 @@ pub mod exec;
 pub mod fixture;
 pub mod fixtures;
 pub mod gate;
+pub mod phases;
 pub mod profile;
 pub mod protocol;
 pub mod provider;
@@ -72,6 +74,7 @@ pub use canary::{Printed, assert_never_printed};
 pub use cortex_base::{Clock, FakeClock, Rng, SeededRng};
 pub use exec::{block_on, join};
 pub use gate::Gate;
+pub use phases::Phases;
 pub use protocol::TestProtocol;
 pub use provider::{Response, ScriptedProvider};
 pub use scratch::Scratch;

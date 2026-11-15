@@ -112,6 +112,10 @@ fn an_approval_for_a_change_to_a_file_shows_the_change_within_a_bound() {
             says("Left alone."),
         ],
     );
+    // The write is 600 kB, far past what the model may write in one
+    // response: what is under test is the bound on a question, not the
+    // model's own.
+    world.provider.set_output_limit(false);
     world.put(PROTECTED, "on: push\n");
     world.put(".env", "TOKEN=the-old-secret\n");
     let core = world.core();
