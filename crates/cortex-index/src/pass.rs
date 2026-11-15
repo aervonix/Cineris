@@ -313,9 +313,11 @@ impl Index {
                 }
                 let at = next.fetch_add(1, Ordering::Relaxed);
                 let Some(file) = files.get(at) else { return };
-                let found = self.read_one(root_fs, file, now).map(|(stamp, flags, outline)| {
-                    crate::cache::record(&file.relative, &stamp, flags, &outline)
-                });
+                let found = self
+                    .read_one(root_fs, file, now)
+                    .map(|(stamp, flags, outline)| {
+                        crate::cache::record(&file.relative, &stamp, flags, &outline)
+                    });
                 if let Some(slot) = results.get(at) {
                     *slot
                         .lock()

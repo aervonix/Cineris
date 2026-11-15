@@ -98,7 +98,13 @@ fn generated(test: &str, files: usize) -> Tree {
 }
 
 fn system_index(root: AbsPath, dir: std::path::PathBuf, limits: Limits) -> Index {
-    Index::new(root, dir, limits, Arc::new(OpenGate), Arc::new(SystemClock::new()))
+    Index::new(
+        root,
+        dir,
+        limits,
+        Arc::new(OpenGate),
+        Arc::new(SystemClock::new()),
+    )
 }
 
 #[test]
@@ -180,7 +186,12 @@ fn perf_the_caps_hold_on_a_tree_of_100000_files() {
     assert!(!report.complete());
     let start = Instant::now();
     let map = index.map(&MapRequest::new()).expect("a map");
-    println!("its map: {:.1} ms, {} bytes, says partial: {}", ms(start.elapsed()), map.len(), map.contains("partial"));
+    println!(
+        "its map: {:.1} ms, {} bytes, says partial: {}",
+        ms(start.elapsed()),
+        map.len(),
+        map.contains("partial")
+    );
     assert!(map.contains("The index is partial"));
 }
 

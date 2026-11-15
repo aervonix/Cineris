@@ -199,7 +199,7 @@ impl CacheFile {
         let mut open: Option<(Record, usize)> = None;
         let mut summary: Option<(usize, usize, Vec<Partial>)> = None;
         let mut ended = false;
-        while let Some((line, range)) = lines.next() {
+        for (line, range) in lines {
             if ended {
                 return None;
             }
