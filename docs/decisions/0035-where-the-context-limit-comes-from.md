@@ -25,7 +25,7 @@ Step 15 was to decide what happens when neither knows the window: refuse, assume
 
 - **"Neither knows" cannot arise.** A model is reached only through its catalog entry, and an entry is refused without a context window. So the catalog's figure is the floor of what is known, and there is no case to refuse, assume or ask in a session.
 - **A local server's answer stands in for the catalog's.** When the main role's provider names a `context_probe`, the core asks the server once, in the background, when the session opens, and hands the answer to the loop (`SessionHandle::set_context_window`). Nothing waits for it: until it answers, and when it cannot (the server is not up, the model is not loaded, the answer is not what the server documents), the catalog's figure stands, and the failure is logged.
-- **A wrong figure is caught by the provider.** A request a server refuses as too long is answered by one compaction and one more try ("Budgeting", the overflow fallback), as for any model.
+- **A wrong figure is caught by the provider.** A request a server refuses as too long is answered by one compaction and one more try ("Budgeting", the overflow fallback), as for any model, and a summary request it refuses by one more try, cut to half the limit (since the review of step 15). With automatic compaction off the turn stops and asks instead.
 
 ## What is given up
 

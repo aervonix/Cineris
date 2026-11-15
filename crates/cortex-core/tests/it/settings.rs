@@ -626,6 +626,50 @@ fn a_request_refused_in_one_part_changes_nothing() {
     });
 }
 
+/// A level carried from one model to the next that the new one cannot
+/// take within its output limit (a budget model, whose smallest budget and
+/// the answer's room do not fit) is left behind as an unknown level is, and
+/// the user is told why.
+#[test]
+fn a_level_the_new_model_cannot_fit_in_its_output_is_left_behind_and_said() {
+    let world = World::new("effort_too_large", [says("One.")]);
+    world.raw_user_config(&format!(
+        "[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n\n[model]\nmain \
+         = \"{MODEL}\"\neffort = \"max\"\nmax_output = 1024\n\n[models.budget]\nprovider = \
+         \"anthropic\"\nid = \"claude-budget\"\nname = \"Budget\"\nprotocol = \
+         \"anthropic-messages\"\ncontext_window = 200000\nmax_output = 64000\ninput = \
+         [\"text\"]\n\n[models.budget.reasoning]\nmin_tokens = 1024\nmax_tokens = 64000\n"
+    ));
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let state = set(
+            &front,
+            role(RoleSettings {
+                model: Some(ModelId::new("claude-budget")),
+                ..RoleSettings::default()
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(state.roles[&ModelRole::Main].effort, None);
+        front.drain();
+        assert!(
+            front
+                .notices()
+                .iter()
+                .any(|notice| notice.contains("cannot reason at `max` and leave its answer room")),
+            "{:?}",
+            front.notices()
+        );
+        front.turn("one").await;
+        let request = &world.provider.requests()[0];
+        assert_eq!(request.model.info.id.as_str(), "claude-budget");
+        assert_eq!(request.reasoning.budget_tokens, None);
+        front.close().await;
+    });
+}
+
 /// A level set for one model is that model's. When the model alone is
 /// changed and the new one has no such level, it runs at its own default,
 /// and the user is told; a level that is asked for and is not there is

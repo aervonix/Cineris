@@ -707,10 +707,15 @@ impl Core {
                         .iter()
                         .map(|one| one.path.display().to_string())
                         .collect();
+                    // An id of its own, after every item in the log: two
+                    // such notices with one id made a summary that covered
+                    // the second read back as covering the first (the
+                    // review of step 15, its second note).
+                    let id = disk.session.next_item_id();
                     let _ = disk.session.append(
                         None,
                         Body::Notice(cortex_protocol::item::NoticeItem {
-                            id: ItemId::new("outside-change"),
+                            id,
                             source: NoticeSource::Harness,
                             text: format!(
                                 "A protected path changed since the last command, and none of \
@@ -1372,10 +1377,16 @@ impl Core {
                     (Some(named), _) => make(Some(&named)).map(|model| (model, None)),
                     // One that is only carried over from the model before
                     // is left behind where the new model has no such
-                    // level: nobody asked for it here.
+                    // level, or none that leaves the answer room within its
+                    // output limit: nobody asked for it here.
                     (None, Some(carried)) => match make(Some(&carried)) {
-                        Err(refused) if refused.code == "unknown_effort" => {
-                            make(None).map(|model| (model, Some(carried)))
+                        Err(refused)
+                            if matches!(
+                                refused.code.as_str(),
+                                "unknown_effort" | "reasoning_budget_too_large"
+                            ) =>
+                        {
+                            make(None).map(|model| (model, Some((carried, refused.code))))
                         }
                         made => made.map(|model| (model, None)),
                     },
@@ -1383,10 +1394,14 @@ impl Core {
                 }
             })
             .await?;
-            if let Some(left) = left {
+            if let Some((left, why)) = left {
+                let cannot = if why == "unknown_effort" {
+                    format!("has no reasoning level `{left}`")
+                } else {
+                    format!("cannot reason at `{left}` and leave its answer room")
+                };
                 told.push(format!(
-                    "`{}` has no reasoning level `{left}`, so the role `{}` runs at the model's \
-                     own default.",
+                    "`{}` {cannot}, so the role `{}` runs at the model's own default.",
                     model.entry.info.id,
                     role.as_str()
                 ));

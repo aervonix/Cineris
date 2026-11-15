@@ -3,11 +3,111 @@
 //! `session/compact` and undone by a rewind, and a session resumed from a
 //! summary.
 
+use cortex_protocol::event::{Event, Notice};
 use cortex_protocol::methods::{Op, SessionCompactParams, SessionRef, SessionRewindParams};
 use cortex_protocol::{Item, Role};
 use serde_json::Value;
 
 use crate::{Front, World, says};
+
+/// What the user was warned of about instruction files, in order.
+fn instruction_warnings(front: &Front) -> Vec<String> {
+    front
+        .events()
+        .into_iter()
+        .filter_map(|event| match event.event {
+            Event::Notice(Notice::Instructions(notice)) => Some(notice.message),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Makes a link to a file. On Windows that needs a privilege an ordinary
+/// account lacks unless Developer Mode is on: the CI runner has it, and
+/// there the link must be made. Elsewhere a test without it says so and
+/// stops.
+fn link_file(target: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(target, link);
+    match made {
+        Ok(()) => true,
+        Err(error) if std::env::var_os("GITHUB_ACTIONS").is_none() => {
+            #[expect(
+                clippy::print_stdout,
+                reason = "a test that cannot run on this machine says so, where the runner shows it"
+            )]
+            {
+                println!("skipped: cannot make a link to a file here ({error})");
+            }
+            false
+        }
+        Err(error) => panic!("the CI runner cannot make a link to a file: {error}"),
+    }
+}
+
+/// The user's own instruction file in the configuration directory is the
+/// user's, and is read as it is: one that is a link, as a dotfile manager
+/// (GNU Stow, home-manager, chezmoi's symlink mode) makes it, is followed.
+/// The review of step 15 found it left out without a word. On Windows the
+/// link is a symbolic link to a file.
+#[test]
+fn the_users_own_instruction_file_is_read_when_it_is_a_link() {
+    let world = World::new("instructions_user_link", [says("Hello.")]);
+    let dotfiles = world.home.join("dotfiles");
+    std::fs::create_dir_all(&dotfiles).unwrap();
+    std::fs::write(
+        dotfiles.join("AGENTS.md"),
+        "The user's own, through a link.",
+    )
+    .unwrap();
+    let config = world.dirs().config.unwrap();
+    std::fs::create_dir_all(&config).unwrap();
+    if !link_file(&dotfiles.join("AGENTS.md"), &config.join("AGENTS.md")) {
+        return;
+    }
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("go").await;
+        let warned = instruction_warnings(&front);
+        front.close().await;
+        let system = world.provider.requests()[0].system.clone();
+        assert!(
+            system.contains("The user's own, through a link."),
+            "the linked file is not in the prompt; the user was told {warned:#?}\n{system}"
+        );
+        assert!(warned.is_empty(), "{warned:#?}");
+    });
+}
+
+/// A link of the user's that leads nowhere is not silently taken for no
+/// file: the user is told, by the file's name.
+#[test]
+fn a_users_link_that_leads_nowhere_is_warned_of() {
+    let world = World::new("instructions_user_dangling", [says("Hello.")]);
+    let config = world.dirs().config.unwrap();
+    std::fs::create_dir_all(&config).unwrap();
+    if !link_file(
+        &world.home.join("gone/AGENTS.md"),
+        &config.join("CLAUDE.md"),
+    ) {
+        return;
+    }
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("go").await;
+        let warned = instruction_warnings(&front);
+        front.close().await;
+        assert!(
+            warned.iter().any(|message| message.contains("CLAUDE.md")
+                && message.contains("a link to a file that is not there")),
+            "{warned:#?}"
+        );
+    });
+}
 
 fn kinds(lines: &[Value]) -> Vec<String> {
     lines
@@ -209,13 +309,92 @@ fn a_link_out_of_the_workspace_is_not_followed_where_a_rule_allows_reading_there
         outside.display()
     ));
     let core = world.core();
+    let warned = world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("go").await;
+        let warned = instruction_warnings(&front);
+        front.close().await;
+        warned
+    });
+    let system = world.provider.requests()[0].system.clone();
+    assert!(!system.contains("OUTSIDE-NOTES"), "{system}");
+    // It stays refused, and the user is told which file, and why (since
+    // the review of step 15: it was dropped without a word).
+    assert!(
+        warned
+            .iter()
+            .any(|message| message.contains("AGENTS.md")
+                && message.contains("outside the workspace")),
+        "{warned:#?}"
+    );
+}
+
+/// The same on Windows, with a symbolic link to a file: a project's
+/// instruction file that links outside the workspace is refused, and the
+/// user is told.
+#[cfg(windows)]
+#[test]
+fn on_windows_a_link_out_of_the_workspace_is_refused_and_warned_of() {
+    let world = World::new("instructions_link_out_windows", [says("Hello.")]);
+    let outside = world.dir.join("elsewhere");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("notes.md"), "OUTSIDE-NOTES").unwrap();
+    if !link_file(
+        &outside.join("notes.md"),
+        &world.workspace.join("AGENTS.md"),
+    ) {
+        return;
+    }
+    let core = world.core();
+    let warned = world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("go").await;
+        let warned = instruction_warnings(&front);
+        front.close().await;
+        warned
+    });
+    let system = world.provider.requests()[0].system.clone();
+    assert!(!system.contains("OUTSIDE-NOTES"), "{system}");
+    assert!(
+        warned
+            .iter()
+            .any(|message| message.contains("AGENTS.md")
+                && message.contains("outside the workspace")),
+        "{warned:#?}"
+    );
+}
+
+/// `[compat]` governs readers of other tools' files only
+/// (`docs/architecture/08-configuration.md`): with `compat.instructions`
+/// off, `AGENTS.md` and `CLAUDE.md` in the workspace are not read, and the
+/// names the user configured, and the user's own file in the configuration
+/// directory, still are. The review of step 15, its fourth note, found
+/// every instruction file turned off with it, without a word.
+#[test]
+fn with_compat_instructions_off_only_other_tools_names_are_not_read() {
+    let world = World::new("instructions_compat_off", [says("Hello.")]);
+    world.put("AGENTS.md", "OTHER-TOOLS-NAME");
+    world.put("CLAUDE.md", "OTHER-TOOLS-NAME-TOO");
+    world.put("CORTEX.md", "The project's, under a name of ours.");
+    let config = world.dirs().config.unwrap();
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("AGENTS.md"), "The user's own.").unwrap();
+    world.user_config(
+        "[compat]\ninstructions = false\n\n[context]\ninstruction_names = [\"CORTEX.md\"]\n",
+    );
+    let core = world.core();
     world.run(async {
         let front = Front::start(&world, &core).await;
         front.turn("go").await;
         front.close().await;
     });
     let system = world.provider.requests()[0].system.clone();
-    assert!(!system.contains("OUTSIDE-NOTES"), "{system}");
+    assert!(!system.contains("OTHER-TOOLS-NAME"), "{system}");
+    assert!(
+        system.contains("The project's, under a name of ours."),
+        "{system}"
+    );
+    assert!(system.contains("The user's own."), "{system}");
 }
 
 #[test]

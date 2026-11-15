@@ -241,6 +241,10 @@ struct Record {
     read: bool,
     /// A tool, or a command, changed it in this session.
     changed: bool,
+    /// A command changed it after the snapshot was taken: the snapshot is
+    /// still what the staleness guard compares with, and no longer what
+    /// the file holds.
+    changed_since: bool,
 }
 
 /// A file the session's tools have read or changed, as compaction carries
@@ -292,6 +296,7 @@ impl FileTable {
                 shown: Some((epoch, shown)),
                 read: true,
                 changed,
+                changed_since: false,
             },
         );
     }
@@ -310,6 +315,7 @@ impl FileTable {
                 shown: None,
                 read,
                 changed: true,
+                changed_since: false,
             },
         );
     }
@@ -317,11 +323,15 @@ impl FileTable {
     /// Notes that a command changed `path` (created, modified or deleted
     /// it). Nothing is known of what it holds now, so the snapshot a tool
     /// took of it stays as it was, and the staleness guard sees the change
-    /// for itself when the file is next edited.
+    /// for itself when the file is next edited. What compaction carries no
+    /// longer gives that snapshot's hash as the file's ([`carried`](Self::carried)).
     pub fn note_changed(&self, path: &AbsPath) {
         let mut inner = self.lock();
         match inner.files.get_mut(path) {
-            Some(record) => record.changed = true,
+            Some(record) => {
+                record.changed = true;
+                record.changed_since = true;
+            }
             None => {
                 inner.changed.insert(path.clone());
             }
@@ -386,9 +396,21 @@ impl FileTable {
             .collect()
     }
 
+    /// Every file a tool read or wrote in this session, in path order: not
+    /// the ones only a command changed. A nested instruction file is given
+    /// for these (`docs/architecture/07-sessions-and-context.md`, "when a
+    /// tool first touches a file").
+    #[must_use]
+    pub fn touched(&self) -> Vec<AbsPath> {
+        self.lock().files.keys().cloned().collect()
+    }
+
     /// Every file the session's tools have read, or its tools or commands
     /// have changed, in path order, with what is known of each. Compaction
-    /// carries this list across.
+    /// carries this list across. A file a command changed since a tool's
+    /// last read or write of it has no snapshot here: the one the table
+    /// keeps is not what the file holds (the review of step 15 found it
+    /// carried with the old hash).
     #[must_use]
     pub fn carried(&self) -> Vec<SeenFile> {
         let inner = self.lock();
@@ -397,7 +419,7 @@ impl FileTable {
             .iter()
             .map(|(path, record)| SeenFile {
                 path: path.clone(),
-                snapshot: Some(record.snapshot.clone()),
+                snapshot: (!record.changed_since).then(|| record.snapshot.clone()),
                 read: record.read,
                 changed: record.changed,
             })
@@ -535,7 +557,8 @@ mod tests {
         // A read the loop discarded is not carried.
         table.record_read(&deleted, snapshot.clone(), shown(b"one\n", 1, 1));
         table.forget(&deleted);
-        // A read after a command changed a file keeps it changed.
+        // A command changed a file after a tool read it: it is changed,
+        // and the snapshot the read took is not carried as its hash.
         table.note_changed(&read);
 
         let carried: Vec<(String, bool, bool, bool)> = table
@@ -553,12 +576,23 @@ mod tests {
         assert_eq!(
             carried,
             [
-                ("/work/a.rs".to_owned(), true, true, true),
+                ("/work/a.rs".to_owned(), true, true, false),
                 ("/work/b.rs".to_owned(), false, true, true),
                 ("/work/c.rs".to_owned(), true, true, true),
                 ("/work/d.rs".to_owned(), false, true, false),
             ]
         );
+        // The guard still compares with what the read saw.
+        assert_eq!(
+            table.staleness(&read, &snapshot.hash),
+            Staleness::Current,
+            "the snapshot stays for the guard"
+        );
+        // A read after the command gives the file a hash again, and keeps
+        // it changed.
+        table.record_read(&read, snapshot.clone(), shown(b"one\n", 1, 1));
+        let again = table.carried().remove(0);
+        assert!(again.changed && again.snapshot.is_some(), "{again:?}");
         table.begin_epoch();
         assert_eq!(table.carried().len(), 4, "an epoch keeps the list");
         table.forget_all();

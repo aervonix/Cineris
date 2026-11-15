@@ -370,18 +370,29 @@ pub(crate) fn retry_policy(settings: &Settings, provider: &str) -> RetryPolicy {
 ///   one of its names is mapped to the level at the same place along the
 ///   model's own scale.
 /// - A model with a **token budget** takes a number of tokens, or an alias,
-///   which is mapped along its range.
+///   which is mapped along its range. **The budget leaves the answer room**
+///   within `output_limit`, the most the role's requests may write (its
+///   `max_output`, or the model's): a budget is part of the output, and
+///   Anthropic refuses one that is not below `max_tokens`. An alias is
+///   placed along the range up to `output_limit` less
+///   [`answer_reserve`]; a number past that, or a model whose smallest
+///   budget does not fit under it, is refused here, when the session's
+///   models are put together, with both numbers. Since the review of step
+///   15, which found `max` on a 1,024–64,000 budget with an output of
+///   64,000 (a catalog entry of the user's) making every request refused
+///   when it was built.
 /// - A model with **no control** takes none: the setting is left out.
 ///
 /// # Errors
 ///
 /// When the text is neither a level of the model, an alias, nor (for a
-/// budget) a number in the model's range. The error lists what the model
-/// takes.
+/// budget) a number in the model's range that leaves the answer its room.
+/// The error lists what the model takes.
 pub(crate) fn reasoning(
     entry: &ModelEntry,
     effort: Option<&str>,
     visibility: ReasoningVisibility,
+    output_limit: u64,
 ) -> Result<Reasoning, Box<ErrorData>> {
     let mut reasoning = Reasoning {
         level: None,
@@ -421,11 +432,27 @@ pub(crate) fn reasoning(
         ReasoningControlKind::Budget => {
             let min = control.min_tokens.unwrap_or(0);
             let max = control.max_tokens.unwrap_or(min).max(min);
+            // The most a budget may be and leave the answer its room.
+            let reserve = answer_reserve(output_limit);
+            let room = output_limit.saturating_sub(reserve);
+            let top = max.min(room);
+            if top < min {
+                return Err(config_error(
+                    "reasoning_budget_too_large",
+                    format!(
+                        "The model `{id}` reasons on a budget of at least {min} tokens, and its \
+                         requests may write {output_limit} tokens in all (`model.max_output`, \
+                         or the model's own limit): that leaves less than the {reserve} kept \
+                         for the answer after the reasoning. Raise `model.max_output`, or set \
+                         no `effort` for this model."
+                    ),
+                ));
+            }
             let tokens = if let Some(alias) = alias {
                 // Worked out in a wider number: a catalog entry may give
                 // any range.
                 let steps = (EFFORT_ALIASES.len() - 1) as u128;
-                let along = u128::from(max - min) * alias as u128 / steps;
+                let along = u128::from(top - min) * alias as u128 / steps;
                 min.saturating_add(u64::try_from(along).unwrap_or(u64::MAX))
             } else if let Ok(tokens) = effort.parse::<u64>() {
                 if !(min..=max).contains(&tokens) {
@@ -434,6 +461,18 @@ pub(crate) fn reasoning(
                         format!(
                             "The model `{id}` takes a reasoning budget of {min} to {max} tokens, \
                              not {tokens}."
+                        ),
+                    ));
+                }
+                if tokens > top {
+                    return Err(config_error(
+                        "reasoning_budget_too_large",
+                        format!(
+                            "A reasoning budget of {tokens} tokens does not leave room for the \
+                             answer: requests of the model `{id}` may write {output_limit} \
+                             tokens in all (`model.max_output`, or the model's own limit), and \
+                             {reserve} of them are kept for the answer, so the budget may be at \
+                             most {top}. Set a smaller one, or raise `model.max_output`."
                         ),
                     ));
                 }
@@ -455,6 +494,15 @@ pub(crate) fn reasoning(
         _ => {}
     }
     Ok(reasoning)
+}
+
+/// The tokens of a response kept for the answer after a reasoning budget:
+/// 4,096, or a quarter of what the response may hold, whichever is more.
+/// 4,096 holds an answer with a tool call that carries a sizeable edit; a
+/// quarter keeps the reasoning to at most three quarters of a response
+/// when the limit is large (16,000 of 64,000).
+pub(crate) fn answer_reserve(output_limit: u64) -> u64 {
+    (output_limit / 4).max(4_096)
 }
 
 /// The images a model accepts in a tool result.
@@ -719,7 +767,10 @@ impl Providers {
             cortex_config::schema::ReasoningVisibility::None => ReasoningVisibility::None,
             _ => ReasoningVisibility::Summary,
         };
-        let reasoning = reasoning(&entry, effort, visibility)?;
+        let output_limit = max_output.map_or(entry.info.max_output, |asked| {
+            asked.min(entry.info.max_output)
+        });
+        let reasoning = reasoning(&entry, effort, visibility, output_limit)?;
         let client = self.client(settings, env, &provider, images)?;
         let mut model = RoleModel::new(client, entry);
         model.reasoning = reasoning;
@@ -741,9 +792,21 @@ mod tests {
             &fixtures::model(),
             Some(effort),
             ReasoningVisibility::Summary,
+            8_000,
         )
         .map(|reasoning| reasoning.level)
         .map_err(|error| error.message.clone())
+    }
+
+    /// A model whose reasoning is a budget of `min` to `max` tokens.
+    fn budget_entry(min: u64, max: u64, max_output: u64) -> ModelEntry {
+        let mut model = fixtures::model().as_ref().clone();
+        model.info.reasoning.kind = ReasoningControlKind::Budget;
+        model.info.reasoning.levels.clear();
+        model.info.reasoning.min_tokens = Some(min);
+        model.info.reasoning.max_tokens = Some(max);
+        model.info.max_output = max_output;
+        model
     }
 
     #[test]
@@ -757,10 +820,15 @@ mod tests {
         assert_eq!(levels("minimal").unwrap().as_ref(), own.first());
         assert_eq!(levels("max").unwrap().as_ref(), own.last());
         // Nothing set leaves the model's default.
-        let none = reasoning(&fixtures::model(), None, ReasoningVisibility::None).unwrap();
+        let none = reasoning(&fixtures::model(), None, ReasoningVisibility::None, 8_000).unwrap();
         assert_eq!(none.level, None);
         assert_eq!(none.visibility, ReasoningVisibility::None);
-        let blank = reasoning(&fixtures::model(), Some("  "), ReasoningVisibility::Summary);
+        let blank = reasoning(
+            &fixtures::model(),
+            Some("  "),
+            ReasoningVisibility::Summary,
+            8_000,
+        );
         assert_eq!(blank.unwrap().level, None);
     }
 
@@ -768,30 +836,106 @@ mod tests {
     /// whatever the range, and a number is taken when it is inside.
     #[test]
     fn a_budget_is_placed_along_any_range() {
-        let budget = |min: u64, max: u64, effort: &str| {
-            let mut model = fixtures::model().as_ref().clone();
-            model.info.reasoning.kind = ReasoningControlKind::Budget;
-            model.info.reasoning.levels.clear();
-            model.info.reasoning.min_tokens = Some(min);
-            model.info.reasoning.max_tokens = Some(max);
-            reasoning(&model, Some(effort), ReasoningVisibility::Summary)
+        let budget = |min: u64, max: u64, effort: &str, output: u64| {
+            let model = budget_entry(min, max, output);
+            reasoning(&model, Some(effort), ReasoningVisibility::Summary, output)
                 .map(|reasoning| reasoning.budget_tokens)
                 .map_err(|error| error.code.clone())
         };
-        assert_eq!(budget(1_000, 5_000, "minimal"), Ok(Some(1_000)));
-        assert_eq!(budget(1_000, 5_000, "medium"), Ok(Some(3_000)));
-        assert_eq!(budget(1_000, 5_000, "max"), Ok(Some(5_000)));
-        assert_eq!(budget(1_000, 5_000, "2048"), Ok(Some(2_048)));
+        // An output limit that holds the whole range and the answer.
+        let wide = 100_000;
+        assert_eq!(budget(1_000, 5_000, "minimal", wide), Ok(Some(1_000)));
+        assert_eq!(budget(1_000, 5_000, "medium", wide), Ok(Some(3_000)));
+        assert_eq!(budget(1_000, 5_000, "max", wide), Ok(Some(5_000)));
+        assert_eq!(budget(1_000, 5_000, "2048", wide), Ok(Some(2_048)));
         assert_eq!(
-            budget(1_000, 5_000, "6000"),
+            budget(1_000, 5_000, "6000", wide),
             Err("unknown_effort".to_owned())
         );
-        // A catalog entry may give any range: nothing overflows.
-        assert_eq!(budget(0, u64::MAX, "max"), Ok(Some(u64::MAX)));
-        assert_eq!(budget(0, u64::MAX, "medium"), Ok(Some(u64::MAX / 2)));
+        // A catalog entry may give any range, and any output limit:
+        // nothing overflows.
+        let room = u64::MAX - u64::MAX / 4;
+        assert_eq!(budget(0, u64::MAX, "max", u64::MAX), Ok(Some(room)));
+        assert_eq!(budget(0, u64::MAX, "medium", u64::MAX), Ok(Some(room / 2)));
+        let along = u64::try_from(u128::from(room - 7) * 3 / 4).unwrap();
+        assert_eq!(budget(7, u64::MAX, "high", u64::MAX), Ok(Some(7 + along)));
+    }
+
+    /// A budget leaves the answer its room within what a request may
+    /// write, so that every effort's request builds. The review of step 15
+    /// found `max` on a user's catalog entry (1,024 to 64,000, an output of
+    /// 64,000) placed at 64,000, which Anthropic's builder refuses at every
+    /// request: a budget must be below `max_tokens`.
+    #[test]
+    fn a_budget_leaves_the_answer_room_at_every_effort() {
+        let entry = budget_entry(1_024, 64_000, 64_000);
+        let built = |budget: u64, max_output: u64| {
+            let mut request = cortex_llm::ModelRequest::new(
+                Arc::new(entry.clone()),
+                cortex_protocol::model::ModelRole::Main,
+            );
+            request.model = Arc::new({
+                let mut entry = entry.clone();
+                anthropic::NAME.clone_into(&mut entry.info.protocol);
+                entry
+            });
+            request.reasoning.budget_tokens = Some(budget);
+            request.max_output = Some(max_output);
+            cortex_llm::Protocol::build(
+                &anthropic::AnthropicMessages,
+                &request,
+                &anthropic::provider(),
+            )
+        };
+        let mut placed = Vec::new();
+        for effort in EFFORT_ALIASES {
+            let budget = reasoning(&entry, Some(effort), ReasoningVisibility::Summary, 64_000)
+                .unwrap()
+                .budget_tokens
+                .unwrap();
+            assert!(
+                budget + answer_reserve(64_000) <= 64_000,
+                "{effort}: {budget} leaves the answer no room"
+            );
+            assert!(
+                built(budget, 64_000).is_ok(),
+                "{effort}: {budget} is refused"
+            );
+            placed.push(budget);
+        }
+        assert_eq!(placed, [1_024, 12_768, 24_512, 36_256, 48_000]);
+        // A role's own output limit, at or below the budget a number asks
+        // for, is held to the same rule.
+        let with = |effort: &str, output: u64| {
+            reasoning(&entry, Some(effort), ReasoningVisibility::Summary, output)
+                .map(|reasoning| reasoning.budget_tokens)
+                .map_err(|error| (error.code.clone(), error.message.clone()))
+        };
+        assert_eq!(with("max", 20_000), Ok(Some(15_000)));
+        assert_eq!(with("15000", 20_000), Ok(Some(15_000)));
+        for (asked, output) in [("15001", 20_000), ("20000", 20_000), ("30000", 20_000)] {
+            let (code, message) = with(asked, output).unwrap_err();
+            assert_eq!(code, "reasoning_budget_too_large", "{asked}");
+            assert!(
+                message.contains(asked) && message.contains("20000") && message.contains("15000"),
+                "{message}"
+            );
+        }
+        // An output limit at or below the smallest budget fits no effort.
+        for effort in EFFORT_ALIASES {
+            let (code, message) = with(effort, 1_024).unwrap_err();
+            assert_eq!(code, "reasoning_budget_too_large");
+            assert!(
+                message.contains("1024") && message.contains("4096"),
+                "{message}"
+            );
+        }
+        // No effort sends no budget, which every limit holds.
         assert_eq!(
-            budget(7, u64::MAX, "high"),
-            Ok(Some(7 + (u64::MAX - 7) / 4 * 3))
+            reasoning(&entry, None, ReasoningVisibility::Summary, 1_024)
+                .unwrap()
+                .budget_tokens,
+            None
         );
     }
 

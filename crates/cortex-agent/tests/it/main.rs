@@ -51,6 +51,7 @@ mod settings;
 mod speed;
 mod steering;
 mod streaming;
+mod summaries;
 mod transitions;
 
 use std::collections::{BTreeMap, VecDeque};

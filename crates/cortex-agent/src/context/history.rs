@@ -265,13 +265,15 @@ impl History {
     }
 }
 
+/// A message's size in bytes, as the budget counts it.
+pub(crate) fn message_bytes(message: &Message) -> u64 {
+    message.parts.iter().map(part_bytes).sum()
+}
+
 /// A message's size in bytes, as the budget counts it, and its
 /// fingerprint.
 fn measure(message: &Message) -> (u64, u64) {
-    let mut bytes = 0u64;
-    for part in &message.parts {
-        bytes += part_bytes(part);
-    }
+    let bytes = message_bytes(message);
     let mut hasher = DefaultHasher::new();
     hasher.write(message.role.as_str().as_bytes());
     hasher.write(

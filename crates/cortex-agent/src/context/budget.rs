@@ -41,12 +41,22 @@ pub(crate) struct Budget {
     counted: Option<Counted>,
     /// Bytes per token, from the last request the provider counted.
     ratio: Option<f64>,
+    /// A provider refused a request as too long since it last counted one:
+    /// the estimate is known to be low, by an amount the refusal does not
+    /// say. A summary request is then cut to half the limit.
+    refused: bool,
 }
 
 impl Budget {
     /// Bytes per token.
     pub(crate) fn ratio(&self) -> f64 {
         self.ratio.unwrap_or(DEFAULT_RATIO)
+    }
+
+    /// Whether a provider refused a request as too long since it last
+    /// counted one.
+    pub(crate) fn refused(&self) -> bool {
+        self.refused
     }
 
     /// Tokens for so many bytes.
@@ -85,6 +95,7 @@ impl Budget {
         )]
         let ratio = (sent_bytes as f64 / input as f64).clamp(1.0, 8.0);
         self.ratio = Some(ratio);
+        self.refused = false;
         self.counted = Some(Counted {
             tokens: input + output,
             bytes_after,
@@ -96,11 +107,16 @@ impl Budget {
     /// The ratio is brought down to what that shows at most, and the count
     /// is dropped, so that the same content is estimated at the window or
     /// more. The true ratio may be lower still: what is cut to fit after an
-    /// overflow keeps a margin of its own.
+    /// overflow keeps a margin of its own, until a request is counted again.
+    ///
+    /// Any request's refusal teaches it, a summary's as well as the turn's
+    /// own (the review of step 15 found a refused summary request taught
+    /// nothing, and was sent whole again at every turn).
     pub(crate) fn overflowed(&mut self, sent_bytes: u64, window: u64) {
         if window == 0 {
             return;
         }
+        self.refused = true;
         #[expect(
             clippy::cast_precision_loss,
             reason = "a ratio: the counts are far below 2^52"
@@ -128,20 +144,36 @@ pub(crate) enum Pressure {
     Compact,
 }
 
-/// Where `estimate` stands against `limit`.
-pub(crate) fn pressure(estimate: u64, limit: u64, prepare_at: f64, compact_at: f64) -> Pressure {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a comparison of estimates far below 2^52"
-    )]
-    let (estimate, limit) = (estimate as f64, limit as f64);
-    if estimate > compact_at * limit {
+/// Where `estimate` stands against the trigger and the threshold for a
+/// summary in the background, all in tokens.
+pub(crate) fn pressure(estimate: u64, prepare: u64, trigger: u64) -> Pressure {
+    if estimate > trigger {
         Pressure::Compact
-    } else if estimate > prepare_at * limit {
+    } else if estimate > prepare {
         Pressure::Prepare
     } else {
         Pressure::Fine
     }
+}
+
+/// So many hundredths, or another fraction, of `limit`, in whole tokens.
+pub(crate) fn fraction_of(fraction: f64, limit: u64) -> u64 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "a threshold: a fraction of a limit far below 2^52, and not negative"
+    )]
+    let tokens = (fraction.max(0.0) * limit as f64).floor() as u64;
+    tokens
+}
+
+/// The room kept for a summary when the trigger is placed: 8,192 tokens,
+/// or an eighth of the limit on a small window. A summary under the six
+/// headings is rarely past 2,000 tokens; the carried state adds the plan,
+/// the files and the user's last message.
+pub(crate) fn summary_room(limit: u64) -> u64 {
+    (limit / 8).min(8_192)
 }
 
 #[cfg(test)]
@@ -160,6 +192,13 @@ mod tests {
         // A ratio already lower than what the overflow shows stays.
         budget.overflowed(900_000, 200_000);
         assert_eq!(budget.estimate(600_000), 200_000);
+        // Until the provider counts a request again, the estimate is known
+        // to be low.
+        assert!(budget.refused());
+        budget.new_epoch();
+        assert!(budget.refused(), "a new epoch is no count");
+        budget.counted(3_000, 1_000, 0, 3_000);
+        assert!(!budget.refused());
     }
 
     #[test]
@@ -186,8 +225,13 @@ mod tests {
 
     #[test]
     fn the_thresholds_are_the_limits_fractions() {
-        assert_eq!(pressure(69, 100, 0.7, 0.85), Pressure::Fine);
-        assert_eq!(pressure(71, 100, 0.7, 0.85), Pressure::Prepare);
-        assert_eq!(pressure(86, 100, 0.7, 0.85), Pressure::Compact);
+        let (prepare, trigger) = (fraction_of(0.7, 100), fraction_of(0.85, 100));
+        assert_eq!((prepare, trigger), (70, 85));
+        assert_eq!(pressure(69, prepare, trigger), Pressure::Fine);
+        assert_eq!(pressure(71, prepare, trigger), Pressure::Prepare);
+        assert_eq!(pressure(86, prepare, trigger), Pressure::Compact);
+        assert_eq!(fraction_of(-1.0, 100), 0);
+        assert_eq!(summary_room(200_000), 8_192);
+        assert_eq!(summary_room(3_650), 456);
     }
 }

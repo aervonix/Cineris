@@ -382,6 +382,53 @@ fn turns_replayed_after_a_summary_are_the_same_live_and_read_again() {
     );
 }
 
+/// A log written before every notice had an id of its own: the core's
+/// notice of a change from outside, at two closes, both `outside-change`.
+/// A summary covering through the second, as the live session made it,
+/// is read back as covering through the second too, not the first: the
+/// turns between are not replayed (the review of step 15, its second
+/// note).
+#[test]
+fn a_summary_covering_an_id_the_log_holds_twice_covers_the_last_of_them() {
+    let outside = || {
+        Item::Notice(NoticeItem {
+            id: ItemId::new("outside-change"),
+            source: NoticeSource::Harness,
+            text: "A protected path changed.".to_owned(),
+            created_at: None,
+        })
+    };
+    let items = vec![
+        user("i_1", "go"),
+        thinking_answer("i_2", None),
+        outside(),
+        user("i_3", "more"),
+        thinking_answer("i_4", None),
+        outside(),
+    ];
+    let mut live = context();
+    for item in &items {
+        live.push(item);
+    }
+    let summary = summary_item("i_5", "outside-change");
+    let mut replayed = History::default();
+    replayed.push(&summary);
+    replayed.extend_projected(&live.history, live.history.len());
+
+    let mut compaction = epoch("one");
+    compaction.reason = Some(EpochReason::Compaction);
+    let mut read = context();
+    let mut logged = items.clone();
+    logged.push(summary);
+    read.load(&Opened {
+        items: logged,
+        epochs: vec![(0, epoch("one")), (6, compaction)],
+        ..Opened::default()
+    });
+    assert_eq!(replayed.messages(), read.history.messages());
+    assert_eq!(read.history.len(), 1, "the summary alone");
+}
+
 fn summary_item(id: &str, covers_through: &str) -> Item {
     Item::Summary(SummaryItem {
         id: ItemId::new(id),

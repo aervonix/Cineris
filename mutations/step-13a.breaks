@@ -753,8 +753,8 @@ caught-by:
 [break] carried-level-refused
 rule: A reasoning level only carried over from the role's earlier model is left behind where the new model has none such.
 file: crates/cortex-core/src/core.rs
-find: Err(refused) if refused.code == "unknown_effort" => {
-replace: Err(refused) if refused.code == "never" => {
+find: "unknown_effort" | "reasoning_budget_too_large"
+replace: "reasoning_budget_too_large"
 caught-by:
     cortex-core::it settings::a_level_the_new_model_does_not_have_is_left_behind_and_said
 

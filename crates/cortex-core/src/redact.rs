@@ -196,10 +196,12 @@ pub(crate) fn resumed(entries: &[Entry]) -> Resumed {
     for entry in entries {
         match &entry.body {
             Body::Summary { item, .. } => {
+                // From the end, as the loop reads it (`held_after_summaries`
+                // in `cortex-agent`): an old log can hold an id twice.
                 let after = item
                     .covers_through
                     .as_ref()
-                    .and_then(|through| held.iter().position(|(id, _, _)| id == through.as_str()));
+                    .and_then(|through| held.iter().rposition(|(id, _, _)| id == through.as_str()));
                 let kept: Vec<(String, bool, bool)> = after.map_or_else(Vec::new, |after| {
                     held[after + 1..]
                         .iter()
@@ -551,6 +553,39 @@ mod tests {
                 },
                 redacted,
             )
+        }
+
+        /// A log written before every notice had an id of its own holds
+        /// the core's notice of a change from outside twice under one id.
+        /// A summary that covers through the second covers the masked turn
+        /// between them, which marks nothing after it (the review of step
+        /// 15, its second note: the first match replayed it).
+        #[test]
+        fn a_summary_covering_an_id_the_log_holds_twice_covers_the_last_of_them() {
+            let outside = |number: u32| {
+                entry(
+                    number,
+                    Body::Notice(cortex_protocol::item::NoticeItem {
+                        id: ItemId::new("outside-change"),
+                        source: cortex_protocol::item::NoticeSource::Harness,
+                        text: "A protected path changed.".to_owned(),
+                        created_at: None,
+                    }),
+                    false,
+                )
+            };
+            let entries = [
+                user(1, false),
+                answer(2),
+                outside(3),
+                user(4, true),
+                answer(5),
+                outside(6),
+                summary_entry(7, Some("outside-change"), false),
+                epoch(8, "compaction"),
+                answer(9),
+            ];
+            assert_eq!(raw(&entries), [true, false, true]);
         }
 
         #[test]

@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use cortex_agent::RoleModel;
+use cortex_agent::{PrefixDifference, RoleModel, StatEvent};
 use cortex_base::UtcTime;
 use cortex_llm::{CooldownChange, ModelEvent};
 use cortex_protocol::event::{Event, Notice};
@@ -323,6 +323,72 @@ fn a_fallback_and_its_cooldown_are_notices_and_the_state_shows_the_speed_in_effe
     assert_eq!(ended.state, CooldownState::Ended);
     assert_eq!(ended.message, "Fast mode is back.");
     assert_eq!(told(&rig).speed_in_effect, Speed::Fast);
+}
+
+/// The context record says where a request first differs from the one
+/// before it as the bytes sent do: at the speed the client sent it at, not
+/// the one the role asked for. During a cooldown the requests go at
+/// standard, and extend each other; the first after it goes at the tier
+/// again, which is a cache of its own. The review of step 15 found every
+/// one of them recorded as extending the last.
+#[test]
+fn the_context_record_compares_requests_at_the_speed_they_were_sent_at() {
+    let refused = Gate::new();
+    let first = Response::events([])
+        .wait(&refused)
+        .event(fell_back(SpeedFallbackReason::RateLimited, Some(UNTIL)))
+        .event(cooldown(CooldownState::Started, Some(UNTIL)))
+        .event(start())
+        .served_at(Speed::Standard)
+        .text("At standard.")
+        .end(StopReason::End);
+    let during = Response::events([
+        fell_back(SpeedFallbackReason::Cooldown, Some(UNTIL)),
+        start(),
+    ])
+    .served_at(Speed::Standard)
+    .text("Still at standard.")
+    .end(StopReason::End);
+    let after = Response::events([cooldown(CooldownState::Ended, None), start()])
+        .text("Fast again.")
+        .end(StopReason::End);
+    let again = says("Fast still.");
+    let world = World::new("speed_context_record", [first, during, after, again]);
+    let rig = fast_session(&world);
+    world.run(async {
+        rig.prompt("go");
+        rig.events.seen("user", 1).await;
+        world.cooldowns.start(
+            &ProviderId::new(fixtures::PROVIDER),
+            &ModelId::new(fixtures::MODEL),
+            &Speed::Fast,
+            Duration::from_secs(600),
+        );
+        refused.open();
+        rig.events.turns(1).await;
+    });
+    turn(&world, &rig, 2);
+    world.clock.advance(Duration::from_secs(600));
+    turn(&world, &rig, 3);
+    turn(&world, &rig, 4);
+    let differences: Vec<PrefixDifference> = rig
+        .stats
+        .all()
+        .into_iter()
+        .filter_map(|event| match event {
+            StatEvent::Context(context) => Some(context.difference),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        differences,
+        [
+            PrefixDifference::First,
+            PrefixDifference::Extends,
+            PrefixDifference::Settings,
+            PrefixDifference::Extends
+        ]
+    );
 }
 
 #[test]

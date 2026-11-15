@@ -361,6 +361,138 @@ fn a_nested_instruction_file_is_given_once_when_a_tool_first_touches_its_directo
     assert_valid_history(&second.messages);
 }
 
+/// A nested instruction file that is there and is not read (the core's
+/// reader refuses a link out of the workspace) is warned of by its name,
+/// once: its directory is looked at once. The review of step 15 found it
+/// dropped without a word.
+#[test]
+fn a_nested_instruction_file_that_is_not_read_is_warned_of_once() {
+    let world = World::new(
+        "instructions_nested_refused",
+        [
+            calls(&[(
+                "c1",
+                "read",
+                json!({"path": "vendor/lib/a.rs", "record": true}),
+            )]),
+            calls(&[(
+                "c2",
+                "read",
+                json!({"path": "vendor/lib/b.rs", "record": true}),
+            )]),
+            says("Done."),
+        ],
+    );
+    let rig = Setup::new(&world).start(&world);
+    rig.instructions.fail(
+        &root_file(&rig, "vendor/lib/AGENTS.md"),
+        "it is a link to a file outside the workspace",
+    );
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    let warned: Vec<(String, Vec<String>)> = rig
+        .events
+        .notices()
+        .into_iter()
+        .filter_map(|notice| match notice {
+            Notice::Instructions(notice) => Some((notice.message, notice.files)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        warned,
+        [(
+            "The instruction file vendor/lib/AGENTS.md could not be read: it is a link to a file \
+             outside the workspace"
+                .to_owned(),
+            vec!["vendor/lib/AGENTS.md".to_owned()]
+        )],
+        "once, though two files under it were read"
+    );
+    assert!(notice_texts(&rig).is_empty(), "nothing was given the model");
+}
+
+/// A nested instruction file is given for a file a tool read or wrote,
+/// not for one only a command changed: a command can write into any number
+/// of directories (a vendored tree), and 07 says "when a tool first touches
+/// a file". The review of step 15, its sixth note.
+#[test]
+fn a_file_only_a_command_changed_gives_no_nested_instruction_file() {
+    let world = World::new(
+        "instructions_nested_command",
+        [calls(&[("c1", "plain", json!({}))]), says("Done.")],
+    );
+    let rig = Setup::new(&world).start(&world);
+    rig.instructions
+        .set(&root_file(&rig, "vendor/pkg/AGENTS.md"), "Vendored rules.");
+    // What the core's shell wrapper tells the table of a command's change.
+    rig.workspace
+        .files
+        .note_changed(&root_file(&rig, "vendor/pkg/lib.rs"));
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    assert!(notice_texts(&rig).is_empty(), "{:#?}", notice_texts(&rig));
+    let last = last_request(&world.provider);
+    assert!(
+        !last
+            .messages
+            .iter()
+            .any(|message| all_text(message).contains("Vendored rules.")),
+        "given for a file only a command changed"
+    );
+}
+
+/// The nested instruction files one boundary gives are held to the cap on
+/// instruction files together, as section 4 is: what is past it is left
+/// out, and the user is told by name.
+#[test]
+fn nested_instruction_files_at_one_boundary_are_held_to_the_cap() {
+    let world = World::new(
+        "instructions_nested_cap",
+        [
+            calls(&[
+                ("c1", "read", json!({"path": "a/x.rs", "record": true})),
+                ("c2", "read", json!({"path": "b/y.rs", "record": true})),
+            ]),
+            says("Done."),
+        ],
+    );
+    let mut setup = Setup::new(&world);
+    setup.context = ContextSettings {
+        instructions_cap: 100,
+        ..ContextSettings::default()
+    };
+    let rig = setup.start(&world);
+    rig.instructions
+        .set(&root_file(&rig, "a/AGENTS.md"), "a".repeat(60));
+    rig.instructions
+        .set(&root_file(&rig, "b/AGENTS.md"), "b".repeat(60));
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    let given = notice_texts(&rig);
+    assert_eq!(given.len(), 1, "one of them: {given:#?}");
+    assert!(given[0].starts_with("Instruction file `a/AGENTS.md`"));
+    let warned: Vec<(String, Vec<String>)> = rig
+        .events
+        .notices()
+        .into_iter()
+        .filter_map(|notice| match notice {
+            Notice::Instructions(notice) if notice.message.contains("left out") => {
+                Some((notice.message, notice.files))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(warned.len(), 1, "{warned:#?}");
+    assert_eq!(warned[0].1, ["b/AGENTS.md"]);
+}
+
 #[test]
 fn instruction_files_over_the_cap_are_cut_and_the_user_is_told() {
     let world = World::new("instructions_cap", [says("Hello.")]);
@@ -806,6 +938,60 @@ fn a_compaction_carries_the_plan_the_files_and_the_last_message_exactly() {
     assert_eq!(next.messages.len(), 2);
 }
 
+/// A file a tool read and a command then changed (`sed -i`, a formatter:
+/// the core's shell wrapper tells the table with `note_changed`) is carried
+/// across a compaction as changed, with no hash: the one the read took is
+/// not the file's any more. 07 says the files are carried "with their
+/// current hashes". The review of step 15 found the read's hash carried.
+#[test]
+fn a_file_a_command_changed_after_a_read_is_carried_without_the_old_hash() {
+    let world = World::new("carried_hash", [says("One."), says("Goal: the summary.")]);
+    let rig = Setup::new(&world).start(&world);
+    let file = root_file(&rig, "src/lib.rs");
+    let other = root_file(&rig, "src/main.rs");
+    let read = cortex_tools::FileSnapshot::of_content(b"old\n", None);
+    let old = read.hash;
+    let shown = cortex_tools::Shown {
+        hash: old,
+        lines: cortex_tools::LineRanges::of(1, 1),
+        total_lines: 1,
+        turn: 1,
+        kept: true,
+    };
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+        rig.workspace
+            .files
+            .record_read(&file, read.clone(), shown.clone());
+        rig.workspace.files.record_read(&other, read.clone(), shown);
+        // `sed -i` on one of them, as the shell wrapper reports a
+        // command's change.
+        rig.workspace.files.note_changed(&file);
+        rig.handle.compact(None).map_err(|error| *error).unwrap();
+        rig.events.turns(2).await;
+    });
+    let summary = rig.store.summaries().pop().expect("a summary");
+    let files = summary.carried["files"].as_array().unwrap().clone();
+    let carried = |path: &str| {
+        files
+            .iter()
+            .find(|entry| entry["path"] == path)
+            .unwrap_or_else(|| panic!("{path} not carried: {files:?}"))
+            .clone()
+    };
+    let changed = carried("src/lib.rs");
+    assert_eq!(changed["changed"], true, "{changed}");
+    assert_eq!(changed["read"], true, "{changed}");
+    assert_eq!(
+        changed["hash"],
+        serde_json::Value::Null,
+        "carried with the hash the tool read before the command changed the file: {changed}"
+    );
+    // A file only read keeps the hash of what was read.
+    assert_eq!(carried("src/main.rs")["hash"], json!(old.to_hex()));
+}
+
 #[test]
 fn a_summary_too_large_for_the_new_epoch_fails_the_compaction_and_records_nothing() {
     let world = World::new(
@@ -1119,6 +1305,57 @@ fn the_loops_check_stops_a_request_that_does_not_begin_with_the_one_before() {
             .contains("does not begin with the one before it"),
         "{}",
         error.message
+    );
+    assert_eq!(
+        world.provider.requests().len(),
+        1,
+        "the second was never sent"
+    );
+}
+
+/// The check holds a request to the one before it at the speed that one
+/// was sent at. A request the client sent at standard in place of the
+/// tier the role asks for (a cooldown) is what the next is held to, at
+/// standard: an edited history is caught there too.
+#[cfg(debug_assertions)]
+#[test]
+fn the_loops_check_holds_a_request_to_the_one_before_at_the_speed_it_was_sent_at() {
+    let world = World::new(
+        "prefix_check_sent_speed",
+        [
+            Response::events([crate::transitions::fell_back(
+                cortex_protocol::speed::SpeedFallbackReason::Cooldown,
+                None,
+            )])
+            .served_at(cortex_protocol::Speed::Standard)
+            .tool_call("c1", "read", &json!({"path": "a"}))
+            .end(StopReason::ToolCalls),
+            says("Unreached."),
+        ],
+    );
+    let mut setup = Setup::new(&world);
+    setup.speeds.session = cortex_protocol::Speed::Fast;
+    setup.model = RoleModel::new(
+        Arc::new(Shifting {
+            inner: world.provider.clone(),
+            requests: std::sync::atomic::AtomicU64::new(0),
+        }),
+        fixtures::model(),
+    );
+    let rig = setup.start(&world);
+    rig.events
+        .loop_panic_expected
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    let error = rig.events.ends()[0].error.clone().unwrap();
+    assert_eq!(error.code, "loop_panicked", "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains("does not begin with the one before it")
     );
     assert_eq!(
         world.provider.requests().len(),

@@ -168,6 +168,70 @@ fn a_session_is_refused_at_a_level_that_cannot_be_held_and_told_when_there_is_no
     });
 }
 
+/// A user's catalog entry whose reasoning is a budget of 1,024 to 64,000
+/// tokens, with an output of 64,000: the review of step 15's.
+const BUDGET_MODEL: &str = "[models.budget]
+provider = \"anthropic\"
+id = \"claude-budget\"
+name = \"Budget\"
+protocol = \"anthropic-messages\"
+context_window = 200000
+max_output = 64000
+input = [\"text\"]
+
+[models.budget.reasoning]
+min_tokens = 1024
+max_tokens = 64000
+";
+
+/// The user's configuration with the budget model as the main one.
+fn on_the_budget_model(world: &World, model: &str) {
+    world.raw_user_config(&format!(
+        "[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n\n[model]\nmain \
+         = \"claude-budget\"\n{model}\n\n{BUDGET_MODEL}"
+    ));
+}
+
+/// A reasoning budget leaves the answer room within what the main role's
+/// requests may write (since the review of step 15, which found `max`
+/// placed at the top of the range, where Anthropic refuses every request).
+/// One that cannot is refused when the session starts, with both numbers,
+/// and not at every request.
+#[test]
+fn a_reasoning_budget_that_leaves_the_answer_no_room_is_refused_at_the_start() {
+    let world = World::new("budget_refused", [says("Hi.")]);
+    on_the_budget_model(&world, "effort = \"max\"\nmax_output = 1024");
+    let core = world.core();
+    world.run(async {
+        let error = session_error(&world, &core).await;
+        assert_eq!(
+            (error.kind.clone(), error.code.as_str()),
+            (ErrorKind::Config, "reasoning_budget_too_large"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains("1024") && error.message.contains("max_output"),
+            "{}",
+            error.message
+        );
+    });
+    assert!(world.provider.requests().is_empty());
+
+    // An output limit of the user's that holds a budget and the answer:
+    // `max` is placed below it, and the request says so.
+    on_the_budget_model(&world, "effort = \"max\"\nmax_output = 20000");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("hi").await;
+        front.close().await;
+    });
+    let request = &world.provider.requests()[0];
+    assert_eq!(request.max_output, Some(20_000));
+    assert_eq!(request.reasoning.budget_tokens, Some(15_000));
+}
+
 #[test]
 fn a_session_needs_a_model_and_a_key() {
     let world = World::new("no_model", []);

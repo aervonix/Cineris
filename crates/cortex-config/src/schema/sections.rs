@@ -418,8 +418,9 @@ settings! {
     /// read (`docs/architecture/07-sessions-and-context.md`).
     pub struct ContextSettings {
         /// Whether the conversation is compacted by itself when a request
-        /// would pass `compact_at`. Off, the turn stops there and asks for
-        /// a compaction (`session/compact`) or a new session.
+        /// would pass `compact_at`, or the provider says a request does not
+        /// fit. Off, the turn stops there and asks for a compaction
+        /// (`session/compact`) or a new session.
         [Preference, Now]
         pub auto_compact: bool = true,
         /// Whether a summary is prepared in the background from
@@ -430,7 +431,10 @@ settings! {
         /// The trigger: the fraction of what a request may hold (the
         /// model's context window less room for the answer and a margin)
         /// past which the conversation is compacted before the request.
-        /// From a project, after trust: a compaction costs a request.
+        /// Never below what a compaction needs, the prompt and the tools
+        /// and room for a summary: a lower value is raised to that, and
+        /// the user is told. From a project, after trust: a compaction
+        /// costs a request.
         [RaisesCost, Now, 0..=1]
         pub compact_at: f64 = 0.85,
         /// The fraction past which a summary is prepared in the
@@ -439,7 +443,9 @@ settings! {
         pub prepare_at: f64 = 0.7,
         /// How much of the most recent conversation a compaction replays
         /// after its summary, without its reasoning, in tokens. 0 replays
-        /// nothing. From a project, after trust.
+        /// nothing. At most half of what the trigger leaves once the prompt
+        /// and the tools are counted, and the user is told when that holds
+        /// it back. From a project, after trust.
         [RaisesCost, NextEpoch, 0..=10_000_000]
         pub keep_recent_tokens: u64 = 0,
         /// More names of instruction files, read after `AGENTS.md` and
@@ -459,7 +465,10 @@ settings! {
     /// Which files written for other tools are read. They are read and
     /// never changed.
     pub struct CompatSettings {
-        /// Instruction files: `AGENTS.md` and `CLAUDE.md`.
+        /// Instruction files under the names other tools use, `AGENTS.md`
+        /// and `CLAUDE.md`, in the workspace. Off, only the names in
+        /// `context.instruction_names` are read there; the user's own files
+        /// in the configuration directory are read either way.
         [UserOnly, NextEpoch]
         pub instructions: bool = true,
         /// MCP server definitions of other clients, offered for import.

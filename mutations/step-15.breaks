@@ -214,8 +214,8 @@ caught-by:
 rule: An instruction file that is a link out of the workspace is not read.
 file: crates/cortex-core/src/instructions.rs
 in: DiskInstructions::read
-find: if !resolved.is_inside_workspace() ||
-replace: if
+find: if !resolved.is_inside_workspace() {
+replace: if false {
 # The engine's gate refuses a file outside the workspace too, unless a
 # rule allows reading there: the test has such a rule.
 caught-by:
@@ -225,8 +225,8 @@ caught-by:
 rule: An instruction file the permission engine would not let the agent read unasked is not read.
 file: crates/cortex-core/src/instructions.rs
 in: DiskInstructions::read
-find: || !self.gate.may_keep(resolved.abs())
-replace:
+find: if !self.gate.may_keep(resolved.abs()) {
+replace: if false {
 caught-by:
     cortex-core::it context::an_instruction_file_a_rule_denies_is_not_read
 
@@ -260,9 +260,9 @@ caught-by:
 [break] overflow-not-told-to-the-budget
 rule: After the provider says a request does not fit, the summary request is cut by what that showed of the ratio.
 file: crates/cortex-agent/src/turn/epochs.rs
-in: Session::compacting
-find: self.context .budget .overflowed(self.context.sent_bytes, window);
-replace: let _ = window;
+in: Session::main_refused
+find: self.budget_for_mut(&ModelRole::Main).overflowed(sent, window);
+replace: let _ = (sent, window);
 caught-by:
     cortex-agent::it context::after_an_overflow_the_summary_request_is_cut_to_fit_what_the_provider_showed
 
@@ -342,8 +342,8 @@ caught-by:
 rule: The room a cut summary request gives its messages leaves out what it holds besides: the prompt, the tools and the instructions.
 file: crates/cortex-agent/src/turn/epochs.rs
 in: Session::summary_request
-find: self.trimmed(messages, (limit / 2).saturating_sub(fixed))
-replace: self.trimmed(messages, limit / 2)
+find: self.trimmed(messages, (limit / 2).saturating_sub(fixed), budget)
+replace: self.trimmed(messages, limit / 2, budget)
 caught-by:
     cortex-agent::it context::after_an_overflow_in_one_long_turn_the_summary_request_keeps_its_last_round
 

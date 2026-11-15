@@ -51,12 +51,15 @@ pub struct FileText {
 pub trait InstructionFiles: Send + Sync {
     /// Reads at most `limit` bytes of the file at `path`. `Ok(None)` when
     /// there is no file there that the harness may read: none at all, one
-    /// that is not a regular file, a link out of the workspace, or one the
-    /// permission engine would not let the agent read.
+    /// that is not a regular file, or one the permission engine would not
+    /// let the agent read.
     ///
     /// # Errors
     ///
-    /// When the file is there and could not be read.
+    /// When the file is there and could not be read, or is not read for a
+    /// reason the user is to be told: a link out of the workspace, or a
+    /// link of the user's that leads nowhere. The text says why, and the
+    /// user is warned with the file's name.
     fn read(&self, path: &AbsPath, limit: usize) -> Result<Option<FileText>, String>;
 }
 
@@ -74,6 +77,8 @@ impl InstructionFiles for NoInstructionFiles {
 #[derive(Debug, Default)]
 pub struct MemoryInstructionFiles {
     files: Mutex<BTreeMap<String, Vec<u8>>>,
+    /// Paths whose read fails, with why.
+    failing: Mutex<BTreeMap<String, String>>,
     reads: Mutex<u64>,
 }
 
@@ -94,6 +99,16 @@ impl MemoryInstructionFiles {
         self.lock().remove(path.key());
     }
 
+    /// Makes every read of `path` fail with `why`, as the core's does for a
+    /// file it will not read and the user is to be told of (a link out of
+    /// the workspace).
+    pub fn fail(&self, path: &AbsPath, why: &str) {
+        self.failing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(path.key().to_owned(), why.to_owned());
+    }
+
     /// How many reads have been asked for.
     #[must_use]
     pub fn reads(&self) -> u64 {
@@ -108,6 +123,14 @@ impl MemoryInstructionFiles {
 impl InstructionFiles for MemoryInstructionFiles {
     fn read(&self, path: &AbsPath, limit: usize) -> Result<Option<FileText>, String> {
         *self.reads.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        if let Some(why) = self
+            .failing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(path.key())
+        {
+            return Err(why.clone());
+        }
         Ok(self.lock().get(path.key()).map(|bytes| FileText {
             bytes: bytes[..bytes.len().min(limit)].to_vec(),
             len: bytes.len() as u64,

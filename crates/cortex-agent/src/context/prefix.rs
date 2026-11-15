@@ -43,6 +43,30 @@ pub(crate) struct Shape {
     pub(crate) messages: Vec<u64>,
 }
 
+/// A main request that was sent, until the speed the client sent it at is
+/// known: what the context record and the debug build's check compare the
+/// next request with. The client sends `standard` in place of the speed
+/// asked for during a cooldown, where the model has no such tier, or when
+/// the tier refused part-way, and the stream says so
+/// (`ModelEvent::SpeedFallback` by the harness). The bytes sent differ
+/// with the speed, so the request is known by the speed it was sent at
+/// (since the review of step 15, which found both comparisons using the
+/// speed asked for).
+#[derive(Debug, Clone)]
+pub(crate) struct InFlight {
+    /// Its shape, with the settings at the speed asked for.
+    pub(crate) shape: Shape,
+    /// Its stable prefix at that speed, in a debug build.
+    pub(crate) prefix: Option<Vec<u8>>,
+    /// For a request that asked for another speed than standard: its
+    /// settings at standard, and its stable prefix at standard.
+    pub(crate) standard: Option<(u64, Option<Vec<u8>>)>,
+    /// The epoch it was sent in.
+    pub(crate) epoch: u64,
+    /// The client said it sent it at standard.
+    pub(crate) at_standard: bool,
+}
+
 /// A hash of anything that can be hashed, for a [`Shape`].
 pub(crate) fn hash_of(value: &impl Hash) -> u64 {
     let mut hasher = DefaultHasher::new();
