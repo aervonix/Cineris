@@ -14,6 +14,8 @@
     reason = "an integration test prepares real files, fails by panicking, and prints measurements"
 )]
 
+mod index;
+mod map;
 mod outlines;
 
 use std::path::{Path, PathBuf};

@@ -11,6 +11,9 @@ doctest = false
 
 [dependencies]
 cortex-base.workspace = true
+# The walk under a pass: the same ignore rules as `search` and `list`.
+ignore.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 cortex-testkit.workspace = true
