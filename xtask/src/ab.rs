@@ -26,8 +26,8 @@ use crate::tiers::{self, Os, Tier};
 use crate::workspace;
 
 const USAGE: &str = "\
-usage: cargo xtask ab --base DIR [--label NAME] [--count N] [--top N] [-p CRATE]...
-                      [-- NEXTEST ARGUMENT...]
+usage: cargo xtask ab --base DIR [--label NAME] [--count N] [--top N] [--keep-going]
+                      [-p CRATE]... [-- NEXTEST ARGUMENT...]
 
 Builds the tests of this tree (the head) and of the tree at DIR (the base)
 once each, as the blocking test job does, each in a build directory of its
@@ -35,7 +35,13 @@ own; runs them in turn on this machine, N rounds (5 when not given) in
 alternating order; and compares each test's median time, by tier, crate and
 test, as `ci --tiers --compare` does. NAME is what the base is called in the
 report (its directory when not given). `cargo xtask try` runs it on a hosted
-runner with the input `against`.";
+runner with the input `against`.
+
+A test that fails ends the run, after both builds, unless --keep-going is
+given: then the round is recorded as failed for that side, the run goes on to
+the next round, and the comparison is of the rounds both sides finished. The
+rounds that failed, and the tests that failed in them, are listed after it,
+and the command still fails.";
 
 /// Rounds when not told: enough for a median, few enough for a Windows job.
 const ROUNDS: usize = 5;
@@ -50,6 +56,8 @@ pub(crate) struct Request {
     pub(crate) label: Option<String>,
     pub(crate) rounds: usize,
     pub(crate) top: usize,
+    /// A round with a failing test is recorded, not the end of the run.
+    pub(crate) keep_going: bool,
     pub(crate) packages: Vec<String>,
     /// For nextest, after `--`.
     pub(crate) rest: Vec<String>,
@@ -63,6 +71,7 @@ impl Request {
             label: None,
             rounds: ROUNDS,
             top: 10,
+            keep_going: false,
             packages: Vec::new(),
             rest: Vec::new(),
         };
@@ -96,6 +105,7 @@ impl Request {
                         .parse()
                         .map_err(|_| format!("`--top {text}` is not a number"))?;
                 }
+                "--keep-going" => request.keep_going = true,
                 "-p" | "--package" => request.packages.push(value("a crate")?.clone()),
                 "--help" | "-h" => return Err(USAGE.to_owned()),
                 other => return Err(format!("unknown argument `{other}`\n\n{USAGE}")),
@@ -157,14 +167,107 @@ pub(crate) fn medians(runs: &[Vec<TestCase>]) -> Vec<TestCase> {
         .collect()
 }
 
+/// One side's run of one round: it finished, with its report, or a test
+/// failed in it (or the run could not be made).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Attempt {
+    Finished(Vec<TestCase>),
+    Failed(Failure),
+}
+
+/// What a failed run left: the tests that failed, as `binary name`, from
+/// whatever report it wrote, and what the run said.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Failure {
+    pub(crate) tests: Vec<String>,
+    pub(crate) error: String,
+}
+
+/// A failed run's failure, from its report when it wrote one.
+pub(crate) fn failure_of(report: Option<&[TestCase]>, error: String) -> Failure {
+    Failure {
+        tests: report
+            .unwrap_or_default()
+            .iter()
+            .filter(|case| case.failed)
+            .map(TestCase::id)
+            .collect(),
+        error,
+    }
+}
+
+/// Both sides of one round.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Round {
+    pub(crate) base: Attempt,
+    pub(crate) head: Attempt,
+}
+
+/// The rounds both sides finished, which are all that is compared: their
+/// numbers (counted from 1), and each side's reports. A round in which either
+/// side failed is in none of them.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct Compared {
+    pub(crate) numbers: Vec<usize>,
+    pub(crate) base: Vec<Vec<TestCase>>,
+    pub(crate) head: Vec<Vec<TestCase>>,
+}
+
+/// The rounds in which both sides finished.
+pub(crate) fn finished_by_both(rounds: &[Round]) -> Compared {
+    let mut compared = Compared::default();
+    for (index, round) in rounds.iter().enumerate() {
+        if let (Attempt::Finished(base), Attempt::Finished(head)) = (&round.base, &round.head) {
+            compared.numbers.push(index + 1);
+            compared.base.push(base.clone());
+            compared.head.push(head.clone());
+        }
+    }
+    compared
+}
+
+/// The rounds in which a side failed, and the tests that failed: empty when
+/// none did.
+pub(crate) fn failed_rounds(rounds: &[Round], label: &str) -> String {
+    let mut text = String::new();
+    for (index, round) in rounds.iter().enumerate() {
+        let sides = [
+            (format!("base ({label})"), &round.base),
+            ("head".to_owned(), &round.head),
+        ];
+        for (side, attempt) in sides {
+            let Attempt::Failed(failure) = attempt else {
+                continue;
+            };
+            let _ = write!(text, "  round {}, {side}: ", index + 1);
+            if failure.tests.is_empty() {
+                let _ = writeln!(text, "no failing test in a report: {}", failure.error);
+            } else {
+                let _ = writeln!(text, "{} failed", failure.tests.join(", "));
+            }
+        }
+    }
+    if text.is_empty() {
+        return text;
+    }
+    format!(
+        "Rounds in which a run failed, left out of the comparison along with the other side's \
+         run of the same round:\n{text}"
+    )
+}
+
 /// Each round's tier times above the start, for both sides: the spread of
 /// one side is the noise.
-pub(crate) fn rounds_table(base: &[Vec<TestCase>], head: &[Vec<TestCase>]) -> String {
+pub(crate) fn rounds_table(compared: &Compared) -> String {
     let mut text = String::from(
         "Each round, each tier's time above the start of its processes, in seconds:\n\n\
          round  side   start      unit  integration     system\n",
     );
-    for (round, (base, head)) in base.iter().zip(head).enumerate() {
+    for (number, (base, head)) in compared
+        .numbers
+        .iter()
+        .zip(compared.base.iter().zip(&compared.head))
+    {
         for (side, cases) in [("base", base), ("head", head)] {
             let (start, _) = tiers::start_of(cases);
             let [unit, integration, system] =
@@ -172,7 +275,7 @@ pub(crate) fn rounds_table(base: &[Vec<TestCase>], head: &[Vec<TestCase>]) -> St
             let _ = writeln!(
                 text,
                 "{:>5}  {side}  {:>5.0} ms  {unit:>8.1}  {integration:>11.1}  {system:>9.1}",
-                round + 1,
+                number,
                 start * 1000.0
             );
         }
@@ -243,7 +346,9 @@ fn run_job(tree: &Path, request: &Request) -> Result<()> {
     let last = runs.len() - 1;
     for (index, run) in runs.iter().enumerate() {
         let ran = run_in(tree, nextest(tree, run), "the tests");
-        if index == last {
+        // A run that failed ends the job's, and what the earlier runs
+        // reported is brought together with its own for whoever reads it.
+        if index == last || ran.is_err() {
             crate::checks::bring_together(tree)?;
         } else {
             crate::checks::set_aside(tree)?;
@@ -296,8 +401,9 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         println!("== building the {} ==", name(which, &label));
         run_in(tree(which), nextest(tree(which), &build), "the build")?;
     }
-    let mut runs: [Vec<Vec<TestCase>>; 2] = [Vec::new(), Vec::new()];
+    let mut rounds: Vec<Round> = Vec::new();
     for round in 0..request.rounds {
+        let mut attempts: [Option<Attempt>; 2] = [None, None];
         for which in order(round) {
             println!(
                 "== round {} of {}: the {} ==",
@@ -307,8 +413,18 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             );
             let at = tree(which);
             let report = workspace::nextest_report(at, "ci");
-            run_job(at, &request)?;
-            let cases = junit::read(&report)?;
+            let ran = run_job(at, &request);
+            if let Err(error) = &ran {
+                if !request.keep_going {
+                    return Err(error.clone());
+                }
+                println!(
+                    "== the {} failed: {error}; carrying on ==",
+                    name(which, &label)
+                );
+            }
+            // What the run reported, if it got as far as a report.
+            let cases = junit::read(&report);
             // Each round's report, kept where the head's run keeps its own
             // (the `try` workflow uploads the folder).
             let kept = head.join("target").join("ab").join(format!(
@@ -316,35 +432,77 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
                 if which == Which::Base { "base" } else { "head" },
                 round + 1
             ));
-            std::fs::create_dir_all(kept.parent().unwrap_or(&head))
-                .and_then(|()| std::fs::copy(&report, &kept))
-                .map_err(|error| format!("could not keep {}: {error}", kept.display()))?;
-            runs[which as usize].push(cases);
+            if report.is_file() {
+                std::fs::create_dir_all(kept.parent().unwrap_or(&head))
+                    .and_then(|()| std::fs::copy(&report, &kept))
+                    .map_err(|error| format!("could not keep {}: {error}", kept.display()))?;
+            }
+            attempts[which as usize] = Some(attempt_of(ran, cases)?);
         }
+        let [Some(base), Some(head)] = attempts else {
+            return Err("a round ran only one side".to_owned());
+        };
+        rounds.push(Round { base, head });
     }
-    let [base_runs, head_runs] = runs;
-    println!("\n{}", rounds_table(&base_runs, &head_runs));
+    let compared = finished_by_both(&rounds);
+    let failed = failed_rounds(&rounds, &label);
+    if !failed.is_empty() {
+        println!("\n{failed}");
+    }
+    let (base_runs, head_runs) = (&compared.base, &compared.head);
+    if base_runs.is_empty() {
+        crate::steps::append_job_summary(&format!("### Two trees on one runner\n\n{failed}\n"));
+        return Err(format!(
+            "no round finished on both sides: all {} had a failing run",
+            rounds.len()
+        ));
+    }
+    println!("\n{}", rounds_table(&compared));
     let base_side = Side {
         label: format!("base, {label} (the median of {} runs)", base_runs.len()),
-        cases: medians(&base_runs),
+        cases: medians(base_runs),
     };
     let head_side = Side {
         label: format!("head, this tree (the median of {} runs)", head_runs.len()),
-        cases: medians(&head_runs),
+        cases: medians(head_runs),
     };
-    let compared = compare::compare_with(
+    let table = compare::compare_with(
         &head_side,
         &base_side,
         Os::here(),
         request.top,
         compare::Start::Shared,
     );
-    println!("{compared}");
+    println!("{table}");
     crate::steps::append_job_summary(&format!(
-        "### Two trees on one runner\n\n```text\n{}\n{compared}\n```\n",
-        rounds_table(&base_runs, &head_runs)
+        "### Two trees on one runner\n\n```text\n{}\n{table}\n{failed}```\n",
+        rounds_table(&compared)
     ));
-    Ok(())
+    conclusion(rounds.len(), compared.numbers.len())
+}
+
+/// What the run ends as, after its comparison is printed: the measurement is
+/// kept, and a failing test is still a failure.
+pub(crate) fn conclusion(rounds: usize, compared: usize) -> Result<()> {
+    if compared < rounds {
+        Err(format!(
+            "{} of {rounds} rounds had a failing run, and are left out of the comparison above",
+            rounds - compared
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// One side's run of a round: `ran` is how the tests ended, and `report`
+/// the report it left, if it left one. A run that failed is a failed
+/// attempt, whatever its report says; one that passed and left no report
+/// is an error.
+pub(crate) fn attempt_of(ran: Result<()>, report: Result<Vec<TestCase>>) -> Result<Attempt> {
+    match ran {
+        Ok(()) => report.map(Attempt::Finished),
+        Err(error) => Ok(Attempt::Failed(failure_of(report.ok().as_deref(), error))),
+    }
 }
 
 fn name(which: Which, label: &str) -> String {
@@ -356,7 +514,10 @@ fn name(which: Which, label: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Request, Which, medians, order, rounds_table};
+    use super::{
+        Attempt, Compared, Failure, Request, Round, Which, attempt_of, conclusion, failed_rounds,
+        failure_of, finished_by_both, medians, order, rounds_table,
+    };
     use crate::junit::TestCase;
 
     fn case(binary: &str, name: &str, seconds: f64) -> TestCase {
@@ -396,6 +557,7 @@ mod tests {
                 label: Some("main".to_owned()),
                 rounds: 8,
                 top: 10,
+                keep_going: false,
                 packages: strings(&["cortex-base"]),
                 rest: strings(&["-E", "test(/x/)"]),
             }
@@ -456,15 +618,140 @@ mod tests {
 
     #[test]
     fn each_round_is_a_line_for_each_side() {
-        let base = vec![vec![case("cortex-base", "t", 0.5)]; 2];
-        let head = vec![vec![case("cortex-base", "t", 0.75)]; 2];
-        let table = rounds_table(&base, &head);
+        let compared = Compared {
+            numbers: vec![1, 3],
+            base: vec![vec![case("cortex-base", "t", 0.5)]; 2],
+            head: vec![vec![case("cortex-base", "t", 0.75)]; 2],
+        };
+        let table = rounds_table(&compared);
         let lines: Vec<&str> = table
             .lines()
             .filter(|line| line.contains(" base ") || line.contains(" head "))
             .collect();
         assert_eq!(lines.len(), 4, "{table}");
         assert!(lines[0].trim_start().starts_with("1  base"), "{table}");
-        assert!(lines[3].trim_start().starts_with("2  head"), "{table}");
+        // A round left out keeps the numbers of the others.
+        assert!(lines[3].trim_start().starts_with("3  head"), "{table}");
+    }
+
+    fn finished(seconds: f64) -> Attempt {
+        Attempt::Finished(vec![case("cortex-base", "t", seconds)])
+    }
+
+    fn failed(tests: &[&str]) -> Attempt {
+        Attempt::Failed(Failure {
+            tests: strings(tests),
+            error: "the tests failed".to_owned(),
+        })
+    }
+
+    /// Four rounds: the head fails the second, the base fails the third.
+    fn rounds() -> Vec<Round> {
+        vec![
+            Round {
+                base: finished(0.5),
+                head: finished(0.6),
+            },
+            Round {
+                base: finished(0.5),
+                head: failed(&["cortex-base t"]),
+            },
+            Round {
+                base: failed(&[]),
+                head: finished(0.6),
+            },
+            Round {
+                base: finished(0.7),
+                head: finished(0.8),
+            },
+        ]
+    }
+
+    #[test]
+    fn only_the_rounds_both_sides_finished_are_compared() {
+        let compared = finished_by_both(&rounds());
+        assert_eq!(compared.numbers, [1, 4]);
+        // The round the base finished and the head failed is not in the
+        // base's medians either.
+        assert_eq!(compared.base.len(), 2);
+        assert!((compared.base[1][0].seconds - 0.7).abs() < 1e-9);
+        assert!((compared.head[0][0].seconds - 0.6).abs() < 1e-9);
+        let none = finished_by_both(&rounds()[1..3]);
+        assert_eq!(none, Compared::default());
+    }
+
+    #[test]
+    fn the_rounds_that_failed_are_listed_with_their_tests_and_a_clean_run_has_no_list() {
+        let text = failed_rounds(&rounds(), "main");
+        assert!(
+            text.contains("round 2, head: cortex-base t failed"),
+            "{text}"
+        );
+        assert!(
+            text.contains("round 3, base (main): no failing test in a report: the tests failed"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("round 1") && !text.contains("round 4"),
+            "{text}"
+        );
+        assert_eq!(failed_rounds(&rounds()[..1], "main"), "");
+    }
+
+    #[test]
+    fn a_failed_run_names_the_tests_its_report_says_failed() {
+        let mut bad = case("cortex-agent::it", "turn::stops", 1.0);
+        bad.failed = true;
+        let report = vec![case("cortex-base", "t", 0.1), bad];
+        assert_eq!(
+            failure_of(Some(&report), "the tests failed".to_owned()),
+            Failure {
+                tests: strings(&["cortex-agent::it turn::stops"]),
+                error: "the tests failed".to_owned(),
+            }
+        );
+        // No report: nothing to name, and the error is what is left.
+        assert!(failure_of(None, "x".to_owned()).tests.is_empty());
+    }
+
+    #[test]
+    fn a_run_that_failed_is_a_failed_attempt_whatever_its_report_says() {
+        let mut bad = case("cortex-base", "t", 1.0);
+        bad.failed = true;
+        let report = || Ok(vec![bad.clone()]);
+        let attempt = attempt_of(Err("the tests failed".to_owned()), report()).unwrap();
+        assert_eq!(attempt, failed(&["cortex-base t"]));
+        // No report at all.
+        let attempt = attempt_of(Err("the tests failed".to_owned()), Err("none".to_owned()));
+        assert_eq!(attempt, Ok(failed(&[])));
+        // A run that passed is finished, and one that left no report is an
+        // error, not a failed attempt: nothing says it failed.
+        assert!(matches!(
+            attempt_of(Ok(()), report()),
+            Ok(Attempt::Finished(_))
+        ));
+        assert_eq!(
+            attempt_of(Ok(()), Err("none".to_owned())),
+            Err("none".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_run_with_a_round_left_out_ends_as_a_failure_and_one_without_does_not() {
+        assert_eq!(conclusion(5, 5), Ok(()));
+        let error = conclusion(5, 3).unwrap_err();
+        assert!(error.contains("2 of 5 rounds"), "{error}");
+        assert!(conclusion(2, 0).is_err());
+    }
+
+    #[test]
+    fn a_request_may_ask_to_keep_going() {
+        let request = Request::parse(&strings(&["--base", "b", "--keep-going"])).unwrap();
+        assert!(request.keep_going);
+        assert!(
+            !Request::parse(&strings(&["--base", "b"]))
+                .unwrap()
+                .keep_going
+        );
     }
 }

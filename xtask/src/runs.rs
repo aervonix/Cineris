@@ -43,7 +43,7 @@ impl Source {
 }
 
 /// Runs `gh` with `arguments` and returns what it printed.
-fn gh(arguments: &[&str]) -> Result<String> {
+pub(crate) fn gh(arguments: &[&str]) -> Result<String> {
     let output = Command::new("gh")
         .args(arguments)
         .current_dir(workspace::root())

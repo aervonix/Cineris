@@ -20,6 +20,7 @@ use std::process::ExitCode;
 mod ab;
 mod alias;
 mod checks;
+mod ci_log;
 mod combine;
 mod compare;
 mod decide;
@@ -31,6 +32,7 @@ mod mutate;
 mod nonblocking;
 mod outside;
 mod owner_guard;
+mod pattern;
 mod perf;
 mod records;
 mod replace;
@@ -84,6 +86,11 @@ Checks and tests
   ci-times --ab TRY-RUN [--against REF] [--write FILE]
                     A try A/B run's tiers on both sides, for each OS's section
                     `<OS>, both trees on one runner`, and the PR's CI section.
+  ci-log RUN|JOB [--job NAME] [--all] [--grep RE] [--context N] [--tail N]
+                    A CI job's log through gh, escape codes taken out, for any
+                    workflow (the nightly's too): a run's failed jobs, the jobs
+                    named, or all; or one job by its id. --grep prints the
+                    matching lines with their neighbours.
   rules             The repo-rule checks alone: no home-directory paths, the
                     crate dependency rules, docs/dependencies.md, workflows,
                     links and the layout of the step records.
@@ -117,12 +124,15 @@ On the runners, without a pull request (the `try` workflow runs this)
   try --command 'COMMAND [ARGS]' [--profile ci|release|dist] [--count N]
       [--load N] [--cores K] [--filter 'EXPR; EXPR'] [--against REF]
                     One of test, stress, startup, perf or ci, as the workflow's
-                    inputs ask: `try --help` has the rules.
-  ab --base DIR [--label NAME] [--count N] [-p CRATE]... [-- NEXTEST ARGS]
+                    inputs ask: `try --help` has the rules. `perf -p CRATE`
+                    is the crate's ignored perf_ tests in a release build.
+  ab --base DIR [--label NAME] [--count N] [--keep-going] [-p CRATE]...
+     [-- NEXTEST ARGS]
                     This tree's tests and those of the tree at DIR, each built
                     once, run in turn N rounds on this machine, and compared
                     by each test's median: a change's cost apart from the
-                    runner's speed.
+                    runner's speed. --keep-going records a round with a
+                    failing test and carries on.
 
 Reviews
   scratch-test CRATE FILE [-- NEXTEST ARGS]
@@ -243,6 +253,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "test" => checks::test(rest),
         "ci" => checks::ci(rest),
         "ci-times" => runs::ci_times(rest),
+        "ci-log" => ci_log::run(rest),
         "replace" => replace::run(rest),
         "rules" => checks::rules(),
         "links" => checks::links(),

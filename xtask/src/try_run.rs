@@ -23,6 +23,10 @@ COMMAND is one of:
   startup                          start-up of `cortex` built in the profile
                                    (release or dist), --count runs
   perf [ARGS]...                   the performance budgets (step 20)
+  perf -p CRATE... [NAME]...       the crates' ignored `perf_` tests, in a release
+                                   build (dist with --profile dist), one at a
+                                   time, output shown, and nothing else; a NAME
+                                   narrows them
   ci [ARGS]...                     any form of `cargo xtask ci`
   partial-landlock                 the nightly's job: cortex-sandbox's tests on
                                    a kernel with the partial Landlock (on
@@ -42,7 +46,9 @@ test that any of them matches.
 --against REF makes `test` an A/B run: the workflow checks REF out beside the
 branch, and `cargo xtask ab` builds both once and runs them in turn, --count
 rounds (5 when not given), on one runner, then compares them by tier, crate
-and test.
+and test. It runs with --keep-going: a round in which a test fails is recorded
+and left out, the run goes on, and it ends as a failure after the comparison of
+the rounds that finished.
 
 An empty value is the same as leaving the flag out.";
 
@@ -61,6 +67,10 @@ const COMMANDS: [&str; 8] = [
 /// The nightly workflow's jobs a `try` run may run, as they are: the job's
 /// own `cargo xtask` command, with nothing added.
 const NIGHTLY_JOBS: [&str; 3] = ["partial-landlock", "advisories", "unused"];
+
+/// The filter of the ignored performance tests: a test whose name, below its
+/// binary, is `perf_…` or ends a module path with one.
+const PERF_TESTS: &str = "test(/(^|::)perf_/)";
 
 /// The workflow's inputs.
 #[derive(Debug, Default, PartialEq)]
@@ -217,6 +227,12 @@ impl Inputs {
                 .map(|word| (*word).to_owned())
                 .collect::<Vec<_>>()
         };
+        if verb == "perf" {
+            let (packages, others) = packages_and_others(rest)?;
+            if !packages.is_empty() {
+                return self.perf_tests(packages, others);
+            }
+        }
         let mut command = Vec::new();
         match verb.as_str() {
             "test" | "stress" if verb == "stress" || self.count.is_some() => {
@@ -319,6 +335,44 @@ impl Inputs {
         words
     }
 
+    /// `perf -p CRATE…`: the crates' ignored `perf_` tests, in a release
+    /// build, one at a time and with their output shown, and nothing else.
+    /// A word after the crates narrows them further (nextest ANDs a test
+    /// name with the filter).
+    fn perf_tests(&self, packages: Vec<String>, others: Vec<String>) -> Result<Vec<String>> {
+        if self.count.is_some() {
+            return Err(
+                "`--count` repeats a stress run: `perf -p CRATE` runs each perf test once"
+                    .to_owned(),
+            );
+        }
+        let profile = if self.profile == "dist" {
+            "dist"
+        } else {
+            "release"
+        };
+        let mut command: Vec<String> = ["test", "--cargo-profile", profile, "--profile", "ci"]
+            .map(str::to_owned)
+            .to_vec();
+        for package in packages {
+            command.extend(["-p".to_owned(), package]);
+        }
+        command.extend(
+            [
+                "--run-ignored",
+                "only",
+                "-E",
+                PERF_TESTS,
+                "--no-capture",
+                "--test-threads",
+                "1",
+            ]
+            .map(str::to_owned),
+        );
+        command.extend(others);
+        Ok(command)
+    }
+
     /// The A/B run: `ab` against the tree the workflow checked out.
     fn ab(&self, verb: &str, rest: &[String], against: &str) -> Result<Vec<String>> {
         if verb != "test" || self.profile != "ci" {
@@ -331,9 +385,18 @@ impl Inputs {
         if self.load.is_some() || self.cores.is_some() {
             return Err("`--load` and `--cores` go with a stress run, not an A/B run".to_owned());
         }
-        let mut command: Vec<String> = ["ab", "--base", AB_BASE, "--label", against, "--top", "20"]
-            .map(str::to_owned)
-            .to_vec();
+        let mut command: Vec<String> = [
+            "ab",
+            "--base",
+            AB_BASE,
+            "--label",
+            against,
+            "--top",
+            "20",
+            "--keep-going",
+        ]
+        .map(str::to_owned)
+        .to_vec();
         if let Some(count) = self.count {
             command.extend(["--count".to_owned(), count.max(2).to_string()]);
         }
@@ -560,12 +623,12 @@ mod tests {
                 "--filter",
                 "test(/slow/)"
             ]),
-            Ok("ab --base ../ab-base --label main --top 20 --count 6 -p cortex-core -- -E test(/slow/)"
+            Ok("ab --base ../ab-base --label main --top 20 --keep-going --count 6 -p cortex-core -- -E test(/slow/)"
                 .to_owned())
         );
         assert_eq!(
             try_command(&["--command", "test", "--against", "origin/main"]),
-            Ok("ab --base ../ab-base --label origin/main --top 20".to_owned())
+            Ok("ab --base ../ab-base --label origin/main --top 20 --keep-going".to_owned())
         );
         for (arguments, expected) in [
             (
@@ -614,6 +677,69 @@ mod tests {
             try_command(&["--command", "ci --tiers -p cortex-llm"]),
             Ok("ci --tiers -p cortex-llm".to_owned())
         );
+    }
+
+    #[test]
+    fn perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else() {
+        let tests = "--run-ignored only -E test(/(^|::)perf_/) --no-capture --test-threads 1";
+        assert_eq!(
+            try_command(&["--command", "perf -p cortex-index"]),
+            Ok(format!(
+                "test --cargo-profile release --profile ci -p cortex-index {tests}"
+            ))
+        );
+        // The workflow's own default profile is `ci`: still a release build.
+        assert_eq!(
+            try_command(&[
+                "--command",
+                "perf --package=cortex-index -pcortex-session",
+                "--profile",
+                "ci"
+            ]),
+            Ok(format!(
+                "test --cargo-profile release --profile ci -p cortex-index -p cortex-session {tests}"
+            ))
+        );
+        assert_eq!(
+            try_command(&["--command", "perf -p cortex-index", "--profile", "dist"]),
+            Ok(format!(
+                "test --cargo-profile dist --profile ci -p cortex-index {tests}"
+            ))
+        );
+        // A name after the crate narrows the tests: nextest takes a test that
+        // matches the name and the filter.
+        assert_eq!(
+            try_command(&["--command", "perf -p cortex-index warm"]),
+            Ok(format!(
+                "test --cargo-profile release --profile ci -p cortex-index {tests} warm"
+            ))
+        );
+        // Without a crate it is step 20's measurement, as it was.
+        assert_eq!(
+            try_command(&["--command", "perf --only editor"]),
+            Ok("perf --only editor".to_owned())
+        );
+        for (arguments, expected) in [
+            (
+                &["--command", "perf -p cortex-index", "--count", "3"][..],
+                "runs each perf test once",
+            ),
+            (
+                &["--command", "perf -p cortex-index", "--filter", "test(x)"],
+                "goes with `test` or `stress`",
+            ),
+            (
+                &["--command", "perf -p cortex-index", "--load", "2"],
+                "go with a stress run",
+            ),
+            (
+                &["--command", "perf -p cortex-index", "--against", "main"],
+                "goes with `test`",
+            ),
+        ] {
+            let error = try_command(arguments).unwrap_err();
+            assert!(error.contains(expected), "{arguments:?}: {error}");
+        }
     }
 
     #[test]

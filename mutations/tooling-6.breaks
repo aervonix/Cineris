@@ -1,0 +1,198 @@
+# The sixth tooling step: `ab --keep-going`, `ci-log` and the perf preset of
+# `try`. Written with the code, and run with `cargo xtask mutate tooling-6`.
+
+# ------------------------------------------------------------ ab --keep-going
+
+[break] ab-counts-a-failed-run-as-finished
+rule: A run that failed is a failed attempt, whatever report it left; only a finished one is compared.
+file: xtask/src/ab.rs
+in: attempt_of
+find: Err(error) => Ok(Attempt::Failed(failure_of(report.ok().as_deref(), error)))
+replace: Err(_) => report.map(Attempt::Finished)
+caught-by:
+    ab::tests::a_run_that_failed_is_a_failed_attempt_whatever_its_report_says
+
+[break] ab-compares-the-numbers-of-the-wrong-rounds
+rule: The rounds both sides finished keep their own numbers in the table, counted from 1.
+file: xtask/src/ab.rs
+in: finished_by_both
+find: compared.numbers.push(index + 1);
+replace: compared.numbers.push(compared.numbers.len() + 1);
+caught-by:
+    ab::tests::only_the_rounds_both_sides_finished_are_compared
+
+[break] ab-takes-the-heads-runs-from-the-base
+rule: Each side's runs are its own.
+file: xtask/src/ab.rs
+in: finished_by_both
+find: compared.head.push(head.clone());
+replace: compared.head.push(base.clone());
+caught-by:
+    ab::tests::only_the_rounds_both_sides_finished_are_compared
+
+[break] ab-lists-no-failures-for-a-clean-run-wrongly
+rule: A run with no failed round prints no list of them.
+file: xtask/src/ab.rs
+in: failed_rounds
+find: if text.is_empty() {
+replace: if false {
+caught-by:
+    ab::tests::the_rounds_that_failed_are_listed_with_their_tests_and_a_clean_run_has_no_list
+
+[break] ab-ends-well-with-a-round-left-out
+rule: A run with a round left out of the comparison ends as a failure, so that the job is red.
+file: xtask/src/ab.rs
+in: conclusion
+find: if compared < rounds {
+replace: if compared > rounds {
+caught-by:
+    ab::tests::a_run_with_a_round_left_out_ends_as_a_failure_and_one_without_does_not
+
+[break] ab-names-no-test-of-a-failed-run
+rule: A failed run's list names the tests its report says failed.
+file: xtask/src/ab.rs
+in: failure_of
+find: .filter(|case| case.failed)
+replace: .filter(|case| !case.failed)
+caught-by:
+    ab::tests::a_failed_run_names_the_tests_its_report_says_failed
+
+[break] ab-keeps-going-without-being-asked
+rule: Without --keep-going the first failing run is the error.
+file: xtask/src/ab.rs
+in: Request::parse
+find: "--keep-going" => request.keep_going = true,
+replace: "--keep-going" => request.keep_going = false,
+caught-by:
+    ab::tests::a_request_may_ask_to_keep_going
+
+[break] try-does-not-keep-going-in-an-ab-run
+rule: An `against` run of `try` passes --keep-going, so that a run on a runner is not lost to a failing test.
+file: xtask/src/try_run.rs
+in: ab
+find: "--keep-going"
+replace: "--label"
+caught-by:
+    try_run::tests::against_makes_a_test_run_an_ab_run_of_the_two_refs
+
+# --------------------------------------------------------------------- ci-log
+
+[break] ci-log-leaves-a-colour-open
+rule: Escape codes are taken out of a log: a sequence ends at its final byte, `@` to `~`.
+file: xtask/src/ci_log.rs
+in: strip_ansi
+find: ('@'..='~').contains(&next)
+replace: ('A'..='Z').contains(&next)
+caught-by:
+    ci_log::tests::escape_codes_are_taken_out_and_the_text_between_them_is_not
+
+[break] ci-log-skips-the-jobs-that-timed-out
+rule: A run's failed jobs are those that failed and those that timed out.
+file: xtask/src/ci_log.rs
+in: Job::failed
+find: Some("failure" | "timed_out")
+replace: Some("failure")
+caught-by:
+    ci_log::tests::the_jobs_are_read_and_a_failed_run_is_its_failed_jobs
+
+[break] ci-log-names-a-job-by-its-exact-case
+rule: A job's name given to --job is part of the job's name, in any case.
+file: xtask/src/ci_log.rs
+in: choose
+find: let name = job.name.to_lowercase();
+replace: let name = job.name.clone();
+caught-by:
+    ci_log::tests::the_jobs_are_read_and_a_failed_run_is_its_failed_jobs
+
+[break] ci-log-repeats-the-lines-between-matches
+rule: A line is printed once, where two matches' neighbours overlap.
+file: xtask/src/ci_log.rs
+in: grep
+find: let from = at.saturating_sub(context).max(next);
+replace: let from = at.saturating_sub(context);
+caught-by:
+    ci_log::tests::grep_shows_each_match_with_its_neighbours_and_marks_the_gaps
+
+[break] ci-log-tries-a-forbidden-run-as-a-job
+rule: Only an answer that says GitHub knows no such run sends the id to be tried as a job.
+file: xtask/src/ci_log.rs
+in: not_found
+find: error.contains("404") || error.contains("Not Found")
+replace: true
+caught-by:
+    ci_log::tests::only_a_missing_run_sends_the_id_to_be_tried_as_a_job
+
+[break] ci-log-pattern-does-not-anchor-the-end
+rule: `$` matches only at the end of a line.
+file: xtask/src/pattern.rs
+in: Matcher::atom
+find: Atom::End => at == self.text.len() && then(at),
+replace: Atom::End => then(at),
+caught-by:
+    pattern::tests::a_pattern_matches_anywhere_in_a_line_unless_it_is_anchored
+
+[break] ci-log-pattern-repeats-without-giving-back
+rule: A repeat gives back what the rest of the pattern needs.
+file: xtask/src/pattern.rs
+in: Matcher::repeat
+find: count >= piece.min && self.sequence(rest, at, then)
+replace: count >= piece.min && at == usize::MAX && self.sequence(rest, at, then)
+caught-by:
+    pattern::tests::marks_classes_and_repeats_are_read_as_the_usual_syntax_has_them
+    pattern::tests::groups_and_alternatives_take_the_longest_way_that_lets_the_rest_match
+
+# ------------------------------------------------------------ try's perf preset
+
+[break] try-perf-runs-the-ignored-tests-and-the-others
+rule: The preset runs the ignored tests only.
+file: xtask/src/try_run.rs
+in: perf_tests
+find: "--run-ignored"
+replace: "--include-ignored"
+caught-by:
+    try_run::tests::perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else
+
+[break] try-perf-builds-in-the-ci-profile
+rule: The preset builds in release, whatever the workflow's default profile is.
+file: xtask/src/try_run.rs
+in: perf_tests
+find: if self.profile == "dist" { "dist" } else { "release" }
+replace: if self.profile == "dist" { "dist" } else { self.profile.as_str() }
+caught-by:
+    try_run::tests::perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else
+
+[break] try-perf-runs-the-tests-together
+rule: The perf tests run one at a time.
+file: xtask/src/try_run.rs
+in: perf_tests
+find: "--test-threads"
+replace: "--threads"
+caught-by:
+    try_run::tests::perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else
+
+[break] try-perf-filter-takes-any-test
+rule: The preset's filter takes only tests named perf_ at the end of a module path.
+file: xtask/src/try_run.rs
+find: "test(/(^|::)perf_/)"
+replace: "test(/perf/)"
+caught-by:
+    try_run::tests::perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else
+
+[break] try-perf-with-a-crate-is-the-terminal-demo
+rule: `perf` with a crate is the preset, and without one step 20's measurement.
+file: xtask/src/try_run.rs
+in: command
+find: if !packages.is_empty() {
+replace: if packages.is_empty() {
+caught-by:
+    try_run::tests::perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else
+    try_run::tests::perf_and_ci_take_their_words_as_they_are
+
+[break] try-perf-repeats-with-a-count
+rule: The preset runs each perf test once: a count is refused, not read as a stress run.
+file: xtask/src/try_run.rs
+in: perf_tests
+find: if self.count.is_some() {
+replace: if false {
+caught-by:
+    try_run::tests::perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else
