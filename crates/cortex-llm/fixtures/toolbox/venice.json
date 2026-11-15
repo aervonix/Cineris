@@ -94,6 +94,33 @@
     },
     {
       "function": {
+        "description": "Show the structure of a file or a directory without its content: each definition (function, type, class, method, constant, heading) with its line number, nested ones indented. For a directory, the outlines of its files, down to `depth`. Outlines are approximate: they are found by reading lines, not by parsing. Use it to find where something is, then `read` with `offset` for the lines you need.",
+        "name": "outline",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "depth": {
+              "description": "For a directory: how many levels down to go. 1, its own files, unless given.",
+              "maximum": 8,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "path": {
+              "description": "A file or a directory in the workspace.",
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
         "description": "Keep the plan for the current work: a short task list the user can see and edit while you work. Each call sends the full list and replaces the plan. Give each item a short `id` that stays the same from call to call, its `text` in one line, and its `status`. Mark an item `active` when you start it and `done` when it is finished. The user may reorder, reword, skip, add or remove items; you are told when they do, and if they did since you last saw the plan, your call replaces nothing and returns the current plan to work from.",
         "name": "plan",
         "parameters": {
@@ -327,6 +354,10 @@
               "description": "The directory to run in. Defaults to the workspace root.",
               "minLength": 1,
               "type": "string"
+            },
+            "sandbox": {
+              "description": "Leave out, or true, to run in the sandbox. false runs the command outside it, with the user's full rights, after the user approves: only for a command the sandbox blocked.",
+              "type": "boolean"
             },
             "timeout_ms": {
               "description": "The time limit in milliseconds. 120000 unless given, and at most 1800000.",
