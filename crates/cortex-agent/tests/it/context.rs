@@ -401,6 +401,45 @@ fn a_nested_instruction_file_under_a_name_shown_escaped_is_not_told_removed() {
     assert!(!notices[0].contains('\u{200C}'));
 }
 
+/// A nested instruction file under a name that holds `\n` as two
+/// characters, which [`cortex_base::unescape`] reads as a line break, is
+/// found by its name as it is and not told removed (the independent review
+/// of step 18's fixes). On Unix only: on Windows `\` parts a path.
+#[cfg(unix)]
+#[test]
+fn a_nested_instruction_file_under_a_name_with_a_backslash_is_not_told_removed() {
+    let world = World::new(
+        "instructions_nested_backslash",
+        [
+            calls(&[(
+                "c1",
+                "read",
+                json!({"path": "src/a\\nb/handler.rs", "record": true}),
+            )]),
+            says("Done."),
+            says("Again."),
+        ],
+    );
+    let rig = Setup::new(&world).start(&world);
+    rig.instructions.set(
+        &root_file(&rig, "src/a\\nb/AGENTS.md"),
+        "Return JSON errors.",
+    );
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+        rig.prompt("again");
+        rig.events.turns(2).await;
+    });
+    let notices = notice_texts(&rig);
+    assert_eq!(notices.len(), 1, "{notices:#?}");
+    assert!(
+        notices[0].starts_with("Instruction file `src/a\\nb/AGENTS.md` applies"),
+        "{}",
+        notices[0]
+    );
+}
+
 /// A nested instruction file that is there and is not read (the core's
 /// reader refuses a link out of the workspace) is warned of by its name,
 /// once: its directory is looked at once. The review of step 15 found it

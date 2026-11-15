@@ -1,9 +1,9 @@
-# The fixes of the independent review of step 18: the cache that holds what
-# the map shows and is read once a map (finding 1), the map's ranking
-# (finding 6), the one escape for names and lines from the workspace
-# (findings 3 to 5, and the open item on names that act unseen), the
-# start-up check (finding 9), the map's wait (finding 10) and the map's
-# state in an epoch (finding 11).
+# The fixes of the independent review of step 18, its findings numbered as
+# its report numbers them: the cache that holds what the map shows and is
+# read once a map (finding 1), the map's ranking (finding 5), the one
+# escape for names and lines from the workspace (findings 3 and 4, and the
+# open item on names that act unseen), the start-up check (finding 8), the
+# map's wait (finding 9) and the map's state in an epoch (finding 10).
 
 # ---------------------------------------------------------------- finding 1
 
@@ -53,7 +53,7 @@ replace: self.index.map(&request)
 caught-by:
     cortex-core repo_map::tests::a_map_asked_for_with_a_pass_is_made_from_what_the_pass_kept
 
-# ---------------------------------------------------------------- finding 6
+# ---------------------------------------------------------------- finding 5
 
 [break] the-map-shows-lockfiles-and-licences
 rule: A lockfile, a licence, a changelog or a merge's leftover that Markdown or the fallback outlines is never shown.
@@ -102,7 +102,7 @@ replace: .cmp(&cache.records[other].top)
 caught-by:
     cortex-index::it map::the_map_shows_the_trees_breadth_before_one_directorys_depth
 
-# -------------------------------------------------------- findings 3 to 5
+# --------------------------------------------------------- findings 3 and 4
 
 [break] a-format-character-acts-seen
 rule: Every format character (Unicode's Cf) is written as an escape, the ones that do not render as nothing (U+FFF9, U+0600) too.
@@ -212,7 +212,7 @@ replace: #[error("`{path}` leads out of the directory it is relative to")]
 caught-by:
     cortex-base::it paths::a_refusal_writes_the_path_it_names_as_an_escape
 
-# ---------------------------------------------------------------- finding 9
+# ---------------------------------------------------------------- finding 8
 
 [break] the-index-starts-while-the-session-is-assembled
 rule: The index's first pass starts once the session's loop runs, never while the session is put together (the independent review of step 18's break).
@@ -223,7 +223,7 @@ replace: if let Some(repo) = &repo { repo.warm(); } let main = models.main().clo
 caught-by:
     cortex-core::it index::the_index_is_not_touched_until_the_session_is_open
 
-# --------------------------------------------------------------- finding 10
+# ---------------------------------------------------------------- finding 9
 
 [break] a-project-may-set-the-maps-wait
 rule: The map's wait is the user's alone: a repository's file must not make the sessions in it wait.
@@ -251,7 +251,7 @@ replace: let number = match value { Value::Integer(number) => Some(*number as f6
 caught-by:
     cortex-config validate::tests::a_length_of_time_out_of_range_is_an_error_in_milliseconds
 
-# --------------------------------------------------------------- finding 11
+# --------------------------------------------------------------- finding 10
 
 [break] a-change-of-history-keeps-the-maps-state
 rule: A change of history forgets what the loop knew of the map: the epoch's number may come again for another history.
@@ -280,7 +280,7 @@ replace: if false {
 caught-by:
     cortex-agent::it map::a_source_that_drops_every_answer_is_asked_a_bounded_number_of_times
 
-# ------------------------------------------- the twins of findings 3 to 5
+# -------------------------------------------- the twins of findings 3 and 4
 
 [break] a-permission-reason-names-a-path-raw
 rule: A permission reason, which the model reads in a denial or a refusal, names its path as an escape.
@@ -343,8 +343,8 @@ caught-by:
 rule: A name the model was shown escaped leads back to its file: the path resolver reads the escapes back when the path as written leads to nothing.
 file: crates/cortex-base/src/path/resolve.rs
 in: PathResolver::resolve
-find: if !matches!(&literal, Ok(found) if found.exists())
-replace: if false
+find: && (missing == 0 || missing < literal_missing)
+replace: && false
 packages: cortex-base, cortex-tools
 caught-by:
     cortex-base::it paths::a_name_shown_escaped_resolves_to_its_file
@@ -380,8 +380,9 @@ caught-by:
 [break] an-instruction-files-key-is-joined-as-shown
 rule: The key of an instruction file the model was given is its name as shown, escaped, and leads to the file read back.
 file: crates/cortex-agent/src/turn/epochs.rs
-find: root.join(&cortex_base::unescape(shown))
-replace: root.join(shown)
+in: instruction_changes
+find: let unescaped = cortex_base::unescape(shown);
+replace: let unescaped = std::borrow::Cow::Borrowed(shown.as_str());
 caught-by:
     cortex-agent::it context::a_nested_instruction_file_under_a_name_shown_escaped_is_not_told_removed
 
@@ -412,7 +413,7 @@ caught-by:
     cortex-tools walk::tests::a_skipped_entrys_reason_names_it_as_an_escape
     cortex-tools walk::tests::what_was_skipped_is_said_once_per_kind
 
-# --------------------------------------- findings 2, 7 and 8: the extractors
+# -------------------------------------- findings 2, 6 and 7: the extractors
 #
 # The fixes to step 18's extractors, from its review: no input recurses or
 # is scanned once per prefix (finding 2); five common shapes that had a
@@ -667,3 +668,104 @@ replace: if let Some(tick) = after.find('`').filter(|_| false)
 caught-by:
     cortex-index extract::tests::a_kotlin_function_named_in_backticks_is_outlined
     cortex-index::it outlines::kotlin
+
+# ------------------------------------------- the full review of the fixes
+
+[break] a-new-file-in-an-escaped-directory-goes-elsewhere
+rule: A path whose escapes read back reach further into directories that exist is taken that way: a new file goes into the directory the model was shown escaped, not a new one named by the escape.
+file: crates/cortex-base/src/path/resolve.rs
+in: PathResolver::resolve
+find: && (missing == 0 || missing < literal_missing)
+replace: && missing == 0
+caught-by:
+    cortex-base::it paths::a_name_shown_escaped_resolves_to_its_file
+
+[break] jsx-text-after-a-tag-starts-a-regex
+rule: A `/` after `>` is JSX text, not a regular expression, unless the `>` ends an arrow.
+file: crates/cortex-index/src/lex.rs
+in: regex_may_start
+find: b'>' => return previous == Some(b'='),
+replace: b'>' => return true,
+caught-by:
+    cortex-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
+
+[break] a-postfix-increment-starts-a-regex
+rule: A `/` after `++` or `--` is a division: they end an operand.
+file: crates/cortex-index/src/lex.rs
+in: regex_may_start
+find: b'+' | b'-' => return previous != Some(before[last]),
+replace: b'+' | b'-' => return true,
+caught-by:
+    cortex-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
+
+[break] a-non-null-assertion-starts-a-regex
+rule: A `/` after a `!` that follows a name or a closing bracket (TypeScript's non-null assertion) is a division.
+file: crates/cortex-index/src/lex.rs
+in: regex_may_start
+find: b'!' => {
+replace: b'!' => return true, b'\0' => {
+caught-by:
+    cortex-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
+
+[break] a-property-named-as-a-keyword-starts-a-regex
+rule: A `/` after a keyword that follows a `.` is a division: the word is a property.
+file: crates/cortex-index/src/lex.rs
+in: regex_may_start
+find: || before[start - 1] == b'.')
+replace: || false)
+caught-by:
+    cortex-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
+
+[break] a-shift-in-shell-arithmetic-is-a-heredoc
+rule: `<<` inside a shell's `(( ))` is a shift, not a heredoc, whatever follows it.
+file: crates/cortex-index/src/lex.rs
+in: Lexer::code_at
+find: && !(syntax.heredocs == Heredocs::Shell && self.arithmetic.open_at(code, at))
+replace: && true
+caught-by:
+    cortex-index lex::tests::heredocs_are_skipped_to_their_tag
+
+[break] a-heredoc-tag-is-unbounded
+rule: A heredoc's tag longer than a name is not one: the lexer would hold it for every line after.
+file: crates/cortex-index/src/lex.rs
+in: heredoc_at
+find: if tag.len() > NAME_CHARS {
+replace: if tag.len() > NAME_CHARS * 2 {
+caught-by:
+    cortex-index lex::tests::heredocs_are_skipped_to_their_tag
+
+[break] a-pass-asks-the-gate-for-each-path
+rule: A pass takes its gate once at its start (`Gate::for_pass`), so that finding the engine in force is not paid for every path.
+file: crates/cortex-index/src/pass.rs
+in: Index::pass_and_keep
+find: &walk::for_pass(&self.gate)
+replace: &self.gate
+caught-by:
+    cortex-index::it index::a_pass_and_a_map_each_take_the_gate_once
+
+[break] a-map-asks-the-gate-for-each-path
+rule: A map takes its gate once at its start, as a pass does.
+file: crates/cortex-index/src/pass.rs
+in: Index::gate_for_pass
+find: walk::for_pass(&self.gate)
+replace: Arc::clone(&self.gate)
+caught-by:
+    cortex-index::it index::a_pass_and_a_map_each_take_the_gate_once
+
+[break] an-instruction-name-with-a-backslash-is-told-removed
+rule: A nested instruction file's name is tried as it is before it is read back, so a name that holds `\n` as two characters is not told removed.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: instruction_changes
+find: std::borrow::Cow::Owned(_) => root.join(shown).ok(),
+replace: std::borrow::Cow::Owned(_) => None,
+caught-by:
+    cortex-agent::it context::a_nested_instruction_file_under_a_name_with_a_backslash_is_not_told_removed
+
+[break] a-glob-copied-from-an-escaped-name-matches-nothing
+rule: A glob that holds a name as the model was shown it, escaped, matches that name.
+file: crates/cortex-tools/src/walk.rs
+in: GlobFilter::matches
+find: .is_some_and(|matcher| matcher.is_match(candidate))
+replace: .is_some_and(|_| false)
+caught-by:
+    cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves

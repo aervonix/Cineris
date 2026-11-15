@@ -255,24 +255,32 @@ impl PathResolver {
     /// - **A name the model was shown escaped** ([`ResolvedPath::shown`],
     ///   [`crate::visible`]) leads back to its file: when the path as written
     ///   leads to nothing, the same path with the escapes read back
-    ///   ([`crate::unescape`]) is tried, and taken when it leads to
-    ///   something. A file named with a zero-width joiner or a right-to-left
+    ///   ([`crate::unescape`]) is tried, and taken when more of it exists:
+    ///   all of it, or more of its leading directories than of the path as
+    ///   written. A file named with a zero-width joiner or a right-to-left
     ///   mark, which is shown as `\u{200d}` or `\u{200f}`, is reached by that
-    ///   spelling (found by the independent review of step 18's fixes).
+    ///   spelling, and so is a new file in a directory so named (found by
+    ///   the independent review of step 18's fixes).
     pub fn resolve(&self, input: &str) -> Result<ResolvedPath, PathError> {
         let literal = self.resolve_written(input);
-        if !matches!(&literal, Ok(found) if found.exists())
+        let literal_missing = match &literal {
+            Ok((_, 0)) => None,
+            Ok((_, missing)) => Some(*missing),
+            Err(_) => Some(usize::MAX),
+        };
+        if let Some(literal_missing) = literal_missing
             && let std::borrow::Cow::Owned(unescaped) = crate::visible::unescape(input)
-            && let Ok(found) = self.resolve_written(&unescaped)
-            && found.exists()
+            && let Ok((found, missing)) = self.resolve_written(&unescaped)
+            && (missing == 0 || missing < literal_missing)
         {
             return Ok(found);
         }
-        literal
+        literal.map(|(found, _)| found)
     }
 
-    /// [`PathResolver::resolve`] of the path exactly as written.
-    fn resolve_written(&self, input: &str) -> Result<ResolvedPath, PathError> {
+    /// [`PathResolver::resolve`] of the path exactly as written, with how
+    /// many of its last names do not exist.
+    fn resolve_written(&self, input: &str) -> Result<(ResolvedPath, usize), PathError> {
         let style = PathStyle::NATIVE;
         let (root, mut parts) = steps(input, style)?;
         let start = match root {
@@ -312,12 +320,15 @@ impl PathResolver {
             // Each name was checked when the path was read.
             abs = abs.join_rel(&RelPath::from_text(style, name.clone()));
         }
-        Ok(ResolvedPath {
-            abs,
-            relative,
-            exists,
-            names_a_directory,
-        })
+        Ok((
+            ResolvedPath {
+                abs,
+                relative,
+                exists,
+                names_a_directory,
+            },
+            missing.len(),
+        ))
     }
 }
 

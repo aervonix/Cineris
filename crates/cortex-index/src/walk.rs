@@ -72,6 +72,20 @@ pub trait Gate: Send + Sync {
     /// Whether the file or directory at `path`, a real location inside the
     /// workspace with no link in it followed, may be indexed.
     fn may_index(&self, path: &AbsPath) -> bool;
+
+    /// The gate one pass or one map asks, taken once at its start: for a
+    /// gate whose answers come from something that may be replaced (the
+    /// permission engine in force), so that what it costs to find that is
+    /// paid once and not for every path. `None`, the default, is this gate
+    /// itself.
+    fn for_pass(&self) -> Option<Arc<dyn Gate>> {
+        None
+    }
+}
+
+/// `gate` as one pass or one map asks it ([`Gate::for_pass`]).
+pub(crate) fn for_pass(gate: &Arc<dyn Gate>) -> Arc<dyn Gate> {
+    gate.for_pass().unwrap_or_else(|| Arc::clone(gate))
 }
 
 impl<F> Gate for F

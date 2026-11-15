@@ -65,13 +65,14 @@ impl Index {
 
     fn map_of(&self, cache: &CacheFile, request: &MapRequest) -> Option<String> {
         let root = self.root();
+        let gate = self.gate_for_pass();
         // A path, and every directory above it: the walk goes into no
         // directory the gate refuses.
         let allowed = |path: &str| {
             path.match_indices('/')
                 .map(|(at, _)| &path[..at])
                 .chain(std::iter::once(path))
-                .all(|part| root.join(part).is_ok_and(|abs| self.gate().may_index(&abs)))
+                .all(|part| root.join(part).is_ok_and(|abs| gate.may_index(&abs)))
         };
         render(cache, request, self.limits().max_files, &allowed)
     }
