@@ -13,7 +13,7 @@ use cortex_testkit::VTerm;
 use cortex_testkit::pty::Session;
 
 use super::demo::STATUS_MARK;
-use super::{DEMO, NOT_RESTORED, RESTORED, SHELL, STARTING, child_arguments, this_binary};
+use super::{DEMO, NOT_RESTORED, RESTORED, SHELL, STARTING, this_binary};
 
 /// A bound on every wait, which only a broken test reaches.
 const LIMIT: Duration = Duration::from_secs(20);
@@ -32,7 +32,7 @@ const FIRST_FRAME: Duration = if cfg!(windows) {
 const KEY_ECHO: Duration = Duration::from_millis(250);
 
 fn start(options: &str) -> Session {
-    Session::start(&this_binary(), &child_arguments(SHELL, options), 100, 30).answering()
+    Session::start(&this_binary(), &SHELL.arguments(options), 100, 30).answering()
 }
 
 /// Waits for the demo's first frame and checks it came in time, with no
@@ -192,7 +192,7 @@ fn record(vk: u32, unit: u32, state: u32) -> Vec<u8> {
 #[test]
 fn sys_keys_arrive_with_their_modifiers() {
     let mut session =
-        Session::start(&this_binary(), &child_arguments(DEMO, "rate=400"), 100, 30).answering();
+        Session::start(&this_binary(), &DEMO.arguments("rate=400"), 100, 30).answering();
     session.wait_for(LIMIT, "the first frame", |t| t.shows(STATUS_MARK));
 
     // A lone Escape is the Escape key once nothing follows it.
@@ -258,7 +258,7 @@ fn holds(haystack: &[u8], needle: &[u8]) -> bool {
 #[test]
 fn sys_after_ctrl_z_and_fg_everything_is_on_again() {
     let mut session =
-        Session::start(&this_binary(), &child_arguments(DEMO, "rate=400"), 100, 30).answering();
+        Session::start(&this_binary(), &DEMO.arguments("rate=400"), 100, 30).answering();
     session.wait_for(LIMIT, "the first frame", |t| {
         t.shows(STATUS_MARK) && t.modes().bracketed_paste && t.modes().win32_input
     });

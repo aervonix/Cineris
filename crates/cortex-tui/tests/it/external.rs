@@ -9,9 +9,7 @@ use std::time::Duration;
 
 use cortex_testkit::pty::Session;
 
-use crate::children::{
-    EDITOR_WAITING, LOST, NOT_RESTORED, RESTORED, SHELL, WAITING, child_arguments, this_binary,
-};
+use crate::children::{EDITOR_WAITING, LOST, NOT_RESTORED, RESTORED, SHELL, WAITING, this_binary};
 
 /// A bound on every wait, which only a broken test reaches.
 const LIMIT: Duration = Duration::from_secs(20);
@@ -34,7 +32,7 @@ fn run(scenario: &str, test: &str, editor: &Editor) -> String {
     let scratch = cortex_testkit::Scratch::outside("cortex-tui-external", test);
     let options = format!("{scenario}|{}", scratch.path().display());
     let mut session =
-        Session::start(&this_binary(), &child_arguments(SHELL, &options), 100, 30).answering();
+        Session::start(&this_binary(), &SHELL.arguments(&options), 100, 30).answering();
     if !matches!(editor, Editor::None) {
         session.wait_for(LIMIT, "the editor to wait for a line", |t| {
             t.shows(EDITOR_WAITING)

@@ -760,6 +760,75 @@ pub(crate) mod pty {
         check(unsafe { libc::kill(pid, signal) })?;
         Ok(())
     }
+
+    /// A signal set holding SIGINT alone.
+    fn interrupt_set() -> libc::sigset_t {
+        let mut set = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        // SAFETY: `sigemptyset` initialises the set before `sigaddset` reads
+        // it, and both only write the set they are given.
+        unsafe {
+            libc::sigemptyset(set.as_mut_ptr());
+            libc::sigaddset(set.as_mut_ptr(), libc::SIGINT);
+            set.assume_init()
+        }
+    }
+
+    /// Blocks SIGINT on the calling thread, sends it to that thread, and
+    /// returns the thread's mask before: the signal is then pending on the
+    /// thread, as one the kernel has not handed to a thread yet is.
+    pub(crate) fn interrupt_pending_here() -> io::Result<libc::sigset_t> {
+        let set = interrupt_set();
+        let mut previous = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        // SAFETY: `set` is initialised, and `previous` is filled by the call
+        // before it is read.
+        let blocked = unsafe {
+            libc::pthread_sigmask(libc::SIG_BLOCK, &raw const set, previous.as_mut_ptr())
+        };
+        if blocked != 0 {
+            return Err(io::Error::from_raw_os_error(blocked));
+        }
+        // SAFETY: filled by the call above, which succeeded.
+        let previous = unsafe { previous.assume_init() };
+        // SAFETY: `pthread_self` is this thread, and `pthread_kill` sends it
+        // a signal it blocks, which waits on it.
+        let sent = unsafe { libc::pthread_kill(libc::pthread_self(), libc::SIGINT) };
+        if sent != 0 {
+            // SAFETY: `previous` is the mask the call above returned.
+            unsafe {
+                libc::pthread_sigmask(libc::SIG_SETMASK, &raw const previous, std::ptr::null_mut())
+            };
+            return Err(io::Error::from_raw_os_error(sent));
+        }
+        Ok(previous)
+    }
+
+    /// Whether SIGINT is pending on the calling thread or the process.
+    pub(crate) fn interrupt_is_pending() -> bool {
+        let mut pending = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+        // SAFETY: `sigpending` fills the set it is given, and `sigismember`
+        // reads the filled set.
+        unsafe {
+            libc::sigpending(pending.as_mut_ptr()) == 0
+                && libc::sigismember(pending.as_ptr(), libc::SIGINT) == 1
+        }
+    }
+
+    /// Puts back the calling thread's mask `previous`: a signal it blocked
+    /// that is still pending is delivered now.
+    pub(crate) fn restore_mask(previous: &libc::sigset_t) {
+        // SAFETY: `previous` is a complete mask.
+        unsafe {
+            libc::pthread_sigmask(libc::SIG_SETMASK, previous, std::ptr::null_mut());
+        }
+    }
+
+    /// Raises SIGINT on the calling thread: its handler has run when this
+    /// returns.
+    pub(crate) fn raise_interrupt() -> io::Result<()> {
+        // SAFETY: `raise` reads nothing but its argument.
+        check(unsafe { libc::raise(libc::SIGINT) })?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

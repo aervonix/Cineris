@@ -92,8 +92,7 @@ pub(crate) fn press(input: &mut Input, binding: &str) -> Outcome {
 /// say so ([`children`]), and passes at once otherwise.
 #[test]
 fn child_entry() {
-    let arguments: Vec<String> = std::env::args().collect();
-    if let Some(options) = arguments.iter().find_map(|a| a.strip_prefix(DEMO)) {
+    if let Some(options) = DEMO.options() {
         let options = demo::Options::parse(options.split(',')).expect("the demo's options");
         demo::run(&options).expect("the demo runs");
         #[expect(clippy::exit, reason = "a child ends when the demo does")]
@@ -104,4 +103,5 @@ fn child_entry() {
 
 /// The argument that makes this binary the editor demo, with its options
 /// after it, separated by commas.
-pub(crate) const DEMO: &str = "cxtui-demo=";
+/// This binary as the editor demo, with its options, separated by commas.
+pub(crate) const DEMO: cortex_testkit::role::Role = cortex_testkit::role::Role::new("cxtui-demo=");

@@ -11,6 +11,7 @@
 //! | [`scratch`] | [`Scratch`]: a directory of a test's own, with files, a git repository when the test needs one, and nothing left behind. |
 //! | [`seed`] | The seed of a test whose order of events is seeded: 0 in an ordinary run, the next one for each repeat of `cargo xtask stress`, and printed so that a failure can be run again. |
 //! | [`children`] | Child processes for process tests: the test binary run again as a child, a grandchild or a child that will not stop, and a [`Roll`](children::Roll) that shows each one start and die. |
+//! | [`role`] | The test binary as a child in roles ([`Role`](role::Role)), a [`Report`](role::Report) file of what each child found, and a [`ModeShell`](role::ModeShell) that says whether the terminal's modes came back. For tests of a terminal. |
 //! | [`rerun`] | [`Rerun`](rerun::Rerun): the running test again in a child process, with a `PATH`, a working directory and variables of its own, for tests of how a program is found. |
 //! | [`exec`] | [`block_on`], which runs async code with no runtime, and [`join`], which runs two futures together. |
 //! | [`brief`] | [`brief`]: a long text in an assertion's message as its size and its two ends. |
@@ -53,6 +54,7 @@ pub mod protocol;
 pub mod provider;
 pub mod pty;
 pub mod rerun;
+pub mod role;
 pub mod schema;
 pub mod scratch;
 pub mod seed;

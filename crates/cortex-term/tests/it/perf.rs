@@ -29,7 +29,7 @@ use cortex_testkit::VTerm;
 use cortex_testkit::pty::Session;
 
 use super::demo::STATUS_MARK;
-use super::{DEMO, child_arguments, this_binary};
+use super::{DEMO, this_binary};
 
 const COLS: u16 = 120;
 const ROWS: u16 = 40;
@@ -52,7 +52,7 @@ fn demo(options: &[&str]) -> (String, Vec<String>) {
         Ok(program) if !program.is_empty() => {
             (program, options.iter().map(|o| (*o).to_owned()).collect())
         }
-        _ => (this_binary(), child_arguments(DEMO, &options.join(","))),
+        _ => (this_binary(), DEMO.arguments(&options.join(","))),
     }
 }
 
