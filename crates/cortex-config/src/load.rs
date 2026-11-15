@@ -300,6 +300,10 @@ pub struct Loaded {
     pub withheld: Vec<Withheld>,
     /// The profile that was applied.
     pub profile: Option<String>,
+    /// The profiles the project's own files define, by name, in order:
+    /// what trusting a project pins the rules of, whichever is selected
+    /// (since step 23).
+    pub project_profiles: Vec<String>,
     /// The directories the environment gives.
     pub dirs: Dirs,
     /// The files that were looked for, lowest layer first, and whether each
@@ -425,6 +429,14 @@ pub(crate) fn merge_layers(
     }
 
     let profile = apply_profile(options, layers, &mut merger, &mut diagnostics);
+    let mut project_profiles: Vec<String> = layers
+        .iter()
+        .filter(|layer| matches!(layer.kind, LayerKind::Project | LayerKind::ProjectLocal))
+        .filter_map(|layer| layer.document.table.get("profiles")?.as_table())
+        .flat_map(|profiles| profiles.keys().cloned())
+        .collect();
+    project_profiles.sort_unstable();
+    project_profiles.dedup();
     apply_environment(options, &mut merger, &mut diagnostics);
     for given in &options.overrides {
         apply_override(given, &mut merger, &mut diagnostics);
@@ -456,6 +468,7 @@ pub(crate) fn merge_layers(
         diagnostics,
         withheld: merger.withheld,
         profile,
+        project_profiles,
         dirs: options.dirs.clone(),
         files,
         values: merger.values,
