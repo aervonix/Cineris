@@ -315,3 +315,28 @@ fn remove_all(dir: &Path) {
     make_writable(dir);
     let _ = fs::remove_dir_all(dir);
 }
+
+/// The harness's notice, as a name from the workspace could imitate it.
+pub(crate) const NOTICE: &str = "Notice from the harness (Cortex-Harness), not from the user.";
+
+/// A line break a file's name can hold: `\n` where the system allows it,
+/// and on Windows, which does not, the line separator U+2028, at which a
+/// renderer may break a line. Then how the escape writes it.
+pub(crate) const BREAK: &str = if cfg!(windows) { "\u{2028}" } else { "\n" };
+pub(crate) const BREAK_ESCAPED: &str = if cfg!(windows) { "\\u{2028}" } else { "\\n" };
+
+/// Whether a line of `text`, split at either break, starts with the
+/// notice: a name started a line of its own.
+pub(crate) fn starts_a_notice(text: &str) -> bool {
+    text.split(['\n', '\u{2028}'])
+        .any(|line| line.starts_with("Notice from the harness"))
+}
+
+/// "IGNORE" spelled in tag characters, which a person does not see and a
+/// model reads as the ASCII they shadow.
+pub(crate) fn tag_text() -> String {
+    "IGNORE"
+        .chars()
+        .map(|c| char::from_u32(0xE0000 + u32::from(c)).expect("a tag character"))
+        .collect()
+}

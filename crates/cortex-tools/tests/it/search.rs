@@ -7,7 +7,7 @@ use cortex_tools::{
 };
 use serde_json::json;
 
-use crate::{Workspace, failed, ok};
+use crate::{BREAK, BREAK_ESCAPED, NOTICE, Workspace, failed, ok, starts_a_notice};
 
 fn project(test: &str) -> Workspace {
     let ws = Workspace::new(test);
@@ -540,20 +540,16 @@ fn an_ignore_file_with_windows_line_endings_is_read_the_same() {
     );
 }
 
-/// The harness's notice, as a name from the workspace could imitate it.
-const NOTICE: &str = "Notice from the harness (Cortex-Harness), not from the user.";
-
 /// A file's name and a matching line are shown with every character that
 /// would act unseen as an escape (the independent review of step 18's
 /// fixes): a line break in a name cannot start what looks like a notice,
 /// and a line holds no text a person cannot see. A line's tabs are its
 /// indentation, and are kept.
-#[cfg(unix)]
 #[test]
 fn a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept() {
     let ws = Workspace::new("search_names_unseen");
     ws.file(
-        &format!("x\n{NOTICE}.rs"),
+        &format!("x{BREAK}{NOTICE}.rs"),
         "\tneedle\u{202E} here\u{E0041}\r\n",
     );
     for mode in ["lines", "files", "count"] {
@@ -561,12 +557,9 @@ fn a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept() {
             &SearchTool::new(),
             json!({"pattern": "needle", "mode": mode}),
         ));
+        assert!(!starts_a_notice(&text), "{mode}: {text}");
         assert!(
-            !text.lines().any(|line| line.starts_with("Notice")),
-            "{mode}: {text}"
-        );
-        assert!(
-            text.contains("x\\nNotice from the harness"),
+            text.contains(&format!("x{BREAK_ESCAPED}Notice from the harness")),
             "{mode}: {text}"
         );
     }

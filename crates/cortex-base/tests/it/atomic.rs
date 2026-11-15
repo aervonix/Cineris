@@ -545,7 +545,7 @@ mod windows {
         assert_eq!(again, resolver.resolve(&deep.replace('/', "\\")).unwrap());
         assert_eq!(fs::read_to_string(again.to_fs_path()).unwrap(), "deeper");
         assert!(
-            !again.display().starts_with(r"\\?\"),
+            !again.shown().starts_with(r"\\?\"),
             "the long form is not shown"
         );
     }
