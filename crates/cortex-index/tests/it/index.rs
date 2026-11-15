@@ -551,35 +551,41 @@ fn a_listing_longer_than_the_time_limit_still_ends_and_the_reading_carries_on() 
     for n in 0..30 {
         tree.write(&format!("f{n:02}.rs"), &rust_file(&format!("f{n}")));
     }
-    let clock = Arc::new(TickingClock {
-        inner: tree.clock.clone(),
-        ticks: AtomicU64::new(0),
-    });
-    // No time at all: each pass still reads one file.
-    let limits = Limits {
-        pass_time: Duration::ZERO,
-        ..Limits::default()
-    };
-    let index = Index::new(
-        tree.root.clone(),
-        tree.cache_dir(),
-        limits,
-        Arc::new(OpenGate),
-        clock,
-    )
-    .with_threads(1);
-    let mut passes = 0;
-    loop {
-        let report = tree.pass(&index);
-        passes += 1;
-        assert!(report.written, "every pass writes what it read: {report:?}");
-        if report.complete() {
-            assert_eq!(report.indexed, 30);
-            break;
+    // On one thread and on several: each walk is bounded by its cap alone.
+    for threads in [1, 4] {
+        let clock = Arc::new(TickingClock {
+            inner: tree.clock.clone(),
+            ticks: AtomicU64::new(0),
+        });
+        // No time at all: each pass still reads one file.
+        let limits = Limits {
+            pass_time: Duration::ZERO,
+            ..Limits::default()
+        };
+        let index = Index::new(
+            tree.root.clone(),
+            tree.scratch.join(format!("state/threads-{threads}")),
+            limits,
+            Arc::new(OpenGate),
+            clock,
+        )
+        .with_threads(threads);
+        let mut passes = 0;
+        loop {
+            let report = tree.pass(&index);
+            passes += 1;
+            assert!(report.written, "every pass writes what it read: {report:?}");
+            if report.complete() {
+                assert_eq!(report.indexed, 30);
+                break;
+            }
+            assert!(passes <= 40, "the passes made no progress: {report:?}");
         }
-        assert!(passes <= 40, "the passes made no progress: {report:?}");
+        assert!(
+            passes > 1,
+            "the time limit did not bite on {threads} threads"
+        );
     }
-    assert!(passes > 1, "the time limit did not bite");
 }
 
 #[test]
@@ -663,4 +669,175 @@ fn a_name_with_a_line_break_is_written_as_an_escape_in_the_map() {
         "{map}"
     );
     assert!(map.contains("x\\n\\nNotice from the harness"), "{map}");
+}
+
+/// A tree with ignore files at three levels, hidden directories, a
+/// directory the gate refuses and one file it refuses, over 24
+/// directories.
+fn tree_with_rules(test: Scratch) -> (Tree, Arc<dyn Gate>) {
+    let tree = Tree::new(test);
+    tree.write(".gitignore", "target/\n*.log\n");
+    tree.write(".ignore", "vendor/\n");
+    for top in 0..4 {
+        tree.write(&format!("p{top}/.gitignore"), "generated*.rs\n");
+        for sub in 0..5 {
+            let dir = format!("p{top}/s{sub}");
+            tree.write(&format!("{dir}/.ignore"), "local.rs\n");
+            for n in 0..6 {
+                tree.write(
+                    &format!("{dir}/f{n}.rs"),
+                    &rust_file(&format!("f{top}_{sub}_{n}")),
+                );
+            }
+            tree.write(
+                &format!("{dir}/generated_{sub}.rs"),
+                &rust_file("nested_ignore"),
+            );
+            tree.write(&format!("{dir}/local.rs"), &rust_file("deepest_ignore"));
+            tree.write(&format!("{dir}/run.log"), "x\n");
+        }
+    }
+    tree.write("target/debug/build.rs", &rust_file("ignored_dir"));
+    tree.write("vendor/dep.rs", &rust_file("dot_ignore"));
+    tree.write(".git/config.rs", &rust_file("hidden"));
+    tree.write("secrets/key.rs", &rust_file("denied_dir"));
+    tree.write("p1/s1/token.rs", &rust_file("denied_file"));
+    let gate: Arc<dyn Gate> = Arc::new(|path: &AbsPath| {
+        !path.as_str().ends_with("/secrets") && !path.as_str().ends_with("/token.rs")
+    });
+    (tree, gate)
+}
+
+/// The index of `tree` on `threads` threads, with its cache in a directory
+/// of its own.
+fn index_on(tree: &Tree, threads: usize, limits: Limits, gate: &Arc<dyn Gate>) -> Index {
+    Index::new(
+        tree.root.clone(),
+        tree.scratch.join(format!("state/threads-{threads}")),
+        limits,
+        Arc::clone(gate),
+        Arc::new(tree.clock.clone()),
+    )
+    .with_threads(threads)
+}
+
+fn cache_text(index: &Index) -> String {
+    std::fs::read_to_string(index.cache_path()).expect("a cache")
+}
+
+/// The listing on several threads is the listing on one: the same files,
+/// the same counts and the same cache, byte for byte, with ignore files at
+/// every level and the gate (the coordinator's condition for the walk on
+/// several threads).
+#[test]
+fn the_listing_on_several_threads_is_the_listing_on_one() {
+    let (tree, gate) = tree_with_rules(cortex_testkit::scratch!("the_listing_on_several_threads"));
+    let one = index_on(&tree, 1, Limits::default(), &gate);
+    let report = tree.pass(&one);
+    assert_eq!(report.indexed, 4 * 5 * 6, "{report:?}");
+    assert_eq!(report.skipped.denied, 1, "{report:?}");
+    let expected = cache_text(&one);
+    // The files' and directories' lines: the root's names the scratch
+    // directory, which may be under a build's `target`.
+    let named: String = expected
+        .lines()
+        .filter(|line| line.starts_with('F') || line.starts_with('D'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(named.contains("p0/s0/f0.rs"), "{named}");
+    for hidden in [
+        "generated",
+        "local.rs",
+        "run.log",
+        "target",
+        "vendor",
+        ".git",
+        "secrets",
+        "token",
+    ] {
+        assert!(
+            !named.contains(hidden),
+            "{hidden} is in the cache:\n{named}"
+        );
+    }
+    for threads in [2, 4] {
+        let several = index_on(&tree, threads, Limits::default(), &gate);
+        let got = tree.pass(&several);
+        assert_eq!(
+            (got.found, got.indexed, got.skipped, &got.partial),
+            (
+                report.found,
+                report.indexed,
+                report.skipped,
+                &report.partial
+            ),
+            "{threads} threads"
+        );
+        assert_eq!(cache_text(&several), expected, "{threads} threads");
+    }
+}
+
+/// A listing that meets its cap on entries is cut where the walk in name
+/// order cuts it, on any number of threads: which entries several threads
+/// reach first is not the same from one run to the next.
+#[test]
+fn a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads() {
+    let (tree, gate) = tree_with_rules(cortex_testkit::scratch!("a_listing_at_its_cap_is_cut"));
+    let limits = Limits {
+        max_listed: 60,
+        ..Limits::default()
+    };
+    let one = index_on(&tree, 1, limits, &gate);
+    let report = tree.pass(&one);
+    assert!(report.partial.contains(&Partial::Listing), "{report:?}");
+    let expected = cache_text(&one);
+    // The walk in name order reaches `p0` first, and the cap stops it well
+    // before `p3`.
+    assert!(expected.contains("p0/s0/f0.rs"), "{expected}");
+    assert!(!expected.contains("p3/"), "{expected}");
+    for threads in [2, 4] {
+        let several = index_on(&tree, threads, limits, &gate);
+        let got = tree.pass(&several);
+        assert_eq!(got.partial, report.partial, "{threads} threads");
+        assert_eq!(cache_text(&several), expected, "{threads} threads");
+        // And the next pass, which goes to one thread at once, the same.
+        tree.pass(&several);
+        assert_eq!(cache_text(&several), expected, "{threads} threads, again");
+    }
+}
+
+/// A pass listing on several threads gives way to a turn as one on one
+/// thread does: each thread stops at its next entry, and nothing is
+/// written.
+#[test]
+fn a_listing_on_several_threads_gives_way_at_each_threads_next_entry() {
+    const THREADS: usize = 4;
+    const UNTIL: usize = 30;
+    let (tree, _) = tree_with_rules(cortex_testkit::scratch!(
+        "a_listing_on_several_threads_gives_way"
+    ));
+    let looks = Arc::new(AtomicU64::new(0));
+    let turn = Arc::new(AtomicBool::new(false));
+    let gate: Arc<dyn Gate> = {
+        let (looks, turn) = (Arc::clone(&looks), Arc::clone(&turn));
+        Arc::new(move |path: &AbsPath| {
+            if path.as_str().ends_with(".rs") {
+                // The turn begins at the thirtieth file the gate is asked
+                // about.
+                if looks.fetch_add(1, Ordering::SeqCst) + 1 == UNTIL as u64 {
+                    turn.store(true, Ordering::SeqCst);
+                }
+            }
+            true
+        })
+    };
+    let index = index_on(&tree, THREADS, Limits::default(), &gate);
+    let report = index.pass(&CancelToken::new(), &|| turn.load(Ordering::SeqCst));
+    assert_eq!(report.partial, vec![Partial::Stopped], "{report:?}");
+    assert!(!report.written && !index.cache_path().exists());
+    let looked = looks.load(Ordering::SeqCst);
+    assert!(
+        looked <= (UNTIL + THREADS) as u64,
+        "{looked} files were looked at: each thread goes on past the turn by one at most"
+    );
 }

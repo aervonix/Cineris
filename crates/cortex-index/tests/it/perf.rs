@@ -200,6 +200,40 @@ fn breakdown(tree: &Tree) {
     };
     let listing = median((0..5).map(|_| list(true)).collect());
     let bare = median((0..5).map(|_| list(false)).collect());
+    // The same rules on the threads a pass lists on: half the cores, four
+    // at most.
+    let threads =
+        std::thread::available_parallelism().map_or(1, |cores| (cores.get() / 2).clamp(1, 4));
+    let on_threads = median(
+        (0..5)
+            .map(|_| {
+                let start = Instant::now();
+                let mut builder = ignore::WalkBuilder::new(&root);
+                builder
+                    .follow_links(false)
+                    .standard_filters(false)
+                    .hidden(true)
+                    .ignore(true)
+                    .git_ignore(true)
+                    .git_exclude(true)
+                    .parents(true)
+                    .require_git(false)
+                    .git_global(false)
+                    .threads(threads);
+                let found = std::sync::atomic::AtomicUsize::new(0);
+                builder.build_parallel().run(|| {
+                    Box::new(|entry| {
+                        if entry.is_ok_and(|entry| entry.metadata().is_ok()) {
+                            found.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        ignore::WalkState::Continue
+                    })
+                });
+                assert!(found.into_inner() > 0);
+                ms(start.elapsed())
+            })
+            .collect(),
+    );
     let cache = tree.cache_dir().join(cortex_index::CACHE_FILE);
     let reads = (0..5)
         .map(|_| {
@@ -226,7 +260,7 @@ fn breakdown(tree: &Tree) {
         })
         .collect();
     println!(
-        "where it goes: the listing {listing:.1} ms ({bare:.1} ms without the ignore files), the cache read {:.1} ms, written {:.1} ms ({} bytes)",
+        "where it goes: the listing on one thread {listing:.1} ms ({bare:.1} ms without the ignore files), on {threads} threads {on_threads:.1} ms; the cache read {:.1} ms, written {:.1} ms ({} bytes)",
         median(reads),
         median(writes),
         bytes.len()

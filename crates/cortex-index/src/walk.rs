@@ -12,6 +12,11 @@
 //! - **Links are not followed** and not listed, wherever they point.
 //! - **A name the path rules refuse** (not valid Unicode, a Windows device
 //!   name) is stepped past, with everything under it.
+//! - **On several threads** (the pass's), each looking before each entry
+//!   whether to stop, and the files put in [`path_order`] after: the
+//!   listing a walk on one thread makes. One that meets its cap on entries
+//!   is made again on one thread, in name order, so that a cut listing is
+//!   the same on every machine.
 //! - **The caps:** a listing stops at [`Limits::max_listed`] entries (not at
 //!   the pass's time limit, which is the reading's). Past
 //!   [`Limits::max_files`] files, the shallowest of what was listed are
@@ -27,10 +32,11 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 
 use cortex_base::{AbsPath, CancelToken};
-use ignore::WalkBuilder;
+use ignore::{WalkBuilder, WalkState};
 
 /// The caps of a pass (`docs/architecture/15-efficiency.md`, "Cost
 /// control").
@@ -223,9 +229,17 @@ pub(crate) fn fs_path_of(root_fs: &Path, relative: &str) -> PathBuf {
 
 /// The order a listing and the cache keep files in: name by name, so that
 /// a directory's files sort together whatever the names' characters.
+///
+/// It compares the bytes with `/` taken as the least of them, below any
+/// byte a name can hold (a name holds no NUL): the same order as comparing
+/// the names one by one, without splitting the paths.
 #[must_use]
 pub fn path_order(one: &str, other: &str) -> Ordering {
-    one.split('/').cmp(other.split('/'))
+    let key = |byte: &u8| if *byte == b'/' { 0 } else { *byte };
+    one.as_bytes()
+        .iter()
+        .map(key)
+        .cmp(other.as_bytes().iter().map(key))
 }
 
 /// What tells a pass to stop between files.
@@ -300,15 +314,10 @@ fn parent_of(root_fs: &Path, root: &AbsPath, fs_parent: &Path) -> Option<Parent>
     })
 }
 
-/// Lists the workspace at `root`.
-pub(crate) fn list(
-    root: &AbsPath,
-    gate: &Arc<dyn Gate>,
-    limits: &Limits,
-    control: &Control<'_>,
-) -> Listing {
-    let root_fs = root.to_fs_path();
-    let mut builder = WalkBuilder::new(&root_fs);
+/// The walker over the workspace with the ignore rules and the gate: the
+/// same for the walk on one thread and the walk on several.
+fn walker(root_fs: &Path, root: &AbsPath, gate: &Arc<dyn Gate>) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root_fs);
     builder
         .follow_links(false)
         .hidden(true)
@@ -317,12 +326,9 @@ pub(crate) fn list(
         .git_exclude(true)
         .parents(true)
         .require_git(false)
-        .git_global(false)
-        // In name order, so that a listing cut at its cap is the same one
-        // on every machine, whatever order a directory gives its entries.
-        .sort_by_file_name(std::ffi::OsStr::cmp);
+        .git_global(false);
     let gate_root = root.clone();
-    let root_for_filter = root_fs.clone();
+    let root_for_filter = root_fs.to_path_buf();
     let filter_gate = Arc::clone(gate);
     // A directory the gate refuses is not gone into.
     builder.filter_entry(move |entry| {
@@ -341,81 +347,227 @@ pub(crate) fn list(
             .child(entry.file_name())
             .is_ok_and(|abs| filter_gate.may_index(&abs))
     });
+    builder
+}
 
-    let mut listing = Listing::default();
-    let mut all: Vec<Listed> = Vec::new();
-    let mut parent: Option<Parent> = None;
-    let mut entries = 0usize;
-    for entry in builder.build() {
-        if let Some(why) = control.stop_listing() {
-            listing.partial = Some(why);
-            break;
-        }
-        entries += 1;
-        if entries > limits.max_listed {
-            listing.partial = Some(Partial::Listing);
-            break;
-        }
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => {
-                listing.skipped.unreadable += 1;
-                continue;
-            }
+/// What a walk gathers: on several threads, one of these each.
+#[derive(Default)]
+struct Gathered {
+    files: Vec<Listed>,
+    skipped: Skipped,
+    /// The directory the last entry was in, so that a run of entries in one
+    /// directory has its path checked once.
+    parent: Option<Parent>,
+}
+
+impl Gathered {
+    /// Takes one entry of the walk: a file to index, or the reason it is
+    /// not one.
+    fn take(
+        &mut self,
+        entry: Result<ignore::DirEntry, ignore::Error>,
+        root_fs: &Path,
+        root: &AbsPath,
+        gate: &dyn Gate,
+    ) {
+        let Ok(entry) = entry else {
+            self.skipped.unreadable += 1;
+            return;
         };
         if entry.depth() == 0 {
-            continue;
+            return;
         }
         let Some(kind) = entry.file_type() else {
-            continue;
+            return;
         };
         if kind.is_symlink() {
-            listing.skipped.links += 1;
-            continue;
+            self.skipped.links += 1;
+            return;
         }
         if !kind.is_file() {
             // A directory is listed by the files under it; anything else
             // (a FIFO, a socket, a device) is not a file to read.
-            continue;
+            return;
         }
         let Some(fs_parent) = entry.path().parent() else {
-            continue;
+            return;
         };
-        if parent
+        if self
+            .parent
             .as_ref()
             .is_none_or(|known| known.fs_path != fs_parent)
         {
-            parent = parent_of(&root_fs, root, fs_parent);
+            self.parent = parent_of(root_fs, root, fs_parent);
         }
-        let Some(known) = parent.as_ref() else {
-            listing.skipped.refused += 1;
-            continue;
+        let Some(known) = self.parent.as_ref() else {
+            self.skipped.refused += 1;
+            return;
         };
         let Ok(abs) = known.abs.child(entry.file_name()) else {
-            listing.skipped.refused += 1;
-            continue;
+            self.skipped.refused += 1;
+            return;
         };
         if !gate.may_index(&abs) {
-            listing.skipped.denied += 1;
-            continue;
+            self.skipped.denied += 1;
+            return;
         }
         let Ok(metadata) = entry.metadata() else {
-            listing.skipped.unreadable += 1;
-            continue;
+            self.skipped.unreadable += 1;
+            return;
         };
         let Some(name) = abs.file_name() else {
-            continue;
+            return;
         };
         let relative = if known.relative.is_empty() {
             name.to_owned()
         } else {
             format!("{}/{name}", known.relative)
         };
-        all.push(Listed {
+        self.files.push(Listed {
             relative,
             depth: known.depth,
             stamp: Stamp::of(&metadata),
         });
+    }
+}
+
+/// A thread's [`Gathered`], handed over when the walk ends with it.
+struct HandedOver<'a> {
+    gathered: Gathered,
+    into: &'a std::sync::Mutex<Vec<Gathered>>,
+}
+
+impl Drop for HandedOver<'_> {
+    fn drop(&mut self) {
+        self.into
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(std::mem::take(&mut self.gathered));
+    }
+}
+
+/// Lists the workspace at `root`, on `threads` threads.
+///
+/// On several threads the entries come in no set order, and the files are
+/// put in [`path_order`] after, so the listing is the one a walk on one
+/// thread makes. A listing that reaches its cap on entries is made again
+/// on one thread, in name order: which entries several threads reach
+/// first differs from one run to the next, and the cut must be the same on
+/// every machine.
+pub(crate) fn list(
+    root: &AbsPath,
+    gate: &Arc<dyn Gate>,
+    limits: &Limits,
+    control: &Control<'_>,
+    threads: usize,
+) -> Listing {
+    let root_fs = root.to_fs_path();
+    if threads > 1
+        && let Some(listing) = list_on_threads(&root_fs, root, gate, limits, control, threads)
+    {
+        return listing;
+    }
+    list_in_order(&root_fs, root, gate, limits, control)
+}
+
+/// The walk on one thread, in name order.
+fn list_in_order(
+    root_fs: &Path,
+    root: &AbsPath,
+    gate: &Arc<dyn Gate>,
+    limits: &Limits,
+    control: &Control<'_>,
+) -> Listing {
+    let mut builder = walker(root_fs, root, gate);
+    // In name order, so that a listing cut at its cap is the same one on
+    // every machine, whatever order a directory gives its entries.
+    builder.sort_by_file_name(std::ffi::OsStr::cmp);
+    let mut gathered = Gathered::default();
+    let mut partial = None;
+    let mut entries = 0usize;
+    for entry in builder.build() {
+        if let Some(why) = control.stop_listing() {
+            partial = Some(why);
+            break;
+        }
+        entries += 1;
+        if entries > limits.max_listed {
+            partial = Some(Partial::Listing);
+            break;
+        }
+        gathered.take(entry, root_fs, root, &**gate);
+    }
+    finish(vec![gathered], partial, limits)
+}
+
+/// The walk on several threads; `None` when it reached the cap on entries,
+/// whose cut the walk in name order makes.
+fn list_on_threads(
+    root_fs: &Path,
+    root: &AbsPath,
+    gate: &Arc<dyn Gate>,
+    limits: &Limits,
+    control: &Control<'_>,
+    threads: usize,
+) -> Option<Listing> {
+    let entries = AtomicUsize::new(0);
+    let stopped = AtomicBool::new(false);
+    let capped = AtomicBool::new(false);
+    let handed = std::sync::Mutex::new(Vec::new());
+    let (entries, stopped, capped, handed) = (&entries, &stopped, &capped, &handed);
+    walker(root_fs, root, gate)
+        .threads(threads)
+        .build_parallel()
+        .run(|| {
+            let mut mine = HandedOver {
+                gathered: Gathered::default(),
+                into: handed,
+            };
+            Box::new(move |entry| {
+                // Each thread looks before each entry, as the walk on one
+                // thread does: a turn that begins stops them all at their
+                // next entry.
+                if control.stop_listing().is_some() {
+                    stopped.store(true, AtomicOrdering::SeqCst);
+                    return WalkState::Quit;
+                }
+                if entries.fetch_add(1, AtomicOrdering::SeqCst) >= limits.max_listed {
+                    capped.store(true, AtomicOrdering::SeqCst);
+                    return WalkState::Quit;
+                }
+                mine.gathered.take(entry, root_fs, root, &**gate);
+                WalkState::Continue
+            })
+        });
+    if capped.load(AtomicOrdering::SeqCst) {
+        return None;
+    }
+    let partial = stopped
+        .load(AtomicOrdering::SeqCst)
+        .then_some(Partial::Stopped);
+    let gathered = std::mem::take(
+        &mut *handed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    Some(finish(gathered, partial, limits))
+}
+
+/// The listing from what the walk gathered: the files in path order, each
+/// directory's count, and the cap on files.
+fn finish(gathered: Vec<Gathered>, partial: Option<Partial>, limits: &Limits) -> Listing {
+    let mut listing = Listing {
+        partial,
+        ..Listing::default()
+    };
+    let mut all: Vec<Listed> = Vec::new();
+    for part in gathered {
+        all.extend(part.files);
+        let skipped = &mut listing.skipped;
+        skipped.refused += part.skipped.refused;
+        skipped.denied += part.skipped.denied;
+        skipped.unreadable += part.skipped.unreadable;
+        skipped.links += part.skipped.links;
     }
 
     listing.found = all.len();

@@ -35,4 +35,4 @@ pub use lookup::{FileOutline, OutlineError};
 pub use map::{DEFAULT_TOKENS, MapRequest, NoRecentFiles, RecentFiles};
 pub use outline::{Entry, Kind, Outline};
 pub use pass::{CACHE_FILE, Index, PassReport};
-pub use walk::{Gate, Limits, OpenGate, Partial, Skipped, Stamp};
+pub use walk::{Gate, Limits, OpenGate, Partial, Skipped, Stamp, path_order};
