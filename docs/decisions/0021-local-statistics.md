@@ -19,7 +19,7 @@ Storing and querying statistics pulls against three budgets: start-up (nothing m
 
 ## Decision
 
-- Events are appended as JSON lines, one file per month, by the log-writer thread.
+- Events are appended as JSON lines, one file per month, by a writer thread. (**Amended in step 16:** a thread of the statistics' own, not the log's: the two queues fill at different rates, and a log line dropped is not an event dropped. Each is a bounded queue that drops and counts.)
 - A small aggregates file (counts and sums keyed by model, variant, tool and project) is rebuilt incrementally and is the only thing adaptive decisions read.
 - Nothing is read at start-up. The aggregates are loaded on first use.
 - Old months are folded into the aggregates and deleted after a retention period.

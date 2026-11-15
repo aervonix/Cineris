@@ -70,6 +70,13 @@ The statistics store already records one event per model request. For this view 
 
 **This costs nothing new at start-up.** The aggregates are read the first time the view, or an adaptive feature, needs them.
 
+**As built in step 16.** The request event carries all of the above, the cost as the loop priced it when the request ended. The aggregates' usage buckets are as described, with the speed tier among the keys, and time and tools beside them ([14-adaptation.md](14-adaptation.md), "Local statistics"). `usage/report` answers from them alone:
+
+- **Ranges:** the open session's own figures for `session`; today, the week from `usage.week_start` (or the last 7 days with `usage.ranges = "rolling"`), the month from its first day (or the last 30) and everything for `all`. Days are counted in the local zone: `cortex_base::Zone`, from `TZ` or `/etc/localtime` on Linux and from the system on Windows.
+- **Groupings:** any of provider, model, project, source and speed, outermost first, with each row's turns' time when the grouping is of provider, model or project.
+
+`cortex usage [--range today|week|month|all] [--by G,…] [--project KEY] [--json] [--refresh]` prints it. `cortex stats [show|reset]` shows or deletes the files. Measured: [../performance-budgets.md](../performance-budgets.md).
+
 **If statistics are disabled** (`stats.enabled = false`), the session range still works, from the session itself, and the other ranges say that recording is off.
 
 ## Cost, and what kind of number it is
@@ -108,8 +115,8 @@ Response headers say what is left only after a request has been made, and some f
 
 | Rule | What it means in practice |
 |---|---|
-| **Opt-in per provider, off by default** | `usage.refresh = ["anthropic"]` names the providers the user allows. It is a user-only setting: a project's configuration cannot turn it on. With the list empty, which is the default, the view makes no request at all. |
-| **Only the provider's documented usage endpoint** | The endpoint must be one the provider documents for use with an API key or an official sign-in. A provider without one has no refresh and cannot be listed. No scraping, no undocumented endpoint. |
+| **Opt-in per provider, off by default** | `usage.refresh = ["openrouter"]` names the providers the user allows. It is a user-only setting: a project's configuration cannot turn it on. With the list empty, which is the default, the view makes no request at all. |
+| **Only the provider's documented usage endpoint** | The endpoint must be one the provider documents for use with an API key or an official sign-in. A provider without one has no refresh: listed, it is refused when the refresh is asked for (`no_usage_endpoint`), and nothing is sent. No scraping, no undocumented endpoint. |
 | **The user's own key, to the user's own provider** | The request goes to the provider the key belongs to, with the credential the user already configured for it, over the same client as model requests. It carries nothing else: no usage figures, no project names, no identifiers of ours. |
 | **Never telemetry** | Nothing is sent to us or to any third party. The response is used for the view and is not forwarded. |
 | **Only when asked** | The request is made when the user asks for it: the refresh key in the view, or `cortex usage --refresh`. Nothing calls it at start-up, on a timer or in the background, so an idle session still makes no request. |
@@ -119,8 +126,15 @@ The endpoints themselves are provider facts that go stale. The step that builds 
 
 **The first three endpoints** were built with the `openai-chat` protocol in step 31, as far as a provider's side goes: which request to make, and how to read the answer ([04-providers.md](04-providers.md), "The `openai-chat` protocol"). OpenRouter, DeepSeek and Venice.ai each document one that an ordinary key can call. OpenAI's takes an admin key, so it has none. Two things came out of it for this view:
 
-- **They report balances, in a currency.** A limit window counts requests or tokens, and none of the three reports those through its endpoint as something left. What they report is money: US dollars, yuan, one provider's own unit. How a balance is shown here, and what carries it, is open ([outstanding/a-balance-in-the-usage-view.md](../outstanding/a-balance-in-the-usage-view.md)).
+- **They report balances, in a currency.** A limit window counts requests or tokens, and none of the three reports those through its endpoint as something left. What they report is money: US dollars, yuan, one provider's own unit. Since step 16 a balance is carried by `ProviderLimits::balances`, below ([steps/16/answered.md](../steps/16/answered.md)).
 - **An answer is read and dropped.** One provider's answer holds a shortened form of the key. Nothing of an answer but its figures may be kept, shown or logged.
+
+**As built in step 16** (`cortex-core`'s `usage`; `cortex usage --refresh`; `usage/refresh`).
+
+- **Which providers have one,** read on 2026-11-15: OpenRouter (`GET /api/v1/key`), DeepSeek (`GET /user/balance`) and Venice.ai (`GET /api/v1/api_keys/rate_limits`). Not Anthropic, whose usage, cost and rate-limit endpoints are its Admin API's and take an Admin API credential. Nor OpenAI, whose usage API takes an admin key. The table is in [steps/16/answered.md](../steps/16/answered.md).
+- **The request** is one `GET` with no body for each provider in the user's `usage.refresh` (a name listed twice is asked once), to the endpoint under the provider's own `base_url`, with its own configured headers and its own credential, through the transport model calls use, which follows no redirect. It is bounded to 20 seconds, and the answer to 256 KiB. It carries the client's `User-Agent` and nothing else of ours. It is made only by `usage/refresh`, from a `user` client, which `cortex usage --refresh` is.
+- **What is kept** is the figures alone, as `ProviderLimits` with `source: refresh`: limits on the key (a model's own are not kept), balances as exact decimal strings one a currency, whether the key may make calls, and the next epoch where the provider names one. They go into `stats/limits.json`, owner-only and replaced atomically, and not at all with statistics off. A refresh that fails, however it fails, keeps what was there and says which provider failed and with what status, with nothing of the answer's text.
+- **Limits from responses** reach the same file: each response's rate-limit headers are a statistics event, and the writer keeps the latest of each provider. A figure past its reset time is shown as not known (`remaining` dropped), never as full.
 
 ## Usage recorded by other tools
 

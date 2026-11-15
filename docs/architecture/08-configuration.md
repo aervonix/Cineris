@@ -235,11 +235,11 @@ The schema, in outline. The full list, generated from the declarations, is the [
 | `[shell]` | Program and arguments, default and maximum timeout, environment variables to remove. | Reserved. |
 | `[context]` | `auto_compact`, `background`, `compact_at` (0.85), `prepare_at` (0.70), `keep_recent_tokens`, `instruction_names` (more names, plain `.md` files only) and `instructions_cap` (48 KiB) ([07-sessions-and-context.md](07-sessions-and-context.md)). The thresholds and the names raise what is spent, so a project's value waits for trust; turning compaction or the background summary off is a preference. A `compact_at` below what a compaction needs, or a `keep_recent_tokens` past what one can replay, is held to it when it is used, and the user is told (since the review of step 15). | Declared in step 15. |
 | `[verify]` | Verification mode, commands, time limits, rounds. See [15-efficiency.md](15-efficiency.md). | Reserved. |
-| `[adapt]` | Variant overrides per model, whether to explore, the map and profile token budgets. | Reserved. |
-| `[stats]` | Recording on or off, retention. | Reserved. |
+| `[adapt]` | Variant overrides per model, whether to explore, the map and profile token budgets. | **`variants` declared in step 16:** `[adapt.variants."<model id>"]` with `edit_format`, `tool_schema`, `prompt_style` and `effort`, each user-only and from the next epoch. Whether to explore, and the budgets, are later steps'. |
+| `[stats]` | Recording on or off, retention. | **Declared in step 16:** `enabled` (default `true`, user-only, at restart) and `retention` (months a monthly file stays after its own, default 12, user-only). |
 | `[index]` | Repository map caps. | Reserved. |
 | `[runs]` | Run engine: concurrency, workspace location, set-up command, budgets (after the first release). | Reserved. |
-| `[usage]` | Week start, calendar or rolling ranges, and, after the first release, which other tools' usage records may be read ([18-usage.md](18-usage.md)). | Reserved. |
+| `[usage]` | Week start, calendar or rolling ranges, the opt-in refresh, and, after the first release, which other tools' usage records may be read ([18-usage.md](18-usage.md)). | **Declared in step 16:** `week_start` (`monday` to `sunday`), `ranges` (`calendar` or `rolling`) and `refresh` (the providers whose usage endpoint may be asked), each user-only. The other tools' sources are step 45's. |
 | `[tui]` | Presenter (inline or full screen), theme, density, markdown and diff options. | Reserved. |
 | `[keys.<mode>]` | Key bindings ([09-tui.md](09-tui.md)). | Reserved. |
 | `[terminal]` | Capability overrides, each defaulting to automatic detection. All terminal quirks live here. | Reserved. |
