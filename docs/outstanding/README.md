@@ -44,6 +44,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-setting-that-restricts-reads](a-setting-that-restricts-reads.md): No setting fills the launcher's read-restricting policy (`Reach::Only`), so every sandboxed session can read everything. Owner: the owner, then step 32 unless sooner.
 - [approval-time-limit-setting](approval-time-limit-setting.md): A setting for how long an approval may wait, in the reserved `[rpc]` section, feeding `CoreOptions::approval_timeout`. Owner: step 27.
 - [secret-service-backend](secret-service-backend.md): The Linux Secret Service credential backend needs a non-blocking CI job against a real keyring daemon. Owner: a step the owner places.
+- [settings-a-repository-can-slow-a-session-with](settings-a-repository-can-slow-a-session-with.md): The retry and speed-tier waits and `context.background` are preferences with no range: a repository's file can stall or slow its sessions. Owner: the owner, with a `cortex-config` step or step 32.
 - [settings-a-later-step-declares](settings-a-later-step-declares.md): Reserved configuration sections, including `[models]` and `[http]`, still need their keys declared and their project rules set. Owner: steps 5, 13, 15, 16 and others, each for its own section.
 
 ### cortex-core
