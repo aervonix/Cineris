@@ -36,6 +36,7 @@ pub use header::{Header, header};
 pub use hint::{Hint, HintRow, RunningKeys, Speed, hint_row};
 pub use round::{
     Call, CallState, Change, Detail, DiffLine, Measure, Placement, Round, Target, round,
+    shows_detail,
 };
 
 /// Text from outside on one line: control characters as visible symbols,
