@@ -172,18 +172,34 @@ impl Skipped {
         notes
     }
 
-    /// Counts an entry whose name was refused, with the reason.
+    /// Counts an entry whose name was refused, with the reason. A reason
+    /// names the entry, and goes into a result: what would act unseen in it
+    /// is an escape.
     pub(crate) fn refuse(&mut self, reason: String) {
         self.refused += 1;
-        keep_smallest(&mut self.first_refusal, reason);
+        keep_smallest(
+            &mut self.first_refusal,
+            cortex_base::visible(&reason).into_owned(),
+        );
     }
 
-    /// Counts an entry that could not be read, with what was said of it.
+    /// Counts an entry that could not be read, with what was said of it,
+    /// which may name it (the walker's errors do): what would act unseen in
+    /// it is an escape.
     pub(crate) fn unreadable(&mut self, reason: &str) {
         self.unreadable += 1;
         // One line, and not a long one: it goes into a result.
-        let line = reason.lines().next().unwrap_or("");
-        keep_smallest(&mut self.first_error, line.chars().take(200).collect());
+        let line: String = reason
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(200)
+            .collect();
+        keep_smallest(
+            &mut self.first_error,
+            cortex_base::visible(&line).into_owned(),
+        );
     }
 
     /// Adds what another count holds to this one.

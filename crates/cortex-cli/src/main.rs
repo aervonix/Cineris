@@ -121,24 +121,15 @@ pub(crate) fn print_out(text: &str) {
     let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
 }
 
-/// Text as it is safe to show at a terminal: every control character but a
-/// line break and a tab is written as an escape (`\u{1b}`), so that text a
-/// repository or a model wrote cannot move the cursor, clear a line, or
-/// hide what it is next to.
+/// Text as it is safe to show at a terminal: every character that would act
+/// unseen but a line break and a tab (a control character, a bidirectional
+/// control, a tag character) is written as an escape (`\u{1b}`), so that
+/// text a repository or a model wrote cannot move the cursor, clear a line,
+/// reorder what is next to it or hide text: `cortex_base::visible`'s set,
+/// since the fixes of the independent review of step 18 found this one
+/// passing the format characters.
 pub(crate) fn visible(text: &str) -> std::borrow::Cow<'_, str> {
-    let hidden = |character: char| character.is_control() && character != '\n' && character != '\t';
-    if !text.chars().any(hidden) {
-        return std::borrow::Cow::Borrowed(text);
-    }
-    let mut shown = String::with_capacity(text.len() + 8);
-    for character in text.chars() {
-        if hidden(character) {
-            shown.extend(character.escape_unicode());
-        } else {
-            shown.push(character);
-        }
-    }
-    std::borrow::Cow::Owned(shown)
+    cortex_base::visible_keeping(text, &['\n', '\t'])
 }
 
 /// How a run is carried out.
@@ -185,7 +176,8 @@ mod tests {
     fn control_characters_are_shown_as_escapes() {
         assert_eq!(visible("plain\ttext\nnext"), "plain\ttext\nnext");
         assert_eq!(visible("a\u{1b}[2Kb"), "a\\u{1b}[2Kb");
-        assert_eq!(visible("\r\u{7}\u{9b}"), "\\u{d}\\u{7}\\u{9b}");
+        assert_eq!(visible("\r\u{7}\u{9b}"), "\\r\\u{7}\\u{9b}");
+        assert_eq!(visible("a\u{202E}b\u{E0041}c"), "a\\u{202e}b\\u{e0041}c");
     }
 
     fn name_for(arg0: &str) -> &'static str {

@@ -768,7 +768,9 @@ impl Core {
                 if !outside.is_empty() && disk.session.is_born() {
                     let names: Vec<String> = outside
                         .iter()
-                        .map(|one| one.path.display().to_string())
+                        // Names from the workspace, which the model reads
+                        // when the session is resumed.
+                        .map(|one| cortex_base::visible(&one.path.to_string_lossy()).into_owned())
                         .collect();
                     // An id of its own, after every item in the log: two
                     // such notices with one id made a summary that covered
