@@ -1111,6 +1111,7 @@ impl Generator {
             stop: stop.to_owned(),
             error,
             retries: u32::try_from(retried).unwrap_or(0),
+            charged_to: None,
         }));
         if failed {
             session.last_end = end;
@@ -1247,6 +1248,7 @@ impl Generator {
             stop: "end".to_owned(),
             error: None,
             retries: 0,
+            charged_to: None,
         }));
         end
     }
