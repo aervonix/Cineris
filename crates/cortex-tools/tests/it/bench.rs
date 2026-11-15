@@ -521,11 +521,18 @@ pub(crate) fn print_variable(shell: &Shell, name: &str) -> String {
 }
 
 /// The command that prints `line 1` to `line <count>`, one to a line.
+///
+/// PowerShell builds the text and writes it at once: a pipeline of
+/// `ForEach-Object` took about two seconds for 6,000 lines on a hosted
+/// Windows runner, most of its test's time, and what the tests check is
+/// what the tool makes of the output, not how PowerShell made it.
 pub(crate) fn count_lines(shell: &Shell, count: usize) -> String {
     match shell.kind() {
-        ShellKind::Pwsh | ShellKind::WindowsPowerShell => {
-            format!("1..{count} | ForEach-Object {{ \"line $_\" }}")
-        }
+        ShellKind::Pwsh | ShellKind::WindowsPowerShell => format!(
+            "$text = [System.Text.StringBuilder]::new(); \
+             foreach ($n in 1..{count}) {{ [void]$text.Append(\"line $n`n\") }}; \
+             [Console]::Out.Write($text.ToString())"
+        ),
         ShellKind::Cmd => format!("for /L %i in (1,1,{count}) do @echo line %i"),
         _ => format!("i=1; while [ $i -le {count} ]; do echo \"line $i\"; i=$((i+1)); done"),
     }
