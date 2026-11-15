@@ -189,13 +189,14 @@ impl Outline {
 }
 
 /// Whether a character would change how the text around it reads without
-/// being seen: a control character (a line break, an escape) or one that
-/// reorders text (the bidirectional controls).
+/// being seen: a control character (a line break, an escape), one that
+/// reorders text (the bidirectional controls), a line or paragraph
+/// separator, or one of no width.
 fn hidden(character: char) -> bool {
     character.is_control()
         || matches!(
             character,
-            '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            '\u{200B}'..='\u{200F}' | '\u{061C}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
         )
 }
 
@@ -265,6 +266,7 @@ mod tests {
         assert_eq!(visible("plain é"), "plain é");
         assert_eq!(visible("a\nb\tc\u{1b}[0m"), "a\\nb\\tc\\u{1b}[0m");
         assert_eq!(visible("x\u{202E}y"), "x\\u{202e}y");
+        assert_eq!(visible("a\u{2028}b\u{200B}c"), "a\\u{2028}b\\u{200b}c");
     }
 
     #[test]

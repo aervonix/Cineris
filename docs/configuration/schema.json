@@ -231,7 +231,7 @@
         },
         "pass_time": {
           "default": "2s",
-          "description": "The most time one pass of the index takes. One that runs out carries on when the session is next idle.",
+          "description": "The most time one pass of the index spends reading files, after its listing (which its cap on entries bounds). One that runs out carries on when the session is next idle. At least 250 ms is used, whatever is set: less would make an idle session pass over the workspace again for every few files.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "restart",

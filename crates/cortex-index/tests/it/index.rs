@@ -620,14 +620,30 @@ fn a_file_rewritten_with_its_old_size_and_time_is_known_by_its_change_time() {
     assert_eq!(tree.pass(&index).read, 0);
     // The same size, and its modification time set back to what it was:
     // only the inode's change time, which no program sets back, differs.
-    std::fs::write(tree.scratch.join("ws/a.rs"), rust_file("other")).expect("write");
-    tree.date("a.rs", Duration::from_secs(3600));
+    // A kernel that stamps change times from a coarse clock may give the
+    // rewrite the same one within a tick: it is written again until the
+    // change time moves, which takes at most a tick and waits on nothing.
+    use std::os::unix::fs::MetadataExt;
+    let path = tree.scratch.join("ws/a.rs");
+    let change = |path: &std::path::Path| {
+        let metadata = std::fs::metadata(path).expect("look");
+        (metadata.ctime(), metadata.ctime_nsec())
+    };
+    let before = change(&path);
+    loop {
+        std::fs::write(&path, rust_file("other")).expect("write");
+        tree.date("a.rs", Duration::from_secs(3600));
+        if change(&path) != before {
+            break;
+        }
+    }
     let report = tree.pass(&index);
     assert_eq!(report.read, 1, "{report:?}");
-    let outline = index
-        .outline_of(&tree.root.join("a.rs").expect("path"))
-        .expect("an outline");
-    assert_eq!(outline.outline.entries[0].name, "other");
+    let map = index.map(&MapRequest::new()).expect("a map");
+    assert!(
+        map.contains("a.rs: fn other"),
+        "the cache has the new outline:\n{map}"
+    );
 }
 
 #[cfg(unix)]

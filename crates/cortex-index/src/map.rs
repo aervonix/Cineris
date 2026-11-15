@@ -142,7 +142,7 @@ pub(crate) fn render(
     const HEADING: &str = "\nFiles, most relevant first:\n";
     let cut_line = |left: usize| {
         format!(
-            "[{left} more {} not shown: `outline` or `list` reach them.]\n",
+            "[{left} more {} not shown.]\n",
             if left == 1 { "file" } else { "files" }
         )
     };

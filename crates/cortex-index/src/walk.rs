@@ -12,9 +12,10 @@
 //! - **Links are not followed** and not listed, wherever they point.
 //! - **A name the path rules refuse** (not valid Unicode, a Windows device
 //!   name) is stepped past, with everything under it.
-//! - **The caps:** a listing stops at [`Limits::max_listed`] entries, or at
-//!   the pass's time limit. Past [`Limits::max_files`] files, the shallowest
-//!   are indexed, so that the map covers the top of the tree.
+//! - **The caps:** a listing stops at [`Limits::max_listed`] entries (not at
+//!   the pass's time limit, which is the reading's). Past
+//!   [`Limits::max_files`] files, the shallowest of what was listed are
+//!   indexed.
 
 #![allow(
     clippy::disallowed_methods,
@@ -39,8 +40,8 @@ pub struct Limits {
     pub max_files: usize,
     /// The largest file that is read; a larger one is listed, not outlined.
     pub max_file_bytes: u64,
-    /// The most time one pass takes. One that runs out carries on in the
-    /// next.
+    /// The most time one pass spends reading files, after its listing. One
+    /// that runs out carries on in the next.
     pub pass_time: Duration,
     /// The most entries a listing gathers, files and directories, so that
     /// a tree of millions costs a bounded walk.

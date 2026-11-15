@@ -16,7 +16,7 @@ use crate::language::Language;
 use crate::map::{MapRequest, render};
 use crate::outline::Outline;
 use crate::pass::Index;
-use crate::text::{decode, is_binary};
+use crate::text::{BINARY_PROBE, decode, is_binary};
 use crate::walk::Stamp;
 
 /// One file's outline, as the `outline` tool and `read` are given it.
@@ -82,14 +82,20 @@ impl Index {
         let stamp = Stamp::of(&metadata);
         let cap = self.limits().max_file_bytes;
         let wanted = stamp.size.min(cap);
-        let mut bytes = Vec::with_capacity(usize::try_from(wanted).unwrap_or(0));
-        handle
-            .take(wanted)
+        let mut reader = handle.take(wanted);
+        // The start first: a binary file is known by it, and the rest of it
+        // is not read.
+        let mut bytes = Vec::with_capacity(usize::try_from(wanted).unwrap_or(0).min(1 << 20));
+        (&mut reader)
+            .take(BINARY_PROBE as u64)
             .read_to_end(&mut bytes)
             .map_err(|error| OutlineError::Unreadable(error.to_string()))?;
         if is_binary(&bytes) {
             return Err(OutlineError::Binary);
         }
+        reader
+            .read_to_end(&mut bytes)
+            .map_err(|error| OutlineError::Unreadable(error.to_string()))?;
         // A cut inside a character is not a character.
         if stamp.size > cap {
             let valid = match std::str::from_utf8(&bytes) {

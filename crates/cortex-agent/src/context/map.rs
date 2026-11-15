@@ -96,7 +96,8 @@ impl MapPending {
     }
 
     /// Waits for the answer: the map, or `None` when there is none. Call it
-    /// once: a second call after the answer has come does not return.
+    /// once: a call after the answer has come panics (it is the channel's
+    /// receiver, which is done).
     pub async fn wait(&mut self) -> Option<String> {
         (&mut self.answer).await.unwrap_or(None)
     }

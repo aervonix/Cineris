@@ -1352,12 +1352,11 @@ pub(crate) fn assemble(
     let repo = match &index_dir {
         Some(dir) if options.repo_index => {
             let index_settings = &settings.index;
-            let limits = cortex_index::Limits {
-                max_files: usize::try_from(index_settings.max_files).unwrap_or(usize::MAX),
-                max_file_bytes: index_settings.max_file_bytes,
-                pass_time: index_settings.pass_time,
-                ..cortex_index::Limits::default()
-            };
+            let limits = crate::repo_map::limits(
+                index_settings.max_files,
+                index_settings.max_file_bytes,
+                index_settings.pass_time,
+            );
             let keep = policy.keep_gate();
             let gate: Arc<dyn cortex_index::Gate> = options
                 .index_gate
