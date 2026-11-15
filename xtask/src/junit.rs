@@ -162,6 +162,10 @@ pub(crate) struct Failure {
     /// What the test wrote to its standard error: where the timeout report
     /// of `cortex_testkit::watch` is.
     pub(crate) stderr: String,
+    /// When the test started, as nextest wrote it (`2026-11-15T01:27:48.020+00:00`).
+    pub(crate) started: String,
+    /// How long it ran, in seconds: for a timeout, until nextest stopped it.
+    pub(crate) seconds: f64,
 }
 
 /// The failures of a report, in its order: every case with a `<failure>`,
@@ -213,6 +217,12 @@ pub(crate) fn failures(xml: &str) -> Vec<Failure> {
                     text,
                     kind,
                     stderr,
+                    started: attribute(tag, "timestamp")
+                        .map(unescape)
+                        .unwrap_or_default(),
+                    seconds: attribute(tag, "time")
+                        .and_then(|time| time.parse().ok())
+                        .unwrap_or(0.0),
                 });
             }
         }

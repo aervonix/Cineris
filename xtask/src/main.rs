@@ -39,6 +39,7 @@ mod runs;
 mod schema;
 mod scratch_test;
 mod screens;
+mod stall;
 mod startup;
 mod steps;
 mod stress;
