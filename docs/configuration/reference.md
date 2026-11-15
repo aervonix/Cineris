@@ -163,7 +163,7 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
 | `stats.enabled` | `true` or `false` | `true` | user only | restart | Whether events are recorded. Off, nothing is written, every adaptive feature uses its default, and the usage view has the open session's figures alone. |
-| `stats.retention` | whole number, 1 to 1200 | `12` | user only | at once | How many months a monthly file of events stays after its own month. What it added up to stays in the aggregates. |
+| `stats.retention` | whole number, 1 to 1200 | `3` | user only | at once | How many months a monthly file of events stays after its own month: 3 by default. What it added up to stays in the aggregates, every all-time figure with it, so only the raw events go (a heavy user's are about 90 MB a month). |
 
 ## `[usage]`
 

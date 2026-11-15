@@ -31,7 +31,7 @@ Four rules hold for all of them.
 
 - Events are queued to a writer thread (since step 16 the statistics' own, not the log's). Recording never blocks the core.
 - Nothing is read at start-up. The aggregates file (kilobytes) is loaded the first time an adaptive decision needs it.
-- Old monthly files are folded into the aggregates and deleted after a retention period (default 12 months).
+- Old monthly files are folded into the aggregates and deleted after a retention period (default 3 months since step 16, the coordinator's decision, which the owner may revisit; 12 before: a year of a heavy user's raw events is about 1.1 GB, and every all-time figure is in the aggregates).
 
 **Control.** `cortex stats` shows what is stored, in plain numbers. `cortex stats reset` deletes it. `stats.enabled = false` turns recording off, and every adaptive feature then falls back to its catalog default.
 

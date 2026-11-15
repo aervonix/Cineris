@@ -26,5 +26,5 @@ pub use record::{
     ContextRecord, Difference, Line, Purpose, Record, RequestRecord, Sources, ToolOutcome,
     ToolRecord, ToolShare, TurnRecord, Variants,
 };
-pub use recorder::{Recorder, RecorderOptions};
+pub use recorder::{DEFAULT_RETENTION, Recorder, RecorderOptions};
 pub use store::{Aggregates, LimitsFile, StatsDir, month_of, reads};

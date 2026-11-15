@@ -562,9 +562,11 @@ settings! {
         [UserOnly, Restart]
         pub enabled: bool = true,
         /// How many months a monthly file of events stays after its own
-        /// month. What it added up to stays in the aggregates.
+        /// month: 3 by default. What it added up to stays in the
+        /// aggregates, every all-time figure with it, so only the raw
+        /// events go (a heavy user's are about 90 MB a month).
         [UserOnly, Now, 1..=1200]
-        pub retention: u32 = 12,
+        pub retention: u32 = 3,
     }
 }
 
@@ -736,6 +738,12 @@ mod tests {
         assert_eq!(settings.retry.first_event_timeout, Duration::from_secs(60));
         assert_eq!(settings.credentials.store, StoreChoice::Auto);
         assert!(settings.limits.turn.is_empty() && settings.limits.day.is_empty());
+        // Three months of raw events by default (the coordinator's decision
+        // in step 16): a year of a heavy user's is about 1.1 GB, and every
+        // all-time figure is in the aggregates.
+        assert_eq!(settings.stats.retention, 3);
+        assert!(settings.stats.enabled);
+        assert!(settings.usage.refresh.is_empty());
         assert!(settings.compat.instructions && settings.compat.mcp && settings.compat.skills);
         assert!(settings.context.auto_compact && settings.context.background);
         assert!((settings.context.compact_at - 0.85).abs() < f64::EPSILON);

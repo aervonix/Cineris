@@ -840,8 +840,8 @@
           "x-cortex-trust": "user only"
         },
         "retention": {
-          "default": 12,
-          "description": "How many months a monthly file of events stays after its own month. What it added up to stays in the aggregates.",
+          "default": 3,
+          "description": "How many months a monthly file of events stays after its own month: 3 by default. What it added up to stays in the aggregates, every all-time figure with it, so only the raw events go (a heavy user's are about 90 MB a month).",
           "maximum": 1200,
           "minimum": 1,
           "type": "integer",

@@ -145,19 +145,40 @@ fn all_time_outlives_the_raw_files_and_old_days_fold_into_months() {
     let scratch = scratch("all_time_outlives");
     let dir = StatsDir::new(scratch.join("stats"));
     let clock = clock("2025-01-10T12:00:00Z");
-    let recorder = recorder(&dir, Zone::utc(), clock.clone(), 12);
+    // At the default retention.
+    let retention = cortex_stats::RecorderOptions::new(dir.clone()).retention;
+    assert_eq!(retention, 3);
+    let recorder = recorder(&dir, Zone::utc(), clock.clone(), retention);
     recorder.record(request("2025-01-10T12:00:00Z", "p", "opus", 7_000));
     recorder.record(request("2025-01-11T12:00:00Z", "p", "opus", 3_000));
     recorder.flush();
+    // Four months on, January's file is past three months of retention and
+    // gone, and what it held is still counted.
+    clock.set_now(time("2025-05-15T12:00:00Z"));
+    recorder.record(request("2025-05-15T12:00:00Z", "p", "opus", 1_000));
+    recorder.flush();
+    assert!(!dir.events_file("2025-01").exists());
+    assert!(dir.events_file("2025-05").exists());
+    let part = Aggregates::load(&dir).unwrap().total();
+    let all = report(
+        &part,
+        &all_time(vec![UsageGroup::Model]),
+        &Zone::utc(),
+        time("2025-05-15T12:00:00Z"),
+        &[],
+        true,
+    );
+    assert_eq!(all.totals.requests, 3);
+    assert_eq!(all.totals.costs[0].usd_nanos, 11_000);
     // Almost two years later the January file is gone, and its days, more
     // than 400 days back, are one month.
     clock.set_now(time("2026-11-15T12:00:00Z"));
     recorder.record(request("2026-11-15T12:00:00Z", "p", "opus", 5_000));
     recorder.flush();
-    assert!(!dir.events_file("2025-01").exists());
+    assert!(!dir.events_file("2025-05").exists());
     let part = Aggregates::load(&dir).unwrap().total();
     let periods: Vec<&str> = part.usage.keys().map(|key| key.period.as_str()).collect();
-    assert_eq!(periods, ["2025-01", "2026-11-15"]);
+    assert_eq!(periods, ["2025-01", "2025-05", "2026-11-15"]);
     let all = report(
         &part,
         &all_time(vec![UsageGroup::Model]),
@@ -166,8 +187,8 @@ fn all_time_outlives_the_raw_files_and_old_days_fold_into_months() {
         &[],
         true,
     );
-    assert_eq!(all.totals.requests, 3);
-    assert_eq!(all.totals.costs[0].usd_nanos, 15_000);
+    assert_eq!(all.totals.requests, 4);
+    assert_eq!(all.totals.costs[0].usd_nanos, 16_000);
 }
 
 #[test]
