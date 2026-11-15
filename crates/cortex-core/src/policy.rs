@@ -39,7 +39,7 @@ use cortex_protocol::jsonrpc::RequestId;
 use cortex_protocol::lease::Effect as EffectKind;
 use cortex_protocol::methods::{
     ApprovalChoice, ApprovalDetail, ApprovalRequest, ApprovalResponse, CommandDetail, DiffDetail,
-    ServerRequest, TargetDetail, ToolDetail,
+    ServerRequest, ServerResponse, TargetDetail, ToolDetail,
 };
 use cortex_protocol::{CallId, TurnId};
 use cortex_session::KeepGate;
@@ -424,7 +424,7 @@ impl Policy for EnginePolicy {
             let mut limit = self.timeout.map(|limit| self.timer.sleep(limit));
             let answered: Option<ApprovalResponse> = poll_fn(|cx| {
                 if let Poll::Ready(response) = std::pin::Pin::new(&mut answer).poll(cx) {
-                    return Poll::Ready(response.ok());
+                    return Poll::Ready(response.ok().and_then(approval_of));
                 }
                 if let Some(limit) = &mut limit
                     && limit.as_mut().poll(cx).is_ready()
@@ -439,7 +439,7 @@ impl Policy for EnginePolicy {
             // answered in this instant, and the client was told its answer
             // was taken: it is.
             let answered = match answered {
-                None if !self.clients.close(&id) => answer.try_recv().ok(),
+                None if !self.clients.close(&id) => answer.try_recv().ok().and_then(approval_of),
                 other => other,
             };
 
@@ -544,6 +544,16 @@ impl<T: Send + Sync + 'static> cortex_index::Gate for InForce<T> {
         Some(Arc::new(move |path: &AbsPath| {
             taken.as_deref().is_some_and(|in_force| ask(in_force, path))
         }))
+    }
+}
+
+
+/// An approval's answer, from the table's answers of every kind: the table
+/// refuses an answer of another kind, so nothing else arrives here.
+fn approval_of(response: ServerResponse) -> Option<ApprovalResponse> {
+    match response {
+        ServerResponse::Approval(response) => Some(response),
+        _ => None,
     }
 }
 
