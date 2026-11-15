@@ -111,8 +111,12 @@ pub(crate) fn fmt() -> Result<()> {
 ///
 /// The whole workspace, unless the arguments name packages: `test -p
 /// cortex-agent` builds and runs that crate's tests and no other's.
+///
+/// `--dependents` beside `-p` adds every workspace crate whose tests can see
+/// a change to the crates named ([`crate::dependents`]).
 pub(crate) fn test(arguments: &[String]) -> Result<()> {
     require_nextest()?;
+    let arguments = &crate::dependents::expand(arguments)?;
     let command = test_command(arguments);
     workspace::say_implied(&workspace::implied_features(&workspace::packages_named(
         arguments,

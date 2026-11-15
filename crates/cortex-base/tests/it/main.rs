@@ -35,6 +35,9 @@ use cortex_base::{AbsPath, PathOptions, PathResolver};
 /// A directory that belongs to one test and is removed with it.
 struct Scratch {
     dir: PathBuf,
+    /// What is removed when the test ends: `dir`, or a folder made for it
+    /// alone ([`Scratch::short`]).
+    remove: PathBuf,
 }
 
 impl Scratch {
@@ -51,7 +54,30 @@ impl Scratch {
             remove_all(&dir);
         }
         fs::create_dir_all(&dir).expect("create the test's directory");
-        Self { dir }
+        Self {
+            remove: dir.clone(),
+            dir,
+        }
+    }
+
+    /// A directory with a short path, for a test that binds a Unix socket
+    /// in it. A socket's address holds about a hundred bytes of path
+    /// (`sun_path`), and a worktree's build directory, under which
+    /// [`Scratch::new`] puts a test's, can be longer than that: there the
+    /// bind fails with "path must be shorter than SUN_LEN" whatever the
+    /// test is about. The system's temporary directory, in a folder named
+    /// for this process so that two worktrees' runs do not meet.
+    #[cfg(unix)]
+    fn short(test: &str) -> Self {
+        let mut base = std::env::temp_dir();
+        // A temporary directory moved somewhere long is no help.
+        if base.as_os_str().len() > 40 {
+            base = PathBuf::from("/tmp");
+        }
+        let own = base.join(format!("cx-it-{}", std::process::id()));
+        let mut scratch = Self::under(&own, test);
+        scratch.remove = own;
+        scratch
     }
 
     /// A path inside the directory.
@@ -111,7 +137,7 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        remove_all(&self.dir);
+        remove_all(&self.remove);
     }
 }
 

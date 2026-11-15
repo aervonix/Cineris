@@ -23,6 +23,7 @@ mod checks;
 mod combine;
 mod compare;
 mod decide;
+mod dependents;
 mod junit;
 mod like_runner;
 mod load;
@@ -59,6 +60,9 @@ Checks and tests
   test [ARGS...]    All tests, with nextest. Arguments go to `cargo nextest run`,
                     for example: test --profile fast     (tiers 1 and 2 only)
                                  test -p cortex-agent    (one crate, and only it)
+                    --dependents -p CRATE: the crate's tests and those of
+                    every workspace crate that depends on it, directly or
+                    not. Run it after a change of behaviour.
   ci [lint|test]    Exactly what the blocking CI jobs run. No argument: both.
   ci --tiers [-p CRATE]... [--top N]
                     Build and run the tests as CI does (third-party crates not
