@@ -24,6 +24,7 @@
 //! | `auto` | Start a turn at once, without waiting for Enter. |
 //! | `quit-after-turn` | Quit when the turn ends. |
 //! | `panic-on=C` | Panic when the key C is typed. |
+//! | `caught-panic-on=C` | When the key C is typed, panic on another thread, catch it there, and go on. |
 //! | `terminate-on=C` | End the process as SIGTERM or Ctrl+Break would when C is typed. |
 //! | `stats=PATH` | Write the frame and key timings there on exit, as JSON. |
 //!
@@ -98,6 +99,8 @@ pub struct Options {
     pub quit_after_turn: bool,
     /// Panic on this key.
     pub panic_on: Option<char>,
+    /// Panic on another thread on this key, and catch it there.
+    pub caught_panic_on: Option<char>,
     /// End the process as a signal would on this key.
     pub terminate_on: Option<char>,
     /// Where to write the timings.
@@ -113,6 +116,7 @@ impl Default for Options {
             auto: false,
             quit_after_turn: false,
             panic_on: None,
+            caught_panic_on: None,
             terminate_on: None,
             stats: None,
         }
@@ -145,6 +149,7 @@ impl Options {
                 "auto" => options.auto = true,
                 "quit-after-turn" => options.quit_after_turn = true,
                 "panic-on" => options.panic_on = Some(key()?),
+                "caught-panic-on" => options.caught_panic_on = Some(key()?),
                 "terminate-on" => options.terminate_on = Some(key()?),
                 "stats" => options.stats = Some(value.to_owned()),
                 "" => {}
@@ -458,6 +463,16 @@ pub fn run(options: &Options) -> io::Result<()> {
                 match code {
                     KeyCode::Char(c) if Some(c) == options.panic_on => {
                         panic!("demo panic on request");
+                    }
+                    KeyCode::Char(c) if Some(c) == options.caught_panic_on => {
+                        // As the core catches a tool's panic: on a thread of
+                        // its own, and the program goes on.
+                        let caught = std::thread::spawn(|| {
+                            std::panic::catch_unwind(|| panic!("demo panic caught elsewhere"))
+                                .is_err()
+                        })
+                        .join();
+                        editor.push(if matches!(caught, Ok(true)) { '!' } else { '?' });
                     }
                     KeyCode::Char(c) if Some(c) == options.terminate_on => {
                         cortex_term::pty::terminate_self()?;

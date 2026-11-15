@@ -1,0 +1,32 @@
+# Step 23, the interactive application: its rules broken one at a time,
+# with the tests that must fail. Written with the code.
+
+[break] a-caught-panic-puts-the-terminal-back
+rule: A panic on a thread other than the one that entered the terminal does not put the terminal back: the program may catch it and go on drawing.
+file: crates/cortex-term/src/terminal.rs
+in: restores_on_panic
+find: == Some(std::thread::current().id())
+replace: .is_some()
+caught-by:
+    cortex-term::it system::sys_a_panic_caught_on_another_thread_leaves_the_terminal_to_the_program
+
+[break] no-panic-puts-the-terminal-back
+rule: A panic on the thread that entered the terminal puts it back before the panic's message is printed.
+file: crates/cortex-term/src/terminal.rs
+in: restores_on_panic
+find: == Some(std::thread::current().id())
+replace: == None
+caught-by:
+    cortex-term::it system::sys_the_terminal_is_put_back_after_a_panic
+
+[break] tui-settings-a-project-may-set
+rule: Every key of [tui], [keys] and [terminal] is the user's own: a project's file cannot change how the user's terminal looks or which keys do what.
+file: crates/cortex-config/src/schema/sections.rs
+find:
+    [UserOnly, Now]
+    pub glyphs
+replace:
+    [Preference, Now]
+    pub glyphs
+caught-by:
+    cortex-config::it trust::every_key_has_a_trust_class
