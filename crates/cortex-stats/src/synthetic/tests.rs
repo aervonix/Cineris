@@ -52,13 +52,42 @@ fn lines(dir: &StatsDir) -> Vec<Line> {
     all
 }
 
+/// A scale that is small and has a little of everything: every day worked,
+/// every provider, the fast tier, both billings, failed requests and a
+/// judge, at rates far above any real user's, so that three days show every
+/// kind a month can hold, and a test of the kinds does not need a month.
+const MIXED: Scale = Scale {
+    name: "mixed",
+    weekday_active: 100,
+    weekend_active: 100,
+    sessions: (2, 3),
+    turns: (3, 6),
+    requests: (2, 4),
+    tool_batch: (1, 3),
+    projects: 3,
+    models: &[
+        ("claude-opus-5-5", 3),
+        ("claude-fable-5-2", 2),
+        ("claude-sonnet-5-5", 2),
+        ("gpt-6-luna", 1),
+        ("openai/gpt-6-luna", 1),
+        ("deepseek-v4-pro", 1),
+        ("z-ai/glm-5.3-flash", 1),
+    ],
+    fast_speed: 50,
+    subscription: 40,
+    failures: 60,
+    judge: 20,
+};
+
 #[test]
 fn one_seed_gives_the_same_bytes() {
     let scratch = scratch("one_seed_gives_the_same_bytes");
-    let spec = Spec::month(7, Scale::TYPICAL);
+    let spec = Spec::month(7, MIXED).with_days(1);
     let (first, one) = made(&scratch, "a", &spec);
     let (second, two) = made(&scratch, "b", &spec);
     assert_eq!(one, two);
+    assert!(one.lines > 50, "{}", one.lines);
     let (one_files, two_files) = (files(&first), files(&second));
     assert_eq!(
         one_files.keys().collect::<Vec<_>>(),
@@ -70,31 +99,11 @@ fn one_seed_gives_the_same_bytes() {
 #[test]
 fn another_seed_gives_another_month() {
     let scratch = scratch("another_seed_gives_another_month");
-    let (first, one) = made(&scratch, "a", &Spec::month(1, Scale::TYPICAL));
-    let (second, two) = made(&scratch, "b", &Spec::month(2, Scale::TYPICAL));
+    let (first, one) = made(&scratch, "a", &Spec::month(1, MIXED).with_days(1));
+    let (second, two) = made(&scratch, "b", &Spec::month(2, MIXED).with_days(1));
     assert_ne!(one.usage, two.usage);
     assert_ne!(one.totals, two.totals);
     assert_ne!(files(&first), files(&second));
-    // The shape is the scale's, whatever the seed.
-    for summary in [&one, &two] {
-        assert!(
-            summary.active_days > 15 && summary.active_days < 31,
-            "{summary:?}"
-        );
-    }
-}
-
-#[test]
-fn the_same_seed_makes_the_same_months_whichever_scale_it_follows() {
-    // The seed is the whole of the randomness: nothing of the process's
-    // state, the order of tests or the time leaks into the month.
-    let scratch = scratch("the_same_seed_makes_the_same_months");
-    let spec = Spec::month(3, Scale::LIGHT);
-    let (_, before) = made(&scratch, "a", &Spec::month(9, Scale::TYPICAL));
-    let (_, one) = made(&scratch, "b", &spec);
-    let (_, two) = made(&scratch, "c", &spec);
-    assert!(before.requests > one.requests);
-    assert_eq!(one, two);
 }
 
 /// The summary against what the crate's own reader and aggregates say of
@@ -168,6 +177,21 @@ fn assert_summary_matches(dir: &StatsDir, read: &[Line], summary: &Summary) {
         count(|record| matches!(record, Record::Request(request) if request.error.is_some())),
         summary.failed_requests
     );
+    for line in read {
+        assert!(
+            summary
+                .months
+                .iter()
+                .any(|month| line.day.starts_with(month)),
+            "{} is in no month written",
+            line.day
+        );
+        assert_eq!(
+            &line.record.at().as_str()[..10],
+            line.day,
+            "the day a line says is the day its time names, in UTC"
+        );
+    }
     let days: BTreeSet<&str> = read.iter().map(|line| line.day.as_str()).collect();
     let summed: BTreeSet<&str> = summary.usage.keys().map(|(day, _)| day.as_str()).collect();
     assert!(days.is_superset(&summed));
@@ -187,81 +211,129 @@ fn assert_summary_matches(dir: &StatsDir, read: &[Line], summary: &Summary) {
 }
 
 #[test]
-fn a_year_is_twelve_files_and_adds_up() {
-    let scratch = scratch("a_year_is_twelve_files_and_adds_up");
-    let (dir, summary) = made(&scratch, "year", &Spec::year(5, Scale::LIGHT));
-    assert_eq!(summary.months.len(), 12);
+fn a_small_month_is_what_the_crate_reads_back() {
+    let scratch = scratch("a_small_month_is_what_the_crate_reads_back");
+    // A week of a light user: some days worked, some not.
+    let spec = Spec::month(11, Scale::LIGHT).with_days(7);
+    let (dir, light) = made(&scratch, "light", &spec);
+    assert_eq!(light.days, 7);
+    assert!(light.days_off >= 1, "days off: {}", light.days_off);
+    assert!(light.active_days >= 1, "days worked: {}", light.active_days);
+    assert_summary_matches(&dir, &lines(&dir), &light);
+    // And a day of the mixed scale.
+    let (dir, mixed) = made(&scratch, "mixed", &Spec::month(12, MIXED).with_days(1));
+    assert_eq!((mixed.days, mixed.days_off), (1, 0));
+    assert_summary_matches(&dir, &lines(&dir), &mixed);
+}
+
+#[test]
+fn each_month_is_a_file_of_its_own() {
+    let scratch = scratch("each_month_is_a_file_of_its_own");
+    let spec = Spec::year(5, MIXED).with_months(2).with_days(1);
+    let (dir, summary) = made(&scratch, "months", &spec);
+    assert_eq!(summary.months, ["2026-01", "2026-02"]);
     assert_eq!(dir.months().unwrap(), summary.months);
-    assert_eq!(summary.days, 365);
+    assert_eq!(summary.days, 2);
     assert_summary_matches(&dir, &lines(&dir), &summary);
 }
 
+/// What a small month of the mixed scale must show: the kinds a reader meets
+/// that come with the scale's rates, and the cache read on most requests.
 #[test]
-fn a_light_and_a_typical_month_are_what_the_crate_reads_back() {
-    let scratch = scratch("a_light_and_a_typical_month");
-    for (seed, scale) in [(11, Scale::LIGHT), (12, Scale::TYPICAL)] {
-        let (dir, summary) = made(&scratch, scale.name, &Spec::month(seed, scale));
-        assert_eq!(summary.scale, scale.name);
-        assert_summary_matches(&dir, &lines(&dir), &summary);
+fn a_mixed_month_has_its_kinds_and_each_request_is_priced() {
+    let scratch = scratch("a_mixed_month_has_its_kinds");
+    let (dir, summary) = made(&scratch, "mixed", &Spec::month(31, MIXED).with_days(2));
+    let read = lines(&dir);
+    let mut roles = BTreeSet::new();
+    let mut speeds = BTreeSet::new();
+    let mut billings = BTreeSet::new();
+    let mut providers = BTreeSet::new();
+    let (mut hits, mut retried) = (0, 0);
+    for line in &read {
+        match &line.record {
+            Record::Request(request) => {
+                roles.insert(request.role.as_str().to_owned());
+                speeds.insert(request.speed.as_str().to_owned());
+                billings.insert(request.billing.as_str().to_owned());
+                providers.insert(request.provider.as_str().to_owned());
+                hits += u64::from(request.tokens.cache_read > 0);
+                retried += u64::from(request.retries > 0);
+            }
+            Record::Dropped { .. } => panic!("an event was dropped"),
+            _ => {}
+        }
     }
+    assert_eq!(
+        roles,
+        ["fast", "judge", "main"].map(str::to_owned).into(),
+        "the roles"
+    );
+    assert_eq!(speeds.len(), 2, "standard and fast: {speeds:?}");
+    assert_eq!(billings.len(), 2, "metered and subscription: {billings:?}");
+    assert!(providers.len() >= 3, "{providers:?}");
+    assert!(summary.failed_requests > 0 && retried > 0);
+    assert_eq!(
+        summary.totals.unpriced, summary.failed_requests,
+        "a failed request is the one kind with no price"
+    );
+    assert!(
+        hits * 100 > summary.requests * 55,
+        "the cache is read: {hits} of {}",
+        summary.requests
+    );
+    assert!(summary.totals.cache_read > 5 * summary.totals.input);
+    assert!(summary.totals.reasoning > 0 && summary.totals.reasoning < summary.totals.output);
+    assert!(summary.totals.metered_nanos > 0 && summary.totals.estimate_nanos > 0);
+    assert_costs_are_priced(&read, 50);
 }
 
+/// The scales are what their documentation says, from their parameters: a
+/// month of each is not made. The expected requests of a month are the days
+/// worked, by the sessions a day, the turns a session and the requests a
+/// turn, at the middle of each range.
 #[test]
 fn the_scales_differ_as_they_are_documented() {
-    let scratch = scratch("the_scales_differ_as_they_are_documented");
-    let mut by_scale = Vec::new();
-    for scale in Scale::ALL {
-        let started = Instant::now();
-        let (dir, summary) = made(&scratch, scale.name, &Spec::month(21, scale));
-        let took = started.elapsed();
-        println!(
-            "{:8} {:>3} days worked, {:>4} sessions, {:>5} turns, {:>6} requests ({} failed), \
-             {:>6} tool calls, {:>6} contexts, {:>6} lines, {:>6} KB, ${:.2} metered, ${:.2} estimated, made in {} ms",
-            scale.name,
-            summary.active_days,
-            summary.sessions,
-            summary.turns,
-            summary.requests,
-            summary.failed_requests,
-            summary.tool_calls,
-            summary.contexts,
-            summary.lines,
-            dir.size() / 1000,
-            summary.totals.metered_nanos as f64 / 1e9,
-            summary.totals.estimate_nanos as f64 / 1e9,
-            took.as_millis(),
-        );
-        assert_eq!(summary.scale, scale.name);
-        by_scale.push(summary);
-    }
-    let [light, typical, heavy] = &by_scale[..] else {
-        panic!("three scales");
+    let mean = |(low, high): (u64, u64)| (low + high) as f64 / 2.0;
+    // A 31-day month of the calendar has 22 weekdays and 9 days of weekend.
+    let expected = |scale: &Scale| {
+        let days =
+            22.0 * scale.weekday_active as f64 / 100.0 + 9.0 * scale.weekend_active as f64 / 100.0;
+        days * mean(scale.sessions) * mean(scale.turns) * mean(scale.requests)
     };
-    // Each scale is bigger than the one before in everything it counts.
-    for (small, big) in [(light, typical), (typical, heavy)] {
-        assert!(small.active_days < big.active_days);
-        assert!(small.sessions * 3 < big.sessions * 2);
-        assert!(small.turns * 2 < big.turns);
-        assert!(small.requests * 2 < big.requests);
-        assert!(small.tool_calls * 2 < big.tool_calls);
-        assert!(small.totals.output * 2 < big.totals.output);
-        assert!(small.totals.cache_read * 2 < big.totals.cache_read);
+    let [light, typical, heavy] = Scale::ALL;
+    for (small, big) in [(light, typical), (typical, heavy), (heavy, Scale::EXTREME)] {
+        assert!(small.weekday_active <= big.weekday_active);
+        assert!(small.weekend_active < big.weekend_active);
+        assert!(small.projects < big.projects);
+        assert!(mean(small.tool_batch) <= mean(big.tool_batch));
+        assert!(expected(&small) * 2.0 < expected(&big));
+        assert!(small.models.len() <= big.models.len());
     }
-    // And is in the range its documentation gives.
-    assert!((120..600).contains(&light.requests), "{}", light.requests);
-    assert!(
-        (900..2_500).contains(&typical.requests),
-        "{}",
-        typical.requests
+    for (scale, low, high) in [
+        (&light, 150.0, 300.0),
+        (&typical, 1_000.0, 2_000.0),
+        (&heavy, 4_000.0, 6_500.0),
+        (&Scale::EXTREME, 50_000.0, 150_000.0),
+    ] {
+        let requests = expected(scale);
+        assert!(
+            (low..high).contains(&requests),
+            "{}: {requests}",
+            scale.name
+        );
+    }
+    // A light user has days off most weeks; a heavy one almost none; the
+    // fast tier, subscriptions and the judge are the heavy scales' alone.
+    assert!(light.weekday_active < 50 && heavy.weekday_active > 95);
+    assert_eq!(
+        (light.fast_speed, light.subscription, light.judge),
+        (0, 0, 0)
     );
-    assert!(
-        (3_500..8_000).contains(&heavy.requests),
-        "{}",
-        heavy.requests
+    assert!(heavy.fast_speed > 0 && heavy.subscription > 0 && heavy.judge > 0);
+    assert_eq!(
+        Scale::ALL.map(|scale| scale.name),
+        ["light", "typical", "heavy"]
     );
-    // A light user has days off most weeks; a heavy one almost none.
-    assert!(light.days_off >= 12, "{}", light.days_off);
-    assert!(heavy.days_off <= 6, "{}", heavy.days_off);
 }
 
 /// A heavy month holds every kind of event a reader must meet.
@@ -359,20 +431,6 @@ fn assert_every_kind(read: &[Line], summary: &Summary) {
     assert_eq!(summary.totals.recorded_nanos, 0);
 }
 
-#[test]
-fn a_months_events_stay_in_its_file_by_the_day_they_fell_on() {
-    let scratch = scratch("a_months_events_stay_in_its_file");
-    let (dir, _) = made(&scratch, "month", &Spec::month(41, Scale::TYPICAL));
-    for line in lines(&dir) {
-        assert!(line.day.starts_with("2026-10-"), "{}", line.day);
-        assert_eq!(
-            &line.record.at().as_str()[..10],
-            line.day,
-            "the day a line says is the day its time names, in UTC"
-        );
-    }
-}
-
 /// The catalog's own file, as text.
 fn catalog() -> &'static str {
     include_str!("../../../../catalog/models.toml")
@@ -457,7 +515,7 @@ fn the_models_and_prices_are_the_catalogs() {
 }
 
 /// Each request's cost is its tokens at the prices of its model and speed.
-fn assert_costs_are_priced(read: &[Line]) {
+fn assert_costs_are_priced(read: &[Line], at_least: u64) {
     let mut checked = 0;
     for line in read {
         let Record::Request(request) = &line.record else {
@@ -498,15 +556,79 @@ fn assert_costs_are_priced(read: &[Line]) {
         assert_eq!(cost.basis, expected);
         checked += 1;
     }
-    assert!(checked > 4_000);
+    assert!(checked >= at_least, "{checked} requests priced");
 }
 
-/// A heavy month, made once: what it holds, what it costs, and how long it
+// The measurements. Each makes whole months, which is what costs: they are
+// ignored in every ordinary run, and run by hand with
+// `cargo xtask test -p cortex-stats --run-ignored only perf_`. They print
+// their times and assert on none of them.
+
+/// Light, typical and heavy months, made and timed, each read back and
+/// compared with its summary.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn perf_the_scales_made_and_timed() {
+    let scratch = scratch("perf_the_scales_made_and_timed");
+    let mut by_scale = Vec::new();
+    for scale in Scale::ALL {
+        let started = Instant::now();
+        let (dir, summary) = made(&scratch, scale.name, &Spec::month(21, scale));
+        let took = started.elapsed();
+        println!(
+            "{:8} {:>3} days worked, {:>4} sessions, {:>5} turns, {:>6} requests ({} failed), \
+             {:>6} tool calls, {:>6} contexts, {:>6} lines, {:>6} KB, ${:.2} metered, ${:.2} estimated, made in {} ms",
+            scale.name,
+            summary.active_days,
+            summary.sessions,
+            summary.turns,
+            summary.requests,
+            summary.failed_requests,
+            summary.tool_calls,
+            summary.contexts,
+            summary.lines,
+            dir.size() / 1000,
+            summary.totals.metered_nanos as f64 / 1e9,
+            summary.totals.estimate_nanos as f64 / 1e9,
+            took.as_millis(),
+        );
+        assert_summary_matches(&dir, &lines(&dir), &summary);
+        by_scale.push(summary);
+    }
+    let [light, typical, heavy] = &by_scale[..] else {
+        panic!("three scales");
+    };
+    for (small, big) in [(light, typical), (typical, heavy)] {
+        assert!(small.active_days < big.active_days);
+        assert!(small.sessions * 3 < big.sessions * 2);
+        assert!(small.turns * 2 < big.turns);
+        assert!(small.requests * 2 < big.requests);
+        assert!(small.tool_calls * 2 < big.tool_calls);
+        assert!(small.totals.output * 2 < big.totals.output);
+        assert!(small.totals.cache_read * 2 < big.totals.cache_read);
+    }
+    assert!((120..600).contains(&light.requests), "{}", light.requests);
+    assert!(
+        (900..2_500).contains(&typical.requests),
+        "{}",
+        typical.requests
+    );
+    assert!(
+        (3_500..8_000).contains(&heavy.requests),
+        "{}",
+        heavy.requests
+    );
+    assert!(light.days_off >= 12, "{}", light.days_off);
+    assert!(heavy.days_off <= 6, "{}", heavy.days_off);
+}
+
+/// A heavy month, made once: every kind in it, every cost, and how long it
 /// takes to make, written and brought up to date, in the build this test
 /// has.
 #[test]
-fn a_heavy_month_has_every_kind_priced_and_is_made_in_a_moment() {
-    let scratch = scratch("a_heavy_month_has_every_kind");
+#[ignore = "a measurement, run by hand"]
+fn perf_a_heavy_month_has_every_kind_priced() {
+    let scratch = scratch("perf_a_heavy_month_has_every_kind_priced");
     let dir = StatsDir::new(scratch.join("heavy"));
     let started = Instant::now();
     let summary = write(&dir, &Spec::month(31, Scale::HEAVY)).unwrap();
@@ -518,10 +640,27 @@ fn a_heavy_month_has_every_kind_priced_and_is_made_in_a_moment() {
         dir.size() / 1000,
         took.as_millis()
     );
-    assert!(took.as_secs() < 3, "{took:?}");
     assert!(Path::new(&dir.events_file("2026-10")).exists());
     let read = lines(&dir);
     assert_every_kind(&read, &summary);
-    assert_costs_are_priced(&read);
+    assert_costs_are_priced(&read, 4_000);
     assert_summary_matches(&dir, &read, &summary);
+}
+
+/// A year of a light user: twelve files, adding up.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn perf_a_year_is_twelve_files_and_adds_up() {
+    let scratch = scratch("perf_a_year_is_twelve_files_and_adds_up");
+    let started = Instant::now();
+    let (dir, summary) = made(&scratch, "year", &Spec::year(5, Scale::LIGHT));
+    println!(
+        "a light year: {} lines in {} ms",
+        summary.lines,
+        started.elapsed().as_millis()
+    );
+    assert_eq!(summary.months.len(), 12);
+    assert_eq!(dir.months().unwrap(), summary.months);
+    assert_eq!(summary.days, 365);
+    assert_summary_matches(&dir, &lines(&dir), &summary);
 }

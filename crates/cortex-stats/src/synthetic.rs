@@ -216,6 +216,10 @@ pub struct Spec {
     /// history (a year or less keeps every day a day bucket and prunes no
     /// file).
     pub months: u32,
+    /// How many days to make of each month, from its first. `0`, or more
+    /// than the month has: all of them. A few days make a small month, for
+    /// the tests that need only its shape.
+    pub days: u32,
 }
 
 impl Spec {
@@ -227,7 +231,20 @@ impl Spec {
             scale,
             first: (2026, 10),
             months: 1,
+            days: 0,
         }
+    }
+
+    /// The same, with only the first `days` days of each month.
+    #[must_use]
+    pub const fn with_days(self, days: u32) -> Self {
+        Self { days, ..self }
+    }
+
+    /// The same, with `months` months.
+    #[must_use]
+    pub const fn with_months(self, months: u32) -> Self {
+        Self { months, ..self }
     }
 
     /// Twelve months, from January 2026.
@@ -238,6 +255,7 @@ impl Spec {
             scale,
             first: (2026, 1),
             months: 12,
+            days: 0,
         }
     }
 }
@@ -724,9 +742,11 @@ pub fn write(dir: &StatsDir, spec: &Spec) -> io::Result<Summary> {
         generator.summary.months.push(first.month_text());
         let next = next_month(first);
         let mut date = first;
-        while date < next {
+        let mut made = 0;
+        while date < next && (spec.days == 0 || made < spec.days) {
             generator.make_day(date, &zone);
             date = date.add_days(1);
+            made += 1;
         }
         first = next;
     }
