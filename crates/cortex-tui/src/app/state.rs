@@ -310,9 +310,13 @@ impl App {
             Outcome::Quit => self.exit = Some(Exit::Quit),
             Outcome::Redraw => self.effects.push(Effect::Redraw),
             Outcome::Suspend => self.effects.push(Effect::Suspend),
-            Outcome::ToggleRound => self.mapper.toggle_round(&mut self.transcript, None),
+            Outcome::ToggleRound => {
+                self.mapper
+                    .toggle_round(&mut self.transcript, None, &self.look);
+            }
             Outcome::Activate(Target::ToolBox(id)) => {
-                self.mapper.toggle_round(&mut self.transcript, Some(id));
+                self.mapper
+                    .toggle_round(&mut self.transcript, Some(id), &self.look);
             }
             _ => {}
         }

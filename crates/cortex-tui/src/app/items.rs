@@ -116,7 +116,12 @@ impl Mapper {
     }
 
     /// Opens or closes a live round's box: the given one, or the last.
-    pub(crate) fn toggle_round(&mut self, transcript: &mut Transcript, which: Option<u64>) {
+    pub(crate) fn toggle_round(
+        &mut self,
+        transcript: &mut Transcript,
+        which: Option<u64>,
+        look: &crate::view::Look,
+    ) {
         let found = match which {
             Some(id) => self.rounds.iter().find(|(number, _)| *number == id),
             None => self.rounds.last(),
@@ -125,10 +130,7 @@ impl Mapper {
             return;
         };
         if let Some(Block::Round(round)) = transcript.get_mut(round.block) {
-            let open = round
-                .open
-                .unwrap_or_else(|| round.calls.iter().any(|call| call.detail != Detail::None));
-            round.open = Some(!open);
+            round.open = Some(!crate::view::shows_detail(round, look));
         }
     }
 

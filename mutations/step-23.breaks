@@ -109,3 +109,48 @@ find: if self.opening {
 replace: if false {
 caught-by:
     app::tests::the_session_is_opened_after_the_first_frame_and_its_header_comes_first
+
+[break] ctrl-t-flips-the-wrong-way
+rule: Ctrl+T turns the running round's box the other way from what it shows now.
+file: crates/cortex-tui/src/app/items.rs
+in: Mapper::toggle_round
+find: round.open = Some(!crate::view::shows_detail(round, look));
+replace: round.open = Some(round.calls.iter().all(|call| call.detail == Detail::None));
+caught-by:
+    app::items::tests::ctrl_t_opens_and_closes_the_running_rounds_box
+
+[break] a-running-commands-output-kept-whole
+rule: The interface keeps only the tail of a running command's output: a command that prints a gigabyte costs it a bounded amount.
+file: crates/cortex-tui/src/app/items.rs
+in: keep_tail
+find: if text.len() <= OUTPUT_TAIL {
+replace: if true {
+caught-by:
+    app::items::tests::a_running_commands_output_is_kept_to_its_tail
+
+[break] deltas-after-a-resync-taken
+rule: After an item's resync its deltas are not taken, and the completed item's text past what arrived is added, so an answer never loses or doubles its middle.
+file: crates/cortex-tui/src/app/items.rs
+in: Mapper::delta
+find:
+    if let Some(reasoning) = response.reasoning.take() {
+        finish_reasoning(transcript, reasoning, now);
+    }
+    let answer = match response.answer {
+replace:
+    response.resync = false;
+    if let Some(reasoning) = response.reasoning.take() {
+        finish_reasoning(transcript, reasoning, now);
+    }
+    let answer = match response.answer {
+caught-by:
+    app::items::tests::an_answer_whose_deltas_stopped_is_completed_from_the_whole_item
+
+[break] a-stopped-responses-calls-left-running
+rule: A response that stopped part-way runs none of its calls, and they end as interrupted, so their round can commit.
+file: crates/cortex-tui/src/app/items.rs
+in: Mapper::response_completed
+find: Some(StopReason::Interrupted | StopReason::Error | StopReason::MalformedToolCall)
+replace: Some(StopReason::Paused)
+caught-by:
+    app::items::tests::a_stopped_response_runs_none_of_its_calls

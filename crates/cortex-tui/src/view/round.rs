@@ -219,6 +219,16 @@ pub fn round(
     rounded.draw(&rows, label.as_ref())
 }
 
+/// Whether a live box shows any call's detail now: what `Ctrl+T` turns
+/// the other way (step 23).
+#[must_use]
+pub fn shows_detail(round: &Round, look: &Look) -> bool {
+    round
+        .calls
+        .iter()
+        .any(|call| call.detail != Detail::None && is_open(round, call, Placement::Live, look))
+}
+
 /// Whether a call's detail is open in this box.
 fn is_open(round: &Round, call: &Call, placement: Placement, look: &Look) -> bool {
     if let Placement::Viewer { open, .. } = placement {
