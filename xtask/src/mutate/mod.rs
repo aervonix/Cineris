@@ -518,6 +518,29 @@ fn preflight(
     problems
 }
 
+/// Where a `find` that ends in a comma, and is not found, is found without
+/// it: a comma before a closing bracket is not a token of the source, and
+/// one at the end of `find` is (nothing closes after it), so such a `find`
+/// can never match there. The line of the match's end, or `None` when the
+/// `find` does not end in a comma or is not there without it either.
+fn comma_before_a_bracket(one: &Break, source: &str, tokens: &[lex::Token]) -> Option<usize> {
+    if lex::code_texts(&one.find).last() != Some(&",") {
+        return None;
+    }
+    let shorter = one.find.trim_end().strip_suffix(',')?;
+    match lex::locate_in(
+        source,
+        tokens,
+        one.anchor.as_deref(),
+        shorter,
+        one.occurrence,
+    ) {
+        Ok(range) => Some(lex::line_of(source, range.end)),
+        Err(lex::Missing::Ambiguous(lines)) => lines.first().copied(),
+        Err(_) => None,
+    }
+}
+
 /// Whether `find` ends in a comma that `rustfmt` may move: one after an
 /// argument, an element or a field. Not the comma after a match arm that is
 /// an expression (`Some(1) => one,`), which the formatter always writes.
@@ -640,10 +663,21 @@ fn locate(
                 },
                 how_to_fix(one),
             ),
-            lex::Missing::NotFound => (
-                format!("its `find` is not in `{}`{inside}", one.file),
-                how_to_fix(one),
-            ),
+            lex::Missing::NotFound => match comma_before_a_bracket(one, source, tokens) {
+                Some(line) => (
+                    format!(
+                        "its `find` ends in a comma, and in `{}` that comma (line {line}) comes \
+                         before a closing bracket, where it is the formatter's and not a token; \
+                         the `find` has it as a token, so it cannot match",
+                        one.file
+                    ),
+                    "End `find` before the comma, and `replace` too if it ends in one.".to_owned(),
+                ),
+                None => (
+                    format!("its `find` is not in `{}`{inside}", one.file),
+                    how_to_fix(one),
+                ),
+            },
             lex::Missing::Ambiguous(lines) => (
                 format!(
                     "its `find` is in `{}`{inside} {} times, at lines {}",
@@ -970,6 +1004,51 @@ find: f.write_str(\"budget\")
 replace: f.write_str(\"other\")
 ";
         assert_eq!(problems_with(list), [] as [String; 0]);
+    }
+
+    #[test]
+    fn a_find_whose_comma_comes_before_a_bracket_is_told_why_it_cannot_match() {
+        let root = super::drive::tests::tree(
+            "preflight-comma",
+            &[
+                ("crates/demo/Cargo.toml", "[package]\n"),
+                (
+                    "crates/demo/src/lib.rs",
+                    "pub fn call() {\n    run(\n        first,\n        second,\n    )\n}\n",
+                ),
+            ],
+        );
+        let list = "\
+[break] comma-before-bracket
+rule: r
+file: crates/demo/src/lib.rs
+find: second,
+replace: third,
+
+[break] comma-elsewhere
+rule: r
+file: crates/demo/src/lib.rs
+find: fourth,
+replace: third,
+";
+        let problems = check(&root, &breaks("demo", list));
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(problems.len(), 2, "{problems:#?}");
+        assert!(
+            problems[0].contains("`demo/comma-before-bracket`")
+                && problems[0].contains("that comma (line 4) comes before a closing bracket")
+                && problems[0].contains("End `find` before the comma"),
+            "{problems:#?}"
+        );
+        // A `find` that is not there without its comma either is just not
+        // there.
+        assert!(
+            problems[1].contains("`demo/comma-elsewhere`")
+                && problems[1].contains("its `find` is not in")
+                && !problems[1].contains("closing bracket"),
+            "{problems:#?}"
+        );
     }
 
     #[test]
