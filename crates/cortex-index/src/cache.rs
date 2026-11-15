@@ -314,6 +314,7 @@ impl CacheFile {
     }
 
     /// The record of the file at `path`, under the workspace with `/`.
+    #[cfg(test)]
     pub(crate) fn find(&self, path: &str) -> Option<&Record> {
         self.records
             .binary_search_by(|record| path_order(&record.path, path))

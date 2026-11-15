@@ -95,8 +95,9 @@ impl MapPending {
         }
     }
 
-    /// Waits for the answer.
-    pub(crate) async fn wait(&mut self) -> Option<String> {
+    /// Waits for the answer: the map, or `None` when there is none. Call it
+    /// once: a second call after the answer has come does not return.
+    pub async fn wait(&mut self) -> Option<String> {
         (&mut self.answer).await.unwrap_or(None)
     }
 }

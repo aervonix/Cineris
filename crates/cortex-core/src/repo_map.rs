@@ -121,14 +121,30 @@ impl Shared {
         }
     }
 
-    /// Passes until nobody waits, answering who does.
+    /// Passes until nobody waits, answering who does, and while the session
+    /// is idle and the last pass left work and made progress.
     fn work(&self) {
+        let mut indexed = None;
         loop {
             let give_way =
                 || self.turn.load(Ordering::SeqCst) && lock(&self.state).waiting.is_empty();
-            let report = self.index.pass(&self.cancel, &give_way);
+            // A pass that panics (an extractor's bug, a gate's) must not
+            // leave the index running for ever and who waits unanswered.
+            let passed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.index.pass(&self.cancel, &give_way)
+            }));
+            let Ok(report) = passed else {
+                tracing::warn!("a pass of the repository index failed: no map from it");
+                let mut state = lock(&self.state);
+                state.waiting.clear();
+                state.unfinished = false;
+                state.running = false;
+                return;
+            };
             let gave_way = report.partial.contains(&cortex_index::Partial::Stopped)
                 && !self.cancel.is_cancelled();
+            let progressed = indexed.is_none_or(|before| report.indexed > before);
+            indexed = Some(report.indexed);
             let waiting = {
                 let mut state = lock(&self.state);
                 state.unfinished = report.unfinished();
@@ -147,14 +163,25 @@ impl Shared {
                         recent: recent.clone(),
                         tokens: self.tokens,
                     };
-                    answer.send(self.index.map(&request));
+                    let map = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        self.index.map(&request)
+                    }))
+                    .unwrap_or(None);
+                    answer.send(map);
                 }
             }
             let mut state = lock(&self.state);
-            if state.waiting.is_empty() {
-                state.running = false;
-                return;
+            if !state.waiting.is_empty() {
+                continue;
             }
+            // An idle slice the turn's end may have looked for too early:
+            // carry on while the last pass made progress.
+            let idle = !self.turn.load(Ordering::SeqCst) && !self.cancel.is_cancelled();
+            if state.unfinished && idle && progressed {
+                continue;
+            }
+            state.running = false;
+            return;
         }
     }
 }
@@ -212,5 +239,54 @@ impl Outliner for RepoIndex {
             Err(OutlineError::Binary) => Err("it is a binary file".to_owned()),
             Err(error) => Err(error.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use cortex_base::{FakeClock, PathOptions, PathResolver};
+    use cortex_index::{Limits, NoRecentFiles};
+    use cortex_testkit::{Scratch, block_on};
+
+    use super::*;
+
+    /// A pass that panics answers who waits with no map, and leaves the
+    /// index able to start another (the review of step 18).
+    #[test]
+    fn a_pass_that_panics_answers_who_waits_and_lets_the_next_one_start() {
+        let scratch = Scratch::outside("cortex-core-unit", "a_pass_that_panics");
+        scratch.file("ws/src/lib.rs", "pub fn hello() {}\n");
+        let root = PathResolver::new(&scratch.dir("ws"), PathOptions::new())
+            .expect("a workspace")
+            .root()
+            .clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        let gate: Arc<dyn cortex_index::Gate> = Arc::new(move |_: &AbsPath| {
+            assert!(
+                counted.fetch_add(1, Ordering::SeqCst) > 0,
+                "the first look panics"
+            );
+            true
+        });
+        let index = Index::new(
+            root,
+            scratch.join("index"),
+            Limits::default(),
+            gate,
+            Arc::new(FakeClock::default()),
+        );
+        let repo = RepoIndex::new(index, 1500, Arc::new(NoRecentFiles), CancelToken::new());
+        let mut first = repo.request(Vec::new());
+        assert_eq!(
+            block_on(first.wait()),
+            None,
+            "who waited is told there is no map"
+        );
+        let mut second = repo.request(Vec::new());
+        let map = block_on(second.wait()).expect("the next request starts a pass that works");
+        assert!(map.contains("src/lib.rs"), "{map}");
     }
 }

@@ -52,40 +52,34 @@ impl Index {
     #[must_use]
     pub fn map(&self, request: &MapRequest) -> Option<String> {
         let cache = self.cache()?;
-        render(&cache, request, self.limits().max_files)
+        let root = self.root();
+        // A path, and every directory above it: the walk goes into no
+        // directory the gate refuses.
+        let allowed = |path: &str| {
+            path.match_indices('/')
+                .map(|(at, _)| &path[..at])
+                .chain(std::iter::once(path))
+                .all(|part| root.join(part).is_ok_and(|abs| self.gate().may_index(&abs)))
+        };
+        render(&cache, request, self.limits().max_files, &allowed)
     }
 
-    /// The outline of the file at `path`: the cached one when the file is
-    /// as the cache last saw it, and one made now otherwise. A file over
-    /// the cap is outlined from its first bytes up to the cap.
+    /// The outline of the file at `path`, made from the file as it is now.
+    /// The cache is not read: one file's outline takes a fraction of a
+    /// millisecond to make, and reading the cache takes several. A file
+    /// over the cap is outlined from its first bytes up to the cap.
     ///
     /// # Errors
     ///
     /// [`OutlineError`] when the file is outside the workspace, cannot be
     /// opened as a regular file, or is binary.
     pub fn outline_of(&self, path: &AbsPath) -> Result<FileOutline, OutlineError> {
-        let relative = path
-            .strip_prefix(self.root())
+        path.strip_prefix(self.root())
             .filter(|relative| !relative.is_empty())
             .ok_or(OutlineError::Outside)?;
         let (handle, metadata) = open_regular(&path.to_fs_path())
             .map_err(|error| OutlineError::Unreadable(error.to_string()))?;
         let stamp = Stamp::of(&metadata);
-        if let Some(cache) = self.cache()
-            && let Some(record) = cache.find(relative.as_str())
-            && record.stamp == stamp
-            && !record.flags.unsettled
-            && !record.flags.large
-        {
-            if record.flags.binary {
-                return Err(OutlineError::Binary);
-            }
-            return Ok(FileOutline {
-                outline: cache.outline_of(record),
-                size: stamp.size,
-                covered: None,
-            });
-        }
         let cap = self.limits().max_file_bytes;
         let wanted = stamp.size.min(cap);
         let mut bytes = Vec::with_capacity(usize::try_from(wanted).unwrap_or(0));

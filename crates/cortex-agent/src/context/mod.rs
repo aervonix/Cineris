@@ -420,7 +420,16 @@ impl Context {
         for item in items.iter().skip(summary.unwrap_or(0)) {
             let told = match item {
                 Item::Summary(summary) => told_date(&summary.text).map(str::to_owned),
-                Item::Notice(notice) => told_date(&notice.text).map(str::to_owned),
+                // Only the harness's own date notice: the text of an
+                // instruction file, a plan, a check's output or the
+                // repository map can say "Today's date is" too (the review
+                // of step 18).
+                Item::Notice(notice)
+                    if notice.source == NoticeSource::Harness
+                        && notice.text.starts_with("Today's date is ") =>
+                {
+                    told_date(&notice.text).map(str::to_owned)
+                }
                 Item::UserMessage(user) if self.date.is_none() => user
                     .created_at
                     .as_ref()

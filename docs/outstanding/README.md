@@ -56,6 +56,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [log-level-from-configuration-in-headless-mode](log-level-from-configuration-in-headless-mode.md): A headless run starts the log before configuration is read, so `log.level` is ignored. Owner: step 23 or step 27.
 - [secret-filter-on-what-clients-are-sent](secret-filter-on-what-clients-are-sent.md): Events, approval requests and in-progress items sent to clients skip the secret filter applied to disk writes. Owner: the owner; before step 27.
 - [shutdown-and-a-session-being-put-together](shutdown-and-a-session-being-put-together.md): `Core::shutdown` returns before a session still being put together has ended itself. Owner: step 27.
+- [the-top-of-a-tree-past-the-listing-cap](the-top-of-a-tree-past-the-listing-cap.md): A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree. Owner: a later index step, or step 33.
 - [the-maps-files-of-recent-sessions](the-maps-files-of-recent-sessions.md): The map's ranking by the files of recent sessions has its seam (`RecentFiles`) and no source until the statistics record files. Owner: step 16, or the step after it and step 18.
 - [what-start-up-opens-traced](what-start-up-opens-traced.md): The blocking check that start-up opens no file outside an allow-list does not exist; the index's part is checked with a held gate. Owner: the next start-up step, or step 33.
 - [the-shell-version-after-a-shell-update](the-shell-version-after-a-shell-update.md): The first session after a shell is installed or updated has no shell version in its prompt, so the next resume is a `resume` epoch. Owner: step 33.
@@ -110,6 +111,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-tools
 
+- [names-that-act-unseen-in-tool-results](names-that-act-unseen-in-tool-results.md): `list`, `search` and `read` show a name with a line break or an escape as it is; the map and `outline` escape them. Owner: a later `cortex-tools` step, or step 32.
 - [a-git-look-too-slow-on-a-loaded-windows-runner](a-git-look-too-slow-on-a-loaded-windows-runner.md): The shell's look at changes gave up as too slow on a loaded Windows runner, failing one system test once. Owner: the next step that changes the look, or step 32.
 - [cmd-searches-the-current-directory](cmd-searches-the-current-directory.md): `cmd.exe` finds a program in the working directory before `PATH`, so a workspace `git.bat` runs as `git`. Owner: the owner.
 - [windows-tier-three-margin-and-the-powershell-tests](windows-tier-three-margin-and-the-powershell-tests.md): Windows tier 3 reads 76 to 90 s of its 90 on ordinary runners and failed at 138.8 s on a 12 ms one; `cortex-tools`' PowerShell tests are 76 s of it. Owner: a tooling step early in wave 10.

@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use crate::cache::{CacheFile, Record};
-use crate::outline::{Entry, Kind};
+use crate::outline::{Entry, Kind, visible};
 use crate::walk::Partial;
 
 /// The map's default budget, in tokens.
@@ -98,8 +98,21 @@ const LEAD: &str = "Repository map, made by the harness from the workspace's fil
 how many files they hold, then the most relevant files with their main definitions. \
 `outline` shows a file's or a directory's definitions with their lines.";
 
-/// The map of a cache, or `None` when it has nothing to show.
-pub(crate) fn render(cache: &CacheFile, request: &MapRequest, max_files: usize) -> Option<String> {
+/// How many files left at the end of the ranking are tried whole when the
+/// next one does not fit beside the line that says what is left out: so
+/// that a map that would fit its budget exactly is not cut for that line.
+const LAST_FEW: usize = 16;
+
+/// The map of a cache, or `None` when it has nothing to show. `allowed`
+/// says whether a path under the workspace may be named: the session's
+/// gate, asked again, because the cache is the project's and another
+/// session's rules may have let more in.
+pub(crate) fn render(
+    cache: &CacheFile,
+    request: &MapRequest,
+    max_files: usize,
+    allowed: &dyn Fn(&str) -> bool,
+) -> Option<String> {
     if cache.records.is_empty() {
         return None;
     }
@@ -113,56 +126,73 @@ pub(crate) fn render(cache: &CacheFile, request: &MapRequest, max_files: usize) 
     }
 
     // The tree, up to its share.
-    let tree = tree(cache, (budget - text.len()) * TREE_SHARE / 100);
+    let tree = tree(cache, (budget - text.len()) * TREE_SHARE / 100, allowed);
     if !tree.is_empty() {
         text.push_str("\nDirectories:\n");
         text.push_str(&tree);
     }
 
-    // The files, most relevant first, each whole or not at all.
-    let ranked = rank(cache, request);
-    let lines: Vec<String> = ranked
-        .iter()
-        .filter_map(|&at| file_line(cache, &cache.records[at]))
+    // The files, most relevant first, each whole or not at all. A line is
+    // made only when it is tried, so a map of 20,000 files reads the
+    // outlines of the few it shows.
+    let showable: Vec<usize> = rank(cache, request)
+        .into_iter()
+        .filter(|&at| cache.records[at].entries > 0)
         .collect();
-    if lines.is_empty() {
-        return Some(text);
-    }
     const HEADING: &str = "\nFiles, most relevant first:\n";
-    let all: usize = HEADING.len() + lines.iter().map(|line| line.len() + 1).sum::<usize>();
-    if text.len() + all <= budget {
-        text.push_str(HEADING);
-        for line in &lines {
-            text.push_str(line);
-            text.push('\n');
-        }
-        return Some(text);
-    }
-    // Not all fit: keep room for the line that says so.
     let cut_line = |left: usize| {
         format!(
             "[{left} more {} not shown: `outline` or `list` reach them.]\n",
             if left == 1 { "file" } else { "files" }
         )
     };
-    let reserve = cut_line(lines.len()).len();
-    let mut shown = 0;
+    let line_of = |at: usize| {
+        let record = &cache.records[at];
+        allowed(&record.path)
+            .then(|| file_line(cache, record))
+            .flatten()
+    };
+    let room = budget.saturating_sub(text.len() + HEADING.len());
     let mut body = String::new();
-    for line in &lines {
-        if text.len() + HEADING.len() + body.len() + line.len() + 1 + reserve > budget {
-            break;
+    let mut tried = 0;
+    while tried < showable.len() {
+        let Some(line) = line_of(showable[tried]) else {
+            tried += 1;
+            continue;
+        };
+        let left = showable.len() - tried - 1;
+        let reserve = if left == 0 { 0 } else { cut_line(left).len() };
+        if body.len() + line.len() + 1 + reserve <= room {
+            body.push_str(&line);
+            body.push('\n');
+            tried += 1;
+            continue;
         }
-        body.push_str(line);
-        body.push('\n');
-        shown += 1;
+        // It does not fit beside the cut line: near the end, all that is
+        // left may fit without it.
+        if showable.len() - tried <= LAST_FEW {
+            let rest: String = showable[tried..]
+                .iter()
+                .filter_map(|&at| line_of(at))
+                .map(|line| line + "\n")
+                .collect();
+            if body.len() + rest.len() <= room {
+                body.push_str(&rest);
+                tried = showable.len();
+            }
+        }
+        break;
     }
-    if shown > 0 {
+    if !body.is_empty() {
         text.push_str(HEADING);
         text.push_str(&body);
     }
-    let cut = cut_line(lines.len() - shown);
-    if text.len() + cut.len() <= budget {
-        text.push_str(&cut);
+    let left = showable.len() - tried;
+    if left > 0 {
+        let cut = cut_line(left);
+        if text.len() + cut.len() <= budget {
+            text.push_str(&cut);
+        }
     }
     Some(text)
 }
@@ -200,14 +230,25 @@ fn counts(cache: &CacheFile, max_files: usize) -> String {
     line
 }
 
-/// Whole levels of directories, as deep as fit in `room` bytes.
-fn tree(cache: &CacheFile, room: usize) -> String {
-    let dirs: Vec<(&str, usize)> = cache
-        .dirs
-        .iter()
-        .filter(|(dir, _)| !dir.is_empty())
-        .map(|(dir, files)| (dir.as_str(), *files))
-        .collect();
+/// Whole levels of directories, as deep as fit in `room` bytes: the ones
+/// `allowed` lets through, with every directory above them.
+fn tree(cache: &CacheFile, room: usize, allowed: &dyn Fn(&str) -> bool) -> String {
+    let mut known: std::collections::BTreeMap<&str, bool> = std::collections::BTreeMap::new();
+    let mut dirs: Vec<(&str, usize)> = Vec::new();
+    for (dir, files) in &cache.dirs {
+        if dir.is_empty() {
+            continue;
+        }
+        // The cache lists a directory after the ones above it.
+        let parent_ok = dir
+            .rsplit_once('/')
+            .is_none_or(|(parent, _)| known.get(parent).copied().unwrap_or(false));
+        let ok = parent_ok && allowed(dir);
+        known.insert(dir.as_str(), ok);
+        if ok {
+            dirs.push((dir.as_str(), *files));
+        }
+    }
     let deepest = dirs
         .iter()
         .map(|(dir, _)| dir.split('/').count())
@@ -220,7 +261,7 @@ fn tree(cache: &CacheFile, room: usize) -> String {
             if level > depth {
                 continue;
             }
-            let name = dir.rsplit('/').next().unwrap_or(dir);
+            let name = visible(dir.rsplit('/').next().unwrap_or(dir));
             let _ = writeln!(
                 out,
                 "{:indent$}{name}/ ({files})",
@@ -326,7 +367,7 @@ fn file_line(cache: &CacheFile, record: &Record) -> Option<String> {
         return None;
     }
     let outline = cache.outline_of(record);
-    let mut line = format!("{}:", record.path);
+    let mut line = format!("{}:", visible(&record.path));
     let mut top: Vec<(&Entry, Vec<&Entry>)> = Vec::new();
     for entry in &outline.entries {
         match entry.depth {
@@ -347,7 +388,7 @@ fn file_line(cache: &CacheFile, record: &Record) -> Option<String> {
             line.push_str(" {");
             for (index, member) in members.iter().take(MEMBERS).enumerate() {
                 line.push_str(if index == 0 { " " } else { ", " });
-                line.push_str(&member.name);
+                line.push_str(&visible(&member.name));
             }
             if members.len() > MEMBERS {
                 let _ = write!(line, ", +{}", members.len() - MEMBERS);
@@ -365,7 +406,7 @@ fn file_line(cache: &CacheFile, record: &Record) -> Option<String> {
 /// name, or a heading's text.
 fn named(entry: &Entry) -> String {
     match entry.kind {
-        Kind::Section | Kind::Block => entry.name.clone(),
-        kind => format!("{} {}", kind.word(), entry.name),
+        Kind::Section | Kind::Block => visible(&entry.name).into_owned(),
+        kind => format!("{} {}", kind.word(), visible(&entry.name)),
     }
 }

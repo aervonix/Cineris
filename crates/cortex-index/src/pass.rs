@@ -131,8 +131,10 @@ impl Index {
         gate: Arc<dyn Gate>,
         clock: SharedClock,
     ) -> Self {
-        let threads = std::thread::available_parallelism()
-            .map_or(1, |cores| (cores.get() / 2).clamp(1, MAX_THREADS));
+        // How many threads read is worked out by the first pass: asking the
+        // system reads files on Linux (the process's cgroup), and making
+        // an index must touch none.
+        let threads = 0;
         Self {
             root,
             dir,
@@ -162,6 +164,11 @@ impl Index {
         &self.limits
     }
 
+    /// What may be indexed and named.
+    pub(crate) fn gate(&self) -> &dyn Gate {
+        &*self.gate
+    }
+
     /// The cache file.
     #[must_use]
     pub fn cache_path(&self) -> PathBuf {
@@ -182,10 +189,19 @@ impl Index {
         cancel: &cortex_base::CancelToken,
         give_way: &(dyn Fn() -> bool + Sync),
     ) -> PassReport {
-        let started = self.clock.monotonic();
+        // The time limit is the reading's: it starts when the listing ends
+        // (`walk::Control::stop_listing`).
+        let started = std::sync::Mutex::new(None::<std::time::Duration>);
         let limit = self.limits.pass_time;
         let clock = Arc::clone(&self.clock);
-        let out_of_time = move || clock.monotonic().saturating_sub(started) >= limit;
+        let out_of_time = || {
+            let now = clock.monotonic();
+            let began = *started
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_or_insert(now);
+            now.saturating_sub(began) >= limit
+        };
         let control = Control {
             cancel,
             give_way,
@@ -196,6 +212,7 @@ impl Index {
             i128::from(now.unix_secs()) * 1_000_000_000 + i128::from(now.subsec_nanos())
         };
         let listing = walk::list(&self.root, &self.gate, &self.limits, &control);
+        let _ = out_of_time();
         let mut report = PassReport {
             found: listing.found,
             skipped: listing.skipped,
@@ -212,8 +229,13 @@ impl Index {
         let old = self.cache();
         let root_fs = self.root.to_fs_path();
         let mut writer = Writer::new(self.root.as_str());
-        for (dir, files) in &listing.dirs {
-            writer.dir(dir, *files);
+        // Directories in the order the files are in, so that a directory's
+        // subdirectories follow it (`a`, `a/x`, `a-b`), which is what the
+        // map's tree draws by indentation.
+        let mut dirs: Vec<(&String, &usize)> = listing.dirs.iter().collect();
+        dirs.sort_by(|(one, _), (other, _)| walk::path_order(one, other));
+        for (dir, files) in &dirs {
+            writer.dir(dir, **files);
         }
         // A window of files at a time: what is read is written out before
         // the next is read, so a pass holds one window's outlines, not the
@@ -239,7 +261,7 @@ impl Index {
                 .map(|(file, _)| file)
                 .collect();
             let read = if stopped.is_none() {
-                let (read, why) = self.read_all(&root_fs, &wanted, &control, now);
+                let (read, why) = self.read_all(&root_fs, &wanted, &control, now, report.read == 0);
                 stopped = why;
                 read
             } else {
@@ -272,12 +294,12 @@ impl Index {
                 && old.records.len() == report.indexed
                 && old.found == listing.found
                 && old.partial == report.partial
-                && old.dirs.len() == listing.dirs.len()
+                && old.dirs.len() == dirs.len()
                 && old
                     .dirs
                     .iter()
-                    .zip(&listing.dirs)
-                    .all(|((one, n), (other, m))| one == other && n == m)
+                    .zip(&dirs)
+                    .all(|((one, n), (other, m))| one == *other && n == *m)
         });
         // The old cache's text goes before the new one is written.
         drop(old);
@@ -296,20 +318,35 @@ impl Index {
         files: &[&Listed],
         control: &Control<'_>,
         now: i128,
+        first: bool,
     ) -> (Vec<Option<String>>, Option<Partial>) {
         let next = AtomicUsize::new(0);
         let stopped: std::sync::Mutex<Option<Partial>> = std::sync::Mutex::new(None);
         let results: Vec<std::sync::Mutex<Option<String>>> =
             files.iter().map(|_| std::sync::Mutex::new(None)).collect();
-        let threads = self.threads.min(files.len()).max(1);
+        let threads = if self.threads == 0 {
+            std::thread::available_parallelism()
+                .map_or(1, |cores| (cores.get() / 2).clamp(1, MAX_THREADS))
+        } else {
+            self.threads
+        };
+        let threads = threads.min(files.len()).max(1);
         let work = || {
             loop {
-                if let Some(why) = control.stop() {
-                    let mut stopped = stopped
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    stopped.get_or_insert(why);
-                    return;
+                // A pass reads one file at least, whatever its time limit
+                // says, so that every pass makes progress: the time can run
+                // out with the listing on a slow disk, or be set to nothing.
+                let started_reading = !first || next.load(Ordering::Relaxed) > 0;
+                match control.stop() {
+                    Some(Partial::Time) if !started_reading => {}
+                    Some(why) => {
+                        let mut stopped = stopped
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        stopped.get_or_insert(why);
+                        return;
+                    }
+                    None => {}
                 }
                 let at = next.fetch_add(1, Ordering::Relaxed);
                 let Some(file) = files.get(at) else { return };

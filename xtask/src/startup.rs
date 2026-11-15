@@ -108,8 +108,12 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let scratch = std::env::temp_dir().join(format!("cortex-startup-{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     fs::create_dir_all(&scratch).map_err(|error| format!("{}: {error}", scratch.display()))?;
+    // Absolute, not canonical: on Windows a canonical path is the
+    // extended-length form, which is no working directory (AGENTS.md).
     let tree = tree
-        .map(|tree| fs::canonicalize(&tree).map_err(|error| format!("{}: {error}", tree.display())))
+        .map(|tree| {
+            std::path::absolute(&tree).map_err(|error| format!("{}: {error}", tree.display()))
+        })
         .transpose()?;
     let outcome = measure(&binary, &scratch, runs, tree.as_deref());
     let _ = fs::remove_dir_all(&scratch);

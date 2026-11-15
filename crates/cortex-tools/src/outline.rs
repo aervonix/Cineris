@@ -47,6 +47,48 @@ const KEPT_FILES: usize = 2_000;
 /// file leaves room for the others: the rest is the file's own outline.
 const FILE_LINES: usize = 30;
 
+/// A path of a directory's listing, ordered name by name, so that a
+/// directory's files sort together whatever their neighbours' names hold
+/// (`a/x.rs` before `a-b.rs`): the order the repository map uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InOrder(String);
+
+impl Ord for InOrder {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.split('/').cmp(other.0.split('/'))
+    }
+}
+
+impl PartialOrd for InOrder {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// `text` with every character that would act unseen (a line break, an
+/// escape, a bidirectional control) written as an escape: a file can be
+/// named so that, written as it is, it starts lines of its own.
+fn visible(text: &str) -> String {
+    let hidden = |character: char| {
+        character.is_control()
+            || matches!(
+                character,
+                '\u{200E}' | '\u{200F}' | '\u{061C}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            )
+    };
+    let mut out = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other if hidden(other) => out.push_str(&format!("\\u{{{:x}}}", u32::from(other))),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// What the header and the closing notes may take of the output limits.
 const RESERVED_LINES: usize = 8;
 const RESERVED_BYTES: usize = 1536;
@@ -210,10 +252,13 @@ fn outline_file(
     let shown = target.display();
     let outlined = match outliner.describe(target.abs()) {
         Ok(outlined) => outlined,
-        Err(why) => return ToolResult::error(format!("`{shown}` has no outline: {why}.")),
+        Err(why) => {
+            return ToolResult::error(format!("`{}` has no outline: {why}.", visible(&shown)));
+        }
     };
     let mut text = format!(
-        "{shown} ({}; approximate):",
+        "{} ({}; approximate):",
+        visible(&shown),
         describing(outlined.language.as_deref(), outlined.definitions)
     );
     if outlined.definitions == 0 {
@@ -270,7 +315,7 @@ fn outline_directory(
     let shown = call.target.display();
     // The first files in path order, kept as the walk goes; the rest are
     // counted.
-    let found = Mutex::new((BTreeSet::<String>::new(), 0usize));
+    let found = Mutex::new((BTreeSet::<InOrder>::new(), 0usize));
     let skipped = walk::walk(
         &WalkSpec {
             root: &call.target,
@@ -289,7 +334,7 @@ fn outline_directory(
                 }
                 let mut found = found.lock().unwrap_or_else(PoisonError::into_inner);
                 found.1 += 1;
-                found.0.insert(entry.relative.to_owned());
+                found.0.insert(InOrder(entry.relative.to_owned()));
                 if found.0.len() > KEPT_FILES {
                     found.0.pop_last();
                 }
@@ -307,7 +352,7 @@ fn outline_directory(
     let mut empty = 0usize;
     let mut out_of_room = false;
     let mut looked = 0usize;
-    for relative in &files {
+    for InOrder(relative) in &files {
         if cancel.is_cancelled() {
             return ToolResult::interrupted(format!("Outlining `{shown}` was interrupted."));
         }
@@ -315,7 +360,7 @@ fn outline_directory(
         let Ok(path) = call.target.abs().join(relative) else {
             continue;
         };
-        let file_shown = walk::shown_path(&shown, relative);
+        let file_shown = visible(&walk::shown_path(&shown, relative));
         let Some(text) = file_outline(&path, outliner) else {
             empty += 1;
             continue;
