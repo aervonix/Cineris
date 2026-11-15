@@ -153,7 +153,7 @@ caught-by:
 [break] preparing-is-sized-past-the-trigger
 rule: Fill::Preparing puts the estimate between the background threshold and the trigger.
 file: crates/cortex-agent/tests/it/main.rs
-in: Rig::fill
+in: Rig::size
 find: Fill::Preparing => (prepare, compact),
 replace: Fill::Preparing => (compact, limit as f64),
 caught-by:

@@ -1219,12 +1219,70 @@ impl Rig {
     /// counted a request.
     ///
     /// Call it before the session's first turn, and outside `world.run`:
-    /// the twin has a runtime of its own.
+    /// the twin has a runtime of its own. For a session that has history,
+    /// see [`Rig::fill_next`] and [`Rig::fill_after`].
     pub fn fill(&self, fill: Fill, prompt: &str) -> Filled {
         assert!(
             !self.handle.has_history(),
-            "Rig::fill sizes a session's first request: this one has history"
+            "Rig::fill sizes a session's first request: this one has history (Rig::fill_next \
+             sizes the first request of its next turn)"
         );
+        let filled = self.size(fill, prompt, Vec::new());
+        self.bulk(filled.bulk);
+        filled
+    }
+
+    /// [`Rig::fill`] for a session that has history: gives the next turn the
+    /// bulk that puts its first request at `fill`, the second turn's first
+    /// request of a test that runs two. Between turns, outside
+    /// `world.run`.
+    ///
+    /// The twin is the session as it stands: it is resumed from a copy of
+    /// the items the rig's store holds, and runs `prompt` as its next turn.
+    /// So the history counts, as it will in the request. Refused, with the
+    /// numbers, when the band cannot be reached with that history in the
+    /// window; and refused when the session has no items in the rig's
+    /// store, has begun a second context epoch, or has had a request
+    /// counted by its provider (a response that reported tokens): the loop
+    /// then estimates from the count, and the twin has none.
+    pub fn fill_next(&self, fill: Fill, prompt: &str) -> Filled {
+        assert!(
+            self.handle.has_history(),
+            "Rig::fill_next sizes the first request of a turn after the first: this session has \
+             no history (Rig::fill sizes its first request)"
+        );
+        let filled = self.size(fill, prompt, Vec::new());
+        self.bulk(filled.bulk);
+        filled
+    }
+
+    /// Sizes a later request of a turn: the one that follows `earlier`, the
+    /// responses of the turn `prompt` starts that come before it (the call
+    /// of a tool round, whose result is in the request). Returns what it
+    /// measured and gives the session nothing: the bulk is delivered with
+    /// `rig.bulk(filled.bulk)` at the moment the test chooses while the
+    /// turn runs (a notice reaches the turn at its next request), since
+    /// given at the start of the turn it would be in the first request too.
+    ///
+    /// The twin runs the turn: the session's history as [`Rig::fill_next`]
+    /// has it, then `prompt`, then `earlier` in order, then one request
+    /// that it measures. So `earlier` must be what the session will be
+    /// given, without a wait (a gate in a response would hold the twin for
+    /// ever), and the session's tools must answer as the twin's do. Refused,
+    /// with the numbers, when the band cannot be reached; and when the twin's
+    /// turn ends before the request is made, or a response reported tokens.
+    pub fn fill_after(
+        &self,
+        fill: Fill,
+        prompt: &str,
+        earlier: impl IntoIterator<Item = Response>,
+    ) -> Filled {
+        self.size(fill, prompt, earlier.into_iter().collect())
+    }
+
+    /// The bulk that puts the request that follows `earlier` in the turn
+    /// `prompt` starts at `fill`, measured on a twin.
+    fn size(&self, fill: Fill, prompt: &str, earlier: Vec<Response>) -> Filled {
         let entry = &self.twin.model.entry.info;
         let window = self.window.lock().unwrap().unwrap_or(entry.context_window);
         let max_output = self.twin.model.max_output.unwrap_or(entry.max_output);
@@ -1234,7 +1292,7 @@ impl Rig {
             self.twin.context.prepare_at * limit as f64,
             self.twin.context.compact_at * limit as f64,
         );
-        let base_bytes = self.measure(prompt);
+        let base_bytes = self.measure(prompt, earlier);
         let ratio = cortex_agent::context::DEFAULT_RATIO;
         #[expect(clippy::cast_precision_loss, reason = "byte counts far below 2^52")]
         let base = base_bytes as f64 / ratio;
@@ -1258,7 +1316,6 @@ impl Rig {
             reason = "a positive byte count far below 2^52"
         )]
         let bulk = (target * ratio) as usize - usize::try_from(base_bytes).unwrap();
-        self.bulk(bulk);
         #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -1276,15 +1333,17 @@ impl Rig {
         }
     }
 
-    /// The bytes of this session's first request without its bulk, from a
-    /// twin's context record.
-    fn measure(&self, prompt: &str) -> u64 {
+    /// The bytes of the request that follows `earlier` in the turn `prompt`
+    /// starts, without its bulk, from a twin's context record. The twin has
+    /// this session's history, if it has one.
+    fn measure(&self, prompt: &str, earlier: Vec<Response>) -> u64 {
         static TWINS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let number = TWINS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let before = earlier.len();
         let world = World::seeded(
             &format!("twin-{}-{number}", std::process::id()),
             0,
-            [says("Measured.")],
+            earlier.into_iter().chain([says("Measured.")]),
         );
         let mut setup = Setup::new(&world);
         setup.id.clone_from(&self.twin.id);
@@ -1298,6 +1357,9 @@ impl Rig {
         setup.context = self.twin.context.clone();
         setup.instructions = Arc::clone(&self.twin.instructions);
         setup.user_dir.clone_from(&self.twin.user_dir);
+        if self.handle.has_history() {
+            setup.memory = self.history_so_far();
+        }
         let twin = setup.start(&world);
         // A window the request cannot come near.
         twin.window(u64::MAX / 4);
@@ -1306,15 +1368,39 @@ impl Rig {
             twin.prompt(prompt);
             twin.events.turns(1).await;
         });
-        let estimate = twin
-            .stats
-            .all()
-            .into_iter()
-            .find_map(|event| match event {
-                cortex_agent::StatEvent::Context(context) => Some(context.estimate),
-                _ => None,
+        let contexts_of = |stats: &StatLog| -> Vec<cortex_agent::ContextStat> {
+            stats
+                .all()
+                .into_iter()
+                .filter_map(|event| match event {
+                    StatEvent::Context(context) => Some(context),
+                    _ => None,
+                })
+                .collect()
+        };
+        let contexts = contexts_of(&twin.stats);
+        for context in contexts.iter().chain(&contexts_of(&self.stats)) {
+            let counted = context.usage.as_ref().map_or(0, |usage| {
+                usage.input + usage.cache_read + usage.cache_write
+            });
+            assert!(
+                counted == 0,
+                "a request of the session was counted by its provider ({counted} input tokens): \
+                 the loop estimates from the count, which the twin has not, so it cannot size a \
+                 request by pressure here"
+            );
+        }
+        let estimate = contexts
+            .get(before)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the twin's turn made {} request(s), and the one to size is number {}: \
+                     `earlier` must hold every response of the turn that comes before it",
+                    contexts.len(),
+                    before + 1
+                )
             })
-            .expect("the twin's request has a context record");
+            .estimate;
         // The estimate is the bytes at the ratio, rounded up to a token.
         #[expect(
             clippy::cast_possible_truncation,
@@ -1323,6 +1409,29 @@ impl Rig {
         )]
         let bytes = (estimate as f64 * cortex_agent::context::DEFAULT_RATIO) as u64;
         bytes.saturating_sub(MEASURE_BULK as u64)
+    }
+
+    /// A store of its own that holds what this session's store holds now,
+    /// for a twin to be resumed from.
+    fn history_so_far(&self) -> MemorySessionStore {
+        let items = self.store.items();
+        assert!(
+            !items.is_empty(),
+            "the rig's store holds no items, so a twin cannot be resumed from them (a session \
+             given a store of its own in `Setup::store` cannot be sized with history)"
+        );
+        assert!(
+            self.store.epochs().len() <= 1 && self.store.summaries().is_empty(),
+            "the session has compacted: a twin resumed from its items would not hold what its \
+             next request holds"
+        );
+        let turn = self
+            .store
+            .records()
+            .last()
+            .map(|(turn, _)| turn.clone())
+            .expect("a record");
+        MemorySessionStore::with_items(&turn, items)
     }
 }
 

@@ -316,6 +316,46 @@ fn a_response_cut_off_in_its_text_ends_the_turn_marked_truncated() {
     assert_eq!(assistant.error, None, "the response itself did not fail");
 }
 
+/// The scripted provider counts output at the ratio the loop does before a
+/// provider has counted: a test that sizes by the one is only right while
+/// they agree.
+#[test]
+fn the_scripted_provider_counts_output_as_the_loop_counts_a_request() {
+    assert!(
+        (cortex_agent::context::DEFAULT_RATIO
+            - cortex_testkit::provider::BYTES_PER_OUTPUT_TOKEN as f64)
+            .abs()
+            < f64::EPSILON
+    );
+}
+
+#[test]
+fn an_answer_longer_than_the_model_may_write_reaches_the_loop_cut() {
+    // `test-model` writes at most 8,000 tokens: 24,000 bytes.
+    let long = Response::new()
+        .text(&"w".repeat(30_000))
+        .end(StopReason::End);
+    let (world, rig) = Rig::one("max_output_script", [long]);
+    turn(&world, &rig, 1);
+
+    let ends = rig.events.ends();
+    assert_eq!(ends[0].outcome, TurnOutcome::Failed);
+    assert_eq!(ends[0].stop_reason, Some(StopReason::MaxOutput));
+    let Item::AssistantMessage(assistant) = &rig.store.items()[1] else {
+        panic!("an assistant item");
+    };
+    assert!(assistant.truncated);
+    let said: usize = assistant
+        .parts
+        .iter()
+        .map(|part| match part {
+            Part::Text(text) => text.text.len(),
+            _ => 0,
+        })
+        .sum();
+    assert_eq!(said, 24_000);
+}
+
 /// A response whose last block is a tool call that never finished.
 fn cut_off_in_a_call() -> Response {
     Response::new()

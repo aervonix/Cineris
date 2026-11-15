@@ -192,3 +192,186 @@ fn a_pressure_the_window_cannot_hold_is_refused() {
     rig.window(800);
     let _ = rig.fill(Fill::Below, "go");
 }
+
+/// The estimate of each request the session sent, in order.
+fn estimates(rig: &Rig) -> Vec<u64> {
+    rig.stats
+        .all()
+        .into_iter()
+        .filter_map(|event| match event {
+            StatEvent::Context(context) => Some(context.estimate),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_first_request_of_a_later_turn_is_sized_with_the_history_it_carries() {
+    for kind in KINDS {
+        let world = World::new("fill_next", [says("One."), says("Two.")]);
+        let fast = ScriptedProvider::new([says("A summary.")]);
+        let rig = setup(&world, kind, true, Some(&fast));
+        rig.window(6_000);
+        world.run(async {
+            rig.prompt("first");
+            rig.events.turns(1).await;
+        });
+        let first = estimates(&rig)[0];
+        assert!(
+            fast.requests().is_empty(),
+            "{kind:?}: nothing to prepare yet"
+        );
+
+        let filled = rig.fill_next(Fill::Preparing, "second");
+        world.run(async {
+            rig.prompt("second");
+            rig.events.turns(2).await;
+        });
+
+        let measured = estimates(&rig)[1];
+        // The twin is resumed from the items, and the session goes on in
+        // its epoch: they may differ by the few tokens of a notice.
+        assert!(
+            measured.abs_diff(filled.estimate) <= 8,
+            "{kind:?}: measured {measured}, filled {filled:?}"
+        );
+        assert!(
+            (measured as f64) > filled.prepare && (measured as f64) < filled.compact,
+            "{kind:?}: {measured} is not between the thresholds: {filled:?}"
+        );
+        assert!(
+            filled.base_bytes > first * 3,
+            "{kind:?}: the history is in the twin's request: {filled:?}, first {first}"
+        );
+        assert_eq!(world.provider.requests().len(), 2, "{kind:?}");
+        assert_eq!(fast.requests().len(), 1, "{kind:?}: a summary was prepared");
+    }
+}
+
+/// A response that calls the `read` tool, and waits for `gate` when given
+/// one: what it says is the same either way.
+fn read_call(gate: Option<&cortex_testkit::Gate>) -> cortex_testkit::Response {
+    let response =
+        cortex_testkit::Response::new().tool_call("c1", "read", &serde_json::json!({"path": "a"}));
+    match gate {
+        Some(gate) => response.wait(gate),
+        None => response,
+    }
+    .end(cortex_protocol::StopReason::ToolCalls)
+}
+
+#[test]
+fn a_request_after_a_tool_round_is_sized_and_the_bulk_given_in_the_turn() {
+    for fill in [Fill::Preparing, Fill::Compacting] {
+        let gate = cortex_testkit::Gate::new();
+        let mut script = vec![read_call(Some(&gate)), says("Done.")];
+        if fill == Fill::Compacting {
+            script.insert(1, says("Goal: the summary."));
+        }
+        let world = World::new("fill_after", script);
+        let fast = ScriptedProvider::new([says("A summary."), says("Another.")]);
+        let rig = setup(&world, Kind::Fake, true, Some(&fast));
+        rig.window(6_000);
+        let filled = rig.fill_after(fill, "go", [read_call(None)]);
+        world.run(async {
+            rig.prompt("go");
+            rig.events.seen("started:assistant", 1).await;
+            // The first request is on its way, with none of the bulk: the
+            // notice reaches the turn at its next request.
+            rig.bulk(filled.bulk);
+            gate.open();
+            rig.events.turns(1).await;
+        });
+
+        let sent = estimates(&rig);
+        assert_eq!(sent.len(), 2, "{fill:?}: {sent:?}");
+        assert!(
+            (sent[0] as f64) < filled.prepare,
+            "{fill:?}: the first request is small: {sent:?}, {filled:?}"
+        );
+        match fill {
+            Fill::Preparing => {
+                assert!(
+                    sent[1].abs_diff(filled.estimate) <= 8,
+                    "the second request measured {}, filled {filled:?}",
+                    sent[1]
+                );
+                let after = sent[1] as f64;
+                assert!(
+                    after > filled.prepare && after < filled.compact,
+                    "{filled:?}"
+                );
+                assert_eq!(fast.requests().len(), 1, "a summary was prepared");
+            }
+            // Past the trigger the epoch is compacted before the request,
+            // so the request that is counted is the new epoch's.
+            _ => assert_eq!(
+                rig.store.summaries().len(),
+                1,
+                "compacted before the second request: {filled:?}"
+            ),
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "this one has history")]
+fn fill_refuses_a_session_that_has_history() {
+    let world = World::new("fill_history", [says("One.")]);
+    let rig = setup(&world, Kind::Fake, true, None);
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+    });
+    let _ = rig.fill(Fill::Below, "second");
+}
+
+#[test]
+#[should_panic(expected = "this session has no history")]
+fn fill_next_refuses_a_session_with_no_history() {
+    let world = World::new("fill_next_none", [says("One.")]);
+    let rig = setup(&world, Kind::Fake, true, None);
+    let _ = rig.fill_next(Fill::Below, "first");
+}
+
+#[test]
+#[should_panic(expected = "cannot be reached")]
+fn a_pressure_the_history_leaves_no_room_for_is_refused_with_the_numbers() {
+    let world = World::new("fill_next_full", [says(&"x".repeat(3_000)), says("Two.")]);
+    let rig = setup(&world, Kind::Fake, true, None);
+    rig.window(4_000);
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+    });
+    // The answer alone is a thousand tokens of a limit of 2,920: no bulk
+    // can take the request past the trigger and keep it below the
+    // threshold of a summary in the background.
+    let _ = rig.fill_next(Fill::Below, &"y".repeat(6_000));
+}
+
+#[test]
+#[should_panic(expected = "counted by its provider")]
+fn a_session_whose_requests_were_counted_cannot_be_sized_by_pressure() {
+    let counted = says("One.").tokens(cortex_protocol::usage::TokenUsage {
+        input: 700,
+        output: 5,
+        ..cortex_protocol::usage::TokenUsage::default()
+    });
+    let world = World::new("fill_next_counted", [counted, says("Two.")]);
+    let rig = setup(&world, Kind::Fake, true, None);
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+    });
+    let _ = rig.fill_next(Fill::Below, "second");
+}
+
+#[test]
+#[should_panic(expected = "must hold every response of the turn")]
+fn a_request_the_turn_never_makes_is_refused() {
+    let world = World::new("fill_after_short", [says("One.")]);
+    let rig = setup(&world, Kind::Fake, true, None);
+    // The twin's turn ends at its first answer: there is no third request.
+    let _ = rig.fill_after(Fill::Below, "go", [says("Two."), says("Three.")]);
+}

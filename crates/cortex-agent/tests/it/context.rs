@@ -1123,6 +1123,9 @@ fn a_summary_too_large_for_the_new_epoch_fails_the_compaction_and_records_nothin
             .text(&"s".repeat(20_000))
             .end(StopReason::End)],
     );
+    // The summary is longer than a summary request may write, so that its
+    // size, and not the provider's cut, is what the compaction meets.
+    world.provider.set_output_limit(false);
     let rig = Setup::new(&world).start(&world);
     rig.window(4_000);
     rig.fill(Fill::Compacting, "go");

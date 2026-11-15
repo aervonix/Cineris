@@ -95,9 +95,16 @@ All three were built in step 5, with two more pieces they need.
 
 **A request a real protocol could not build.** The scripted provider takes any request. `ScriptedProvider::built_as(protocol, provider)` (since the fourth tooling step) runs the real `Protocol::build` on each request first, for a catalog model given with `with_model`, and fails a request the protocol cannot build with the build's error, as the real client does, taking nothing from the script; its stable prefix is the protocol's, so the loop's debug-build check runs on real bytes. Step 15's review needed one to show that a summary's thinking budget was not below `max_tokens`. `cortex-agent`'s context tests use it for Anthropic and DeepSeek.
 
+**A response is cut at the request's maximum output** (since the sixth tooling step). A real provider stops a response at `max_output`, ends it with the length stop reason and counts the output it wrote; a script that said more than the request allows used to pass the loop as if it had been written whole. `ScriptedProvider` now cuts it, and ends it as a provider does:
+
+- **The limit** is the request's `max_output`, or the model's own most when the request sets none, and never more than the model's own most (as Anthropic's builder holds it). `test-model` writes 8,000 tokens at most.
+- **Output is counted as the loop counts a request before a provider has counted it,** at three bytes to the token (`cortex_testkit::provider::BYTES_PER_OUTPUT_TOKEN`; a test of `cortex-agent` holds it to `cortex_agent::context::DEFAULT_RATIO`), over the text, the reasoning and the arguments of the tool calls. A response is cut when its output would be more than the limit's bytes, never at them.
+- **What is cut:** the delta in which the limit falls is cut on a character boundary, and nothing of the script after it is played, errors, waits and an `abort` included. Every block that was open is closed with what had arrived of it, as the real decoders close an unfinished block (`BlockEnd` with the partial content); a tool call cut in its arguments has arguments that are not JSON, as a real one has. The response then ends with `StopReason::MaxOutput` and a usage whose `output` is the limit (the script's other counts are kept). The loop treats it as it treats a real one ("a response cut off in its text", "a response cut off inside a tool call", in `cortex-agent`'s `streaming.rs`).
+- **It is the default.** Of the 2,812 tests of tiers 1 and 2 when it was made, two had a script longer than their request allowed (a 600 kB write in `cortex-core`'s approval test; a 20,000-byte summary in `cortex-agent`'s test of a summary too large for a new epoch), and no test cut by it passed unnoticed. Each says why it opts out with `provider.set_output_limit(false)`, which is shared by every clone, so it can be called on a world's provider after the rig is made; `ScriptedProvider::without_output_limit()` is the same at construction. A script that needs a response longer than its model may write is a script of a response that cannot happen: the opt-out is the exception to say so.
+
 **A long text in an assertion's message** is `cortex_testkit::brief(&text)`: whole when it is short, its size and its two ends when it is long. A notice of ten kilobytes in a failure message once hid the result it was about.
 
-**Sizing a context test by pressure.** A test of compaction needs a request at a given pressure, and step 15's bulk was counted by hand, then counted again three times as the prompt and the tools grew. `Rig::fill(Fill::…, prompt)` in `cortex-agent`'s rig (since the fourth tooling step) gives the session's first request the bulk that puts it below the threshold for a background summary (`Below`), between it and the trigger (`Preparing`), past the trigger (`Compacting`), or past the window (`PastWindow`). It measures the request without the bulk on a twin of the session (the same prompt, tools, instruction files, thresholds and model, at the same workspace path, in a world of its own with a window it cannot fill), and puts the estimate in the middle of the band, from the real limit (`cortex_agent::context::limit_of`) and thresholds, at the ratio the loop uses before a provider has counted. A band the window cannot reach is refused with the numbers. It sizes a session's first request: one with history is refused. The fixture models it works from:
+**Sizing a context test by pressure.** A test of compaction needs a request at a given pressure, and step 15's bulk was counted by hand, then counted again three times as the prompt and the tools grew. `Rig::fill(Fill::…, prompt)` in `cortex-agent`'s rig (since the fourth tooling step) gives the session's first request the bulk that puts it below the threshold for a background summary (`Below`), between it and the trigger (`Preparing`), past the trigger (`Compacting`), or past the window (`PastWindow`). It measures the request without the bulk on a twin of the session (the same prompt, tools, instruction files, thresholds and model, at the same workspace path, in a world of its own with a window it cannot fill), and puts the estimate in the middle of the band, from the real limit (`cortex_agent::context::limit_of`) and thresholds, at the ratio the loop uses before a provider has counted. A band the window cannot reach is refused with the numbers. The fixture models it works from:
 
 | Model | Window | Most output | Limit | Background summary past | Compaction past |
 |---|---|---|---|---|---|
@@ -107,6 +114,12 @@ All three were built in step 5, with two more pieces they need.
 | `test-plain` (`fixtures::plain_model()`) | 32,000 | 4,000 | 27,360 | 19,152 | 23,256 |
 
 The limit is the window less the room kept for the answer (the most output, capped at 32,768 and at a quarter of the window) and a fiftieth of the window; the thresholds are `context.prepare_at` (0.70) and `context.compact_at` (0.85) of the limit, in tokens. Seven of step 15's tests use it; they still catch all 40 of step 15's breaks.
+
+**A request after the first** (since the sixth tooling step). `Rig::fill` sizes a session's first request and refuses one with history. Two more methods size a later one, on a twin made the same way:
+
+- **`Rig::fill_next(Fill::…, prompt)`** sizes the first request of the next turn of a session that has history, and gives the next turn its bulk, as `fill` does. The twin is resumed from a copy of the items the rig's store holds, so what the session has said is in the measure; `summaries::past_the_trigger` (the second turn's request between the trigger and the limit, which counted its bulk by hand from the first request's estimate) is its first user.
+- **`Rig::fill_after(Fill::…, prompt, earlier)`** sizes a request inside a turn: the one that follows `earlier`, the responses of the turn `prompt` starts that come before it (the call of a tool round, whose result is in the request). The twin runs the turn on those responses and measures the request after them. It returns what it measured and **gives the session nothing**: bulk given before the turn is in the turn's first request too, so the test gives it with `rig.bulk(filled.bulk)` at a moment of its own, while the turn runs, and the notice reaches the turn at its next request. `earlier` is what the session will be given, without a wait (a `wait` in a response changes no byte of the request, so the test's script may have one where the twin's has none: the test builds both from one function), and its tools must answer as the twin's. The test of it holds a response at a gate, gives the bulk, opens the gate, and checks the second request's estimate against the one sized.
+- **They refuse what the twin cannot know**, with the numbers or the reason: a band the window cannot reach with that history; a session that has no history (`fill_next`) or has some (`fill`); a request the twin's turn never makes (how many it made, and which was asked for); a session whose store the rig does not hold, or that has compacted already; and a session any of whose requests was counted by its provider (a response that reported tokens), where the loop estimates from the count and the twin has none. A twin is resumed from items alone, so its estimate and the session's can differ by the few tokens of a notice: the tests allow eight.
 
 **A directory of a test's own** is `cortex_testkit::Scratch`, made with the `scratch!` macro: a new, empty directory under the one Cargo gives the crate's integration tests, with helpers to write files and to make a git repository whose configuration is the test's own and not the machine's. It is removed when the test ends, and left in place when the test fails. A test that needs "no repository above this directory" asks for `Scratch::outside`, in the system's temporary directory. The tests of `cortex-config`, `cortex-policy`, `cortex-session` and `cortex-agent` use it. The ones that still have their own are listed in [steps/tooling-w5/answered.md](steps/tooling-w5/answered.md).
 
@@ -275,6 +288,32 @@ time profile of `sys_trust` (CORTEX_TESTKIT_PROFILE): 218.9 ms from the process'
 - **It costs nothing when it is off.** The variable is read once; after that each mark is one load of a flag. No clock is read, nothing is allocated and no lock is taken. A unit test holds that.
 - **On a hosted runner** (since the fifth tooling step), where a passing test's output is not kept: `CORTEX_TESTKIT_PROFILE_DIR` names a directory that each test's report is also written to, a file a test, named for its binary, its name and its process. `try`'s input `-f testkit=profile` sets both variables and uploads the directory with the run's log: `gh workflow run try --ref <branch> -f os=windows -f command=test -f testkit=profile -f filter='kind(test) & !test(/(^|::)sys_/)'` is tier 2 profiled on a Windows runner.
 - **Shown in the fourth tooling step** on the slowest test of each rig ([steps/tooling-4/answered.md](steps/tooling-4/answered.md)).
+
+### Where a measurement's time goes
+
+The profile is opt-in and is about the test kit's waits. A `perf_` test (a measurement, in its own file, in a release build: [performance-budgets.md](performance-budgets.md)) wants something else, and always: which of its stretches took the time, from its first run on any machine, without a `try` round trip to find out. step 18's needed three. `cortex_testkit::Phases` (since the sixth tooling step) names the stretches and prints a breakdown when the test is done:
+
+```text
+phases of `perf_a_cold_index_a_warm_one_and_a_warm_map`: 297.3 ms in all
+  phase                             took   share  times
+  generate the tree              24.0 ms    8.1%
+  cold pass                      11.0 ms    3.7%
+  change a file                   0.5 ms    0.2%  15
+  warm pass                     139.9 ms   47.0%  15
+  warm map                       18.9 ms    6.3%  15
+  breakdown of a warm pass       82.3 ms   27.7%
+  tear-down                      20.7 ms    7.0%
+  outside every phase             0.1 ms    0.0%
+```
+
+That is the first test of `cortex-index`'s `perf.rs` on a tree of 3,000 files (`CORTEX_PERF_FILES=3000`, a release build on the desktop, a run of 0.3 s).
+
+- **The calls:** `let phases = Phases::new("perf_…")`; `phases.measure("name", || work)` runs the work as a phase and returns its value; `let _p = phases.phase("name")` is a phase until the guard is dropped; `phases.mark("name")` ends the phase the last `mark` began and begins another, `phases.end()` ends it, for a test written as a run of stretches. `phases.took("name")` is a phase's time so far, for a test that holds one stretch to a bound of its own; `phases.report()` prints at once and returns the text.
+- **Phases of one name are added up** and shown in the order their names first appeared, with the number of times when it is more than one. What is outside every phase is shown too, so a stretch nobody named is not lost, and the shares add up to the whole. A phase inside a phase is counted twice: use phases for stretches that follow one another.
+- **It prints when it is dropped,** unless `report()` printed already, so a test that fails half-way still says where its time had gone. The text is on standard output: nextest shows it for a failing test, and for a passing one with `--no-capture`; `cargo test … -- --nocapture` for the release runs the perf tests are made for.
+- **It is always on and costs two clock readings and a push for each phase.** With `CORTEX_TESTKIT_PROFILE=1` each phase is also a phase of the test's [time profile](#where-a-tests-time-goes), beside the waits, so the two reports agree on the names.
+- **Used in** `cortex-index`'s `perf_a_cold_index_a_warm_one_and_a_warm_map` (tree, cold pass, each warm round's change, pass and map, the breakdown of a pass, tear-down). A new `perf_` test begins with `Phases::new`.
+- **How it is tested:** on a fake clock (`Phases::with_clock`), so nothing waits: the times and shares, phases of one name, marks and ends, the shares adding to the whole, a report printed once, an empty test, and the grouping of thousands.
 
 ### A throwaway test
 
@@ -453,7 +492,7 @@ An architecture page may end with a section **"Invariants to test"** (since the 
 - **One row an invariant,** in a table `| Invariant | How a review breaks it | Held by |`: the rule as a sentence that can be false; an attack or a mistake that would make it false (a command, a sequence, a file a repository could carry); and the tests or the break list that hold it today, or "nothing yet", which is a gap to fill.
 - **Found by a review, said where:** a row that a review's finding taught names it (`step 26, finding 2`), so the next review knows it was broken once.
 - **A row is added when a review finds a new way in,** and changed when the code moves; a row is never removed because a test now holds it.
-- **The tools for it:** `cargo xtask scratch-test` for a failing test without registering it, the core's adversarial fixture (`Reach`) for a confined command, `Rig::fill` for a context test at a pressure, `cargo xtask mutate` to see a test catch its break.
+- **The tools for it:** `cargo xtask scratch-test` for a failing test without registering it, the core's adversarial fixture (`Reach`) for a confined command, `Rig::fill`, `fill_next` and `fill_after` for a context test at a pressure, `cortex_testkit::Phases` for where a `perf_` test's time goes, `cargo xtask mutate` to see a test catch its break.
 
 ## Testing the TUI
 
