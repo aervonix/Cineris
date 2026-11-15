@@ -322,6 +322,10 @@ pub struct ContextRecord {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a record is made once and boxed onto the writer's queue; a box per variant would buy nothing"
+)]
 pub enum Record {
     /// A request ended.
     Request(RequestRecord),
