@@ -189,6 +189,10 @@ fn a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer() {
     server.push(ServerReply::status(401).send(
         r#"{"error":{"message":"BODY-TEXT-401","code":"BODY-TEXT in the code"},"request_id":"BODY-TEXT-id"}"#,
     ));
+    // A code that is plain in its shape and is a key.
+    server.push(ServerReply::status(401).send(
+        r#"{"error":{"message":"BODY-TEXT-key","code":"sk-or-v1-bodytext0123456789abcdef"}}"#,
+    ));
     server.push(ServerReply::status(500).send("BODY-TEXT-500"));
     server.push(ServerReply::status(200).send("BODY-TEXT-not-json"));
     let never = Gate::new();
@@ -197,13 +201,14 @@ fn a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer() {
     let core = world.core();
     net(refresh(&core, ClientInfo::user())).unwrap();
     let kept = limits_text(&world).unwrap();
-    for _ in 0..3 {
+    for _ in 0..4 {
         let result = net(refresh(&core, ClientInfo::user())).unwrap();
         let error = result.providers[0].error.as_ref().unwrap();
         assert!(error.message.contains("openrouter"), "{}", error.message);
         // Nothing of the answer: not its message, its code or its id.
         let whole = serde_json::to_string(error).unwrap();
         assert!(!whole.contains("BODY-TEXT"), "{whole}");
+        assert!(!whole.contains("bodytext"), "{whole}");
         assert_eq!(limits_text(&world).unwrap(), kept, "what was kept stays");
     }
     // One that never answers is given up at its time limit.

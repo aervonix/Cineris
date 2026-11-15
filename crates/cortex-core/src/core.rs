@@ -830,9 +830,14 @@ impl Core {
         // writer stuck on its disk is waited for only so long.
         if let Some(recorder) = self.inner.stats.clone() {
             let flushed = crate::stats::flush(recorder.clone(), &self.inner.options.timer).await;
-            // A writer never started has nothing to say, unless something
-            // waited for it.
-            if flushed.unwritten() > 0 || recorder.dropped() > 0 {
+            // A writer never started with nothing waiting has nothing to
+            // say; any other that did not finish is said, though nothing
+            // counted is waiting: it may be stuck on the limits.
+            if !matches!(
+                flushed,
+                cortex_stats::Flushed::Done | cortex_stats::Flushed::NotStarted { waiting: 0 }
+            ) || recorder.dropped() > 0
+            {
                 tracing::warn!(
                     unwritten = flushed.unwritten(),
                     dropped = recorder.dropped(),

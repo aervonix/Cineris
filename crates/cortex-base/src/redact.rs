@@ -511,7 +511,19 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// the statistics both hold codes to this one rule.
 #[must_use]
 pub fn is_plain_code(code: &str) -> bool {
-    cortex_protocol::error::code::is_plain(code) && !SecretFilter::new().finds(code)
+    if !cortex_protocol::error::code::is_plain(code) {
+        return false;
+    }
+    // The filter finds a key that stands as a word; in a code, `_`, `-` and
+    // `.` join words, so a key glued on by them is looked for after each.
+    let filter = SecretFilter::new();
+    let after_each = code
+        .char_indices()
+        .filter(|(_, at)| matches!(at, '_' | '-' | '.'))
+        .map(|(index, _)| &code[index + 1..]);
+    !std::iter::once(code)
+        .chain(after_each)
+        .any(|part| filter.finds(part))
 }
 
 #[cfg(test)]
@@ -823,6 +835,9 @@ mod plain_code_tests {
         assert!(is_plain_code("rate_limit_exceeded"));
         assert!(is_plain_code("invalid_api_key"));
         assert!(!is_plain_code("sk-0123456789abcdef0123456789abcdef"));
+        assert!(!is_plain_code(
+            "invalid_key_sk-0123456789abcdef0123456789abcdef"
+        ));
         assert!(!is_plain_code("Refused: key sk-live"));
     }
 }

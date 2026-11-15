@@ -106,6 +106,8 @@ Every cost on screen has one of four bases, shown beside it or in the column hea
 
 A total that mixes bases shows them apart: `$44.40 metered + $212.10 est.`
 
+One exception, since the fixes after step 16's review: a request's line in the statistics carries what its attempts given up cost with what its last cost, as the ledger charged them, and in the rare request whose attempts were priced on two bases (a provider that stated the cost of one attempt and not another) the sum is under the basis of the attempt that counted, rather than a part of the money lost.
+
 ## Limits left
 
 For each provider: how much of its rate limit or allowance remains, and when it resets.

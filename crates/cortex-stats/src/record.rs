@@ -117,7 +117,7 @@ pub struct RequestRecord {
     /// when it is not. The writer keeps no other.
     pub stop: String,
     /// The code of the failure, when it failed: a plain code
-    /// (`cortex_protocol::error::code::is_plain`), or `other` where the
+    /// (`cortex_base::redact::is_plain_code`), or `other` where the
     /// provider's was not one. The writer keeps no other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,

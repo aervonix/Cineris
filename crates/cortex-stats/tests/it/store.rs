@@ -313,6 +313,8 @@ fn an_aggregates_file_that_does_not_parse_is_moved_aside_before_anything_is_save
     // A file cut short: what a disk that failed part-way leaves.
     let whole = std::fs::read(dir.aggregates_file()).unwrap();
     let damaged = whole[..whole.len() / 2].to_vec();
+    // Made anew, and so not private, as a file a backup put back is not.
+    std::fs::remove_file(dir.aggregates_file()).unwrap();
     std::fs::write(dir.aggregates_file(), &damaged).unwrap();
     clock.set_now(time("2026-04-10T13:00:00Z"));
     let recorder = recorder(&dir, Zone::utc(), clock, 1);

@@ -51,11 +51,14 @@ pub(crate) fn add_request(totals: &mut UsageTotals, usage: &RequestUsage) {
 }
 
 /// One request's usage with another's of the same request added to it: an
-/// attempt given up and the one that counted. The tokens are added class
-/// by class, and the costs whatever their bases, as the ledger charged them
-/// (two attempts of one model have one basis; were they to differ, the sum
-/// is told under the later one's rather than a part of it lost). The rest
-/// is the later one's.
+/// attempt given up and the one that counted, for the request's statistics
+/// event (never a protocol message). The tokens are added class by class,
+/// and the costs whatever their bases, as the ledger charged them: two
+/// attempts of one model have one basis, and in the rare request whose
+/// attempts were priced on two (a provider that stated the cost of one and
+/// not the other) the sum is told under the basis of the one that counted
+/// rather than a part of the money lost (`docs/architecture/18-usage.md`,
+/// "Cost, and what kind of number it is"). The rest is the later one's.
 pub(crate) fn together(earlier: RequestUsage, later: &RequestUsage) -> RequestUsage {
     let mut tokens = earlier.tokens;
     add_tokens(&mut tokens, &later.tokens);
