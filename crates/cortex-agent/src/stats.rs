@@ -66,6 +66,12 @@ pub struct RequestStat {
     pub error: Option<ErrorData>,
     /// How many attempts were given up before this one.
     pub retries: u32,
+    /// The account spent elsewhere too that this request was charged to,
+    /// by its id ([`CatchUp::id`](crate::CatchUp::id)): a day's purse, which
+    /// counts the request as it is made and so does not read it back from
+    /// the statistics. `None` when the request was charged to no such
+    /// account.
+    pub charged_to: Option<String>,
 }
 
 /// How a tool call ended, for the success rates of tools and schemas.

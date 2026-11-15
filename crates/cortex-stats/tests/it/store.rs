@@ -434,7 +434,14 @@ fn a_monthly_file_stays_for_its_retention_and_goes_the_month_after() {
     for month in ["2026-08", "2026-09"] {
         std::fs::write(dir.events_file(month), b"").unwrap();
     }
+    // Aggregates read from a file, which alone prune.
+    let clock = clock("2026-11-15T10:00:00Z");
+    Aggregates::load(&dir)
+        .unwrap()
+        .save(&dir, clock.as_ref())
+        .unwrap();
     let mut aggregates = Aggregates::load(&dir).unwrap();
+    assert_eq!(aggregates.found(), &Found::Read);
     aggregates
         .sync(&dir, date("2026-11-15"), "2026-11", Some(2))
         .unwrap();
@@ -443,6 +450,37 @@ fn a_monthly_file_stays_for_its_retention_and_goes_the_month_after() {
         "two months after its own"
     );
     assert!(!dir.events_file("2026-08").exists(), "three months after");
+}
+
+/// Aggregates that started from nothing (a first run, or a file moved
+/// aside) are saved before they prune: two processes that both started so
+/// could otherwise each prune a month the other's save then leaves out
+/// (found by the review of step 16's fixes).
+#[test]
+fn aggregates_that_start_from_nothing_prune_only_once_saved() {
+    let scratch = scratch("aggregates_that_start_from_nothing");
+    let dir = StatsDir::new(scratch.join("stats"));
+    std::fs::create_dir_all(dir.root()).unwrap();
+    std::fs::write(dir.events_file("2026-01"), b"").unwrap();
+    let mut fresh = Aggregates::load(&dir).unwrap();
+    assert_eq!(fresh.found(), &Found::Missing);
+    fresh
+        .sync(&dir, date("2026-11-15"), "2026-11", Some(1))
+        .unwrap();
+    assert!(
+        dir.events_file("2026-01").exists(),
+        "not pruned before saving"
+    );
+    fresh
+        .save(&dir, clock("2026-11-15T10:00:00Z").as_ref())
+        .unwrap();
+    let mut read = Aggregates::load(&dir).unwrap();
+    read.sync(&dir, date("2026-11-15"), "2026-11", Some(1))
+        .unwrap();
+    assert!(
+        !dir.events_file("2026-01").exists(),
+        "pruned once read back"
+    );
 }
 
 /// A line another process is still writing has no newline yet: it is left
@@ -455,7 +493,6 @@ fn a_line_still_being_written_is_read_once_it_is_whole() {
     std::fs::create_dir_all(dir.root()).unwrap();
     let line = serde_json::to_vec(&cortex_stats::Line {
         day: "2026-11-15".to_owned(),
-        writer: None,
         record: request("2026-11-15T10:00:00Z", "p", "opus", 1),
     })
     .unwrap();
@@ -488,7 +525,6 @@ fn days_fold_into_months_after_four_hundred_days() {
     for back in [400, 401] {
         part.add_line(&cortex_stats::Line {
             day: today.add_days(-back).to_string(),
-            writer: None,
             record: request("2025-10-11T12:00:00Z", "p", "opus", 1),
         });
     }
@@ -511,7 +547,6 @@ fn sums_that_would_overflow_stop_at_the_most_a_figure_holds() {
         }
         part.add_line(&cortex_stats::Line {
             day: "2026-11-15".to_owned(),
-            writer: None,
             record: huge,
         });
     }
@@ -596,7 +631,6 @@ fn perf_saving_the_aggregates() {
                 ] {
                     part.add_line(&cortex_stats::Line {
                         day: day.clone(),
-                        writer: None,
                         record,
                     });
                 }
@@ -635,4 +669,28 @@ fn perf_saving_the_aggregates() {
             );
         }
     }
+}
+
+/// A line break with nothing before it is not a line: two writers that
+/// both ended a cut line leave one, and it is not counted as unreadable
+/// (found by the review of step 16's fixes).
+#[test]
+fn a_blank_line_is_not_counted_as_unreadable() {
+    let scratch = scratch("a_blank_line_is_not_counted");
+    let dir = StatsDir::new(scratch.join("stats"));
+    std::fs::create_dir_all(dir.root()).unwrap();
+    let mut line = serde_json::to_vec(&cortex_stats::Line {
+        day: "2026-11-15".to_owned(),
+        record: request("2026-11-15T10:00:00Z", "p", "opus", 1),
+    })
+    .unwrap();
+    line.extend_from_slice(b"\n\n");
+    std::fs::write(dir.events_file("2026-11"), &line).unwrap();
+    let mut aggregates = Aggregates::load(&dir).unwrap();
+    aggregates
+        .sync(&dir, date("2026-11-15"), "2026-11", None)
+        .unwrap();
+    let total = aggregates.total();
+    assert_eq!(total.unreadable, 0);
+    assert_eq!(total.usage.values().map(|sum| sum.requests).sum::<u64>(), 1);
 }

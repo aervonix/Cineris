@@ -151,6 +151,7 @@ impl SessionStats {
             stop: stat.stop.as_str().to_owned(),
             error: stat.error.map(|error| error.code),
             retries: stat.retries,
+            charged_to: stat.charged_to,
         })
     }
 
@@ -336,6 +337,7 @@ mod tests {
             stop: StopReason::ToolCalls,
             error: None,
             retries: 0,
+            charged_to: None,
         });
         let mut times: Vec<Duration> = Vec::with_capacity(20_000);
         for round in 0..20_000 {

@@ -50,6 +50,11 @@ pub trait CatchUp: Send + Sync + std::fmt::Debug {
     /// was made for. The request waits for it, so it must end within a
     /// time limit of its own, whatever its disk does.
     fn catch_up(&self) -> BoxFuture<'_, ()>;
+
+    /// The account's id, which the statistics event of every request
+    /// charged to it carries (`RequestStat::charged_to`): the account
+    /// counts those requests as they are made, and does not read them back.
+    fn id(&self) -> &str;
 }
 
 /// One limit: a budget and what has been spent of it.
@@ -381,6 +386,16 @@ impl Ledger {
                 done.push(catch_up);
             }
         }
+    }
+
+    /// The id of the account spent elsewhere too that this ledger's
+    /// requests are charged to, if there is one: what their statistics
+    /// events carry.
+    pub(crate) fn charged_to(&self) -> Option<String> {
+        self.accounts
+            .iter()
+            .find_map(|account| account.inner.catch_up.as_ref())
+            .map(|catch_up| catch_up.id().to_owned())
     }
 
     /// Charges one request to every account, before it is sent. When an

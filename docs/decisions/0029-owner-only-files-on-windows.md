@@ -59,7 +59,7 @@ The module was reviewed independently before its first push, block by block agai
 
 ## Amended after the review of step 16: and a file's identity
 
-`private::windows` gained `file_identity`: the volume's serial number and the file's index on it, from one call (`GetFileInformationByHandle`) that fills a structure of plain numbers the function owns, with a `// SAFETY:` comment. It is what `cortex_base::FileIdentity` is on Windows, as a device and an inode number are on Linux; the standard library's `file_index` is not stable. The statistics' writer needs it to notice that the month's file it holds open is no longer the one at the name (`cortex stats reset` deleted it), where a creation time is no help: NTFS gives a file made again under a name within seconds the old file's creation time. The rule about where `unsafe` may be written does not change.
+`private::windows` gained `file_identity`: the volume's serial number and the file's 128-bit id on it, from one call (`GetFileInformationByHandleEx` with the class `FileIdInfo`, which ReFS keeps unique where the older 64-bit index is not) that fills a structure of a number and sixteen bytes the function owns, with a `// SAFETY:` comment. It is what `cortex_base::FileIdentity` is on Windows, as a device and an inode number are on Linux; the standard library's `file_index` is not stable. The statistics' writer needs it to notice that the month's file it holds open is no longer the one at the name (`cortex stats reset` deleted it), where a creation time is no help: NTFS gives a file made again under a name within seconds the old file's creation time. The rule about where `unsafe` may be written does not change.
 
 ## Amended in step 10: the module also reads a reparse tag
 

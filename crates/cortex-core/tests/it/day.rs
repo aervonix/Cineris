@@ -85,16 +85,12 @@ fn a_processs_own_spending_is_not_counted_twice() {
         front.turn("one").await;
         // The writer has the first request's line on the disk before the
         // second request reads the files.
-        let mut written = false;
-        for _ in 0..1_000_000 {
-            if std::fs::read_to_string(&file).is_ok_and(|text| text.contains(r#""kind":"request""#))
-            {
-                written = true;
-                break;
-            }
+        // (The writer is a thread of its own, which this waits for; a
+        // writer that never wrote it is stopped by the test's time limit.)
+        while !std::fs::read_to_string(&file).is_ok_and(|text| text.contains(r#""kind":"request""#))
+        {
             std::thread::yield_now();
         }
-        assert!(written, "the writer wrote the first request's line");
         let two = front.turn("two").await;
         assert_eq!(two.outcome, TurnOutcome::Completed, "{:?}", two.error);
         front.close().await;

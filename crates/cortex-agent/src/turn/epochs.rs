@@ -1185,6 +1185,7 @@ impl Session {
             stop: stop_of(&summarized.outcome),
             error: summarized.outcome.as_ref().err().cloned(),
             retries: summarized.attempts.saturating_sub(1),
+            charged_to: self.ledger.charged_to(),
         }));
     }
 

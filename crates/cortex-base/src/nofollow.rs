@@ -56,7 +56,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileIdentity {
     device: u64,
-    index: u64,
+    index: u128,
 }
 
 impl FileIdentity {
@@ -72,16 +72,13 @@ impl FileIdentity {
             let metadata = file.metadata()?;
             Ok(Self {
                 device: metadata.dev(),
-                index: metadata.ino(),
+                index: u128::from(metadata.ino()),
             })
         }
         #[cfg(windows)]
         {
-            let (volume, index) = crate::private::file_identity(file)?;
-            Ok(Self {
-                device: u64::from(volume),
-                index,
-            })
+            let (device, index) = crate::private::file_identity(file)?;
+            Ok(Self { device, index })
         }
     }
 
@@ -99,7 +96,7 @@ impl FileIdentity {
             let metadata = std::fs::metadata(path)?;
             Ok(Self {
                 device: metadata.dev(),
-                index: metadata.ino(),
+                index: u128::from(metadata.ino()),
             })
         }
         #[cfg(windows)]

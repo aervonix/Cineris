@@ -24,7 +24,6 @@ fn part_of(days: &[&str]) -> Part {
     for day in days {
         part.add_line(&Line {
             day: (*day).to_owned(),
-            writer: None,
             record: request(&format!("{day}T12:00:00Z"), "p", "opus", 1_000_000_000),
         });
     }
@@ -145,12 +144,10 @@ fn rows_group_by_what_was_asked_and_time_goes_with_them() {
     let mut part = part_of(&["2026-11-15"]);
     part.add_line(&Line {
         day: "2026-11-15".to_owned(),
-        writer: None,
         record: request("2026-11-15T12:00:00Z", "q", "haiku", 500),
     });
     part.add_line(&Line {
         day: "2026-11-15".to_owned(),
-        writer: None,
         record: turn("2026-11-15T12:00:00Z", "q"),
     });
     let mut by_project = query(UsageRange::Today);

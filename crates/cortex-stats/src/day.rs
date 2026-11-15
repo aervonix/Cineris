@@ -4,19 +4,23 @@
 //! independent review of step 16: the day's account had counted only its
 //! own process's spending).
 //!
-//! A [`DayReader`] starts where an [`Aggregates`] brought up to date left
-//! off, with what the day's requests spent up to there, and from then on
-//! reads only what each monthly file gained since: a few lines a request.
+//! A [`DayReader`] starts where an [`Aggregates`] left off, with what the
+//! day's requests spent up to there, and from then on reads only what each
+//! monthly file the day's lines can be in gained since: a few lines a
+//! request.
 //!
-//! **A process's own spending is not read back.** The process that keeps a
-//! day's account charges it as each request is made, so the lines its own
-//! recorder writes for the sessions that draw on that account are already
-//! counted. Each request line says which recorder wrote it
-//! ([`Line::writer`](crate::Line::writer)); a reader skips the lines of
-//! its own writer for the sessions it is told are its own
-//! ([`DayReader::own`]). Every other line counts: other processes', this
-//! process's sessions that have no day limit, and lines from builds before
-//! the writer was recorded.
+//! **A purse's own requests are not read back.** The day's purse of a
+//! process charges each request as it is made, so the line of a request it
+//! counted says so (`charged_to`, the purse's id), and its reader skips
+//! exactly those lines. Every other line counts: other processes', this
+//! process's sessions with no day's limit, a session's whose purse is
+//! another day's, and lines from builds before the mark was written.
+//!
+//! **Each file it reads is held open,** so that the identity it compares
+//! with the name's is one no other file can be given: on Linux a deleted
+//! file's inode number is often given to the next file made in its
+//! directory, and a reader that let go of the old one could take a file
+//! made again after `cortex stats reset` for it.
 //!
 //! Every function here blocks.
 
@@ -26,7 +30,8 @@
     reason = "the monthly files are read off the core thread, by the day's own reader thread"
 )]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::fs::File;
 use std::io;
 
 use cortex_base::{FileIdentity, LocalDate};
@@ -86,11 +91,12 @@ impl DaySpent {
     }
 }
 
-/// How far one monthly file has been read.
-#[derive(Debug, Clone, Copy)]
+/// How far one monthly file has been read, and the file.
+#[derive(Debug, Default)]
 struct Tail {
-    /// Which file it was: another under the name is read from its start.
-    identity: Option<FileIdentity>,
+    /// The file read, held open, and which it is: another under the name
+    /// is read from its start.
+    file: Option<(File, FileIdentity)>,
     offset: u64,
 }
 
@@ -100,9 +106,7 @@ struct DayLine {
     day: String,
     kind: String,
     #[serde(default)]
-    writer: Option<String>,
-    #[serde(default)]
-    session: Option<String>,
+    charged_to: Option<String>,
     #[serde(default)]
     tokens: TokenUsage,
     #[serde(default)]
@@ -117,21 +121,23 @@ pub struct DayReader {
     day_text: String,
     /// The monthly files the day's lines may be in, by month.
     tails: BTreeMap<String, Tail>,
-    /// This process's recorder, whose lines for `own` are counted already.
-    writer: Option<String>,
-    own: BTreeSet<String>,
+    /// The id of the purse this reader adds to: its lines are counted
+    /// already.
+    purse: Option<String>,
 }
 
 impl DayReader {
-    /// A reader that starts where `aggregates`, brought up to date from
-    /// `dir` a moment ago, left off, and what the day spent up to there.
-    /// `writer` is this process's recorder, when it has one.
+    /// A reader that starts where `aggregates`, as loaded from `dir`, left
+    /// off, and what the day spent up to there. `purse` is the id of the
+    /// purse it reads for, whose requests' lines it skips. Call
+    /// [`catch_up`](Self::catch_up) next for what the files gained since
+    /// the aggregates were saved.
     #[must_use]
     pub fn start(
         dir: &StatsDir,
         day: LocalDate,
         aggregates: &Aggregates,
-        writer: Option<String>,
+        purse: Option<String>,
     ) -> (Self, DaySpent) {
         let day_text = day.to_string();
         let mut spent = DaySpent::default();
@@ -143,11 +149,18 @@ impl DayReader {
         let tails = months_of(day)
             .into_iter()
             .map(|month| {
-                let tail = Tail {
-                    identity: FileIdentity::at(&dir.events_file(&month)).ok(),
-                    offset: aggregates.files.get(&month).map_or(0, |file| file.offset),
-                };
-                (month, tail)
+                // The file the aggregates read to their offset is the one
+                // there now: a reset that replaced it took the aggregates
+                // with it.
+                let file = open_to_read(&dir.events_file(&month))
+                    .ok()
+                    .and_then(|file| {
+                        FileIdentity::of(&file)
+                            .ok()
+                            .map(|identity| (file, identity))
+                    });
+                let offset = aggregates.files.get(&month).map_or(0, |part| part.offset);
+                (month, Tail { file, offset })
             })
             .collect();
         let reader = Self {
@@ -155,8 +168,7 @@ impl DayReader {
             day,
             day_text,
             tails,
-            writer,
-            own: BTreeSet::new(),
+            purse,
         };
         (reader, spent)
     }
@@ -167,29 +179,14 @@ impl DayReader {
         self.day
     }
 
-    /// Takes `session` as one whose spending this process counts as it
-    /// happens: its lines by this process's writer are not read from now
-    /// on. What it spent before, and what other processes spend in it, is.
-    /// Reads what the files gained first, so that nothing written before
-    /// is skipped, and returns that.
-    ///
-    /// # Errors
-    ///
-    /// When a file cannot be read. The session is taken as its own all the
-    /// same.
-    pub fn own(&mut self, session: &str) -> io::Result<DaySpent> {
-        let read = self.catch_up();
-        self.own.insert(session.to_owned());
-        read
-    }
-
     /// What the day's requests spent since the last call, from every
-    /// monthly file that may hold the day's lines.
+    /// monthly file that may hold the day's lines, less the requests of the
+    /// purse it reads for.
     ///
     /// # Errors
     ///
-    /// When a file cannot be read. What was read of the others is kept and
-    /// counted at the next call.
+    /// When a file cannot be read and nothing was read from the others.
+    /// What was read is kept and counted, here or at the next call.
     pub fn catch_up(&mut self) -> io::Result<DaySpent> {
         let mut spent = DaySpent::default();
         let mut failed = None;
@@ -207,39 +204,48 @@ impl DayReader {
 
     fn read_month(&mut self, month: &str, spent: &mut DaySpent) -> io::Result<()> {
         let path = self.dir.events_file(month);
-        let file = match open_to_read(&path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                // Gone (a reset): one made again is read from its start.
-                self.tails.insert(
-                    month.to_owned(),
-                    Tail {
-                        identity: None,
-                        offset: 0,
-                    },
-                );
-                return Ok(());
-            }
-            Err(error) => return Err(error),
-        };
-        let identity = FileIdentity::of(&file).ok();
-        let length = file.metadata()?.len();
         let Some(tail) = self.tails.get_mut(month) else {
             return Ok(());
         };
-        if identity != tail.identity {
-            // Another file under the name: everything in it is new.
-            *tail = Tail {
-                identity,
-                offset: 0,
-            };
-        } else if length < tail.offset {
+        match FileIdentity::at(&path) {
+            Ok(now) if tail.file.as_ref().is_some_and(|(_, held)| *held == now) => {}
+            Ok(_) => {
+                // Another file under the name, or one where there was none:
+                // everything in it is new.
+                let file = open_to_read(&path)?;
+                let identity = FileIdentity::of(&file)?;
+                *tail = Tail {
+                    file: Some((file, identity)),
+                    offset: 0,
+                };
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // Gone (a reset): one made again is read from its start.
+                *tail = Tail::default();
+                return Ok(());
+            }
+            Err(error) => {
+                // On Windows a file deleted while it is held open cannot be
+                // looked at until every holder lets it go: this one does,
+                // so that the delete completes and the file can be made
+                // again. What was read of it stays counted.
+                if cfg!(windows) {
+                    tail.file = None;
+                }
+                return Err(error);
+            }
+        }
+        let Some((file, _)) = tail.file.as_mut() else {
+            return Ok(());
+        };
+        let length = file.metadata()?.len();
+        if length < tail.offset {
             // Cut back in place: what was counted stays counted, and what
             // is there now is not counted twice.
             tail.offset = length;
             return Ok(());
         }
-        let (day, writer, own) = (&self.day_text, &self.writer, &self.own);
+        let (day, purse) = (&self.day_text, &self.purse);
         read_lines(file, &mut tail.offset, |line| {
             let Ok(line) = serde_json::from_slice::<DayLine>(line) else {
                 return;
@@ -247,13 +253,8 @@ impl DayReader {
             if line.kind != "request" || line.day != *day {
                 return;
             }
-            let mine = line.writer.is_some()
-                && line.writer == *writer
-                && line
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| own.contains(session));
-            if !mine {
+            let counted = line.charged_to.is_some() && line.charged_to == *purse;
+            if !counted {
                 spent.add(DaySpent::of_request(&line.tokens, line.cost.as_ref()));
             }
         })

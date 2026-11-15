@@ -96,6 +96,7 @@ pub(crate) fn request(at: &str, project: &str, model: &str, nanos: u64) -> Recor
         stop: "end".to_owned(),
         error: None,
         retries: 0,
+        charged_to: None,
     })
 }
 

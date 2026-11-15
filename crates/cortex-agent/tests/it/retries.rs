@@ -169,4 +169,20 @@ fn what_a_discarded_attempt_used_is_still_counted() {
     );
     assert_eq!(usage.totals.tokens.input, 1_000);
     assert_eq!(rig.events.ends()[0].usage.tokens.output, 40);
+    // The statistics hold what the ledger was charged: the request's event
+    // carries both attempts' tokens, where other processes' day limits read
+    // it (found by the review of step 16's fixes).
+    let recorded: Vec<TokenUsage> = rig
+        .stats
+        .all()
+        .into_iter()
+        .filter_map(|event| match event {
+            StatEvent::Request(request) => request.usage.map(|usage| usage.tokens),
+            _ => None,
+        })
+        .collect();
+    let [tokens] = recorded.as_slice() else {
+        panic!("one event for the request: {recorded:#?}");
+    };
+    assert_eq!((tokens.input, tokens.output), (1_000, 40));
 }
