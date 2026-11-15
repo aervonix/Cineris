@@ -46,4 +46,25 @@ The third runner was slower across the board (its listing, its map and its cache
 
 ## The pull request's CI times
 
-To be filled from the pull request's run.
+All four jobs passed at `8656056`, in the table below. The Linux runner of the pull request's run started a test's process in 6 ms against main's 3 ms, so it was about half as fast, and its tiers are not this step's cost; the A/B on one Windows runner above is (tier 1 +0.8 s, tier 2 +0.2 s, tier 3 +0.2 s). On Windows, where both runs started processes in 10 ms, every tier is within its budget; main's own tier 3 was over it, at 92.6 s.
+
+## On the pull request
+
+<!-- written by cargo xtask ci-times: it replaces this up to the end mark -->
+Pull request 53, on `main` at `7798c25`. "Main" is main's own run at `7798c25` (run 43700052663).
+The PR's run is 43706681538, at `8656056`.
+
+| Job | Main, `7798c25` | The PR at `8656056` |
+|---|---|---|
+| `lint-linux` | 54 s | 52 s |
+| `test-linux` | 81 s | 104 s |
+| `lint-windows` | 91 s | 70 s |
+| `test-windows` | 226 s | 204 s |
+
+| Time above process start, against the budget | Linux, main (3 ms) | Linux, `8656056` (6 ms) | Windows, main (10 ms) | Windows, `8656056` (10 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 5.6 s | 10.3 s | 15.8 s | 16.0 s |
+| Tier 2, integration (40 s) | 10.3 s | 19.8 s | 36.5 s | 34.8 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 11.2 s | 15.4 s | 92.6 s | 86.6 s |
+
+<!-- end of what cargo xtask ci-times wrote -->
