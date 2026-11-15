@@ -258,7 +258,14 @@ struct TiersRequest {
     /// What `compare` is compared with: the main branch when not given.
     against: Option<Source>,
     /// What follows `--`: more arguments for nextest, a filter for example.
+    /// What follows `--`: more arguments for nextest, a filter for example.
     rest: Vec<String>,
+    /// Run at a runner's test threads, and estimate what a runner of each
+    /// OS would report (`like_runner`).
+    like_runner: bool,
+    /// A `try` A/B run to measure the factors of `like_runner` from, with
+    /// the desk's report `from`.
+    factors_from: Option<Source>,
 }
 
 impl TiersRequest {
@@ -271,6 +278,8 @@ impl TiersRequest {
             compare: None,
             against: None,
             rest: Vec::new(),
+            like_runner: false,
+            factors_from: None,
         };
         let mut os_given = false;
         let mut rest = arguments.iter();
@@ -292,6 +301,10 @@ impl TiersRequest {
                         .map_err(|_| format!("`--top {text}` is not a number"))?;
                 }
                 "--from" => request.from = Some(PathBuf::from(value("a JUnit report")?)),
+                "--like-runner" => request.like_runner = true,
+                "--factors-from" => {
+                    request.factors_from = Some(Source::parse(value("a try run's id")?));
+                }
                 "--compare" => {
                     request.compare = Some(Source::parse(value("a report, a run or `main`")?));
                 }
@@ -351,8 +364,42 @@ impl TiersRequest {
 fn ci_tiers(arguments: &[String]) -> Result<()> {
     let request = TiersRequest::parse(arguments)?;
     let (top, os) = (request.top, request.os);
+    if let Some(run) = &request.factors_from {
+        let Some(desk) = &request.from else {
+            return Err(
+                "`--factors-from` measures against the desk's report: give it with \
+                        `--from`"
+                    .to_owned(),
+            );
+        };
+        let Source::Run(run) = run else {
+            return Err("`--factors-from` takes a try run's id".to_owned());
+        };
+        let desk = crate::junit::read(desk)?;
+        let side = |os| -> Result<Vec<crate::junit::TestCase>> {
+            let sides = crate::records::ab_reports(*run, os)?
+                .ok_or_else(|| format!("run {run} kept no report for {os:?}"))?;
+            Ok(crate::ab::medians(&sides.base))
+        };
+        print!(
+            "{}",
+            crate::like_runner::measure(
+                &desk,
+                &side(tiers::Os::Linux)?,
+                &side(tiers::Os::Windows)?
+            )
+        );
+        return Ok(());
+    }
     if let Some(report) = request.from {
-        return tiers::check_report(&report, os, top);
+        let checked = tiers::check_report(&report, os, top);
+        if request.like_runner {
+            print!(
+                "{}",
+                crate::like_runner::estimate(&crate::junit::read(&report)?)
+            );
+        }
+        return checked;
     }
     if let (Some(new), Some(old)) = (&request.compare, &request.against) {
         let (label, cases) = runs::report(new, os)?;
@@ -364,7 +411,18 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
     }
     require_nextest()?;
     let mut run = ci_run(&request.packages);
+    let threads_given = request
+        .rest
+        .iter()
+        .any(|word| word.starts_with("--test-threads") || word == "-j");
+    if request.like_runner && !threads_given {
+        run.extend([
+            "--test-threads".to_owned(),
+            crate::like_runner::RUNNER_THREADS.to_owned(),
+        ]);
+    }
     run.extend(request.rest.iter().cloned());
+    let like_runner = request.like_runner;
     let mut build = ci_run(&request.packages);
     build.push("--no-run".to_owned());
     let title = if request.packages.is_empty() && request.rest.is_empty() {
@@ -386,7 +444,12 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
             }),
             Step::cargo_owned("run tests", run),
             Step::closure("tier budgets", move || {
-                tiers::check_report(&tiers::ci_report_path(), os, top)
+                let checked = tiers::check_report(&tiers::ci_report_path(), os, top);
+                if like_runner {
+                    let cases = crate::junit::read(&tiers::ci_report_path())?;
+                    print!("{}", crate::like_runner::estimate(&cases));
+                }
+                checked
             }),
         ],
     )
@@ -519,6 +582,8 @@ mod tests {
                 compare: None,
                 against: None,
                 rest: vec![],
+                like_runner: false,
+                factors_from: None,
             }
         );
         assert_eq!(
@@ -541,6 +606,8 @@ mod tests {
                 against: None,
                 // After `--` nothing is this command's, whatever it looks like.
                 rest: strings(&["replay::", "--top"]),
+                like_runner: false,
+                factors_from: None,
             }
         );
         assert_eq!(
@@ -553,8 +620,21 @@ mod tests {
                 compare: None,
                 against: None,
                 rest: vec![],
+                like_runner: false,
+                factors_from: None,
             }
         );
+        let like = TiersRequest::parse(&strings(&["--like-runner", "-p", "cortex-llm"])).unwrap();
+        assert!(like.like_runner);
+        assert_eq!(like.packages, strings(&["cortex-llm"]));
+        let measure = TiersRequest::parse(&strings(&[
+            "--from",
+            "desk.xml",
+            "--factors-from",
+            "43663690282",
+        ]))
+        .unwrap();
+        assert_eq!(measure.factors_from, Some(Source::Run(43663690282)));
     }
 
     #[test]

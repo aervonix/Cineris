@@ -210,7 +210,15 @@ fn edit(source: &str, request: &Request, shown_as: &str) -> Result<(String, Stri
                 format!("`{within}` in {shown_as} has no item called `{segment}`")
             }
         }
-        lex::Missing::NotFound => format!("--from is not in {shown_as}{inside}. Nothing changed."),
+        lex::Missing::NotFound => match comma_before_a_bracket(source, &tokens, request) {
+            Some(line) => format!(
+                "--from ends in a comma, and in {shown_as} that comma (line {line}) comes before \
+                 a closing bracket, where it is the formatter's and not a token; --from has it as \
+                 a token, so it cannot match. End --from before the comma, and --to too. Nothing \
+                 changed."
+            ),
+            None => format!("--from is not in {shown_as}{inside}. Nothing changed."),
+        },
         lex::Missing::Ambiguous(lines) => format!(
             "--from is in {shown_as}{inside} {} times, at lines {}. Nothing changed. Make it \
              longer, name the item with --in, or pick one with --occurrence.",
@@ -425,6 +433,28 @@ fn apply_script(
     Ok((files, shown))
 }
 
+/// Where a `--from` that ends in a comma, and is not found, is found
+/// without it: a comma before a closing bracket is not a token of the
+/// source, and one at the end of `--from` is, so such a match can never be
+/// made (`mutate`'s pre-flight says the same of a break's `find`).
+fn comma_before_a_bracket(source: &str, tokens: &[lex::Token], request: &Request) -> Option<usize> {
+    if lex::code_texts(&request.from).last() != Some(&",") {
+        return None;
+    }
+    let shorter = request.from.trim_end().strip_suffix(',')?;
+    match lex::locate_in(
+        source,
+        tokens,
+        request.within.as_deref(),
+        shorter,
+        request.occurrence,
+    ) {
+        Ok(range) => Some(lex::line_of(source, range.end)),
+        Err(lex::Missing::Ambiguous(lines)) => lines.first().copied(),
+        Err(_) => None,
+    }
+}
+
 /// `cargo xtask replace --script FILE [--dry-run]`
 fn run_script(arguments: &[String]) -> Result<()> {
     let mut script = None;
@@ -587,6 +617,24 @@ fn budget(tier: Tier, os: Os) -> f64 {
             shown,
             "budget.rs: lines 6-6 are now 6-6\n-     6          _ => 60.0,\n+     6          _ => 61.0,\n"
         );
+    }
+
+    #[test]
+    fn a_match_whose_comma_comes_before_a_bracket_is_told_why_it_cannot_be_made() {
+        let source = "fn f() {\n    run(\n        first,\n        second,\n    )\n}\n";
+        let error = edit(source, &request("second,", "third,"), "a.rs").unwrap_err();
+        assert!(
+            error.contains("that comma (line 4) comes before a closing bracket")
+                && error.contains("End --from before the comma"),
+            "{error}"
+        );
+        // Without the comma it is made.
+        let (edited, _) = edit(source, &request("second", "third"), "a.rs").unwrap();
+        assert!(edited.contains("        third,\n"), "{edited}");
+        // A --from that is not there without its comma either is just not
+        // there.
+        let error = edit(source, &request("fourth,", "third,"), "a.rs").unwrap_err();
+        assert!(error.contains("--from is not in a.rs"), "{error}");
     }
 
     #[test]

@@ -354,7 +354,7 @@ fn write_section(file: &Path, heading: &str, body: &str) -> Result<()> {
 
 /// Every A/B report a `try` run kept for `os`: `<side>-round-<n>.xml`,
 /// found anywhere under its artifact, which keeps the runner's paths.
-fn ab_reports(run: u64, os: Os) -> Result<Option<Sides>> {
+pub(crate) fn ab_reports(run: u64, os: Os) -> Result<Option<Sides>> {
     let name = match os {
         Os::Linux => "try-linux",
         Os::Windows => "try-windows",
