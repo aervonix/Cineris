@@ -251,6 +251,8 @@ version = "0.0.0"
 dependencies = [
  "cortex-base",
  "cortex-testkit",
+ "ignore",
+ "thiserror",
 ]
 
 [[package]]

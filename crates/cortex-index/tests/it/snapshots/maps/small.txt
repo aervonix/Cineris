@@ -1,0 +1,16 @@
+Repository map, made by the harness from the workspace's files (approximate: definitions are found by reading lines, not by parsing). Directories with how many files they hold, then the most relevant files with their main definitions. `outline` shows a file's or a directory's definitions with their lines.
+7 files indexed.
+
+Directories:
+docs/ (1)
+src/ (3)
+  parse/ (2)
+tests/ (1)
+
+Files, most relevant first:
+README.md: Demo { Use }
+docs/guide.md: Guide { Install }
+src/lib.rs: struct Engine, impl Engine { start, stop }
+tests/it.rs: fn runs
+src/parse/expr.rs: fn expr
+src/parse/mod.rs: fn parse, fn tokens
