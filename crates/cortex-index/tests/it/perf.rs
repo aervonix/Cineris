@@ -456,9 +456,20 @@ fn tree_file(n: usize) -> String {
 /// writes the cache again), where a warm pass's time goes, and the
 /// process's peak and remaining memory; then the map.
 ///
+/// **On a hosted runner** the registry's sources are there once a build has
+/// fetched the workspace's dependencies, which `try` does before it runs the
+/// tests: `gh workflow run try -f os=windows -f profile=release -f
+/// command="test -p cortex-index --run-ignored only --no-capture
+/// --test-threads 1" -f filter="test(=perf::sys_perf_a_tree_of_real_code)"`.
+/// With no registry and no `CORTEX_PERF_SOURCE` it says so and measures
+/// nothing.
+///
 /// Named as a system test: it starts PowerShell on Windows for the memory
 /// figures, and making and indexing a tree of real code takes longer than
-/// tier 2's ten seconds on a hosted runner.
+/// tier 2's ten seconds on a hosted runner (20 s there). Like every
+/// measurement here it is ignored, so no blocking tier runs it; the
+/// blocking tiers' guard of what it measures is
+/// `index::the_cache_holds_what_the_map_shows_and_no_heads_or_docs`.
 #[test]
 #[ignore = "a measurement, run by hand in a release build: see the module documentation"]
 fn sys_perf_a_tree_of_real_code() {

@@ -386,6 +386,47 @@ fn the_map_after_a_pass_is_made_from_what_the_pass_kept() {
     assert_eq!(index.map(&MapRequest::new()), None);
 }
 
+/// The cache holds what the map shows and no more: the independent review
+/// of step 18 found whole outlines in it, 4.7 KiB a file on real code,
+/// which took the warm map past its budget. The blocking tiers' guard of
+/// that measurement (`perf::sys_perf_a_tree_of_real_code` is the
+/// measurement, run by hand): every language's sample, its heads and its
+/// docs left out, at a few hundred bytes a file.
+#[test]
+fn the_cache_holds_what_the_map_shows_and_no_heads_or_docs() {
+    let tree = Tree::new(cortex_testkit::scratch!(
+        "the_cache_holds_what_the_map_shows"
+    ));
+    let mut files = 0;
+    let mut entries: Vec<_> = std::fs::read_dir(crate::fixtures().join("outlines"))
+        .expect("the fixtures")
+        .flatten()
+        .collect();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let text = std::fs::read_to_string(entry.path()).expect("a fixture");
+        tree.write(&format!("src/{name}"), &text);
+        files += 1;
+    }
+    let index = tree.index();
+    let report = tree.pass(&index);
+    assert_eq!(report.indexed, files, "{report:?}");
+    let cache = std::fs::read_to_string(index.cache_path()).expect("the cache");
+    // A doc comment's text and a definition's head are not kept.
+    assert!(!cache.contains("A parser of frames"), "a doc in the cache");
+    assert!(
+        !cache.contains("pub const MAX_FRAME: usize"),
+        "a head in the cache"
+    );
+    assert!(cache.contains("\tParser\t"), "a name is kept");
+    let per_file = report.cache_bytes / files;
+    assert!(
+        per_file < 640,
+        "{per_file} bytes a file: the cache holds more than the map shows"
+    );
+}
+
 /// A definition's line is read when its file is shown, not by every pass
 /// (the independent review of step 18: checking every line of the cache
 /// twice a map cost a warm map most of its time). One this build did not
