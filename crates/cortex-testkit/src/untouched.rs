@@ -16,8 +16,19 @@
 //! asserts that none was early. Nothing is asserted about a gate another
 //! thread opens (`docs/testing-and-ci.md`, "No real waiting in tests"):
 //! the limit only turns a regression into a failure instead of a hang.
+//!
+//! **Work started beside the opening.** A hold catches a use the opening
+//! waits for, not one the opening starts on another thread and does not
+//! wait for: the independent review of step 18 started the index's first
+//! pass while the session was put together, and the check passed. So the
+//! code under test also says when what opens the session is done
+//! ([`open`](Untouched::open), from a hook the test gives it), and says, on
+//! the thread that starts the work and at once, that it starts some
+//! ([`note`](Untouched::note)). A note or a touch before the opening is done
+//! is counted [`before_open`](Untouched::before_open): which comes first is
+//! then the order of the code under test, not of two threads.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::Gate;
@@ -34,6 +45,8 @@ pub struct Untouched {
     touched: Gate,
     touches: AtomicUsize,
     early: AtomicUsize,
+    opened: AtomicBool,
+    before_open: AtomicUsize,
 }
 
 impl Untouched {
@@ -46,11 +59,37 @@ impl Untouched {
     /// What the watched part calls each time it is used. Waits until the
     /// test lets go, or [`HOLD`] has passed.
     pub fn touch(&self) {
+        self.count_before_open();
         self.touches.fetch_add(1, Ordering::SeqCst);
         self.touched.open();
         if !self.released.wait(HOLD) {
             self.early.fetch_add(1, Ordering::SeqCst);
         }
+    }
+
+    /// What the watched part calls when it starts work it does not wait
+    /// for, on the thread that starts it: counted, never held.
+    pub fn note(&self) {
+        self.count_before_open();
+    }
+
+    /// What the code under test calls once what opens the session is done:
+    /// a touch or a note from then on is not on the opening's path.
+    pub fn open(&self) {
+        self.opened.store(true, Ordering::SeqCst);
+    }
+
+    fn count_before_open(&self) {
+        if !self.opened.load(Ordering::SeqCst) {
+            self.before_open.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Touches and notes that came before [`open`](Self::open): work started
+    /// on the opening's path, whether or not the opening waited for it.
+    #[must_use]
+    pub fn before_open(&self) -> usize {
+        self.before_open.load(Ordering::SeqCst)
     }
 
     /// Lets every touch through, the waiting ones and every later one.
@@ -95,5 +134,22 @@ mod tests {
         assert_eq!((watch.touches(), watch.early()), (1, 0));
         watch.touch();
         assert_eq!((watch.touches(), watch.early()), (2, 0));
+        assert_eq!(watch.before_open(), 2, "nothing said the opening was done");
+    }
+
+    /// A note or a touch before the opening is done is counted, held or
+    /// not; one after it is not.
+    #[test]
+    fn work_started_before_the_opening_is_done_is_counted() {
+        let watch = Untouched::new();
+        watch.release();
+        watch.note();
+        watch.touch();
+        assert_eq!(watch.before_open(), 2);
+        watch.open();
+        watch.note();
+        watch.touch();
+        assert_eq!(watch.before_open(), 2);
+        assert_eq!(watch.early(), 0);
     }
 }

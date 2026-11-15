@@ -1,0 +1,283 @@
+# The fixes of the independent review of step 18: the cache that holds what
+# the map shows and is read once a map (finding 1), the map's ranking
+# (finding 6), the one escape for names and lines from the workspace
+# (findings 3 to 5, and the open item on names that act unseen), the
+# start-up check (finding 9), the map's wait (finding 10) and the map's
+# state in an epoch (finding 11).
+
+# ---------------------------------------------------------------- finding 1
+
+[break] the-cache-keeps-every-top-level-definition
+rule: The cache keeps a file's first top-level definitions only, the ones the map names, and counts the rest.
+file: crates/cortex-index/src/cache.rs
+in: record
+find: if seen_top <= TOP_ENTRIES {
+replace: if true {
+caught-by:
+    cortex-index cache::tests::a_record_keeps_what_the_map_shows_and_counts_the_rest
+
+[break] a-pass-checks-every-definition-line
+rule: A definition's line is read when its file is shown, not by every pass: a pass reads the stamps.
+file: crates/cortex-index/src/cache.rs
+in: CacheFile::parse
+find: let record = open.as_mut()?;
+replace: parse_shown(line.strip_prefix("O\t")?)?; let record = open.as_mut()?;
+caught-by:
+    cortex-index::it index::a_bad_definition_line_leaves_its_file_out_of_the_map
+    cortex-index cache::tests::a_bad_definition_line_is_found_when_its_file_is_shown
+
+[break] a-warm-pass-makes-a-new-cache-when-nothing-changed
+rule: A pass that finds nothing to read and nothing gone makes no new cache and writes none.
+file: crates/cortex-index/src/pass.rs
+in: Index::pass_and_keep
+find: if unchanged {
+replace: if false {
+caught-by:
+    cortex-index::it index::a_warm_pass_reads_only_what_changed
+
+[break] the-map-after-a-pass-reads-the-cache-again
+rule: The map asked for with a pass is made from the cache that pass kept, without reading it again.
+file: crates/cortex-index/src/lookup.rs
+in: Index::map_from
+find: self.map_of(snapshot.cache.as_ref()?, request)
+replace: { let _ = snapshot; self.map(request) }
+caught-by:
+    cortex-index::it index::the_map_after_a_pass_is_made_from_what_the_pass_kept
+
+[break] the-session-reads-the-cache-again-for-its-map
+rule: The session's index makes the maps asked for from the cache its pass kept.
+file: crates/cortex-core/src/repo_map.rs
+in: Shared::work
+find: self.index.map_from(&snapshot, &request)
+replace: self.index.map(&request)
+caught-by:
+    cortex-core repo_map::tests::a_map_asked_for_with_a_pass_is_made_from_what_the_pass_kept
+
+# ---------------------------------------------------------------- finding 6
+
+[break] the-map-shows-lockfiles-and-licences
+rule: A lockfile, a licence, a changelog or a merge's leftover that Markdown or the fallback outlines is never shown.
+file: crates/cortex-index/src/map.rs
+in: noise
+find: lockfile || leftover || named
+replace: false
+caught-by:
+    cortex-index::it map::noise_is_never_shown_and_code_comes_before_documents
+
+[break] a-code-file-named-like-noise-is-left-out
+rule: A file a language's extractor outlines is code, whatever its name.
+file: crates/cortex-index/src/map.rs
+in: noise
+find: if class(record) == 0 {
+replace: if false {
+caught-by:
+    cortex-index::it map::noise_is_never_shown_and_code_comes_before_documents
+
+[break] the-map-ranks-documents-with-code
+rule: In each tier, code comes before Markdown, and Markdown before the fallback's files.
+file: crates/cortex-index/src/map.rs
+in: rank
+find: class(record), changed_rank[at]
+replace: 0, changed_rank[at]
+caught-by:
+    cortex-index::it map::noise_is_never_shown_and_code_comes_before_documents
+    cortex-index::it map::a_small_projects_map
+    cortex-index::it map::a_fresh_clone_has_no_recent_changes_to_rank_by
+
+[break] the-map-goes-deep-before-wide
+rule: The last tier is spread over the tree: each directory's first file before any directory's second.
+file: crates/cortex-index/src/map.rs
+in: rank
+find: round[at] = place;
+replace: round[at] = 0;
+caught-by:
+    cortex-index::it map::the_map_shows_the_trees_breadth_before_one_directorys_depth
+
+[break] a-directorys-first-file-is-its-first-by-name
+rule: A directory's first file in the map is the one with the most top-level definitions.
+file: crates/cortex-index/src/map.rs
+in: rank
+find: .cmp(&cache.records[one].top)
+replace: .cmp(&cache.records[other].top)
+caught-by:
+    cortex-index::it map::the_map_shows_the_trees_breadth_before_one_directorys_depth
+
+# -------------------------------------------------------- findings 3 to 5
+
+[break] a-format-character-acts-seen
+rule: Every format character (Unicode's Cf), the tag characters among them, is written as an escape.
+file: crates/cortex-base/src/visible.rs
+packages: cortex-base, cortex-tools
+in: is_format
+find: .is_ok()
+replace: .is_err() && false
+caught-by:
+    cortex-base visible::tests::a_character_is_a_format_character_exactly_when_unicode_says
+    cortex-base visible::tests::tag_characters_are_written_as_escapes
+    cortex-tools::it outline::tag_characters_and_line_breaks_are_escapes_in_names_and_outline_lines
+
+[break] the-tag-block-is-left-out-of-the-table
+rule: The table of format characters is Unicode's, the tag characters included.
+file: crates/cortex-base/src/visible.rs
+find: (0xE0020, 0xE007F)
+replace: (0xE0020, 0xE0020)
+caught-by:
+    cortex-base visible::tests::the_table_of_format_characters_is_unicodes_for_its_version
+    cortex-base visible::tests::tag_characters_are_written_as_escapes
+
+[break] the-outline-tools-directory-name-is-raw
+rule: The outline tool writes a directory's name as an escape in its headers and its messages.
+file: crates/cortex-tools/src/outline.rs
+in: outline_directory
+find: let shown = call.target.shown();
+replace: let shown = call.target.data();
+caught-by:
+    cortex-tools::it outline::a_directory_named_to_start_lines_of_its_own_is_an_escape_in_every_message
+
+[break] a-plan-summary-names-the-path-raw
+rule: A plan's summary, which an approval prompt and a client show, names its path as an escape.
+file: crates/cortex-tools/src/outline.rs
+in: OutlineTool::plan
+find: let shown = target.shown();
+replace: let shown = target.data();
+caught-by:
+    cortex-tools::it outline::a_directory_named_to_start_lines_of_its_own_is_an_escape_in_every_message
+
+[break] an-outliners-lines-are-shown-as-they-are
+rule: The outline tool writes each line an outliner gives as an escape, whatever the outliner did.
+file: crates/cortex-tools/src/outline.rs
+in: outline_directory
+find: let line = format!("  {}", limits.clip(&visible(line)));
+replace: let line = format!("  {}", limits.clip(line));
+caught-by:
+    cortex-tools::it outline::tag_characters_and_line_breaks_are_escapes_in_names_and_outline_lines
+
+[break] a-listed-path-is-raw
+rule: list, search and outline show a listed path with every character that would act unseen as an escape.
+file: crates/cortex-tools/src/walk.rs
+in: shown_path
+find: match cortex_base::visible(&joined) {
+replace: match std::borrow::Cow::<str>::Borrowed(&joined) {
+caught-by:
+    cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
+    cortex-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
+
+[break] a-link-is-resolved-by-its-shown-name
+rule: list resolves a link by its path as it is, not as it is shown.
+file: crates/cortex-tools/src/list.rs
+find: let path = walk::joined_path(data, entry.relative);
+replace: let path = line.clone();
+caught-by:
+    cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
+
+[break] a-matching-line-is-shown-as-it-is
+rule: search shows a matching line with every character that would act unseen as an escape, its tabs kept.
+file: crates/cortex-tools/src/search.rs
+in: FileSink::line
+find: let text = String::from_utf8_lossy(bytes); let text = visible_keeping(&text, &['\t']);
+replace: let text = String::from_utf8_lossy(bytes);
+caught-by:
+    cortex-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
+
+[break] a-matching-lines-tabs-are-escaped
+rule: A matching line's tabs are its indentation, and are kept.
+file: crates/cortex-tools/src/search.rs
+in: FileSink::line
+find: let text = String::from_utf8_lossy(bytes); let text = visible_keeping(&text, &['\t']);
+replace: let text = String::from_utf8_lossy(bytes); let text = visible_keeping(&text, &[]);
+caught-by:
+    cortex-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
+
+[break] a-payload-path-is-escaped
+rule: A payload's path is data, which programs read back (the files a summary carries): it is as it is.
+file: crates/cortex-tools/src/read.rs
+find: "path": data
+occurrence: 3
+replace: "path": shown
+caught-by:
+    cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
+
+[break] read-names-close-matches-raw
+rule: The names read gives as close matches to a missing file are escapes.
+file: crates/cortex-tools/src/read.rs
+in: missing
+find: .map(|name| cortex_base::visible(name).into_owned())
+replace: .map(|name| name.clone())
+caught-by:
+    cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
+
+[break] a-path-refusal-names-the-path-raw
+rule: A path the resolver refuses is named in its message as an escape.
+file: crates/cortex-base/src/path/mod.rs
+find: #[error("`{shown_path}` leads out of the directory it is relative to", shown_path = crate::visible(.path))]
+replace: #[error("`{path}` leads out of the directory it is relative to")]
+caught-by:
+    cortex-base::it paths::a_refusal_writes_the_path_it_names_as_an_escape
+
+# ---------------------------------------------------------------- finding 9
+
+[break] the-index-starts-while-the-session-is-assembled
+rule: The index's first pass starts once the session's loop runs, never while the session is put together (the independent review of step 18's break).
+file: crates/cortex-core/src/assemble.rs
+in: assemble
+find: let main = models.main().clone();
+replace: if let Some(repo) = &repo { repo.warm(); } let main = models.main().clone();
+caught-by:
+    cortex-core::it index::the_index_is_not_touched_until_the_session_is_open
+
+# --------------------------------------------------------------- finding 10
+
+[break] a-project-may-set-the-maps-wait
+rule: The map's wait is the user's alone: a repository's file must not make the sessions in it wait.
+file: crates/cortex-config/src/schema/sections.rs
+find: [UserOnly, NextEpoch, 0..=1_000]
+replace: [Preference, NextEpoch, 0..=1_000]
+caught-by:
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it trust::every_key_has_a_trust_class
+
+[break] the-maps-wait-has-no-bound
+rule: The map's wait is at most one second.
+file: crates/cortex-config/src/schema/sections.rs
+find: [UserOnly, NextEpoch, 0..=1_000]
+replace: [UserOnly, NextEpoch]
+caught-by:
+    cortex-config validate::tests::a_length_of_time_out_of_range_is_an_error_in_milliseconds
+
+[break] a-length-of-time-is-not-ranged
+rule: A length of time with a range is checked against it, in milliseconds.
+file: crates/cortex-config/src/validate.rs
+in: check_leaf
+find: let number = crate::schema::magnitude(value);
+replace: let number = match value { Value::Integer(number) => Some(*number as f64), Value::Float(number) => Some(*number), _ => None };
+caught-by:
+    cortex-config validate::tests::a_length_of_time_out_of_range_is_an_error_in_milliseconds
+
+# --------------------------------------------------------------- finding 11
+
+[break] a-change-of-history-keeps-the-maps-state
+rule: A change of history forgets what the loop knew of the map: the epoch's number may come again for another history.
+file: crates/cortex-agent/src/turn.rs
+in: Session::reload
+find: self.forget_map();
+replace:
+caught-by:
+    cortex-agent::it map::a_rewind_past_a_compaction_forgets_what_the_epoch_of_its_number_knew
+
+[break] a-dropped-answer-is-taken-for-no-map
+rule: A source that drops its answer (a pass that failed) has not said there is no map, and is asked again.
+file: crates/cortex-agent/src/context/map.rs
+in: MapPending::try_take
+find: Err(oneshot::error::TryRecvError::Closed) => Some(Answered::Dropped)
+replace: Err(oneshot::error::TryRecvError::Closed) => Some(Answered::NoMap)
+caught-by:
+    cortex-agent::it map::a_dropped_answer_is_asked_again_at_a_later_boundary
+
+[break] a-dropped-answer-is-asked-for-ever
+rule: A source that drops every answer is asked a few times in an epoch, not at every boundary.
+file: crates/cortex-agent/src/turn/map.rs
+in: Session::give_map
+find: if dropped >= DROPPED {
+replace: if false {
+caught-by:
+    cortex-agent::it map::a_source_that_drops_every_answer_is_asked_a_bounded_number_of_times

@@ -17,8 +17,9 @@
 //! - **Nothing is held:** a map is made from the cache the pass before it
 //!   read or made, without reading it again, an outline from its file, and
 //!   both are dropped.
-//! - **A pass that panics** answers who waits with no map, and lets the next
-//!   request start another. An idle session goes on passing while each
+//! - **A pass that panics** drops who waits unanswered, which the loop
+//!   reads as "ask again later", not as "there is no map", and lets the next
+//!   request start another; so does a map that panics. An idle session goes on passing while each
 //!   pass makes progress, a few passes at most for each idle slice.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -54,7 +55,14 @@ struct Shared {
     /// A turn is running.
     turn: AtomicBool,
     state: Mutex<State>,
+    /// Called on the thread that starts each pass, as it starts it: a
+    /// test's watch of when the index is first used.
+    started: Option<Probe>,
 }
+
+/// A test's probe of the core: called where something happens, on the
+/// thread it happens on.
+pub type Probe = Arc<dyn Fn() + Send + Sync>;
 
 #[derive(Default)]
 struct State {
@@ -88,8 +96,18 @@ impl RepoIndex {
                 cancel,
                 turn: AtomicBool::new(false),
                 state: Mutex::new(State::default()),
+                started: None,
             }),
         }
+    }
+
+    /// The same index, calling `probe` as each pass starts, on the thread
+    /// that starts it (`CoreOptions::index_started`).
+    pub(crate) fn probed(mut self, probe: Option<Probe>) -> Self {
+        if let Some(shared) = Arc::get_mut(&mut self.shared) {
+            shared.started = probe;
+        }
+        self
     }
 
     /// Starts a pass in the background, unless one is running: the first,
@@ -107,6 +125,9 @@ impl RepoIndex {
 
 impl Shared {
     fn spawn(self: Arc<Self>) {
+        if let Some(probe) = &self.started {
+            probe();
+        }
         if self.cancel.is_cancelled() {
             // The session has ended: who waits is told there is no map.
             let mut state = lock(&self.state);
@@ -180,9 +201,13 @@ impl Shared {
                     };
                     let map = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         self.index.map_from(&snapshot, &request)
-                    }))
-                    .unwrap_or(None);
-                    answer.send(map);
+                    }));
+                    // A map that panicked is dropped unanswered: the loop
+                    // asks again at a later boundary, as after a pass that
+                    // panicked.
+                    if let Ok(map) = map {
+                        answer.send(map);
+                    }
                 }
             }
             // The cache's text is the size of the cache: not held past the
@@ -445,8 +470,9 @@ mod tests {
         assert!(!lock(&repo.shared.state).running);
     }
 
-    /// A pass that panics answers who waits with no map, and leaves the
-    /// index able to start another (the review of step 18).
+    /// A pass that panics drops who waits unanswered (which the loop asks
+    /// again for later), and leaves the index able to start another (the
+    /// review of step 18).
     #[test]
     fn a_pass_that_panics_answers_who_waits_and_lets_the_next_one_start() {
         let scratch = Scratch::outside("cortex-core-unit", "a_pass_that_panics");
@@ -481,5 +507,36 @@ mod tests {
         let mut second = repo.request(Vec::new());
         let map = block_on(second.wait()).expect("the next request starts a pass that works");
         assert!(map.contains("src/lib.rs"), "{map}");
+    }
+
+    /// The map asked for with a pass is made from the cache the pass kept,
+    /// not read again: a cache that could not be written (its directory is
+    /// a file) still gives the epoch its map, where reading it back would
+    /// have found none (the independent review of step 18: a transient
+    /// failure must not leave an epoch without a map).
+    #[test]
+    fn a_map_asked_for_with_a_pass_is_made_from_what_the_pass_kept() {
+        let scratch = Scratch::outside("cortex-core-unit", "a_map_from_what_the_pass_kept");
+        scratch.file("ws/src/lib.rs", "pub fn hello() {}\n");
+        scratch.file("index", "a file where the cache's directory would be\n");
+        let root = PathResolver::new(&scratch.dir("ws"), PathOptions::new())
+            .expect("a workspace")
+            .root()
+            .clone();
+        let index = Index::new(
+            root,
+            scratch.join("index"),
+            Limits::default(),
+            Arc::new(cortex_index::OpenGate),
+            Arc::new(FakeClock::default()),
+        );
+        let repo = RepoIndex::new(index, 1500, Arc::new(NoRecentFiles), CancelToken::new());
+        let mut pending = repo.request(Vec::new());
+        let map = block_on(pending.wait()).expect("a map from the pass, not from the disk");
+        assert!(map.contains("src/lib.rs: fn hello"), "{map}");
+        assert!(
+            repo.shared.index.map(&MapRequest::new()).is_none(),
+            "there is no cache on the disk"
+        );
     }
 }

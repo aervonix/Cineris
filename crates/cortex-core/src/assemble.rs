@@ -1369,14 +1369,17 @@ pub(crate) fn assemble(
                 gate,
                 Arc::clone(&clock),
             );
-            Some(crate::repo_map::RepoIndex::new(
-                index,
-                usize::try_from(index_settings.map_tokens).unwrap_or(usize::MAX),
-                // The files of recent sessions come from the statistics
-                // (step 16), when they exist.
-                Arc::new(cortex_index::NoRecentFiles),
-                cancel.clone(),
-            ))
+            Some(
+                crate::repo_map::RepoIndex::new(
+                    index,
+                    usize::try_from(index_settings.map_tokens).unwrap_or(usize::MAX),
+                    // The files of recent sessions come from the statistics
+                    // (step 16), when they exist.
+                    Arc::new(cortex_index::NoRecentFiles),
+                    cancel.clone(),
+                )
+                .probed(options.index_started.clone()),
+            )
         }
         _ => None,
     };

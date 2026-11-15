@@ -26,6 +26,14 @@
 //! - **After a summary** the turns it did not cover are replayed without the
 //!   old epoch's map notice, live and when the log is read again, so that
 //!   the two histories are the same.
+//! - **A source that says there is no map** is not asked again in the
+//!   epoch. **One that drops its answer** (a pass that failed) is asked again
+//!   at a later boundary, a few times at most in an epoch: a passing failure
+//!   must not leave the epoch without a map (the independent review of step
+//!   18).
+//! - **A change of history** (a rewind) forgets what the loop knew of the
+//!   map: the number of the epoch it leaves may come again, for another
+//!   history.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -84,14 +92,23 @@ impl MapPending {
         pending
     }
 
-    /// The answer if it has come: `Some(None)` when there is no map,
-    /// `None` when it has not come yet. A source that went away without
-    /// answering has no map.
-    pub(crate) fn try_take(&mut self) -> Option<Option<String>> {
+    /// The answer if it has come, `None` when it has not come yet.
+    pub(crate) fn try_take(&mut self) -> Option<Answered> {
         match self.answer.try_recv() {
-            Ok(map) => Some(map),
+            Ok(Some(map)) => Some(Answered::Map(map)),
+            Ok(None) => Some(Answered::NoMap),
             Err(oneshot::error::TryRecvError::Empty) => None,
-            Err(oneshot::error::TryRecvError::Closed) => Some(None),
+            Err(oneshot::error::TryRecvError::Closed) => Some(Answered::Dropped),
+        }
+    }
+
+    /// Waits for the answer, as [`MapPending::try_take`] reads it. Call it
+    /// once, as [`MapPending::wait`].
+    pub(crate) async fn answered(&mut self) -> Answered {
+        match (&mut self.answer).await {
+            Ok(Some(map)) => Answered::Map(map),
+            Ok(None) => Answered::NoMap,
+            Err(_) => Answered::Dropped,
         }
     }
 
@@ -101,6 +118,19 @@ impl MapPending {
     pub async fn wait(&mut self) -> Option<String> {
         (&mut self.answer).await.unwrap_or(None)
     }
+}
+
+/// What became of a request for a map.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Answered {
+    /// The map.
+    Map(String),
+    /// The source says there is none: an empty workspace, an index that is
+    /// off.
+    NoMap,
+    /// The source went away without answering: a pass that failed. A later
+    /// request may have one.
+    Dropped,
 }
 
 /// The map's part of a session's context.

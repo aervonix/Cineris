@@ -24,6 +24,8 @@ enum Answer {
     None,
     /// Later: the test sends it with [`ScriptedMap::send`].
     Later,
+    /// Never: the answer is dropped, as a pass that panics drops it.
+    Dropped,
 }
 
 /// A map source that answers as it is told, and remembers what it was
@@ -67,6 +69,7 @@ impl MapSource for ScriptedMap {
                 lock(&self.held).push(answer);
                 pending
             }
+            Answer::Dropped => MapPending::channel().1,
         }
     }
 
@@ -316,4 +319,101 @@ fn the_map_is_asked_for_with_the_files_the_sessions_tools_touched() {
     assert_eq!(requests.len(), 2, "{requests:?}");
     assert!(requests[0].is_empty());
     assert_eq!(requests[1], ["src/a.rs"]);
+}
+
+/// The independent review of step 18: the loop kept what it knew of the map
+/// by the epoch's number, which comes round again after a rewind past a
+/// compaction. Epoch 2's source said it had no map; after a rewind to epoch
+/// 1 and another compaction, the new epoch 2 was taken to have none too. A
+/// change of history forgets it all.
+#[test]
+fn a_rewind_past_a_compaction_forgets_what_the_epoch_of_its_number_knew() {
+    let world = World::new(
+        "map_rewind",
+        [
+            says("One."),
+            says("A summary."),
+            says("Two."),
+            says("A summary again."),
+            says("Three."),
+        ],
+    );
+    let source = ScriptedMap::new([
+        Answer::Now("FIRST MAP"),
+        Answer::None,
+        Answer::Now("THIRD MAP"),
+    ]);
+    let timer = FakeTimer::auto(&world.clock);
+    let rig = with_map(&world, &source, &timer, Duration::from_millis(150)).start(&world);
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+    });
+    // Where going back to the end of the first turn leaves the history.
+    let back_to = rig.store.records().len();
+    rig.handle.compact(None).expect("a compaction");
+    world.run(async {
+        rig.events.turns(2).await;
+        rig.prompt("second");
+        rig.events.turns(3).await;
+    });
+    assert_eq!(source.requests(), 2, "epoch 2's source had no map");
+    assert_eq!(map_items(&rig), ["FIRST MAP"]);
+    // Back in epoch 1, whose history holds its map.
+    rig.store.keep_first(back_to);
+    let mut change = rig.handle.change_history().expect("idle");
+    change.made();
+    drop(change);
+    rig.handle.compact(None).expect("a compaction again");
+    world.run(async {
+        rig.events.turns(4).await;
+        rig.prompt("third");
+        rig.events.turns(5).await;
+    });
+    assert_eq!(
+        source.requests(),
+        3,
+        "the new epoch 2 is asked for its own map"
+    );
+    assert_eq!(map_items(&rig), ["FIRST MAP", "THIRD MAP"]);
+}
+
+/// A source that drops its answer (a pass that panicked) has not said
+/// there is no map: a later boundary asks again, and the epoch has its map
+/// (the independent review of step 18).
+#[test]
+fn a_dropped_answer_is_asked_again_at_a_later_boundary() {
+    let world = World::new("map_dropped", [says("One."), says("Two.")]);
+    let source = ScriptedMap::new([Answer::Dropped, Answer::Now("THE MAP")]);
+    let timer = FakeTimer::auto(&world.clock);
+    let rig = with_map(&world, &source, &timer, Duration::from_millis(150)).start(&world);
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+        rig.prompt("second");
+        rig.events.turns(2).await;
+    });
+    assert_eq!(source.requests(), 2);
+    assert_eq!(map_items(&rig), ["THE MAP"]);
+}
+
+/// A source that drops every answer is asked a few times in an epoch, not
+/// at every boundary for ever.
+#[test]
+fn a_source_that_drops_every_answer_is_asked_a_bounded_number_of_times() {
+    let world = World::new(
+        "map_dropped_always",
+        [says("One."), says("Two."), says("Three."), says("Four.")],
+    );
+    let source = ScriptedMap::new((0..10).map(|_| Answer::Dropped));
+    let timer = FakeTimer::auto(&world.clock);
+    let rig = with_map(&world, &source, &timer, Duration::from_millis(150)).start(&world);
+    world.run(async {
+        for (turn, prompt) in ["one", "two", "three", "four"].into_iter().enumerate() {
+            rig.prompt(prompt);
+            rig.events.turns(turn + 1).await;
+        }
+    });
+    assert_eq!(source.requests(), 3);
+    assert!(map_items(&rig).is_empty());
 }

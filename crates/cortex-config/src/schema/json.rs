@@ -68,9 +68,19 @@ fn entry(child: &Child, enforced: bool) -> Json {
                 _ => json!({}),
             };
             if let Json::Object(object) = &mut schema {
-                if let Some((low, high)) = range {
-                    object.insert("minimum".to_owned(), number(low));
-                    object.insert("maximum".to_owned(), number(high));
+                match (range, &child.node) {
+                    // A length of time is text, ranged in milliseconds.
+                    (Some((low, high)), Node::Leaf(Kind::Duration)) => {
+                        object.insert(
+                            "x-cortex-milliseconds".to_owned(),
+                            json!({ "minimum": number(low), "maximum": number(high) }),
+                        );
+                    }
+                    (Some((low, high)), _) => {
+                        object.insert("minimum".to_owned(), number(low));
+                        object.insert("maximum".to_owned(), number(high));
+                    }
+                    (None, _) => {}
                 }
                 if let Some(default) = &child.default {
                     object.insert("default".to_owned(), from_toml(default));

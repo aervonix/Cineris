@@ -183,6 +183,14 @@ pub struct CoreOptions {
     /// engine's gate: a test's, which watches when the index is first used
     /// (`cortex_testkit::Untouched`).
     pub index_gate: Option<Arc<dyn cortex_index::Gate>>,
+    /// Called as each pass of the repository index starts, on the thread
+    /// that starts it: a test's, which watches whether the first starts
+    /// before the session's loop runs (`cortex_testkit::Untouched::note`).
+    pub index_started: Option<crate::repo_map::Probe>,
+    /// Called once a session's loop runs, just before its background work
+    /// starts: a test's, which marks the end of the path that opens the
+    /// session (`cortex_testkit::Untouched::open`).
+    pub session_running: Option<crate::repo_map::Probe>,
     /// Cancelled when the process is to stop: every session's token is a
     /// child of it.
     pub cancel: CancelToken,
@@ -240,6 +248,8 @@ impl CoreOptions {
             repo_index: true,
             map_wait: Duration::from_millis(150),
             index_gate: None,
+            index_started: None,
+            session_running: None,
             cancel: CancelToken::new(),
             zone: None,
         }
@@ -618,6 +628,9 @@ impl Core {
         // Everything the session's loop logs is inside its span.
         let span = tracing::info_span!("session", session = %handle.id());
         let task = tokio::spawn(tracing::Instrument::instrument(session.run(), span));
+        if let Some(probe) = &self.inner.options.session_running {
+            probe();
+        }
         // The repository index's first pass, now that the loop runs: never
         // on the path that puts the session together. With no map there is
         // nothing to make ahead: the `outline` tool reads what it needs.

@@ -263,20 +263,18 @@ fn check_leaf(
         checked.report_at(diagnostics, Severity::Error, key, line, message);
         return;
     }
-    let number = match value {
-        Value::Integer(number) => Some(*number as f64),
-        Value::Float(number) => Some(*number),
-        _ => None,
-    };
+    // A length of time is ranged in milliseconds.
+    let number = crate::schema::magnitude(value);
     if let (Some((low, high)), Some(number)) = (range, number)
         && !(low..=high).contains(&number)
     {
-        checked.report(
-            diagnostics,
-            Severity::Error,
-            key,
-            format!("{number} is out of range: expected {low} to {high}"),
-        );
+        let message = match value {
+            Value::String(text) => {
+                format!("`{text}` is out of range: expected {low} ms to {high} ms")
+            }
+            _ => format!("{number} is out of range: expected {low} to {high}"),
+        };
+        checked.report(diagnostics, Severity::Error, key, message);
     }
 }
 
@@ -435,6 +433,23 @@ mod tests {
                  expected 1 to 10",
             ]
         );
+    }
+
+    /// A length of time with a range is ranged in milliseconds, and says
+    /// so: the map's wait is at most a second.
+    #[test]
+    fn a_length_of_time_out_of_range_is_an_error_in_milliseconds() {
+        let (usable, said) = user("[index]\nmap_wait = \"2s\"\n");
+        assert!(!usable);
+        assert_eq!(
+            said,
+            [
+                "error: /work/config.toml:2: index.map_wait: `2s` is out of range: expected 0 ms \
+              to 1000 ms"
+            ]
+        );
+        let (usable, said) = user("[index]\nmap_wait = \"1s\"\n");
+        assert!(usable && said.is_empty(), "{said:?}");
     }
 
     #[test]

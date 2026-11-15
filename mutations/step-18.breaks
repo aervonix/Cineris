@@ -48,7 +48,7 @@ caught-by:
 [break] the-cache-reads-every-file-again
 rule: A warm pass reads again only the files whose stamp changed or that were unsettled; an unchanged file keeps its record unopened.
 file: crates/cortex-index/src/pass.rs
-in: Index::pass
+in: held_records
 find: (record.stamp == file.stamp && !record.flags.unsettled).then_some(cursor)
 replace: (false).then_some(cursor)
 caught-by:
@@ -57,7 +57,7 @@ caught-by:
 [break] the-cache-misses-a-changed-file
 rule: A file whose size, modification time or change time is not the cached one is read again.
 file: crates/cortex-index/src/pass.rs
-in: Index::pass
+in: held_records
 find: (record.stamp == file.stamp && !record.flags.unsettled).then_some(cursor)
 replace: (record.path == file.relative && !record.flags.unsettled).then_some(cursor)
 caught-by:
@@ -103,7 +103,7 @@ caught-by:
 [break] the-time-cap-is-not-enforced
 rule: A pass stops at its time limit and the next carries on from what it wrote.
 file: crates/cortex-index/src/pass.rs
-in: Index::pass
+in: Index::pass_and_keep
 find: now.saturating_sub(began) >= limit
 replace: false
 caught-by:
@@ -112,7 +112,7 @@ caught-by:
 [break] a-pass-cut-short-while-listing-writes-the-cache
 rule: A pass whose listing was cut short writes nothing: the files it did not reach would lose their records.
 file: crates/cortex-index/src/pass.rs
-in: Index::pass
+in: Index::pass_and_keep
 find: if matches!(listing.partial, Some(Partial::Time | Partial::Stopped)) {
 replace: if false {
 caught-by:
@@ -267,7 +267,7 @@ caught-by:
 [break] the-tree-is-in-byte-order
 rule: A directory's subdirectories follow it in the cache and are drawn under it in the map, whatever characters its neighbours' names hold.
 file: crates/cortex-index/src/pass.rs
-in: Index::pass
+in: Index::pass_and_keep
 find: dirs.sort_by(|(one, _), (other, _)| walk::path_order(one, other));
 replace:
 caught-by:
@@ -292,11 +292,11 @@ caught-by:
     cortex-agent context::tests::a_reload_takes_the_date_from_the_harnesss_own_notice_only
 
 [break] a-pass-that-panics-stops-the-index
-rule: A pass that panics answers who waits with no map, and leaves the index able to start another.
+rule: A pass that panics drops who waits unanswered (the loop asks again later), and leaves the index able to start another.
 file: crates/cortex-core/src/repo_map.rs
 in: Shared::work
-find: let Ok(report) = passed else {
-replace: let Ok(report) = Ok::<_, ()>(passed.unwrap_or_else(|panic| std::panic::resume_unwind(panic))) else {
+find: let Ok((report, snapshot)) = passed else {
+replace: let Ok((report, snapshot)) = Ok::<_, ()>(passed.unwrap_or_else(|panic| std::panic::resume_unwind(panic))) else {
 caught-by:
     cortex-core repo_map::tests::a_pass_that_panics_answers_who_waits_and_lets_the_next_one_start
 
@@ -346,22 +346,22 @@ caught-by:
     cortex-core repo_map::tests::the_pass_time_is_never_below_the_least
 
 [break] the-map-writes-a-line-separator-as-it-is
-rule: A character that would act unseen in a name (a line or paragraph separator, a zero-width one) is written as an escape in the map.
-file: crates/cortex-index/src/outline.rs
-in: hidden
-find: '\u{2028}'..='\u{202E}'
-replace: '\u{202A}'..='\u{202E}'
+rule: A character that would act unseen in a name (a line or paragraph separator, a zero-width one) is written as an escape in the map. The map writes names through `cortex_base::visible` since the fixes of step 18's review.
+file: crates/cortex-base/src/visible.rs
+in: acts_unseen
+find: '\u{2028}' | '\u{2029}'
+replace: '\u{2029}'
 caught-by:
-    cortex-index outline::tests::what_would_act_unseen_is_written_as_an_escape
+    cortex-base visible::tests::what_would_act_unseen_is_written_as_an_escape
 
 [break] the-outline-tool-writes-a-zero-width-character-as-it-is
-rule: A character that would act unseen in a name is written as an escape in the outline tool's listing.
-file: crates/cortex-tools/src/outline.rs
-in: visible
-find: '\u{200B}'..='\u{200F}'
-replace: '\u{200E}'..='\u{200F}'
+rule: A character that would act unseen in a name is written as an escape in the outline tool's listing, which writes names through `cortex_base::visible` since the fixes of step 18's review.
+file: crates/cortex-base/src/visible.rs
+find: (0x200B, 0x200F)
+replace: (0x200E, 0x200F)
 caught-by:
-    cortex-tools outline::tests::what_would_act_unseen_is_written_as_an_escape
+    cortex-base visible::tests::what_would_act_unseen_is_written_as_an_escape
+    cortex-base visible::tests::the_table_of_format_characters_is_unicodes_for_its_version
 
 [break] the-map-off-still-indexes
 rule: With the map off, a session starts no background pass and writes no cache.
