@@ -1,0 +1,428 @@
+# The fixes after the review of step 15: context management, in
+# cortex-agent, cortex-core, cortex-tools and cortex-config.
+#
+# Each finding and each note the fixes settled is broken here: a summary
+# request refused as too long (finding 1) and its twins, a summary on a
+# budget-reasoning model (finding 2) and the budget its main requests
+# send, the user's instruction file as a link (finding 3), the hash a
+# command's change leaves carried (finding 4), automatic compaction off at
+# an overflow (the owner's decision), and the notes.
+
+# ------------------------------------------------------------ finding 1
+
+[break] refused-summary-teaches-nothing
+rule: A summary request the provider refuses as too long teaches the budget, as the turn's own request's refusal does.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::counted
+find: self.budget_for_mut(&summarized.role) .overflowed(summarized.bytes, summarized.window);
+replace:
+caught-by:
+    cortex-agent::it summaries::a_second_refusal_ends_the_turn_and_the_next_turns_summary_is_cut
+    cortex-agent::it summaries::a_background_summary_refused_as_too_long_teaches_the_budget
+    cortex-agent::it summaries::a_summary_request_refused_as_too_long_is_cut_and_tried_again
+
+[break] refused-summary-not-tried-again
+rule: A summary request refused as too long is answered by one more try, cut to half the limit.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::compacting
+find: let again = if refusal { refused < 2 } else { from_background };
+replace: let again = from_background;
+caught-by:
+    cortex-agent::it summaries::a_summary_request_refused_as_too_long_is_cut_and_tried_again
+    cortex-agent::it summaries::a_summary_the_fast_role_refused_is_asked_of_the_main_model
+    cortex-agent::it summaries::a_summary_whose_response_ends_as_too_long_is_a_refusal
+
+[break] refused-summary-retried-without-bound
+rule: The retry is bounded: a second refusal in one compaction ends the turn with compaction_failed.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::compacting
+find: refused < 2
+replace: refused < 3
+caught-by:
+    cortex-agent::it summaries::a_second_refusal_ends_the_turn_and_the_next_turns_summary_is_cut
+
+[break] refused-background-summary-not-counted
+rule: A background summary refused as too long is the compaction's first refusal: the summary asked for at the trigger is its one more try.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::compacting
+find: if refusal { refused += 1; }
+replace: if refusal && !from_background { refused += 1; }
+expect: survives
+# Counting it or not changes only whether a third summary request may follow
+# a background refusal and a refused retry; no test reaches that far, and
+# the bound still holds (at most three summary requests in a compaction).
+
+[break] fast-role-asked-again-after-refusing
+rule: A summary the fast role's model refused as too long is asked of the main model for the rest of the epoch.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::summary_model
+find: && self.fast_refused != Some(self.context.epoch_number)
+replace:
+caught-by:
+    cortex-agent::it summaries::a_summary_the_fast_role_refused_is_asked_of_the_main_model
+    cortex-agent::it summaries::a_background_summary_refused_as_too_long_teaches_the_budget
+
+[break] refusal-forgotten-before-a-count
+rule: After a refusal, and until the provider counts a request again, a summary request is cut to half the limit.
+file: crates/cortex-agent/src/context/budget.rs
+in: Budget::refused
+find: self.refused
+replace: false
+caught-by:
+    cortex-agent::it summaries::a_summary_request_refused_as_too_long_is_cut_and_tried_again
+    cortex-agent::it summaries::a_second_refusal_ends_the_turn_and_the_next_turns_summary_is_cut
+    cortex-agent::it context::after_an_overflow_the_summary_request_is_cut_to_fit_what_the_provider_showed
+    cortex-agent context::budget::tests::an_overflow_brings_the_ratio_down_to_what_it_shows
+
+[break] a-count-does-not-clear-the-refusal
+rule: A request the provider counted shows the ratio again: the refusal it learned is over.
+file: crates/cortex-agent/src/context/budget.rs
+in: Budget::counted
+find: self.refused = false;
+replace:
+caught-by:
+    cortex-agent context::budget::tests::an_overflow_brings_the_ratio_down_to_what_it_shows
+
+[break] summary-stopped-as-too-long-is-used
+rule: A summary response that ends because the request did not fit is a refusal as too long, as an error of that kind is.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: summarize
+find: let outcome = if stop == StopReason::ContextOverflow {
+replace: let outcome = if false {
+caught-by:
+    cortex-agent::it summaries::a_summary_whose_response_ends_as_too_long_is_a_refusal
+
+# --------------------------------------------- the owner's decision
+
+[break] overflow-compacts-with-automatic-compaction-off
+rule: With automatic compaction off, a provider's overflow stops the turn with compaction_needed and nothing is compacted.
+file: crates/cortex-agent/src/turn.rs
+in: Session::overflowed
+find: if !self.context.parts.settings.auto_compact {
+replace: if false {
+caught-by:
+    cortex-agent::it summaries::with_automatic_compaction_off_an_overflow_stops_the_turn_and_asks
+
+[break] overflow-with-compaction-off-teaches-nothing
+rule: An overflow teaches the budget whether or not a compaction follows: with automatic compaction off the next turn stops at the trigger with nothing sent.
+file: crates/cortex-agent/src/turn.rs
+in: Session::overflowed
+find: self.main_refused();
+replace: if self.context.parts.settings.auto_compact { self.main_refused(); }
+caught-by:
+    cortex-agent::it summaries::with_automatic_compaction_off_an_overflow_stops_the_turn_and_asks
+
+# ------------------------------------------------------------ finding 2
+
+[break] summary-output-ignores-the-reasoning-budget
+rule: A summary on a model whose reasoning is a token budget gets its output on top of the budget, so that Anthropic's builder takes it.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::summary_limit
+find: .map_or(cap, |budget| budget.saturating_add(cap));
+replace: .map_or(cap, |_| cap);
+caught-by:
+    cortex-agent::it summaries::a_summary_on_a_budget_reasoning_model_can_be_built
+    cortex-agent::it summaries::a_summary_on_a_budget_too_large_for_its_room_gets_what_the_maximum_leaves
+
+[break] summary-output-past-the-models-maximum
+rule: A summary's output is never more than the model's maximum, whatever the budget.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::summary_limit
+find: let max_output = wanted.min(model.entry.info.max_output);
+replace: let max_output = wanted;
+caught-by:
+    cortex-agent::it summaries::a_summary_on_a_budget_too_large_for_its_room_gets_what_the_maximum_leaves
+
+[break] summary-budget-dropped
+rule: A summary sends the role's reasoning budget as the epoch's requests do: a change to the thinking parameters would lose the epoch's cache.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::summary_request
+find: request.reasoning = model.reasoning.clone();
+replace: request.reasoning = cortex_llm::Reasoning::default();
+caught-by:
+    cortex-agent::it summaries::a_summary_on_a_budget_reasoning_model_can_be_built
+    cortex-agent::it summaries::a_summary_on_a_budget_too_large_for_its_room_gets_what_the_maximum_leaves
+
+[break] cut-summary-not-marked
+rule: A summary whose response stopped at the output limit is used, and its text says it was cut off there.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::finish_compaction
+find: let text = if written.cut {
+replace: let text = if false {
+caught-by:
+    cortex-agent::it summaries::a_summary_cut_off_at_the_output_limit_is_used_and_marked
+
+[break] cut-summary-not-told
+rule: The user is told, in the notice that the compaction finished, that its summary was cut off at the output limit.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::compacting
+find: if written.cut { message.push_str(
+replace: if false { message.push_str(
+caught-by:
+    cortex-agent::it summaries::a_summary_cut_off_at_the_output_limit_is_used_and_marked
+
+[break] every-summary-taken-for-cut
+rule: Only a response that stopped at the output limit is marked as cut.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: summarize
+find: cut: stop == StopReason::MaxOutput
+replace: cut: true
+caught-by:
+    cortex-agent::it summaries::a_summary_cut_off_at_the_output_limit_is_used_and_marked
+
+# ------------------------------------------------------------ finding 4
+
+[break] carried-hash-from-before-a-command
+rule: A file a command changed since a tool's last read or write is carried with no hash: the table's snapshot is no longer what it holds.
+file: crates/cortex-tools/src/files.rs
+in: FileTable::carried
+find: snapshot: (!record.changed_since).then(|| record.snapshot.clone())
+replace: snapshot: Some(record.snapshot.clone())
+packages: cortex-tools, cortex-agent
+caught-by:
+    cortex-tools files::tests::what_compaction_carries_says_what_was_read_and_what_changed
+    cortex-agent::it context::a_file_a_command_changed_after_a_read_is_carried_without_the_old_hash
+
+[break] command-change-not-marked-on-the-record
+rule: A command's change to a file a tool has a snapshot of is marked on its record.
+file: crates/cortex-tools/src/files.rs
+in: FileTable::note_changed
+find: record.changed_since = true;
+replace:
+packages: cortex-tools, cortex-agent
+caught-by:
+    cortex-tools files::tests::what_compaction_carries_says_what_was_read_and_what_changed
+    cortex-agent::it context::a_file_a_command_changed_after_a_read_is_carried_without_the_old_hash
+
+[break] a-read-after-the-command-keeps-no-hash
+rule: A tool's read after a command's change gives the file its hash again.
+file: crates/cortex-tools/src/files.rs
+in: FileTable::record_read
+find: changed_since: false
+replace: changed_since: changed
+caught-by:
+    cortex-tools files::tests::what_compaction_carries_says_what_was_read_and_what_changed
+
+# ------------------------------------------------------------ finding 3
+
+[break] users-link-not-followed
+rule: The user's own instruction file is read as it is: a link in the configuration directory is followed to the file it names.
+file: crates/cortex-core/src/instructions.rs
+in: DiskInstructions::read
+find: users_own(&path.to_fs_path())?
+replace: Some(path.to_fs_path())
+caught-by:
+    cortex-core::it context::the_users_own_instruction_file_is_read_when_it_is_a_link
+
+[break] users-dangling-link-taken-for-no-file
+rule: A link of the user's that leads nowhere is warned of, not taken for no file.
+file: crates/cortex-core/src/instructions.rs
+in: users_own
+find: Err("it is a link to a file that is not there".to_owned())
+replace: Ok(None)
+caught-by:
+    cortex-core::it context::a_users_link_that_leads_nowhere_is_warned_of
+
+[break] link-out-of-the-workspace-dropped-without-a-word
+rule: A workspace instruction file that links outside the workspace stays refused, and the user is warned with its name.
+file: crates/cortex-core/src/instructions.rs
+in: DiskInstructions::read
+find: if !resolved.is_inside_workspace() {
+replace: if !resolved.is_inside_workspace() { return Ok(None); } if false {
+caught-by:
+    cortex-core::it context::a_link_out_of_the_workspace_is_not_followed_where_a_rule_allows_reading_there
+
+[break] nested-file-not-read-dropped-without-a-word
+rule: A nested instruction file that is there and is not read is warned of by its name.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::nested_instructions
+find: unread.push((place.shown, error))
+replace: drop((place.shown, error))
+caught-by:
+    cortex-agent::it context::a_nested_instruction_file_that_is_not_read_is_warned_of_once
+
+# ----------------------------- finding 2's twin: the main request's budget
+
+[break] alias-placed-to-the-top-of-the-range
+rule: An effort alias on a budget model is placed below the output limit less the answer's reserve, not at the top of the range.
+file: crates/cortex-core/src/provider.rs
+in: reasoning
+find: let top = max.min(room);
+replace: let top = max;
+caught-by:
+    cortex-core provider::tests::a_budget_leaves_the_answer_room_at_every_effort
+    cortex-core::it start::a_reasoning_budget_that_leaves_the_answer_no_room_is_refused_at_the_start
+
+[break] explicit-budget-past-the-answers-room
+rule: A budget given as a number that does not leave the answer its room is refused, with both numbers.
+file: crates/cortex-core/src/provider.rs
+in: reasoning
+find: if tokens > top {
+replace: if false {
+caught-by:
+    cortex-core provider::tests::a_budget_leaves_the_answer_room_at_every_effort
+
+[break] no-room-kept-for-the-answer
+rule: The answer keeps at least 4,096 tokens, or a quarter of the output, after the reasoning budget.
+file: crates/cortex-core/src/provider.rs
+in: answer_reserve
+find: (output_limit / 4).max(4_096)
+replace: 1
+caught-by:
+    cortex-core provider::tests::a_budget_leaves_the_answer_room_at_every_effort
+    cortex-core::it start::a_reasoning_budget_that_leaves_the_answer_no_room_is_refused_at_the_start
+
+[break] budget-held-to-the-models-output-not-the-roles
+rule: The budget leaves the answer room within what the role's requests may write: model.max_output where it is set.
+file: crates/cortex-core/src/provider.rs
+in: Providers::role_model
+find: max_output.map_or(entry.info.max_output, |asked| { asked.min(entry.info.max_output) })
+replace: entry.info.max_output
+caught-by:
+    cortex-core::it start::a_reasoning_budget_that_leaves_the_answer_no_room_is_refused_at_the_start
+
+[break] carried-level-that-cannot-fit-refuses-the-change
+rule: A level carried to a new model that cannot take it within its output limit is left behind as an unknown level is, and said.
+file: crates/cortex-core/src/core.rs
+find: "unknown_effort" | "reasoning_budget_too_large"
+replace: "unknown_effort"
+caught-by:
+    cortex-core::it settings::a_level_the_new_model_cannot_fit_in_its_output_is_left_behind_and_said
+
+# ------------------------------------------------------------- note 1
+
+[break] record-compares-at-the-speed-asked-for
+rule: The context record compares a request with the one before at the speed the client sent it at, not the speed asked for.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::sent_at
+find: in_flight.at_standard = true;
+replace: let _ = in_flight;
+caught-by:
+    cortex-agent::it speed::the_context_record_compares_requests_at_the_speed_they_were_sent_at
+    cortex-agent::it context::the_loops_check_holds_a_request_to_the_one_before_at_the_speed_it_was_sent_at
+
+[break] check-skips-the-standard-speed
+rule: The debug build's check holds a request to the one before at standard too, where the one before was sent at standard.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::context_request
+find: self.check_prefix(standard, bytes.as_deref());
+replace:
+caught-by:
+    cortex-agent::it context::the_loops_check_holds_a_request_to_the_one_before_at_the_speed_it_was_sent_at
+
+[break] request-never-settled
+rule: A request is settled when its end is recorded: its context record says where it differs from the one before.
+file: crates/cortex-agent/src/turn.rs
+in: Session::request_stat
+find: self.settle_sent();
+replace:
+caught-by:
+    cortex-agent::it speed::the_context_record_compares_requests_at_the_speed_they_were_sent_at
+    cortex-agent::it context::the_context_record_compares_with_the_request_before_across_a_reload
+
+# ------------------------------------------------------------- note 2
+
+[break] outside-change-notice-under-one-id
+rule: Each notice of a change from outside at a session's close has an id of its own.
+file: crates/cortex-core/src/core.rs
+find: let id = disk.session.next_item_id();
+replace: let id = ItemId::new("outside-change");
+caught-by:
+    cortex-core::it sandbox::sys_two_closes_that_find_changes_from_outside_and_a_compaction_read_back_as_built
+
+[break] covered-item-looked-for-from-the-start
+rule: The item a summary covers through is looked for from the end of what came before it.
+file: crates/cortex-agent/src/context/mod.rs
+in: held_after_summaries
+find: .rposition(|&at| items[at].id() == Some(through.as_str()))
+replace: .position(|&at| items[at].id() == Some(through.as_str()))
+caught-by:
+    cortex-agent context::tests::a_summary_covering_an_id_the_log_holds_twice_covers_the_last_of_them
+
+[break] redaction-cover-looked-for-from-the-start
+rule: The redaction mark finds a summary's cover from the end, as the loop does.
+file: crates/cortex-core/src/redact.rs
+in: resumed
+find: .rposition(|(id, _, _)| id == through.as_str())
+replace: .position(|(id, _, _)| id == through.as_str())
+caught-by:
+    cortex-core redact::tests::resumed_marks::a_summary_covering_an_id_the_log_holds_twice_covers_the_last_of_them
+
+# ------------------------------------------------------------- note 3
+
+[break] summary-lead-says-nothing-of-going-on
+rule: A summary's lead tells the model to continue the work, since after a compaction at the trigger it is the model's only message.
+file: crates/cortex-agent/src/context/compact.rs
+find: const GO_ON: &str = "Continue the work from where it stands.";
+replace: const GO_ON: &str = "";
+caught-by:
+    cortex-agent context::compact::tests::the_carried_state_is_in_the_text_and_in_the_data
+
+# ------------------------------------------------------------- note 4
+
+[break] compat-off-reads-other-tools-names
+rule: With compat.instructions off, AGENTS.md and CLAUDE.md are not read in the workspace.
+file: crates/cortex-core/src/assemble.rs
+in: context_settings
+find: let mut names: Vec<String> = if settings.compat.instructions {
+replace: let mut names: Vec<String> = if true {
+caught-by:
+    cortex-core::it context::with_compat_instructions_off_only_other_tools_names_are_not_read
+
+# ------------------------------------------------------------- note 5
+
+[break] trigger-not-raised-to-what-a-compaction-needs
+rule: The trigger is never below the epoch's prompt and tools and room for a summary, up to the limit.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::trigger
+find: if asked < needed {
+replace: if false {
+caught-by:
+    cortex-agent::it summaries::a_trigger_below_what_a_compaction_needs_is_raised_and_said
+
+[break] trigger-raised-without-a-word
+rule: The user is told, once, when the trigger is raised to what a compaction needs.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::tell_clamped
+find: if raised && !self.told_trigger {
+replace: if false {
+caught-by:
+    cortex-agent::it summaries::a_trigger_below_what_a_compaction_needs_is_raised_and_said
+
+[break] trigger-raised-told-every-request
+rule: The user is told once in a session that the trigger was raised, not at every request.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::tell_clamped
+find: self.told_trigger = true;
+replace:
+caught-by:
+    cortex-agent::it summaries::a_trigger_below_what_a_compaction_needs_is_raised_and_said
+
+[break] kept-turns-not-capped
+rule: What a compaction replays is held to half of what the trigger leaves beyond the prompt and the tools.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::keep_room
+find: if keep > room {
+replace: if false {
+caught-by:
+    cortex-agent::it summaries::kept_turns_past_what_a_compaction_can_replay_are_capped_and_said
+
+# ------------------------------------------------------------- note 6
+
+[break] nested-file-for-a-commands-change
+rule: A nested instruction file is given for a file a tool read or wrote, not for one only a command changed.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::nested_instructions
+find: for file in self.env.workspace.files.touched() { for dir in nested_dirs(&root, &file) {
+replace: for file in self.env.workspace.files.carried() { for dir in nested_dirs(&root, &file.path) {
+caught-by:
+    cortex-agent::it context::a_file_only_a_command_changed_gives_no_nested_instruction_file
+
+[break] nested-files-past-the-cap
+rule: The nested instruction files one boundary gives are held to the cap together.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::nested_instructions
+find: if found.text.len() > room {
+replace: if false {
+caught-by:
+    cortex-agent::it context::nested_instruction_files_at_one_boundary_are_held_to_the_cap

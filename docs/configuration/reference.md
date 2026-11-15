@@ -117,7 +117,7 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `compat.instructions` | `true` or `false` | `true` | user only | next epoch | Instruction files: `AGENTS.md` and `CLAUDE.md`. |
+| `compat.instructions` | `true` or `false` | `true` | user only | next epoch | Instruction files under the names other tools use, `AGENTS.md` and `CLAUDE.md`, in the workspace. Off, only the names in `context.instruction_names` are read there; the user's own files in the configuration directory are read either way. |
 | `compat.mcp` | `true` or `false` | `true` | user only | next epoch | MCP server definitions of other clients, offered for import. |
 | `compat.skills` | `true` or `false` | `true` | user only | next epoch | Agent Skills folders: `.agents/skills` and `.claude/skills`. |
 
@@ -141,11 +141,11 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `context.auto_compact` | `true` or `false` | `true` | preference | at once | Whether the conversation is compacted by itself when a request would pass `compact_at`. Off, the turn stops there and asks for a compaction (`session/compact`) or a new session. |
+| `context.auto_compact` | `true` or `false` | `true` | preference | at once | Whether the conversation is compacted by itself when a request would pass `compact_at`, or the provider says a request does not fit. Off, the turn stops there and asks for a compaction (`session/compact`) or a new session. |
 | `context.background` | `true` or `false` | `true` | preference | at once | Whether a summary is prepared in the background from `prepare_at`, on the `fast` role's model (the main model when there is none), so that the compaction need not wait for it. |
-| `context.compact_at` | number, 0 to 1 | `0.85` | raises cost | at once | The trigger: the fraction of what a request may hold (the model's context window less room for the answer and a margin) past which the conversation is compacted before the request. From a project, after trust: a compaction costs a request. |
+| `context.compact_at` | number, 0 to 1 | `0.85` | raises cost | at once | The trigger: the fraction of what a request may hold (the model's context window less room for the answer and a margin) past which the conversation is compacted before the request. Never below what a compaction needs, the prompt and the tools and room for a summary: a lower value is raised to that, and the user is told. From a project, after trust: a compaction costs a request. |
 | `context.prepare_at` | number, 0 to 1 | `0.7` | raises cost | at once | The fraction past which a summary is prepared in the background. From a project, after trust. |
-| `context.keep_recent_tokens` | whole number, 0 to 10000000 | `0` | raises cost | next epoch | How much of the most recent conversation a compaction replays after its summary, without its reasoning, in tokens. 0 replays nothing. From a project, after trust. |
+| `context.keep_recent_tokens` | whole number, 0 to 10000000 | `0` | raises cost | next epoch | How much of the most recent conversation a compaction replays after its summary, without its reasoning, in tokens. 0 replays nothing. At most half of what the trigger leaves once the prompt and the tools are counted, and the user is told when that holds it back. From a project, after trust. |
 | `context.instruction_names` | list of text | `[]` | raises cost | next epoch | More names of instruction files, read after `AGENTS.md` and `CLAUDE.md` in each directory. From a project, after trust: what they hold is sent with every request. |
 | `context.instructions_cap` | whole number, 0 to 100000000 | `49152` | raises cost | next epoch | The most the instruction files may hold in all, in bytes. Past it the innermost files are cut, and the user is warned. From a project, after trust. |
 

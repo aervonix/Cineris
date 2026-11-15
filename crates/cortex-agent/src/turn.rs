@@ -149,6 +149,13 @@ pub struct Session {
     /// The epoch in which a summary in the background failed: no other is
     /// started in it.
     background_failed: Option<u64>,
+    /// Whether the user was told that the trigger, or the turns a
+    /// compaction keeps, are held to what a compaction needs.
+    told_trigger: bool,
+    told_keep: bool,
+    /// The epoch in which the `fast` role's model refused a summary request
+    /// as too long: summaries go to the main model for the rest of it.
+    fast_refused: Option<u64>,
     /// Summaries given up after their request finished: counted at the next
     /// boundary.
     given_up: Vec<tokio::task::JoinHandle<epochs::Summarized>>,
@@ -416,6 +423,9 @@ impl Session {
             usage_sent: None,
             background: None,
             background_failed: None,
+            fast_refused: None,
+            told_trigger: false,
+            told_keep: false,
             given_up: Vec::new(),
             manual: false,
             manual_focus: None,
@@ -569,6 +579,8 @@ impl Session {
         if changed {
             self.drop_background();
         }
+        // The request before was sent as it was, whatever is read now.
+        self.settle_sent();
         let opened = self.store.open().await?;
         // Nor is the request before the one the next must begin with when
         // memory held what the log does not, or the log holds an entry
@@ -729,6 +741,7 @@ impl Session {
         if let Err(error) = self.collect_background(turn).await {
             return Phase::Finishing(End::store(&error));
         }
+        self.tell_clamped(turn);
         if self.manual {
             return Phase::Compacting(prep);
         }
@@ -872,6 +885,7 @@ impl Session {
                     self.enter(TurnState::Backoff);
                 }
                 ModelEvent::SpeedFallback(moved) => {
+                    self.sent_at(&moved);
                     self.speed_moved(turn, &model, &moved);
                     if moved.by == SpeedFallbackBy::Harness && self.state == TurnState::Streaming {
                         // The tier refused part-way and the request is sent
@@ -1036,17 +1050,15 @@ impl Session {
         }
         let data = error.to_error_data_at(self.clock.now());
         if error.kind == cortex_base::ErrorKind::ContextOverflow && !prep.overflowed {
-            // The provider says the request does not fit: compact, once,
-            // and send it again.
+            // The provider says the request does not fit: the budget
+            // learns from it, and the loop compacts, once, and sends it
+            // again. With automatic compaction off it stops and asks.
             if let Err(error) = self.void(turn, model, &mut live, &mut round, data).await {
                 return self.abandon(round, End::store(&error)).await;
             }
             round.discard_kept();
             round.settle().await;
-            return Phase::Compacting(Prep {
-                overflowed: true,
-                ..prep
-            });
+            return self.overflowed(turn, prep);
         }
 
         let usage = live
@@ -1079,6 +1091,22 @@ impl Session {
             }
         }
         phase
+    }
+
+    /// The provider refused the request as too long, for the first time in
+    /// this request: what that shows of the ratio is learned, and the loop
+    /// compacts and sends it once more, or, with automatic compaction off,
+    /// stops and asks (`compaction_needed`).
+    fn overflowed(&mut self, turn: &mut Turn, prep: Prep) -> Phase {
+        self.main_refused();
+        if !self.context.parts.settings.auto_compact {
+            turn.stop = Some(StopReason::ContextOverflow);
+            return Phase::Finishing(self.overflow_without_compaction());
+        }
+        Phase::Compacting(Prep {
+            overflowed: true,
+            ..prep
+        })
     }
 
     // ------------------------------------------------------------ deciding
@@ -1117,10 +1145,7 @@ impl Session {
             }
             round.discard_kept();
             round.settle().await;
-            return Phase::Compacting(Prep {
-                overflowed: true,
-                ..prep
-            });
+            return self.overflowed(turn, prep);
         }
 
         // Cut off inside a tool call: send the request once more with all
@@ -1817,6 +1842,7 @@ impl Session {
             error,
             retries: live.attempt.saturating_sub(1),
         }));
+        self.settle_sent();
         if let Some(mut context) = self.pending_context.take() {
             context.usage = tokens;
             self.stats.record(StatEvent::Context(context));

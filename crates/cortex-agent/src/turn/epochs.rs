@@ -22,20 +22,21 @@ use std::sync::Arc;
 use cortex_base::{AbsPath, CancelToken, Classified, ContentHash};
 use cortex_llm::{ModelClient, ModelEvent, ModelRequest, Usage};
 use cortex_protocol::event::{
-    CompactionNotice, CompactionState, Event, InstructionsNotice, ItemCompleted, Notice,
+    CompactionNotice, CompactionState, Event, InfoNotice, InstructionsNotice, ItemCompleted, Notice,
 };
 use cortex_protocol::item::{NoticeSource, SummaryItem};
 use cortex_protocol::model::ModelRole;
 use cortex_protocol::usage::RequestUsage;
-use cortex_protocol::{ErrorData, ErrorKind, Item, ItemId, Message, Part, Role, StopReason};
+use cortex_protocol::{ErrorData, ErrorKind, Item, ItemId, Message, Part, Role, Speed, StopReason};
 use cortex_tools::run_blocking;
 
 use super::{End, Phase, Prep, Session, Turn};
 use crate::config::RoleModel;
 use crate::context::{
-    Built, Carried, Change, Discovered, Found, History, Place, Pressure, Sections, Shape, build,
-    check_prefix, difference, discover, excerpt, hash_of, instructions_message, limit_of,
-    nested_dirs, notice_text, places, pressure, project, read_one,
+    Budget, Built, Carried, Change, Discovered, Found, History, InFlight, Place, PrefixDifference,
+    Pressure, SUMMARY_CUT, Sections, Shape, build, check_prefix, difference, discover, excerpt,
+    fraction_of, hash_of, instructions_message, limit_of, nested_dirs, notice_text, places,
+    pressure, project, read_one, request_bytes, summary_room,
 };
 use crate::state::TurnState;
 use crate::stats::ContextStat;
@@ -58,7 +59,16 @@ pub(super) struct Job {
 /// A summary that is done, its usage counted.
 pub(super) struct Ready {
     covered: Cover,
-    outcome: Result<String, ErrorData>,
+    outcome: Result<Written, ErrorData>,
+}
+
+/// What a summary request answered with.
+#[derive(Debug, Clone)]
+pub(super) struct Written {
+    text: String,
+    /// The response stopped at the output limit: the summary's end is
+    /// missing.
+    cut: bool,
 }
 
 /// What a summary was taken over: the first `messages` of the epoch's
@@ -80,8 +90,12 @@ impl Cover {
 pub(super) struct Summarized {
     model: RoleModel,
     role: ModelRole,
-    outcome: Result<String, ErrorData>,
+    outcome: Result<Written, ErrorData>,
     usage: Option<Usage>,
+    /// The request's size in bytes, and the window of the model it went
+    /// to: what a refusal as too long teaches the budget.
+    bytes: u64,
+    window: u64,
 }
 
 /// Why a compaction could not finish.
@@ -98,11 +112,15 @@ fn date_of(time: cortex_base::UtcTime) -> String {
 }
 
 /// Sends a summary request and reads its text.
+///
+/// A response that ends because the request did not fit is a refusal as
+/// too long, as an error of that kind is: the main request's are read the
+/// same way (`turn::decide`).
 async fn summarize(
     client: Arc<dyn ModelClient>,
     request: ModelRequest,
     cancel: CancelToken,
-) -> (Result<String, ErrorData>, Option<Usage>) {
+) -> (Result<Written, ErrorData>, Option<Usage>) {
     let mut stream = client.stream(request, cancel.child());
     let mut text = String::new();
     let mut usage = None;
@@ -129,15 +147,26 @@ async fn summarize(
             ModelEvent::Retry(_) => text.clear(),
             ModelEvent::Start { .. } => text.clear(),
             ModelEvent::Usage(running) => usage = Some(running),
-            ModelEvent::End { usage: last, .. } => {
-                let outcome = if text.trim().is_empty() {
+            ModelEvent::End {
+                usage: last, stop, ..
+            } => {
+                let outcome = if stop == StopReason::ContextOverflow {
+                    Err(ErrorData::new(
+                        ErrorKind::ContextOverflow,
+                        "context_overflow",
+                        "The request for a summary did not fit the model's context window.",
+                    ))
+                } else if text.trim().is_empty() {
                     Err(ErrorData::new(
                         ErrorKind::ModelStop,
                         "empty_summary",
                         "The model answered the request for a summary with no text.",
                     ))
                 } else {
-                    Ok(text)
+                    Ok(Written {
+                        text,
+                        cut: stop == StopReason::MaxOutput,
+                    })
                 };
                 return (outcome, Some(last));
             }
@@ -441,12 +470,16 @@ impl Session {
     }
 
     /// Gives the model, once, each instruction file of a directory between
-    /// the workspace root and a file a tool has read or changed.
+    /// the workspace root and a file a tool has read or written: not a file
+    /// only a command changed, which may be any number of them in a
+    /// vendored tree. What one boundary gives is held to the cap on
+    /// instruction files, and the user is told of what is left out (since
+    /// the review of step 15, its sixth note).
     async fn nested_instructions(&mut self, turn: &Turn) -> Result<(), StoreError> {
         let root = self.root();
         let mut dirs: Vec<AbsPath> = Vec::new();
-        for file in self.env.workspace.files.carried() {
-            for dir in nested_dirs(&root, &file.path) {
+        for file in self.env.workspace.files.touched() {
+            for dir in nested_dirs(&root, &file) {
                 let key = crate::context::shown_in(&root, &dir);
                 if self.context.given.looked.insert(key) {
                     dirs.push(dir);
@@ -472,16 +505,35 @@ impl Session {
         }
         let io = Arc::clone(&self.context.parts.instructions);
         let cap = self.context.parts.settings.instructions_cap;
-        let read = run_blocking(&CancelToken::new(), move |_| {
-            candidates
-                .into_iter()
-                .filter_map(|place| read_one(&*io, &place, cap).ok().flatten())
-                .collect::<Vec<Found>>()
+        let (read, unread) = run_blocking(&CancelToken::new(), move |_| {
+            let mut read: Vec<Found> = Vec::new();
+            let mut unread: Vec<(String, String)> = Vec::new();
+            for place in candidates {
+                match read_one(&*io, &place, cap) {
+                    Ok(Some(found)) => read.push(found),
+                    Ok(None) => {}
+                    Err(error) => unread.push((place.shown, error)),
+                }
+            }
+            (read, unread)
         })
         .await
         .unwrap_or_default();
+        // A directory is looked at once, so each is told once.
+        for (shown, error) in unread {
+            self.notify(
+                turn,
+                Notice::Instructions(InstructionsNotice {
+                    message: format!("The instruction file {shown} could not be read: {error}"),
+                    files: vec![shown],
+                }),
+            );
+        }
         let mut changes = Vec::new();
         let mut in_dir: BTreeMap<String, BTreeSet<ContentHash>> = BTreeMap::new();
+        // Each file is already cut to the cap; together they are held to it.
+        let mut room = cap;
+        let mut left_out = Vec::new();
         for found in read {
             if self.context.given.files.contains_key(&found.place.shown) {
                 continue;
@@ -493,8 +545,28 @@ impl Session {
             {
                 continue;
             }
+            if found.text.len() > room {
+                left_out.push(found.place.shown.clone());
+                continue;
+            }
+            room -= found.text.len();
             let dir = crate::context::shown_in(&root, &found.place.dir);
             changes.push(Change::Nested { found, dir });
+        }
+        if !left_out.is_empty() {
+            self.notify(
+                turn,
+                Notice::Instructions(InstructionsNotice {
+                    message: format!(
+                        "The instruction files under the directories a tool touched hold more \
+                         than the {} KiB that are given at once, so {} was left out. \
+                         `context.instructions_cap` sets the limit.",
+                        cap / 1024,
+                        left_out.join(", ")
+                    ),
+                    files: left_out,
+                }),
+            );
         }
         self.tell_changes(turn, changes).await
     }
@@ -525,23 +597,127 @@ impl Session {
 
     /// Where the next request stands against the thresholds.
     pub(super) fn pressure(&self) -> Pressure {
-        let settings = &self.context.parts.settings;
         let (_, limit) = self.limit(&self.model);
-        pressure(
-            self.estimate(),
-            limit,
-            settings.prepare_at,
-            settings.compact_at,
+        self.pressure_of(self.estimate(), limit)
+    }
+
+    /// Where a request of `estimate` tokens stands, against `limit`.
+    fn pressure_of(&self, estimate: u64, limit: u64) -> Pressure {
+        let prepare = fraction_of(self.context.parts.settings.prepare_at, limit);
+        let (trigger, _) = self.trigger(limit);
+        pressure(estimate, prepare, trigger)
+    }
+
+    /// The epoch's prompt and tools, in tokens: what every request of it
+    /// holds, and a new epoch's will too.
+    fn fixed_tokens(&self) -> u64 {
+        self.context.budget.tokens(
+            self.context
+                .content_bytes()
+                .saturating_sub(self.context.history.bytes()),
         )
     }
 
+    /// The trigger in tokens: `compact_at` of `limit`, and never below what
+    /// a compaction needs, the epoch's prompt and tools and room for a
+    /// summary, up to the limit itself; and whether the setting was raised
+    /// to that. Below it every compaction is too large for the new epoch,
+    /// and the session stops at the trigger (the review of step 15, its
+    /// fifth note). A low setting on a large window, which leaves that
+    /// room, is the user's to choose, and stands.
+    fn trigger(&self, limit: u64) -> (u64, bool) {
+        let asked = fraction_of(self.context.parts.settings.compact_at, limit);
+        let needed = self
+            .fixed_tokens()
+            .saturating_add(summary_room(limit))
+            .min(limit);
+        if asked < needed {
+            (needed, true)
+        } else {
+            (asked, false)
+        }
+    }
+
+    /// The most of the recent conversation a compaction replays, in
+    /// tokens: `keep_recent_tokens`, and no more than half of what the
+    /// trigger leaves beyond the prompt and the tools, so that the summary
+    /// and what follows have the other half. Past that the replay alone
+    /// fills the new epoch (the review of step 15, its fifth note).
+    fn keep_room(&self) -> (u64, bool) {
+        let keep = self.context.parts.settings.keep_recent_tokens;
+        let (_, limit) = self.limit(&self.model);
+        let (trigger, _) = self.trigger(limit);
+        let room = trigger.saturating_sub(self.fixed_tokens()) / 2;
+        if keep > room {
+            (room, true)
+        } else {
+            (keep, false)
+        }
+    }
+
+    /// Tells the user, once in a session, of a setting the loop holds to
+    /// what a compaction needs.
+    pub(super) fn tell_clamped(&mut self, turn: &Turn) {
+        let (_, limit) = self.limit(&self.model);
+        let settings = &self.context.parts.settings;
+        let (compact_at, keep) = (settings.compact_at, settings.keep_recent_tokens);
+        let (trigger, raised) = self.trigger(limit);
+        if raised && !self.told_trigger {
+            self.told_trigger = true;
+            let fixed = self.fixed_tokens();
+            let message = format!(
+                "`context.compact_at` ({compact_at}) puts the trigger at {} of the {limit} \
+                 tokens a request may hold, below what a compaction needs: the prompt and the \
+                 tools ({fixed}) and room for a summary ({}). The conversation is compacted \
+                 past {trigger} tokens instead.",
+                fraction_of(compact_at, limit),
+                summary_room(limit)
+            );
+            self.notify(turn, Notice::Info(InfoNotice { message }));
+        }
+        let (kept, capped) = self.keep_room();
+        if capped && !self.told_keep {
+            self.told_keep = true;
+            let message = format!(
+                "`context.keep_recent_tokens` ({keep}) is more than a compaction can replay \
+                 here: it keeps at most {kept} tokens of the most recent conversation, half of \
+                 what the trigger leaves once the prompt and the tools are counted."
+            );
+            self.notify(turn, Notice::Info(InfoNotice { message }));
+        }
+    }
+
+    /// The budget a role's requests are estimated with.
+    ///
+    /// **The seam for an estimate per role (step 16).** Every role is
+    /// estimated with the main model's budget today, at the ratio of bytes
+    /// to tokens measured from the main model's counts, and a refusal as too
+    /// long by any role's model teaches that one budget. Erring that way is
+    /// safe: a `fast` model's refusal can only lower the ratio, which makes
+    /// the main model's estimate higher (a compaction comes a little early),
+    /// and the main model's next count sets the ratio again. A budget of the
+    /// role's own replaces these two methods.
+    fn budget_for(&self, _role: &ModelRole) -> &Budget {
+        &self.context.budget
+    }
+
+    /// See [`budget_for`](Self::budget_for).
+    fn budget_for_mut(&mut self, _role: &ModelRole) -> &mut Budget {
+        &mut self.context.budget
+    }
+
     /// The model a summary is asked of: the `fast` role's, when it has one
-    /// whose window holds the epoch, and otherwise the main model.
+    /// whose window holds the epoch and it has not refused a summary of
+    /// this epoch as too long, and otherwise the main model.
     fn summary_model(&self) -> (ModelRole, RoleModel) {
-        let estimate = self.estimate();
         let fast = self.shared.lock().models.role(&ModelRole::Fast).cloned();
-        if let Some(fast) = fast {
-            let (_, limit) = self.limit(&fast);
+        if let Some(fast) = fast
+            && self.fast_refused != Some(self.context.epoch_number)
+        {
+            let estimate = self
+                .budget_for(&ModelRole::Fast)
+                .estimate(self.context.content_bytes());
+            let (_, limit, _) = self.summary_limit(&fast);
             if estimate <= limit {
                 return (ModelRole::Fast, fast);
             }
@@ -549,19 +725,42 @@ impl Session {
         (ModelRole::Main, self.model.clone())
     }
 
+    /// For a summary asked of `model`: its window, the most the request may
+    /// hold, and the output it is given.
+    ///
+    /// The output is `summary_max_output` **on top of the role's reasoning
+    /// budget**, where the role has one, up to the model's maximum. The
+    /// budget is part of the output on every protocol, and Anthropic's
+    /// refuses a budget that is not below the request's `max_tokens` (the
+    /// review of step 15 found every summary of a budget of 16,384 or more
+    /// refused). The budget itself is sent as the epoch's requests send it:
+    /// a change to the thinking parameters would lose the epoch's cache.
+    /// Where the model's maximum cannot hold both, the summary has what the
+    /// maximum leaves; a summary cut off there is marked as cut.
+    fn summary_limit(&self, model: &RoleModel) -> (u64, u64, u64) {
+        let window = self.window_of(model);
+        let cap = self.context.parts.settings.summary_max_output;
+        let wanted = model
+            .reasoning
+            .budget_tokens
+            .map_or(cap, |budget| budget.saturating_add(cap));
+        let max_output = wanted.min(model.entry.info.max_output);
+        (window, limit_of(window, max_output), max_output)
+    }
+
     /// A summary request over the first `covered` messages of the epoch:
     /// the epoch's own prefix, so that a summary on the same model reads
     /// the epoch's cache, then the instructions.
     ///
-    /// After the provider said a request does not fit, the estimate is
-    /// known to be low, so the request is always cut, to half the limit.
+    /// After a provider refused a request as too long (the turn's own, or a
+    /// summary's) and before it counted one again, the estimate is known to
+    /// be low, so the request is always cut, to half the limit.
     fn summary_request(
         &self,
         model: &RoleModel,
         role: &ModelRole,
         covered: usize,
         focus: Option<&str>,
-        overflowed: bool,
     ) -> ModelRequest {
         let assembled = self.context.assemble();
         let mut request = ModelRequest::new(Arc::clone(&model.entry), role.clone());
@@ -570,11 +769,10 @@ impl Session {
         request.cache = assembled.cache;
         request.reasoning = model.reasoning.clone();
         request.speed = self.shared.lock().speeds.of(role);
-        let settings = &self.context.parts.settings;
-        request.max_output = Some(settings.summary_max_output.min(model.entry.info.max_output));
+        let (_, limit, max_output) = self.summary_limit(model);
+        request.max_output = Some(max_output);
         let messages = &self.context.history.messages()[..covered];
-        let (_, limit) = self.limit(model);
-        let budget = &self.context.budget;
+        let budget = self.budget_for(role);
         let whole = budget.tokens(self.context.content_bytes());
         // What the request holds besides the messages: the prompt, the
         // tools and the instructions. The messages get the rest.
@@ -584,14 +782,15 @@ impl Session {
                 .saturating_sub(self.context.history.bytes())
                 + crate::context::SUMMARY_INSTRUCTIONS.len() as u64,
         );
-        request.messages = if overflowed {
-            self.trimmed(messages, (limit / 2).saturating_sub(fixed))
+        request.messages = if budget.refused() {
+            self.trimmed(messages, (limit / 2).saturating_sub(fixed), budget)
         } else if whole <= limit {
             messages.to_vec()
         } else {
             self.trimmed(
                 messages,
                 (limit.saturating_mul(9) / 10).saturating_sub(fixed),
+                budget,
             )
         };
         request.messages.push(instructions_message(focus));
@@ -602,8 +801,7 @@ impl Session {
     /// time and without their reasoning, after the epoch's summary if it
     /// begins with one: for a summary request the summarising model could
     /// not take whole (the provider said the epoch does not fit).
-    fn trimmed(&self, messages: &[Message], room: u64) -> Vec<Message> {
-        let budget = &self.context.budget;
+    fn trimmed(&self, messages: &[Message], room: u64, budget: &Budget) -> Vec<Message> {
         let starts_with_summary = self.context.history.starts_with_summary();
         let first = usize::from(starts_with_summary).min(messages.len());
         // A round begins at any message that is not a tool's results: the
@@ -667,7 +865,9 @@ impl Session {
         }
         let covered = self.context.history.len();
         let (role, model) = self.summary_model();
-        let request = self.summary_request(&model, &role, covered, None, false);
+        let request = self.summary_request(&model, &role, covered, None);
+        let bytes = request_bytes(&request);
+        let (window, _, _) = self.summary_limit(&model);
         let cancel = self.shared.cancel.child();
         let token = cancel.clone();
         let client = Arc::clone(&model.client);
@@ -678,6 +878,8 @@ impl Session {
                 role,
                 outcome,
                 usage,
+                bytes,
+                window,
             }
         });
         self.background = Some(Background::Running(Job {
@@ -730,12 +932,15 @@ impl Session {
         Ok(())
     }
 
-    /// Counts what a summary request used, and records it.
+    /// Counts what a summary request used, and records it. A request the
+    /// provider refused as too long teaches the budget, as the turn's own
+    /// request's refusal does (`main_refused`), and a refusal by the `fast`
+    /// role's model sends the epoch's summaries to the main model.
     async fn counted(
         &mut self,
         turn: &mut Turn,
         summarized: Result<Summarized, tokio::task::JoinError>,
-    ) -> Result<Result<String, ErrorData>, StoreError> {
+    ) -> Result<Result<Written, ErrorData>, StoreError> {
         let summarized = match summarized {
             Ok(summarized) => summarized,
             Err(_) => {
@@ -750,7 +955,26 @@ impl Session {
             self.out_of_band(turn, &summarized.model, &summarized.role, usage)
                 .await?;
         }
+        if let Err(error) = &summarized.outcome
+            && error.kind == ErrorKind::ContextOverflow
+        {
+            self.budget_for_mut(&summarized.role)
+                .overflowed(summarized.bytes, summarized.window);
+            if summarized.role == ModelRole::Fast {
+                self.fast_refused = Some(self.context.epoch_number);
+            }
+        }
         Ok(summarized.outcome)
+    }
+
+    /// The provider refused the turn's request as too long: the budget
+    /// learns what that shows of the ratio, whether or not a compaction
+    /// follows.
+    pub(super) fn main_refused(&mut self) {
+        let (window, _) = self.limit(&self.model);
+        let sent = self.context.sent_bytes;
+        self.budget_for_mut(&ModelRole::Main)
+            .overflowed(sent, window);
     }
 
     /// Counts what a request outside the conversation used, in the
@@ -816,7 +1040,7 @@ impl Session {
     /// leaving a round's results without their calls.
     fn covered_now(&self) -> usize {
         let history = &self.context.history;
-        let keep = self.context.parts.settings.keep_recent_tokens;
+        let (keep, _) = self.keep_room();
         let count = history.len();
         if keep == 0 {
             return count;
@@ -835,6 +1059,19 @@ impl Session {
     }
 
     /// `Compacting`: the summary, then the new epoch.
+    ///
+    /// **A summary request the provider refuses as too long** has taught
+    /// the budget by the time it is seen here ([`counted`](Self::counted)),
+    /// and is answered by one more try: cut to half the limit at the ratio
+    /// the refusal showed, and on the main model when the `fast` role's
+    /// refused. A second refusal in one compaction, a background summary's
+    /// included, ends the turn with `compaction_failed`, and what the
+    /// budget learned stays for the next turn: so the requests of one
+    /// compaction are bounded, and the next turn's summary is cut.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one compaction from the summary to the new epoch, each way it can end in its place"
+    )]
     pub(super) async fn compacting(&mut self, turn: &mut Turn, prep: Prep) -> Phase {
         self.enter(TurnState::Compacting);
         self.manual = false;
@@ -866,12 +1103,8 @@ impl Session {
                 message,
             )));
         }
-        if prep.overflowed {
-            let (window, _) = self.limit(&self.model);
-            self.context
-                .budget
-                .overflowed(self.context.sent_bytes, window);
-        }
+        // An overflow of the turn's request has taught the budget already
+        // (`main_refused`), so the summary request below is cut.
         let before = self.estimate();
         self.notify(
             turn,
@@ -915,6 +1148,8 @@ impl Session {
             _ => None,
         };
         let mut attempt = background.map(|(covered, outcome)| (covered, outcome, true));
+        // The summary requests refused as too long in this compaction.
+        let mut refused = 0u32;
         loop {
             let (covered, outcome, from_background) = match attempt.take() {
                 Some(taken) => taken,
@@ -941,13 +1176,9 @@ impl Session {
                         );
                         return self.limit_reached(turn, &reached).await;
                     }
-                    let request = self.summary_request(
-                        &model,
-                        &role,
-                        messages,
-                        focus.as_deref(),
-                        prep.overflowed,
-                    );
+                    let request = self.summary_request(&model, &role, messages, focus.as_deref());
+                    let bytes = request_bytes(&request);
+                    let (window, _, _) = self.summary_limit(&model);
                     let client = Arc::clone(&model.client);
                     let Some((outcome, usage)) = turn
                         .cancel
@@ -961,6 +1192,8 @@ impl Session {
                         role,
                         outcome,
                         usage,
+                        bytes,
+                        window,
                     };
                     match self.counted(turn, Ok(summarized)).await {
                         Ok(outcome) => (cover, outcome, false),
@@ -968,17 +1201,28 @@ impl Session {
                     }
                 }
             };
+            // Whether the provider refused the summary request as too long:
+            // not a summary too large for the new epoch, which is the
+            // harness's own finding.
+            let mut refusal = false;
             let failure = match outcome {
-                Ok(text) => match self.finish_compaction(turn, &text, &covered).await {
+                Ok(written) => match self.finish_compaction(turn, &written, &covered).await {
                     Ok(after) => {
+                        let mut message = format!(
+                            "The conversation was compacted: about {before} tokens became {after}."
+                        );
+                        if written.cut {
+                            message.push_str(
+                                " The summary was cut off at the model's output limit, so its \
+                                 end is missing; the plan, the files and the last message were \
+                                 carried in full.",
+                            );
+                        }
                         self.notify(
                             turn,
                             notice(
                                 CompactionState::Finished,
-                                format!(
-                                    "The conversation was compacted: about {before} tokens became \
-                                     {after}."
-                                ),
+                                message,
                                 Some(before),
                                 Some(after),
                             ),
@@ -998,14 +1242,25 @@ impl Session {
                         ErrorData::new(ErrorKind::ContextOverflow, "summary_too_large", message)
                     }
                 },
-                Err(error) => error,
+                Err(error) => {
+                    refusal = error.kind == ErrorKind::ContextOverflow;
+                    error
+                }
             };
             if failure.kind == ErrorKind::Interrupted || turn.cancel.is_cancelled() {
                 return Phase::Interrupted(None);
             }
-            if from_background {
-                // The summary from the background could not be used: one
-                // is asked for now, over everything.
+            if refusal {
+                refused += 1;
+            }
+            // The summary from the background could not be used: one is
+            // asked for now, over everything. A refusal is answered once.
+            let again = if refusal {
+                refused < 2
+            } else {
+                from_background
+            };
+            if again {
                 continue;
             }
             self.notify(
@@ -1033,7 +1288,7 @@ impl Session {
     async fn finish_compaction(
         &mut self,
         turn: &Turn,
-        text: &str,
+        written: &Written,
         covered: &Cover,
     ) -> Result<u64, Unfinished> {
         let (built, discovered) = self.build_prompt().await;
@@ -1051,9 +1306,15 @@ impl Session {
             last_user: self.context.last_user.clone(),
             artifacts: self.context.artifacts.iter().flatten().cloned().collect(),
         };
+        // A summary cut off at the output limit says so where it stops.
+        let text = if written.cut {
+            format!("{}\n\n{SUMMARY_CUT}", written.text.trim_end())
+        } else {
+            written.text.clone()
+        };
         let item = SummaryItem {
             id: self.item_ids.next_id(),
-            text: carried.render(text, &today),
+            text: carried.render(&text, &today),
             covers_through: covered.through.clone(),
             usage: None,
             created_at: Some(self.clock.now().to_timestamp()),
@@ -1076,8 +1337,7 @@ impl Session {
             .budget
             .tokens(built.system.len() as u64 + tools_bytes + history.bytes());
         let (_, limit) = self.limit(&self.model);
-        let settings = &self.context.parts.settings;
-        if pressure(after, limit, settings.prepare_at, settings.compact_at) == Pressure::Compact {
+        if self.pressure_of(after, limit) == Pressure::Compact {
             return Err(Unfinished::TooLarge(format!(
                 "The summary, with what it carries and the turns it replays, is about {after} \
                  tokens, more than a new context of the model allows."
@@ -1112,21 +1372,34 @@ impl Session {
 
     /// Before a request is sent: the context record, and in a debug build
     /// the check that the request begins with the one before it.
+    ///
+    /// Where the request first differs from the one before is said once it
+    /// is known what speed it was sent at ([`settle_sent`](Self::settle_sent)).
+    /// The check is made now, before anything is sent, on each speed it may
+    /// go at whose settings are the last request's: whichever it is sent at,
+    /// an append-only history begins with the last request's bytes.
     pub(super) fn context_request(
         &mut self,
         turn: &Turn,
         model: &RoleModel,
         request: &ModelRequest,
     ) {
+        // A request that ended without a word of its end (an interrupt) is
+        // settled at the speed the stream said, if it said.
+        self.settle_sent();
         let (window, limit) = self.limit(model);
         let info = &model.entry.info;
-        let settings = hash_of(&(
-            info.provider.as_str(),
-            info.id.as_str(),
-            request.max_output,
-            format!("{:?}", request.reasoning),
-            request.speed.as_str(),
-        ));
+        let settings_at = |speed: &Speed| {
+            hash_of(&(
+                info.provider.as_str(),
+                info.id.as_str(),
+                request.max_output,
+                format!("{:?}", request.reasoning),
+                speed.as_str(),
+            ))
+        };
+        let settings = settings_at(&request.speed);
+        let standard = (!request.speed.is_standard()).then(|| settings_at(&Speed::Standard));
         let tools: Vec<(&str, &str, String)> = request
             .tools
             .iter()
@@ -1144,8 +1417,6 @@ impl Session {
             tools: hash_of(&tools),
             messages: self.context.history.fingerprints(),
         };
-        let difference = difference(self.context.last_shape.as_ref(), &shape);
-        self.context.last_shape = Some(shape);
         self.context.sent_bytes = self.context.content_bytes();
         self.pending_context = Some(ContextStat {
             session: self.shared.info.id.clone(),
@@ -1156,11 +1427,65 @@ impl Session {
             estimate: self.estimate(),
             limit,
             window,
-            difference,
+            // Said when the request is settled.
+            difference: PrefixDifference::First,
             usage: None,
         });
+        let mut in_flight = InFlight {
+            shape,
+            prefix: None,
+            standard: standard.map(|standard| (standard, None)),
+            epoch: self.context.epoch_number,
+            at_standard: false,
+        };
         if cfg!(debug_assertions) {
-            self.check_prefix(model, request, settings);
+            in_flight.prefix = model.client.stable_prefix(request);
+            self.check_prefix(settings, in_flight.prefix.as_deref());
+            if let Some(standard) = standard {
+                let mut at = request.clone();
+                at.speed = Speed::Standard;
+                let bytes = model.client.stable_prefix(&at);
+                self.check_prefix(standard, bytes.as_deref());
+                in_flight.standard = Some((standard, bytes));
+            }
+        }
+        self.context.in_flight = Some(in_flight);
+    }
+
+    /// The stream said the client sends the request in flight at another
+    /// speed than it asked for.
+    pub(super) fn sent_at(&mut self, moved: &cortex_llm::SpeedMove) {
+        if moved.by == cortex_protocol::speed::SpeedFallbackBy::Harness
+            && moved.served.is_standard()
+            && let Some(in_flight) = &mut self.context.in_flight
+        {
+            in_flight.at_standard = true;
+        }
+    }
+
+    /// The request in flight is settled at the speed it was sent at: it is
+    /// the request the next is compared with, and its context record says
+    /// where it first differs from the one before it. Called when its end
+    /// is recorded, and before the next request or a reload otherwise.
+    pub(super) fn settle_sent(&mut self) {
+        let Some(sent) = self.context.in_flight.take() else {
+            return;
+        };
+        let (settings, prefix) = match sent.standard {
+            Some((standard, bytes)) if sent.at_standard => (standard, bytes),
+            _ => (sent.shape.settings, sent.prefix),
+        };
+        let shape = Shape {
+            settings,
+            ..sent.shape
+        };
+        let difference = difference(self.context.last_shape.as_ref(), &shape);
+        self.context.last_shape = Some(shape);
+        if let Some(context) = &mut self.pending_context {
+            context.difference = difference;
+        }
+        if let Some(bytes) = prefix {
+            self.context.last_prefix = Some((hash_of(&(settings, sent.epoch)), bytes));
         }
     }
 
@@ -1168,23 +1493,22 @@ impl Session {
     /// settings, a request's stable prefix begins with the one before it.
     /// A reload that changed nothing keeps the request before it, so the
     /// history read again from the log is held to the one built live.
-    fn check_prefix(&mut self, model: &RoleModel, request: &ModelRequest, settings: u64) {
-        let Some(bytes) = model.client.stable_prefix(request) else {
+    fn check_prefix(&self, settings: u64, bytes: Option<&[u8]>) {
+        let Some(bytes) = bytes else {
             return;
         };
         let key = hash_of(&(settings, self.context.epoch_number));
         if let Some((last_key, last)) = &self.context.last_prefix
             && *last_key == key
-            && let Err(at) = check_prefix(last, &bytes)
+            && let Err(at) = check_prefix(last, bytes)
         {
             panic!(
                 "the request does not begin with the one before it in its context epoch: they \
                  part at byte {at}.\nbefore: {}\nnow:    {}",
                 excerpt(last, at),
-                excerpt(&bytes, at)
+                excerpt(bytes, at)
             );
         }
-        self.context.last_prefix = Some((key, bytes));
     }
 
     /// The provider counted the request that has just been answered, and
@@ -1196,6 +1520,21 @@ impl Session {
         self.context
             .budget
             .counted(self.context.sent_bytes, input, tokens.output, after);
+    }
+
+    /// The turn ends because the provider refused its request as too long
+    /// and automatic compaction is off: the loop stops and asks, as it does
+    /// at the trigger (the owner's decision after the review of step 15).
+    /// The budget has learned from the refusal, so the next turn stops at
+    /// the trigger before anything is sent.
+    pub(super) fn overflow_without_compaction(&self) -> End {
+        End::failed(ErrorData::new(
+            ErrorKind::ContextOverflow,
+            "compaction_needed",
+            "The provider said the conversation does not fit the model's context window, and \
+             automatic compaction is off (`context.auto_compact`). Compact it \
+             (`session/compact`), or start a new session.",
+        ))
     }
 
     /// The turn ends because the trigger is reached and automatic

@@ -56,14 +56,14 @@ pub use instructions::{
 pub use prefix::{PrefixDifference, check_prefix};
 pub use prompt::{CORE_INSTRUCTIONS, Environment};
 
-pub(crate) use budget::{Budget, Pressure, pressure};
-pub(crate) use compact::{ARTIFACT_ROUNDS, Carried, Touched, instructions_message};
-pub(crate) use history::{History, Source};
+pub(crate) use budget::{Budget, Pressure, fraction_of, pressure, summary_room};
+pub(crate) use compact::{ARTIFACT_ROUNDS, Carried, SUMMARY_CUT, Touched, instructions_message};
+pub(crate) use history::{History, Source, message_bytes};
 pub(crate) use instructions::{
     Change, Discovered, Found, Given, Place, date_text, discover, nested_dirs, notice_text, places,
     read_one, shown as shown_in, told_date,
 };
-pub(crate) use prefix::{Shape, difference, excerpt, hash_of};
+pub(crate) use prefix::{InFlight, Shape, difference, excerpt, hash_of};
 pub(crate) use prompt::{Built, Sections, build};
 
 use crate::store::{EpochReason, EpochStart, Opened};
@@ -222,6 +222,15 @@ fn tools_bytes(tools: &[ToolDefinition]) -> u64 {
         .sum()
 }
 
+/// The size of a request's content in bytes, as the budget counts it: its
+/// system prompt, its tools and its messages. A summary request's, for what
+/// its refusal teaches the budget.
+pub(crate) fn request_bytes(request: &cortex_llm::ModelRequest) -> u64 {
+    request.system.len() as u64
+        + tools_bytes(&request.tools)
+        + request.messages.iter().map(message_bytes).sum::<u64>()
+}
+
 /// Whether two epochs send the same prefix: the same system prompt and
 /// the same tools, in the same order.
 pub(crate) fn same_prefix(one: &EpochStart, other: &EpochStart) -> bool {
@@ -232,13 +241,18 @@ pub(crate) fn same_prefix(one: &EpochStart, other: &EpochStart) -> bool {
 /// the summary first: what the history before each summary held after the
 /// item it covers through, as the live session replayed it. With no
 /// summary, every item.
+///
+/// The item covered through is looked for from the end: what a summary
+/// covers comes just before it, and a log written before every item had an
+/// id of its own (the core's notice of a change from outside, before the
+/// review of step 15) can hold an id twice.
 fn held_after_summaries(items: &[Item]) -> Vec<usize> {
     let mut held: Vec<usize> = Vec::new();
     for (index, item) in items.iter().enumerate() {
         if let Item::Summary(summary) = item {
             let after = summary.covers_through.as_ref().and_then(|through| {
                 held.iter()
-                    .position(|&at| items[at].id() == Some(through.as_str()))
+                    .rposition(|&at| items[at].id() == Some(through.as_str()))
             });
             let kept: Vec<usize> = after.map_or_else(Vec::new, |after| {
                 held[after + 1..]
@@ -288,6 +302,8 @@ pub(crate) struct Context {
     /// The stable prefix of the last request, with what it is compared
     /// under: a debug build's check.
     pub(crate) last_prefix: Option<(u64, Vec<u8>)>,
+    /// The main request in flight, until the speed it was sent at is known.
+    pub(crate) in_flight: Option<InFlight>,
 }
 
 impl Context {
@@ -309,6 +325,7 @@ impl Context {
             last_shape: None,
             sent_bytes: 0,
             last_prefix: None,
+            in_flight: None,
         }
     }
 

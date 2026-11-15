@@ -38,8 +38,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use cortex_agent::{
-    Account, ContextParts, ContextSettings, Environment, Ledger, LoopConfig, Models,
-    NoInstructionFiles, NoStats, NoVerifier, SessionInfo, SessionParts, SpeedSettings, Workspace,
+    Account, ContextParts, ContextSettings, Environment, Ledger, LoopConfig, Models, NoStats,
+    NoVerifier, SessionInfo, SessionParts, SpeedSettings, Workspace,
 };
 use cortex_base::{AbsPath, CancelToken, PathOptions, PathResolver};
 use cortex_config::{LayerKind, LoadOptions, Loaded, Override, Settings, StateDir};
@@ -87,12 +87,24 @@ fn in_git(root: &AbsPath) -> bool {
 }
 
 /// The context's settings, from `[context]` and `compat.instructions`.
+///
+/// `compat.instructions` governs the names other tools' files have,
+/// `AGENTS.md` and `CLAUDE.md`, in the workspace: off, only the names in
+/// `context.instruction_names` are read there. The user's own files in the
+/// configuration directory are the harness's, and are read either way, as
+/// `[compat]` is for readers of other tools' files only
+/// (`docs/architecture/08-configuration.md`; the review of step 15, its
+/// fourth note, found both turned off with it).
 fn context_settings(settings: &Settings) -> ContextSettings {
     let context = &settings.context;
-    let mut names: Vec<String> = cortex_agent::context::DEFAULT_NAMES
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
+    let mut names: Vec<String> = if settings.compat.instructions {
+        cortex_agent::context::DEFAULT_NAMES
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect()
+    } else {
+        Vec::new()
+    };
     // Only plain documents: a name with a separator, or one that is not a
     // `.md` file, could make the harness read and send something that is
     // not instructions (`cortex_agent::context::is_instruction_name`).
@@ -1366,18 +1378,14 @@ pub(crate) fn assemble(
         }
     }
     // What the session's context is made from. The instruction files are
-    // read through the resolver and the engine's gate, and not at all when
-    // `compat.instructions` is off.
+    // read through the resolver and the engine's gate; which names are
+    // read is the context's settings' (`context_settings`).
     let user_dir = load.dirs.config.as_deref().and_then(resolve_dir);
-    let instructions: Arc<dyn cortex_agent::InstructionFiles> = if settings.compat.instructions {
-        Arc::new(DiskInstructions {
-            resolver: Arc::clone(&resolver),
-            user_dir: user_dir.clone(),
-            gate: policy.keep_gate(),
-        })
-    } else {
-        Arc::new(NoInstructionFiles)
-    };
+    let instructions: Arc<dyn cortex_agent::InstructionFiles> = Arc::new(DiskInstructions {
+        resolver: Arc::clone(&resolver),
+        user_dir: user_dir.clone(),
+        gate: policy.keep_gate(),
+    });
     let context = ContextParts {
         environment: Environment {
             os: if cfg!(windows) { "Windows" } else { "Linux" }.to_owned(),

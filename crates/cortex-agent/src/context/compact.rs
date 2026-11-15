@@ -44,6 +44,19 @@ be kept word for word.
 
 Be specific and brief. Leave out what no longer matters.";
 
+/// The line a summary ends with when the model's response stopped at its
+/// output limit: what it would have said after it is missing. Marked in the
+/// text, so the model knows, and the log's format is unchanged
+/// (`docs/outstanding/a-summary-cut-off-at-the-output-limit.md`).
+pub(crate) const SUMMARY_CUT: &str = "[This summary was cut off here at the model's output \
+limit: what it would have said after this point is missing.]";
+
+/// How a summary's lead ends. After a compaction at the trigger the summary
+/// is the model's only message, and the core instructions say a notice
+/// needs no reply: this says the work goes on (the review of step 15, its
+/// third note).
+const GO_ON: &str = "Continue the work from where it stands.";
+
 /// How many of the last rounds' artifacts are carried across.
 pub(crate) const ARTIFACT_ROUNDS: usize = 3;
 
@@ -229,7 +242,7 @@ impl Carried {
         let mut out = format!(
             "This conversation was compacted to make room. {} What came before is summarised \
              below. The plan, the files and the user's last message were carried across exactly \
-             as they were.\n\n## Summary\n\n{}",
+             as they were. {GO_ON}\n\n## Summary\n\n{}",
             date_text(date),
             summary.trim()
         );
@@ -348,6 +361,13 @@ mod tests {
         };
         let text = carried.render("Goal: fix it.", "2026-11-14");
         assert!(text.contains("Today's date is 2026-11-14 (UTC)."));
+        // The model's only message after a compaction at the trigger is
+        // this one, a notice: it says the work goes on (the review of step
+        // 15, its third note).
+        assert!(
+            text.contains("as they were. Continue the work from where it stands.\n\n## Summary"),
+            "{text}"
+        );
         assert!(text.contains("- [done] Read the code (p1)\n- [active] Fix the bug (p2)"));
         assert!(text.contains("Read: `src/lib.rs`\nChanged: `src/lib.rs`"));
         assert!(text.contains("Fix the off-by-one in `count`, please."));

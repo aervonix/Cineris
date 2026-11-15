@@ -1140,3 +1140,125 @@ fn sys_an_unconfined_command_does_not_trip_the_next_command() {
         front.close().await;
     });
 }
+
+/// A session of this world opened again, as a second run of the program
+/// does.
+#[cfg(target_os = "linux")]
+async fn reopened(core: &cortex_core::Core, session: &cortex_protocol::SessionId) -> Front {
+    let client = core.connect(cortex_core::ClientInfo::user());
+    let opened = core
+        .handle(
+            client.id,
+            Op::SessionOpen(cortex_protocol::methods::SessionRef {
+                session_id: session.clone(),
+            }),
+        )
+        .await
+        .expect("the session opens");
+    let OpResult::SessionOpen(opened) = opened else {
+        panic!("not the result of session/open");
+    };
+    Front {
+        core: core.clone(),
+        client,
+        session: session.clone(),
+        state: opened.session,
+        seen: std::cell::RefCell::default(),
+        answered: std::cell::RefCell::default(),
+    }
+}
+
+/// Each close that finds a change from outside appends a notice with an id
+/// of its own. Two such closes, then a compaction at once, whose summary
+/// covers through the second notice: the history a later run reads back
+/// begins as the one the compacting run built. The review of step 15, its
+/// second note, found the notice's fixed id (`outside-change`) making the
+/// read-back find the first notice, and replay the turn between them.
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_two_closes_that_find_changes_from_outside_and_a_compaction_read_back_as_built() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("outside_twice", []);
+    world.put(".git/config", "[core]\n");
+    world.put(".git/hooks/pre-commit.sample", "#!/bin/sh\n");
+    world.user_config("[permissions]\nmode = \"autonomous\"\n");
+    for response in [
+        calls(&[("c1", "shell", json!({"command": "echo one > one.txt"}))]),
+        says("One."),
+        calls(&[("c2", "shell", json!({"command": "echo two > two.txt"}))]),
+        says("Two."),
+        says("The summary."),
+        says("Three."),
+        says("Four."),
+    ] {
+        world.provider.push(response);
+    }
+    let core = || world.core_with(|options| options.launcher = Some(launcher()));
+    // Two runs, each with a confined command and then a protected path
+    // changed by hand before the session closes.
+    let first = core();
+    let session = world.run(async {
+        let front = Front::start(&world, &first).await;
+        front.turn("one").await;
+        world.put(".git/hooks/pre-commit", "by hand\n");
+        front.close().await;
+        front.session.clone()
+    });
+    let second = core();
+    world.run(async {
+        let front = reopened(&second, &session).await;
+        front.turn("two").await;
+        world.put(".git/hooks/post-commit", "by hand\n");
+        front.close().await;
+    });
+    let notices: Vec<String> = world
+        .log()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|entry| {
+            entry["kind"] == "notice"
+                && entry["item"]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("none of the harness's own tools"))
+        })
+        .map(|entry| entry["item"]["id"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(notices.len(), 2, "a notice at each close: {notices:?}");
+    assert_ne!(notices[0], notices[1], "each has an id of its own");
+    // A third run compacts at once, and goes on.
+    let third = core();
+    let built = world.run(async {
+        let front = reopened(&third, &session).await;
+        front
+            .op(Op::SessionCompact(
+                cortex_protocol::methods::SessionCompactParams {
+                    session_id: front.session.clone(),
+                    focus: None,
+                },
+            ))
+            .await
+            .unwrap();
+        front.turns(1).await;
+        front.turn("three").await;
+        front.close().await;
+        world.provider.requests().pop().unwrap()
+    });
+    let summary = crate::texts(&built.messages[0]);
+    assert!(summary.contains("The summary."), "{summary}");
+    assert_eq!(built.messages.len(), 2, "the summary and the prompt");
+    // A fourth reads it back.
+    let fourth = core();
+    let read = world.run(async {
+        let front = reopened(&fourth, &session).await;
+        front.turn("four").await;
+        front.close().await;
+        world.provider.requests().pop().unwrap()
+    });
+    assert_eq!(
+        read.messages[..built.messages.len()],
+        built.messages[..],
+        "the history read back is not the one built live"
+    );
+}
