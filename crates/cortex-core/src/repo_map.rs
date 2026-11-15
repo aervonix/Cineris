@@ -383,8 +383,9 @@ mod tests {
     /// the idle slice to it (the second review of step 18).
     #[test]
     fn a_pass_that_gave_way_to_a_turn_already_over_is_carried_on() {
+        const FILES: usize = 50;
         let scratch = Scratch::outside("cortex-core-unit", "a_pass_that_gave_way_is_carried_on");
-        for n in 0..50 {
+        for n in 0..FILES {
             scratch.file(format!("ws/f{n:02}.rs"), format!("pub fn f{n}() {{}}\n"));
         }
         let root = PathResolver::new(&scratch.dir("ws"), PathOptions::new())
@@ -393,18 +394,16 @@ mod tests {
             .clone();
         let shared = Arc::new(std::sync::OnceLock::<std::sync::Weak<Shared>>::new());
         let armed = Arc::new(AtomicBool::new(false));
-        // The last file closes each whole listing. The first look of the
+        // A whole listing asks the gate about each of the 50 files, in
+        // whatever order the walk meets them. The first question of the
         // second pass begins a turn, so the pass gives way at its next
         // entry, and arms the clock, which ends the turn right after.
-        let looks = Arc::new(AtomicUsize::new(0));
-        let begun = AtomicBool::new(false);
+        let asked = Arc::new(AtomicUsize::new(0));
         let gate: Arc<dyn cortex_index::Gate> = {
-            let (looks, armed, shared) =
-                (Arc::clone(&looks), Arc::clone(&armed), Arc::clone(&shared));
-            Arc::new(move |path: &AbsPath| {
-                if path.as_str().ends_with("/f49.rs") {
-                    looks.fetch_add(1, Ordering::SeqCst);
-                } else if looks.load(Ordering::SeqCst) == 1 && !begun.swap(true, Ordering::SeqCst) {
+            let (asked, armed, shared) =
+                (Arc::clone(&asked), Arc::clone(&armed), Arc::clone(&shared));
+            Arc::new(move |_: &AbsPath| {
+                if asked.fetch_add(1, Ordering::SeqCst) + 1 == FILES + 1 {
                     let shared = shared
                         .get()
                         .and_then(std::sync::Weak::upgrade)
@@ -430,11 +429,11 @@ mod tests {
         shared.set(Arc::downgrade(&repo.shared)).expect("set once");
         lock(&repo.shared.state).running = true;
         repo.shared.work();
-        // The first pass, the one that gave way (which never reached the
-        // last file), and seven more of the idle slice's eight.
+        // The first pass (50 questions), the one that gave way (one, on one
+        // thread), and seven more whole passes of the idle slice's eight.
         assert_eq!(
-            looks.load(Ordering::SeqCst),
-            8,
+            asked.load(Ordering::SeqCst),
+            FILES + 1 + 7 * FILES,
             "the work went on after the turn"
         );
         assert!(!lock(&repo.shared.state).running);
