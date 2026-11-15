@@ -418,8 +418,15 @@ mod linux {
 }
 
 /// The process tree under `root` on Windows, from PowerShell: each
-/// process's id, name and command line, and each of its threads' state and
-/// wait reason. Thread stacks are not read.
+/// process's id and command line, and each of its threads' state and, while
+/// it waits, its wait reason. Thread stacks are not read.
+///
+/// The processes come from one query of `Win32_Process`, and their threads
+/// from `Get-Process`, which reads one snapshot of the system. A query of
+/// `Win32_Thread` for each process walks every thread of the system each
+/// time: on a cold nightly runner the tree of a test and one child took
+/// longer than the 30 s the watch's own test waited for it (nightly run
+/// 43675736382).
 fn windows_tree(root: u32) -> String {
     let script = format!(
         "$all = Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine; \
@@ -428,16 +435,18 @@ fn windows_tree(root: u32) -> String {
            $p = $all | Where-Object {{ $_.ProcessId -eq $id }}; \
            $line = if ($p) {{ $p.CommandLine }} else {{ '?' }}; \
            Write-Output ('  ' * $depth + \"$id $line\"); \
-           Get-CimInstance Win32_Thread -Filter \"ProcessHandle='$id'\" | ForEach-Object {{ \
-             Write-Output ('  ' * $depth + \"  thread $($_.Handle) state $($_.ThreadState) wait reason $($_.ThreadWaitReason)\") }}; \
+           $process = Get-Process -Id $id -ErrorAction SilentlyContinue; \
+           if ($process) {{ $process.Threads | ForEach-Object {{ \
+             $reason = if ($_.ThreadState -eq 'Wait') {{ $_.WaitReason }} else {{ '-' }}; \
+             Write-Output ('  ' * $depth + \"  thread $($_.Id) state $($_.ThreadState) wait reason $reason\") }} }}; \
            $all | Where-Object {{ $_.ParentProcessId -eq $id -and $_.ProcessId -ne $id }} | ForEach-Object {{ $todo.Enqueue(@($_.ProcessId, ($depth + 1))) }} }}"
     );
     let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output();
     let mut text = String::from(
-        "processes: pid and command line; then each thread's state and wait reason \
-         (Win32_Thread: state 5 is waiting). Thread stacks are not read on Windows.\n",
+        "processes: pid and command line; then each thread's state and, while it waits, \
+         its wait reason. Thread stacks are not read on Windows.\n",
     );
     match output {
         Ok(output) => text.push_str(&String::from_utf8_lossy(&output.stdout)),
@@ -683,15 +692,27 @@ mod tests {
             }
         });
         let mut text = String::new();
+        let (mut head_at, mut ended) = (None, None);
         // A bound on a mistake: the report comes after 0.8 s.
         while let Ok(line) = received.recv_timeout(Duration::from_secs(30)) {
             text.push_str(&line);
             text.push('\n');
+            if line.contains("this test has run ") {
+                head_at = Some(std::time::Instant::now());
+            }
             if line.starts_with("== end of cortex-testkit's report") {
+                ended = head_at.map(|at| at.elapsed());
                 break;
             }
         }
         kill_tree(&mut child);
+        // How long the tree took after the waits, which on Windows is
+        // PowerShell's time: seen with `--no-capture`.
+        eprintln!("the tree came {ended:?} after the waits");
+        assert!(
+            ended.is_some(),
+            "the report's tree did not come within 30 s of its waits: {text}"
+        );
 
         assert!(
             text.contains("of the 1 s it is given (CORTEX_WATCH_LIMIT_MS)"),
