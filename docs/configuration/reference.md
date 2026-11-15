@@ -208,6 +208,7 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | `keys.toggle` | table of list of text | not set | user only | at once | The `/effort` picker's fast-mode toggle. |
 | `keys.search` | table of list of text | not set | user only | at once | The history search's. |
 | `keys.focus` | table of list of text | not set | user only | at once | A focused tool box's or panel's. |
+| `keys.dialog` | table of list of text | not set | user only | at once | A dialog's: the answers to an approval, a question or trust. |
 | `keys.global` | table of list of text | not set | user only | at once | Those looked up last, whatever has the keyboard: `interrupt`, `redraw`, `suspend`, and the rest. |
 
 ## `[terminal]`

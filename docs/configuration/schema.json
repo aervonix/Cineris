@@ -248,6 +248,18 @@
       "additionalProperties": true,
       "description": "The terminal UI's key bindings, by the context an action belongs to: `[keys] editor.new_line = [\"shift+enter\", \"ctrl+j\"]`.",
       "properties": {
+        "dialog": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "A dialog's: the answers to an approval, a question or trust.",
+          "type": "object",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
         "editor": {
           "additionalProperties": {
             "items": {
