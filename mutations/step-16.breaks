@@ -400,3 +400,12 @@ find: .is_none_or(|variants| *variants == self.model.variants)
 replace: .is_none_or(|_| true)
 caught-by:
     cortex-agent::it roles::variants_changed_between_two_openings_begin_a_new_epoch
+
+[break] raw-events-kept-a-year-by-default
+rule: Raw events are kept three months by default; every all-time figure is in the aggregates.
+file: crates/cortex-config/src/schema/sections.rs
+in: StatsSettings
+find: pub retention: u32 = 3
+replace: pub retention: u32 = 12
+caught-by:
+    cortex-config schema::sections::tests::*

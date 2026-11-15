@@ -70,7 +70,7 @@ The statistics store already records one event per model request. For this view 
 
 **This costs nothing new at start-up.** The aggregates are read the first time the view, or an adaptive feature, needs them.
 
-**As built in step 16.** The request event carries all of the above, the cost as the loop priced it when the request ended. The aggregates' usage buckets are as described, with the speed tier among the keys, and time and tools beside them ([14-adaptation.md](14-adaptation.md), "Local statistics"). `usage/report` answers from them alone:
+**As built in step 16.** The request event carries all of the above, the cost as the loop priced it when the request ended. The aggregates' usage buckets are as described, with the speed tier among the keys, and time and tools beside them ([14-adaptation.md](14-adaptation.md), "Local statistics"). The raw monthly files are kept for `stats.retention` months after their own, **3 by default** (the coordinator's decision in step 16, which the owner may revisit): a heavy user's are about 90 MB a month, and a file's part stays in the aggregates when it goes, so every range of this view, all time included, is unchanged by the pruning. `usage/report` answers from them alone:
 
 - **Ranges:** the open session's own figures for `session`; today, the week from `usage.week_start` (or the last 7 days with `usage.ranges = "rolling"`), the month from its first day (or the last 30) and everything for `all`. Days are counted in the local zone: `cortex_base::Zone`, from `TZ` or `/etc/localtime` on Linux and from the system on Windows.
 - **Groupings:** any of provider, model, project, source and speed, outermost first, with each row's turns' time when the grouping is of provider, model or project.

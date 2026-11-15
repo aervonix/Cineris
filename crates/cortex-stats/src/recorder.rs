@@ -43,6 +43,12 @@ use crate::store::{Aggregates, Appender, LimitsFile, StatsDir, month_of};
 /// How many events may wait for the writer.
 pub const QUEUE: usize = 4096;
 
+/// How many months a monthly file stays after its own, unless configured
+/// otherwise (`stats.retention`): three. The coordinator's decision in step
+/// 16, which the owner may revisit: a year of a heavy user's raw events is
+/// about 1.1 GB, and every all-time figure is kept in the aggregates.
+pub const DEFAULT_RETENTION: u32 = 3;
+
 /// How the recorder is set.
 #[derive(Debug, Clone)]
 pub struct RecorderOptions {
@@ -67,7 +73,7 @@ impl RecorderOptions {
         Self {
             dir,
             zone: None,
-            retention: 12,
+            retention: DEFAULT_RETENTION,
             queue: QUEUE,
             sync_every: Duration::from_secs(5),
         }

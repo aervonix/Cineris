@@ -48,6 +48,13 @@ fn a_stalled_writer_drops_and_counts_and_never_waits() {
     assert_eq!(recorder.dropped(), 0);
 }
 
+#[test]
+fn raw_events_are_kept_three_months_by_default() {
+    let options = RecorderOptions::new(StatsDir::new("stats"));
+    assert_eq!(options.retention, 3);
+    assert_eq!(options.retention, DEFAULT_RETENTION);
+}
+
 fn cortex_base_scratch(test: &str) -> cortex_testkit::Scratch {
     cortex_testkit::Scratch::outside("cortex-stats", test)
 }
