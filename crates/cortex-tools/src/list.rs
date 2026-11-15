@@ -136,7 +136,7 @@ impl Tool for ListTool {
             (None, None) => Some(1),
             (None, Some(_)) => None,
         };
-        let shown = directory.display();
+        let shown = directory.shown();
         let summary = match &glob {
             Some((pattern, _)) => format!("Find {pattern} under {shown}"),
             None => format!("List {shown}"),
@@ -189,7 +189,7 @@ fn list(
     limits: &OutputLimits,
     cancel: &CancelToken,
 ) -> ToolResult {
-    let shown = call.directory.display();
+    let shown = call.directory.shown();
     match std::fs::symlink_metadata(call.directory.to_fs_path()) {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => {
@@ -214,6 +214,9 @@ fn list(
     let found = Mutex::new((BTreeSet::<String>::new(), 0usize));
     let refused_links = Mutex::new(Skipped::default());
     let inside = call.directory.is_inside_workspace();
+    // The directory as data: a link is resolved by its path as it is, not as
+    // it is shown.
+    let data = call.directory.data();
     let mut skipped = walk::walk(
         &WalkSpec {
             root: &call.directory,
@@ -225,7 +228,7 @@ fn list(
         gate,
         cancel,
         &mut || {
-            let (found, refused_links, shown) = (&found, &refused_links, &shown);
+            let (found, refused_links, shown, data) = (&found, &refused_links, &shown, &data);
             Box::new(move |entry: &walk::Found<'_>| {
                 let mut line = walk::shown_path(shown, entry.relative);
                 let is_dir = match entry.kind {
@@ -238,11 +241,8 @@ fn list(
                         // A path inside the workspace is relative, and is
                         // marked as such: a link named `~` is not the home
                         // directory.
-                        let written = if inside {
-                            format!("./{line}")
-                        } else {
-                            line.clone()
-                        };
+                        let path = walk::joined_path(data, entry.relative);
+                        let written = if inside { format!("./{path}") } else { path };
                         match paths.resolve(&written) {
                             Ok(target) => std::fs::symlink_metadata(target.to_fs_path())
                                 .is_ok_and(|metadata| metadata.is_dir()),
@@ -337,7 +337,7 @@ fn list(
         text.push_str(&note);
     }
     ToolResult::success(text).with_payload(json!({
-        "path": shown,
+        "path": call.directory.data(),
         "entries": total,
         "shown": listed,
     }))

@@ -19,7 +19,7 @@ use std::io;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use cortex_base::{CancelToken, ResolvedPath};
+use cortex_base::{CancelToken, ResolvedPath, visible_keeping};
 use cortex_protocol::ids::ArtifactId;
 use grep_matcher::LineTerminator;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
@@ -275,7 +275,7 @@ fn in_path(path: &str, cx: &PlanCx) -> Result<(Target, Option<Effect>, String), 
     } else {
         Effect::Read(resolved.clone())
     };
-    let place = resolved.display();
+    let place = resolved.shown();
     Ok((Target::Path(resolved), Some(effect), place))
 }
 
@@ -328,12 +328,18 @@ impl FileSink<'_> {
         // minified file is one line of megabytes. A character is one byte
         // that is not a continuation byte.
         let room = self.limits.max_line_chars() * 4 + 8;
+        // A line of a file is shown with every character that would act
+        // unseen written as an escape, its tabs kept: one line is never two,
+        // and holds no text a person cannot see (the independent review of
+        // step 18). `read` gives the file exactly.
         let line = if bytes.len() <= room {
             let text = String::from_utf8_lossy(bytes);
+            let text = visible_keeping(&text, &['\t']);
             self.limits.clip(&format!("{prefix}{text}")).into_owned()
         } else {
             let chars = bytes.iter().filter(|&&byte| byte & 0xc0 != 0x80).count();
             let text = String::from_utf8_lossy(&bytes[..room]);
+            let text = visible_keeping(&text, &['\t']);
             self.limits
                 .clip_start(&format!("{prefix}{text}"), prefix.chars().count() + chars)
         };
@@ -516,7 +522,7 @@ fn search(
             }
         }
         Target::Path(path) => {
-            place = path.display();
+            place = path.shown();
             let fs_path = path.to_fs_path();
             match std::fs::symlink_metadata(&fs_path) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -574,7 +580,7 @@ fn search_tree(
     cancel: &CancelToken,
     merged: &mut Merged,
 ) -> Skipped {
-    let root_shown = root.display();
+    let root_shown = root.shown();
     let shared = Mutex::new(std::mem::take(merged));
     let extra = Mutex::new(Skipped::default());
     let mut skipped = walk::walk(

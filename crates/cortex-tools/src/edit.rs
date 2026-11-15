@@ -159,7 +159,7 @@ impl Tool for EditTool {
         plan_change(
             format!(
                 "Edit {} ({})",
-                path.display(),
+                path.shown(),
                 if total == 1 {
                     "1 edit".to_owned()
                 } else {
@@ -199,7 +199,7 @@ impl Tool for EditTool {
         let gate = std::sync::Arc::clone(&cx.gate);
         let limit = self.editing.limit;
         Some(Box::new(move || {
-            let shown = call.path.display();
+            let shown = call.path.shown();
             change::preview(&call.path, &paths, gate.as_ref(), limit, |old| {
                 let Some(old) = old else {
                     return Err(format!(
@@ -245,7 +245,7 @@ fn edit_file(call: &Call, env: &Env) -> Result<ToolResult, ToolResult> {
             "`{shown}` already has this text: with the edits made it would be exactly as it \
              is. Nothing was written."
         ))
-        .with_payload(json!({"path": shown, "kind": "unchanged"})));
+        .with_payload(json!({"path": target.data, "kind": "unchanged"})));
     }
     let mut new = String::with_capacity(body.len() + BOM.len());
     if marked {
@@ -260,7 +260,7 @@ fn edit_file(call: &Call, env: &Env) -> Result<ToolResult, ToolResult> {
     let mut message = format!("Edited `{shown}`: {}.", places_list(&written));
     let tolerant = report_tolerant(&mut message, call.edits.len(), &places);
     Ok(ToolResult::success(message).with_payload(json!({
-        "path": shown,
+        "path": target.data,
         "kind": "edit",
         "lines": Text::new(&body).lines.len(),
         "replacements": places.len(),

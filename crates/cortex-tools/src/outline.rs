@@ -24,7 +24,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use cortex_base::{AbsPath, CancelToken, ResolvedPath};
+use cortex_base::{AbsPath, CancelToken, ResolvedPath, visible};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -63,30 +63,6 @@ impl PartialOrd for InOrder {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
-}
-
-/// `text` with every character that would act unseen (a line break, an
-/// escape, a bidirectional control) written as an escape: a file can be
-/// named so that, written as it is, it starts lines of its own.
-fn visible(text: &str) -> String {
-    let hidden = |character: char| {
-        character.is_control()
-            || matches!(
-                character,
-                '\u{200B}'..='\u{200F}' | '\u{061C}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
-            )
-    };
-    let mut out = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            other if hidden(other) => out.push_str(&format!("\\u{{{:x}}}", u32::from(other))),
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 /// What the header and the closing notes may take of the output limits.
@@ -169,7 +145,7 @@ impl Tool for OutlineTool {
     fn plan(&self, args: &Json, cx: &PlanCx) -> Result<Plan, ToolError> {
         let arguments: Arguments = args::parse(&self.spec, args)?;
         let target = cx.paths.resolve(&arguments.path)?;
-        let shown = target.display();
+        let shown = target.shown();
         if !target.is_inside_workspace() {
             return Err(ToolError::invalid(format!(
                 "`{shown}` is outside the workspace, and outlines come from the workspace's \
@@ -249,16 +225,15 @@ fn outline_file(
     outliner: &dyn Outliner,
     limits: &OutputLimits,
 ) -> ToolResult {
-    let shown = target.display();
+    let shown = target.shown();
     let outlined = match outliner.describe(target.abs()) {
         Ok(outlined) => outlined,
         Err(why) => {
-            return ToolResult::error(format!("`{}` has no outline: {why}.", visible(&shown)));
+            return ToolResult::error(format!("`{shown}` has no outline: {why}."));
         }
     };
     let mut text = format!(
-        "{} ({}; approximate):",
-        visible(&shown),
+        "{shown} ({}; approximate):",
         describing(outlined.language.as_deref(), outlined.definitions)
     );
     if outlined.definitions == 0 {
@@ -268,7 +243,8 @@ fn outline_file(
     let lines: Vec<&str> = outlined.text.lines().collect();
     let mut shown_lines = 0;
     for line in &lines {
-        let line = limits.clip(line);
+        let escaped = visible(line);
+        let line = limits.clip(&escaped);
         if !budget.take(&line) {
             break;
         }
@@ -296,7 +272,7 @@ fn outline_file(
         ));
     }
     ToolResult::success(text).with_payload(json!({
-        "path": shown,
+        "path": target.data(),
         "kind": "file",
         "language": outlined.language,
         "definitions": outlined.definitions,
@@ -312,7 +288,7 @@ fn outline_directory(
     limits: &OutputLimits,
     cancel: &CancelToken,
 ) -> ToolResult {
-    let shown = call.target.display();
+    let shown = call.target.shown();
     // The first files in path order, kept as the walk goes; the rest are
     // counted.
     let found = Mutex::new((BTreeSet::<InOrder>::new(), 0usize));
@@ -360,7 +336,7 @@ fn outline_directory(
         let Ok(path) = call.target.abs().join(relative) else {
             continue;
         };
-        let file_shown = visible(&walk::shown_path(&shown, relative));
+        let file_shown = walk::shown_path(&shown, relative);
         let Some(text) = file_outline(&path, outliner) else {
             empty += 1;
             continue;
@@ -375,7 +351,7 @@ fn outline_directory(
         let lines: Vec<&str> = text.lines().collect();
         let mut taken = 0;
         for line in lines.iter().take(FILE_LINES) {
-            let line = format!("  {}", limits.clip(line));
+            let line = format!("  {}", limits.clip(&visible(line)));
             if !budget.take(&line) {
                 out_of_room = true;
                 break;
@@ -445,7 +421,7 @@ fn outline_directory(
         text.push_str(&note);
     }
     ToolResult::success(text).with_payload(json!({
-        "path": shown,
+        "path": call.target.data(),
         "kind": "directory",
         "files": total,
         "shown": outlined,
@@ -457,20 +433,4 @@ fn outline_directory(
 fn file_outline(path: &AbsPath, outliner: &dyn Outliner) -> Option<String> {
     let outlined = outliner.describe(path).ok()?;
     (outlined.definitions > 0).then_some(outlined.text)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::visible;
-
-    /// A line break, an escape, a bidirectional control, a line separator
-    /// and a zero-width character are each written as an escape.
-    #[test]
-    fn what_would_act_unseen_is_written_as_an_escape() {
-        assert_eq!(visible("plain é"), "plain é");
-        assert_eq!(
-            visible("a\nb\u{1b}c\u{202E}d\u{2028}e\u{200B}f\u{FEFF}"),
-            "a\\nb\\u{1b}c\\u{202e}d\\u{2028}e\\u{200b}f\\u{feff}"
-        );
-    }
 }

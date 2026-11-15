@@ -95,7 +95,7 @@ pub(crate) fn plan_change<T: Send + Sync + 'static>(
     if path.names_a_directory() {
         return Err(ToolError::invalid(format!(
             "`{}` names a directory (it ends with a separator), and a file is needed.",
-            path.display()
+            path.shown()
         )));
     }
     Ok(Plan::new(summary, call)
@@ -148,7 +148,7 @@ impl Tool for WriteTool {
         let path = cx.paths.resolve(&arguments.path)?;
         let lines = Text::new(&arguments.content).lines.len();
         plan_change(
-            format!("Write {} ({})", path.display(), lines_word(lines)),
+            format!("Write {} ({})", path.shown(), lines_word(lines)),
             &path,
             Call {
                 path: path.clone(),
@@ -216,7 +216,7 @@ fn write_file(call: &Call, env: &Env) -> Result<ToolResult, ToolResult> {
                 return Ok(ToolResult::success(format!(
                     "`{shown}` already has exactly this content. Nothing was written."
                 ))
-                .with_payload(json!({"path": shown, "kind": "unchanged"})));
+                .with_payload(json!({"path": target.data, "kind": "unchanged"})));
             }
             (Some(old_text), new.into_bytes())
         }
@@ -242,7 +242,7 @@ fn write_file(call: &Call, env: &Env) -> Result<ToolResult, ToolResult> {
         (Found::File(_), None) => format!("Wrote `{shown}`: {}.", lines_word(lines)),
     };
     Ok(ToolResult::success(text).with_payload(json!({
-        "path": shown,
+        "path": target.data,
         "kind": if old_text.is_some() { "write" } else { "create" },
         "lines": lines,
         "bytes": new_bytes.len(),

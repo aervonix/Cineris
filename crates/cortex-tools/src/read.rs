@@ -202,7 +202,7 @@ impl Tool for ReadTool {
             Ok(path) => {
                 let resolved = cx.paths.resolve(path)?;
                 Ok(Plan::new(
-                    format!("Read {}{range}", resolved.display()),
+                    format!("Read {}{range}", resolved.shown()),
                     call(Source::File(resolved.clone())),
                 )
                 .with_effect(Effect::Read(resolved)))
@@ -524,7 +524,8 @@ fn read_file(
     cancel: &CancelToken,
     seen: &mut Option<Seen>,
 ) -> ToolResult {
-    let shown = path.display();
+    let shown = path.shown();
+    let data = path.data();
     let fs_path = path.to_fs_path();
     // The open is the check: no link is followed at the file's own name and
     // no FIFO is waited on, whatever was put there since the path was
@@ -605,7 +606,7 @@ fn read_file(
                     )
                 };
                 return ToolResult::success(text).with_payload(json!({
-                    "path": shown,
+                    "path": data,
                     "kind": "unchanged",
                     "total_lines": scan.total_lines,
                 }));
@@ -632,7 +633,7 @@ fn read_file(
                 },
             ));
             return ToolResult::success(text).with_payload(json!({
-                "path": shown,
+                "path": data,
                 "kind": "diff",
                 "total_lines": scan.total_lines,
                 "added": added,
@@ -672,7 +673,7 @@ fn read_file(
         },
     ));
     ToolResult::success(content.text).with_payload(json!({
-        "path": shown,
+        "path": data,
         "kind": if content.outlined { "outline" } else { "content" },
         "first_line": content.first,
         "last_line": content.last,
@@ -869,7 +870,8 @@ fn not_text(
     kind: Kind,
     env: &Env,
 ) -> ToolResult {
-    let shown = path.display();
+    let shown = path.shown();
+    let data = path.data();
     let human = size(usize::try_from(bytes).unwrap_or(usize::MAX));
     match kind {
         Kind::Image(media_type) => {
@@ -898,7 +900,7 @@ fn not_text(
                         artifact: Some(artifact.id.clone()),
                     }))
                     .with_artifact(artifact)
-                    .with_payload(json!({"path": shown, "kind": "image", "bytes": bytes})),
+                    .with_payload(json!({"path": data, "kind": "image", "bytes": bytes})),
                 Err(error) => ToolResult::error(format!("`{shown}` could not be read: {error}.")),
             }
         }
@@ -960,7 +962,7 @@ fn read_artifact(id: &ArtifactId, call: &Call, env: &Env, cancel: &CancelToken) 
 /// The error for a file that is not there, with the names in its directory
 /// that are close to the one asked for.
 fn missing(path: &ResolvedPath, env: &Env) -> ToolResult {
-    let shown = path.display();
+    let shown = path.shown();
     // The deepest directory on the way that does exist, and the first name
     // under it that does not.
     let mut wanted = path.abs().clone();
@@ -992,6 +994,12 @@ fn missing(path: &ResolvedPath, env: &Env) -> ToolResult {
              there."
         ))
     } else {
+        // Names from the directory: each an escape, so that one cannot
+        // start lines of its own (found by the fixes of step 18's review).
+        let close: Vec<String> = close
+            .iter()
+            .map(|name| cortex_base::visible(name).into_owned())
+            .collect();
         ToolResult::error(format!(
             "{what} Close matches in `{directory}`: {}.",
             close.join(", ")

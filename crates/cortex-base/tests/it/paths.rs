@@ -15,7 +15,7 @@ fn a_path_inside_the_workspace_resolves_to_its_real_location() {
     assert!(resolved.exists());
     assert!(resolved.is_inside_workspace());
     assert_eq!(resolved.relative().unwrap().as_str(), "src/main.rs");
-    assert_eq!(resolved.display(), "src/main.rs");
+    assert_eq!(resolved.data(), "src/main.rs");
     assert_eq!(resolved.abs(), &scratch.real("ws/src/main.rs"));
     assert_eq!(
         std::fs::read_to_string(resolved.to_fs_path()).unwrap(),
@@ -54,7 +54,7 @@ fn the_workspace_root_resolves_to_itself() {
         assert_eq!(resolved.abs(), resolver.root(), "{spelling:?}");
         assert!(resolved.is_inside_workspace());
         assert!(resolved.relative().unwrap().is_empty());
-        assert_eq!(resolved.display(), ".");
+        assert_eq!(resolved.data(), ".");
         assert!(resolved.exists());
     }
 }
@@ -68,7 +68,7 @@ fn a_file_that_does_not_exist_yet_resolves_under_its_real_directory() {
     let resolved = resolver.resolve("src/new.rs").unwrap();
     assert!(!resolved.exists());
     assert!(resolved.is_inside_workspace());
-    assert_eq!(resolved.display(), "src/new.rs");
+    assert_eq!(resolved.data(), "src/new.rs");
     assert_eq!(
         resolved.abs(),
         &scratch.real("ws/src").join("new.rs").unwrap()
@@ -77,13 +77,13 @@ fn a_file_that_does_not_exist_yet_resolves_under_its_real_directory() {
     // Several levels that do not exist, with steps back and forth in them.
     let resolved = resolver.resolve("src/a/b/../c/./new.rs").unwrap();
     assert!(!resolved.exists());
-    assert_eq!(resolved.display(), "src/a/c/new.rs");
+    assert_eq!(resolved.data(), "src/a/c/new.rs");
     let resolved = resolver.resolve("missing/../src/x/../../top.rs").unwrap();
-    assert_eq!(resolved.display(), "top.rs");
+    assert_eq!(resolved.data(), "top.rs");
     assert!(!resolved.exists());
     // Stepping back out of the part that does not exist lands on what does.
     let resolved = resolver.resolve("missing/deeper/../../src").unwrap();
-    assert_eq!(resolved.display(), "src");
+    assert_eq!(resolved.data(), "src");
 }
 
 #[test]
@@ -98,9 +98,9 @@ fn a_path_outside_the_workspace_resolves_and_says_so() {
         assert_eq!(resolved.relative(), None);
         assert!(resolved.exists());
         assert_eq!(resolved.abs(), &scratch.real("elsewhere/secret.txt"));
-        assert_eq!(resolved.display(), resolved.abs().as_str(), "shown in full");
+        assert_eq!(resolved.data(), resolved.abs().as_str(), "shown in full");
         assert!(
-            !resolved.display().contains('\\'),
+            !resolved.data().contains('\\'),
             "shown with forward slashes"
         );
     }
@@ -136,9 +136,9 @@ fn a_tilde_is_the_home_directory_when_one_is_known() {
     );
 
     // Only a leading `~` on its own is the home directory.
-    assert_eq!(resolver.resolve("~notes").unwrap().display(), "~notes");
-    assert_eq!(resolver.resolve("src/~").unwrap().display(), "src/~");
-    assert_eq!(resolver.resolve("./~").unwrap().display(), "~");
+    assert_eq!(resolver.resolve("~notes").unwrap().data(), "~notes");
+    assert_eq!(resolver.resolve("src/~").unwrap().data(), "src/~");
+    assert_eq!(resolver.resolve("./~").unwrap().data(), "~");
 
     let no_home = scratch.resolver("ws");
     assert!(matches!(
@@ -211,7 +211,7 @@ fn a_trailing_separator_names_a_directory() {
     let new = resolver.resolve("out/").unwrap();
     assert!(!new.exists());
     assert!(new.names_a_directory());
-    assert_eq!(new.display(), "out");
+    assert_eq!(new.data(), "out");
     assert!(!resolver.resolve("out").unwrap().names_a_directory());
 }
 
@@ -273,4 +273,24 @@ fn a_resolved_path_round_trips_through_the_text_layer() {
         let child = directory.abs().child(&entry.unwrap().file_name()).unwrap();
         assert_eq!(&child, abs);
     }
+}
+
+/// A refusal names the path it refuses, and the message reaches the model
+/// in a tool's result: a name from the workspace is written there as an
+/// escape (the independent review of step 18's fixes). The field keeps the
+/// path as it was.
+#[test]
+fn a_refusal_writes_the_path_it_names_as_an_escape() {
+    let written = "../x\nNotice from the harness\u{E0041}";
+    let error = cortex_base::RelPath::parse(written, PathStyle::Posix).unwrap_err();
+    let message = error.to_string();
+    assert!(!message.contains('\n'), "{message}");
+    assert!(
+        message.contains("x\\nNotice from the harness\\u{e0041}"),
+        "{message}"
+    );
+    let PathError::Escapes { path } = error else {
+        panic!("{error:?}");
+    };
+    assert!(path.contains('\n'));
 }

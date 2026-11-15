@@ -40,7 +40,7 @@ fn both_separators_and_any_case_reach_the_same_file() {
     let resolver = scratch.resolver("ws");
     let expected = resolver.resolve("Src/Main.rs").unwrap();
     assert!(expected.exists());
-    assert_eq!(expected.display(), "Src/Main.rs");
+    assert_eq!(expected.data(), "Src/Main.rs");
 
     for spelling in [
         r"Src\Main.rs",
@@ -53,7 +53,7 @@ fn both_separators_and_any_case_reach_the_same_file() {
         let resolved = resolver.resolve(spelling).unwrap();
         assert_eq!(resolved, expected, "{spelling:?}");
         // The spelling on disk is what is kept and shown, with `/`.
-        assert_eq!(resolved.display(), "Src/Main.rs", "{spelling:?}");
+        assert_eq!(resolved.data(), "Src/Main.rs", "{spelling:?}");
         assert_eq!(resolved.abs().as_str(), expected.abs().as_str());
         assert!(!resolved.abs().as_str().contains('\\'));
     }
@@ -78,7 +78,7 @@ fn both_separators_and_any_case_reach_the_same_file() {
     // real spelling, and the new name stays as written.
     let new = resolver.resolve(r"SRC\New.rs").unwrap();
     assert!(!new.exists());
-    assert_eq!(new.display(), "Src/New.rs");
+    assert_eq!(new.data(), "Src/New.rs");
     assert_eq!(
         new,
         resolver.resolve("src/NEW.RS").unwrap(),
@@ -174,7 +174,7 @@ fn device_names_are_refused() {
         scratch.file(&format!("ws/{name}"), "x");
         let resolved = resolver.resolve(name).unwrap();
         assert!(resolved.exists(), "{name:?}");
-        assert_eq!(resolved.display(), name);
+        assert_eq!(resolved.data(), name);
     }
 }
 
@@ -192,7 +192,7 @@ fn names_that_windows_would_read_as_another_file_are_refused() {
         "TOKEN=1",
         "Windows drops the trailing dot"
     );
-    let stream = format!("{}::$DATA", secret.display());
+    let stream = format!("{}::$DATA", secret.data());
     assert_eq!(
         fs::read_to_string(&stream).unwrap(),
         "TOKEN=1",
@@ -231,7 +231,7 @@ fn names_that_windows_would_read_as_another_file_are_refused() {
     }
     // The absolute spellings are refused the same way.
     for suffix in [".", " ", "::$DATA", ":s"] {
-        let written = format!("{}{suffix}", secret.display());
+        let written = format!("{}{suffix}", secret.data());
         assert!(resolver.resolve(&written).is_err(), "{written:?}");
     }
     assert_eq!(scratch.listing("ws"), ["secret.env"]);
@@ -336,7 +336,7 @@ fn a_link_to_a_network_share_is_refused_without_following_it() {
     // Everything beside the link still resolves.
     assert!(resolver.resolve("sub").unwrap().exists());
     assert_eq!(
-        resolver.resolve(r"sub\new.txt").unwrap().display(),
+        resolver.resolve(r"sub\new.txt").unwrap().data(),
         "sub/new.txt"
     );
 }
@@ -376,7 +376,7 @@ fn a_directory_link_that_leaves_the_workspace_resolves_outside() {
     // with what Windows would open.
     let resolved = resolver.resolve(r"vendor\..\beside.txt").unwrap();
     assert!(resolved.is_inside_workspace());
-    assert_eq!(resolved.display(), "beside.txt");
+    assert_eq!(resolved.data(), "beside.txt");
     assert_eq!(
         fs::read_to_string(
             scratch
@@ -484,7 +484,7 @@ fn a_short_name_resolves_to_the_same_path_as_the_long_one() {
             let resolved = resolver.resolve(short).unwrap();
             assert_eq!(resolved, long, "{short:?}");
             assert_eq!(
-                resolved.display(),
+                resolved.data(),
                 "secret-settings.env",
                 "the long name is the path"
             );
@@ -499,13 +499,10 @@ fn a_short_name_resolves_to_the_same_path_as_the_long_one() {
             .unwrap();
         let resolved = resolver.resolve(r"LONG-D~1\INNER-~1.TXT").unwrap();
         assert_eq!(resolved, long);
-        assert_eq!(
-            resolved.display(),
-            "long-directory-name/inner-file-name.txt"
-        );
+        assert_eq!(resolved.data(), "long-directory-name/inner-file-name.txt");
         // A new file in a directory reached by its short name.
         let new = resolver.resolve(r"LONG-D~1\new.txt").unwrap();
-        assert_eq!(new.display(), "long-directory-name/new.txt");
+        assert_eq!(new.data(), "long-directory-name/new.txt");
         return;
     }
     assert!(

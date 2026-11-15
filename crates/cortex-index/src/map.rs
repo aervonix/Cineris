@@ -42,9 +42,11 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
+use cortex_base::visible;
+
 use crate::cache::{CacheFile, Record, Shown};
 use crate::language::Language;
-use crate::outline::{Kind, visible};
+use crate::outline::Kind;
 use crate::walk::Partial;
 
 /// The map's default budget, in tokens.

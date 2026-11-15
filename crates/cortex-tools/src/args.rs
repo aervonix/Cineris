@@ -41,10 +41,12 @@ pub(crate) fn unfinished(error: BlockingError, tool: &str) -> ToolResult {
 }
 
 /// A real location as it is shown to the model: relative to the workspace
-/// when inside it, absolute otherwise.
+/// when inside it, absolute otherwise, with every character that would
+/// act unseen written as an escape (`cortex_base::visible`).
 pub(crate) fn shown(paths: &PathResolver, path: &AbsPath) -> String {
-    match path.strip_prefix(paths.root()) {
+    let text = match path.strip_prefix(paths.root()) {
         Some(relative) => relative.to_string(),
         None => path.to_string(),
-    }
+    };
+    cortex_base::visible(&text).into_owned()
 }

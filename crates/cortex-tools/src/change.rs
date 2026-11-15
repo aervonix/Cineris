@@ -97,8 +97,10 @@ impl Env {
 /// The file a call changes.
 pub(crate) struct Target {
     pub(crate) path: ResolvedPath,
-    /// The path as the model is shown it.
+    /// The path as the model is shown it, escaped (`ResolvedPath::shown`).
     pub(crate) shown: String,
+    /// The path as data, for the result's payload.
+    pub(crate) data: String,
     pub(crate) fs_path: PathBuf,
 }
 
@@ -148,7 +150,8 @@ impl Target {
     /// call was planned (step 1).
     pub(crate) fn new(path: &ResolvedPath, paths: &PathResolver) -> Result<Self, ToolResult> {
         let target = Self {
-            shown: path.display(),
+            shown: path.shown(),
+            data: path.data(),
             fs_path: path.to_fs_path(),
             path: path.clone(),
         };

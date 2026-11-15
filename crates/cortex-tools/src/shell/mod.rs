@@ -351,7 +351,7 @@ impl Tool for ShellTool {
             return Err(ToolError::invalid(format!(
                 "`cwd` is not a directory: {}. Give a directory that exists, or leave `cwd` \
                  out to run in the workspace root.",
-                cwd.display()
+                cwd.shown()
             )));
         }
         let timeout = arguments
@@ -362,7 +362,7 @@ impl Tool for ShellTool {
         let confined = arguments.sandbox != Some(false);
         let mut summary = format!("Run `{}`", summary_of(&arguments.command));
         if cwd != workspace {
-            summary.push_str(&format!(" in {}", cwd.display()));
+            summary.push_str(&format!(" in {}", cwd.shown()));
         }
         if !confined {
             summary.push_str(" outside the sandbox");

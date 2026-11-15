@@ -285,7 +285,7 @@ fn check_of(argument: CheckArgument, cx: &PlanCx) -> Result<EntryCheck, ToolErro
                 None => Err(ToolError::invalid(format!(
                     "The check's path `{}` is outside the workspace. A check reads the \
                      project's own files.",
-                    resolved.display()
+                    resolved.shown()
                 ))),
             }
         })

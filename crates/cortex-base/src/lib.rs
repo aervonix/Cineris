@@ -11,6 +11,7 @@
 //! | [`cancel`] | [`CancelToken`], the tree of cancellation tokens. |
 //! | [`path`] | [`AbsPath`], [`RelPath`] and [`PathResolver`]: paths read, checked and resolved by one set of rules, with the Windows rules. |
 //! | [`text`] | Width in terminal columns, wrapping and truncation, by grapheme cluster. |
+//! | [`visible`](mod@visible) | [`visible()`]: text from the workspace as the model and a client are shown it, every character that would act unseen (a line break, a bidirectional control, a tag character) written as an escape. |
 //! | [`atomic`] | [`write_atomic`]: replace a file's content in one step. |
 //! | [`nofollow`] | [`open_regular`]: open a regular file without following a link and without waiting on a FIFO. |
 //! | [`hash`] | [`ContentHash`]: the hash a piece of content is known by. |
@@ -64,6 +65,7 @@ pub mod secret;
 pub mod text;
 pub mod time;
 pub mod timer;
+pub mod visible;
 pub mod watch;
 pub mod zone;
 
@@ -89,5 +91,6 @@ pub use rng::{Rng, SeededRng, SystemRng};
 pub use secret::Secret;
 pub use time::{TimeError, UtcTime};
 pub use timer::{SharedTimer, Sleep, Timer};
+pub use visible::{acts_unseen, visible, visible_keeping};
 pub use watch::{FileStamp, TimedStamp, WatchList};
 pub use zone::{LocalDate, Zone};
