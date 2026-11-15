@@ -410,18 +410,25 @@ impl Session {
             // `\n` as two characters is the key as it is, which is tried
             // first, on the blocking pool, since the loop looks at no file.
             let unescaped = cortex_base::unescape(shown);
-            if let Ok(path) = root.join(&unescaped) {
-                as_written.push(match unescaped {
-                    std::borrow::Cow::Owned(_) => root.join(shown).ok(),
-                    std::borrow::Cow::Borrowed(_) => None,
-                });
-                checked.push(Place {
-                    dir: path.parent().unwrap_or_else(|| root.clone()),
-                    path,
-                    shown: shown.clone(),
-                    user: false,
-                });
-            }
+            let read_back = root.join(&unescaped);
+            let written = match unescaped {
+                std::borrow::Cow::Owned(_) => root.join(shown).ok(),
+                std::borrow::Cow::Borrowed(_) => None,
+            };
+            // Read back it may not join (`\u{0}` as six characters): then
+            // only as written.
+            let (path, written) = match (read_back, written) {
+                (Ok(path), written) => (path, written),
+                (Err(_), Some(written)) => (written, None),
+                (Err(_), None) => continue,
+            };
+            as_written.push(written);
+            checked.push(Place {
+                dir: path.parent().unwrap_or_else(|| root.clone()),
+                path,
+                shown: shown.clone(),
+                user: false,
+            });
         }
         let io = Arc::clone(&parts.instructions);
         let cap = parts.settings.instructions_cap;

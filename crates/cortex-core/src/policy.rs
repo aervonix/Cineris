@@ -172,12 +172,13 @@ impl EnginePolicy {
             .clone()
     }
 
-    /// What the base state, the instruction files and the repository index
-    /// may keep and name: what the read rules of the engine in force would
-    /// let the agent read unasked. The engine is asked for each path, not
-    /// taken once: a change of level replaces it, and what is approved or
-    /// refused after that is the new one's (the independent review of step
-    /// 18 found the index left on the engine of the session's assembly).
+    /// What the base state and the instruction files may keep and name:
+    /// what the read rules of the engine in force would let the agent read
+    /// unasked. The engine is asked for each path, not taken once: a change
+    /// of level replaces it, and what is approved or refused after that is
+    /// the new one's (the independent review of step 18 found the index,
+    /// which [`EnginePolicy::index_gate`] serves now, left on the engine of
+    /// the session's assembly).
     pub(crate) fn keep_gate(self: &Arc<Self>) -> Arc<dyn KeepGate> {
         let policy = Arc::downgrade(self);
         Arc::new(move |path: &AbsPath| {
@@ -196,8 +197,10 @@ impl EnginePolicy {
     /// after a change of level is still the next pass's and the next
     /// map's.
     pub(crate) fn index_gate(self: &Arc<Self>) -> Arc<dyn cortex_index::Gate> {
-        Arc::new(IndexGate {
-            policy: Arc::downgrade(self),
+        let policy = Arc::downgrade(self);
+        Arc::new(InForce {
+            now: Box::new(move || policy.upgrade().map(|policy| policy.engine())),
+            ask: Engine::may_store,
         })
     }
 
@@ -513,22 +516,79 @@ impl ReadGate for EngineGate {
     }
 }
 
-/// [`EnginePolicy::index_gate`].
-struct IndexGate {
-    policy: std::sync::Weak<EnginePolicy>,
+/// [`EnginePolicy::index_gate`]: a gate that asks what is in force now
+/// (`now`, the engine in force; nothing once the session is gone) for each
+/// path, and that a pass or a map takes once at its start.
+struct InForce<T> {
+    now: Box<dyn Fn() -> Option<Arc<T>> + Send + Sync>,
+    ask: fn(&T, &AbsPath) -> bool,
 }
 
-impl cortex_index::Gate for IndexGate {
+impl<T: Send + Sync + 'static> cortex_index::Gate for InForce<T> {
     fn may_index(&self, path: &AbsPath) -> bool {
-        self.policy
-            .upgrade()
-            .is_some_and(|policy| policy.engine().may_store(path))
+        (self.now)().is_some_and(|in_force| (self.ask)(&in_force, path))
     }
 
     fn for_pass(&self) -> Option<Arc<dyn cortex_index::Gate>> {
-        let engine = self.policy.upgrade().map(|policy| policy.engine());
+        let taken = (self.now)();
+        let ask = self.ask;
         Some(Arc::new(move |path: &AbsPath| {
-            engine.as_ref().is_some_and(|engine| engine.may_store(path))
+            taken.as_deref().is_some_and(|in_force| ask(in_force, path))
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use cortex_base::PathStyle;
+    use cortex_index::Gate;
+
+    use super::*;
+
+    /// The index's gate takes what is in force once for a pass, which then
+    /// answers by it alone, and the next pass by what replaced it (the
+    /// independent review of step 18's fixes: taking the engine for each
+    /// path cost 0.55 µs a path under four threads).
+    #[test]
+    fn the_index_gate_takes_what_is_in_force_once_a_pass() {
+        let in_force = Arc::new(RwLock::new(Arc::new("first".to_owned())));
+        let taken = Arc::new(AtomicUsize::new(0));
+        let gate = InForce {
+            now: {
+                let (in_force, taken) = (Arc::clone(&in_force), Arc::clone(&taken));
+                Box::new(move || {
+                    taken.fetch_add(1, Ordering::SeqCst);
+                    Some(Arc::clone(
+                        &in_force.read().unwrap_or_else(PoisonError::into_inner),
+                    ))
+                })
+            },
+            ask: |rules: &String, path: &AbsPath| path.as_str().contains(rules.as_str()),
+        };
+        let path = |text: &str| AbsPath::parse(text, PathStyle::Posix).expect("a path");
+        let (first, second) = (path("/ws/first.rs"), path("/ws/second.rs"));
+
+        let pass = gate.for_pass().expect("a pass takes the gate once");
+        assert_eq!(taken.load(Ordering::SeqCst), 1);
+        for _ in 0..10 {
+            assert!(pass.may_index(&first));
+            assert!(!pass.may_index(&second));
+        }
+        assert_eq!(taken.load(Ordering::SeqCst), 1, "asked again for a path");
+
+        *in_force.write().unwrap_or_else(PoisonError::into_inner) = Arc::new("second".to_owned());
+        assert!(pass.may_index(&first), "a pass answers by what it took");
+        let next = gate.for_pass().expect("a pass takes the gate once");
+        assert!(next.may_index(&second) && !next.may_index(&first));
+        assert!(gate.may_index(&second) && !gate.may_index(&first));
+
+        let gone = InForce::<String> {
+            now: Box::new(|| None),
+            ask: |_, _| true,
+        };
+        assert!(!gone.may_index(&first));
+        assert!(!gone.for_pass().expect("a gate").may_index(&first));
     }
 }

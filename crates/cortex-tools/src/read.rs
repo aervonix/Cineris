@@ -1002,10 +1002,15 @@ fn missing(path: &ResolvedPath, env: &Env) -> ToolResult {
 }
 
 /// The names in `directory` closest to `wanted`, best first, at most five.
+/// Both are compared as the model is shown them, escaped: a name asked for
+/// as it is, with a character that acts unseen, is close to its file's too
+/// (on Windows a line separator's escape is eight characters long).
 fn close_matches(directory: &AbsPath, wanted: &str) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(directory.to_fs_path()) else {
         return Vec::new();
     };
+    let wanted = cortex_base::visible(wanted);
+    let wanted = wanted.as_ref();
     let wanted_lower = wanted.to_lowercase();
     let wanted_stem = stem(&wanted_lower);
     let allowed = (wanted.chars().count() / 3).max(2);

@@ -1348,7 +1348,8 @@ pub(crate) fn assemble(
     // ------------------------------------------------ the repository index
     // Made here, touching no file: its first pass starts once the loop runs
     // (`Core::open`). What it indexes is held to what the agent could read
-    // unasked, by the same gate as the base state.
+    // unasked, as the base state is, by a gate that a pass and a map take
+    // once (`EnginePolicy::index_gate`).
     let repo = match &index_dir {
         Some(dir) if options.repo_index => {
             let index_settings = &settings.index;

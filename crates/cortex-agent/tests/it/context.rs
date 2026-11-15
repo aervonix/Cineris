@@ -440,6 +440,47 @@ fn a_nested_instruction_file_under_a_name_with_a_backslash_is_not_told_removed()
     );
 }
 
+/// A nested instruction file under a name that holds `\u{0}` as six
+/// characters, which read back is a name no path may hold, is still
+/// followed by its name as it is: a change to it is told (the second
+/// review of step 18's fixes found it dropped from the check). On Unix
+/// only: on Windows `\` parts a path.
+#[cfg(unix)]
+#[test]
+fn a_nested_instruction_file_whose_name_does_not_read_back_is_still_followed() {
+    let world = World::new(
+        "instructions_nested_no_read_back",
+        [
+            calls(&[(
+                "c1",
+                "read",
+                json!({"path": "src/c\\u{0}d/handler.rs", "record": true}),
+            )]),
+            says("Done."),
+            says("Again."),
+        ],
+    );
+    let rig = Setup::new(&world).start(&world);
+    let file = root_file(&rig, "src/c\\u{0}d/AGENTS.md");
+    rig.instructions.set(&file, "One.");
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    rig.instructions.set(&file, "Two.");
+    world.run(async {
+        rig.prompt("again");
+        rig.events.turns(2).await;
+    });
+    let notices = notice_texts(&rig);
+    assert_eq!(notices.len(), 2, "{notices:#?}");
+    assert!(
+        notices[1].starts_with("Instruction file `src/c\\u{0}d/AGENTS.md` changed."),
+        "{}",
+        notices[1]
+    );
+}
+
 /// A nested instruction file that is there and is not read (the core's
 /// reader refuses a link out of the workspace) is warned of by its name,
 /// once: its directory is looked at once. The review of step 15 found it
