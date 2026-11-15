@@ -184,6 +184,7 @@ A session's state is in several crates, and each part has to follow the history 
 | **The ids the loop makes** (turns, items) | `cortex-agent` | Item ids go on after the highest the log holds, the store's repairs included | After `Log::last_ids` | The same as a resume | Unchanged |
 | **Whether the conversation has history** (`SessionHandle::has_history`, for the warning that a change of model re-sends it uncached) | `cortex-agent`'s inbox | Set from the branch read again | Set from the log, before any request of this process | The same as a resume | Still history: the summary is sent |
 | **Usage** (`SessionUsage`) | `cortex-agent`, this process's requests | Unchanged | Starts at none | Starts at none | Unchanged. The summary's own request takes a request of the ledger before it is sent, and is a `usage` record (`purpose: compaction`), counted in the session's and the turn's usage and against the ledger, at the role it ran on. One given up, after its request finished or while it ran, is counted at the next safe boundary, and one still running when the loop ends is counted then (since step 16, [steps/16/answered.md](../steps/16/answered.md)) |
+| **The repository map** (a `notice` of source `map` in the epoch's history; the outlines in `cortex-index`'s cache) | The loop's `Context`, whose history marks the map's notice, and the map source the core fills from the session's index (step 18) | Read again from the branch: an epoch whose branch holds its map keeps it; one rewound to before it is given one at its next chance | From the branch, at open: the epoch keeps the map its history holds, and none is built or compared, so the prefix is what it was | The same as a resume | **A new epoch, a fresh map:** the summary's replay leaves the old epoch's map out, live (`History::extend_projected`) and read again (`Context::load`), and the new epoch is given its own at its first chance. A change of model keeps the map, as it keeps the history |
 
 
 ## Snapshots and undo
@@ -221,7 +222,7 @@ In order, for one request in an epoch:
 2. **Tool definitions** (frozen for the epoch), in sorted order.
 3. **History** for the epoch: the summary if there is one, then every `user`, `assistant`, `tool_result` and `notice` entry on the active branch, unchanged.
 
-The first user message of an epoch also carries what is useful but not stable enough for the system prompt: the current date, and the repository map ([15-efficiency.md](15-efficiency.md)) when it is ready. If the map is not ready in time it follows as an appended notice.
+The first user message of an epoch also carries what is useful but not stable enough for the system prompt: the current date. The repository map ([15-efficiency.md](15-efficiency.md)) is a notice of its own (since step 18): just before the epoch's first user message when it is ready in time, and appended at a later safe boundary when it is not. It is made from the repository's own names, so it carries the harness's authority and not the user's ([decision 0034](../decisions/0034-notices-in-the-users-role.md)).
 
 **As built in step 15** (`cortex_agent::context::prompt`):
 
@@ -229,6 +230,11 @@ The first user message of an epoch also carries what is useful but not stable en
 - **The tools** are the toolbox's, sorted by name, which is the order `cortex-llm`'s strict reduction counts them in.
 - **The date** is a text part before what the user wrote, in the epoch's first user message, taken from that message's own `created_at`: so the message is the same bytes whenever it is built, a resume's included, and the stored item is not changed. An epoch that begins with a summary has the date in the summary.
 - **A notice is a message in the user's role, and says it is the harness's** ([decision 0034](../decisions/0034-notices-in-the-users-role.md)): its text, and a summary's, is sent after the lead-in `Notice from the harness (Cortex-Harness), not from the user.`, which the core instructions explain. The lead-in is added when the message is built; the log keeps the notice's own text.
+
+**As built in step 18** (`cortex_agent::context::map`, the loop's `turn::map`):
+
+- **The map is a `notice` item of source `map`,** given once an epoch: at a turn's start before its prompt, or at a safe boundary before a request. The epoch's first chance waits up to `index.map_wait` for it (150 ms in the interactive app, none headless); every later one takes it only if it is ready. The history marks the map's notice, and an epoch whose history holds one is given no other.
+- **After a summary** the turns it did not cover are replayed without the old epoch's map notice, live (`History::extend_projected`) and when the log is read again (`Context::load`), so the two are the same; the new epoch is given a fresh map. `context::tests::an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again` and `cortex-agent`'s `map::a_compaction_gives_a_fresh_map_and_a_resume_keeps_it_as_the_history_was_sent` hold it.
 
 ## Project instruction files
 

@@ -24,6 +24,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [an-instruction-file-left-out-for-the-cap](an-instruction-file-left-out-for-the-cap.md): An instruction file left out of the prompt for `context.instructions_cap` is still listed in the epoch as given. Owner: a later step on instruction files, with the owner for the format.
 - [session-compact-after-a-turns-last-request](session-compact-after-a-turns-last-request.md): `session/compact` during a turn's last request waits for the next turn instead of running a compaction-only turn. Owner: step 23 or step 27.
 - [stopping-at-a-task-lease-edge](stopping-at-a-task-lease-edge.md): At a task lease's edge the loop should stop and report, then fall back to the standing lease. Owner: step 37.
+- [the-maps-share-of-the-context-record](the-maps-share-of-the-context-record.md): The repository map is counted among the notices in the context record, so the profiler cannot say what it costs. Owner: step 44, or step 16.
 - [the-token-counting-endpoint-near-the-limit](the-token-counting-endpoint-near-the-limit.md): The provider's token-counting endpoint is never asked near the limit; needs a `Protocol` method and loop call. Owner: a later step that touches the budget, or step 33.
 
 ### cortex-base
@@ -55,6 +56,8 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [log-level-from-configuration-in-headless-mode](log-level-from-configuration-in-headless-mode.md): A headless run starts the log before configuration is read, so `log.level` is ignored. Owner: step 23 or step 27.
 - [secret-filter-on-what-clients-are-sent](secret-filter-on-what-clients-are-sent.md): Events, approval requests and in-progress items sent to clients skip the secret filter applied to disk writes. Owner: the owner; before step 27.
 - [shutdown-and-a-session-being-put-together](shutdown-and-a-session-being-put-together.md): `Core::shutdown` returns before a session still being put together has ended itself. Owner: step 27.
+- [the-maps-files-of-recent-sessions](the-maps-files-of-recent-sessions.md): The map's ranking by the files of recent sessions has its seam (`RecentFiles`) and no source until the statistics record files. Owner: step 16, or the step after it and step 18.
+- [what-start-up-opens-traced](what-start-up-opens-traced.md): The blocking check that start-up opens no file outside an allow-list does not exist; the index's part is checked with a held gate. Owner: the next start-up step, or step 33.
 - [the-shell-version-after-a-shell-update](the-shell-version-after-a-shell-update.md): The first session after a shell is installed or updated has no shell version in its prompt, so the next resume is a `resume` epoch. Owner: step 33.
 
 ### cortex-llm
@@ -62,6 +65,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-price-that-depends-on-the-time-of-day](a-price-that-depends-on-the-time-of-day.md): The catalog's single rate card records DeepSeek's off-peak requests at the peak price, an upper bound. Owner: the owner, with step 16.
 - [account-in-the-replay-rule](account-in-the-replay-rule.md): Whether a request carries its account, so a provider tying reasoning to an account never gets another's. Owner: the first step that adds such a provider, or step 53.
 - [fuzz-targets-for-later-decoders](fuzz-targets-for-later-decoders.md): Each later provider protocol's decoder needs a fuzz target in `fuzz/` and a line in `xtask/src/outside.rs`. Owner: steps 31, 35 and 36.
+- [the-toolbox-fixtures-without-outline](the-toolbox-fixtures-without-outline.md): The toolbox fixtures were recorded before the `outline` tool; re-recording them is a paid call. Owner: the owner, or the next step that records.
 - [the-prefix-check-and-image-references](the-prefix-check-and-image-references.md): The debug prefix check skips requests holding a stored image reference; a protocol should write a placeholder. Owner: step 33, or the step that next touches images.
 
 ### cortex-policy

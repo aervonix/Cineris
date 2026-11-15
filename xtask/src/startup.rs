@@ -19,6 +19,12 @@
 //! the run with `--no-session`, with a shell that starts fast, and with
 //! both.
 //!
+//! `--workspace DIR` runs the headless rows in `DIR` in place of an empty
+//! directory, so that what a session starts in the background (the
+//! repository index's first pass, since step 18) runs beside them on a
+//! real tree. The index's cache is in the temporary state directory, so
+//! the first run indexes cold and the rest warm.
+//!
 //! Each is run `--runs` times (30 by default); the median and the 95th
 //! percentile are printed against the budget of the column `--budget`
 //! names, and added to the job's summary in CI. With `--check` a median
@@ -54,6 +60,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let mut column = if cfg!(windows) { "windows" } else { "linux" }.to_owned();
     let mut check = false;
     let mut profile = None;
+    let mut tree: Option<PathBuf> = None;
     let mut rest = arguments.iter();
     while let Some(argument) = rest.next() {
         match argument.as_str() {
@@ -66,6 +73,11 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             }
             "--budget" => column = rest.next().ok_or("`--budget` takes a column")?.clone(),
             "--check" => check = true,
+            "--workspace" => {
+                tree = Some(PathBuf::from(
+                    rest.next().ok_or("`--workspace` takes a directory")?,
+                ));
+            }
             "--profile" => {
                 profile = Some(
                     rest.next()
@@ -78,7 +90,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         }
     }
     const USAGE: &str = "usage: cargo xtask startup BINARY|--profile PROFILE [--runs N] \
-                         [--budget desktop|linux|windows] [--check]";
+                         [--budget desktop|linux|windows] [--check] [--workspace DIR]";
     let binary = match (binary, profile) {
         (Some(binary), None) => binary,
         (None, Some(profile)) => build(&profile)?,
@@ -96,7 +108,10 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let scratch = std::env::temp_dir().join(format!("cortex-startup-{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     fs::create_dir_all(&scratch).map_err(|error| format!("{}: {error}", scratch.display()))?;
-    let outcome = measure(&binary, &scratch, runs);
+    let tree = tree
+        .map(|tree| fs::canonicalize(&tree).map_err(|error| format!("{}: {error}", tree.display())))
+        .transpose()?;
+    let outcome = measure(&binary, &scratch, runs, tree.as_deref());
     let _ = fs::remove_dir_all(&scratch);
     let rows = outcome?;
 
@@ -167,7 +182,12 @@ fn profile_directory(profile: &str) -> &str {
     }
 }
 
-fn measure(binary: &Path, scratch: &Path, runs: usize) -> Result<Vec<(String, Vec<f64>)>> {
+fn measure(
+    binary: &Path,
+    scratch: &Path,
+    runs: usize,
+    tree: Option<&Path>,
+) -> Result<Vec<(String, Vec<f64>)>> {
     let alias_dir = scratch.join("bin");
     fs::create_dir_all(&alias_dir).map_err(|error| error.to_string())?;
     let alias = alias_dir.join(format!("cx{}", std::env::consts::EXE_SUFFIX));
@@ -175,8 +195,14 @@ fn measure(binary: &Path, scratch: &Path, runs: usize) -> Result<Vec<(String, Ve
         fs::copy(binary, &alias).map_err(|error| format!("could not make `cx`: {error}"))?;
     }
     let home = scratch.join("home");
-    let workspace = scratch.join("work");
-    fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
+    let workspace = match tree {
+        Some(tree) => tree.to_path_buf(),
+        None => {
+            let workspace = scratch.join("work");
+            fs::create_dir_all(&workspace).map_err(|error| error.to_string())?;
+            workspace
+        }
+    };
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| error.to_string())?;
     let port = listener
         .local_addr()

@@ -35,6 +35,7 @@ Anthropic now documents a system message inside the conversation for its current
 
 - **Every notice says plainly that it comes from the harness.** Its text begins with one fixed lead-in, `Notice from the harness (Cortex-Harness), not from the user.` and a blank line (`cortex_agent::NOTICE_LEAD`), and so does a compaction's summary. The core instructions tell the model what such a message is. The lead-in is part of the cached prefix and never changes; the prefix tests cover it.
 - **The lead-in is added when the message is built, not stored.** The log keeps the notice's own text and its source (`notice` items), never a role: the role is chosen in one place, when the context folds an item into the conversation (`cortex_agent::context::append`). So a later change of mind needs no migration of the log.
+- **The repository map is a notice too** (`NoticeSource::Map`, since step 18), and not a part of the epoch's first user message, which an earlier draft of the context page had it as. It is text the harness made from the repository's own file names and definitions, which a repository can word as it likes: in a notice it says it is the harness's.
 - **What instruction-file text carries.** Text from an instruction file sent as a notice (a changed file, a nested file) has the authority of a user message. That is the same as the system prompt's project section, which holds the same text at the start of an epoch: both are text the model reads, and neither grants anything ([../security.md](../security.md), section 2).
 
 ## Revisit when
