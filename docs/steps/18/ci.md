@@ -68,3 +68,33 @@ The PR's run is 43706681538, at `8656056`.
 | Tier 3, system (60 s on Linux, 90 s on Windows) | 11.2 s | 15.4 s | 92.6 s | 86.6 s |
 
 <!-- end of what cargo xtask ci-times wrote -->
+
+## After the independent review: the fixes' pull request (#56)
+
+Measured on 2026-11-15, against the main branch's run at `d6a1a14`, which the branch was rebased on.
+
+| Job | Main, `d6a1a14` (run 43723529265) | The PR at `620e0c1` (run 43730540914) |
+|---|---|---|
+| `lint-linux` | 50 s | 52 s |
+| `test-linux` | 83 s | 102 s |
+| `lint-windows` | 83 s | 58 s |
+| `test-windows` | 213 s | 149 s |
+
+| Time above process start, against the budget | Linux, main (3 ms) | Linux, `620e0c1` (4 ms) | Windows, main (10 ms) | Windows, `620e0c1` (6 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 6.7 s | 10.0 s | 17.1 s | 10.8 s |
+| Tier 2, integration (40 s) | 11.5 s | 18.1 s | 35.3 s | 23.4 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 10.3 s | 16.0 s | 61.0 s | 45.5 s |
+
+- **The runners differ more than the trees.** The PR's Linux runner was the slower kind (4 ms a process start against 3 ms), its Windows runner the faster (6 ms against 10 ms). At an earlier commit, on Linux runners of one speed (3 ms each), the PR's tier 1 was 1.5 s and its tier 2 0.9 s above main's, by `cargo xtask ci --tiers --compare` against main's run.
+- **Both trees on one Windows runner** (`try` with `-f against=main`, run 43730534505, the median of 5 runs each, at 11.0 ms a process start):
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 17.8 s (1,768 tests) | 17.4 s (1,728) | +0.4 s | 20 s |
+| 2, integration | 40.0 s (1,227 tests) | 39.0 s (1,202) | +1.0 s | 40 s |
+| 3, system | 63.4 s (134 tests) | 63.6 s (134) | −0.2 s | 90 s |
+
+  The fixes cost 0.4 s of tier 1 for 40 more unit tests, and 1.0 s of tier 2 for 25 more integration tests: the four tests of an extractor's memory on 1 MiB inputs, about 0.1 s each, are most of it. An earlier A/B at `01bbea3` (run 43728878359) gave +1.6 s for tier 1: the two tests of the escape's tables walked all 1.1 million code points, and the two tests of the prefix chains outlined lines of a megabyte. They are now checked at the tables' edges and on 32 to 64 KiB, and their breaks are still caught.
+- **Raised (rule 11): Windows' tier 2 on the slower runners.** On a runner at 11 ms a process start, main's own tier 2 is 39.0 s against its budget of 40 s, and the PR's 40.0 s: at the budget, where CI warns, and well short of 60 s, where it fails. On the faster runners it is 23 to 35 s. The fixes' share is the 1.0 s above. **Recommendation:** leave the fixes' tests where they are, and have the step that next adds integration tests on Windows, or the tooling's next step, find what takes main's tier 2 to 39 s on those runners; the slowest of it is not this step's.
+- **The Windows `try` runs** before the PR: `test -p cortex-index -p cortex-tools -p cortex-core -p cortex-base -p cortex-agent` (run 43725766901), 1,252 tests, all passed, after a first run (43724308740) that found three tests failing on Windows only: the resolver's and a glob's reading back of escapes, and `read`'s close matches, each fixed; and `perf -p cortex-index` (run 43724310745), which measured the tree of real code on the runner ([performance-budgets.md](../../performance-budgets.md), "Data paths").
