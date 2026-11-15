@@ -260,8 +260,8 @@ Answer|
 {fg=a8}DiffContext|
 {fg=a5}SyntaxKeyword|
 {fg=a6}SyntaxType|
-{fg=a2 b}SyntaxString|
-{fg=a3 b}SyntaxNumber|
+{fg=a2}SyntaxString|
+{fg=a3}SyntaxNumber|
 {fg=a8}SyntaxComment|
 
 == 80 columns, unicode, 16 colours, dark
@@ -327,8 +327,8 @@ Answer|
 {fg=a8}Hint|
 {fg=a5 b}Key|
 {fg=a5 b}Selected|
-{fg=a2 b}DiffAddLine|
-{fg=a1 b}DiffDelLine|
+{fg=a2}DiffAddLine|
+{fg=a1}DiffDelLine|
 {fg=a2 b}DiffAddSign|
 {fg=a1 b}DiffDelSign|
 {fg=a8}DiffAddNumber|
@@ -336,8 +336,8 @@ Answer|
 {fg=a8}DiffContext|
 {fg=a5}SyntaxKeyword|
 {fg=a6}SyntaxType|
-{fg=a2 b}SyntaxString|
-{fg=a3 b}SyntaxNumber|
+{fg=a2}SyntaxString|
+{fg=a3}SyntaxNumber|
 {fg=a8}SyntaxComment|
 
 == 80 columns, unicode, 256 colours, dark

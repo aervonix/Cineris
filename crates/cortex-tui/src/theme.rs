@@ -307,7 +307,9 @@ impl Palette {
             code: Color::Ansi(6),
             code_bold: true,
             warm_bold: true,
-            warm_bold_code_and_lines: true,
+            // The owner kept highlighted code and whole changed lines at
+            // their weight (2026-11-15): status text only goes bold.
+            warm_bold_code_and_lines: false,
             success: Color::Ansi(2),
             warning: Color::Ansi(3),
             error: Color::Ansi(1),

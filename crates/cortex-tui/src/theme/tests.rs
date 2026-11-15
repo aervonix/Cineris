@@ -418,8 +418,6 @@ fn on_a_light_background_red_green_and_yellow_text_is_bold() {
             (Token::DiffDel, 1),
             (Token::DiffAddSign, 2),
             (Token::DiffDelSign, 1),
-            (Token::SyntaxString, 2),
-            (Token::SyntaxNumber, 3),
         ] {
             let style = light.style(token);
             assert_eq!(style.fg, Color::Ansi(colour), "{token:?} at {depth:?}");
@@ -427,12 +425,39 @@ fn on_a_light_background_red_green_and_yellow_text_is_bold() {
         }
         // Where there is no tint, a changed line is drawn in its colour,
         // bold; with one, it is the tint behind the default colour.
+        // Highlighted code and a whole changed line keep their weight, by
+        // the owner's choice: where there is no tint, a changed line is
+        // drawn in its colour, not bold; with one, it is the tint behind
+        // the default colour.
         let line = light.style(Token::DiffAddLine);
         if depth == ColorDepth::TrueColor {
             assert_eq!((line.fg, line.bold), (Color::Default, false));
         } else {
-            assert_eq!((line.fg, line.bold), (Color::Ansi(2), true), "{depth:?}");
+            assert_eq!((line.fg, line.bold), (Color::Ansi(2), false), "{depth:?}");
         }
+        for (token, colour) in [(Token::SyntaxString, 2), (Token::SyntaxNumber, 3)] {
+            let style = light.style(token);
+            assert_eq!(
+                (style.fg, style.bold),
+                (Color::Ansi(colour), false),
+                "{token:?}"
+            );
+        }
+        // The flag that would reach them does, when a palette sets it.
+        let wide = Theme::with_palette(
+            &Palette {
+                warm_bold_code_and_lines: true,
+                ..Palette::light()
+            },
+            depth,
+            Some(ONE_HALF_LIGHT.bg),
+        );
+        assert!(wide.style(Token::SyntaxString).bold, "{depth:?}");
+        assert_eq!(
+            wide.style(Token::DiffAddLine).bold,
+            depth != ColorDepth::TrueColor,
+            "{depth:?}"
+        );
         // Colours over the target, and muted text, which is dim on
         // purpose, are not made bold.
         for token in [

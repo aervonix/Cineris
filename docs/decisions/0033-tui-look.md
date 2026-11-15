@@ -87,7 +87,7 @@ Step 22 found three colours of the default theme that carry text and are under 4
 - **On a dark background, and when none is reported** (which the theme treats as dark), **keywords in code are bright blue** (5.0 to 1 on Campbell) instead of bright magenta.
 - **Muted stays as it is:** it is dim on purpose.
 
-Code's strings and numbers, and a changed line drawn in its colour where there is no tint, are text in green, red or yellow too, and are bold under the same rule. Whether they should be is a question of the look the owner was asked on 2026-11-15; one flag of the palette turns that part off. The reference screens were rewritten from the real views (`cargo xtask tui-screens --write`): only styles changed, in 728 cells of 18 screens ([steps/tooling-5/answered.md](../steps/tooling-5/answered.md)). The theme's tests hold the contrast figures and the styles.
+**Status text only.** Asked whether highlighted code (strings in green, numbers in yellow) and a whole changed line drawn in its colour where there is no tint go bold too, the owner chose not: they keep their weight, and stay under the target on a light scheme, by that choice. One flag of the palette (`warm_bold_code_and_lines`, off) would reach them. The reference screens were rewritten from the real views (`cargo xtask tui-screens --write`): only styles changed, in 320 cells of 18 screens ([steps/tooling-5/answered.md](../steps/tooling-5/answered.md)). The theme's tests hold the contrast figures and the styles.
 
 ## Revisit when
 
