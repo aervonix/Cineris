@@ -82,6 +82,29 @@
       "strict": true
     },
     {
+      "description": "Show the structure of a file or a directory without its content: each definition (function, type, class, method, constant, heading) with its line number, nested ones indented. For a directory, the outlines of its files, down to `depth`. Outlines are approximate: they are found by reading lines, not by parsing. Use it to find where something is, then `read` with `offset` for the lines you need.",
+      "eager_input_streaming": true,
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "depth": {
+            "description": "For a directory: how many levels down to go. 1, its own files, unless given. At least 1. At most 8.",
+            "type": "integer"
+          },
+          "path": {
+            "description": "A file or a directory in the workspace. At least 1 character.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      "name": "outline",
+      "strict": true
+    },
+    {
       "description": "Keep the plan for the current work: a short task list the user can see and edit while you work. Each call sends the full list and replaces the plan. Give each item a short `id` that stays the same from call to call, its `text` in one line, and its `status`. Mark an item `active` when you start it and `done` when it is finished. The user may reorder, reword, skip, add or remove items; you are told when they do, and if they did since you last saw the plan, your call replaces nothing and returns the current plan to work from.",
       "eager_input_streaming": true,
       "input_schema": {
@@ -282,15 +305,23 @@
         "additionalProperties": false,
         "properties": {
           "command": {
-            "description": "The command line. At least 1 character.",
+            "description": "The command line.",
+            "minLength": 1,
             "type": "string"
           },
           "cwd": {
-            "description": "The directory to run in. Defaults to the workspace root. At least 1 character.",
+            "description": "The directory to run in. Defaults to the workspace root.",
+            "minLength": 1,
             "type": "string"
           },
+          "sandbox": {
+            "description": "Leave out, or true, to run in the sandbox. false runs the command outside it, with the user's full rights, after the user approves: only for a command the sandbox blocked.",
+            "type": "boolean"
+          },
           "timeout_ms": {
-            "description": "The time limit in milliseconds. 120000 unless given, and at most 1800000. At least 1. At most 1800000.",
+            "description": "The time limit in milliseconds. 120000 unless given, and at most 1800000.",
+            "maximum": 1800000,
+            "minimum": 1,
             "type": "integer"
           }
         },
@@ -299,8 +330,7 @@
         ],
         "type": "object"
       },
-      "name": "shell",
-      "strict": true
+      "name": "shell"
     },
     {
       "description": "Run a tool found with `tool_search`. `tool` is its full name, `source/tool`, and `arguments` an object that fits the schema the search showed. The arguments are checked against that schema before the tool runs.",
@@ -332,9 +362,7 @@
         "additionalProperties": false,
         "properties": {
           "limit": {
-            "description": "The most tools to return. 8 unless given.",
-            "maximum": 25,
-            "minimum": 1,
+            "description": "The most tools to return. 8 unless given. At least 1. At most 25.",
             "type": "integer"
           },
           "query": {
@@ -347,7 +375,8 @@
         ],
         "type": "object"
       },
-      "name": "tool_search"
+      "name": "tool_search",
+      "strict": true
     },
     {
       "description": "Create a file, or replace the whole content of one. Missing parent directories are created. A file that already exists must have been read in this session and not have changed since, or the call fails and says to read it first. To change part of a file, use `edit`: it sends less. The result is a one-line confirmation with the number of lines written.",

@@ -5,8 +5,8 @@
     "x-ratelimit-limit-tokens": "1000000",
     "x-ratelimit-remaining-requests": "995",
     "x-ratelimit-remaining-tokens": "1000000",
-    "x-ratelimit-reset-requests": "1794590371241",
-    "x-ratelimit-reset-tokens": "1794590371242"
+    "x-ratelimit-reset-requests": "1794744791798",
+    "x-ratelimit-reset-tokens": "1794744791799"
   },
   "status": 200
 }
