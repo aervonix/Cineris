@@ -28,9 +28,9 @@
 [0m  and returns [0;1;36m1[0m. A separator has to be followed by a digit, so the other case[0m
 [0m  becomes an error:[0m
 [0m
-[0m  [0;35mif[0m c == [0;1;32m'_'[0m {[0m
+[0m  [0;35mif[0m c == [0;32m'_'[0m {[0m
 [0m  [0m    [0;35mif[0m ![0;36mself[0m.peek_next().is_some_and(|d| d.is_ascii_digit()) {[0m
-[0m          [0;35mreturn[0m [0;36mErr[0m([0;36mself[0m.error([0;1;32m"digit separator must be followed by a digit"[0m));[0m
+[0m          [0;35mreturn[0m [0;36mErr[0m([0;36mself[0m.error([0;32m"digit separator must be followed by a digit"[0m));[0m
 [0m  [0m    }[0m
 [0m  [0m    [0;36mself[0m.bump();[0m
 [0m  [0m    [0;35mcontinue[0m;[0m

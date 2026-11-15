@@ -32,7 +32,7 @@
 [0m  stops before the [0;1;36m_[0m and returns [0;1;36m1[0m. A separator has to be[0m
 [0m  followed by a digit, so the other case becomes an error:[0m
 [0m
-[0m  [0;35mif[0m c == [0;1;32m'_'[0m {[0m
+[0m  [0;35mif[0m c == [0;32m'_'[0m {[0m
 [0m  [0m    [0;35mif[0m ![0;36mself[0m.peek_next().is_some_and(|d| d.is_ascii_digi[0m…[0m
 [0m          return Err(self.error("digit separator mu[0m
 [0m
