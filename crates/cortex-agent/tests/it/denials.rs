@@ -625,3 +625,42 @@ fn a_command_marked_read_only_does_not_start_before_the_response_ends() {
     });
     assert_eq!(world.log.count("end shell status"), 1);
 }
+
+/// The rig's own promise: a question the test scripted no answer for fails
+/// the test, naming the call, instead of being allowed by default, which
+/// could hide a question that should not have been asked.
+#[test]
+fn a_question_with_no_scripted_answer_fails_the_test_naming_the_call() {
+    let world = World::new(
+        "unscripted",
+        [
+            calls(&[("c1", "write", json!({"path": "a"}))]),
+            says("Done."),
+        ],
+    );
+    let rig = Setup::new(&world).start(&world);
+    rig.policy.decide_for("write", Decision::Ask);
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    // The call was refused, so nothing ran; the test fails when its rig
+    // goes.
+    assert_eq!(results(&rig)[0].outcome, ToolOutcome::Denied);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(rig)));
+    let message = failed.expect_err("an unscripted question was answered");
+    let message = message
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| {
+            message
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+        })
+        .unwrap_or_default();
+    assert!(
+        message.contains("the test scripted no answer") && message.contains("\"write a\""),
+        "{message}"
+    );
+    assert!(world.log.lines().is_empty(), "nothing ran");
+}

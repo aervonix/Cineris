@@ -89,6 +89,8 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-session
 
+- [the-first-lease-flush-before-the-first-request](the-first-lease-flush-before-the-first-request.md): A session's first lease record is flushed to disk before its first request, whatever the durability. Owner: the next step that changes leases, or step 32.
+
 - [an-undo-after-an-incomplete-look](an-undo-after-an-incomplete-look.md): An undo after an incomplete change look does not say what it missed; the checkpoint lacks the flag. Owner: a later step, else step 32.
 - [hashing-large-files-at-a-rounds-end](hashing-large-files-at-a-rounds-end.md): A changed file is hashed whole at round end and on rewind, uncapped, at 0.4 s a gibibyte. Owner: step 33.
 - [private-keys-in-text-artifacts](private-keys-in-text-artifacts.md): Text artifacts are redacted line by line, so a PEM private key is masked on one line only. Owner: step 32.
@@ -122,6 +124,8 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [timeout-report-timing-on-windows](timeout-report-timing-on-windows.md): The `watch` timeout report counts from the first wait off Linux; Windows takes the process tree from PowerShell. Owner: a later tooling step.
 
 ### The tooling and CI
+
+- [running-the-system-tests-after-tiers-one-and-two](running-the-system-tests-after-tiers-one-and-two.md): Running the system tests after tiers 1 and 2, three at a time, cuts Windows tier 2 by a fifth. Owner: the owner.
 
 - [actionlint-in-the-checks](actionlint-in-the-checks.md): The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary. Owner: the owner.
 - [an-ab-run-ends-at-a-failing-test](an-ab-run-ends-at-a-failing-test.md): `cargo xtask ab` stops at the first round with a failing test and loses the rounds already measured. Owner: a later tooling step.
