@@ -709,8 +709,9 @@ file: crates/cortex-testkit/src/provider.rs
 in: ScriptedProvider::stream
 find: stop: StopReason::MaxOutput
 replace: stop: StopReason::End
+packages: cortex-testkit,cortex-agent
 caught-by:
-    cortex-testkit provider::tests::an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit
+    cortex-testkit provider::tests::text_reasoning_and_arguments_all_count_and_the_cut_closes_the_open_block
     cortex-agent::it streaming::an_answer_longer_than_the_model_may_write_reaches_the_loop_cut
 
 [break] a-cut-splits-a-character
