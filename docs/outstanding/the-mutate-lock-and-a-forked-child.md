@@ -1,0 +1,3 @@
+| Item | Who | When |
+|---|---|---|
+| **`mutate`'s copy lock can be held a moment by a child another thread forked.** Under plain `cargo test`, where `xtask`'s tests are threads of one process, a test that runs `mutate` twice on one copy can find the lock still held by the first run: a process another test started forked with the lock's descriptor and had not yet run its program (seen on the laptop while six builds ran beside it). Under nextest, which CI and `cargo xtask test` use, each test is a process of its own and it does not happen. Two pre-flight tests also share a temporary directory's name. A retry of the lock for a short while, or descriptors closed in the child, would end it. | A later tooling step | When `mutate`'s driver is next changed |
