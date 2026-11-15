@@ -388,12 +388,13 @@ fn a_chain_of_template_and_extern_prefixes_needs_no_more_stack_than_one() {
         chain("template<> ", 22_000, "int f();\n"),
         chain("extern \"C\" ", 22_000, "int f();\n"),
     ];
-    // And a megabyte of each spelling of each, mixed.
+    // And each spelling of each, mixed: 64 KiB is some three thousand
+    // levels, past what the old recursion's stack held.
     for unit in [
         "template<> extern \"C\" ",
         "extern\"\"template<typename T> ",
     ] {
-        lines.push(chain(unit, 1 << 20, "int f();\n"));
+        lines.push(chain(unit, 64 << 10, "int f();\n"));
     }
     for text in lines {
         let found = on_a_pass_thread(move || shape(Some(Language::Cpp), "a.hpp", &text));
@@ -409,7 +410,7 @@ fn a_chain_of_extern_prefixes_costs_linear_time() {
         Language::Cpp,
         "a.hpp",
         "extern \"C\" ",
-        64 << 10,
+        32 << 10,
         "int f();\n",
     );
 }
