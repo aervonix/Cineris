@@ -28,8 +28,9 @@ use cortex_protocol::usage::{
     Balance, LimitSource, ModelUsage, ProviderLimits, UsageGroup, UsageRange, UsageReport, UsageRow,
 };
 use cortex_protocol::{ErrorData, ErrorKind, ProviderId};
-use cortex_stats::{Aggregates, LimitsFile, Query, Recorder, RecorderOptions, StatsDir};
+use cortex_stats::{Aggregates, Found, LimitsFile, Query, Recorder, RecorderOptions, StatsDir};
 
+use crate::ClientId;
 use crate::core::{Core, CoreOptions, OpError, error};
 
 /// How long one refresh may take, from the request to the end of the
@@ -57,83 +58,29 @@ pub(crate) fn recorder(user: &Loaded, options: &CoreOptions) -> Option<Recorder>
     Some(Recorder::new(recorder_options, Arc::clone(&options.clock)))
 }
 
-/// The account of today's limits, `[limits.day]`: requests, tokens and
-/// money, across every session of the day. It begins with what the day's
-/// statistics hold (read here, when a session with a day limit is put
-/// together, on the blocking pool, and never when there is none), and every
-/// session of this core then draws on the one account. A session that runs
-/// past midnight goes on drawing on the day it began in; the next session
-/// opened begins a new day. `limits.day.time` is not a day's wall-clock
-/// time and is not enforced
-/// (`docs/outstanding/a-days-time-limit.md`).
-pub(crate) fn day_account(
-    inner: &crate::core::Inner,
-    limits: &cortex_config::schema::LimitSet,
-) -> Option<cortex_agent::Account> {
-    if limits.requests.is_none() && limits.tokens.is_none() && limits.cost.is_none() {
-        return None;
-    }
-    let clock = Arc::clone(&inner.options.clock);
-    let zone = inner.options.zone.clone().unwrap_or_else(Zone::system);
-    let today = zone.date_of(clock.now());
-    let mut day = inner
-        .day
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let budget = cortex_protocol::lease::Budget {
-        wall_clock_ms: None,
-        ..crate::assemble::budget(limits)
-    };
-    let name = format!("the day {today}");
-    // Each session holds the day to its own limits (a project may lower
-    // them), and every session spends from the one day's purse (found by
-    // the review of step 16).
-    if let Some((date, purse)) = day.as_ref()
-        && *date == today
-    {
-        return Some(cortex_agent::Account::draws_on(name, budget, purse));
-    }
-    let mut spent = cortex_agent::Spent::default();
-    if let Some(dir) = stats_dir(&inner.user)
-        && let Ok(mut aggregates) = Aggregates::load(&dir)
-    {
-        let now = clock.now();
-        if let Ok(true) = aggregates.sync(
-            &dir,
-            today,
-            &cortex_stats::month_of(now),
-            Some(inner.user.settings.stats.retention),
-        ) {
-            let _ = aggregates.save(&dir, clock.as_ref());
-        }
-        let day_text = today.to_string();
-        for (key, sum) in &aggregates.total().usage {
-            if key.period == day_text {
-                spent.requests += sum.requests;
-                spent.tokens += sum.input + sum.cache_read + sum.cache_write + sum.output;
-                spent.usd_nanos += sum.metered_nanos + sum.estimate_nanos + sum.recorded_nanos;
-            }
-        }
-    }
-    let purse = cortex_agent::Account::with_spent(
-        name.clone(),
-        cortex_protocol::lease::Budget::default(),
-        clock,
-        spent,
-    );
-    let account = cortex_agent::Account::draws_on(name, budget, &purse);
-    *day = Some((today, purse));
-    Some(account)
-}
-
 /// `usage/report`.
 pub(crate) async fn report(
     core: &Core,
+    client: ClientId,
     params: &UsageReportParams,
 ) -> Result<UsageReport, OpError> {
     let inner = &core.inner;
-    if params.range == UsageRange::Session {
-        return session_report(core, params);
+    match &params.range {
+        UsageRange::Session => return session_report(core, client, params),
+        UsageRange::Today | UsageRange::Week | UsageRange::Month | UsageRange::All => {}
+        // A newer client's range is not answered as some other one (the
+        // independent review of step 16's note: it was answered as all
+        // time).
+        other => {
+            return Err(error(
+                ErrorKind::Usage,
+                cortex_protocol::error::code::UNKNOWN_VALUE,
+                format!(
+                    "The range `{other}` is not one this build knows: `session`, `today`, \
+                     `week`, `month` or `all`."
+                ),
+            ));
+        }
     }
     let settings = &inner.user.settings;
     let recording = settings.stats.enabled;
@@ -161,7 +108,16 @@ pub(crate) async fn report(
         let now = clock.now();
         let (part, mut limits) = match &dir {
             Some(dir) => {
-                let mut aggregates = Aggregates::load(dir).map_err(read_failed)?;
+                // With statistics on, what is read is saved: a file that
+                // cannot be read is moved aside first. With them off,
+                // nothing on the disk is changed.
+                let mut aggregates = if recording {
+                    Aggregates::load_for_saving(dir, clock.as_ref())
+                } else {
+                    Aggregates::load(dir)
+                }
+                .map_err(read_failed)?;
+                refuse_unread(aggregates.found(), dir)?;
                 let changed = aggregates
                     .sync(
                         dir,
@@ -203,8 +159,40 @@ fn read_failed(failure: std::io::Error) -> OpError {
     )
 }
 
-/// The session range: the open session's own figures.
-fn session_report(core: &Core, params: &UsageReportParams) -> Result<UsageReport, OpError> {
+/// A report is not made from aggregates that did not read the file that is
+/// there: its all-time figures would leave out every pruned month without
+/// saying so. Nothing is guessed.
+fn refuse_unread(found: &Found, dir: &StatsDir) -> Result<(), OpError> {
+    match found {
+        Found::Newer { version } => Err(error(
+            ErrorKind::Usage,
+            "stats_newer",
+            format!(
+                "The statistics' aggregates were written by a newer build of Cortex-Harness \
+                 (version {version}), which this one does not read or change: the newer build \
+                 shows them."
+            ),
+        )),
+        Found::Unreadable => Err(error(
+            ErrorKind::Internal,
+            "stats_unreadable",
+            format!(
+                "The statistics' aggregates file `{}` could not be read, and is left as it is.",
+                dir.aggregates_file().display()
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// The session range: the open session's own figures, for a client that
+/// has it open, as `usage/get` answers (found by the independent review of
+/// step 16).
+fn session_report(
+    core: &Core,
+    client: ClientId,
+    params: &UsageReportParams,
+) -> Result<UsageReport, OpError> {
     let Some(session) = &params.session_id else {
         return Err(error(
             ErrorKind::Usage,
@@ -212,13 +200,7 @@ fn session_report(core: &Core, params: &UsageReportParams) -> Result<UsageReport
             "The `session` range needs a `session_id`.",
         ));
     };
-    let Some(usage) = core.session_usage(session) else {
-        return Err(error(
-            ErrorKind::Usage,
-            cortex_protocol::error::code::SESSION_NOT_OPEN,
-            format!("The session `{session}` is not open: the `session` range is a live one."),
-        ));
-    };
+    let usage = core.open_for(client, session)?.handle.usage();
     let group_by = if params.group_by.is_empty() {
         vec![UsageGroup::Provider, UsageGroup::Model]
     } else {
@@ -260,17 +242,6 @@ fn session_report(core: &Core, params: &UsageReportParams) -> Result<UsageReport
         tools: Vec::new(),
         zone: None,
     })
-}
-
-/// Whether a provider's error code is a plain one (`invalid_api_key`,
-/// `rate_limit_exceeded`): lower-case letters, digits, `_`, `.` and `-`, at
-/// most 64 of them. Anything else is not shown.
-fn is_plain_code(code: &str) -> bool {
-    !code.is_empty()
-        && code.len() <= 64
-        && code.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
-        })
 }
 
 /// An amount in billionths as an exact decimal number, with at least two
@@ -510,7 +481,7 @@ async fn refresh_one(
             // nothing else of the answer reaches the user, a client or a
             // log (found by the early review of the refresh).
             let mut data = failure.to_error_data_at(now);
-            if !is_plain_code(&data.code) {
+            if !cortex_protocol::error::code::is_plain(&data.code) {
                 data.code = "refresh_refused".to_owned();
             }
             data.request_id = None;
@@ -551,6 +522,12 @@ pub struct StatsSummary {
     pub dropped: u64,
     /// Lines that could not be read.
     pub unreadable: u64,
+    /// What the aggregates file was found to be: a newer build's, or one
+    /// that could not be read, is said.
+    pub aggregates: Found,
+    /// Aggregates files that could not be read and were moved aside, with
+    /// `~` for the home directory: each holds the months pruned before it.
+    pub set_aside: Vec<String>,
 }
 
 impl Core {
@@ -578,13 +555,23 @@ impl Core {
                 tool_calls: 0,
                 dropped: 0,
                 unreadable: 0,
+                aggregates: Found::Missing,
+                set_aside: Vec::new(),
             };
             let Some(dir) = stats_dir(&user) else {
                 return Ok(summary);
             };
             summary.dir = Some(shortened(dir.root(), home.as_deref()));
             summary.months = dir.months().map_err(read_failed)?;
+            summary.set_aside = dir
+                .set_aside()
+                .map_err(read_failed)?
+                .iter()
+                .map(|path| shortened(path, home.as_deref()))
+                .collect();
+            // Read only: `cortex stats` changes nothing on the disk.
             let mut aggregates = Aggregates::load(&dir).map_err(read_failed)?;
+            summary.aggregates = aggregates.found().clone();
             let now = clock.now();
             let zone = zone.unwrap_or_else(Zone::system);
             aggregates

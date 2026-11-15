@@ -74,3 +74,57 @@ fn the_latest_figures_of_each_provider_and_source_are_kept() {
         .collect();
     assert_eq!(remaining, [("anthropic", Some(5)), ("openrouter", Some(7))]);
 }
+
+/// A limits file that cannot be read, for any reason but its absence, is
+/// left byte for byte: a passing failure to read it must not lose the
+/// other providers' figures (the early review of step 16's fix, which no
+/// test held until the independent review found it).
+#[cfg(unix)]
+#[test]
+fn a_limits_file_that_cannot_be_read_is_left_as_it_is() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = scratch("a_limits_file_that_cannot_be_read");
+    let dir = StatsDir::new(scratch.join("stats"));
+    let clock = clock("2026-11-15T10:00:00Z");
+    LimitsFile::update(
+        &dir,
+        [headers_limits("anthropic", "2026-11-15T10:00:00Z", 5)],
+        clock.as_ref(),
+    )
+    .unwrap();
+    let before = std::fs::read(dir.limits_file()).unwrap();
+    std::fs::set_permissions(dir.limits_file(), std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(dir.limits_file()).is_ok() {
+        // Root reads anything: nothing here can be unreadable.
+        println!("skipped: this user reads a file of mode 000");
+        return;
+    }
+    let refused = LimitsFile::update(
+        &dir,
+        [headers_limits("openrouter", "2026-11-15T10:01:00Z", 9)],
+        clock.as_ref(),
+    );
+    assert!(refused.is_err());
+    std::fs::set_permissions(dir.limits_file(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(std::fs::read(dir.limits_file()).unwrap(), before);
+}
+
+/// An update holds the file's lock from its read to its write, so that a
+/// refresh written between another writer's read and write is not undone
+/// (found by the independent review of step 16). The lock is the shared
+/// one (`cortex_base::private::hold_lock`), whose holding is tested there.
+#[test]
+fn an_update_takes_the_files_lock() {
+    let scratch = scratch("an_update_takes_the_files_lock");
+    let dir = StatsDir::new(scratch.join("stats"));
+    let clock = clock("2026-11-15T10:00:00Z");
+    LimitsFile::update(
+        &dir,
+        [headers_limits("anthropic", "2026-11-15T10:00:00Z", 5)],
+        clock.as_ref(),
+    )
+    .unwrap();
+    let lock = cortex_base::private::lock_path(&dir.limits_file());
+    assert!(lock.exists(), "{}", lock.display());
+    assert!(cortex_base::private::is_private(&lock).unwrap());
+}

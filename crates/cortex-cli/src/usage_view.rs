@@ -351,6 +351,27 @@ pub(crate) fn stats(summary: &StatsSummary) -> String {
             summary.unreadable
         );
     }
+    match &summary.aggregates {
+        cortex_core::AggregatesFound::Newer { version } => {
+            let _ = writeln!(
+                out,
+                "The aggregates are a newer build's (version {version}): this build neither reads \
+                 nor changes them, and the figures above are the monthly files' alone."
+            );
+        }
+        cortex_core::AggregatesFound::Unreadable => out.push_str(
+            "The aggregates file could not be read: the figures above are the monthly files' \
+             alone.\n",
+        ),
+        _ => {}
+    }
+    for path in &summary.set_aside {
+        let _ = writeln!(
+            out,
+            "Set aside: {path}, an aggregates file that could not be read, with the months \
+             pruned before it."
+        );
+    }
     out.push_str("Nothing of it leaves this machine. `cortex stats reset` deletes it.\n");
     out
 }

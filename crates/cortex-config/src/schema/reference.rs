@@ -34,9 +34,10 @@ pub fn reference_page() -> String {
          - **Takes effect.** When a change to the key reaches a running harness: *at once*, at \
          the *next epoch* (it shapes the prompt, the tool list or the model), or after a \
          *restart*.\n\
-         - **Enforced.** In `[permissions]`, `[sandbox]` and `[limits]` an unknown key or value \
-         is an error and the file is refused: a restriction this version does not understand is \
-         never skipped. Everywhere else an unknown key is a warning.\n",
+         - **Fails closed.** In `[permissions]`, `[sandbox]` and `[limits]` an unknown key or \
+         value is an error and the file is refused: a restriction this version does not \
+         understand is never skipped. Everywhere else an unknown key is a warning. It says how \
+         the file is read, not that the setting is in force: the key's description says that.\n",
     );
 
     // A table per section. The keys of the file itself, which have no
@@ -89,7 +90,7 @@ fn row(key: &KeyInfo) -> String {
         .map(|(low, high)| format!(", {} to {}", plain(low), plain(high)))
         .unwrap_or_default();
     let joined = if key.joined { ", joined" } else { "" };
-    let enforced = if key.enforced { " Enforced." } else { "" };
+    let enforced = if key.enforced { " Fails closed." } else { "" };
     let default = match &key.default {
         Some(value) => format!("`{}`", cell(&value.to_string())),
         None => "not set".to_owned(),
@@ -182,7 +183,7 @@ mod tests {
             rules.contains("list of rule: `effect`, `match`, `action`, joined"),
             "{rules}"
         );
-        assert!(rules.ends_with("Enforced. |"), "{rules}");
+        assert!(rules.ends_with("Fails closed. |"), "{rules}");
         assert!(line("model.main").contains("| not set | raises cost | next epoch |"));
         assert!(line("model.reasoning").contains("| preference | next epoch |"));
         assert!(line("providers.*.base_url").contains("| user only |"));

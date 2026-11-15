@@ -52,15 +52,31 @@ impl Header {
     }
 
     /// The length of the data block after this header, with times of
-    /// `time_len` bytes.
-    fn data_len(&self, time_len: usize) -> usize {
-        self.timecnt * time_len
-            + self.timecnt
-            + self.typecnt * 6
-            + self.charcnt
-            + self.leapcnt * (time_len + 4)
-            + self.isstdcnt
-            + self.isutcnt
+    /// `time_len` bytes. `None` when the counts add up past what any file
+    /// could hold.
+    fn data_len(&self, time_len: usize) -> Option<usize> {
+        let parts = [
+            self.timecnt.checked_mul(time_len)?,
+            self.timecnt,
+            self.typecnt.checked_mul(6)?,
+            self.charcnt,
+            self.leapcnt.checked_mul(time_len + 4)?,
+            self.isstdcnt,
+            self.isutcnt,
+        ];
+        parts
+            .into_iter()
+            .try_fold(0usize, |sum, part| sum.checked_add(part))
+    }
+
+    /// Where the data block that starts at `start` ends, when the file
+    /// holds all of it. The counts are the file's word: nothing is
+    /// allocated for them until the bytes are known to be there (the
+    /// independent review of step 16 found a 94-byte file that asked for
+    /// 17 GB).
+    fn data_end(&self, start: usize, time_len: usize, file_len: usize) -> Option<usize> {
+        let end = start.checked_add(self.data_len(time_len)?)?;
+        (end <= file_len).then_some(end)
     }
 }
 
@@ -70,7 +86,7 @@ impl Transitions {
     pub fn parse(bytes: &[u8]) -> Option<Self> {
         let first = Header::read(bytes, 0)?;
         let (header, start, time_len) = if first.version >= b'2' {
-            let second_at = Header::LEN + first.data_len(4);
+            let second_at = first.data_end(Header::LEN, 4, bytes.len())?;
             (Header::read(bytes, second_at)?, second_at + Header::LEN, 8)
         } else {
             (first, Header::LEN, 4)
@@ -78,6 +94,7 @@ impl Transitions {
         if header.typecnt == 0 {
             return None;
         }
+        let data_end = header.data_end(start, time_len, bytes.len())?;
         let times_at = start;
         let indexes_at = times_at + header.timecnt * time_len;
         let types_at = indexes_at + header.timecnt;
@@ -100,8 +117,7 @@ impl Transitions {
             return None;
         }
         let tail = if header.version >= b'2' {
-            let footer_at = start + header.data_len(time_len);
-            let footer = bytes.get(footer_at..)?;
+            let footer = bytes.get(data_end..)?;
             let footer = footer.strip_prefix(b"\n")?;
             let end = footer.iter().position(|byte| *byte == b'\n')?;
             let text = std::str::from_utf8(&footer[..end]).ok()?;

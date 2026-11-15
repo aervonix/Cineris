@@ -58,3 +58,61 @@ fn raw_events_are_kept_three_months_by_default() {
 fn cortex_base_scratch(test: &str) -> cortex_testkit::Scratch {
     cortex_testkit::Scratch::outside("cortex-stats", test)
 }
+
+/// A flush that its owner gives up returns at once, with what was left: the
+/// end of a process waits for the writer only so long (found by the
+/// independent review of step 16, where `Core::shutdown` waited with no
+/// limit).
+#[test]
+fn a_flush_given_up_returns_at_once_with_what_was_left() {
+    let scratch = cortex_base_scratch("given_up");
+    let clock = Arc::new(FakeClock::starting_at("2026-11-15T10:00:00Z").unwrap());
+    let mut options = RecorderOptions::new(StatsDir::new(scratch.join("stats")));
+    options.zone = Some(Zone::utc());
+    let recorder = Recorder::new(options, clock);
+    // Never started: nothing is waited for, and the queue's event is told.
+    recorder.record(dropped_at("2026-11-15T10:00:00Z", 0));
+    assert_eq!(recorder.flush(), Flushed::NotStarted { waiting: 1 });
+    // Started, and given up before it began: the answer is "given up",
+    // whatever the writer then does.
+    recorder.start().unwrap();
+    let give_up = GiveUp::new();
+    give_up.now();
+    assert!(matches!(
+        recorder.flush_until(&give_up),
+        Flushed::GaveUp { .. }
+    ));
+    assert_eq!(recorder.flush(), Flushed::Done);
+}
+
+/// A writer whose thread has ended takes nothing more: what is recorded
+/// after is dropped and counted, and a flush says it stopped rather than
+/// returning as if all were written (the independent review of step 16's
+/// note: such a writer was invisible).
+#[test]
+fn a_writer_that_stopped_is_counted_not_hidden() {
+    let clock = Arc::new(FakeClock::starting_at("2026-11-15T10:00:00Z").unwrap());
+    let recorder = Recorder::new(RecorderOptions::new(StatsDir::new("unused")), clock);
+    // What a thread that panicked leaves: its end of the queue is gone.
+    drop(recorder.unstarted.lock().unwrap().take());
+    for _ in 0..3 {
+        recorder.record(dropped_at("2026-11-15T10:00:00Z", 0));
+    }
+    assert_eq!(recorder.dropped(), 3);
+    assert_eq!(recorder.flush(), Flushed::Stopped { waiting: 0 });
+}
+
+/// A writer that ends while a flush waits for it answers the flush as
+/// stopped: the answer it drops says so.
+#[test]
+fn a_flush_the_writer_drops_unanswered_says_it_stopped() {
+    let state = GiveUp::new();
+    drop(Answer(Arc::clone(&state.state)));
+    assert!(matches!(*state.state.lock(), Some(Ended::Stopped)));
+    // An answer given is not taken back by its drop.
+    let state = GiveUp::new();
+    let answer = Answer(Arc::clone(&state.state));
+    answer.written();
+    drop(answer);
+    assert!(matches!(*state.state.lock(), Some(Ended::Written)));
+}

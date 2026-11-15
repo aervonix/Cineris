@@ -17,6 +17,59 @@ use cortex_stats::{
     ToolRecord, ToolShare, TurnRecord, Variants,
 };
 
+/// How long the end of a process waits for the statistics writer. A flush
+/// is a few appends, a read of the files' tails and one aggregates file
+/// flushed to the disk: milliseconds, and a few hundred on a slow disk. Two
+/// seconds leaves room for that many times over, and is about as long as a
+/// person waits for a command to end before they wonder why it has not.
+pub(crate) const FLUSH_LIMIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Waits for the statistics writer to write what it was given, at most
+/// [`FLUSH_LIMIT`] on the core's timer (found by the independent review of
+/// step 16: `Core::shutdown` waited with no limit). The wait is on a thread
+/// of its own, not the blocking pool, so that a writer stuck on its disk
+/// cannot hold the runtime's end either.
+pub(crate) async fn flush(
+    recorder: cortex_stats::Recorder,
+    timer: &cortex_base::SharedTimer,
+) -> cortex_stats::Flushed {
+    let give_up = cortex_stats::GiveUp::new();
+    let waiting = give_up.clone();
+    let (done, finished) = tokio::sync::oneshot::channel();
+    let flushing = recorder.clone();
+    let started = std::thread::Builder::new()
+        .name("cortex-stats-flush".to_owned())
+        .spawn(move || {
+            let _ = done.send(flushing.flush_until(&waiting));
+        });
+    if started.is_err() {
+        give_up.now();
+        return recorder.flush_until(&give_up);
+    }
+    let sleep = timer.sleep(FLUSH_LIMIT);
+    let mut finished = std::pin::pin!(finished);
+    let mut sleep = std::pin::pin!(sleep);
+    let first = std::future::poll_fn(|context| {
+        if let std::task::Poll::Ready(flushed) = finished.as_mut().poll(context) {
+            return std::task::Poll::Ready(Some(flushed));
+        }
+        if sleep.as_mut().poll(context).is_ready() {
+            return std::task::Poll::Ready(None);
+        }
+        std::task::Poll::Pending
+    })
+    .await;
+    let flushed = match first {
+        Some(flushed) => flushed,
+        None => {
+            // The thread returns as soon as it is told.
+            give_up.now();
+            finished.await
+        }
+    };
+    flushed.unwrap_or(cortex_stats::Flushed::Stopped { waiting: 0 })
+}
+
 /// The statistics of one session: its recorder and its project.
 pub(crate) struct SessionStats {
     pub(crate) recorder: Recorder,

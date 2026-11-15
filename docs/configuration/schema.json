@@ -252,7 +252,7 @@
       "properties": {
         "day": {
           "additionalProperties": false,
-          "description": "Limits on one day, across sessions.",
+          "description": "Limits on one local day, across every session of every process on this machine, counted from the statistics: with `stats.enabled = false` a session with a day's limit is refused when it opens. Another process's requests are counted once they end, so the ones in flight when the limit is reached can pass it (`docs/architecture/18-usage.md`, \"Limits on one day\").",
           "properties": {
             "cost": {
               "description": "Money, in US dollars.",
@@ -271,7 +271,7 @@
               "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
             },
             "time": {
-              "description": "Wall-clock time.",
+              "description": "Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`).",
               "pattern": "^([0-9]+(ms|s|m|h|d))+$",
               "type": "string",
               "x-cortex-effect": "at once",
@@ -309,7 +309,7 @@
               "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
             },
             "time": {
-              "description": "Wall-clock time.",
+              "description": "Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`).",
               "pattern": "^([0-9]+(ms|s|m|h|d))+$",
               "type": "string",
               "x-cortex-effect": "at once",
@@ -347,7 +347,7 @@
               "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
             },
             "time": {
-              "description": "Wall-clock time.",
+              "description": "Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`).",
               "pattern": "^([0-9]+(ms|s|m|h|d))+$",
               "type": "string",
               "x-cortex-effect": "at once",
@@ -891,11 +891,11 @@
         },
         "retention": {
           "default": 3,
-          "description": "How many months a monthly file of events stays after its own month: 3 by default. What it added up to stays in the aggregates, every all-time figure with it, so only the raw events go (a heavy user's are about 90 MB a month).",
+          "description": "How many months a monthly file of events stays after its own month: 3 by default. What it added up to stays in the aggregates, every all-time figure with it, so only the raw events go (a heavy user's are about 90 MB a month). Read when the harness starts.",
           "maximum": 1200,
           "minimum": 1,
           "type": "integer",
-          "x-cortex-effect": "at once",
+          "x-cortex-effect": "restart",
           "x-cortex-trust": "user only"
         }
       },
@@ -930,7 +930,7 @@
             "calendar",
             "rolling"
           ],
-          "x-cortex-effect": "at once",
+          "x-cortex-effect": "restart",
           "x-cortex-trust": "user only"
         },
         "refresh": {
@@ -940,7 +940,7 @@
             "type": "string"
           },
           "type": "array",
-          "x-cortex-effect": "at once",
+          "x-cortex-effect": "restart",
           "x-cortex-trust": "user only"
         },
         "week_start": {
@@ -955,7 +955,7 @@
             "saturday",
             "sunday"
           ],
-          "x-cortex-effect": "at once",
+          "x-cortex-effect": "restart",
           "x-cortex-trust": "user only"
         }
       },

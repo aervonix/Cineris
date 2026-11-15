@@ -31,6 +31,7 @@ mod checkpoints;
 mod clients;
 mod content;
 pub mod core;
+mod day;
 pub mod events;
 mod instructions;
 mod manage;
@@ -53,6 +54,8 @@ pub use crate::policy::PermissionDenial;
 pub use crate::provider::{ANTHROPIC_KEY_ENV, Connector, EFFORT_ALIASES, KeyFound};
 pub use crate::rules::parse_rule;
 pub use crate::usage::StatsSummary;
+/// What `cortex stats` found where the aggregates file is.
+pub use cortex_stats::Found as AggregatesFound;
 /// The runtime's timer, which the core's options take: the provider layer's
 /// and the process runner's waits are on it.
 pub use cortex_llm::TokioTimer;

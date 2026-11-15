@@ -492,3 +492,157 @@ fn a_turn_reaches_the_report_from_the_files_and_its_cost_stays_as_it_was_priced(
     assert_eq!(time.turns, 1);
     assert_eq!(time.parts_ms(), time.wall_ms);
 }
+
+/// The refresh keeps a provider's error code only when it is a plain one;
+/// a request's failure reached the statistics with its code as the provider
+/// client gave it, for months (found by the independent review of step 16).
+/// The one rule now holds for both.
+#[test]
+fn a_providers_error_code_reaches_the_statistics_only_when_it_is_plain() {
+    let failing = cortex_testkit::Response::new().error(cortex_llm::error::ProviderError::new(
+        cortex_base::ErrorKind::Provider,
+        "your prompt 'deploy with key sk-live-0123456789' was refused",
+        "Refused.",
+    ));
+    let world = World::new("error_code_plain", [failing]);
+    let core = world.core_with(|options| options.zone = Some(cortex_base::Zone::utc()));
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let _ = front.turn("go").await;
+        front.close().await;
+        core.shutdown().await;
+    });
+    let dir = world.dirs().state.unwrap().join("stats");
+    let text = std::fs::read_to_string(dir.join("events-2026-11.jsonl")).unwrap();
+    assert!(text.contains(r#""kind":"request""#), "{text}");
+    assert!(!text.contains("sk-live"), "{text}");
+    assert!(text.contains(r#""error":"other""#), "{text}");
+}
+
+/// `usage/report`'s session range answers only a client that has the
+/// session open, as `usage/get` does (found by the independent review of
+/// step 16).
+#[test]
+fn a_client_that_has_not_opened_a_session_gets_no_report_of_it() {
+    let world = World::new("report_open_for", [says("One.")]);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("one").await;
+        let params = || UsageReportParams {
+            range: UsageRange::Session,
+            group_by: Vec::new(),
+            session_id: Some(front.session.clone()),
+            project: None,
+        };
+        let other = core.connect(ClientInfo::observer());
+        let refused = core
+            .handle(other.id, Op::UsageReport(params()))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "session_not_open");
+        let mine = front.op(Op::UsageReport(params())).await;
+        assert!(mine.is_ok(), "{mine:?}");
+        front.close().await;
+    });
+}
+
+/// A range from a newer client is refused, not answered as all time.
+#[test]
+fn a_range_this_build_does_not_know_is_refused() {
+    let world = World::new("report_unknown_range", []);
+    let core = world.core();
+    let client = core.connect(ClientInfo::observer());
+    let refused = world
+        .run(core.handle(
+            client.id,
+            Op::UsageReport(UsageReportParams {
+                range: UsageRange::Unknown("fortnight".to_owned()),
+                group_by: Vec::new(),
+                session_id: None,
+                project: None,
+            }),
+        ))
+        .unwrap_err();
+    assert_eq!(refused.code, "unknown_value");
+    assert!(refused.message.contains("fortnight"), "{}", refused.message);
+}
+
+/// The end of a process waits for a writer stuck on its disk at most two
+/// seconds (a FIFO with nobody at its other end stands in for the disk),
+/// where it waited for as long as the writer was stuck (found by the
+/// independent review of step 16).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_stuck_statistics_writer_holds_the_end_at_most_two_seconds() {
+    let world = World::new("stuck_writer", [says("One.")]);
+    let dir = world.dirs().state.unwrap().join("stats");
+    std::fs::create_dir_all(&dir).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(dir.join("events-2026-11.jsonl"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let core = world.core_with(|options| options.zone = Some(cortex_base::Zone::utc()));
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("one").await;
+        front.close().await;
+        let ((), ()) = join(core.shutdown(), async {
+            while !world.timer.running().contains(&Duration::from_secs(2)) {
+                world.timer.sleeping().await;
+                tokio::task::yield_now().await;
+            }
+            world.timer.advance(Duration::from_secs(2));
+        })
+        .await;
+    });
+    assert!(world.timer.sleeps().contains(&Duration::from_secs(2)));
+}
+
+/// A newer build's aggregates are not reported as if they were the
+/// monthly files' alone, and `cortex stats` says what it found; one that
+/// could not be read is moved aside, and `cortex stats` says where.
+#[test]
+fn the_report_and_cortex_stats_say_what_the_aggregates_file_was() {
+    let world = World::new("aggregates_found", [says("One.")]);
+    let dir = world.dirs().state.unwrap().join("stats");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("aggregates.json"), r#"{"version":2}"#).unwrap();
+    let core = world.core_with(|options| options.zone = Some(cortex_base::Zone::utc()));
+    let client = core.connect(ClientInfo::observer());
+    let today = UsageReportParams {
+        range: UsageRange::Today,
+        group_by: Vec::new(),
+        session_id: None,
+        project: None,
+    };
+    let refused = world
+        .run(core.handle(client.id, Op::UsageReport(today.clone())))
+        .unwrap_err();
+    assert_eq!(refused.code, "stats_newer");
+    let summary = world.run(core.stats_summary()).unwrap();
+    assert_eq!(
+        summary.aggregates,
+        cortex_core::AggregatesFound::Newer { version: 2 }
+    );
+    // One that does not parse.
+    std::fs::write(dir.join("aggregates.json"), b"{\"version\":1,").unwrap();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("one").await;
+        front.close().await;
+        core.shutdown().await;
+    });
+    let summary = world.run(core.stats_summary()).unwrap();
+    assert_eq!(summary.set_aside.len(), 1, "{:?}", summary.set_aside);
+    assert!(
+        summary.set_aside[0].starts_with('~')
+            && summary.set_aside[0].contains("aggregates.json.unreadable-2026-11-13T"),
+        "{:?}",
+        summary.set_aside
+    );
+    assert_eq!(summary.requests, 1);
+    let report = world.run(core.handle(client.id, Op::UsageReport(today)));
+    assert!(report.is_ok(), "{report:?}");
+}

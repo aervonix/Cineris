@@ -328,6 +328,13 @@ pub(crate) fn stats(command: StatsCommand, name: &'static str) -> Done {
                         "tool_calls": summary.tool_calls,
                         "dropped": summary.dropped,
                         "unreadable": summary.unreadable,
+                        "aggregates": match &summary.aggregates {
+                            cortex_core::AggregatesFound::Newer { .. } => "newer",
+                            cortex_core::AggregatesFound::Unreadable => "unreadable",
+                            cortex_core::AggregatesFound::Missing => "missing",
+                            _ => "read",
+                        },
+                        "set_aside": summary.set_aside,
                     });
                     out!("{value}\n");
                 } else {

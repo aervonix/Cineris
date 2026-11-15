@@ -1384,6 +1384,7 @@ impl Session {
                     };
                     let (role, model) = self.summary_model();
                     // A summary is a request: the ledger is asked first.
+                    self.ledger.catch_up().await;
                     if let Err(reached) = self.ledger.take_request() {
                         self.notify(
                             turn,

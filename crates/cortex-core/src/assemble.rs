@@ -1412,7 +1412,7 @@ pub(crate) fn assemble(
     let mut ledger = Ledger::new(Arc::clone(&clock))
         .with_account(Account::for_lease(&lease, Arc::clone(&clock)))
         .with_turn_budget(budget(&settings.limits.turn));
-    if let Some(day) = crate::usage::day_account(inner, &settings.limits.day) {
+    if let Some(day) = crate::day::day_account(inner, &settings.limits.day, &id)? {
         ledger = ledger.with_account(day);
     }
     // Every tool is held to a stop a confined command made.

@@ -44,6 +44,78 @@ use std::fs::{File, Metadata, OpenOptions};
 use std::io;
 use std::path::Path;
 
+/// Which file an open handle, or a path, is: on Linux its device and inode
+/// numbers, on Windows its volume's serial number and its index on it. Two
+/// opens of one file have one identity; a file deleted and made again under
+/// the same name has another, even where Windows gives it its old creation
+/// time.
+///
+/// For a writer that holds a file open and must notice that the name now
+/// names another file, or none: the statistics' monthly file after
+/// `cortex stats reset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    device: u64,
+    index: u64,
+}
+
+impl FileIdentity {
+    /// The identity of an open file.
+    ///
+    /// # Errors
+    ///
+    /// When the operating system does not report it.
+    pub fn of(file: &File) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = file.metadata()?;
+            Ok(Self {
+                device: metadata.dev(),
+                index: metadata.ino(),
+            })
+        }
+        #[cfg(windows)]
+        {
+            let (volume, index) = crate::private::file_identity(file)?;
+            Ok(Self {
+                device: u64::from(volume),
+                index,
+            })
+        }
+    }
+
+    /// The identity of the file at `path`, a link followed. On Windows a
+    /// file waiting to be deleted (deleted while another handle holds it
+    /// open) cannot be opened, and is an error here too.
+    ///
+    /// # Errors
+    ///
+    /// When nothing is there, or it cannot be looked at.
+    pub fn at(path: &Path) -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::metadata(path)?;
+            Ok(Self {
+                device: metadata.dev(),
+                index: metadata.ino(),
+            })
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            // The right to read attributes and nothing else: the open takes
+            // no part in any sharing that another program asked for.
+            const FILE_READ_ATTRIBUTES: u32 = 0x80;
+            let file = OpenOptions::new()
+                .access_mode(FILE_READ_ATTRIBUTES)
+                .open(path)?;
+            Self::of(&file)
+        }
+    }
+}
+
 /// Why [`open_regular`] did not return a file. Nothing was read.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {

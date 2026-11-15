@@ -12,6 +12,7 @@
 //! | [`create_new`] | Creates a new, empty file that is private from the moment it exists, and returns it open for writing. |
 //! | [`create_dir_all`] | Creates a directory, and any missing parents, each one private. |
 //! | [`is_private`] | Whether only the current user has access to a file or a directory. |
+//! | [`hold_lock`] | Takes the lock that keeps two writers of a stored file apart: the operating system's lock on a private file beside it. |
 //! | [`access_list`] | Windows only: the access list, read back. |
 //!
 //! [`write_atomic`](crate::write_atomic) with
@@ -78,7 +79,7 @@ mod windows;
 pub use windows::{AccessEntry, AccessKind, AccessList, FULL_CONTROL, access_list};
 
 #[cfg(windows)]
-pub(crate) use windows::reparse_tag;
+pub(crate) use windows::{file_identity, reparse_tag};
 
 #[cfg(not(any(unix, windows)))]
 compile_error!("owner-only files are implemented for Unix and for Windows");
@@ -198,5 +199,73 @@ pub fn is_private(path: &Path) -> io::Result<bool> {
     #[cfg(windows)]
     {
         windows::access_list(path).map(|list| list.is_owner_only())
+    }
+}
+
+/// The lock file of the stored file at `file`: its name with `.lock`
+/// added (`trust.toml.lock`).
+#[must_use]
+pub fn lock_path(file: &Path) -> std::path::PathBuf {
+    let mut name = file.as_os_str().to_owned();
+    name.push(".lock");
+    std::path::PathBuf::from(name)
+}
+
+/// Takes the lock that keeps two writers of the stored file at `file`
+/// apart, for a change that reads the file, changes it and writes it whole:
+/// held from before the read until after the write, so that a second writer
+/// cannot write back what it read before the first one's change.
+///
+/// - **The lock is a file beside the store** ([`lock_path`]), created
+///   owner-only and opened without following a link, with the store's
+///   directory made owner-only if it is missing.
+/// - **It is the operating system's lock on an open file** (`flock` on
+///   Linux, `LockFileEx` on Windows, which keep two opens apart in one
+///   process too), so it goes with its holder however that ends, and there
+///   is no stale lock to clear. It is held until the returned file is
+///   dropped, and waits while another holds it.
+/// - **A file system that says it cannot lock gives no lock** (`Ok(None)`),
+///   and the change goes ahead: two writers are then the user's to keep
+///   apart, as they were before there was a lock.
+/// - **Readers take no lock:** a store replaced in one step is read whole,
+///   old or new.
+///
+/// # Errors
+///
+/// When the directory or the lock file cannot be made or opened, a link
+/// stands at the lock file's name, or the lock fails for any reason but
+/// the file system's not having locks.
+pub fn hold_lock(file: &Path) -> io::Result<Option<File>> {
+    if let Some(directory) = file
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        create_dir_all(directory)?;
+    }
+    let path = lock_path(file);
+    let refused = |error: crate::OpenError| match error {
+        crate::OpenError::Io(source) => source,
+        other => io::Error::other(format!("the lock file {}: {other}", path.display())),
+    };
+    let lock = match crate::open_regular(&path) {
+        Ok((lock, _)) => lock,
+        Err(crate::OpenError::NotFound) => {
+            match create_new(&path) {
+                Ok(_) => {}
+                // Another process made it first, or something else did: the
+                // open says which. A link there is not followed.
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+            crate::open_regular(&path)
+                .map(|(lock, _)| lock)
+                .map_err(refused)?
+        }
+        Err(error) => return Err(refused(error)),
+    };
+    match lock.lock() {
+        Ok(()) => Ok(Some(lock)),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(None),
+        Err(error) => Err(error),
     }
 }

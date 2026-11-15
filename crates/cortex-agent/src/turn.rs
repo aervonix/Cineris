@@ -834,7 +834,9 @@ impl Session {
         };
 
         // Every request is charged to the ledger before it is sent: this
-        // one first, then a summary prepared beside it.
+        // one first, then a summary prepared beside it. An account spent
+        // elsewhere too (a day's) is brought up to date first.
+        self.ledger.catch_up().await;
         if let Err(reached) = self.ledger.take_request() {
             return self.limit_reached(turn, &reached).await;
         }

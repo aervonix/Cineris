@@ -6,9 +6,12 @@
 #![allow(
     clippy::unwrap_used,
     clippy::disallowed_methods,
-    reason = "tests, which read the files they check"
+    clippy::disallowed_types,
+    clippy::print_stdout,
+    reason = "tests, which read and write the files they check, and say when they skip"
 )]
 
+mod day;
 mod limits;
 mod ranges;
 mod store;
@@ -25,6 +28,17 @@ use cortex_stats::{
     ToolShare, TurnRecord, Variants,
 };
 use cortex_testkit::Scratch;
+
+/// The entry test: a child in a role when its arguments say so (a second
+/// process for the tests of what two processes do), and nothing otherwise.
+#[test]
+fn child_entry() {
+    if let Some(dir) = day::WRITER.options() {
+        day::write_one(&dir);
+        #[expect(clippy::exit, reason = "a child ends when its part is played")]
+        std::process::exit(0);
+    }
+}
 
 pub(crate) fn scratch(test: &str) -> Scratch {
     cortex_testkit::scratch!(test)

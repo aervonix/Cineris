@@ -9,7 +9,7 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 - **Type.** A length of time is text such as `"20s"`, `"10m"` or `"1h30m"` (units `ms`, `s`, `m`, `h`, `d`). A list marked *joined* is added to by every layer; any other list, like any other value, is replaced by a higher layer.
 - **From a project.** What happens to the key in a project's `.cortex/config.toml` or `.cortex/config.local.toml`. *preference*: applied always. *runs code*, *widens access* and *raises cost*: applied only after the user has trusted the project, and listed for the user until then; until then the user's own value applies. *user only*: ignored, with a warning. A few keys depend on the value, and say how.
 - **Takes effect.** When a change to the key reaches a running harness: *at once*, at the *next epoch* (it shapes the prompt, the tool list or the model), or after a *restart*.
-- **Enforced.** In `[permissions]`, `[sandbox]` and `[limits]` an unknown key or value is an error and the file is refused: a restriction this version does not understand is never skipped. Everywhere else an unknown key is a warning.
+- **Fails closed.** In `[permissions]`, `[sandbox]` and `[limits]` an unknown key or value is an error and the file is refused: a restriction this version does not understand is never skipped. Everywhere else an unknown key is a warning. It says how the file is read, not that the setting is in force: the key's description says that.
 
 ## Top level
 
@@ -71,34 +71,34 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `permissions.mode` | `"read-only"`, `"supervised"`, `"guided"`, `"autonomous"`, `"unrestricted"` | `"supervised"` | by level: not above the mode in effect is a preference, up to `supervised` widens access, above it user only | at once | The session's level: how much runs without asking. Enforced. |
-| `permissions.rules` | list of rule: `effect`, `match`, `action`, joined | `[]` | by action: `deny` and `ask` are preferences, `allow` widens access | at once | Permission rules. Every layer adds to the list; `deny` beats `ask` beats `allow`, whatever the order. Enforced. |
+| `permissions.mode` | `"read-only"`, `"supervised"`, `"guided"`, `"autonomous"`, `"unrestricted"` | `"supervised"` | by level: not above the mode in effect is a preference, up to `supervised` widens access, above it user only | at once | The session's level: how much runs without asking. Fails closed. |
+| `permissions.rules` | list of rule: `effect`, `match`, `action`, joined | `[]` | by action: `deny` and `ask` are preferences, `allow` widens access | at once | Permission rules. Every layer adds to the list; `deny` beats `ask` beats `allow`, whatever the order. Fails closed. |
 
 ## `[sandbox]`
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `sandbox.enabled` | `true` or `false` | `true` | user only | at once | Whether commands are confined by the OS sandbox where there is one. Enforced. |
-| `sandbox.write` | list of text, joined | `[]` | widens access | at once | Paths a command may write besides the workspace. Every layer adds to the list. Enforced. |
-| `sandbox.protect` | list of text, joined | `[]` | preference | at once | Paths a command may not change, besides the built-in ones. Every layer adds to the list. Enforced. |
-| `sandbox.network` | `"off"`, `"full"` | `"off"` | by value: `off` is a preference, `full` widens access | at once | Whether a command may use the network. `off`: no TCP or UDP, to this machine's own addresses included, and no Unix socket, so a test suite that starts a server on loopback or on a Unix socket fails in the sandbox; such a run needs `full`, or one approved run outside the sandbox. `full`: the network (TCP and UDP, loopback included), and nothing else: still no Unix socket (the session bus, an agent, the Docker socket), no virtual machine's socket to its host, no raw socket. Enforced. |
+| `sandbox.enabled` | `true` or `false` | `true` | user only | at once | Whether commands are confined by the OS sandbox where there is one. Fails closed. |
+| `sandbox.write` | list of text, joined | `[]` | widens access | at once | Paths a command may write besides the workspace. Every layer adds to the list. Fails closed. |
+| `sandbox.protect` | list of text, joined | `[]` | preference | at once | Paths a command may not change, besides the built-in ones. Every layer adds to the list. Fails closed. |
+| `sandbox.network` | `"off"`, `"full"` | `"off"` | by value: `off` is a preference, `full` widens access | at once | Whether a command may use the network. `off`: no TCP or UDP, to this machine's own addresses included, and no Unix socket, so a test suite that starts a server on loopback or on a Unix socket fails in the sandbox; such a run needs `full`, or one approved run outside the sandbox. `full`: the network (TCP and UDP, loopback included), and nothing else: still no Unix socket (the session bus, an agent, the Docker socket), no virtual machine's socket to its host, no raw socket. Fails closed. |
 
 ## `[limits]`
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `limits.turn.requests` | whole number, 1 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Requests to a model. Enforced. |
-| `limits.turn.tokens` | whole number, 1 to 1000000000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Tokens, input and output together. Enforced. |
-| `limits.turn.cost` | number, 0 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Money, in US dollars. Enforced. |
-| `limits.turn.time` | length of time | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Wall-clock time. Enforced. |
-| `limits.session.requests` | whole number, 1 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Requests to a model. Enforced. |
-| `limits.session.tokens` | whole number, 1 to 1000000000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Tokens, input and output together. Enforced. |
-| `limits.session.cost` | number, 0 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Money, in US dollars. Enforced. |
-| `limits.session.time` | length of time | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Wall-clock time. Enforced. |
-| `limits.day.requests` | whole number, 1 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Requests to a model. Enforced. |
-| `limits.day.tokens` | whole number, 1 to 1000000000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Tokens, input and output together. Enforced. |
-| `limits.day.cost` | number, 0 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Money, in US dollars. Enforced. |
-| `limits.day.time` | length of time | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Wall-clock time. Enforced. |
+| `limits.turn.requests` | whole number, 1 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Requests to a model. Fails closed. |
+| `limits.turn.tokens` | whole number, 1 to 1000000000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Tokens, input and output together. Fails closed. |
+| `limits.turn.cost` | number, 0 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Money, in US dollars. Fails closed. |
+| `limits.turn.time` | length of time | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`). Fails closed. |
+| `limits.session.requests` | whole number, 1 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Requests to a model. Fails closed. |
+| `limits.session.tokens` | whole number, 1 to 1000000000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Tokens, input and output together. Fails closed. |
+| `limits.session.cost` | number, 0 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Money, in US dollars. Fails closed. |
+| `limits.session.time` | length of time | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`). Fails closed. |
+| `limits.day.requests` | whole number, 1 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Requests to a model. Fails closed. |
+| `limits.day.tokens` | whole number, 1 to 1000000000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Tokens, input and output together. Fails closed. |
+| `limits.day.cost` | number, 0 to 1000000000 | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Money, in US dollars. Fails closed. |
+| `limits.day.time` | length of time | not set | tighten only: a lower limit is a preference, a higher one user only | at once | Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`). Fails closed. |
 
 ## `[credentials]`
 
@@ -163,7 +163,7 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
 | `stats.enabled` | `true` or `false` | `true` | user only | restart | Whether events are recorded. Off, nothing is written, every adaptive feature uses its default, and the usage view has the open session's figures alone. |
-| `stats.retention` | whole number, 1 to 1200 | `3` | user only | at once | How many months a monthly file of events stays after its own month: 3 by default. What it added up to stays in the aggregates, every all-time figure with it, so only the raw events go (a heavy user's are about 90 MB a month). |
+| `stats.retention` | whole number, 1 to 1200 | `3` | user only | restart | How many months a monthly file of events stays after its own month: 3 by default. What it added up to stays in the aggregates, every all-time figure with it, so only the raw events go (a heavy user's are about 90 MB a month). Read when the harness starts. |
 
 ## `[index]`
 
@@ -180,9 +180,9 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `usage.week_start` | `"monday"`, `"tuesday"`, `"wednesday"`, `"thursday"`, `"friday"`, `"saturday"`, `"sunday"` | `"monday"` | user only | at once | The first day of a week: `monday` to `sunday`. |
-| `usage.ranges` | `"calendar"`, `"rolling"` | `"calendar"` | user only | at once | `calendar` weeks and months, or `rolling`: the last 7 and 30 days. |
-| `usage.refresh` | list of text | `[]` | user only | at once | The providers whose documented usage endpoint `cortex usage --refresh` may ask, with that provider's own key: `["openrouter"]`. Empty, nothing is ever asked. Only when the user asks, never on its own. The user's alone: a project's file cannot turn it on. |
+| `usage.week_start` | `"monday"`, `"tuesday"`, `"wednesday"`, `"thursday"`, `"friday"`, `"saturday"`, `"sunday"` | `"monday"` | user only | restart | The first day of a week: `monday` to `sunday`. |
+| `usage.ranges` | `"calendar"`, `"rolling"` | `"calendar"` | user only | restart | `calendar` weeks and months, or `rolling`: the last 7 and 30 days. |
+| `usage.refresh` | list of text | `[]` | user only | restart | The providers whose documented usage endpoint `cortex usage --refresh` may ask, with that provider's own key: `["openrouter"]`. Empty, nothing is ever asked. Only when the user asks, never on its own. The user's alone: a project's file cannot turn it on. |
 
 ## Reserved sections
 

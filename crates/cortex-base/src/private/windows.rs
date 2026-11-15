@@ -54,10 +54,10 @@ use windows_sys::Win32::Security::{
     SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo,
-    GetFileInformationByHandleEx, READ_CONTROL,
+    BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FileAttributeTagInfo, GetFileInformationByHandle, GetFileInformationByHandleEx, READ_CONTROL,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -437,6 +437,31 @@ pub(crate) fn reparse_tag(file: &File) -> io::Result<u32> {
         return Err(io::Error::last_os_error());
     }
     Ok(info.ReparseTag)
+}
+
+/// The serial number of the volume an open file is on, and the file's index
+/// on that volume: together what tells one file from another, as a device
+/// and an inode number do on Linux. For [`crate::nofollow::FileIdentity`],
+/// which the standard library cannot give on Windows (its `file_index` is
+/// not stable). Like [`reparse_tag`], a question about a file this module
+/// asks for another.
+///
+/// # Errors
+///
+/// When Windows refuses to report the handle's information.
+pub(crate) fn file_identity(file: &File) -> io::Result<(u32, u64)> {
+    // SAFETY: `BY_HANDLE_FILE_INFORMATION` is plain numbers and two
+    // `FILETIME`s of plain numbers, for which all zeros is a valid value.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: `file` is an open handle, alive for the call, and `info` is a
+    // live, writable `BY_HANDLE_FILE_INFORMATION`, the structure the call
+    // fills and nothing more.
+    let filled = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut info) };
+    if filled == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    Ok((info.dwVolumeSerialNumber, index))
 }
 
 /// Reads the owner and the access list of the file or directory at `path`.

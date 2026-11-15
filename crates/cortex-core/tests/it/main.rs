@@ -28,6 +28,7 @@
 mod adversary;
 mod approvals;
 mod context;
+mod day;
 mod events;
 mod gates;
 mod harness_git;
