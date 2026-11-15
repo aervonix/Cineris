@@ -65,6 +65,51 @@ impl ToolSchemaStyle {
             Self::Loose => "loose",
         }
     }
+
+    /// The style a name stands for.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "strict" => Some(Self::Strict),
+            "loose" => Some(Self::Loose),
+            _ => None,
+        }
+    }
+}
+
+impl Variants {
+    /// The variants as the session log's `epoch` entry writes them: one
+    /// entry for each variant point.
+    #[must_use]
+    pub fn to_map(&self) -> std::collections::BTreeMap<String, String> {
+        [
+            ("edit_format", self.edit_format.clone()),
+            ("tool_schema", self.tool_schema.as_str().to_owned()),
+            ("prompt_style", self.prompt_style.clone()),
+        ]
+        .into_iter()
+        .map(|(point, choice)| (point.to_owned(), choice))
+        .collect()
+    }
+
+    /// The variants an `epoch` entry wrote. `None` when a point is missing
+    /// or its choice is not one this build knows: the epoch's variants are
+    /// then not known, and it is not gone on with.
+    #[must_use]
+    pub fn from_map(map: &std::collections::BTreeMap<String, String>) -> Option<Self> {
+        let edit_format = map.get("edit_format")?;
+        let prompt_style = map.get("prompt_style")?;
+        if !EDIT_FORMATS.contains(&edit_format.as_str())
+            || !PROMPT_STYLES.contains(&prompt_style.as_str())
+        {
+            return None;
+        }
+        Some(Self {
+            edit_format: edit_format.clone(),
+            tool_schema: ToolSchemaStyle::from_name(map.get("tool_schema")?)?,
+            prompt_style: prompt_style.clone(),
+        })
+    }
 }
 
 /// The variants in effect for a model: one choice at each variant point.

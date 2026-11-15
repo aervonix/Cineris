@@ -11,10 +11,23 @@ use std::time::Duration;
 use cortex_base::UtcTime;
 use cortex_llm::Variants;
 use cortex_protocol::event::{TurnOutcome, Verification};
-use cortex_protocol::usage::{RequestUsage, TokenUsage};
+use cortex_protocol::model::ModelRole;
+use cortex_protocol::usage::{ModelTime, ProviderLimits, RequestUsage, TokenUsage};
 use cortex_protocol::{ErrorData, ModelId, ProviderId, SessionId, StopReason, TurnId};
 
 pub use crate::context::PrefixDifference;
+pub use crate::timing::TurnTimes;
+
+/// Why a request was made.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum RequestPurpose {
+    /// One of the turn's own requests, to the main model.
+    #[default]
+    Turn,
+    /// A summary for a compaction, to the `fast` role's model or the main
+    /// one.
+    Summary,
+}
 
 /// One request to a model ended.
 #[derive(Debug, Clone, PartialEq)]
@@ -29,11 +42,24 @@ pub struct RequestStat {
     pub provider: ProviderId,
     /// The model.
     pub model: ModelId,
+    /// The role it was made in.
+    pub role: ModelRole,
+    /// Why it was made.
+    pub purpose: RequestPurpose,
+    /// For a summary taken in the background, the turn that started it,
+    /// when that is not `turn`: the turn that counted it, in which its
+    /// usage, its cost and its charge to the ledger are.
+    pub started_in: Option<TurnId>,
     /// The per-model variants in effect.
     pub variants: Variants,
+    /// The reasoning level in effect, as the model names it.
+    pub effort: Option<String>,
     /// What the request used, at which speed, and what it cost. `None` when
     /// it failed before any usage was reported.
     pub usage: Option<RequestUsage>,
+    /// Where its time went. All zero for a summary taken beside the turn,
+    /// whose time is its own.
+    pub time: ModelTime,
     /// Why the response ended.
     pub stop: StopReason,
     /// The failure, when the request failed.
@@ -76,6 +102,11 @@ pub struct ToolCallStat {
     pub outcome: ToolStatOutcome,
     /// How long it ran. Zero for a call that never ran.
     pub duration: Duration,
+    /// How long it waited, once allowed, before it ran: for a slot, for an
+    /// earlier call, or for the response to end.
+    pub queued: Duration,
+    /// How long it waited for the user's answer.
+    pub approval: Duration,
 }
 
 /// One turn ended.
@@ -85,8 +116,14 @@ pub struct TurnStat {
     pub session: SessionId,
     /// The turn.
     pub turn: TurnId,
+    /// The main model's provider.
+    pub provider: ProviderId,
     /// The main model.
     pub model: ModelId,
+    /// The variants in effect at the turn's end.
+    pub variants: Variants,
+    /// The reasoning level in effect at its end.
+    pub effort: Option<String>,
     /// How many requests the turn made.
     pub requests: u64,
     /// How many tool calls it recorded a result for.
@@ -97,6 +134,8 @@ pub struct TurnStat {
     pub verification: Option<Verification>,
     /// How long it took.
     pub duration: Duration,
+    /// Where that time went: parts that add up to it.
+    pub times: TurnTimes,
 }
 
 /// How many tokens of a request each part of it is estimated at.
@@ -162,6 +201,9 @@ pub enum StatEvent {
     Turn(TurnStat),
     /// What a request held, by source: sent with its request's `Request`.
     Context(ContextStat),
+    /// The limits a provider reported with a response: the latest are kept
+    /// for the usage view.
+    Limits(ProviderLimits),
 }
 
 /// Takes the loop's statistics events.

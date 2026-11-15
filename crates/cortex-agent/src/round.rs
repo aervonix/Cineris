@@ -185,6 +185,33 @@ struct Outcome {
     item: ToolResultItem,
     stat: ToolStatOutcome,
     duration: Duration,
+    /// How long it waited, once allowed, before it ran.
+    queued: Duration,
+    /// How long it waited for the user's answer.
+    approval: Duration,
+}
+
+/// When things happened to a call, on the monotonic clock: what its time
+/// is cut into (`crate::timing`).
+#[derive(Debug, Clone, Copy, Default)]
+struct CallTimes {
+    /// When it was allowed: planned and allowed, or answered yes.
+    ready: Option<Duration>,
+    /// When its question was put.
+    asked: Option<Duration>,
+    /// How long it waited for the answer.
+    approval: Duration,
+    /// When it started to run.
+    started: Option<Duration>,
+}
+
+impl CallTimes {
+    fn queued(&self) -> Duration {
+        match (self.ready, self.started) {
+            (Some(ready), Some(started)) => started.saturating_sub(ready),
+            _ => Duration::ZERO,
+        }
+    }
 }
 
 enum CallState {
@@ -222,6 +249,8 @@ struct Call {
     shown: bool,
     /// Whether a tool run was started for it.
     ran: bool,
+    /// When things happened to it.
+    times: CallTimes,
 }
 
 /// A run from a response that was thrown away, kept in case the next
@@ -251,6 +280,10 @@ pub(crate) struct Finished {
     pub(crate) item: ToolResultItem,
     pub(crate) stat: ToolStatOutcome,
     pub(crate) duration: Duration,
+    /// How long it waited, once allowed, before it ran.
+    pub(crate) queued: Duration,
+    /// How long it waited for the user's answer.
+    pub(crate) approval: Duration,
     /// The files the call wrote, if it succeeded.
     pub(crate) written: Vec<AbsPath>,
     /// What a repeat of the call with the same result is recognised by.
@@ -345,6 +378,25 @@ impl Round {
     /// Whether the response that counts has any call.
     pub(crate) fn has_calls(&self) -> bool {
         !self.calls.is_empty()
+    }
+
+    /// The tools of the calls running now, in the model's order: what the
+    /// round's time is spent on.
+    pub(crate) fn running(&self) -> Vec<String> {
+        self.calls
+            .iter()
+            .filter(|call| matches!(call.state, CallState::Running))
+            .map(|call| call.name.clone())
+            .collect()
+    }
+
+    /// Whether a question is open.
+    pub(crate) fn is_asking(&self) -> bool {
+        self.asking.is_some()
+    }
+
+    fn now(&self) -> Duration {
+        self.env.clock.monotonic()
     }
 
     /// Whether every call has its result, no run is being kept and no
@@ -542,6 +594,7 @@ impl Round {
             cancel: self.cancel.child(),
             shown: false,
             ran: false,
+            times: CallTimes::default(),
         }
     }
 
@@ -628,6 +681,8 @@ impl Round {
         call.footprint = Some(cached.footprint);
         call.shown = true;
         call.ran = true;
+        // A kept run waited for nothing of this response.
+        call.times.ready = None;
         call.state = match cached.outcome {
             Some(mut outcome) => {
                 outcome.item.call_id = call.call_id.clone();
@@ -709,7 +764,10 @@ impl Round {
         }
         match decision {
             Decision::Allow | Decision::AllowReadOnly => {
-                self.calls[position].state = CallState::Ready(plan);
+                let now = self.now();
+                let call = &mut self.calls[position];
+                call.state = CallState::Ready(plan);
+                call.times.ready = Some(now);
             }
             Decision::Ask => self.calls[position].state = CallState::NeedsAnswer(plan),
             Decision::Deny { reason } => {
@@ -777,6 +835,11 @@ impl Round {
         let Some(position) = self.position(token) else {
             return;
         };
+        let now = self.now();
+        let call = &mut self.calls[position];
+        if let Some(asked) = call.times.asked.take() {
+            call.times.approval += now.saturating_sub(asked);
+        }
         if !matches!(self.calls[position].state, CallState::Asking) {
             // The question was withdrawn while the answer was on its way,
             // and the call has been given its result already.
@@ -787,7 +850,11 @@ impl Round {
             return;
         }
         match verdict {
-            Verdict::Allow => self.calls[position].state = CallState::Ready(plan),
+            Verdict::Allow => {
+                let call = &mut self.calls[position];
+                call.state = CallState::Ready(plan);
+                call.times.ready = Some(now);
+            }
             Verdict::Deny { note } => {
                 let mut text = "The user did not allow this call.".to_owned();
                 if let Some(note) = note {
@@ -852,12 +919,21 @@ impl Round {
                 self.emit_started(call);
             }
             self.emit_completed(&item);
+            let now = self.now();
             let call = &mut self.calls[position];
             call.shown = true;
+            // A question withdrawn without an answer (an interrupt, a stop)
+            // was waited on until now.
+            if let Some(asked) = call.times.asked.take() {
+                call.times.approval += now.saturating_sub(asked);
+            }
+            let (queued, approval) = (call.times.queued(), call.times.approval);
             call.state = CallState::Done(Outcome {
                 item,
                 stat,
                 duration,
+                queued,
+                approval,
             });
         } else if let Some(position) = self.cache.iter().position(|cached| cached.token == token) {
             // A kept run finished. Nobody is shown it unless the next
@@ -875,6 +951,8 @@ impl Round {
                 item,
                 stat,
                 duration,
+                queued: Duration::ZERO,
+                approval: Duration::ZERO,
             });
         } else if let Some(position) = self.draining.iter().position(|run| run.token == token) {
             let run = self.draining.swap_remove(position);
@@ -1015,6 +1093,7 @@ impl Round {
             call.state = CallState::Ready(plan);
             return;
         };
+        call.times.asked = Some(self.env.clock.monotonic());
         let token = call.token;
         let policy = Arc::clone(&self.env.policy);
         let session = self.env.session.clone();
@@ -1069,6 +1148,7 @@ impl Round {
         };
         call.ran = true;
         call.shown = true;
+        call.times.started = Some(self.env.clock.monotonic());
         let token = call.token;
         let name = call.name.clone();
         let call = &self.calls[position];
@@ -1081,7 +1161,11 @@ impl Round {
             turn: self.turn.clone(),
             item_id: call.item_id.clone(),
         };
-        self.spawn(token, &name, async move {
+        // One call's run: its parent is the span the loop is in, the
+        // turn's or the request's (`docs/architecture/02-runtime.md`,
+        // "Spans").
+        let span = tracing::info_span!("tool", tool = %name, call = %call.call_id);
+        self.spawn(token, &name, tracing::Instrument::instrument(async move {
             let started = clock.monotonic();
             let result = execute(tool.as_ref(), plan, &cx, &mut out).await;
             let stat = match result.outcome() {
@@ -1096,7 +1180,7 @@ impl Round {
                 duration: clock.monotonic().saturating_sub(started),
                 stat,
             }
-        });
+        }, span));
     }
 
     /// The response these calls came from no longer counts: it failed and
@@ -1243,6 +1327,8 @@ impl Round {
                     item: outcome.item,
                     stat: outcome.stat,
                     duration: outcome.duration,
+                    queued: outcome.queued,
+                    approval: outcome.approval,
                     written,
                     signature,
                 })

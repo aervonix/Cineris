@@ -41,6 +41,7 @@ use cortex_protocol::speed::{CooldownState, SpeedFallbackBy};
 use cortex_protocol::usage::{RequestUsage, UsageTotals};
 use cortex_protocol::{ErrorData, ErrorKind, Item, ItemId, Part, StopReason, TurnId};
 use tokio::sync::Notify;
+use tracing::Instrument;
 
 use crate::assistant::{Applied, Calls, Draft};
 use crate::config::{LoopConfig, Models, RoleModel, SessionInfo, Workspace};
@@ -54,7 +55,10 @@ use crate::round::{Report, Round, RoundEnv, Stage};
 use crate::session::{Inbox, Pending, Prompt, Queued, Running, SessionHandle, Shared};
 use crate::speed::{Moves, SpeedSettings, cooldown_notice, fallback_notice};
 use crate::state::{Observer, TurnState};
-use crate::stats::{ContextStat, RequestStat, StatEvent, Stats, ToolCallStat, TurnStat};
+use crate::stats::{
+    ContextStat, RequestPurpose, RequestStat, StatEvent, Stats, ToolCallStat, TurnStat,
+};
+use crate::timing::{Spend, TurnClock};
 use crate::store::{Attempt, ITEM_PREFIX, Record, SessionStore, StoreError, TURN_PREFIX};
 use crate::toolset::ToolSet;
 use crate::usage::{UsageBook, add_request};
@@ -166,6 +170,18 @@ pub struct Session {
     /// The context record of the request in flight, sent with its
     /// `Request` event.
     pending_context: Option<ContextStat>,
+    /// Where the running turn's time has gone (`crate::timing`).
+    times: TurnClock,
+    /// The budget of each utility role whose requests have taught it
+    /// something: a refusal as too long, or a count. A role that has none
+    /// is estimated at the main model's ratio. The main model's budget is
+    /// the context's.
+    role_budgets: std::collections::BTreeMap<ModelRole, crate::context::Budget>,
+    /// The last turn that ran: what a summary that finishes after the
+    /// session's last boundary is counted in.
+    last_turn: Option<TurnId>,
+    /// The role the last summary counted was asked of.
+    summary_role: ModelRole,
 }
 
 impl std::fmt::Debug for Session {
@@ -230,6 +246,9 @@ struct Live {
     /// When the request was sent, and when its first content arrived.
     sent: Duration,
     first_content: Option<Duration>,
+    /// The turn's model time when the request was sent: the request's own
+    /// is what it has grown by at its end.
+    model_before: [Duration; 4],
 }
 
 /// A response that ended.
@@ -430,6 +449,10 @@ impl Session {
             manual: false,
             manual_focus: None,
             pending_context: None,
+            times: TurnClock::new(Duration::ZERO),
+            role_budgets: std::collections::BTreeMap::new(),
+            last_turn: None,
+            summary_role: ModelRole::Main,
         };
         Ok((session, SessionHandle { shared }))
     }
@@ -449,9 +472,18 @@ impl Session {
             let mut next = Some(start);
             while let Some((running, prompt)) = next.take() {
                 let turn = running.id.clone();
+                // The turn's span: its requests and its tools are in it
+                // (`docs/architecture/02-runtime.md`, "Logging and
+                // tracing").
+                let span = tracing::info_span!(
+                    "turn",
+                    session = %self.shared.info.id,
+                    turn = %turn,
+                );
                 // A panic is a bug. It ends the turn, and the session can
                 // take the next prompt.
-                let ended = Guarded(Box::pin(self.turn(running, prompt))).await;
+                let ended =
+                    Guarded(Box::pin(self.turn(running, prompt).instrument(span))).await;
                 next = match ended {
                     Ok(next) => next,
                     Err(panic) => {
@@ -461,6 +493,9 @@ impl Session {
                 };
             }
         }
+        // A summary the session's last boundary did not count was spent all
+        // the same.
+        self.count_left_summaries().await;
     }
 
     /// Ends a turn whose code panicked: front ends get `turn.completed`
@@ -608,6 +643,8 @@ impl Session {
             .number_of(running.id.as_str())
             .and_then(|number| u32::try_from(number).ok())
             .unwrap_or(0);
+        self.times = TurnClock::new(self.clock.monotonic());
+        self.last_turn = Some(running.id.clone());
         let mut turn = Turn {
             id: running.id,
             number,
@@ -649,7 +686,18 @@ impl Session {
             phase = match phase {
                 Phase::Preparing(prep) => self.prepare(&mut turn, prep).await,
                 Phase::Compacting(prep) => self.compacting(&mut turn, prep).await,
-                Phase::Requesting(request, prep) => self.respond(&mut turn, *request, prep).await,
+                Phase::Requesting(request, prep) => {
+                    let span = tracing::info_span!(
+                        "request",
+                        role = "main",
+                        provider = %request.model.info.provider,
+                        model = %request.model.info.id,
+                        attempts = tracing::field::Empty,
+                    );
+                    self.respond(&mut turn, *request, prep)
+                        .instrument(span)
+                        .await
+                }
                 Phase::Deciding(response) => self.decide(&mut turn, *response).await,
                 Phase::ToolRound(round) => self.tool_round(&mut turn, *round).await,
                 Phase::Verifying => self.verify(&mut turn).await,
@@ -776,6 +824,8 @@ impl Session {
         request.messages = assembled.messages;
         request.cache = assembled.cache;
         request.reasoning = model.reasoning.clone();
+        // The variants are the epoch's: fixed for it.
+        request.variants = self.epoch_variants();
         // The speed the role is set to. The client sends `standard` in its
         // place while the tier cools down or when the model has no such
         // tier, and says so in the stream.
@@ -795,14 +845,18 @@ impl Session {
     async fn respond(&mut self, turn: &mut Turn, request: ModelRequest, prep: Prep) -> Phase {
         self.enter(TurnState::Requesting);
         let model = self.model.clone();
+        let sent = self.clock.monotonic();
+        let model_before = self.times.model_time(sent);
+        self.times.enter(sent, Spend::Connect);
         let mut live = Live {
             item_id: self.item_ids.next_id(),
             draft: Draft::default(),
             shown: false,
             attempt: 1,
             usage: None,
-            sent: self.clock.monotonic(),
+            sent,
             first_content: None,
+            model_before,
         };
         let mut round = Round::new(
             Arc::clone(&self.env),
@@ -842,7 +896,10 @@ impl Session {
                 // was sent again.
                 self.enter(TurnState::Requesting);
             }
+            self.spend_on(&event);
             match event {
+                // Timing, which `spend_on` took.
+                ModelEvent::Answered => {}
                 ModelEvent::Start { .. } => {
                     if self.state == TurnState::Streaming {
                         // A response began over one that never ended: the
@@ -908,8 +965,12 @@ impl Session {
                 }
                 ModelEvent::SpeedCooldown(change) => self.cooldown_changed(turn, &model, &change),
                 ModelEvent::Limits(windows) => {
-                    self.usage
-                        .set_limits(&model.entry.info.provider, windows, self.clock.now());
+                    let kept = self.usage.set_limits(
+                        &model.entry.info.provider,
+                        windows,
+                        self.clock.now(),
+                    );
+                    self.stats.record(StatEvent::Limits(kept));
                     self.tell_usage(turn, &model, live.usage.as_ref(), false);
                 }
                 ModelEvent::Usage(usage) => {
@@ -962,6 +1023,35 @@ impl Session {
                             });
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// What an event of the response says the turn's time is spent on from
+    /// now (`crate::timing`).
+    fn spend_on(&mut self, event: &ModelEvent) {
+        let now = self.clock.monotonic();
+        match event {
+            // The provider answered: the wait for the first byte.
+            ModelEvent::Answered => self.times.enter(now, Spend::FirstByte),
+            ModelEvent::Retry(info) => self.times.retry(now, info.wait),
+            ModelEvent::SpeedFallback(moved)
+                if moved.by == SpeedFallbackBy::Harness && self.state == TurnState::Streaming =>
+            {
+                // Sent again at standard speed.
+                self.times.enter(now, Spend::Connect);
+            }
+            // What is not the response itself says nothing of where it is.
+            ModelEvent::Usage(_)
+            | ModelEvent::Limits(_)
+            | ModelEvent::SpeedFallback(_)
+            | ModelEvent::SpeedCooldown(_) => {}
+            // The response itself, its end and a failure included: it is
+            // arriving, or has.
+            _ => {
+                if self.state != TurnState::Streaming {
+                    self.times.enter(now, Spend::Streaming);
                 }
             }
         }
@@ -1047,6 +1137,7 @@ impl Session {
         error: ProviderError,
         prep: Prep,
     ) -> Phase {
+        self.times.enter(self.clock.monotonic(), Spend::Harness);
         if error.kind == cortex_base::ErrorKind::Interrupted {
             return Phase::Interrupted(Some(Box::new((live, round))));
         }
@@ -1119,6 +1210,7 @@ impl Session {
     )]
     async fn decide(&mut self, turn: &mut Turn, response: Response) -> Phase {
         self.enter(TurnState::Deciding);
+        self.times.enter(self.clock.monotonic(), Spend::Harness);
         let Response {
             mut live,
             mut round,
@@ -1287,6 +1379,8 @@ impl Session {
         // whatever was kept and is not asked for again is discarded.
         let interrupted = loop {
             round.pump(Stage::Ended);
+            self.times
+                .round(self.clock.monotonic(), round.running(), round.is_asking());
             if round.is_settled() {
                 break false;
             }
@@ -1302,6 +1396,7 @@ impl Session {
             }
         };
 
+        self.times.enter(self.clock.monotonic(), Spend::Harness);
         // Recorded in the model's call order, whatever order they finished
         // in, and never cut short: every provider rejects a call without a
         // result.
@@ -1353,9 +1448,11 @@ impl Session {
                 turn: turn.id.clone(),
                 tool: finished.item.tool.clone(),
                 model: model.entry.info.id.clone(),
-                variants: model.entry.variants.clone(),
+                variants: self.epoch_variants(),
                 outcome: finished.stat,
                 duration: finished.duration,
+                queued: finished.queued,
+                approval: finished.approval,
             }));
             signature.push_str(&finished.signature);
             turn.written.extend(finished.written);
@@ -1426,7 +1523,10 @@ impl Session {
             written: &turn.written,
             cancel: turn.cancel.child(),
         };
-        let Some(outcome) = turn.cancel.race(self.verifier.verify(cx)).await else {
+        self.times.enter(self.clock.monotonic(), Spend::Verification);
+        let verified = turn.cancel.race(self.verifier.verify(cx)).await;
+        self.times.enter(self.clock.monotonic(), Spend::Harness);
+        let Some(outcome) = verified else {
             return Phase::Interrupted(None);
         };
         match outcome {
@@ -1558,15 +1658,20 @@ impl Session {
             _ => completed,
         };
         let outcome = completed.outcome.clone();
+        let now = self.clock.monotonic();
         self.stats.record(StatEvent::Turn(TurnStat {
             session: self.shared.info.id.clone(),
             turn: turn.id.clone(),
+            provider: self.model.entry.info.provider.clone(),
             model: self.model.entry.info.id.clone(),
+            variants: self.epoch_variants(),
+            effort: self.model.effort.clone(),
             requests: turn.requests,
             tool_calls: turn.tool_calls,
             outcome: outcome.clone(),
             verification: completed.verification.clone(),
-            duration: self.clock.monotonic().saturating_sub(turn.started),
+            duration: now.saturating_sub(turn.started),
+            times: self.times.finish(now),
         }));
         self.emit(turn, Event::TurnCompleted(completed));
 
@@ -1832,17 +1937,32 @@ impl Session {
         live: &Live,
     ) {
         let tokens = usage.as_ref().map(|usage| usage.tokens.clone());
+        let after = self.times.model_time(self.clock.monotonic());
+        let spent = |at: usize| millis(after[at].saturating_sub(live.model_before[at]));
+        let attempts = live.attempt;
+        tracing::Span::current().record("attempts", attempts);
         self.stats.record(StatEvent::Request(RequestStat {
             session: self.shared.info.id.clone(),
             turn: turn.id.clone(),
             at: self.clock.now(),
             provider: model.entry.info.provider.clone(),
             model: model.entry.info.id.clone(),
-            variants: model.entry.variants.clone(),
+            role: ModelRole::Main,
+            purpose: RequestPurpose::Turn,
+            started_in: None,
+            variants: self.epoch_variants(),
+            effort: model.effort.clone(),
             usage,
+            time: cortex_protocol::usage::ModelTime {
+                connect_ms: spent(0),
+                first_byte_ms: spent(1),
+                streaming_ms: spent(2),
+                retry_ms: spent(3),
+                summary_ms: 0,
+            },
             stop,
             error,
-            retries: live.attempt.saturating_sub(1),
+            retries: attempts.saturating_sub(1),
         }));
         self.settle_sent();
         if let Some(mut context) = self.pending_context.take() {

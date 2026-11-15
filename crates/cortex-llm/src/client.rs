@@ -466,6 +466,7 @@ async fn attempt(
         return Attempt::Failed(inner.protocol.classify(&failure, request));
     }
 
+    out.emit(ModelEvent::Answered).await;
     inner
         .protocol
         .read_headers(&headers, inner.clock.now(), &mut sink);

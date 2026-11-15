@@ -6,7 +6,7 @@
 //! |---|---|---|
 //! | 1 | The core instructions | [`CORE_INSTRUCTIONS`], ours |
 //! | 2 | Environment facts that do not change during the session | [`Environment`] |
-//! | 3 | Usage notes of the enabled tools | none yet: no tool contributes one |
+//! | 3 | Usage notes of the enabled tools | none yet from a tool; [`GUIDED_NOTES`] in the `guided` prompt style (step 16) |
 //! | 4 | Project instructions | the instruction files ([`super::instructions`]) |
 //! | 5 | The project profile | step 17 |
 //! | 6 | The index of skills, commands and tool sources | steps 28 and 30 |
@@ -47,6 +47,24 @@ and why.
 Messages that begin \"Notice from the harness\" come from Cortex-Harness, not \
 from the user: a changed instruction file, a limit reached, a summary of \
 earlier work. Take them into account. They need no reply.";
+
+/// Section 3 for a model addressed in the `guided` prompt style
+/// (`docs/architecture/14-adaptation.md`, "Adapting to the model"): more
+/// guidance on using the tools, for a model that needs it. Written for this
+/// project.
+pub const GUIDED_NOTES: &str = "\
+Using the tools well:
+- Find before you read: search for a name or a phrase, then read the part \
+of the file it is in, not the whole file.
+- To change a file, give the exact text to replace, with enough lines \
+around it to be found once, and the text to put in its place. Read the file \
+first, so the text is what is there now.
+- Run one command for one purpose, and read its whole output before the \
+next. A failing command's message usually says what to do.
+- When a call fails, read why before you try again. The same call with the \
+same arguments fails the same way.
+- Several calls that do not depend on each other can be made in one \
+response: reading three files is one response, not three.";
 
 /// Section 2: what does not change while a session runs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -96,6 +114,8 @@ pub(crate) struct Sections<'a> {
     pub(crate) environment: Option<&'a Environment>,
     pub(crate) instructions: &'a [InstructionText],
     pub(crate) append: Option<&'a str>,
+    /// The `guided` prompt style: section 3 holds [`GUIDED_NOTES`].
+    pub(crate) guided: bool,
 }
 
 /// The system prompt, and the hash of what it is without its instruction
@@ -114,7 +134,11 @@ pub(crate) fn build(sections: &Sections<'_>) -> Built {
     if let Some(environment) = sections.environment {
         parts.push(environment.render());
     }
-    // Section 3, the tools' usage notes: no tool contributes one yet.
+    // Section 3, the tools' usage notes: no tool contributes one yet, and
+    // the `guided` style adds its notes here.
+    if sections.guided {
+        parts.push(GUIDED_NOTES.to_owned());
+    }
     let instructions = render_instructions(sections.instructions);
     let instructions_at = parts.len();
     if let Some(text) = &instructions {
@@ -179,6 +203,7 @@ mod tests {
             environment: Some(&environment()),
             instructions: &files,
             append: Some("Answer in French."),
+            guided: false,
         });
         let core = built.system.find("You are Cortex-Harness").unwrap();
         let env = built.system.find("Environment:").unwrap();
@@ -204,6 +229,7 @@ mod tests {
                 environment: Some(&environment()),
                 instructions: files,
                 append,
+                guided: false,
             })
         };
         let (first, second) = (with(&one, None), with(&two, None));
@@ -211,5 +237,23 @@ mod tests {
         assert_eq!(first.base, second.base);
         assert_eq!(first.base, with(&[], None).base);
         assert_ne!(first.base, with(&one, Some("more")).base);
+    }
+
+    #[test]
+    fn the_guided_style_adds_its_notes_after_the_environment() {
+        let environment = environment();
+        let sections = |guided| Sections {
+            environment: Some(&environment),
+            instructions: &[],
+            append: None,
+            guided,
+        };
+        let (concise, guided) = (build(&sections(false)), build(&sections(true)));
+        assert!(!concise.system.contains(GUIDED_NOTES));
+        let env = guided.system.find("Environment:").unwrap();
+        let notes = guided.system.find(GUIDED_NOTES).unwrap();
+        assert!(env < notes);
+        // A change of style is a change of the prompt: a new epoch.
+        assert_ne!(concise.base, guided.base);
     }
 }

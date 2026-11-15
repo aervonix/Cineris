@@ -1189,6 +1189,7 @@ impl Core {
                 }))
             }
             Op::UsageReport(_) => not_built("The usage report", "statistics (step 16)"),
+            Op::UsageRefresh(_) => not_built("The usage refresh", "statistics (step 16)"),
             Op::ProjectList(_) | Op::ProjectUpdate(_) => {
                 not_built("The project profile", "the project profile (step 17)")
             }

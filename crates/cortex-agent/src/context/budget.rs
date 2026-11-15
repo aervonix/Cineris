@@ -48,6 +48,33 @@ pub(crate) struct Budget {
 }
 
 impl Budget {
+    /// The budget of a role that has learned nothing of its own yet: at
+    /// `ratio`, the main model's, with no count and no refusal.
+    pub(crate) fn seeded(ratio: f64) -> Self {
+        Self {
+            counted: None,
+            ratio: Some(ratio),
+            refused: false,
+        }
+    }
+
+    /// A request that is not the next one's base (a summary's) was sent as
+    /// `sent_bytes` and counted as `input` tokens: the ratio is what that
+    /// shows, and an earlier refusal is answered. The count the next
+    /// estimate goes on from is left as it is.
+    pub(crate) fn learned(&mut self, sent_bytes: u64, input: u64) {
+        if input == 0 {
+            return;
+        }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a ratio: the counts are far below 2^52"
+        )]
+        let ratio = (sent_bytes as f64 / input as f64).clamp(1.0, 8.0);
+        self.ratio = Some(ratio);
+        self.refused = false;
+    }
+
     /// Bytes per token.
     pub(crate) fn ratio(&self) -> f64 {
         self.ratio.unwrap_or(DEFAULT_RATIO)

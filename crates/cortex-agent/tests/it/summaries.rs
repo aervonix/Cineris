@@ -220,7 +220,11 @@ fn a_second_refusal_ends_the_turn_and_the_next_turns_summary_is_cut() {
 }
 
 /// A `fast` model whose real window is too small for the epoch refuses
-/// the summary: the main model is asked, cut to half its limit.
+/// the summary: the main model is asked, and since step 16, when each role
+/// has a budget of its own, as the main model's own estimate allows. Its
+/// requests at this size were just accepted: the refusal was the `fast`
+/// model's (`docs/outstanding/a-fast-roles-refusal-cuts-the-main-models-summary.md`,
+/// settled).
 #[test]
 fn a_summary_the_fast_role_refused_is_asked_of_the_main_model() {
     let world = World::new(
@@ -246,7 +250,12 @@ fn a_summary_the_fast_role_refused_is_asked_of_the_main_model() {
     let main = world.provider.requests();
     assert_eq!(main.len(), 2);
     assert_eq!(main[0].role, ModelRole::Main);
-    assert!(is_summary(&main[0]) && is_cut(&main[0]));
+    assert!(is_summary(&main[0]));
+    assert!(
+        !is_cut(&main[0]),
+        "the main model's summary is not cut for the fast model's refusal: {:#?}",
+        shortly(&main[0])
+    );
     assert!(text_of(&main[1].messages[0]).contains("Goal: from the main model."));
 }
 
@@ -340,16 +349,16 @@ fn after_a_refusal_the_summary_request_is_held_to_half_the_limit() {
     );
 }
 
-/// A summary prepared in the background that the provider refused as too
-/// long teaches the budget too: the summary asked for at the trigger is
-/// cut, and goes to the main model, not to the `fast` one that refused.
+/// A summary prepared in the background that the `fast` model refused as
+/// too long teaches the `fast` role's budget, and only it (since step 16):
+/// the main model's estimate of the next turn does not move, so the turn is
+/// sent whole, and the `fast` model is not asked again in the epoch.
 #[test]
-fn a_background_summary_refused_as_too_long_teaches_the_budget() {
+fn a_background_summary_refused_as_too_long_teaches_the_fast_roles_budget_alone() {
     let world = World::new(
         "summary_background_refused",
         [
             says("One."),
-            says("Goal: asked for at the trigger."),
             says("Two."),
         ],
     );
@@ -372,12 +381,11 @@ fn a_background_summary_refused_as_too_long_teaches_the_budget() {
     assert_eq!(fast.requests().len(), 1, "no second try in the background");
     let main = world.provider.requests();
     let said: Vec<Vec<String>> = main.iter().map(shortly).collect();
-    assert_eq!(main.len(), 3, "{said:#?}");
+    assert_eq!(main.len(), 2, "{said:#?}");
     assert!(
-        is_summary(&main[1]) && is_cut(&main[1]),
-        "the summary at the trigger is cut: {said:#?}"
+        !is_summary(&main[1]),
+        "the second turn is sent whole, not compacted: {said:#?}"
     );
-    assert_eq!(main[1].role, ModelRole::Main);
     assert_eq!(codes(&rig), [None, None]);
 }
 

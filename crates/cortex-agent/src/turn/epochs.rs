@@ -27,11 +27,13 @@ use cortex_protocol::event::{
 use cortex_protocol::item::{NoticeSource, SummaryItem};
 use cortex_protocol::model::ModelRole;
 use cortex_protocol::usage::RequestUsage;
-use cortex_protocol::{ErrorData, ErrorKind, Item, ItemId, Message, Part, Role, Speed, StopReason};
+use cortex_protocol::{
+    ErrorData, ErrorKind, Item, ItemId, Message, Part, Role, Speed, StopReason, TurnId,
+};
 use cortex_tools::run_blocking;
 
 use super::{End, Phase, Prep, Session, Turn};
-use crate::config::RoleModel;
+use crate::config::{RoleModel, UtilityCall};
 use crate::context::{
     Budget, Built, Carried, Change, Discovered, Found, History, InFlight, Place, PrefixDifference,
     Pressure, SUMMARY_CUT, Sections, Shape, build, check_prefix, difference, discover, excerpt,
@@ -39,7 +41,8 @@ use crate::context::{
     pressure, project, read_one, request_bytes, summary_room,
 };
 use crate::state::TurnState;
-use crate::stats::ContextStat;
+use crate::stats::{ContextStat, RequestPurpose, RequestStat, StatEvent};
+use crate::timing::Spend;
 use crate::store::{EpochReason, EpochStart, Record, StoreError, Summary};
 use crate::usage::add_request;
 
@@ -96,6 +99,10 @@ pub(super) struct Summarized {
     /// to: what a refusal as too long teaches the budget.
     bytes: u64,
     window: u64,
+    /// The turn that asked for it.
+    started_in: TurnId,
+    /// How many attempts it took.
+    attempts: u32,
 }
 
 /// Why a compaction could not finish.
@@ -125,10 +132,11 @@ async fn summarize(
     client: Arc<dyn ModelClient>,
     request: ModelRequest,
     cancel: CancelToken,
-) -> (Result<Written, ErrorData>, Option<Usage>) {
+) -> (Result<Written, ErrorData>, Option<Usage>, u32) {
     let mut stream = client.stream(request, cancel.child());
     let mut text = String::new();
     let mut usage = None;
+    let mut attempts = 1;
     loop {
         let Some(event) = cancel.race(stream.next()).await else {
             let error = ErrorData::new(
@@ -136,7 +144,8 @@ async fn summarize(
                 "interrupted",
                 "The summary was stopped.",
             );
-            return (Err(error), usage);
+            // What the provider said it used before the stop was used.
+            return (Err(error), usage, attempts);
         };
         let Some(event) = event else {
             let error = ErrorData::new(
@@ -144,12 +153,15 @@ async fn summarize(
                 "incomplete_stream",
                 "The summary's response ended before it was complete.",
             );
-            return (Err(error), usage);
+            return (Err(error), usage, attempts);
         };
         match event {
             ModelEvent::TextDelta { text: piece, .. } => text.push_str(&piece),
             // A new attempt begins: what came before it does not count.
-            ModelEvent::Retry(_) => text.clear(),
+            ModelEvent::Retry(_) => {
+                text.clear();
+                attempts += 1;
+            }
             ModelEvent::Start { .. } => text.clear(),
             ModelEvent::Usage(running) => usage = Some(running),
             ModelEvent::End {
@@ -173,11 +185,22 @@ async fn summarize(
                         cut: stop == StopReason::MaxOutput,
                     })
                 };
-                return (outcome, Some(last));
+                return (outcome, Some(last), attempts);
             }
-            ModelEvent::Error(error) => return (Err(error.to_error_data()), usage),
+            ModelEvent::Error(error) => return (Err(error.to_error_data()), usage, attempts),
             _ => {}
         }
+    }
+}
+
+/// The stop reason a summary's outcome stands for, for its record.
+fn stop_of(outcome: &Result<Written, ErrorData>) -> StopReason {
+    match outcome {
+        Ok(written) if written.cut => StopReason::MaxOutput,
+        Ok(_) => StopReason::End,
+        Err(error) if error.kind == ErrorKind::ContextOverflow => StopReason::ContextOverflow,
+        Err(error) if error.kind == ErrorKind::Interrupted => StopReason::Interrupted,
+        Err(_) => StopReason::Error,
     }
 }
 
@@ -227,6 +250,7 @@ impl Session {
             environment: Some(&parts.environment),
             instructions: &discovered.texts,
             append: parts.append.as_deref(),
+            guided: self.model.variants.prompt_style == "guided",
         });
         (built, discovered)
     }
@@ -263,7 +287,19 @@ impl Session {
             base: Some(built.base),
             instructions: discovered.marks.clone(),
             altered: false,
+            variants: Some(self.model.variants.clone()),
         }
+    }
+
+    /// The variants of the epoch in force: fixed for it, and recorded in
+    /// its `epoch` entry. An epoch a build before step 16 wrote has none
+    /// recorded, and takes the main model's.
+    pub(super) fn epoch_variants(&self) -> cortex_llm::Variants {
+        self.context
+            .epoch
+            .as_ref()
+            .and_then(|epoch| epoch.variants.clone())
+            .unwrap_or_else(|| self.model.variants.clone())
     }
 
     /// Records an epoch, then begins it. A summary taken in the background
@@ -301,6 +337,12 @@ impl Session {
             let goes_on = self.context.epoch.as_ref().is_some_and(|epoch| {
                 !epoch.altered
                     && epoch.tools == self.context.tools
+                    // Variants the user changed since apply from a new
+                    // epoch: they are fixed for one.
+                    && epoch
+                        .variants
+                        .as_ref()
+                        .is_none_or(|variants| *variants == self.model.variants)
                     && match epoch.base {
                         Some(base) => base == built.base,
                         None => epoch.system == built.system,
@@ -462,12 +504,20 @@ impl Session {
                 || epoch.model != info.id
                 || epoch.effort != self.model.effort
             {
+                // The prompt and the tools stay exactly, so the prompt's
+                // style stays; how tools are declared and edited is the new
+                // model's, which may not take the old one's.
+                let variants = epoch.variants.clone().map(|kept| cortex_llm::Variants {
+                    prompt_style: kept.prompt_style,
+                    ..self.model.variants.clone()
+                });
                 let next = EpochStart {
                     provider: info.provider.clone(),
                     protocol: info.protocol.clone(),
                     model: info.id.clone(),
                     effort: self.model.effort.clone(),
                     reason: Some(EpochReason::Model),
+                    variants,
                     ..epoch.clone()
                 };
                 self.begin_epoch(turn, next, None).await?;
@@ -702,30 +752,42 @@ impl Session {
         }
     }
 
-    /// The budget a role's requests are estimated with.
-    ///
-    /// **The seam for an estimate per role (step 16).** Every role is
-    /// estimated with the main model's budget today, at the ratio of bytes
-    /// to tokens measured from the main model's counts, and a refusal as too
-    /// long by any role's model teaches that one budget. Erring that way is
-    /// safe: a `fast` model's refusal can only lower the ratio, which makes
-    /// the main model's estimate higher (a compaction comes a little early),
-    /// and the main model's next count sets the ratio again. A budget of the
-    /// role's own replaces these two methods.
-    fn budget_for(&self, _role: &ModelRole) -> &Budget {
-        &self.context.budget
+    /// The budget a role's requests are estimated with: one of each
+    /// role's own (since step 16). The main model's is the context's. A
+    /// utility role has one once a request of its has taught it something,
+    /// a count or a refusal as too long; until then it is estimated at the
+    /// main model's ratio, the best guess there is. So a refusal by the
+    /// `fast` model marks the `fast` budget alone, and the main model's
+    /// retry of the summary is sent as its own estimate allows.
+    fn budget_for(&self, role: &ModelRole) -> &Budget {
+        if *role == ModelRole::Main {
+            return &self.context.budget;
+        }
+        self.role_budgets.get(role).unwrap_or(&self.context.budget)
     }
 
-    /// See [`budget_for`](Self::budget_for).
-    fn budget_for_mut(&mut self, _role: &ModelRole) -> &mut Budget {
-        &mut self.context.budget
+    /// See [`budget_for`](Self::budget_for). A utility role's own budget is
+    /// made here, from the main model's ratio, the first time it learns.
+    fn budget_for_mut(&mut self, role: &ModelRole) -> &mut Budget {
+        if *role == ModelRole::Main {
+            return &mut self.context.budget;
+        }
+        let seed = self.context.budget.ratio();
+        self.role_budgets
+            .entry(role.clone())
+            .or_insert_with(|| Budget::seeded(seed))
     }
 
     /// The model a summary is asked of: the `fast` role's, when it has one
     /// whose window holds the epoch and it has not refused a summary of
     /// this epoch as too long, and otherwise the main model.
     fn summary_model(&self) -> (ModelRole, RoleModel) {
-        let fast = self.shared.lock().models.role(&ModelRole::Fast).cloned();
+        let (role, model) = {
+            let inbox = self.shared.lock();
+            let (role, model) = inbox.models.for_call(UtilityCall::Summary);
+            (role, model.clone())
+        };
+        let fast = (role != ModelRole::Main).then_some(model);
         if let Some(fast) = fast
             && self.fast_refused != Some(self.context.epoch_number)
         {
@@ -806,6 +868,13 @@ impl Session {
         request.cache = assembled.cache;
         request.reasoning = model.reasoning.clone();
         request.speed = self.shared.lock().speeds.of(role);
+        // The main model's summary reads the epoch's cache, so it is sent
+        // as the epoch's requests are; another model's as it is addressed.
+        request.variants = if *role == ModelRole::Main {
+            self.epoch_variants()
+        } else {
+            model.variants.clone()
+        };
         let (_, limit, max_output) = self.summary_limit(model);
         request.max_output = Some(max_output);
         let messages = &self.context.history.messages()[..covered];
@@ -908,17 +977,31 @@ impl Session {
         let cancel = self.shared.cancel.child();
         let token = cancel.clone();
         let client = Arc::clone(&model.client);
-        let handle = tokio::spawn(async move {
-            let (outcome, usage) = summarize(client, request, token).await;
-            Summarized {
-                model,
-                role,
-                outcome,
-                usage,
-                bytes,
-                window,
-            }
-        });
+        let started_in = turn.id.clone();
+        let span = tracing::info_span!(
+            "request",
+            role = %role,
+            provider = %model.entry.info.provider,
+            model = %model.entry.info.id,
+            attempts = tracing::field::Empty,
+        );
+        let handle = tokio::spawn(tracing::Instrument::instrument(
+            async move {
+                let (outcome, usage, attempts) = summarize(client, request, token).await;
+                tracing::Span::current().record("attempts", attempts);
+                Summarized {
+                    model,
+                    role,
+                    outcome,
+                    usage,
+                    bytes,
+                    window,
+                    started_in,
+                    attempts,
+                }
+            },
+            span,
+        ));
         self.background = Some(Background::Running(Job {
             covered: Cover {
                 messages: covered,
@@ -942,13 +1025,12 @@ impl Session {
     /// A summary that finished in the background has its usage counted
     /// now, and waits as ready.
     pub(super) async fn collect_background(&mut self, turn: &mut Turn) -> Result<(), StoreError> {
-        // A summary that finished before it was given up was paid for.
+        // A summary given up was paid for, as far as it went: one that
+        // finished, and one stopped part-way, whose task returns what the
+        // provider had said it used.
         for handle in std::mem::take(&mut self.given_up) {
-            if let Ok(summarized) = handle.await
-                && let Some(usage) = summarized.usage
-            {
-                self.out_of_band(turn, &summarized.model, &summarized.role, usage)
-                    .await?;
+            if let Ok(summarized) = handle.await {
+                self.out_of_band(turn, &summarized).await?;
             }
         }
         let finished =
@@ -988,18 +1070,33 @@ impl Session {
                 )));
             }
         };
-        if let Some(usage) = summarized.usage {
-            self.out_of_band(turn, &summarized.model, &summarized.role, usage)
-                .await?;
-        }
-        if let Err(error) = &summarized.outcome
-            && error.kind == ErrorKind::ContextOverflow
-        {
-            self.budget_for_mut(&summarized.role)
-                .overflowed(summarized.bytes, summarized.window);
-            if summarized.role == ModelRole::Fast {
-                self.fast_refused = Some(self.context.epoch_number);
+        self.summary_role = summarized.role.clone();
+        let record = self.out_of_band(turn, &summarized).await?;
+        match &summarized.outcome {
+            Err(error) if error.kind == ErrorKind::ContextOverflow => {
+                self.budget_for_mut(&summarized.role)
+                    .overflowed(summarized.bytes, summarized.window);
             }
+            // A count teaches the role's ratio, as the main request's does
+            // (the context's `counted`): the bytes sent against the input
+            // the provider counted. The main model's estimate of its next
+            // request still goes on from its own last count.
+            _ => {
+                if let Some(record) = &record {
+                    let tokens = &record.tokens;
+                    let input = tokens.input + tokens.cache_read + tokens.cache_write;
+                    self.budget_for_mut(&summarized.role)
+                        .learned(summarized.bytes, input);
+                }
+            }
+        }
+        // A `fast` model that refused or failed is not asked again in the
+        // epoch: its summaries go to the main model.
+        if let Err(error) = &summarized.outcome
+            && error.kind != ErrorKind::Interrupted
+            && summarized.role != ModelRole::Main
+        {
+            self.fast_refused = Some(self.context.epoch_number);
         }
         Ok(summarized.outcome)
     }
@@ -1014,32 +1111,100 @@ impl Session {
             .overflowed(sent, window);
     }
 
-    /// Counts what a request outside the conversation used, in the
-    /// session's usage, the turn's, and every account of the ledger, and
-    /// records it as a `usage` entry.
+    /// Counts what a summary request used, in the session's usage, the
+    /// turn's, and every account of the ledger, records it as a `usage`
+    /// entry, and sends its statistics event.
+    ///
+    /// **The turn that counts it owns it** (settled in step 16): a summary
+    /// taken in the background is counted at the first boundary after its
+    /// request ended, in the turn that is running then, which may not be
+    /// the one that started it. That turn's usage, its `turn.completed`,
+    /// its account of the ledger and the session log's `usage` entry all
+    /// have it, and so does the statistics event, so that the four agree;
+    /// the event names the turn that started it as `started_in`.
     async fn out_of_band(
         &mut self,
         turn: &mut Turn,
-        model: &RoleModel,
-        role: &ModelRole,
-        usage: Usage,
-    ) -> Result<RequestUsage, StoreError> {
-        let record = self.usage_record_as(model, role.clone(), usage, None);
-        self.usage.add(&record);
-        self.ledger.charge(&record);
-        add_request(&mut turn.usage, &record);
-        self.shared.lock().usage = self.usage.snapshot();
-        self.store
-            .append(
-                &turn.id,
-                Record::Usage {
-                    purpose: "compaction".to_owned(),
-                    usage: record.clone(),
-                },
-            )
-            .await?;
-        self.tell_usage(turn, model, None, true);
+        summarized: &Summarized,
+    ) -> Result<Option<RequestUsage>, StoreError> {
+        let model = &summarized.model;
+        let record = summarized
+            .usage
+            .clone()
+            .map(|usage| self.usage_record_as(model, summarized.role.clone(), usage, None));
+        if let Some(record) = &record {
+            self.usage.add(record);
+            self.ledger.charge(record);
+            add_request(&mut turn.usage, record);
+            self.shared.lock().usage = self.usage.snapshot();
+            self.store
+                .append(
+                    &turn.id,
+                    Record::Usage {
+                        purpose: "compaction".to_owned(),
+                        usage: record.clone(),
+                    },
+                )
+                .await?;
+            self.tell_usage(turn, model, None, true);
+        }
+        self.summary_stat(&turn.id, summarized, record.clone());
         Ok(record)
+    }
+
+    /// The statistics event of a summary request.
+    fn summary_stat(&self, turn: &TurnId, summarized: &Summarized, usage: Option<RequestUsage>) {
+        let info = &summarized.model.entry.info;
+        let variants = if summarized.role == ModelRole::Main {
+            self.epoch_variants()
+        } else {
+            summarized.model.variants.clone()
+        };
+        self.stats.record(StatEvent::Request(RequestStat {
+            session: self.shared.info.id.clone(),
+            turn: turn.clone(),
+            at: self.clock.now(),
+            provider: info.provider.clone(),
+            model: info.id.clone(),
+            role: summarized.role.clone(),
+            purpose: RequestPurpose::Summary,
+            started_in: (summarized.started_in != *turn).then(|| summarized.started_in.clone()),
+            variants,
+            effort: summarized.model.effort.clone(),
+            usage,
+            time: cortex_protocol::usage::ModelTime::default(),
+            stop: stop_of(&summarized.outcome),
+            error: summarized.outcome.as_ref().err().cloned(),
+            retries: summarized.attempts.saturating_sub(1),
+        }));
+    }
+
+    /// When the session's loop ends: a summary that is still running is
+    /// stopped, and every summary no boundary counted is counted now, in
+    /// the last turn that ran. It was spent. Nothing is written to the log
+    /// for it, which a turn that has ended takes no more of; the ledger and
+    /// the statistics have it.
+    pub(super) async fn count_left_summaries(&mut self) {
+        if let Some(Background::Running(job)) = self.background.take() {
+            job.cancel.cancel();
+            self.given_up.push(job.handle);
+        }
+        let Some(turn) = self.last_turn.clone() else {
+            return;
+        };
+        for handle in std::mem::take(&mut self.given_up) {
+            if let Ok(summarized) = handle.await {
+                let record = summarized.usage.clone().map(|usage| {
+                    self.usage_record_as(&summarized.model, summarized.role.clone(), usage, None)
+                });
+                if let Some(record) = &record {
+                    self.usage.add(record);
+                    self.ledger.charge(record);
+                    self.shared.lock().usage = self.usage.snapshot();
+                }
+                self.summary_stat(&turn, &summarized, record);
+            }
+        }
     }
 
     /// Stops a summary that runs in the background, and forgets one that
@@ -1052,15 +1217,16 @@ impl Session {
         self.background_failed = None;
     }
 
-    /// Stops a summary's request. One that already finished is kept, to be
-    /// counted at the next boundary: what it used was spent.
+    /// Stops a summary's request, and keeps its task, to be counted at the
+    /// next boundary: what it used was spent, whether it finished or was
+    /// stopped part-way (since step 16; before, a stopped one was counted
+    /// nowhere). A stopped task returns at once with what the provider had
+    /// said it used.
     fn give_up(&mut self, job: Job) {
-        if job.handle.is_finished() {
-            self.given_up.push(job.handle);
-        } else {
+        if !job.handle.is_finished() {
             job.cancel.cancel();
-            job.handle.abort();
         }
+        self.given_up.push(job.handle);
     }
 
     /// Stops a summary that runs in the background: the turn was
@@ -1167,7 +1333,10 @@ impl Session {
                 // trigger came before the summary was ready.
                 let covered = job.covered.clone();
                 let cancel = job.cancel.clone();
-                match turn.cancel.race(job.handle).await {
+                self.times.enter(self.clock.monotonic(), Spend::Summary);
+                let joined = turn.cancel.race(job.handle).await;
+                self.times.enter(self.clock.monotonic(), Spend::Harness);
+                match joined {
                     None => {
                         cancel.cancel();
                         return Phase::Interrupted(None);
@@ -1187,6 +1356,9 @@ impl Session {
         let mut attempt = background.map(|(covered, outcome)| (covered, outcome, true));
         // The summary requests refused as too long in this compaction.
         let mut refused = 0u32;
+        // Whether the main model has been asked after the `fast` role's
+        // failed, which is done once.
+        let mut fast_retried = false;
         loop {
             let (covered, outcome, from_background) = match attempt.take() {
                 Some(taken) => taken,
@@ -1217,13 +1389,21 @@ impl Session {
                     let bytes = request_bytes(&request);
                     let (window, _, _) = self.summary_limit(&model);
                     let client = Arc::clone(&model.client);
-                    let Some((outcome, usage)) = turn
-                        .cancel
-                        .race(summarize(client, request, turn.cancel.child()))
-                        .await
-                    else {
-                        return Phase::Interrupted(None);
-                    };
+                    let span = tracing::info_span!(
+                        "request",
+                        role = %role,
+                        provider = %model.entry.info.provider,
+                        model = %model.entry.info.id,
+                        attempts = tracing::field::Empty,
+                    );
+                    self.times.enter(self.clock.monotonic(), Spend::Summary);
+                    // The summary's own token: an interrupt stops it, and
+                    // what it used is still counted.
+                    let summary = summarize(client, request, turn.cancel.child());
+                    let (outcome, usage, attempts) =
+                        tracing::Instrument::instrument(summary, span.clone()).await;
+                    span.record("attempts", attempts);
+                    self.times.enter(self.clock.monotonic(), Spend::Harness);
                     let summarized = Summarized {
                         model,
                         role,
@@ -1231,7 +1411,16 @@ impl Session {
                         usage,
                         bytes,
                         window,
+                        started_in: turn.id.clone(),
+                        attempts,
                     };
+                    if turn.cancel.is_cancelled() {
+                        // Counted, then the turn stops.
+                        if let Err(error) = self.counted(turn, Ok(summarized)).await {
+                            return Phase::Finishing(End::store(&error));
+                        }
+                        return Phase::Interrupted(None);
+                    }
                     match self.counted(turn, Ok(summarized)).await {
                         Ok(outcome) => (cover, outcome, false),
                         Err(error) => return Phase::Finishing(End::store(&error)),
@@ -1291,12 +1480,18 @@ impl Session {
                 refused += 1;
             }
             // The summary from the background could not be used: one is
-            // asked for now, over everything. A refusal is answered once.
+            // asked for now, over everything. A refusal is answered once,
+            // and so is a failure of the `fast` role's model, by the main
+            // model (`counted` turned the role away for the epoch).
+            let fast_failed = !refusal && self.summary_role != ModelRole::Main && !fast_retried;
             let again = if refusal {
                 refused < 2
             } else {
-                from_background
+                from_background || fast_failed
             };
+            if fast_failed {
+                fast_retried = true;
+            }
             if again {
                 continue;
             }
