@@ -1348,6 +1348,11 @@ replace: \"inside\"
         /// How many test runs, of any tree, stall: their timeouts ended
         /// together.
         runs_to_stall: usize,
+        /// How many runs with nothing broken stall, counted across every
+        /// job, whichever job runs them.
+        baselines_to_stall: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+        /// How many runs with nothing broken this runner made.
+        baselines: usize,
     }
 
     impl Pretend {
@@ -1378,6 +1383,23 @@ replace: \"inside\"
             }
             if library.contains("breaks the run") {
                 return Ok(Tested::Broken("no report".to_owned()));
+            }
+            if library == LIB {
+                self.baselines += 1;
+            }
+            let shared_stall = library == LIB
+                && self.baselines_to_stall.as_ref().is_some_and(|left| {
+                    left.try_update(
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                        |left| left.checked_sub(1),
+                    )
+                    .is_ok()
+                });
+            if shared_stall {
+                return Ok(Tested::Stalled(
+                    "STALL: 3 tests timed out within 90 ms of each other".to_owned(),
+                ));
             }
             if self.runs_to_stall > 0 {
                 self.runs_to_stall -= 1;
@@ -2198,17 +2220,19 @@ error: could not compile `demo` (lib test) due to 2 previous errors
         );
     }
 
-    /// `go_with_jobs`, with a runner a job, whose first `stalls[job]` test
-    /// runs stall.
+    /// `go_with_jobs`, with `jobs` runners whose first `stalls` runs with
+    /// nothing broken stall, whichever job runs them. Returns how many such
+    /// runs each job made.
     fn go_with_stalling_jobs(
         run: &mut Run,
         list: &[Break],
-        stalls: &[usize],
-    ) -> (Result<Finished>, Vec<Vec<String>>) {
-        let mut pretenders: Vec<Pretend> = stalls
-            .iter()
-            .map(|stalls| Pretend {
-                runs_to_stall: *stalls,
+        jobs: usize,
+        stalls: usize,
+    ) -> (Result<Finished>, Vec<usize>) {
+        let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(stalls));
+        let mut pretenders: Vec<Pretend> = (0..jobs)
+            .map(|_| Pretend {
+                baselines_to_stall: Some(std::sync::Arc::clone(&left)),
                 ..Pretend::default()
             })
             .collect();
@@ -2234,7 +2258,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
         drop(runners);
         (
             finished,
-            pretenders.into_iter().map(|runner| runner.asked).collect(),
+            pretenders.iter().map(|runner| runner.baselines).collect(),
         )
     }
 
@@ -2242,12 +2266,14 @@ error: could not compile `demo` (lib test) due to 2 previous errors
     fn a_baseline_that_stalled_is_run_again_with_one_job_and_said_so() {
         let mut run = Run::new("stalled_baseline");
         let list = breaks("demo", LIST);
-        // Job 0 takes the one set of tests with nothing broken, and its
-        // run stalls; job 0 then runs it again, alone.
-        let (finished, asked) = go_with_stalling_jobs(&mut run, &list, &[1, 0]);
+        // The one set of tests with nothing broken stalls on whichever job
+        // takes it, and is run again by the first job, alone.
+        let (finished, baselines) = go_with_stalling_jobs(&mut run, &list, 2, 1);
         assert!(
-            run.said
-                .contains("1 set(s) of tests stalled with nothing broken, with 2 jobs at a time: running them again with one job."),
+            run.said.contains(
+                "1 set(s) of tests stalled with nothing broken, with 2 jobs at a time: running \
+                 them again with one job."
+            ),
             "{}",
             run.said
         );
@@ -2257,21 +2283,31 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             run.said
         );
         assert!(run.said.contains("  4 tests pass."), "{}", run.said);
+        // Judged as with nothing stalled: one break nothing catches.
         assert_eq!(finished, Ok(Finished::Complete { flagged: 1 }));
-        // The baseline was asked twice of job 0, which ran it again.
-        assert_eq!(asked[0][..2], ["test demo", "test demo"], "{asked:?}");
+        assert!(!run.said.contains("COULD NOT BE JUDGED"), "{}", run.said);
+        assert_eq!(baselines.iter().sum::<usize>(), 2, "{baselines:?}");
+        assert!(
+            baselines[0] >= 1,
+            "the first job ran it again: {baselines:?}"
+        );
     }
 
     #[test]
     fn a_baseline_that_stalls_with_one_job_stops_the_run() {
         let mut run = Run::new("stalled_alone");
-        let (finished, asked) = go_with_stalling_jobs(&mut run, &breaks("demo", LIST), &[1]);
+        let (finished, baselines) = go_with_stalling_jobs(&mut run, &breaks("demo", LIST), 1, 1);
         let error = finished.unwrap_err();
         assert!(
             error.contains("the tests of demo stalled with nothing broken, with one job"),
             "{error}"
         );
-        assert_eq!(asked, [["test demo"]]);
+        assert_eq!(baselines, [1]);
+        // With two jobs, a set that stalls again alone stops the run too.
+        let mut run = Run::new("stalled_twice");
+        let (finished, baselines) = go_with_stalling_jobs(&mut run, &breaks("demo", LIST), 2, 2);
+        assert!(finished.unwrap_err().contains("with one job"));
+        assert_eq!(baselines.iter().sum::<usize>(), 2, "{baselines:?}");
     }
 
     #[test]
