@@ -47,6 +47,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-core
 
+- [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it; one CI flake. Owner: the next step that changes the base capture, or step 32.
 - [a-closed-view-can-still-answer](a-closed-view-can-still-answer.md): After `session/close` a client stays among those an approval request went to, so its answer is still taken. Owner: the owner; before step 27.
 - [an-observer-that-ends-a-session](an-observer-that-ends-a-session.md): An observer's `session/close` or disconnect can end a session that has no client left that may drive it. Owner: the owner; before step 27.
 - [config-reload-through-the-core](config-reload-through-the-core.md): `config/reload` answers `not_available`; what a reload applies to a running session, key by key, is not wired. Owner: step 23.
