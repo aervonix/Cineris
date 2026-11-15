@@ -26,6 +26,7 @@
 
 #[cfg(target_os = "linux")]
 mod adversary;
+mod asking;
 mod approvals;
 mod context;
 mod day;
