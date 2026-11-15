@@ -4,19 +4,22 @@
 //! property does not hold. The fuzzer makes the bytes and follows coverage
 //! to find the ones that reach new code.
 //!
-//! The input is read the same way by both targets: its first two bytes
-//! decide where the rest is cut into the pieces a network would deliver,
-//! and the rest is the stream. So the fuzzer explores the cuts as well as
-//! the content.
+//! The input of a stream's target is read the same way by each: its first
+//! two bytes decide where the rest is cut into the pieces a network would
+//! deliver, and the rest is the stream. So the fuzzer explores the cuts as
+//! well as the content. The extractors' target reads its input as a file.
 //!
 //! | Target | The properties |
 //! |---|---|
 //! | [`sse_parser`] | No input makes the parser panic. The same bytes give the same events, or the same error, however they are cut. |
 //! | [`anthropic_decoder`] | No input makes the decoder panic. The same bytes give the same events however they are cut. A response ends at most once, and nothing follows its end. A block ends only after it started. Every block the decoder stores is one JSON object, so it can be sent back. |
 //! | [`openai_chat_decoder`] | The same properties as the other decoder, for servers with each kind of flag: reasoning under a named member, reasoning in tags inside the text, a model that is asked for a speed tier and one that is not. |
+//! | [`extractors`] | No file makes an outline extractor panic, in any language, by the fallback, or as a C or C++ header or source file. Every outline keeps its caps: its entries, and each entry's name, head and doc. |
 
 use std::sync::Arc;
 
+use cortex_index::outline::{DOC_CHARS, HEAD_CHARS, MAX_ENTRIES, NAME_CHARS};
+use cortex_index::{Language, extract};
 use cortex_llm::anthropic::{self, AnthropicMessages};
 use cortex_llm::openai_chat::{self, OpenAiChat};
 use cortex_llm::{
@@ -236,9 +239,69 @@ pub fn openai_chat_decoder(data: &[u8]) {
     well_formed(&events);
 }
 
+/// The outline extractors, on the input as a file: decoded as a pass
+/// decodes one (`cortex_index::text::decode`), and outlined in every
+/// language, by the fallback, and as a C and a C++ header and source file
+/// (a prototype is outlined in a header only).
+///
+/// # Panics
+///
+/// When an extractor panics, or an outline passes a cap: more entries than
+/// [`MAX_ENTRIES`], an empty name, or a name, a head or a doc longer than
+/// [`NAME_CHARS`], [`HEAD_CHARS`] or [`DOC_CHARS`] characters.
+pub fn extractors(data: &[u8]) {
+    let text = cortex_index::text::decode(data);
+    let mut runs: Vec<(Option<Language>, &str)> = Language::ALL
+        .into_iter()
+        .map(|language| (Some(language), "a"))
+        .collect();
+    runs.extend([
+        (None, "a"),
+        (Some(Language::C), "a.c"),
+        (Some(Language::C), "a.h"),
+        (Some(Language::Cpp), "a.cpp"),
+        (Some(Language::Cpp), "a.hpp"),
+    ]);
+    for (language, file) in runs {
+        let outline = extract(language, file, &text);
+        assert!(
+            outline.entries.len() <= MAX_ENTRIES,
+            "{language:?} {file}: {} entries",
+            outline.entries.len()
+        );
+        for entry in &outline.entries {
+            assert!(!entry.name.is_empty(), "{language:?} {file}: {entry:?}");
+            assert!(
+                entry.name.chars().count() <= NAME_CHARS,
+                "{language:?} {file}: a name too long: {entry:?}"
+            );
+            assert!(
+                entry.head.chars().count() <= HEAD_CHARS,
+                "{language:?} {file}: a head too long: {entry:?}"
+            );
+            assert!(
+                entry
+                    .doc
+                    .as_ref()
+                    .is_none_or(|doc| doc.chars().count() <= DOC_CHARS),
+                "{language:?} {file}: a doc too long: {entry:?}"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_extractors_target_takes_code_and_nonsense() {
+        extractors(b"fn a() {}\nclass B:\n    def c(self): pass\n# D\n");
+        extractors(b"\xEF\xBB\xBFextern \"C\" template<> int f() {\r\n}\r\n");
+        for nonsense in [&b""[..], b"\xff\xfe{", b"<<<A\n/*", b"x = /[/\n\"\"\"", b"`"] {
+            extractors(nonsense);
+        }
+    }
 
     #[test]
     fn the_cuts_cover_the_stream_and_come_from_the_seed() {
