@@ -176,7 +176,6 @@ in: Aggregates::sync
 find: let retention = retention.filter(|_| self.found.may_prune());
 replace:
 caught-by:
-    cortex-stats::it store::a_newer_builds_aggregates_file_is_left_for_it
     cortex-stats::it store::aggregates_that_could_not_read_the_file_are_never_saved_over_it
 
 # ----------------------------------------------- finding 4: the zone's counts
