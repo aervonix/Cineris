@@ -165,6 +165,72 @@ fn perf_a_cold_index_a_warm_one_and_a_warm_map() {
         median(maps),
         warm.iter().copied().fold(0.0, f64::max)
     );
+    breakdown(&tree);
+}
+
+/// Where a warm pass's time goes: the listing as a pass makes it, the same
+/// listing without looking for ignore files in each directory, and the
+/// cache read and written as a pass does (owner-only, by an atomic
+/// replace). Each a median of five.
+fn breakdown(tree: &Tree) {
+    let root = tree.root.to_fs_path();
+    let list = |rules: bool| {
+        let start = Instant::now();
+        let mut builder = ignore::WalkBuilder::new(&root);
+        builder.follow_links(false).standard_filters(false);
+        if rules {
+            builder
+                .hidden(true)
+                .ignore(true)
+                .git_ignore(true)
+                .git_exclude(true)
+                .parents(true)
+                .require_git(false)
+                .git_global(false);
+        }
+        builder.sort_by_file_name(std::ffi::OsStr::cmp);
+        let mut found = 0_usize;
+        for entry in builder.build().flatten() {
+            if entry.metadata().is_ok() {
+                found += 1;
+            }
+        }
+        assert!(found > 0);
+        ms(start.elapsed())
+    };
+    let listing = median((0..5).map(|_| list(true)).collect());
+    let bare = median((0..5).map(|_| list(false)).collect());
+    let cache = tree.cache_dir().join(cortex_index::CACHE_FILE);
+    let reads = (0..5)
+        .map(|_| {
+            let start = Instant::now();
+            let bytes = std::fs::read(&cache).expect("the cache");
+            assert!(!bytes.is_empty());
+            ms(start.elapsed())
+        })
+        .collect();
+    let bytes = std::fs::read(&cache).expect("the cache");
+    let copy = tree.cache_dir().join("copy");
+    let options = cortex_base::AtomicWriteOptions {
+        sync: false,
+        owner_only: true,
+        follow_links: false,
+        ..cortex_base::AtomicWriteOptions::default()
+    };
+    let writes = (0..5)
+        .map(|_| {
+            let start = Instant::now();
+            cortex_base::write_atomic(&copy, &bytes, &options, &SystemClock::new())
+                .expect("written");
+            ms(start.elapsed())
+        })
+        .collect();
+    println!(
+        "where it goes: the listing {listing:.1} ms ({bare:.1} ms without the ignore files), the cache read {:.1} ms, written {:.1} ms ({} bytes)",
+        median(reads),
+        median(writes),
+        bytes.len()
+    );
 }
 
 #[test]
