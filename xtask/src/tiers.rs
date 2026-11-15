@@ -171,6 +171,10 @@ pub(crate) fn check_report(report: &Path, os: Os, slowest: usize) -> Result<()> 
     const ADVICE: &str = "Make the tests faster or move the slow ones to a non-blocking tier \
                           (docs/testing-and-ci.md). Budgets are not loosened quietly.";
 
+    if !over.is_empty() {
+        let (start, sample) = start_of(&cases);
+        println!("{}", runner_line(os, start, sample));
+    }
     let warned = names(Verdict::OverBudget);
     if !warned.is_empty() {
         let message = format!(
@@ -196,6 +200,41 @@ pub(crate) fn check_report(report: &Path, os: Os, slowest: usize) -> Result<()> 
         println!("::error title=Test tier far over budget::{message}");
     }
     Err(message)
+}
+
+/// What a run's start cost says about its runner, for a run whose tiers
+/// are over budget: hosted runners differ in speed by a factor of two, and
+/// a slow one reads every tier slow, the unit tier too, with every test as
+/// it was. The figures are what the fifth tooling step's runs read
+/// (docs/outstanding/windows-tier-three-margin-and-the-powershell-tests.md).
+pub(crate) fn runner_line(os: Os, start: f64, sample: usize) -> String {
+    let ms = (1000.0 * start).round();
+    if sample < SMALL_SAMPLE {
+        return format!(
+            "runner: a start of {ms:.0} ms a test, measured on {sample} tests: too few to tell the \
+             runner's speed. The whole workspace's run tells it."
+        );
+    }
+    let (usual, slow_from, how_slow) = match os {
+        // Linux: 3 to 4 ms a test on most runners; a slow one read the
+        // integration tier 1.8 times a usual one's.
+        Os::Linux => ("3 to 4 ms", 5.0, "1.8 times"),
+        // Windows: 6 to 12 ms. At 10 ms the system tier read 77 to 90 s;
+        // at 12 ms, 138.8 s, every tier about twice the 10 ms runner's.
+        Os::Windows => ("6 to 10 ms", 11.0, "twice"),
+    };
+    let speed = if ms >= slow_from {
+        format!(
+            "a slow runner: tiers likely about {how_slow} what a usual runner ({usual} a test) \
+             reads, with the same tests"
+        )
+    } else {
+        format!("a usual runner ({usual} a test): the time is likely the tests'")
+    };
+    format!(
+        "runner: {ms:.0} ms runner, {speed}. Compare a change only on runners of the same start, \
+         or with both trees on one runner (`try -f against=main`)."
+    )
 }
 
 /// A tier fails the job only when it is this many times over its budget.
@@ -491,6 +530,28 @@ fn slowest_markdown(cases: &[TestCase], count: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_over_budget_run_says_what_its_runner_was() {
+        use super::{Os, runner_line};
+        let slow = runner_line(Os::Windows, 0.012, 1900);
+        assert!(
+            slow.starts_with("runner: 12 ms runner, a slow runner: tiers likely about twice"),
+            "{slow}"
+        );
+        let usual = runner_line(Os::Windows, 0.0098, 1900);
+        assert!(
+            usual.starts_with("runner: 10 ms runner, a usual runner (6 to 10 ms a test)"),
+            "{usual}"
+        );
+        assert!(
+            runner_line(Os::Linux, 0.005, 1900)
+                .contains("a slow runner: tiers likely about 1.8 times"),
+        );
+        assert!(runner_line(Os::Linux, 0.003, 1900).contains("a usual runner"));
+        // Too few tests to measure a runner by.
+        assert!(runner_line(Os::Windows, 0.012, 40).contains("too few to tell"));
+    }
+
     use super::{
         Os, Tier, Totals, Verdict, by_crate, crate_of, crates_markdown, crates_text, markdown,
         slowest_markdown, slowest_tests, start_cost, summarise, total, verdict,
