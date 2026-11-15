@@ -389,7 +389,7 @@ fn the_map_after_a_pass_is_made_from_what_the_pass_kept() {
 /// The cache holds what the map shows and no more: the independent review
 /// of step 18 found whole outlines in it, 4.7 KiB a file on real code,
 /// which took the warm map past its budget. The blocking tiers' guard of
-/// that measurement (`perf::sys_perf_a_tree_of_real_code` is the
+/// that measurement (`perf::perf_a_tree_of_real_code` is the
 /// measurement, run by hand): every language's sample, its heads and its
 /// docs left out, at a few hundred bytes a file.
 #[test]

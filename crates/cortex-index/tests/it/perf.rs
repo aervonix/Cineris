@@ -458,21 +458,20 @@ fn tree_file(n: usize) -> String {
 ///
 /// **On a hosted runner** the registry's sources are there once a build has
 /// fetched the workspace's dependencies, which `try` does before it runs the
-/// tests: `gh workflow run try -f os=windows -f profile=release -f
-/// command="test -p cortex-index --run-ignored only --no-capture
-/// --test-threads 1" -f filter="test(=perf::sys_perf_a_tree_of_real_code)"`.
+/// tests: `gh workflow run try -f os=windows -f command="perf -p
+/// cortex-index perf_a_tree_of_real_code"`.
 /// With no registry and no `CORTEX_PERF_SOURCE` it says so and measures
 /// nothing.
 ///
-/// Named as a system test: it starts PowerShell on Windows for the memory
-/// figures, and making and indexing a tree of real code takes longer than
-/// tier 2's ten seconds on a hosted runner (20 s there). Like every
-/// measurement here it is ignored, so no blocking tier runs it; the
-/// blocking tiers' guard of what it measures is
+/// It starts PowerShell on Windows for the memory figures, and takes about
+/// 20 s on a hosted runner: like every measurement here it is ignored, so
+/// no blocking tier runs it, and `try -f command="perf -p cortex-index"`
+/// runs it in release with the `perf` profile's limits. The blocking tiers'
+/// guard of what it measures is
 /// `index::the_cache_holds_what_the_map_shows_and_no_heads_or_docs`.
 #[test]
 #[ignore = "a measurement, run by hand in a release build: see the module documentation"]
-fn sys_perf_a_tree_of_real_code() {
+fn perf_a_tree_of_real_code() {
     let files = number_from_env("CORTEX_PERF_FILES", 20_000);
     let source = std::env::var_os("CORTEX_PERF_SOURCE")
         .map(std::path::PathBuf::from)
@@ -484,7 +483,7 @@ fn sys_perf_a_tree_of_real_code() {
     let mut found = Vec::new();
     rust_files(&source, &mut found, files);
     assert!(!found.is_empty(), "no .rs file under {}", source.display());
-    let tree = Tree::new(cortex_testkit::scratch!("sys_perf_a_tree_of_real_code"));
+    let tree = Tree::new(cortex_testkit::scratch!("perf_a_tree_of_real_code"));
     let hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
     let (mut bytes, mut linked) = (0u64, 0usize);
     let made = Instant::now();
