@@ -216,14 +216,17 @@ pub(crate) fn told_date(text: &str) -> Option<&str> {
 /// (`cortex_base::visible`): the name goes into the system prompt and into
 /// notices, and is the key the files the model was given are known by, so
 /// it is escaped where it is made, once (the fixes of the independent
-/// review of step 18). A name that held such a character does not lead back
-/// to its file by its shown form: such a file the model was given and no
-/// look finds any more is told as removed.
+/// review of step 18). The key leads back to its file read back
+/// (`cortex_base::unescape`).
 pub(crate) fn shown(root: &AbsPath, path: &AbsPath) -> String {
-    let text = path
-        .strip_prefix(root)
-        .map_or_else(|| path.to_native_string(), |rel| rel.as_str().to_owned());
-    cortex_base::visible(&text).into_owned()
+    cortex_base::visible(&relative(root, path)).into_owned()
+}
+
+/// A file in the workspace as data: relative, with `/`, as it is named.
+/// What a summary's record carries, which is read back.
+pub(crate) fn relative(root: &AbsPath, path: &AbsPath) -> String {
+    path.strip_prefix(root)
+        .map_or_else(|| path.to_native_string(), |rel| rel.as_str().to_owned())
 }
 
 /// The directories between the workspace root (left out) and the

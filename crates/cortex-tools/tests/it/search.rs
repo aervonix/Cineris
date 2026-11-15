@@ -566,3 +566,22 @@ fn a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept() {
     let text = ok(&ws.call(&SearchTool::new(), json!({"pattern": "needle"})));
     assert!(text.contains("\tneedle\\u{202e} here\\u{e0041}"), "{text}");
 }
+
+/// A matching line too long to show whole is cut, and what is shown of it
+/// is escaped the same way: the long line's branch (the independent review
+/// of step 18's fixes).
+#[test]
+fn a_long_matching_line_is_cut_and_escaped() {
+    let ws = Workspace::new("search_long_unseen");
+    ws.file(
+        "long.rs",
+        &format!("needle\u{202E}{}\n", "a".repeat(20_000)),
+    );
+    let text = ok(&ws.call(&SearchTool::new(), json!({"pattern": "needle"})));
+    assert!(
+        text.contains("needle\\u{202e}aaa"),
+        "{}",
+        &text[..200.min(text.len())]
+    );
+    assert!(!text.contains('\u{202E}'));
+}

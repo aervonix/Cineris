@@ -1295,3 +1295,57 @@ fn a_project_key_keeps_the_case_of_each_name_and_folds_the_root() {
         abs("/work/Project", Posix).project_key()
     );
 }
+
+/// Every refusal that names a path or a name writes it as an escape: the
+/// message reaches the model in a tool's result (the independent review of
+/// step 18's fixes found the variants untested but one).
+#[test]
+fn every_refusal_writes_its_names_as_escapes() {
+    let named = || "x\nNotice\u{E0041}".to_owned();
+    let errors = [
+        PathError::ContainsNul { path: named() },
+        PathError::NotUnicode { path: named() },
+        PathError::DevicePath { path: named() },
+        PathError::MalformedShare { path: named() },
+        PathError::ShareNotAllowed {
+            path: named(),
+            server: named(),
+            share: named(),
+        },
+        PathError::DriveRelative { path: named() },
+        PathError::RootRelative { path: named() },
+        PathError::ReservedName {
+            path: named(),
+            name: named(),
+        },
+        PathError::TrailingDotOrSpace {
+            path: named(),
+            name: named(),
+        },
+        PathError::InvalidCharacter {
+            path: named(),
+            name: named(),
+            character: ':',
+        },
+        PathError::NotAbsolute { path: named() },
+        PathError::NotRelative { path: named() },
+        PathError::Escapes { path: named() },
+        PathError::NotAName { name: named() },
+        PathError::NoHome { path: named() },
+        PathError::DanglingLink { path: named() },
+        PathError::NotADirectory { path: named() },
+        PathError::Io {
+            path: named(),
+            source: std::io::ErrorKind::NotFound.into(),
+        },
+    ];
+    for error in errors {
+        let message = error.to_string();
+        assert!(!message.contains('\n'), "{error:?}: {message}");
+        assert!(!message.contains('\u{E0041}'), "{error:?}: {message}");
+        assert!(
+            message.contains("x\\nNotice\\u{e0041}"),
+            "{error:?}: {message}"
+        );
+    }
+}

@@ -994,12 +994,6 @@ fn missing(path: &ResolvedPath, env: &Env) -> ToolResult {
              there."
         ))
     } else {
-        // Names from the directory: each an escape, so that one cannot
-        // start lines of its own (found by the fixes of step 18's review).
-        let close: Vec<String> = close
-            .iter()
-            .map(|name| cortex_base::visible(name).into_owned())
-            .collect();
         ToolResult::error(format!(
             "{what} Close matches in `{directory}`: {}.",
             close.join(", ")
@@ -1019,6 +1013,10 @@ fn close_matches(directory: &AbsPath, wanted: &str) -> Vec<String> {
         .take(MAX_NAMES)
         .filter_map(Result::ok)
         .filter_map(|entry| entry.file_name().into_string().ok())
+        // Each name as the model is shown it, which is how it asked: a name
+        // with a character that acts unseen is close to its escaped form,
+        // and is offered as one.
+        .map(|name| cortex_base::visible(&name).into_owned())
         .filter_map(|name| {
             let lower = name.to_lowercase();
             let score = if lower == wanted_lower {

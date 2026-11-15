@@ -358,9 +358,9 @@ caught-by:
 rule: A character that would act unseen in a name is written as an escape in the outline tool's listing, which writes names through `cortex_base::visible` since the fixes of step 18's review.
 file: crates/cortex-base/src/visible.rs
 find: (0x200B, 0x200F)
+occurrence: 1
 replace: (0x200E, 0x200F)
 caught-by:
-    cortex-base visible::tests::what_would_act_unseen_is_written_as_an_escape
     cortex-base visible::tests::the_table_of_format_characters_is_unicodes_for_its_version
 
 [break] the-map-off-still-indexes

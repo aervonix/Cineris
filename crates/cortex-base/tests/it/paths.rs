@@ -294,3 +294,29 @@ fn a_refusal_writes_the_path_it_names_as_an_escape() {
     };
     assert!(path.contains('\n'));
 }
+
+/// A name the model was shown escaped leads back to its file: a zero-width
+/// non-joiner (Persian, Urdu) and a right-to-left mark are ordinary in
+/// names, and the model is shown them as escapes (the independent review
+/// of step 18's fixes found such files unreachable). A path as written
+/// that leads somewhere wins, and one that leads nowhere either way is kept
+/// as written, for a file to be made there.
+#[test]
+fn a_name_shown_escaped_resolves_to_its_file() {
+    let scratch = Scratch::new("resolve_escaped");
+    let name = "notes/ab\u{200C}c\u{200F}.md";
+    scratch.file(&format!("ws/{name}"), "x");
+    let resolver = scratch.resolver("ws");
+    let shown = cortex_base::visible(name).into_owned();
+    assert_eq!(shown, "notes/ab\\u{200c}c\\u{200f}.md");
+    let found = resolver.resolve(&shown).expect("it resolves");
+    assert!(found.exists());
+    assert_eq!(found.data(), name);
+    assert_eq!(found.shown(), shown);
+    // Nothing there either way: as written.
+    let new = resolver
+        .resolve("notes/new\\u{200c}.md")
+        .expect("it resolves");
+    assert!(!new.exists());
+    assert!(new.data().ends_with(".md"));
+}

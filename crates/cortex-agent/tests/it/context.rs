@@ -361,6 +361,46 @@ fn a_nested_instruction_file_is_given_once_when_a_tool_first_touches_its_directo
     assert_valid_history(&second.messages);
 }
 
+/// A nested instruction file under a directory whose name holds a
+/// character that acts unseen (a zero-width non-joiner, ordinary in Persian
+/// names) is named as an escape, and that name, which is also its key,
+/// still leads to it: the next turn does not tell the model it was removed
+/// (the independent review of step 18's fixes found it told so).
+#[test]
+fn a_nested_instruction_file_under_a_name_shown_escaped_is_not_told_removed() {
+    let world = World::new(
+        "instructions_nested_escaped",
+        [
+            calls(&[(
+                "c1",
+                "read",
+                json!({"path": "src/a\u{200C}pi/handler.rs", "record": true}),
+            )]),
+            says("Done."),
+            says("Again."),
+        ],
+    );
+    let rig = Setup::new(&world).start(&world);
+    rig.instructions.set(
+        &root_file(&rig, "src/a\u{200C}pi/AGENTS.md"),
+        "Return JSON errors.",
+    );
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+        rig.prompt("again");
+        rig.events.turns(2).await;
+    });
+    let notices = notice_texts(&rig);
+    assert_eq!(notices.len(), 1, "{notices:#?}");
+    assert!(
+        notices[0].starts_with("Instruction file `src/a\\u{200c}pi/AGENTS.md` applies"),
+        "{}",
+        notices[0]
+    );
+    assert!(!notices[0].contains('\u{200C}'));
+}
+
 /// A nested instruction file that is there and is not read (the core's
 /// reader refuses a link out of the workspace) is warned of by its name,
 /// once: its directory is looked at once. The review of step 15 found it
