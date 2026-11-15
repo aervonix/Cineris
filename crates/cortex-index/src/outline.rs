@@ -20,6 +20,11 @@ pub const MAX_ENTRIES: usize = 1_000;
 /// The most characters a definition's head keeps.
 pub const HEAD_CHARS: usize = 160;
 
+/// The most characters a definition's name keeps: a name is what the map
+/// shows of a definition, and a generated or hostile file can make one of
+/// megabytes.
+pub const NAME_CHARS: usize = 80;
+
 /// The most characters a doc comment's summary keeps.
 pub const DOC_CHARS: usize = 100;
 

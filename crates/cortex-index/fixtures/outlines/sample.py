@@ -52,3 +52,11 @@ async def fetch(url):  # fetches
 # A comment about the next function.
 def documented_by_comment():
     pass
+
+
+# A bracket left open, as in a file in mid-edit.
+pending = call(
+
+
+def after_open_bracket():
+    pass

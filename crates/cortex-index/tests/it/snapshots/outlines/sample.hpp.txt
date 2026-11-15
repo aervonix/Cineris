@@ -13,3 +13,5 @@ language: cpp
   37     fn clamp  | inline int clamp(int value)
   43 fn c_api_version  | int c_api_version(void)
   46 method shop::Order::lines  | std::vector<shop::Line> shop::Order::lines() const
+  51 fn plugin_init  | extern "C" int plugin_init(int argc)  — A function with C linkage and its body: not an `extern "C" {` block.
+  58 fn c_api_flags  | int c_api_flags(void)

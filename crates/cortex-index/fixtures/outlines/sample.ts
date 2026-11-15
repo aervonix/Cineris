@@ -70,3 +70,17 @@ function* ids() {
 }
 
 module.exports.legacy = function () {};
+
+declare module "express" {
+  export function json(): void;
+}
+
+class Links {
+  check(u: string) {
+    if (/^https?:\/\//.test(u)) {
+      return 1;
+    }
+    return 0;
+  }
+  after() {}
+}

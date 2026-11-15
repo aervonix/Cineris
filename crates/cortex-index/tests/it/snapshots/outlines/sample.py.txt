@@ -9,3 +9,4 @@ language: python
   40     method method  | def method(self)
   48 fn fetch  | async def fetch(url)
   53 fn documented_by_comment  | def documented_by_comment()  — A comment about the next function.
+  61 fn after_open_bracket  | def after_open_bracket()

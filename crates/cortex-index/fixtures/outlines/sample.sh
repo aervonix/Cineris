@@ -26,3 +26,11 @@ clean_up () { rm -rf "$tmp"; }
 case "$1" in
   start) usage ;;
 esac
+
+decode() {
+  base64 -d <<<SGVsbG8=
+}
+
+after_decode() {
+  :
+}
