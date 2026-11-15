@@ -132,6 +132,7 @@ pub trait ImageSource: Send + Sync + Debug {
 
 ```rust
 pub enum ModelEvent {
+    Answered,                                            // the provider answered (step 16): timing only
     Start { response_id: Option<String>, model: String },
     BlockStart { index: u32, kind: BlockKind },          // text, reasoning, tool call, provider block
     TextDelta { index: u32, text: String },
@@ -148,6 +149,8 @@ pub enum ModelEvent {
     Error(ProviderError),                                // the request failed for good
 }
 ```
+
+**`Answered` is the client's, not a decoder's** (since step 16): it says, once an attempt and before anything of that attempt's response, that the provider answered with a success status. What came before it was the connection, the request's upload and the provider's queue; what follows is the wait for the first byte. The loop cuts the turn's time there ([03-agent-loop.md](03-agent-loop.md), "What is recorded for adaptation"). A reader that does not time anything passes it over.
 
 **One stream can hold more than one response.** The retry layer is inside the client, so the loop sees an attempt that failed as events: `Retry` when the request will be sent again after a wait, and `SpeedFallback` by the harness when it is sent again at standard speed. Either is followed by a new `Start`, and everything between the earlier `Start` and that point belongs to an attempt that no longer counts. The loop discards it and tells front ends to (`item.reset`). An `Error` is the last event: the request failed and will not be tried again here.
 
@@ -319,7 +322,7 @@ Providers disagree on what "input" includes, so each adapter documents and tests
   - **A provider with no key variable takes no key unless it is given one:** the local servers, and a user's own entry that names no `key_env`. It is asked without a key if none is stored for it or given on the command line, and a server that wanted one says so itself.
   - **A provider that has a key variable, its own or a built-in one, and no key anywhere is refused before anything is sent** (`no_credentials`, kind `auth`), with where a key is looked for. A missing `OPENROUTER_API_KEY` is said as that, and never becomes a request with no key and a provider's 401.
   - **A credential store that cannot be opened** does not stop a provider whose key is on the command line or in the environment: those are looked at first. One that needs the store is told why it is no help.
-  - **Not wired yet,** because nothing calls them: a provider's usage or balance endpoint (`openai_chat::account`), which the `/usage` view will ask ([../outstanding/a-balance-in-the-usage-view.md](../outstanding/a-balance-in-the-usage-view.md)), and a local server's loaded context size (`openai_chat::context`), which context management asks when it sizes the window (step 15).
+  - **Wired in step 16:** a provider's usage or balance endpoint (`openai_chat::account`), which `usage/refresh` asks with the provider's own `AuthMethod`, through the core's transport ([18-usage.md](18-usage.md), "The opt-in refresh"). A local server's loaded context size (`openai_chat::context`) is asked by context management since step 15.
 - **Handling:** credentials are `Secret` values from the moment they are read. They are attached to requests inside the transport, after request logging. They are never written to session logs, artifacts or debug bundles.
 - **Sign-in beyond API keys.** The credential layer is a trait with one implementation in the first release (an API key) and room for more:
 
@@ -662,9 +665,10 @@ The ports are the ones each server's documentation gives as its default. llama.c
 | `deepseek` | `GET <base>/user/balance` | The balance in each currency, and whether it is enough to make calls. |
 | `venice` | `GET <base>/api_keys/rate_limits` | The balance in each of its currencies, whether the key may make calls, and each model's limits by the minute and by the day. |
 | `openai` | none | Its usage API takes an admin key, which is not the key a user gives for model calls. |
+| `anthropic` | none | Read in step 16: its usage, cost and rate-limit endpoints are the Admin API's, which takes an Admin API credential; "workspace API keys don't work". |
 | the local servers | none | |
 
-- **All three report money**: an amount in a currency (US dollars, yuan, Venice.ai's own unit). The protocol's `LimitWindow` counts requests and tokens and cannot say that. So what is read is returned as a type of this crate (`AccountUsage`), and how a balance reaches `/usage` is step 16's to decide ([outstanding/a-balance-in-the-usage-view.md](../outstanding/a-balance-in-the-usage-view.md)).
+- **All three report money**: an amount in a currency (US dollars, yuan, Venice.ai's own unit). The protocol's `LimitWindow` counts requests and tokens and cannot say that. So what is read is returned as a type of this crate (`AccountUsage`), and since step 16 reaches `/usage` as `ProviderLimits::balances`: exact decimal strings, one a currency, never added together or converted. Venice.ai's `nextEpochBegins` is `AccountUsage::next_epoch`, not a limit's reset time: its documentation does not say what it resets. A model's own limits (Venice.ai reports each one's) are not kept, since a limit window names no model.
 - **The answer is read and dropped.** OpenRouter's holds a shortened form of the key. `AccountUsage` has no member for the provider's own text, and must not gain one.
 
 **What the second protocol changed in the shared parts.**

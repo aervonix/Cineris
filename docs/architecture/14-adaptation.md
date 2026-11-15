@@ -35,6 +35,19 @@ Four rules hold for all of them.
 
 **Control.** `cortex stats` shows what is stored, in plain numbers. `cortex stats reset` deletes it. `stats.enabled = false` turns recording off, and every adaptive feature then falls back to its catalog default.
 
+**As built in step 16** (`cortex-stats`; the core's `stats` and `usage`).
+
+| Part | As built |
+|---|---|
+| **Events** | `request` (both the turn's and the summaries', with `purpose`, `role`, the variants, tokens, the cost and catalog version fixed then, the billing kind, time to first token, tokens a second, where the request's own time went, the stop and an error's code), `tool` (outcome, running, queued and approval times), `turn` (outcome, verification, the parts of its wall time, each tool's share), `context` (the per-request record) and `dropped`. Each is one JSON line with the local day it fell on (`day`), fixed when it is written. No text of a prompt, a file or an answer. |
+| **Recording** | `Recorder`: a bounded queue (4,096 events, boxed, so its slots are small) and a thread of its own. `record` never waits: a full queue drops and counts, and the count is an event. The thread starts when the first session opens, from the blocking pool, and is flushed at `Core::shutdown`. |
+| **Files** | `stats/events-YYYY-MM.jsonl` by the UTC month of the event; `aggregates.json`; `limits.json`. Every one owner-only (`cortex_base::private`), and the two last written atomically. |
+| **Aggregates** | Usage by day, provider, model, speed, project and billing; time by day, project and model; tools by day, project and tool; outcomes by model, variant set and tool (or the turn). Each monthly file has its part and the byte it was read to; the writer brings them up to date every five seconds while it writes, and a report does when it reads. Any process may: two that save out of order leave a file the next one carries on from. A file past `stats.retention` months moves its part to `kept` and is deleted. Days more than 400 back fold into months. A rebuild from the files gives the same values (tested). |
+| **Nothing at start-up** | Making a recorder reads nothing; the files are read by a report, `cortex stats`, a day's limit and the writer's own bringing up to date, never by starting or opening a session (a count of reads by directory, `cortex_stats::reads`). |
+| **Disabled** | No recorder is made; no file is written, a refresh's included. `usage/report` says `recording: false`. |
+
+The size a year of raw files reaches for a heavy user, measured: [steps/16/answered.md](../steps/16/answered.md), point 5.
+
 ## Project knowledge: profile and memory
 
 `cortex-knowledge` holds what the harness knows about one repository. The vision asks for two things: a project profile (commands, conventions, flaky tests) and project memory (facts with a source and an expiry). They are one store with typed entries, because they share everything that matters: provenance, review, expiry and how they reach the prompt.
@@ -147,6 +160,8 @@ Models differ in which edit format they use reliably, how they handle strict sch
 
 **In the first release:** the variant points exist, catalog defaults and overrides work, and every outcome is recorded. Measured choice needs a second edit format and enough data, so it follows after the release.
 
+**As built in step 16.** The points are `edit_format` (`replace`), `tool_schema` (`strict` or `loose`), `prompt_style` (`concise`, or `guided`, which puts `GUIDED_NOTES` in section 3 of the system prompt) and `effort` (the reasoning level: a role's own `effort` wins over it). An override is `[adapt.variants."<model id>"]`, the user's alone. A choice this build does not have, or `strict` tools for a model that cannot be held to them, stops the session from starting (`unknown_variant`). The variants are a role's (`RoleModel::variants`), fixed for the epoch (the `epoch` entry's `variants`), and on every request, tool and turn event; the aggregates keep outcomes by model and variant set. The status view of them is the TUI's (step 24).
+
 ## Model roles and routing
 
 Different work deserves different models. Configuration names models by role.
@@ -158,6 +173,8 @@ Different work deserves different models. Configuration names models by role.
 | `judge` | Model-graded comparisons in the run engine. | Falls back to `main`. |
 
 **Budget.** The user sets limits per session and per day in money or tokens ([08-configuration.md](08-configuration.md)). The hint row shows the spend. Near a limit the harness says so; at the limit it stops and asks.
+
+**As built in step 16.** One utility call exists, the compaction summary, and it goes to `fast` (`UtilityCall::Summary`, `Models::for_call`). Without a `fast` model it goes to `main`. When the `fast` model refuses a summary as too long, or fails it, the main model is asked once, and `fast` is not asked again in that epoch. `judge` has no call yet and falls back to `main` the same way. Each role is estimated with a budget of its own ([07-sessions-and-context.md](07-sessions-and-context.md), "Budgeting"). The spending limits are per turn, session and day (`[limits]`); the day's is one account for every session of the day, begun from the statistics.
 
 **In the first release:** roles, with utility calls routed to `fast`. **Later:** delegating whole sub-tasks (search a large tree, read a long log and report) to the fast model, which needs sub-agents, and choosing the route from measured cost and success.
 

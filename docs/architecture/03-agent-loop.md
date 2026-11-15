@@ -217,7 +217,7 @@ A stop reason this build does not know is treated as `end`. A response that ends
 ## Loop guards and limits
 
 - **Request limit per turn.** Default 200. Reaching it finishes the turn with a `Limit` notice. Headless mode exposes it as a flag.
-- **Cost and token limits.** Optional per turn and per session, from configuration or flags. Checked in `Preparing`. A limit is an account in a **ledger**, and several sessions can draw on one account, which is how a group of supervised sessions shares one hard cap ([16-run-engine.md](16-run-engine.md)).
+- **Cost and token limits.** Optional per turn, per session and per day, from configuration or flags. Checked in `Preparing`. **The day's** (since step 16) are one account shared by every session of a core, which begins with what the day's statistics hold. A limit is an account in a **ledger**, and several sessions can draw on one account, which is how a group of supervised sessions shares one hard cap ([16-run-engine.md](16-run-engine.md)).
 - **Repetition guard.** If the model issues the same call with the same arguments and gets the same result three times in a row, the loop appends a notice telling the model the call is repeating without effect. After five, it stops the turn and asks the user. The thresholds are configurable and the guard can be turned off.
 - **Wall-clock limit.** Optional, for headless runs.
 
@@ -263,6 +263,19 @@ As built in step 7, a session is two things. `Session` is the loop: one future, 
 ## What is recorded for adaptation
 
 At the end of each request, tool call and turn, the loop emits a statistics event ([14-adaptation.md](14-adaptation.md)): the model and variants in effect, the outcome, durations and usage. Recording is a queue push and never blocks the loop. The events go to a `Stats` trait in `cortex-agent`; `cortex-stats` (step 16) records them, and the core connects the two.
+
+**As built in step 16.**
+
+- **Every request has an event**, a summary's too (`purpose: summary`, with its role), and each request's context record. That now includes one the provider refused as too long, whose record is sent before the compaction. A summary counted by a later turn than the one that started it names that turn (`started_in`). The limits a response reported are an event too (`StatEvent::Limits`), kept as the provider's latest.
+- **Where each turn's time goes** (`cortex_agent::timing`). Every moment of a turn is in one part:
+  - the model's: `connect`, `first_byte`, `streaming`, `retry` and `summary`;
+  - `tools` once the response has ended, shared by the calls running;
+  - `approval`: no call running and a question open;
+  - `verification`;
+  - `harness`.
+
+  The parts are counted on the monotonic clock at each change of state, and rounded so that their milliseconds add up to the turn's `duration_ms`. The client's `ModelEvent::Answered` divides the connection from the wait for the first byte. Each call's own running time, its time queued once allowed and its wait for an answer are in its tool event. A tool that runs while the response is still arriving is in the model's part: the turn was waiting for the model.
+- **Utility calls go to their role** (`Models::for_call`). The one built is the summary, to `fast`, then to `main` when `fast` has no model, or refused or failed the summary in the epoch.
 
 ## What the loop does not do
 
