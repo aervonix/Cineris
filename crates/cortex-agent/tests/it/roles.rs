@@ -197,6 +197,37 @@ fn a_request_refused_as_too_long_keeps_its_context_record() {
     assert_eq!(contexts, 2, "{stats:#?}");
 }
 
+/// The variants are fixed for an epoch: a session opened again with other
+/// variants begins an epoch of its own with them, and goes on making its
+/// requests with the epoch's.
+#[test]
+fn variants_changed_between_two_openings_begin_a_new_epoch() {
+    let world = World::new("variants_epoch", [says("One."), says("Two.")]);
+    let first = Setup::new(&world).start(&world);
+    world.run(async {
+        first.prompt("one");
+        first.events.turns(1).await;
+    });
+    first.handle.close();
+    let mut setup = Setup::new(&world);
+    setup.memory = first.store.clone();
+    setup.model.variants.tool_schema = ToolSchemaStyle::Loose;
+    let second = setup.start(&world);
+    world.run(async {
+        second.prompt("two");
+        second.events.turns(1).await;
+    });
+    let epochs = second.store.epochs();
+    assert_eq!(epochs.len(), 2, "{epochs:#?}");
+    assert_eq!(
+        epochs[1].variants.as_ref().unwrap().tool_schema,
+        ToolSchemaStyle::Loose
+    );
+    let requests = world.provider.requests();
+    assert_eq!(requests[0].variants.tool_schema, ToolSchemaStyle::Strict);
+    assert_eq!(requests[1].variants.tool_schema, ToolSchemaStyle::Loose);
+}
+
 /// A variant override changes the request, is recorded in the epoch and
 /// with every outcome, and the `guided` style gives the prompt its notes.
 #[test]

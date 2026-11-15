@@ -80,10 +80,18 @@ pub(crate) fn day_account(
         .day
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((date, account)) = day.as_ref()
+    let budget = cortex_protocol::lease::Budget {
+        wall_clock_ms: None,
+        ..crate::assemble::budget(limits)
+    };
+    let name = format!("the day {today}");
+    // Each session holds the day to its own limits (a project may lower
+    // them), and every session spends from the one day's purse (found by
+    // the review of step 16).
+    if let Some((date, purse)) = day.as_ref()
         && *date == today
     {
-        return Some(account.clone());
+        return Some(cortex_agent::Account::draws_on(name, budget, purse));
     }
     let mut spent = cortex_agent::Spent::default();
     if let Some(dir) = stats_dir(&inner.user)
@@ -94,7 +102,7 @@ pub(crate) fn day_account(
             &dir,
             today,
             &cortex_stats::month_of(now),
-            inner.user.settings.stats.retention,
+            Some(inner.user.settings.stats.retention),
         ) {
             let _ = aggregates.save(&dir, clock.as_ref());
         }
@@ -107,13 +115,14 @@ pub(crate) fn day_account(
             }
         }
     }
-    let budget = cortex_protocol::lease::Budget {
-        wall_clock_ms: None,
-        ..crate::assemble::budget(limits)
-    };
-    let account =
-        cortex_agent::Account::with_spent(format!("the day {today}"), budget, clock, spent);
-    *day = Some((today, account.clone()));
+    let purse = cortex_agent::Account::with_spent(
+        name.clone(),
+        cortex_protocol::lease::Budget::default(),
+        clock,
+        spent,
+    );
+    let account = cortex_agent::Account::draws_on(name, budget, &purse);
+    *day = Some((today, purse));
     Some(account)
 }
 
@@ -158,7 +167,9 @@ pub(crate) async fn report(
                         dir,
                         zone.date_of(now),
                         &cortex_stats::month_of(now),
-                        retention,
+                        // With statistics off nothing is written, so
+                        // nothing is pruned either.
+                        recording.then_some(retention),
                     )
                     .map_err(read_failed)?;
                 if changed && recording {
@@ -577,12 +588,9 @@ impl Core {
             let now = clock.now();
             let zone = zone.unwrap_or_else(Zone::system);
             aggregates
-                .sync(
-                    &dir,
-                    zone.date_of(now),
-                    &cortex_stats::month_of(now),
-                    settings.retention,
-                )
+                // Read, and neither pruned nor saved: `cortex stats` only
+                // shows (found by the review of step 16).
+                .sync(&dir, zone.date_of(now), &cortex_stats::month_of(now), None)
                 .map_err(read_failed)?;
             let total = aggregates.total();
             summary.requests = total.usage.values().map(|sum| sum.requests).sum();

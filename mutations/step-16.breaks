@@ -313,7 +313,7 @@ caught-by:
 rule: A request's span says how many attempts it took.
 file: crates/cortex-agent/src/turn.rs
 in: Session::request_stat
-find: self.request_span.record("attempts", attempts);
+find: span.record("attempts", attempts);
 replace:
 packages: cortex-core
 caught-by:
@@ -354,3 +354,49 @@ find: if !allowed.contains(&provider) {
 replace: if true {
 caught-by:
     cortex-core::it usage::a_provider_listed_twice_is_asked_once_and_nothing_is_kept_with_statistics_off
+
+[break] a-summary-the-trigger-waited-for-is-dropped
+rule: A summary the trigger was waiting for, stopped by an interrupt, is kept and counted.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::compacting
+find: self.given_up.push(handle);
+replace: drop(handle);
+caught-by:
+    cortex-agent::it context::a_summary_the_trigger_waited_for_is_counted_when_an_interrupt_stops_it
+
+[break] the-first-sessions-day-limit-holds-for-all
+rule: Each session holds the day to its own limits, spending from one purse.
+file: crates/cortex-core/src/usage.rs
+in: day_account
+find: return Some(cortex_agent::Account::draws_on(name, budget, purse));
+replace: return Some(purse.clone());
+caught-by:
+    cortex-core::it usage::each_session_holds_the_day_to_its_own_limits
+
+[break] a-request-span-closes-late
+rule: A request's span closes as its request ends, not when the next request replaces it.
+file: crates/cortex-agent/src/turn.rs
+in: Session::request_stat
+find: let span = std::mem::replace(&mut self.request_span, tracing::Span::none());
+replace: let span = self.request_span.clone();
+packages: cortex-core
+caught-by:
+    cortex-core::it usage::the_loops_spans_reach_the_subscriber
+
+[break] showing-the-statistics-prunes
+rule: `cortex stats` reads and shows, and deletes nothing.
+file: crates/cortex-core/src/usage.rs
+in: Core::stats_summary
+find: &cortex_stats::month_of(now), None
+replace: &cortex_stats::month_of(now), Some(settings.retention)
+caught-by:
+    cortex-core::it usage::showing_the_statistics_prunes_nothing
+
+[break] an-epoch-goes-on-with-other-variants
+rule: The variants are fixed for an epoch: a session opened again with other variants begins a new one.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::context_turn_start
+find: .is_none_or(|variants| *variants == self.model.variants)
+replace: .is_none_or(|_| true)
+caught-by:
+    cortex-agent::it roles::variants_changed_between_two_openings_begin_a_new_epoch

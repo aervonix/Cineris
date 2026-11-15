@@ -122,7 +122,7 @@ fn two_writers_that_bring_the_aggregates_up_to_date_out_of_order_lose_nothing() 
     stale.save(&dir, clock.as_ref()).unwrap();
     let mut aggregates = Aggregates::load(&dir).unwrap();
     aggregates
-        .sync(&dir, date("2026-11-15"), "2026-11", 12)
+        .sync(&dir, date("2026-11-15"), "2026-11", Some(12))
         .unwrap();
     let requests: u64 = aggregates
         .total()

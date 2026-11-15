@@ -156,11 +156,19 @@ fn limit_line(limits: &ProviderLimits, now: UtcTime) -> String {
         let left = match (window.remaining, window.limit) {
             (Some(left), Some(limit)) => format!("{} of {} left", count(left), count(limit)),
             (Some(left), None) => format!("{} left", count(left)),
-            // Past its reset time, or never said: not known, never full.
-            (None, Some(limit)) if window.resets_at.is_some() => format!(
-                "{} a window; reset since, unknown until the next request",
-                count(limit)
-            ),
+            // Past its reset time: not known, never full.
+            (None, Some(limit))
+                if window
+                    .resets_at
+                    .as_ref()
+                    .and_then(|at| UtcTime::parse(at.as_str()).ok())
+                    .is_some_and(|reset| reset <= now) =>
+            {
+                format!(
+                    "{} a window; reset since, unknown until the next request",
+                    count(limit)
+                )
+            }
             (None, Some(limit)) => format!("{} a window", count(limit)),
             (None, None) => "not known".to_owned(),
         };

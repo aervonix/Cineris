@@ -346,6 +346,13 @@ fn the_loops_spans_reach_the_subscriber() {
     let tools = timings.named("tool");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].field("tool"), Some("read"));
+    // Each request's span closes as its request ends: before the tool its
+    // response called closes, not when the next request replaces it (found
+    // by the review of step 16).
+    let order: Vec<&str> = timings.all().iter().map(|timing| timing.name).collect();
+    let first_request = order.iter().position(|name| *name == "request").unwrap();
+    let tool = order.iter().position(|name| *name == "tool").unwrap();
+    assert!(first_request < tool, "{order:?}");
     // Opened inside the request whose response named it, or the turn.
     assert!(
         tools[0].parent == Some(requests[0].id) || tools[0].parent == Some(turns[0].id),
@@ -386,6 +393,52 @@ fn a_days_limit_counts_the_days_earlier_sessions() {
         front.close().await;
     });
     assert_eq!(world.provider.requests().len(), 2);
+}
+
+/// Each session holds the day to its own limits, and spends from the one
+/// day's purse: a project's lower limit is not lost to the session that
+/// opened first (found by the review of step 16).
+#[test]
+fn each_session_holds_the_day_to_its_own_limits() {
+    let world = World::new("day_limits_apart", [says("One."), says("Not sent.")]);
+    world.user_config("[limits.day]\nrequests = 5\n");
+    let core = world.core_with(|options| options.zone = Some(cortex_base::Zone::utc()));
+    world.run(async {
+        let first = Front::start(&world, &core).await;
+        first.turn("one").await;
+        first.close().await;
+    });
+    // The project lowers the day's limit to the one request already spent.
+    world.project_config("[limits.day]\nrequests = 1\n");
+    world.run(async {
+        let second = Front::start(&world, &core).await;
+        let end = second.turn("two").await;
+        assert_eq!(
+            end.outcome,
+            cortex_protocol::event::TurnOutcome::Limit,
+            "{:?}",
+            end.error
+        );
+        second.close().await;
+    });
+    assert_eq!(world.provider.requests().len(), 1);
+}
+
+/// `cortex stats` reads and shows, and deletes nothing: a monthly file past
+/// its retention is pruned only by a writer that saves what it read (found
+/// by the review of step 16).
+#[test]
+fn showing_the_statistics_prunes_nothing() {
+    let world = World::new("stats_show", []);
+    world.user_config("[stats]\nretention = 1\n");
+    let dir = world.dirs().state.unwrap().join("stats");
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("events-2025-01.jsonl");
+    std::fs::write(&old, "").unwrap();
+    let core = world.core();
+    let summary = world.run(core.stats_summary()).unwrap();
+    assert_eq!(summary.months, ["2025-01"]);
+    assert!(old.exists(), "nothing was deleted");
 }
 
 /// A user's catalog entry for a model priced at a dollar a million input

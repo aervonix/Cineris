@@ -286,8 +286,9 @@ impl Aggregates {
     /// Brings the aggregates up to date with the monthly files: reads each
     /// from where it was last read to its last whole line, keeps the part
     /// of a file someone else deleted, prunes files more than `retention`
-    /// months older than `this_month`, and folds old days into months.
-    /// Returns whether anything changed.
+    /// months older than `this_month` (with `retention` given; `None` only
+    /// reads, for a caller that will not save what it read), and folds old
+    /// days into months. Returns whether anything changed.
     ///
     /// # Errors
     ///
@@ -297,7 +298,7 @@ impl Aggregates {
         dir: &StatsDir,
         today: LocalDate,
         this_month: &str,
-        retention: u32,
+        retention: Option<u32>,
     ) -> io::Result<bool> {
         let before = self.clone();
         let months = dir.months()?;
@@ -321,11 +322,11 @@ impl Aggregates {
         // Retention: a file stays for `retention` whole months after its
         // own.
         let now = month_number(this_month).unwrap_or(i64::MAX);
-        for month in &months {
+        for month in months.iter().filter(|_| retention.is_some()) {
             let Some(number) = month_number(month) else {
                 continue;
             };
-            if number + i64::from(retention) < now {
+            if number + i64::from(retention.unwrap_or(u32::MAX)) < now {
                 if let Some(file) = self.files.remove(month) {
                     self.kept.merge(&file.part);
                 }

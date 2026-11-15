@@ -646,14 +646,17 @@ impl Session {
             .number_of(running.id.as_str())
             .and_then(|number| u32::try_from(number).ok())
             .unwrap_or(0);
-        self.times = TurnClock::new(self.clock.monotonic());
+        // One reading for the clock of its parts and the turn's start, so
+        // that they agree to the nanosecond (found by the review of step 16).
+        let started = self.clock.monotonic();
+        self.times = TurnClock::new(started);
         self.last_turn = Some(running.id.clone());
         let mut turn = Turn {
             id: running.id,
             number,
             cancel: running.cancel,
             kill: running.kill,
-            started: self.clock.monotonic(),
+            started,
             usage: UsageTotals::default(),
             requests: 0,
             tool_calls: 0,
@@ -1464,6 +1467,7 @@ impl Session {
                 tool: finished.item.tool.clone(),
                 model: model.entry.info.id.clone(),
                 variants: self.epoch_variants(),
+                effort: model.effort.clone(),
                 outcome: finished.stat,
                 duration: finished.duration,
                 queued: finished.queued,
@@ -1576,6 +1580,8 @@ impl Session {
 
     async fn finish(&mut self, turn: &Turn, end: End) -> Option<(Running, Prompt)> {
         self.enter(TurnState::Finishing);
+        self.request_span = tracing::Span::none();
+        let ended = self.clock.monotonic();
         let completed = TurnCompleted {
             verification: (end.outcome == TurnOutcome::Completed)
                 .then(|| turn.verification.clone().unwrap_or(Verification::Skipped)),
@@ -1583,9 +1589,9 @@ impl Session {
             stop_reason: turn.stop.clone(),
             error: end.error,
             usage: turn.usage.clone(),
-            duration_ms: Some(millis(self.clock.monotonic().saturating_sub(turn.started))),
+            duration_ms: Some(millis(ended.saturating_sub(turn.started))),
         };
-        self.conclude(turn, completed).await
+        self.conclude(turn, completed, ended).await
     }
 
     async fn interrupted(&mut self, turn: &mut Turn, partial: Option<Box<(Live, Round)>>) {
@@ -1633,15 +1639,17 @@ impl Session {
             }
         }
         turn.stop = Some(StopReason::Interrupted);
+        self.request_span = tracing::Span::none();
+        let ended = self.clock.monotonic();
         let completed = TurnCompleted {
             outcome: TurnOutcome::Interrupted,
             stop_reason: Some(StopReason::Interrupted),
             error: None,
             usage: turn.usage.clone(),
             verification: None,
-            duration_ms: Some(millis(self.clock.monotonic().saturating_sub(turn.started))),
+            duration_ms: Some(millis(ended.saturating_sub(turn.started))),
         };
-        self.conclude(turn, completed).await;
+        self.conclude(turn, completed, ended).await;
     }
 
     /// The end of every turn: the log is told how it ended, front ends get
@@ -1651,10 +1659,14 @@ impl Session {
     /// **Only a turn that completed starts the next prompt by itself.**
     /// After any other end the prompts that were waiting are held: they
     /// follow the next prompt the user sends.
+    ///
+    /// `ended` is when the turn ended, the moment its `duration_ms` was taken
+    /// at: its parts are cut there too, so they add up to that.
     async fn conclude(
         &mut self,
         turn: &Turn,
         completed: TurnCompleted,
+        ended: Duration,
     ) -> Option<(Running, Prompt)> {
         let stored = self.store.end_turn(&turn.id, &completed).await;
         let store_failed = stored.is_err()
@@ -1674,7 +1686,7 @@ impl Session {
             _ => completed,
         };
         let outcome = completed.outcome.clone();
-        let now = self.clock.monotonic();
+        let now = ended;
         self.stats.record(StatEvent::Turn(TurnStat {
             session: self.shared.info.id.clone(),
             turn: turn.id.clone(),
@@ -1956,7 +1968,12 @@ impl Session {
         let after = self.times.model_time(self.clock.monotonic());
         let spent = |at: usize| millis(after[at].saturating_sub(live.model_before[at]));
         let attempts = live.attempt;
-        self.request_span.record("attempts", attempts);
+        // The span is let go here, so that it closes as its request ends,
+        // and not when the next request replaces it (found by the review of
+        // step 16).
+        let span = std::mem::replace(&mut self.request_span, tracing::Span::none());
+        span.record("attempts", attempts);
+        drop(span);
         self.stats.record(StatEvent::Request(RequestStat {
             session: self.shared.info.id.clone(),
             turn: turn.id.clone(),

@@ -65,8 +65,12 @@ pub struct RequestRecord {
     /// The session.
     pub session: SessionId,
     /// The turn it belongs to: for a summary prepared in the background,
-    /// the turn that started it.
+    /// the turn that counted it, whose usage and account have it.
     pub turn: TurnId,
+    /// For a summary prepared in the background, the turn that started it,
+    /// when that is not `turn`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_in: Option<TurnId>,
     /// The project's key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<ProjectKey>,

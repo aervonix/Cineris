@@ -58,6 +58,7 @@ impl SessionStats {
             at: stat.at.to_timestamp(),
             session: stat.session,
             turn: stat.turn,
+            started_in: stat.started_in,
             project: Some(self.project.clone()),
             provider: stat.provider,
             model: stat.model,
@@ -108,7 +109,7 @@ impl SessionStats {
             project: Some(self.project.clone()),
             tool: stat.tool,
             model: stat.model,
-            variants: variants(&stat.variants, None),
+            variants: variants(&stat.variants, stat.effort.as_ref()),
             outcome: match stat.outcome {
                 ToolStatOutcome::Ok => ToolOutcome::Ok,
                 ToolStatOutcome::InvalidArguments => ToolOutcome::InvalidArguments,

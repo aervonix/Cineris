@@ -53,7 +53,9 @@ struct Inner {
     /// When the account was opened, on the monotonic clock. Its wall-clock
     /// budget runs from here.
     opened: Duration,
-    spent: Mutex<Spent>,
+    /// What has been spent: shared with every account that
+    /// [`draws_on`](Account::draws_on) this one.
+    spent: Arc<Mutex<Spent>>,
 }
 
 /// An account refused a request.
@@ -123,7 +125,7 @@ impl Account {
                 budget,
                 clock,
                 opened,
-                spent: Mutex::new(Spent::default()),
+                spent: Arc::new(Mutex::new(Spent::default())),
             }),
         }
     }
@@ -140,6 +142,23 @@ impl Account {
         let account = Self::new(name, budget, clock);
         *account.lock() = spent;
         account
+    }
+
+    /// An account with a budget of its own that spends from `other`'s
+    /// purse: what one spends the other has spent. A day's limits, where
+    /// each session may hold the day to a lower budget of its own and every
+    /// session's spending is the day's.
+    #[must_use]
+    pub fn draws_on(name: impl Into<String>, budget: Budget, other: &Self) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                name: name.into(),
+                budget,
+                clock: Arc::clone(&other.inner.clock),
+                opened: other.inner.opened,
+                spent: Arc::clone(&other.inner.spent),
+            }),
+        }
     }
 
     /// The account of a lease: its budget, under the lease's id.
