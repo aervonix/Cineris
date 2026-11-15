@@ -61,9 +61,10 @@ Without one, every break.
   --minutes N    Stop starting new work after N minutes, and carry on from
                  there the next time (5 when not given; 0 for no limit).
   --jobs N       Run N breaks at a time, each in a copy of the tree and a build
-                 directory of its own (1 when not given). Each copy's first
+                 directory of its own (2 when not given). Each copy's first
                  build is a whole build. The time budget is for all of them
-                 together.
+                 together. A run with nothing broken whose timeouts ended
+                 together (a machine that stalled) is run again with one.
   --again        Forget the chosen breaks' results first, and run them again.
                  To carry on after the time ran out, leave it off.
   --no-compile-check
@@ -93,6 +94,11 @@ struct Request {
     jobs: usize,
 }
 
+/// How many breaks run at a time when the run does not say. Two: in wave 9,
+/// four jobs at the desk stalled its disk, and baselines were lost to
+/// timeouts that were the machine's.
+const JOBS: usize = 2;
+
 /// The most jobs a run may ask for: each is a whole build directory.
 const MOST_JOBS: usize = 16;
 
@@ -112,7 +118,7 @@ impl Request {
             budget: Some(Duration::from_secs_f64(MINUTES * 60.0)),
             again: false,
             compile_check: true,
-            jobs: 1,
+            jobs: JOBS,
         };
         let mut rest = arguments.iter();
         while let Some(argument) = rest.next() {
@@ -761,7 +767,7 @@ pub fn far_over(seconds: f64, budget: f64) -> bool {
         assert_eq!(jobs("4"), Ok(4));
         assert_eq!(jobs("16"), Ok(16));
         assert_eq!(Request::parse(&strings(&["-j", "2"])).unwrap().jobs, 2);
-        assert_eq!(Request::parse(&[]).unwrap().jobs, 1);
+        assert_eq!(Request::parse(&[]).unwrap().jobs, 2);
         for wrong in ["0", "17", "many", "-1"] {
             let error = jobs(wrong).unwrap_err();
             assert!(error.contains("a number from 1 to 16"), "{wrong}: {error}");
@@ -1255,7 +1261,7 @@ replace: 5
                 budget: Some(Duration::from_secs(30)),
                 again: true,
                 compile_check: false,
-                jobs: 1,
+                jobs: 2,
             }
         );
         assert_eq!(

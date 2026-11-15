@@ -300,8 +300,12 @@ fn run_steps(runs: Vec<Vec<String>>) -> Vec<Step> {
         .enumerate()
         .map(|(index, run)| {
             Step::closure(names[index.min(1)], move || {
+                let watch = crate::stall::Watch::start();
                 let ran = steps::cargo(&run);
                 let root = workspace::root();
+                if ran.is_err() {
+                    say_if_stalled(&watch, &workspace::nextest_report(&root, "ci"));
+                }
                 if index == last {
                     bring_together(&root)?;
                 } else {
@@ -311,6 +315,17 @@ fn run_steps(runs: Vec<Vec<String>>) -> Vec<Step> {
             })
         })
         .collect()
+}
+
+/// After a run that failed: says so when its timeouts ended together, the
+/// sign of a machine that stalled (`crate::stall`).
+pub(crate) fn say_if_stalled(watch: &crate::stall::Watch, report: &Path) {
+    let Ok(xml) = std::fs::read_to_string(report) else {
+        return;
+    };
+    if let Some(stalled) = watch.explain(&crate::junit::failures(&xml)) {
+        println!("{stalled}");
+    }
 }
 
 /// Where the first run's report waits for the second's, beside it.

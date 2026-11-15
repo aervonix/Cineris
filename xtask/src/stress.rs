@@ -23,6 +23,7 @@ use crate::Result;
 use crate::checks;
 use crate::junit::{self, TestCase};
 use crate::load::Squeeze;
+use crate::stall;
 use crate::workspace;
 
 const USAGE: &str = "\
@@ -195,6 +196,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         }
     }
     let _load = request.squeeze.start()?;
+    let watch = stall::Watch::start();
     println!(
         "$ {FIRST_SEED}={} cargo {}",
         request.first_seed,
@@ -215,14 +217,12 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         .unwrap_or(&report)
         .display()
         .to_string();
-    let summary = summarise(
-        &cases,
-        &junit::failures(&xml),
-        &shown,
-        request.count,
-        request.first_seed,
-    );
+    let failures = junit::failures(&xml);
+    let summary = summarise(&cases, &failures, &shown, request.count, request.first_seed);
     print!("{}", summary.text);
+    if let Some(stalled) = watch.explain(&failures) {
+        print!("\n{stalled}");
+    }
     conclude(&summary, status.success(), request.count)
 }
 

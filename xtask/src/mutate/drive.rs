@@ -49,6 +49,10 @@ pub(crate) enum Tested {
     /// The run failed some other way: no test is known to have failed, and
     /// none is known to have passed.
     Broken(String),
+    /// Tests failed, and their timeouts ended together: the machine
+    /// stalled (`crate::stall`), and what failed says nothing about the
+    /// code. The text says so, with the evidence.
+    Stalled(String),
 }
 
 /// What builds the copy and runs its tests. One for each job, each with a
@@ -282,6 +286,7 @@ impl Runner for CargoRunner {
         let report = workspace::nextest_report(tree, "mutate");
         // A report left by the run before must not be read as this run's.
         workspace::forget_report(&report)?;
+        let watch = crate::stall::Watch::start();
         let mut arguments: Vec<String> = ["nextest", "run", "--locked", "--profile", "mutate"]
             .map(str::to_owned)
             .to_vec();
@@ -294,7 +299,16 @@ impl Runner for CargoRunner {
         if let Some(Ok(cases)) = &read
             && agree(cases)
         {
-            return Ok(Tested::Ran(cases.clone()));
+            let stalled = cases
+                .iter()
+                .any(|case| case.failed)
+                .then(|| fs::read_to_string(&report).ok())
+                .flatten()
+                .and_then(|xml| watch.explain(&junit::failures(&xml)));
+            return Ok(match stalled {
+                Some(note) => Tested::Stalled(note),
+                None => Tested::Ran(cases.clone()),
+            });
         }
         if status == Some(NEXTEST_BUILD_FAILED) {
             return Ok(Tested::DoesNotCompile(errors_of(&output)));
@@ -978,49 +992,63 @@ pub(crate) fn drive_jobs(
             sets.push((&one.packages, &one.baseline));
         }
     }
+    // A set whose run stalled is run again with one job, once the others
+    // are done: a stall is a machine with more on it than it can take.
+    let test_set =
+        |runner: &mut dyn Runner, copy: &Path, set: &(&[String], &str)| runner.test(copy, set.0);
+    let mut stalled = Vec::new();
     let finished = jobs::for_each(
         runners,
         &copies,
         &sets,
-        &|runner, copy, (packages, _)| runner.test(copy, packages),
+        &test_set,
         out_of_time,
-        &mut |(packages, baseline_key), tested| {
-            let package = packages.join(", ");
-            say(&format!("The tests of {package} with nothing broken ..."));
-            let cases = match tested? {
-                Tested::Ran(cases) => cases,
-                Tested::DoesNotCompile(detail) => {
-                    return Err(format!(
-                        "the tree does not compile with nothing broken: {detail}"
-                    ));
-                }
-                Tested::Broken(detail) => {
-                    return Err(format!(
-                        "the tests of {package} could not be run with nothing broken: {detail}"
-                    ));
-                }
-            };
-            let failing: Vec<String> = cases
-                .iter()
-                .filter(|case| case.failed)
-                .map(TestCase::id)
-                .collect();
-            if !failing.is_empty() {
-                return Err(format!(
-                    "{} test(s) fail with nothing broken: {}.\nA test that fails by itself is \
-                     no evidence about a break. Fix it first; if it fails only sometimes, find \
-                     it with `cargo xtask stress`.",
-                    failing.len(),
-                    some_of(&failing)
-                ));
+        &mut |set, tested| {
+            if !take_baseline(&mut results, set, tested?, say)? {
+                stalled.push(*set);
             }
-            let tests: Vec<String> = cases.iter().map(TestCase::id).collect();
-            say(&format!("  {} tests pass.", tests.len()));
-            results.put(baseline_key, json!({ "tests": tests }))
+            Ok(())
         },
     )?;
     if !finished {
         return Ok(plan.stop(&results, say));
+    }
+    if !stalled.is_empty() && runners.len() > 1 {
+        say(&format!(
+            "{} set(s) of tests stalled with nothing broken, with {} jobs at a time: running \
+             them again with one job.",
+            stalled.len(),
+            runners.len()
+        ));
+        let mut again = Vec::new();
+        let finished = jobs::for_each(
+            &mut runners[..1],
+            &copies[..1],
+            &stalled,
+            &test_set,
+            out_of_time,
+            &mut |set, tested| {
+                if !take_baseline(&mut results, set, tested?, say)? {
+                    again.push(*set);
+                }
+                Ok(())
+            },
+        )?;
+        if !finished {
+            return Ok(plan.stop(&results, say));
+        }
+        stalled = again;
+    }
+    if !stalled.is_empty() {
+        let names: Vec<String> = stalled
+            .iter()
+            .map(|(packages, _)| packages.join(", "))
+            .collect();
+        return Err(format!(
+            "the tests of {} stalled with nothing broken, with one job: the machine is too \
+             busy to judge a break on. Run again when it is quieter (`rx busy` at the desk).",
+            names.join("; ")
+        ));
     }
 
     // Every break compiles, before any is run.
@@ -1099,6 +1127,8 @@ pub(crate) fn drive_jobs(
                 }
                 Tested::DoesNotCompile(detail) => Outcome::DoesNotCompile(detail),
                 Tested::Broken(detail) => Outcome::Broken(detail),
+                // Not a verdict: the next run tries it again.
+                Tested::Stalled(note) => Outcome::Broken(format!("the machine stalled. {note}")),
             };
             results.put_outcome(&keys.run, &one.id, &outcome)?;
             let tests = results.baseline(&keys.baseline).unwrap_or_default();
@@ -1119,6 +1149,54 @@ pub(crate) fn drive_jobs(
     }
 
     Ok(report(breaks, &keys, &results, say))
+}
+
+/// What a run of a set's tests with nothing broken came to: kept in
+/// `results`, or `false` when it stalled and must be run again. A test that
+/// fails by itself, or a tree that does not build, is an error.
+fn take_baseline(
+    results: &mut Results,
+    (packages, baseline_key): &(&[String], &str),
+    tested: Tested,
+    say: &mut dyn FnMut(&str),
+) -> Result<bool> {
+    let package = packages.join(", ");
+    say(&format!("The tests of {package} with nothing broken ..."));
+    let cases = match tested {
+        Tested::Ran(cases) => cases,
+        Tested::Stalled(note) => {
+            say(note.trim_end());
+            return Ok(false);
+        }
+        Tested::DoesNotCompile(detail) => {
+            return Err(format!(
+                "the tree does not compile with nothing broken: {detail}"
+            ));
+        }
+        Tested::Broken(detail) => {
+            return Err(format!(
+                "the tests of {package} could not be run with nothing broken: {detail}"
+            ));
+        }
+    };
+    let failing: Vec<String> = cases
+        .iter()
+        .filter(|case| case.failed)
+        .map(TestCase::id)
+        .collect();
+    if !failing.is_empty() {
+        return Err(format!(
+            "{} test(s) fail with nothing broken: {}.\nA test that fails by itself is no \
+             evidence about a break. Fix it first; if it fails only sometimes, find it with \
+             `cargo xtask stress`.",
+            failing.len(),
+            some_of(&failing)
+        ));
+    }
+    let tests: Vec<String> = cases.iter().map(TestCase::id).collect();
+    say(&format!("  {} tests pass.", tests.len()));
+    results.put(baseline_key, json!({ "tests": tests }))?;
+    Ok(true)
 }
 
 /// `--report`: what is known for the tree as it is, without running
@@ -1267,6 +1345,9 @@ replace: \"inside\"
         /// How many test runs of a broken tree fail without a verdict, as
         /// a run does when the machine gets in its way.
         runs_to_lose: usize,
+        /// How many test runs, of any tree, stall: their timeouts ended
+        /// together.
+        runs_to_stall: usize,
     }
 
     impl Pretend {
@@ -1297,6 +1378,12 @@ replace: \"inside\"
             }
             if library.contains("breaks the run") {
                 return Ok(Tested::Broken("no report".to_owned()));
+            }
+            if self.runs_to_stall > 0 {
+                self.runs_to_stall -= 1;
+                return Ok(Tested::Stalled(
+                    "STALL: 3 tests timed out within 90 ms of each other".to_owned(),
+                ));
             }
             if library != LIB && self.runs_to_lose > 0 {
                 self.runs_to_lose -= 1;
@@ -2109,6 +2196,104 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             fs::read_to_string(copy.join("crates/demo/src/lib.rs")).unwrap(),
             LIB
         );
+    }
+
+    /// `go_with_jobs`, with a runner a job, whose first `stalls[job]` test
+    /// runs stall.
+    fn go_with_stalling_jobs(
+        run: &mut Run,
+        list: &[Break],
+        stalls: &[usize],
+    ) -> (Result<Finished>, Vec<Vec<String>>) {
+        let mut pretenders: Vec<Pretend> = stalls
+            .iter()
+            .map(|stalls| Pretend {
+                runs_to_stall: *stalls,
+                ..Pretend::default()
+            })
+            .collect();
+        let mut runners: Vec<&mut dyn Runner> = pretenders
+            .iter_mut()
+            .map(|runner| runner as &mut dyn Runner)
+            .collect();
+        let finished = super::drive_jobs(
+            &run.root,
+            &run.scratch,
+            list,
+            &Options {
+                again: false,
+                compile_check: false,
+            },
+            &mut runners,
+            &mut || false,
+            &mut |line| {
+                run.said.push_str(line);
+                run.said.push('\n');
+            },
+        );
+        drop(runners);
+        (
+            finished,
+            pretenders.into_iter().map(|runner| runner.asked).collect(),
+        )
+    }
+
+    #[test]
+    fn a_baseline_that_stalled_is_run_again_with_one_job_and_said_so() {
+        let mut run = Run::new("stalled_baseline");
+        let list = breaks("demo", LIST);
+        // Job 0 takes the one set of tests with nothing broken, and its
+        // run stalls; job 0 then runs it again, alone.
+        let (finished, asked) = go_with_stalling_jobs(&mut run, &list, &[1, 0]);
+        assert!(
+            run.said
+                .contains("1 set(s) of tests stalled with nothing broken, with 2 jobs at a time: running them again with one job."),
+            "{}",
+            run.said
+        );
+        assert!(
+            run.said.contains("STALL: 3 tests timed out"),
+            "{}",
+            run.said
+        );
+        assert!(run.said.contains("  4 tests pass."), "{}", run.said);
+        assert_eq!(finished, Ok(Finished::Complete { flagged: 1 }));
+        // The baseline was asked twice of job 0, which ran it again.
+        assert_eq!(asked[0][..2], ["test demo", "test demo"], "{asked:?}");
+    }
+
+    #[test]
+    fn a_baseline_that_stalls_with_one_job_stops_the_run() {
+        let mut run = Run::new("stalled_alone");
+        let (finished, asked) = go_with_stalling_jobs(&mut run, &breaks("demo", LIST), &[1]);
+        let error = finished.unwrap_err();
+        assert!(
+            error.contains("the tests of demo stalled with nothing broken, with one job"),
+            "{error}"
+        );
+        assert_eq!(asked, [["test demo"]]);
+    }
+
+    #[test]
+    fn a_break_whose_run_stalled_is_not_judged_and_is_tried_again() {
+        let mut run = Run::new("stalled_break");
+        let list = breaks("demo", LIST);
+        let first = &list[..1];
+        // The tests with nothing broken first, with nothing stalled; then
+        // the break's own run stalls.
+        assert!(run.go_for(first, 1).is_ok());
+        run.runner.runs_to_stall = 1;
+        let finished = run.go(first).unwrap();
+        assert_eq!(finished, Finished::Complete { flagged: 1 });
+        assert!(run.said.contains("COULD NOT BE JUDGED"), "{}", run.said);
+        assert!(
+            run.said.contains("the machine stalled. STALL:"),
+            "{}",
+            run.said
+        );
+        // The next run tries it again, and judges it.
+        let finished = run.go(first).unwrap();
+        assert_eq!(finished, Finished::Complete { flagged: 0 });
     }
 
     #[test]
