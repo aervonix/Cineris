@@ -6,7 +6,7 @@
 //! interrupts a turn the moment it enters a state, then sends another
 //! prompt and checks the request that goes out the way a provider would.
 
-use cortex_agent::{Decision, TurnState};
+use cortex_agent::{Decision, TurnState, Verdict};
 use cortex_protocol::error::code;
 use cortex_protocol::event::{TurnOutcome, Verification};
 use cortex_protocol::item::{ToolOutcome, ToolResultItem};
@@ -416,6 +416,7 @@ fn an_answer_that_arrives_as_the_turn_is_interrupted_gives_the_call_one_result()
     );
     let rig = Setup::new(&world).start(&world);
     rig.policy.decide_for("write", Decision::Ask);
+    rig.policy.answer_for("write", Verdict::Allow);
     rig.policy.wait_at(&world.gates);
     // The answer and the interrupt come in the same step: the task that
     // asked interrupts the turn and then returns its answer, so the answer

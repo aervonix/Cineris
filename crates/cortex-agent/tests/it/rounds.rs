@@ -367,6 +367,8 @@ fn questions_are_asked_one_at_a_time_in_call_order_while_allowed_calls_run() {
     let rig = Setup::new(&world).start(&world);
     rig.policy.decide_for("write", Decision::Ask);
     rig.policy.decide_for("shell", Decision::Ask);
+    // Each question is answered by allowing the call.
+    rig.policy.answer_all(Verdict::Allow);
     rig.policy.wait_at(&world.gates);
     world.run(async {
         rig.prompt("go");
@@ -415,6 +417,8 @@ fn a_call_that_is_allowed_runs_while_a_question_for_a_later_call_is_open() {
     let world = World::new("run_while_asking", [response, says("Done.")]);
     let rig = Setup::new(&world).start(&world);
     rig.policy.decide_for("write", Decision::Ask);
+    // Each question is answered by allowing the call.
+    rig.policy.answer_all(Verdict::Allow);
     rig.policy.wait_at(&world.gates);
     world.run(async {
         rig.prompt("go");
@@ -592,6 +596,8 @@ fn a_question_that_panics_is_an_error_for_its_call_and_the_next_question_is_stil
     let rig = Setup::new(&world).start(&world);
     rig.policy.decide_for("shell", Decision::Ask);
     rig.policy.decide_for("write", Decision::Ask);
+    // Each question is answered by allowing the call.
+    rig.policy.answer_all(Verdict::Allow);
     rig.policy.panic_when_asked("shell");
     world.run(async {
         rig.prompt("go");

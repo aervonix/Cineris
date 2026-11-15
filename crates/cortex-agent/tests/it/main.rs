@@ -573,7 +573,13 @@ pub struct ScriptedPolicy {
     decisions: Mutex<BTreeMap<String, Decision>>,
     /// The answers to come for each tool's questions, in order. With none
     /// left the answer is to allow.
+    /// The answers to come for each tool's questions, in order. With none
+    /// left the answer is [`ScriptedPolicy::answer_all`]'s.
     answers: Mutex<BTreeMap<String, VecDeque<Verdict>>>,
+    /// The answer to a question with none scripted. Without one, such a
+    /// question fails the test, naming the call: a default answer could hide
+    /// a question that should not have been asked, or one that was.
+    unscripted: Mutex<Option<Verdict>>,
     /// The calls it was shown to decide, by their plan's summary, in order.
     decided: Mutex<Vec<String>>,
     /// A session to interrupt at the moment a question is answered, so
@@ -612,6 +618,11 @@ impl ScriptedPolicy {
             .entry(tool.to_owned())
             .or_default()
             .push_back(verdict);
+    }
+
+    /// Answers every question that has no answer of its own with `verdict`.
+    pub fn answer_all(&self, verdict: Verdict) {
+        *lock(&self.unscripted) = Some(verdict);
     }
 
     /// Makes every question wait at the gate `ask <tool>`.
@@ -731,10 +742,19 @@ impl Policy for ScriptedPolicy {
             if let Some(session) = lock(&self.interrupts).take() {
                 let _ = session.interrupt();
             }
-            lock(&self.answers)
+            let scripted = lock(&self.answers)
                 .get_mut(&tool)
-                .and_then(VecDeque::pop_front)
-                .unwrap_or(Verdict::Allow)
+                .and_then(VecDeque::pop_front);
+            let unscripted = lock(&self.unscripted).clone();
+            match scripted.or(unscripted) {
+                Some(verdict) => verdict,
+                None => panic!(
+                    "the loop asked about `{}` ({}), and the test scripted no answer: give one \
+                     with `policy.answer_for(\"{tool}\", …)`, or answer every question with \
+                     `policy.answer_all(…)`",
+                    call.plan.summary, tool
+                ),
+            }
         })
     }
 }

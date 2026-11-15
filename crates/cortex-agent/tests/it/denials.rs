@@ -412,6 +412,8 @@ fn a_later_write_runs_beside_a_question_that_cannot_stop_the_turn() {
     let rig = Setup::new(&world).start(&world);
     rig.policy.answers_may_stop(false);
     rig.policy.decide_for("write a", Decision::Ask);
+    // Each question is answered by allowing the call.
+    rig.policy.answer_all(Verdict::Allow);
     rig.policy.wait_at(&world.gates);
     world.run(async {
         rig.prompt("go");
