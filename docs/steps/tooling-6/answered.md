@@ -22,10 +22,6 @@ Measured on scratch branches whose only difference from the step branch, or from
 
 So the cost is PowerShell's own start, paid by every shell call of a system test, and it rises by half when three start together; the runtime's settings do not touch it.
 
-**The slowest twenty of tier 3** in the profiled run, with what each is and what was done:
-
-(Filled in below, with the A/B.)
-
 ## Each PowerShell test: what it tests, and what changed
 
 | Test (for `pwsh` and `powershell`) | Kind | Starts before | Starts now | What changed |
@@ -44,10 +40,66 @@ No test was moved out of the blocking checks, no shell's cases run on fewer shel
 
 The owner guard's tests (`xtask`, 6.7 s of tier 3 on a 6 ms runner) start git about sixty times each; the commit helper now reads the new commit's hash from the repository's files instead of asking git each time, a third of its starts.
 
+## The owner's decision: Windows' system tests two at a time
+
+The test changes alone took Windows' tier 3 from 93.2 to 80.4 s on one 10 to 11 ms runner (`try` 43715195861): 14%, short of the 65 s asked for. Running the system tests two at a time instead of three took 19% more off the same tree on one runner (57.6 to 46.6 s, `try` 43715198613), for 4.1 s more of the system run's wall time (20.1 to 24.2 s; `main`'s last green `test-windows` job took 3 min 42 s, CI run 43707430100). Three at a time was the owner's decision of 2026-11-15, so the coordinator took it to the owner, who **approved two at a time on Windows only** (2026-11-15): a group of its own, `system-windows`, chosen in the `ci` profile by an override for `cfg(windows)`; Linux stays at three. It is recorded as an amendment in [testing-and-ci.md](../../testing-and-ci.md), "Each tier is measured under its own load". What the two together did to `main`'s tree is in [ci.md](ci.md).
+
+## The A/B runs
+
+| Run | What | Runner start | Tier 3 above the start, base → head (median of 5) |
+|---|---|---|---|
+| `try` 43712116926 | `main` against itself | 8 ms | 67.0 → 66.2 s (rounds 65.4 to 82.8 on one side: the noise) |
+| `try` 43715195861 | The branch at `51f9df9` (the test changes) against `main` | 10 to 11 ms | 93.2 → 80.4 s, −12.8 s (−14%); tier 2 41.2 → 38.3 s, tier 1 17.6 → 17.4 s |
+| `try` 43715198613 | The system tests two at a time against three, both the branch | 7 to 8 ms | 57.6 → 46.6 s, −11.0 s (−19%); the system run's wall time 20.1 → 24.2 s |
+
+The slowest tests of tier 3 on the head side, on a 6 ms runner (`try` 43712114548): `trust::sys_a_project_trusted_in_the_store_…` (`cortex-core`) 3.1 s, three turns each with two `pwsh` commands; the owner guard's `sys_what_the_machine_or_another_remote_could_hide_is_still_read` 1.8 s, `sys_a_push_is_searched_in_every_place_it_can_carry_a_term` 1.5 s and `sys_a_clean_push_…` 1.3 s, git started dozens of times; `shell::pwsh::sys_the_exit_status_is_the_commands` 1.8 s and `sys_the_command_reaches_the_shell_as_written` 1.5 s, five and four `pwsh` starts; `differential::sys_a_program_receives_the_words_the_analysis_gives_from_every_powershell` 1.4 s, 120 starts of the echoing child from three scripts; `rules::tests::sys_the_repository_follows_its_own_rules` 1.3 s. By crate: `cortex-tools` 16.1 s, `cortex-core` 8.9, `xtask` 8.1, `cortex-cli` 7.0.
+
+## The breaks, still caught
+
+`cargo xtask mutate tooling-6` on the desk's side slot: 106 of 106 caught by the tests they name (the list as it was at 12:22, every item's breaks; the disk stalled 43.6% of that run, and no verdict was lost to it). The breaks of the two reviews' fixes were run alone after them: every one caught by its named tests. For the PowerShell cases, which run only on Windows, two breaks were made by hand on scratch branches and run on a runner: PowerShell's quoting that does not double a typographic quote (`try` 43713566752) failed `sys_hostile_arguments_arrive_unchanged` on `pwsh` and `powershell`; a last line that always exits 0 (`try` 43713569343) failed `sys_the_exit_status_is_the_commands` and `sys_the_command_reaches_the_shell_as_written` on both. On Linux, the touched tests catch breaks of the POSIX quoting, the fixed `TERM` and the working directory (in `mutations/tooling-6.breaks`).
+
+## The toolbox fixtures, recorded again
+
+Step 18 added the `outline` tool, so the tools the binary sends no longer matched `crates/cortex-llm/fixtures/toolbox/`. `cargo xtask record --toolbox --provider P` at the desk, one provider a call, after a dry run of each (`record --provider P --dry-run toolbox`, nothing sent). Every provider accepted the new toolbox:
+
+| Provider | Model | Tokens in, out | Cost |
+|---|---|---|---|
+| Anthropic | `claude-haiku-5-5` | 4,688, 4 | $0.000471 |
+| DeepSeek | `deepseek-flash` | 2,772 (768 from the cache), 1 | $0.000837 |
+| OpenRouter | `z-ai/glm-5.3-flash` | 3,397, 3 | $0.000511 (as the provider states) |
+| Venice.ai | `deepseek-v4-flash-0731` | 3,550, 2 | $0.000462 (as the provider states) |
+
+$0.002281 in all, against a budget of 5 US cents. The spend ledger before: 11 calls, $0.085024. The decoders' snapshots of the four streams changed by their token counts alone. `tools::sys_the_toolbox_the_binary_sends_is_the_one_its_fixtures_were_recorded_with` no longer warns, and the open item is closed.
+
+## Answered by the coordinator on the way
+
+| Question or addition | Answer |
+|---|---|
+| Two read-only shell-guard checks (`git status --short; echo $?`, and a `for` loop over `git log`). | Both refused by Claude Code's own worktree check, not a permission rule: commits stay as before (plain separate commands, script files, `replace --script`). |
+| Optional additions from the step 16 review's retrospective. | Done: `scratch-test` narrows by a filterset after `--`; `mutate --file PATH`; `mutate` starts with one job when the disk is busy. Filed: a reviewer's kit ([a-reviewers-kit](../../outstanding/a-reviewers-kit.md)). `scratch-test` already reads a tree without `.git` as `mutate` does; the testing page now says so. |
+| `rx`'s own I/O-pressure line. | `rx` covers its runs; the commands' own check (item 2) is for wherever they run. |
+
 ## The independent reviews
 
-(Being written.)
+An early review of item 1's test changes (Opus 5.5, not having seen the session's reasoning) found no assertion dropped or loosened and no shell or system that lost a case; several checks are stricter (exact slices of lines, the exit code of the batched cases, "injected" over the JSON half too). Two residuals: one write of LF lines for PowerShell's large outputs no longer gave the tool CRLF lines or many small reads (fixed: each line is written to the console's own writer, CRLF and one write each); and the JSON half's own success is now the last statement's (left: a quoting that errors while keeping all 27 texts exact cannot be built).
+
+The full review of the whole diff, then a second of the fixes:
+
+| Finding | Done |
+|---|---|
+| `mutate` took a break that hung several tests for a machine stall: tests started together by nextest end together at the same limit, and the break was never judged. | First, a group's starts had to be spread; the second review showed tests of two limits (60 s and 10 s) stopped in one moment still passed that. Now only tests stopped late, more than 250 ms past their own limit (10, 60, 300 or 1,800 s, held to `.config/nextest.toml` by a test), make a stall. Tests and breaks for both shapes. |
+| The `perf -p CRATE` preset ran under tier 2's 10 s limit, which stopped step 18's largest tree. | A nextest `perf` profile, slow at 60 s and stopped at 30 minutes, with its JUnit report uploaded; the test kit's timeout watch knows its limit. Test and break. |
+| `ci-log`'s matcher overflowed the stack on a line of 20,000 characters (about 2,500 on Windows' stack). | A repeat of a one-character atom is a loop. A test with a line of 100,000 characters, and a break. |
+| Nothing held that the last good copy of `xtask` is never made on a CI runner, and every command at the desk started git twice to describe the tree. | `keeps_a_copy` under a test; the tree described only when a copy is made, which a test holds by panicking otherwise. Breaks. |
+| Two `mutate --file` lists of one name shared their breaks' names and results. | Refused. Test and break. |
+| The month generator's tests took 16.4 s of Windows' unit tier, and one failed its own 3 s bound there. | Seven small tests, 64 ms at the desk in CI's build; the whole months are ignored `perf_` tests with no time bound. The writer's wait, which small months never reached, is reached in the crate's tests with a small queue, and its break is caught again. |
+| The commands for the generator's measurements hid their output; a comment claimed more than its test checks; the docs stated the first stall rule differently from the code. | Corrected. |
 
 ## Gaps
 
-(Being written.)
+- **Item 1's target:** met with the owner's decision above (the figure is in [ci.md](ci.md)). Without the thread change, about 80 s at 10 ms is the best this step reaches without testing less: nearly every PowerShell start left in tier 3 is the shell tool's own (one process a call, which is what those tests test) or the product's shell in a `cortex-core` or `cortex-cli` turn. Running the process-tree tests on `cmd.exe` instead of the default `pwsh` would save about 5 s more; it changes which shell they test, and was not done or proposed.
+- **Glue no test holds:** the calls of the stall check in `stress`'s and `ci`'s runs (the check itself, and `mutate`'s use of it, are tested); `./x`'s fallback to the last good copy (a shell script); the move-aside path of the copy on Windows.
+- **`caught-by` names in CI:** checked only where a list of tests is kept; CI keeps none ([caught-by-names-checked-only-at-the-desk](../../outstanding/caught-by-names-checked-only-at-the-desk.md)).
+- **`mutate`'s lock under plain `cargo test`** can be held a moment by another test's child ([the-mutate-lock-and-a-forked-child](../../outstanding/the-mutate-lock-and-a-forked-child.md)).
+- **The month generator's byte-for-byte determinism across systems** is tested on each system alone; the two have not been compared.
+- **The owner guard's test fixture** reads loose refs: a git whose default is reftable or SHA-256 fails it loudly.

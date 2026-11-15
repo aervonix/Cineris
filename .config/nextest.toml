@@ -23,9 +23,15 @@ nextest-version = "0.9.100"
 # the system tests alone (`cargo xtask ci test`), where three at a time is the
 # fastest a 4-core runner went (docs/testing-and-ci.md, "The tiers"). `xtask`
 # reads that a tree's job is two runs from this line: keep its start as it is.
+#
+# `system-windows` is the same job's on Windows, two at a time (the owner's
+# decision, amended on 2026-11-15 in the sixth tooling step): a PowerShell
+# start, which most of Windows' system tests make, costs half as much again
+# with three at once, and the tier read 19% less at two on one runner.
 [test-groups]
 process = { max-threads = 2 }
 system = { max-threads = 3 }
+system-windows = { max-threads = 2 }
 
 # The limits on one test come from the tier budgets in docs/testing-and-ci.md
 # and hold in every profile. After a CI run, `cargo xtask ci test` also checks
@@ -76,9 +82,15 @@ failure-output = "immediate-final"
 [profile.ci.junit]
 path = "junit.xml"
 
-# The system tests in the job's own group. Their limits are the default
-# profile's above: nextest takes each setting from the first override that
-# sets it, the profile's own first.
+# The system tests in the job's own group: two at a time on Windows, three
+# elsewhere. Their limits are the default profile's above: nextest takes each
+# setting from the first override that sets it, the profile's own first, so
+# the Windows override comes first.
+[[profile.ci.overrides]]
+platform = 'cfg(windows)'
+filter = 'test(/(^|::)sys_/)'
+test-group = 'system-windows'
+
 [[profile.ci.overrides]]
 filter = 'test(/(^|::)sys_/)'
 test-group = 'system'
