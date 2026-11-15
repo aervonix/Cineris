@@ -219,6 +219,136 @@ pub struct ProviderLimits {
     pub seen_at: Timestamp,
     /// Where they came from.
     pub source: LimitSource,
+    /// Money left, one entry a currency, where the provider's usage
+    /// endpoint reports it (the opt-in refresh). Amounts in different
+    /// currencies are never added together or converted. Added in step 16.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub balances: Vec<Balance>,
+    /// Whether the account or key may make calls now, where the provider
+    /// says. Added in step 16.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<bool>,
+    /// When the provider's next accounting period begins, where it names
+    /// one without saying which limits it resets (Venice.ai's "epoch").
+    /// It is not a limit's reset time. Added in step 16.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_epoch: Option<Timestamp>,
+}
+
+/// An amount of money a provider reported as left, in one currency.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Balance {
+    /// The currency as the provider names it: `USD`, `CNY`, or a unit of
+    /// the provider's own.
+    pub currency: String,
+    /// What is left, as an exact decimal number: `110.00`. It may be
+    /// negative. Absent when the provider reports only a limit or a spend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining: Option<String>,
+    /// The budget it is left of, where there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<String>,
+    /// What has been spent of it, where the provider says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used: Option<String>,
+}
+
+/// The time a model's part of some turns took, in milliseconds.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ModelTime {
+    /// From sending a request to the provider's answering it: the
+    /// connection, the request's upload and the provider's queue.
+    #[serde(default)]
+    pub connect_ms: u64,
+    /// From the answer to the response's first event.
+    #[serde(default)]
+    pub first_byte_ms: u64,
+    /// From the first event to the response's end.
+    #[serde(default)]
+    pub streaming_ms: u64,
+    /// Waiting to send a failed request again.
+    #[serde(default)]
+    pub retry_ms: u64,
+    /// Waiting for a summary, when a compaction could not go on without
+    /// one.
+    #[serde(default)]
+    pub summary_ms: u64,
+}
+
+/// Where the wall time of some turns went, in milliseconds. Every moment of
+/// a turn is in exactly one part, so the parts add up to `wall_ms`: a tool
+/// that runs while the response is still arriving is in the model's time,
+/// and a question to the user while a tool runs is in the tools'.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct TimeTotals {
+    /// How many turns.
+    #[serde(default)]
+    pub turns: u64,
+    /// Their wall time, from the prompt to `turn.completed`.
+    #[serde(default)]
+    pub wall_ms: u64,
+    /// Waiting for a model.
+    #[serde(default)]
+    pub model: ModelTime,
+    /// Waiting for tools once the response had ended.
+    #[serde(default)]
+    pub tools_ms: u64,
+    /// Waiting for the user to answer whether a call may run, with no tool
+    /// running.
+    #[serde(default)]
+    pub approval_ms: u64,
+    /// Running the project's checks.
+    #[serde(default)]
+    pub verification_ms: u64,
+    /// The harness's own work: assembling requests, recording, planning.
+    #[serde(default)]
+    pub harness_ms: u64,
+}
+
+impl TimeTotals {
+    /// The parts added up: equal to `wall_ms` for whole turns.
+    #[must_use]
+    pub fn parts_ms(&self) -> u64 {
+        let model = &self.model;
+        model.connect_ms
+            + model.first_byte_ms
+            + model.streaming_ms
+            + model.retry_ms
+            + model.summary_ms
+            + self.tools_ms
+            + self.approval_ms
+            + self.verification_ms
+            + self.harness_ms
+    }
+}
+
+/// The time one tool took over some turns, in milliseconds.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ToolTime {
+    /// The tool's name.
+    pub tool: String,
+    /// How many calls.
+    #[serde(default)]
+    pub calls: u64,
+    /// Its part of the turns' tool time (`TimeTotals::tools_ms`): when calls
+    /// run side by side each has an equal part of that moment.
+    #[serde(default)]
+    pub share_ms: u64,
+    /// Its calls' running time, added up. Calls that ran side by side are
+    /// each counted whole.
+    #[serde(default)]
+    pub running_ms: u64,
+    /// How long its calls waited, once allowed, before they ran: for a slot,
+    /// for an earlier call they conflict with, or for the response to end.
+    #[serde(default)]
+    pub queued_ms: u64,
+    /// How long its calls waited for the user's answer.
+    #[serde(default)]
+    pub approval_ms: u64,
 }
 
 /// The live usage of a session: what `usage/get` returns and `usage.updated`
@@ -307,6 +437,11 @@ pub struct UsageRow {
     pub speed: Option<Speed>,
     /// What was used.
     pub totals: UsageTotals,
+    /// Where the time of the turns in the row went: for a report grouped
+    /// by provider, model or project only, since a turn has no one speed
+    /// or source. Added in step 16.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<TimeTotals>,
 }
 
 /// Usage and cost over a range: the result of `usage/report`.
@@ -336,4 +471,16 @@ pub struct UsageReport {
     /// Whether usage history is being recorded. When statistics are off,
     /// only the session range has figures.
     pub recording: bool,
+    /// Where the time of the range's turns went, all rows together. Added
+    /// in step 16.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<TimeTotals>,
+    /// The time each tool took in the range, the most first. Added in step
+    /// 16.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolTime>,
+    /// The time zone the days were counted in, as the user is shown it.
+    /// Added in step 16.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
 }

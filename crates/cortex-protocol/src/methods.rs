@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::event::SessionEvent;
-use crate::ids::{ApprovalId, CallId, ItemId, ProjectKey, SessionId, Timestamp, TurnId};
+use crate::ids::{ApprovalId, CallId, ItemId, ProjectKey, ProviderId, SessionId, Timestamp, TurnId};
 use crate::item::{Delivery, Item, Plan};
 use crate::jsonrpc::{self, ErrorObject, Notification, Request, RequestId};
 use crate::lease::{Effect, Rule};
@@ -21,7 +21,7 @@ use crate::model::ModelInfo;
 use crate::open::{open_enum, open_union};
 use crate::project::{EntryChange, PlanEdit, ProjectEntry};
 use crate::session::{SandboxStatus, SessionSettings, SessionState, SessionSummary};
-use crate::usage::{SessionUsage, UsageGroup, UsageRange, UsageReport};
+use crate::usage::{ProviderLimits, SessionUsage, UsageGroup, UsageRange, UsageReport};
 
 /// The protocol version this build speaks. It changes only for a breaking
 /// change. Everything else is added under a capability.
@@ -441,6 +441,41 @@ pub struct UsageReportParams {
     /// Only this project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<ProjectKey>,
+}
+
+/// `usage/refresh`: asks the documented usage endpoint of each provider the
+/// user turned the refresh on for (`usage.refresh`), with that provider's
+/// own credential. Only a `user` client may call it. Added in step 16.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct UsageRefreshParams {
+    /// Only these providers, each of which must be in `usage.refresh`.
+    /// Empty: every provider in it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderId>,
+}
+
+/// The result of `usage/refresh`: one entry for each provider asked.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct UsageRefreshResult {
+    /// What each provider answered, in the order of `usage.refresh`.
+    pub providers: Vec<RefreshOutcome>,
+}
+
+/// What one provider's usage endpoint answered.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RefreshOutcome {
+    /// The provider.
+    pub provider: ProviderId,
+    /// The figures, when the refresh worked. They are also kept, and
+    /// `usage/report` shows them from then on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<ProviderLimits>,
+    /// Why it did not. The figures kept from before stay as they were.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<crate::ErrorData>,
 }
 
 /// Names a project by a session of it, or by its workspace root. Exactly one
@@ -1089,6 +1124,9 @@ methods! {
     UsageGet(SessionRef) -> UsageGetResult => "usage/get",
     /// Usage and cost for a range, grouped, with limits left.
     UsageReport(UsageReportParams) -> UsageReport => "usage/report",
+    /// Asks the providers' usage endpoints that the user turned on, with
+    /// each one's own credential. Only a `user` client.
+    UsageRefresh(UsageRefreshParams) -> UsageRefreshResult => "usage/refresh",
     /// Reads the project profile and memory.
     ProjectList(ProjectListParams) -> ProjectEntriesResult => "project/list",
     /// Accepts, edits, disables, deletes or promotes entries.
