@@ -21,6 +21,7 @@
 //! | `live` | The one run against a real model, ignored: `cargo xtask live` starts it. |
 //! | `tools` | The real toolbox as a strict variant declares it. |
 //! | `sandbox` | The hidden subcommand `__sandbox` as the sandbox launcher, and what it adds to starting a command (Linux). |
+//! | `tui` | The interactive application under a pseudo-terminal: a turn with tools, an approval, interruptions, a steer and a queue. |
 
 #![allow(
     clippy::disallowed_methods,
@@ -43,6 +44,7 @@ mod runs;
 mod sandbox;
 mod signals;
 mod tools;
+mod tui;
 mod usage;
 
 use std::ffi::OsString;
@@ -74,8 +76,15 @@ fn sys_child_entry() {
     cortex_testkit::children::run_if_child();
 }
 
+/// The entry of this binary in a role (`cortex_testkit::role`): the shell
+/// the interactive tests run the binary under. Passes at once otherwise.
+#[test]
+fn child_entry() {
+    tui::child();
+}
+
 /// The variables that would let the developer's own set-up in.
-const LEFT_OUT: &[&str] = &[
+pub const LEFT_OUT: &[&str] = &[
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
@@ -132,6 +141,11 @@ impl Machine {
         };
         machine.user_config(extra);
         machine
+    }
+
+    /// The variables the binary is given beside the inherited ones.
+    pub fn vars(&self) -> &[(String, OsString)] {
+        &self.vars
     }
 
     /// Where the binary looks, worked out as it works it out.
@@ -255,20 +269,20 @@ impl Machine {
     }
 }
 
-fn message_start() -> Value {
+pub fn message_start() -> Value {
     json!({"type": "message_start", "message": {"model": MODEL, "id": "msg_test",
         "type": "message", "role": "assistant", "content": [], "stop_reason": null,
         "usage": {"input_tokens": 20, "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0, "output_tokens": 1}}})
 }
 
-fn message_delta(stop: &str) -> Value {
+pub fn message_delta(stop: &str) -> Value {
     json!({"type": "message_delta", "delta": {"stop_reason": stop},
         "usage": {"output_tokens": 12}})
 }
 
 /// Events as an Anthropic stream writes them.
-fn sse(events: &[Value]) -> Vec<u8> {
+pub fn sse(events: &[Value]) -> Vec<u8> {
     let mut body = String::new();
     for event in events {
         body.push_str(&format!(
