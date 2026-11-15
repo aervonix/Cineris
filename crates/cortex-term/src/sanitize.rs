@@ -16,12 +16,50 @@
 //! The control characters are C0 (`U+0000` to `U+001F`), DEL (`U+007F`) and
 //! C1 (`U+0080` to `U+009F`). C1 matters as much as ESC: some terminals take
 //! `U+009B` as the start of a control sequence, exactly like `ESC [`.
+//!
+//! **What else acts unseen** (since step 23, which closed
+//! `docs/outstanding/names-a-client-shows-as-they-are.md`): [`sanitize`]
+//! also writes as an escape, `\u{…}`, every character that is not a control
+//! and would change how the text around it reads without being seen, by
+//! `cortex_base::visible`'s rule: the bidirectional controls, which can
+//! reorder a line so that it reads as something else, the characters of no
+//! width, the tag characters, which shadow ASCII unseen, the line and
+//! paragraph separators, and the characters that render as nothing. Text is
+//! escaped once, here, as it is drawn, and stays exact as data. **The
+//! zero-width joiner and non-joiner are kept:** they join an emoji sequence
+//! and shape Persian and the Indic scripts, and can neither reorder text
+//! nor hide any.
 
 use std::borrow::Cow;
 
 /// What a C1 control character is shown as. They have no picture of their
 /// own in Unicode.
 const C1_SYMBOL: char = '\u{FFFD}';
+
+/// What the escape of what acts unseen leaves for the second pass: the
+/// control characters, which become pictures, and the two joiners.
+const KEEP: [char; 67] = {
+    let mut keep = ['\u{200d}'; 67];
+    let mut code = 0u32;
+    while code < 0x20 {
+        keep[code as usize] = match char::from_u32(code) {
+            Some(c) => c,
+            None => '\u{200d}',
+        };
+        code += 1;
+    }
+    keep[0x20] = '\u{7f}';
+    let mut c1 = 0x80u32;
+    while c1 < 0xa0 {
+        keep[(c1 - 0x80 + 0x21) as usize] = match char::from_u32(c1) {
+            Some(c) => c,
+            None => '\u{200d}',
+        };
+        c1 += 1;
+    }
+    keep[0x41] = '\u{200c}';
+    keep
+};
 
 /// The visible stand-in for a control character, or `None` for a character
 /// that is not one.
@@ -41,12 +79,22 @@ pub fn visible(c: char) -> Option<char> {
 }
 
 /// `text` with every control character but the line feed and the tab made
-/// visible. A carriage return just before a line feed is dropped, so text
-/// with Windows line endings is plain lines.
+/// visible, and every other character that acts unseen written as an
+/// escape (see the [module documentation](self)). A carriage return just
+/// before a line feed is dropped, so text with Windows line endings is
+/// plain lines.
 ///
 /// Text with nothing to change is returned as it is, borrowed.
 #[must_use]
 pub fn sanitize(text: &str) -> Cow<'_, str> {
+    match cortex_base::visible_keeping(text, &KEEP) {
+        Cow::Borrowed(text) => pictures(text),
+        Cow::Owned(escaped) => Cow::Owned(pictures(&escaped).into_owned()),
+    }
+}
+
+/// `text` with its control characters as pictures.
+fn pictures(text: &str) -> Cow<'_, str> {
     let needs = text
         .chars()
         .any(|c| c != '\n' && c != '\t' && visible(c).is_some());
@@ -99,6 +147,36 @@ mod tests {
                 "{c:?}"
             );
         }
+    }
+
+    #[test]
+    fn what_acts_unseen_and_is_not_a_control_is_an_escape() {
+        // Reordering, hiding and breaking lines unseen.
+        assert_eq!(sanitize("a\u{202e}b"), "a\\u{202e}b");
+        assert_eq!(sanitize("tag\u{e0041}"), "tag\\u{e0041}");
+        assert_eq!(sanitize("zero\u{200b}width"), "zero\\u{200b}width");
+        assert_eq!(sanitize("line\u{2028}sep"), "line\\u{2028}sep");
+        // Both at once: the escape first, then the pictures.
+        assert_eq!(sanitize("\u{1b}\u{2066}x"), "\u{241b}\\u{2066}x");
+        // An emoji sequence keeps its joiner and its selector, and a word
+        // that needs the non-joiner keeps it.
+        let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}";
+        assert_eq!(sanitize(family), family);
+        assert!(matches!(sanitize(family), Cow::Borrowed(_)));
+        assert_eq!(sanitize("\u{2764}\u{fe0f}"), "\u{2764}\u{fe0f}");
+        assert_eq!(sanitize("\u{645}\u{200c}\u{6cc}"), "\u{645}\u{200c}\u{6cc}");
+        // A selector with nothing to select is an escape.
+        assert_eq!(sanitize("\u{fe0f}x"), "\\u{fe0f}x");
+    }
+
+    #[test]
+    fn the_escape_keeps_every_control_and_the_two_joiners_only() {
+        for code in (0..0x20).chain([0x7f]).chain(0x80..0xa0) {
+            let c = char::from_u32(code).unwrap_or(' ');
+            assert!(KEEP.contains(&c), "{code:#x} is not kept");
+        }
+        let others: Vec<char> = KEEP.iter().copied().filter(|c| !c.is_control()).collect();
+        assert_eq!(others, ['\u{200d}', '\u{200c}']);
     }
 
     #[test]

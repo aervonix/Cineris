@@ -749,6 +749,9 @@ settings! {
         /// A focused tool box's or panel's.
         [UserOnly, Now]
         pub focus: Bindings,
+        /// A dialog's: the answers to an approval, a question or trust.
+        [UserOnly, Now]
+        pub dialog: Bindings,
         /// Those looked up last, whatever has the keyboard: `interrupt`,
         /// `redraw`, `suspend`, and the rest.
         [UserOnly, Now]

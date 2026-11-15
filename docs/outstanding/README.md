@@ -15,7 +15,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-agent
 
-- [a-background-summary-past-its-turn-cannot-be-interrupted](a-background-summary-past-its-turn-cannot-be-interrupted.md): `interrupt` on an idle session does not stop a background summary request, which runs on and goes uncounted. Owner: step 23 or step 27.
+- [a-background-summary-past-its-turn-cannot-be-interrupted](a-background-summary-past-its-turn-cannot-be-interrupted.md): `interrupt` on an idle session does not stop a background summary request, which runs on and goes uncounted. Owner: step 32.
 - [a-decision-made-before-an-earlier-call-ran](a-decision-made-before-an-earlier-call-ran.md): Policy decides a call when planned, so a later call can pass through a link made earlier. Owner: a small step of its own, agreed with the owner.
 - [an-epoch-read-without-its-variants](an-epoch-read-without-its-variants.md): An epoch from a log before step 16 has no variants and follows the live model's; reload must fix them. Owner: step 24.
 - [a-masked-instruction-notice-is-told-again](a-masked-instruction-notice-is-told-again.md): A masked instruction-file notice hashes differently on reload, so the file is announced as changed after every resume. Owner: a later step on instruction files, or step 32.

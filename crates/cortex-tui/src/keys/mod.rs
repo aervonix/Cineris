@@ -52,6 +52,9 @@ pub enum Context {
     Search,
     /// A live tool box or a panel that has the focus (`Ctrl+P`).
     Focus,
+    /// A dialog in place of the input box: an approval, a question, trust
+    /// (step 23). Its keys answer it.
+    Dialog,
 }
 
 impl Context {
@@ -66,6 +69,7 @@ impl Context {
             Self::Toggle => "toggle",
             Self::Search => "search",
             Self::Focus => "focus",
+            Self::Dialog => "dialog",
         }
     }
 }
@@ -186,6 +190,23 @@ pub enum Action {
     FocusUp,
     /// Move down in the focused panel.
     FocusDown,
+
+    // ------------------------------------------------------------ dialog
+    /// Allow this call only; trust the project; the first choice
+    /// (`y`).
+    AllowOnce,
+    /// Allow this call and calls like it until the session ends (`s`).
+    AllowSession,
+    /// Allow this call and calls like it in this project from now on
+    /// (`a`).
+    AllowProject,
+    /// Deny the call; do not trust the project; leave a question
+    /// unanswered (`n`, `Esc`).
+    Deny,
+    /// Deny the call with a note for the model (`e`).
+    DenyWithNote,
+    /// Show the request's detail whole, in the viewer (`Ctrl+O`).
+    ShowWhole,
 }
 
 /// One action: what it is, where it applies, its name in `[keys]`, and the
@@ -397,6 +418,27 @@ pub const ACTIONS: &[Entry] = &[
     entry(Action::FocusReturn, Context::Focus, "return", &["esc"]),
     entry(Action::FocusUp, Context::Focus, "up", &["up"]),
     entry(Action::FocusDown, Context::Focus, "down", &["down"]),
+    entry(Action::AllowOnce, Context::Dialog, "allow_once", &["y"]),
+    entry(
+        Action::AllowSession,
+        Context::Dialog,
+        "allow_session",
+        &["s"],
+    ),
+    entry(
+        Action::AllowProject,
+        Context::Dialog,
+        "allow_project",
+        &["a"],
+    ),
+    entry(Action::Deny, Context::Dialog, "deny", &["n", "esc"]),
+    entry(
+        Action::DenyWithNote,
+        Context::Dialog,
+        "deny_with_note",
+        &["e"],
+    ),
+    entry(Action::ShowWhole, Context::Dialog, "show_whole", &["ctrl+o"]),
 ];
 
 impl Action {

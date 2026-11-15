@@ -5,6 +5,9 @@
 //! The payload's shape belongs to each tool (`cortex-tools`); what is read
 //! here is the part a line shows. A field a tool does not send, or a tool
 //! this build does not know, leaves the line with its verb and its state.
+//!
+//! Everything is kept as it came: the views pass it through
+//! `cortex_term::sanitize` when they draw it.
 
 use std::time::Duration;
 
@@ -12,7 +15,6 @@ use cortex_protocol::item::{ToolOutcome, ToolResultItem};
 use cortex_protocol::message::Part;
 use serde_json::Value;
 
-use super::text::{one_line, shown};
 use crate::view::{Call, CallState, Change, Detail, DiffLine, Measure, Target};
 
 /// The call's line before its arguments are known: the verb from the
@@ -43,7 +45,7 @@ fn verb(tool: &str) -> String {
         "remember" => "Remember",
         "tool_search" => "Find tools",
         "tool_call" => "Call",
-        other => return one_line(other),
+        other => return other.to_owned(),
     }
     .to_owned()
 }
@@ -54,25 +56,25 @@ pub fn target(tool: &str, arguments: &Value) -> Target {
     let text = |key: &str| arguments.get(key).and_then(Value::as_str);
     match tool {
         "read" | "edit" | "write" | "list" | "outline" => match text("path") {
-            Some(path) => Target::Path(one_line(path)),
+            Some(path) => Target::Path(path.to_owned()),
             None => Target::None,
         },
         "search" => match text("pattern") {
-            Some(pattern) => Target::Text(one_line(pattern)),
+            Some(pattern) => Target::Text(pattern.to_owned()),
             None => Target::None,
         },
-        // A command is shown on one line in the box; the whole of it, line
-        // breaks and all, is in the viewer and in the approval's detail.
+        // The box's line shows a command on one line; the whole of it,
+        // line breaks and all, is in the viewer and the approval's detail.
         "shell" => match text("command") {
-            Some(command) => Target::Text(one_line(command)),
+            Some(command) => Target::Text(command.to_owned()),
             None => Target::None,
         },
         "tool_search" => match text("query") {
-            Some(query) => Target::Text(one_line(query)),
+            Some(query) => Target::Text(query.to_owned()),
             None => Target::None,
         },
         "tool_call" => match text("tool") {
-            Some(name) => Target::Text(one_line(name)),
+            Some(name) => Target::Text(name.to_owned()),
             None => Target::None,
         },
         _ => Target::None,
@@ -125,7 +127,7 @@ pub fn finish(call: &mut Call, result: &ToolResultItem, output: &str) {
         "edit" | "write" => payload
             .get("diff")
             .and_then(Value::as_str)
-            .map(|diff| Detail::Diff(diff_lines(&shown(diff))))
+            .map(|diff| Detail::Diff(diff_lines(diff)))
             .unwrap_or(Detail::None),
         "shell" => {
             let text = if output.is_empty() {
@@ -136,7 +138,7 @@ pub fn finish(call: &mut Call, result: &ToolResultItem, output: &str) {
             if text.is_empty() {
                 Detail::None
             } else {
-                Detail::Output(shown(&text).into_owned())
+                Detail::Output(text)
             }
         }
         // A failure says why under its line.
@@ -145,7 +147,7 @@ pub fn finish(call: &mut Call, result: &ToolResultItem, output: &str) {
             if text.is_empty() {
                 Detail::None
             } else {
-                Detail::Output(shown(&text).into_owned())
+                Detail::Output(text)
             }
         }
         _ => Detail::None,
@@ -313,13 +315,10 @@ mod tests {
             target("edit", &json!({"path": "src/lex.rs"})),
             Target::Path("src/lex.rs".to_owned())
         );
+        // As it came: the view draws it on one line, sanitised.
         assert_eq!(
             target("shell", &json!({"command": "cargo test\n -p parser"})),
-            Target::Text("cargo test  -p parser".to_owned())
-        );
-        assert_eq!(
-            target("search", &json!({"pattern": "scan_\u{202e}number"})),
-            Target::Text("scan_\\u{202e}number".to_owned())
+            Target::Text("cargo test\n -p parser".to_owned())
         );
         assert_eq!(target("plan", &json!({"items": []})), Target::None);
     }
