@@ -175,6 +175,13 @@ As built in step 10, the rule the editing tools keep is that **what they do not 
 - **Unless the write is told that its target must not be a link** (`follow_links` off, added in step 10). Then a link under the target's name is refused and nothing on the way to the replace follows one. The editing tools write this way: the path resolver has already followed every link, so the location they write to is a file's own, and a link that appears there afterwards must not carry the write somewhere else. A rename replaces a name and never follows it, so a link swapped in at the last moment is itself replaced.
 - Not preserved: hard links (the file's other names keep the old content), the owner of a file that belonged to someone else, and on Windows the hidden and system attributes and any access rules set on the file itself, as opposed to inherited from its directory.
 
+**Names and lines from the workspace.** A file's or a directory's name, a line of a file and a definition's name are the workspace's text, and the tools show them to the model inside their results, which carry the tool's word, and the map shows them inside the harness's notice. Written as they are, a name with a line break starts what looks like another entry or another line of the harness's, a bidirectional control reorders what is around it, and a tag character (U+E0020 to U+E007F) is text a person does not see and a model reads as the ASCII it shadows. Since the fixes of the independent review of step 18, one function, `cortex_base::visible`, writes every character that would act unseen as an escape (`\n`, `\r`, `\t`, otherwise `\u{…}`): the control characters, the line and paragraph separators, and every format character (Unicode's `Cf`, from a table checked against Unicode 17.0.0's own data).
+
+- **Every name and path a tool shows** passes through it: `ResolvedPath::shown()` is the path as text and `ResolvedPath::data()` the path as data, and every message, plan summary and approval target uses the first. A path a walk lists (`list`, `search`, `outline`) is escaped whole; the path resolver's refusals name their path escaped.
+- **A payload keeps the path as it is.** Programs read it back (the files a summary carries, the headless report), so it is data, never text the model reads.
+- **`search`'s matching lines** are escaped too, their tabs kept: a line is the file's text shown inside the tool's result, and holds no text a person cannot see. **`read`'s content is the file's, exactly:** the model edits against it, and a read is asked for by the model. A large file's outline at its start is escaped as every outline is.
+- **Beyond the tools,** the same function writes the permission engine's reasons, the notes on changed protected paths, instruction files' names (in the system prompt and in notices), the files a summary carries and the workspace in the system prompt; and the command line's output, which keeps its line breaks and tabs. What reaches only a client (an approval's details, the notices of undo and of a session's assembly, the terminal's own guard) is [outstanding](../outstanding/names-a-client-shows-as-they-are.md).
+
 ## `read`
 
 Reads a text file, or part of it.
@@ -412,7 +419,7 @@ Returns the structure of a file or directory without its content.
 | `depth` | integer, optional | For a directory: how deep to list. |
 
 - For a file: its definitions with line numbers. For a directory: the outlines of its files, up to the output limit.
-- Backed by the cached index in [15-efficiency.md](15-efficiency.md). Outlines are approximate, and the result says so for languages without an extractor.
+- Made by the repository index's extractors ([15-efficiency.md](15-efficiency.md)) from the file as it is now, not from the index's cache, which holds only what the map shows. Outlines are approximate, and the result says so for languages without an extractor.
 - Concurrency: read-only.
 
 As built in step 18 (`OutlineTool` in `cortex-tools`, and the `Outliner` seam's `describe`, which the core fills from `cortex-index`):
@@ -421,7 +428,7 @@ As built in step 18 (`OutlineTool` in `cortex-tools`, and the `Outliner` seam's 
 - **A file:** a header (the language, how many definitions, "approximate"), then one definition a line, its line number first, nested ones indented, with a doc comment's summary after the head. A file over the cap on one file (1 MiB) is outlined from its first 1 MiB and says so; a file in no language with an extractor is outlined from its indentation and says so; a binary file is an error that says why. An outline past the output limit is cut, with how many definitions are left out.
 - **A directory:** its files down to `depth` (1 unless given, at most 8), in path order name by name (`a/x.rs` before `a-b.rs`), each with its outline indented under it and cut at 30 definitions, as many files as the output limit holds; the files left out are counted, and so are files with no definitions. The walk is `list`'s: the same ignore rules, every entry put to the read gate (a protected file is neither read nor named), links not followed.
 - **The output policy** is the ordinary one: the tool shapes its own result inside the limits, as `list` does.
-- **A name with a line break or another character that acts unseen** is written as an escape in what the tool shows (`list`, `search` and `read` do not do this yet: [outstanding](../outstanding/names-that-act-unseen-in-tool-results.md)).
+- **A name with a line break or another character that acts unseen** is written as an escape in everything the tool shows: a file's or a directory's name in each header and message, the refusal of a path outside the workspace, the plan's summary, and each line of an outline, whatever the outliner gave ("Names and lines from the workspace", above). The independent review of step 18 found a directory's name written raw in its headers, and tag characters passing the escape.
 
 ## `plan`
 
