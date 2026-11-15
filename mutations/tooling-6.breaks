@@ -196,3 +196,105 @@ find: if self.count.is_some() {
 replace: if false {
 caught-by:
     try_run::tests::perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else
+
+# The sixth tooling step: the generator of a made-up month of statistics
+# (`crates/cortex-stats/src/synthetic.rs`, docs/testing-and-ci.md, "A month
+# of statistics, made up").
+#
+# Each rule the generator promises is broken here, one at a time: that one
+# seed is one month and nothing else decides it, that the summary is what the
+# files hold, that a month has days off, that a cache is read, that a cost is
+# the catalog's price at the speed the request ran at, and that every event
+# reaches the files.
+
+[break] the-seed-is-ignored
+rule: The seed decides the month: another seed gives other figures.
+file: crates/cortex-stats/src/synthetic.rs
+in: write
+find: SeededRng::new(spec.seed)
+replace: SeededRng::new(0)
+caught-by:
+    cortex-stats synthetic::tests::another_seed_gives_another_month
+
+[break] something-besides-the-seed-decides
+rule: The seed is the whole of the randomness: one seed gives the same bytes every time.
+file: crates/cortex-stats/src/synthetic.rs
+in: write
+find: SeededRng::new(spec.seed)
+replace: SeededRng::new(spec.seed ^ cortex_base::SystemRng::new().next_u64())
+caught-by:
+    cortex-stats synthetic::tests::one_seed_gives_the_same_bytes
+
+[break] the-summary-misses-the-tool-calls
+rule: The summary counts every kind of event it was made of.
+file: crates/cortex-stats/src/synthetic.rs
+in: Summary::count
+find: self.tool_calls += 1;
+replace: self.tool_calls += 0;
+caught-by:
+    cortex-stats synthetic::tests::a_light_and_a_typical_month_are_what_the_crate_reads_back
+    cortex-stats synthetic::tests::a_heavy_month_has_every_kind_priced_and_is_made_in_a_moment
+
+[break] the-summary-forgets-the-unpriced
+rule: A failed request has no price, and the summary counts it as unpriced as the aggregates do.
+file: crates/cortex-stats/src/synthetic.rs
+in: Summary::count
+find: None => sum.unpriced += 1,
+replace: None => {}
+caught-by:
+    cortex-stats synthetic::tests::a_light_and_a_typical_month_are_what_the_crate_reads_back
+    cortex-stats synthetic::tests::a_heavy_month_has_every_kind_priced_and_is_made_in_a_moment
+
+[break] the-lines-are-not-counted
+rule: The summary says how many lines the files hold.
+file: crates/cortex-stats/src/synthetic.rs
+in: Summary::count
+find: self.lines += 1;
+replace: self.lines += 0;
+caught-by:
+    cortex-stats synthetic::tests::a_light_and_a_typical_month_are_what_the_crate_reads_back
+    cortex-stats synthetic::tests::a_heavy_month_has_every_kind_priced_and_is_made_in_a_moment
+
+[break] no-day-is-off
+rule: A month has days off, as often as its scale says.
+file: crates/cortex-stats/src/synthetic.rs
+in: Generator::make_day
+find: if !chance(&mut self.rng, percent) {
+replace: if false {
+caught-by:
+    cortex-stats synthetic::tests::the_scales_differ_as_they_are_documented
+
+[break] the-cache-is-never-read
+rule: A request after the first of an epoch reads the cache, most of them.
+file: crates/cortex-stats/src/synthetic.rs
+in: Generator::main_request
+find: tokens.cache_read = before;
+replace: tokens.cache_read = 0;
+caught-by:
+    cortex-stats synthetic::tests::a_heavy_month_has_every_kind_priced_and_is_made_in_a_moment
+
+[break] a-fast-request-is-priced-as-standard
+rule: A cost is the catalog's price at the speed the request ran at.
+file: crates/cortex-stats/src/synthetic.rs
+in: price
+find: (Speed::Fast, Some(fast)) => fast,
+replace: (Speed::Fast, Some(_)) => standard,
+caught-by:
+    cortex-stats synthetic::tests::a_heavy_month_has_every_kind_priced_and_is_made_in_a_moment
+
+[break] a-price-drifts-from-the-catalog
+rule: The generator's prices are the catalog's.
+file: crates/cortex-stats/src/synthetic.rs
+find: card: card(20_000, 100_000, 1_000, 25_000)
+replace: card: card(20_000, 200_000, 1_000, 25_000)
+caught-by:
+    cortex-stats synthetic::tests::the_models_and_prices_are_the_catalogs
+
+[break] the-writer-is-not-waited-for
+rule: The generator waits for the writer often enough that no event is dropped.
+file: crates/cortex-stats/src/synthetic.rs
+in: Generator::emit
+find: if self.pending >= QUEUE / 2 {
+replace: if self.pending >= QUEUE * 4 {
+caught-by:
+    cortex-stats synthetic::tests::a_heavy_month_has_every_kind_priced_and_is_made_in_a_moment

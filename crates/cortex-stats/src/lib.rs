@@ -10,6 +10,7 @@
 //! | [`store`] | [`StatsDir`], [`Aggregates`] and [`LimitsFile`]: the files, brought up to date, pruned and rebuilt. |
 //! | [`aggregate`] | [`Part`]: what some events add up to, by the keys the view asks by. |
 //! | [`query`] | [`report`]: a range and a grouping answered from the aggregates. |
+//! | `synthetic` | Tests only (`test-hooks`): `synthetic::write` fills a directory with a made-up month of events, by a seed and a scale, through the real recorder. |
 //!
 //! Nothing leaves the machine, and nothing here is read until it is asked
 //! for: making a [`Recorder`] touches no file.
@@ -19,6 +20,8 @@ pub mod query;
 pub mod record;
 pub mod recorder;
 pub mod store;
+#[cfg(any(test, feature = "test-hooks"))]
+pub mod synthetic;
 
 pub use aggregate::{DAYS_KEPT, Part};
 pub use query::{Query, current_limits, days_of, report};
