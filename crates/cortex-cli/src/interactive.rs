@@ -46,7 +46,9 @@ use cortex_protocol::jsonrpc::RequestId;
 use cortex_protocol::methods::{Op, ServerResponse};
 use cortex_protocol::session::SessionSettings;
 use cortex_protocol::{ErrorData, ErrorKind, SessionId};
-use cortex_tui::app::{self, ColorDepth, Exit, Inbound, Link, Open, Overrides, Start, Ticket, Waker};
+use cortex_tui::app::{
+    self, ColorDepth, Exit, Inbound, Link, Open, Overrides, Start, Ticket, Waker,
+};
 use cortex_tui::highlight::Highlighter;
 use cortex_tui::history::MemoryHistory;
 use cortex_tui::keys::KeyMap;
@@ -220,7 +222,12 @@ fn shown_folder(workspace: &Path, home: Option<&Path>) -> String {
 }
 
 /// The core's options: as headless mode's, but for a person at a terminal.
-fn core_options(run: &Run, env: &Env, loaded: &Loaded, log: Option<&Arc<LogHandle>>) -> CoreOptions {
+fn core_options(
+    run: &Run,
+    env: &Env,
+    loaded: &Loaded,
+    log: Option<&Arc<LogHandle>>,
+) -> CoreOptions {
     let mut options = CoreOptions::new(env.clone(), Arc::new(TokioTimer));
     options.profile.clone_from(&run.common.profile);
     options.overrides = crate::headless::overrides(run);
@@ -438,7 +445,11 @@ impl Slot {
     }
 
     fn wake(&self) {
-        let waker = self.0.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let waker = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         if let Some(waker) = waker {
             waker.wake();
         }
@@ -689,15 +700,20 @@ mod tests {
 
     #[test]
     fn the_folder_is_shown_from_the_home_directory() {
-        let home = Path::new(if cfg!(windows) { "D:\\people\\u" } else { "/srv/people/u" });
+        let home = Path::new(if cfg!(windows) {
+            "D:\\people\\u"
+        } else {
+            "/srv/people/u"
+        });
         let inside = home.join("src").join("app");
         assert_eq!(shown_folder(&inside, Some(home)), "~/src/app");
         assert_eq!(shown_folder(home, Some(home)), "~");
-        let outside = Path::new(if cfg!(windows) { "D:\\work" } else { "/srv/work" });
-        assert_eq!(
-            shown_folder(outside, Some(home)),
-            outside.to_string_lossy()
-        );
+        let outside = Path::new(if cfg!(windows) {
+            "D:\\work"
+        } else {
+            "/srv/work"
+        });
+        assert_eq!(shown_folder(outside, Some(home)), outside.to_string_lossy());
     }
 
     #[test]

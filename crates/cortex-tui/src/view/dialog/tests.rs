@@ -101,7 +101,10 @@ fn an_approval_with_a_diff_shows_the_question_its_reason_the_change_and_the_answ
     assert_eq!(rows[3], "     29       - uses: x");
     assert_eq!(rows[4], "     30 −       with: a");
     assert_eq!(rows[5], "     30 +       with: b");
-    assert_eq!(rows.last().map(String::as_str), Some("  y Allow once   n Deny"));
+    assert_eq!(
+        rows.last().map(String::as_str),
+        Some("  y Allow once   n Deny")
+    );
     assert!(lines.iter().all(|line| line.width() <= 99));
 }
 
@@ -128,12 +131,27 @@ fn leaving_the_sandbox_asks_its_own_question_and_says_what_it_costs() {
         &look(),
     ));
     assert_eq!(rows[0], "? Run outside the sandbox?");
-    assert!(rows.contains(&"    cargo publish --dry-run -p parser".to_owned()), "{rows:#?}");
-    assert!(rows.contains(&"    in crates/parser".to_owned()), "{rows:#?}");
-    assert!(rows.iter().any(|row| row.contains("full rights")), "{rows:#?}");
-    assert!(rows.iter().any(|row| row.contains("asked every time")), "{rows:#?}");
+    assert!(
+        rows.contains(&"    cargo publish --dry-run -p parser".to_owned()),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.contains(&"    in crates/parser".to_owned()),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("full rights")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("asked every time")),
+        "{rows:#?}"
+    );
     // Its reasons are not repeated: the question says it all.
-    assert!(!rows.iter().any(|row| row.contains("protected")), "{rows:#?}");
+    assert!(
+        !rows.iter().any(|row| row.contains("protected")),
+        "{rows:#?}"
+    );
 }
 
 #[test]
@@ -156,7 +174,10 @@ fn a_command_is_shown_whole_and_what_acts_unseen_is_escaped() {
         &look(),
     ));
     assert!(rows.contains(&"    echo one".to_owned()), "{rows:#?}");
-    assert!(rows.contains(&"    echo two\\u{202e}x".to_owned()), "{rows:#?}");
+    assert!(
+        rows.contains(&"    echo two\\u{202e}x".to_owned()),
+        "{rows:#?}"
+    );
 }
 
 #[test]
@@ -188,7 +209,10 @@ fn a_tall_diff_is_clipped_with_how_much_more_there_is() {
         80,
         &look(),
     ));
-    assert!(rows.iter().any(|row| row.contains("35 more lines")), "{rows:#?}");
+    assert!(
+        rows.iter().any(|row| row.contains("35 more lines")),
+        "{rows:#?}"
+    );
     assert!(rows.iter().filter(|row| row.contains("line ")).count() <= 6);
 }
 

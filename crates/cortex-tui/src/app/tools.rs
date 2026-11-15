@@ -357,7 +357,10 @@ mod tests {
         );
         assert_eq!(call.state, CallState::Failed);
         assert_eq!(call.measure, Measure::Note("exit 101".to_owned()));
-        assert_eq!(call.detail, Detail::Output("test a ... FAILED\n".to_owned()));
+        assert_eq!(
+            call.detail,
+            Detail::Output("test a ... FAILED\n".to_owned())
+        );
 
         let mut call = started("edit");
         finish(
@@ -407,8 +410,14 @@ mod tests {
             ]
         );
         // The changed middle of a replaced line.
-        assert_eq!(lines[1].emphasis, std::iter::once(11..12).collect::<Vec<_>>());
-        assert_eq!(lines[2].emphasis, std::iter::once(11..12).collect::<Vec<_>>());
+        assert_eq!(
+            lines[1].emphasis,
+            std::iter::once(11..12).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            lines[2].emphasis,
+            std::iter::once(11..12).collect::<Vec<_>>()
+        );
     }
 
     #[test]

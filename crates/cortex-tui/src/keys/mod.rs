@@ -438,7 +438,12 @@ pub const ACTIONS: &[Entry] = &[
         "deny_with_note",
         &["e"],
     ),
-    entry(Action::ShowWhole, Context::Dialog, "show_whole", &["ctrl+o"]),
+    entry(
+        Action::ShowWhole,
+        Context::Dialog,
+        "show_whole",
+        &["ctrl+o"],
+    ),
 ];
 
 impl Action {

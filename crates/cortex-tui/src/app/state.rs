@@ -72,7 +72,10 @@ enum Pending {
 
 /// The slash commands this build has, with what each does.
 const COMMANDS: &[(&str, &str)] = &[
-    ("compact", "Compact the conversation now, keeping what you name"),
+    (
+        "compact",
+        "Compact the conversation now, keeping what you name",
+    ),
     ("help", "The commands and the keys"),
     ("quit", "Quit"),
 ];
@@ -354,7 +357,8 @@ impl App {
             input: vec![Part::text(text.clone())],
             delivery,
         }));
-        self.pending.insert(ticket, Pending::Prompt { text, started });
+        self.pending
+            .insert(ticket, Pending::Prompt { text, started });
     }
 
     fn start_running(&mut self, at: Instant) {
@@ -431,7 +435,6 @@ impl App {
 
     // ------------------------------------------------------------- core
 
-
     fn send_open(&mut self, open: Open) {
         self.opening = true;
         let (op, pending) = match open {
@@ -440,7 +443,10 @@ impl App {
                 settings,
                 ephemeral,
             } => (new_session(workspace, settings, ephemeral), Pending::Open),
-            Open::Resume(id) => (Op::SessionOpen(SessionRef { session_id: id }), Pending::Open),
+            Open::Resume(id) => (
+                Op::SessionOpen(SessionRef { session_id: id }),
+                Pending::Open,
+            ),
             Open::Fork(id) => (
                 Op::SessionFork(SessionForkParams {
                     session_id: id,
@@ -523,8 +529,14 @@ impl App {
             return;
         };
         match (pending, result) {
-            (Pending::Open, Ok(OpResult::SessionNew(result) | OpResult::SessionOpen(result)
-                | OpResult::SessionFork(result))) => {
+            (
+                Pending::Open,
+                Ok(
+                    OpResult::SessionNew(result)
+                    | OpResult::SessionOpen(result)
+                    | OpResult::SessionFork(result),
+                ),
+            ) => {
                 self.opened(result.session, now);
             }
             (Pending::Open, Err(error)) => {
@@ -612,7 +624,9 @@ impl App {
         let main = state.roles.get(&ModelRole::Main);
         self.transcript.push(Block::Header(Header {
             version: self.version.clone(),
-            model: main.map(|role| role.model.as_str().to_owned()).unwrap_or_default(),
+            model: main
+                .map(|role| role.model.as_str().to_owned())
+                .unwrap_or_default(),
             effort: main.and_then(|role| role.effort_in_effect.clone().or(role.effort.clone())),
             folder: self.folder.clone(),
             branch: None,
@@ -680,7 +694,10 @@ impl App {
                 let took = completed
                     .duration_ms
                     .map(Duration::from_millis)
-                    .or_else(|| self.running.map(|began| now.saturating_duration_since(began)))
+                    .or_else(|| {
+                        self.running
+                            .map(|began| now.saturating_duration_since(began))
+                    })
                     .unwrap_or_default();
                 if self.look.turn_summary {
                     self.transcript.push(Block::Summary {
@@ -870,15 +887,14 @@ impl App {
             }
             _ => None,
         };
-        let access = self.session.as_ref().and_then(|session| {
-            match session.level.as_str() {
+        let access = self
+            .session
+            .as_ref()
+            .and_then(|session| match session.level.as_str() {
                 "unrestricted" => Some("unrestricted".to_owned()),
-                "autonomous" if session.sandbox.as_str() == "off" => {
-                    Some("sandbox off".to_owned())
-                }
+                "autonomous" if session.sandbox.as_str() == "off" => Some("sandbox off".to_owned()),
                 _ => None,
-            }
-        });
+            });
         let mut extras = Vec::new();
         if let Some(session) = &self.session
             && session.queue_length > 0

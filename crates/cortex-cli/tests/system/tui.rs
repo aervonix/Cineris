@@ -139,7 +139,11 @@ fn quit(session: &mut Session, phases: &Phases) {
         (t.shows(RESTORED) && t.shows(")")) || t.shows("after:")
     });
     let screen = session.screen();
-    assert!(screen.shows(RESTORED), "the modes were not put back:\n{}", screen.dump());
+    assert!(
+        screen.shows(RESTORED),
+        "the modes were not put back:\n{}",
+        screen.dump()
+    );
     let modes = screen.modes();
     assert!(modes.cursor_visible, "the cursor is hidden");
     assert!(!modes.sync, "a synchronized update was left open");
@@ -169,7 +173,8 @@ fn wait_shows(session: &mut Session, what: &str) {
 
 #[test]
 fn sys_a_turn_with_tools_runs_in_the_interface_and_the_terminal_is_put_back() {
-    let phases = Phases::new("sys_a_turn_with_tools_runs_in_the_interface_and_the_terminal_is_put_back");
+    let phases =
+        Phases::new("sys_a_turn_with_tools_runs_in_the_interface_and_the_terminal_is_put_back");
     let machine = Machine::new("tui_turn");
     std::fs::write(
         machine.workspace.join("notes.txt"),
@@ -217,7 +222,10 @@ fn sys_an_approval_is_asked_in_a_dialog_and_answered_with_a_key() {
     wait_shows(&mut session, "Allow once");
     let shown = everything(&session);
     assert!(shown.contains("notes.md"), "{shown}");
-    assert!(!machine.workspace.join(target).exists(), "it ran before the answer");
+    assert!(
+        !machine.workspace.join(target).exists(),
+        "it ran before the answer"
+    );
     session.send(b"y");
     wait_shows(&mut session, "Noted.");
     assert_eq!(
@@ -273,13 +281,17 @@ fn sys_a_turn_is_interrupted_mid_stream_and_mid_tool() {
     type_text(&mut session, "wait a minute\r");
     session.wait_for(LIMIT, "the command running", |t| {
         let all = t.history();
-        all.iter().any(|row| row.contains("Run ") && row.contains("60"))
+        all.iter()
+            .any(|row| row.contains("Run ") && row.contains("60"))
     });
     let began = Instant::now();
     session.send(b"\x1b");
     session.wait_for(LIMIT, "the second interruption", |t| {
         let all = t.history();
-        all.iter().filter(|row| row.contains("Interrupted.")).count() >= 2
+        all.iter()
+            .filter(|row| row.contains("Interrupted."))
+            .count()
+            >= 2
     });
     assert!(
         began.elapsed() < Duration::from_secs(20),
@@ -298,22 +310,20 @@ fn sys_a_steer_reaches_the_running_turn_and_a_queued_prompt_runs_after_it() {
     std::fs::write(machine.workspace.join("notes.txt"), "notes\n").unwrap();
     // The first response waits until the steer and the queued prompt are in.
     let typed = Gate::new();
-    machine.server.push(
-        ServerReply::sse()
-            .hold_until(&typed)
-            .send(super::sse(&[
-                super::message_start(),
-                json!({"type": "content_block_start", "index": 0,
+    machine
+        .server
+        .push(ServerReply::sse().hold_until(&typed).send(super::sse(&[
+            super::message_start(),
+            json!({"type": "content_block_start", "index": 0,
                     "content_block": {"type": "tool_use", "id": "toolu_1", "name": "read",
                         "input": {}}}),
-                json!({"type": "content_block_delta", "index": 0,
+            json!({"type": "content_block_delta", "index": 0,
                     "delta": {"type": "input_json_delta",
                         "partial_json": json!({"path": "notes.txt"}).to_string()}}),
-                json!({"type": "content_block_stop", "index": 0}),
-                super::message_delta("tool_use"),
-                json!({"type": "message_stop"}),
-            ])),
-    );
+            json!({"type": "content_block_stop", "index": 0}),
+            super::message_delta("tool_use"),
+            json!({"type": "message_stop"}),
+        ])));
     machine.reply_text("Read them both.");
     machine.reply_text("Here is the summary.");
     let mut session = machine.tui(&[]);

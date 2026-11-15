@@ -73,10 +73,7 @@ pub fn approval(
     let question = if outside {
         "Run outside the sandbox?".to_owned()
     } else {
-        format!(
-            "{}?",
-            sanitize(&request.summary).replace(['\n', '\t'], " ")
-        )
+        format!("{}?", sanitize(&request.summary).replace(['\n', '\t'], " "))
     };
     let title = Line::from(Span::new(look.glyphs.waiting, theme.style(Token::Warning)))
         .with(Span::plain(" "))
@@ -117,7 +114,13 @@ pub fn approval(
         }
         ApprovalDetail::Diff(diff) => {
             if view.diff.is_empty() {
-                indented(&mut lines, &sanitize(&diff.path), theme.style(Token::Code), 4, width);
+                indented(
+                    &mut lines,
+                    &sanitize(&diff.path),
+                    theme.style(Token::Code),
+                    4,
+                    width,
+                );
                 let why = diff
                     .omitted
                     .as_deref()
@@ -127,7 +130,11 @@ pub fn approval(
                 let rows = diff_rows(&view.diff, width.saturating_sub(1), look);
                 let room = view.detail_rows.max(1);
                 let more = rows.len().saturating_sub(room);
-                let shown = if more > 0 { room.saturating_sub(1) } else { rows.len() };
+                let shown = if more > 0 {
+                    room.saturating_sub(1)
+                } else {
+                    rows.len()
+                };
                 for (row, fill) in rows.into_iter().take(shown) {
                     let mut line = Line::plain(" ");
                     for span in row.spans() {

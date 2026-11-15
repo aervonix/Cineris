@@ -147,7 +147,10 @@ impl Dialog {
             Asks::Approval { request, .. } => request.choices.contains(&choice),
         };
         let answer = |choice: ApprovalChoice| {
-            Keyed::Answer(ServerResponse::Approval(ApprovalResponse { choice, note: None }))
+            Keyed::Answer(ServerResponse::Approval(ApprovalResponse {
+                choice,
+                note: None,
+            }))
         };
         match action {
             Action::AllowOnce if offered(ApprovalChoice::AllowOnce) => {
@@ -185,7 +188,10 @@ impl Dialog {
                 .unwrap_or_else(|| fallback.to_owned())
         };
         if self.note.is_some() {
-            return vec!["enter denies with the note".to_owned(), "esc goes back".to_owned()];
+            return vec![
+                "enter denies with the note".to_owned(),
+                "esc goes back".to_owned(),
+            ];
         }
         vec![
             format!("{} denies", key(Action::Deny, "esc")),

@@ -31,9 +31,9 @@
 //! | `dialog` | The dialogs in the input box's place, and their keys |
 //! | `wording` | What an error says, and what to do next |
 
-pub mod link;
 mod dialog;
 mod items;
+pub mod link;
 mod state;
 mod tools;
 mod wording;
@@ -43,11 +43,11 @@ use std::time::{Duration, Instant};
 
 use cortex_protocol::session::SessionSettings;
 use cortex_protocol::{ErrorData, SessionId};
-use cortex_term::{Device, Event, Frame, Inline, Scheduler, Terminal, Wake};
 /// What the binary hands the terminal layer, through this crate: the
 /// `[terminal]` overrides, the colour depth they name, the waker a link
 /// calls, and what the terminal can do.
 pub use cortex_term::{Capabilities, ColorDepth, Overrides, Waker};
+use cortex_term::{Device, Event, Frame, Inline, Scheduler, Terminal, Wake};
 
 pub use link::{Inbound, Link, Ticket};
 pub use state::{App, Drained, Effect, SECOND_INTERRUPT};

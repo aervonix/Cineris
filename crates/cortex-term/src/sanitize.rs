@@ -18,7 +18,7 @@
 //! `U+009B` as the start of a control sequence, exactly like `ESC [`.
 //!
 //! **What else acts unseen** (since step 23, which closed
-//! `docs/outstanding/names-a-client-shows-as-they-are.md`): [`sanitize`]
+//! the open item on names a client shows as they are): [`sanitize`]
 //! also writes as an escape, `\u{…}`, every character that is not a control
 //! and would change how the text around it reads without being seen, by
 //! `cortex_base::visible`'s rule: the bidirectional controls, which can

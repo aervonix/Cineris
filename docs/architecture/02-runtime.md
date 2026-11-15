@@ -14,7 +14,7 @@
 
 | Channel | Direction | Kind | Backpressure |
 |---|---|---|---|
-| Ops | front end → core | bounded MPSC (64) | The front end waits. Ops are small and rare. |
+| Ops | front end → core | unbounded MPSC (since step 23; bounded at 64 before) | None: every operation is caused by a person's key, so the queue is bounded by typing, and the interface must never wait on the core thread. |
 | Events | core → front end | bounded MPSC (1024) with delta coalescing | See below. |
 
 **Event backpressure.** A slow consumer must not make the core hold unbounded memory or stall a model stream.
@@ -31,7 +31,7 @@
 - **Whole events are queued even when the queue is full.** They are few and each is bounded (a tool result is bounded when it is made), so the queue's size is a limit on deltas, not a hard cap. Closing a connection that cannot take them in time is the RPC server's rule (step 27).
 - **A client that did not declare `deltas` is sent none.**
 - **What an item in progress holds** is kept by the same sink, from the same deltas, and is what `session/read` returns for an item that has not completed.
-- **The ops channel** is not in the core: `Core::handle` is called directly, by whatever front end owns the core thread. The bounded channel of 64 is the front end's, between its own thread and the core's (step 13b for headless, step 23 for the TUI).
+- **The ops channel** is not in the core: `Core::handle` is called directly, by whatever front end owns the core thread. The channel is the front end's, between its own thread and the core's (step 13b for headless, step 23 for the TUI). **The TUI's is unbounded** (step 23, the owner's answer of 2026-11-15): a bounded one would make the interface wait for room, or move the queue into the interface. Its operations that change the session run on the core thread in the order sent, one at a time, so an interrupt cannot overtake the prompt it stops; its reads run beside them ([09-tui.md](09-tui.md), "The application as built").
 
 **Timers and idleness.** When a session is idle the process has no periodic timers. Spinners and clocks tick only while a turn is running. The idle CPU budget in [../performance-budgets.md](../performance-budgets.md) depends on this.
 
@@ -87,7 +87,7 @@ Cancelling a node cancels everything below it. Every await in the loop that can 
 | Tools are running | Every running tool is cancelled. Each started call still gets a result, marked interrupted, with its partial output. | Within 2 s: escalate to a hard kill of child processes immediately. |
 | An approval is pending | The approval is answered "deny" and the turn stops. | n/a |
 | Idle, editor has text | The editor is cleared. | n/a |
-| Idle, editor empty | A hint says to press again to quit. | Within 1 s: quit. |
+| Idle, editor empty | A hint says to press again to quit. | Quit, unless another key came between (step 21: no timer runs, so there is no window). |
 
 **Mid-stream.** Dropping the response body closes the connection, which is the only cancellation signal every provider honours. The partial assistant message is recorded with stop reason `interrupted`. Partial tool calls in it are discarded, because their arguments are incomplete, and they are never run.
 
