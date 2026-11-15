@@ -366,7 +366,7 @@ mod tests {
         }
         // Not escapes `visible` writes: left as they are.
         for text in [
-            r"C:\Users\x",
+            r"C:\Work\x",
             r"a\u{41}b",
             r"a\u{zz}",
             r"a\u{110000}",
