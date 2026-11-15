@@ -150,32 +150,25 @@ fn the_exit_status_is_the_commands(test: &str, shell: Shell) {
     }
 }
 
+/// A test of how a command line reaches the shell: every text is quoted by
+/// the shell's own rules into one command, which goes through the tool's
+/// real start of the shell. On the PowerShells both halves (the texts
+/// through PowerShell itself, then to a program) are one command and one
+/// start: the same command line, carrying both.
 fn hostile_arguments_arrive_unchanged(test: &str, shell: Shell) {
     let bench = Bench::new(test, shell);
     let shell = bench.shell().clone();
     let (program, prefix) = echo_arguments(ENTRY);
 
-    if is_powershell(&shell) {
-        // Through PowerShell itself: every text, as one line of JSON.
+    // Through PowerShell itself: every text, as one line of JSON, before
+    // the program is run.
+    let through_powershell = is_powershell(&shell).then(|| {
         let quoted: Vec<String> = HOSTILE
             .iter()
             .map(|text| shell.quote(text).expect("PowerShell quotes any text"))
             .collect();
-        let ran = bench.command(&format!("ConvertTo-Json -Compress @({})", quoted.join(",")));
-        assert_eq!(
-            ran.result.outcome(),
-            &ToolOutcome::Success,
-            "{}",
-            ran.text()
-        );
-        let text = ran.text();
-        let line = text
-            .lines()
-            .find(|line| line.starts_with('['))
-            .unwrap_or_else(|| panic!("no JSON in {text}"));
-        let arrived: Vec<String> = serde_json::from_str(line).expect("a list of strings");
-        assert_eq!(arrived, HOSTILE);
-    }
+        format!("ConvertTo-Json -Compress @({})\n", quoted.join(","))
+    });
 
     // To a program. Windows PowerShell is known to lose a double quote and
     // an empty text on the way to a program, whatever the quoting, so for
@@ -200,7 +193,12 @@ fn hostile_arguments_arrive_unchanged(test: &str, shell: Shell) {
             }
         }
     }
-    let command = format!("{} {}", invoke(&shell, &program, &prefix), words.join(" "));
+    let command = format!(
+        "{}{} {}",
+        through_powershell.as_deref().unwrap_or(""),
+        invoke(&shell, &program, &prefix),
+        words.join(" ")
+    );
     let ran = bench.command(&command);
     assert_eq!(
         ran.result.outcome(),
@@ -208,6 +206,15 @@ fn hostile_arguments_arrive_unchanged(test: &str, shell: Shell) {
         "{}",
         ran.text()
     );
+    if through_powershell.is_some() {
+        let text = ran.text();
+        let line = text
+            .lines()
+            .find(|line| line.starts_with('['))
+            .unwrap_or_else(|| panic!("no JSON in {text}"));
+        let arrived: Vec<String> = serde_json::from_str(line).expect("a list of strings");
+        assert_eq!(arrived, HOSTILE);
+    }
     let arrived = echoed(&ran.result.text());
     assert_eq!(arrived, [expected], "{}", ran.text());
     // Nothing in any of them ran.
@@ -223,27 +230,30 @@ fn the_command_reaches_the_shell_as_written(test: &str, shell: Shell) {
     match bench.shell().kind() {
         ShellKind::Pwsh | ShellKind::WindowsPowerShell => {
             // Quotes after backslashes, and backslashes at the end: what
-            // the command line's own quoting has to get exactly right.
-            let ran = bench.command("[Console]::Out.WriteLine('x\\\"y\\\\')\n'second line'");
+            // the command line's own quoting has to get exactly right. And
+            // a back-tick at the end joins the next line to the command:
+            // the next line is empty, so the line that sets the exit code
+            // stays a line of its own, the command succeeds, and nothing of
+            // the harness's is printed. One command line carries both.
+            let ran = bench.command(
+                "[Console]::Out.WriteLine('x\\\"y\\\\')\n'second line'\nWrite-Output 'kept' `",
+            );
             let text = ran.text();
-            assert_eq!(lines(&text)[..2], ["x\\\"y\\\\", "second line"], "{text}");
-            // An exit of the command's own is not swallowed by what the
-            // harness puts after it.
-            let ran = bench.command("'before'; exit 7; 'after'");
-            assert_eq!(ran.payload("exit_code"), json!(7));
-            assert!(!ran.text().contains("after\n"), "{}", ran.text());
-            // A back-tick at the end joins the next line to the command.
-            // The next line is empty, so the line that sets the exit code
-            // stays a line of its own: the command succeeds, and nothing
-            // of the harness's is printed.
-            let ran = bench.command("Write-Output 'kept' `");
-            let text = ran.text();
-            assert_eq!(lines(&text)[0], "kept", "{text}");
+            assert_eq!(
+                lines(&text)[..3],
+                ["x\\\"y\\\\", "second line", "kept"],
+                "{text}"
+            );
             assert_eq!(ran.payload("exit_code"), json!(0), "{text}");
             assert!(
                 !text.contains("LASTEXITCODE") && !text.contains("exit 0"),
                 "{text}"
             );
+            // An exit of the command's own is not swallowed by what the
+            // harness puts after it.
+            let ran = bench.command("'before'; exit 7; 'after'");
+            assert_eq!(ran.payload("exit_code"), json!(7));
+            assert!(!ran.text().contains("after\n"), "{}", ran.text());
             // A failure before a trailing back-tick is still a failure.
             let ran = bench.command("Get-Item 'no-such-file-for-this-test' `");
             assert_eq!(ran.payload("exit_code"), json!(1), "{}", ran.text());
@@ -283,44 +293,24 @@ fn the_command_reaches_the_shell_as_written(test: &str, shell: Shell) {
     }
 }
 
+/// A test of what the process is started with: its environment, its
+/// working directory and its input. The three are read in one command, one
+/// start, since each is a property of that start; a second call runs in
+/// another directory.
 fn the_environment_the_directory_and_the_input(test: &str, shell: Shell) {
     let bench = Bench::new(test, shell);
     let shell = bench.shell().clone();
-
-    // Tools are told not to draw and not to ask.
     let separator = if shell.kind() == ShellKind::Cmd {
         "&"
     } else {
         ";"
     };
+
+    // Tools are told not to draw and not to ask.
     let prints: Vec<String> = ["TERM", "NO_COLOR", "GIT_PAGER", "GIT_TERMINAL_PROMPT"]
         .iter()
         .map(|name| print_variable(&shell, name))
         .collect();
-    let ran = bench.command(&prints.join(separator));
-    assert_eq!(
-        lines(&ran.text())[..4],
-        ["dumb", "1", "cat", "0"],
-        "{}",
-        ran.text()
-    );
-
-    // The working directory is the workspace root, or `cwd`, whatever
-    // characters its name has: it is never part of a command line.
-    bench.ws.file("sub & dir/in-the-sub-directory.txt", "");
-    bench.ws.file("at-the-root.txt", "");
-    let ran = bench.command(list_names(&shell));
-    let text = ran.text();
-    assert!(lines(&text).contains(&"at-the-root.txt"), "{text}");
-    assert!(!text.contains("in-the-sub-directory.txt"), "{text}");
-    let ran = bench.run(json!({ "command": list_names(&shell), "cwd": "sub & dir" }));
-    assert_eq!(
-        lines(&ran.text())[0],
-        "in-the-sub-directory.txt",
-        "{}",
-        ran.text()
-    );
-
     // The input is closed: a command that reads it gets its end at once,
     // and does not wait for a key nobody can press.
     let reads = match shell.kind() {
@@ -330,8 +320,45 @@ fn the_environment_the_directory_and_the_input(test: &str, shell: Shell) {
         ShellKind::Cmd => "findstr x & echo read 0 characters",
         _ => "wc -c | tr -d ' ' | sed 's/.*/read & characters/'",
     };
-    let ran = bench.command(reads);
-    assert_eq!(lines(&ran.text())[0], "read 0 characters", "{}", ran.text());
+    // The working directory is the workspace root, or `cwd`, whatever
+    // characters its name has: it is never part of a command line.
+    bench.ws.file("sub & dir/in-the-sub-directory.txt", "");
+    bench.ws.file("at-the-root.txt", "");
+
+    let command = [
+        prints.join(separator),
+        "echo ==listing".to_owned(),
+        list_names(&shell).to_owned(),
+        "echo ==input".to_owned(),
+        reads.to_owned(),
+    ]
+    .join(separator);
+    let ran = bench.command(&command);
+    let text = ran.text();
+    let shown = lines(&text);
+    let at = |marker: &str| {
+        shown
+            .iter()
+            .position(|line| *line == marker)
+            .unwrap_or_else(|| panic!("no `{marker}` line: {text}"))
+    };
+    let (listing, input) = (at("==listing"), at("==input"));
+    assert_eq!(shown[..listing], ["dumb", "1", "cat", "0"], "{text}");
+    assert!(
+        shown[listing + 1..input].contains(&"at-the-root.txt"),
+        "{text}"
+    );
+    assert!(!text.contains("in-the-sub-directory.txt"), "{text}");
+    assert_eq!(shown[input + 1], "read 0 characters", "{text}");
+    assert_eq!(ran.payload("exit_code"), json!(0), "{text}");
+
+    let ran = bench.run(json!({ "command": list_names(&shell), "cwd": "sub & dir" }));
+    assert_eq!(
+        lines(&ran.text())[0],
+        "in-the-sub-directory.txt",
+        "{}",
+        ran.text()
+    );
 }
 
 fn output_too_large_to_show(test: &str, shell: Shell) {
