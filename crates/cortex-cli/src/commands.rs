@@ -13,9 +13,16 @@ use cortex_base::Secret;
 use cortex_config::{Diagnostic, Env, LayerKind, LoadOptions, Platform};
 use cortex_core::{ClientInfo, Core, CoreOptions, OpError, Project, TokioTimer, TrustState};
 use cortex_protocol::ErrorKind;
-use cortex_protocol::methods::{Op, OpResult, SessionListParams};
+use cortex_protocol::methods::{
+    Op, OpResult, SessionListParams, UsageRefreshParams, UsageReportParams,
+};
+use cortex_protocol::usage::{UsageGroup, UsageRange};
+use cortex_protocol::ProjectKey;
 
-use crate::args::{AuthCommand, Common, ConfigCommand, PermissionsCommand, SessionsCommand};
+use crate::args::{
+    AuthCommand, Common, ConfigCommand, PermissionsCommand, SessionsCommand, StatsCommand,
+    UsageCommand,
+};
 use crate::exit;
 
 /// Writes to standard output what a subcommand found, its control
@@ -193,6 +200,152 @@ pub(crate) fn models(name: &'static str) -> Done {
         out!("{out}");
         Ok(exit::COMPLETED)
     })())
+}
+
+/// `cortex usage …`
+pub(crate) fn usage(command: UsageCommand, name: &'static str) -> Done {
+    let context = Context::new(name);
+    result((|| {
+        let core = context.core(&Common::default())?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .enable_io()
+            .build()
+            .map_err(|error| {
+                context.say(&format!("the runtime did not start: {error}"));
+                exit::INTERNAL
+            })?;
+        let range = match command.range.as_str() {
+            "today" => UsageRange::Today,
+            "week" => UsageRange::Week,
+            "all" => UsageRange::All,
+            _ => UsageRange::Month,
+        };
+        let group_by: Vec<UsageGroup> = command
+            .by
+            .iter()
+            .map(|group| UsageGroup::from_wire(group))
+            .collect();
+        let (refreshed, report) = runtime.block_on(async {
+            // A refresh is the user's own request, at the keyboard.
+            let client = core.connect(ClientInfo::user());
+            let refreshed = if command.refresh {
+                Some(
+                    core.handle(
+                        client.id,
+                        Op::UsageRefresh(UsageRefreshParams::default()),
+                    )
+                    .await,
+                )
+            } else {
+                None
+            };
+            let report = core
+                .handle(
+                    client.id,
+                    Op::UsageReport(UsageReportParams {
+                        range,
+                        group_by,
+                        session_id: None,
+                        project: command.project.clone().map(ProjectKey::new),
+                    }),
+                )
+                .await;
+            (refreshed, report)
+        });
+        let mut failed = false;
+        match refreshed {
+            Some(Ok(OpResult::UsageRefresh(result))) => {
+                if result.providers.is_empty() {
+                    context.say(
+                        "nothing to refresh: `usage.refresh` in your configuration names no \
+                         provider",
+                    );
+                }
+                for outcome in &result.providers {
+                    if let Some(error) = &outcome.error {
+                        failed = true;
+                        context.say(&format!(
+                            "the refresh of {} failed: {}",
+                            outcome.provider, error.message
+                        ));
+                    }
+                }
+            }
+            Some(Ok(_)) => return Err(exit::INTERNAL),
+            Some(Err(error)) => return Err(context.fail(&error)),
+            None => {}
+        }
+        let report = match report {
+            Ok(OpResult::UsageReport(report)) => report,
+            Ok(_) => return Err(exit::INTERNAL),
+            Err(error) => return Err(context.fail(&error)),
+        };
+        if command.json {
+            out!("{}\n", serde_json::to_string(&report).unwrap_or_default());
+        } else {
+            out!("{}", crate::usage_view::usage(&report, now()));
+        }
+        // A failed refresh keeps the figures from before, which are shown;
+        // the exit code says it failed.
+        Ok(if failed {
+            exit::INTERNAL
+        } else {
+            exit::COMPLETED
+        })
+    })())
+}
+
+/// `cortex stats …`
+pub(crate) fn stats(command: StatsCommand, name: &'static str) -> Done {
+    let context = Context::new(name);
+    result((|| {
+        let core = context.core(&Common::default())?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .map_err(|error| {
+                context.say(&format!("the runtime did not start: {error}"));
+                exit::INTERNAL
+            })?;
+        match command {
+            StatsCommand::Reset => {
+                let removed = runtime
+                    .block_on(core.stats_reset())
+                    .map_err(|error| context.fail(&error))?;
+                out!("Removed {removed} statistics files.\n");
+            }
+            StatsCommand::Show { json } => {
+                let summary = runtime
+                    .block_on(core.stats_summary())
+                    .map_err(|error| context.fail(&error))?;
+                if json {
+                    let value = serde_json::json!({
+                        "enabled": summary.enabled,
+                        "dir": summary.dir,
+                        "retention_months": summary.retention,
+                        "months": summary.months,
+                        "bytes": summary.bytes,
+                        "requests": summary.requests,
+                        "turns": summary.turns,
+                        "tool_calls": summary.tool_calls,
+                        "dropped": summary.dropped,
+                        "unreadable": summary.unreadable,
+                    });
+                    out!("{value}\n");
+                } else {
+                    out!("{}", crate::usage_view::stats(&summary));
+                }
+            }
+        }
+        Ok(exit::COMPLETED)
+    })())
+}
+
+/// Now, for "as of" in what is printed.
+fn now() -> cortex_base::UtcTime {
+    cortex_base::UtcTime::from_system(std::time::SystemTime::now())
+        .unwrap_or(cortex_base::UtcTime::UNIX_EPOCH)
 }
 
 /// `cortex config …`

@@ -46,6 +46,7 @@ mod usage;
 
 pub use crate::clients::{ClientId, ClientInfo};
 pub use crate::core::{Client, Core, CoreOptions, OpError};
+pub use crate::usage::StatsSummary;
 pub use crate::events::{EventQueue, Outgoing, QUEUE_CAPACITY};
 pub use crate::manage::{Project, ProviderCredential, TrustState, Trusted};
 pub use crate::policy::PermissionDenial;

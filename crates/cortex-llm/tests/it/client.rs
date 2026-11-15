@@ -21,6 +21,34 @@ use crate::{
     names, provider,
 };
 
+/// The client says when the provider answered, once an attempt and before
+/// anything of its response: where a turn's time goes is cut there, into
+/// the connection and the wait for the first byte (step 16). A failed
+/// status is no answer to wait on, and says nothing.
+#[test]
+fn the_client_says_when_the_provider_answered_once_an_attempt() {
+    let harness = Harness::new([Reply::status(529).chunk("{}"), hello()]);
+    let events = block_on(
+        harness
+            .client
+            .stream(
+                crate::request_at(fixtures::model(), Speed::Standard),
+                CancelToken::new(),
+            )
+            .collect(),
+    );
+    let answered: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| matches!(event, ModelEvent::Answered))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(answered.len(), 1, "{events:?}");
+    // After the failed attempt's retry, before the response it answered.
+    assert!(matches!(events[answered[0] - 1], ModelEvent::Retry(_)));
+    assert!(matches!(events[answered[0] + 1], ModelEvent::Start { .. }));
+}
+
 #[test]
 fn a_response_arrives_as_events_whatever_the_chunking() {
     let text = [
@@ -304,6 +332,7 @@ fn cancelling_a_response_part_way_ends_it_as_interrupted_and_is_not_retried() {
         .client
         .stream(fixtures::request(fixtures::model()), cancel.clone());
     let events = block_on(async {
+        assert!(matches!(stream.next().await, Some(ModelEvent::Answered)));
         let first = stream.next().await.unwrap();
         cancel.cancel();
         let mut events = vec![first];
