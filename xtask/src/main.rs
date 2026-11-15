@@ -26,6 +26,7 @@ mod compare;
 mod decide;
 mod dependents;
 mod junit;
+mod last_good;
 mod like_runner;
 mod load;
 mod mutate;
@@ -35,6 +36,7 @@ mod owner_guard;
 mod pattern;
 mod perf;
 mod records;
+mod regen;
 mod replace;
 mod rules;
 mod runs;
@@ -215,11 +217,24 @@ Working on the code
                     however rustfmt laid it out. It must be there once.
                     --from-file and --to-file read the code from files.
                     --text: exact text, for Markdown and other files.
+                    --script FILE: many edits across many files, all or none.
+                    When xtask does not build, `./x replace …` runs the last
+                    binary that worked, from target/xtask-last-good/ (it says
+                    how old it is, and offers only `replace` and `links`).
   schema [--check]  Regenerate the protocol's JSON Schema and TypeScript
                     declarations in docs/protocol/. --check only compares.
   gen               Regenerate every checked-in generated file: what `schema`
                     writes, and the configuration schema and reference in
                     docs/configuration/.
+  regen [--list] [GENERATOR...]
+                    Rebuild everything that can be rebuilt from the tree, with
+                    no network and no key: what `gen` writes, every snapshot
+                    (CORTEX_UPDATE_SNAPSHOTS) and the reference screens
+                    (tui-screens --write). For after a rebase that met changes
+                    to a generated file: settle the sources, take either side
+                    of the file, run this. Ends by listing what differs from
+                    HEAD and checking `links`. --list names what it writes and
+                    what it leaves to other commands, and why.
   alias [--release] Build `cortex` and put its alias `cx` beside it.
 
 Not built yet
@@ -231,6 +246,18 @@ fn main() -> ExitCode {
     let command = arguments.next();
     let rest: Vec<String> = arguments.collect();
 
+    // The copy of xtask kept for when it does not build (`last_good`) says
+    // that it is one, and offers only some commands.
+    let copy = std::env::current_exe()
+        .ok()
+        .filter(|exe| last_good::is_the_copy(exe));
+    if let Some(exe) = &copy
+        && let Err(message) = last_good::announce(&workspace::root(), exe, command.as_deref())
+    {
+        eprintln!("xtask: {message}");
+        return ExitCode::FAILURE;
+    }
+
     let outcome = match command.as_deref() {
         None | Some("help" | "--help" | "-h") => {
             print!("{USAGE}");
@@ -240,6 +267,11 @@ fn main() -> ExitCode {
         Some("mutate") => return mutate::main(&rest),
         Some(command) => run(command, &rest),
     };
+
+    // A binary that has just run a command to its end is a good one.
+    if outcome.is_ok() && copy.is_none() {
+        last_good::keep_after_success();
+    }
 
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
@@ -264,6 +296,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "fmt" => checks::fmt(),
         "decide" => decide::run(rest),
         "gen" => generate(),
+        "regen" => regen::run(rest),
         "schema" => schema::run(rest),
         "size" => nonblocking::size(rest),
         "startup" => startup::run(rest),
@@ -295,6 +328,12 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
 /// the configuration crate and its TOML parser before every CI job.
 fn generate() -> Result<()> {
     schema::write()?;
+    generate_configuration()
+}
+
+/// The configuration's schema and reference, written by the test of
+/// `cortex-config` that checks them.
+fn generate_configuration() -> Result<()> {
     steps::cargo_with(
         &[
             "test",

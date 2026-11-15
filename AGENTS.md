@@ -66,6 +66,7 @@ Each cost a session hours to find. The details are in [docs/steps/11/](docs/step
 | Break the code on purpose and see which tests fail | `cargo xtask mutate`, two breaks at a time unless `--jobs N` says otherwise; `mutate --check` checks every list without building anything |
 | Edit Rust code by its tokens, so the match survives `rustfmt` | `cargo xtask replace <file> --from '<code>' --to '<code>'`; any other file by its exact text with `--text` |
 | Make many edits across many files, all of them or none (the way round the shell guard) | Write the edits to a file, then `cargo xtask replace --script <file>` in a call of its own (`--script --help` has the format) |
+| Edit while `xtask` itself does not build (in the middle of a change to it) | `./x replace …` or `./x links`: it builds `xtask` first and, when that fails, runs the last binary that ran a command to its end, kept in `target/xtask-last-good/` (`xtask.exe` on Windows, run by its path). It says how old it is and which commit it came from, and offers only `replace` and `links` |
 | Estimate what a hosted runner would report, before pushing | `cargo xtask ci --tiers --like-runner [-p <crate>]` |
 | Ask whether a change is slower on the runner, for one crate (about two minutes) | `gh workflow run try --ref <branch> -f os=windows -f command="test -p <crate>" -f against=main -f count=5`, then `cargo xtask ci-times --ab <run id>` |
 | Read a CI job's log, any workflow's (the nightly's included), with its escape codes taken out | `cargo xtask ci-log <run id> [--job NAME] [--grep RE]` for a run's failed jobs, or `<job id>` for one job; through `rx`, `rx -- env GH_REPO=<owner>/<repo> cargo xtask ci-log …` |
@@ -74,6 +75,7 @@ Each cost a session hours to find. The details are in [docs/steps/11/](docs/step
 | Format | `cargo xtask fmt` |
 | Regenerate the protocol schema and TypeScript declarations | `cargo xtask schema` |
 | Regenerate every generated file, the configuration schema and reference included | `cargo xtask gen` |
+| Rebuild every generated file that the tree can rebuild (the protocol, the configuration, every snapshot, the reference screens), for example after a rebase that met changes to them: settle the sources, take either side of each generated file, run it | `cargo xtask regen` (`regen --list` says what it covers and what it leaves to other commands, and why); at the desk `rx --back -- cargo xtask regen` |
 | Build `cortex` and its alias `cx` | `cargo xtask alias` |
 | Fuzz the stream decoders (needs a nightly toolchain and cargo-fuzz) | `cargo xtask fuzz` |
 | Run the live smoke test, or record provider fixtures: by hand, never in CI, and it costs money | `cargo xtask live [PROVIDER]`, `cargo xtask live --headless [PROVIDER] [--test NAME] [--dry-run]` (the real binary's runs, with no time limit; one of them by name; what would run, sending nothing), `cargo xtask record [--provider PROVIDER]`, `cargo xtask record --toolbox`; `record --dry-run` sends nothing, `live --spent` totals the spend |

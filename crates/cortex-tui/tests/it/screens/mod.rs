@@ -361,7 +361,7 @@ fn run() -> (String, usize) {
                 );
             }
             differences += outcome.differences.len();
-            if update && !outcome.rewritten.is_empty() {
+            if update {
                 rewrite(spec, background.0, &outcome);
             }
         }
@@ -378,7 +378,9 @@ fn rewrite(spec: Spec, background: &str, outcome: &Outcome) {
         lines[*row] = text.clone();
     }
     let path = reference_dir().join(format!("{}-{background}.ans", spec.id));
-    std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+    if !outcome.rewritten.is_empty() {
+        std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+    }
     if background == "dark" {
         let screen = compose(spec, BACKGROUNDS[0].1);
         let ours = draw(spec, &screen.rows, screen.live_from);
@@ -392,7 +394,13 @@ fn rewrite(spec: Spec, background: &str, outcome: &Outcome) {
             })
             .collect();
         let path = reference_dir().join(format!("{}.txt", spec.id));
-        std::fs::write(&path, format!("{}\n", text.join("\n"))).unwrap();
+        let text = format!("{}\n", text.join("\n"));
+        // Only when it differs: a text copy that is out of step with its
+        // screen alone (a merge took one side of each file) is put right
+        // too, and one that is right is left as it is.
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+            std::fs::write(&path, text).unwrap();
+        }
     }
 }
 

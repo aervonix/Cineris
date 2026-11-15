@@ -430,3 +430,201 @@ find: "{" | "where" | ";" => break,
 replace: "{" | ";" => break,
 caught-by:
     mutate::lex::tests::the_items_that_hold_a_place_are_named_outermost_first
+
+# The sixth tooling step: the copy of xtask that still runs when xtask does
+# not build (`xtask/src/last_good.rs`), and `cargo xtask regen`, which
+# rebuilds every generated file the tree can rebuild (`xtask/src/regen.rs`).
+# Written with the code, and run with `cargo xtask mutate tooling-6`.
+
+# ------------------------------------------------------- the last good copy
+
+[break] a-copy-that-is-gone-is-not-made-again
+rule: A copy that is missing is made again, whatever the stamp says.
+file: xtask/src/last_good.rs
+in: refresh
+find: let present = dir.join(copy_name()).is_file();
+replace: let present = true;
+caught-by:
+    last_good::tests::a_missing_copy_is_made_again_though_the_stamp_is_there
+
+[break] a-new-build-is-not-copied
+rule: A binary other than the one kept, in size or in time, is copied; only the same one is let be.
+file: xtask/src/last_good.rs
+in: refresh
+find: kept.length == length && kept.built_nanos == built_nanos
+replace: true
+caught-by:
+    last_good::tests::a_good_run_keeps_its_binary_and_the_same_build_is_not_copied_twice
+
+[break] a-build-of-the-same-size-is-not-copied
+rule: Two builds of the same size are told apart by their time.
+file: xtask/src/last_good.rs
+in: refresh
+find: kept.length == length && kept.built_nanos == built_nanos
+replace: kept.length == length
+caught-by:
+    last_good::tests::a_good_run_keeps_its_binary_and_the_same_build_is_not_copied_twice
+
+[break] the-same-build-is-copied-every-time
+rule: The binary already kept is not copied again.
+file: xtask/src/last_good.rs
+in: refresh
+find: kept.length == length && kept.built_nanos == built_nanos
+replace: false
+caught-by:
+    last_good::tests::a_good_run_keeps_its_binary_and_the_same_build_is_not_copied_twice
+
+[break] the-stamp-forgets-the-commit
+rule: The stamp says which commit the copy was built from.
+file: xtask/src/last_good.rs
+in: refresh
+find: commit: commit.to_owned()
+replace: commit: String::new()
+caught-by:
+    last_good::tests::a_good_run_keeps_its_binary_and_the_same_build_is_not_copied_twice
+
+[break] the-stamp-forgets-when-it-was-copied
+rule: The stamp says when the copy was made.
+file: xtask/src/last_good.rs
+in: refresh
+find: copied: now
+replace: copied: 0
+caught-by:
+    last_good::tests::a_good_run_keeps_its_binary_and_the_same_build_is_not_copied_twice
+
+[break] a-half-written-file-is-left-beside-the-copy
+rule: Nothing but the copy and its stamp is left in its folder.
+file: xtask/src/last_good.rs
+in: refresh
+find: forget_moved_aside(&dir);
+replace:
+caught-by:
+    last_good::tests::a_good_run_keeps_its_binary_and_the_same_build_is_not_copied_twice
+
+[break] the-copy-offers-another-command
+rule: The copy offers `replace` and `links`, and no other command.
+file: xtask/src/last_good.rs
+find: pub(crate) const OFFERED: [&str; 2] = ["replace", "links"];
+replace: pub(crate) const OFFERED: [&str; 2] = ["replace", "check"];
+caught-by:
+    last_good::tests::the_copy_offers_replace_and_links_and_nothing_else
+
+[break] the-copy-is-not-known-by-its-folder
+rule: A binary in the copy's folder is the copy, and any other is a fresh build.
+file: xtask/src/last_good.rs
+in: is_the_copy
+find: folder == FOLDER
+replace: folder != FOLDER
+caught-by:
+    last_good::tests::the_copy_is_known_by_its_folder
+
+[break] a-newer-file-is-not-seen
+rule: The copy names the files of xtask/ changed since it was built.
+file: xtask/src/last_good.rs
+in: modified_after
+find: nanos(modified) > built_nanos
+replace: nanos(modified) < built_nanos
+caught-by:
+    last_good::tests::files_newer_than_the_build_are_found_and_older_ones_are_not
+
+[break] the-warning-leaves-out-the-commit
+rule: The copy says which commit it was built from, every time it runs.
+file: xtask/src/last_good.rs
+in: warning
+find: stamp.commit
+replace: "unknown"
+caught-by:
+    last_good::tests::the_warning_says_when_from_which_commit_and_what_changed_since
+
+[break] the-warning-leaves-out-what-changed
+rule: The copy says how many files of xtask/ are newer than it, and which.
+file: xtask/src/last_good.rs
+in: warning
+find: newer.len()
+occurrence: 1
+replace: 0
+caught-by:
+    last_good::tests::the_warning_says_when_from_which_commit_and_what_changed_since
+
+[break] a-date-is-a-day-out
+rule: The time a copy was built is written as UTC, to the second.
+file: xtask/src/last_good.rs
+in: utc
+find: let shifted = days + 719_468;
+replace: let shifted = days + 719_469;
+caught-by:
+    last_good::tests::times_are_written_as_utc_and_ages_in_one_unit
+
+# ---------------------------------------------------------------------- regen
+
+[break] regen-does-not-run-the-screens-mode
+rule: Every writing mode a test reads is run by `regen` or named as left to another command.
+file: xtask/src/regen.rs
+in: WRITERS
+find: modes: &["CORTEX_UPDATE_SCREENS"]
+replace: modes: &[]
+caught-by:
+    regen::tests::every_writing_mode_in_the_code_is_run_by_regen_or_left_to_another_command
+
+[break] regen-sets-the-wrong-snapshot-variable
+rule: The snapshots are written under the variable the tests read.
+file: xtask/src/regen.rs
+in: snapshots
+find: &[("CORTEX_UPDATE_SNAPSHOTS", "1")]
+replace: &[("CORTEX_UPDATE_SNAPSHOT", "1")]
+caught-by:
+    regen::tests::every_writing_mode_in_the_code_is_run_by_regen_or_left_to_another_command
+
+[break] regen-names-a-place-that-is-not-there
+rule: Every place `regen` says it writes is one the repository has.
+file: xtask/src/regen.rs
+in: WRITERS
+find: writes: &["docs/protocol/"]
+replace: writes: &["docs/protocols/"]
+caught-by:
+    regen::tests::every_place_regen_writes_is_in_the_repository
+
+[break] regen-runs-every-generator-whatever-is-asked
+rule: With names, `regen` runs those generators only, in their order.
+file: xtask/src/regen.rs
+in: select
+find: .filter(|writer| names.iter().any(|name| name == writer.name))
+replace: .filter(|_| true)
+caught-by:
+    regen::tests::no_name_is_every_generator_and_names_keep_their_order
+
+[break] regen-takes-a-name-it-does-not-know
+rule: A name that is no generator's is an error that lists the generators.
+file: xtask/src/regen.rs
+in: select
+find: if !WRITERS.iter().any(|writer| writer.name == name) {
+replace: if false {
+caught-by:
+    regen::tests::no_name_is_every_generator_and_names_keep_their_order
+
+[break] regen-does-not-check-what-it-cannot-write
+rule: A run ends with `links`, which checks the index of open items and the step records that no generator writes.
+file: xtask/src/regen.rs
+in: plan
+find: list.push(Step::function("links", checks::links));
+replace:
+caught-by:
+    regen::tests::a_run_is_the_generators_then_what_changed_then_the_check_of_what_it_cannot_write
+
+[break] regen-does-not-say-what-changed
+rule: A run lists the files that differ from HEAD in the places it writes.
+file: xtask/src/regen.rs
+in: plan
+find: list.push(Step::closure("changed", move || show_changed(&selected)));
+replace:
+caught-by:
+    regen::tests::a_run_is_the_generators_then_what_changed_then_the_check_of_what_it_cannot_write
+
+[break] regen-lists-nothing-it-leaves-out
+rule: `regen --list` says what it leaves to other commands, and why.
+file: xtask/src/regen.rs
+in: listing
+find: for left in &NOT_COVERED {
+replace: for left in NOT_COVERED.iter().take(0) {
+caught-by:
+    regen::tests::the_listing_names_every_generator_and_everything_left_out

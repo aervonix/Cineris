@@ -906,6 +906,28 @@ With the `dev` profile's optimised dependencies the cold Windows column would be
 
 **The configuration's generated files** are `docs/configuration/schema.json` and `docs/configuration/reference.md`, generated from the settings declared in `cortex-config`. They are checked by a test in that crate, on both OSes, and not by the `generated` step: `xtask` is built before every CI job does anything, and checking them there would make it build the configuration crate and its TOML parser each time. `cargo xtask gen` writes them, by running that test in its writing mode.
 
+### Rebuilding the generated files
+
+`cargo xtask regen` (since the sixth tooling step) is for after a rebase that met another branch's changes to a generated file, where a merge of the text is not the file the merged sources produce (step 18 settled such conflicts by hand in the snapshots, the screens and the schema). Settle the sources, take either side of each generated file, run it. One step for each generator, all of them run even when one fails, each timed:
+
+| Step | Writes | By |
+|---|---|---|
+| `protocol` | `docs/protocol/` | `schema`'s writer |
+| `configuration` | `docs/configuration/` | the test of `cortex-config` that checks them, with `CORTEX_UPDATE_GENERATED=1` |
+| `screens` | the reference screens and their text copies in `docs/architecture/tui-look/` | `tui-screens --write` (before the snapshots: one of their tests holds the text copies to the screens, and since the sixth tooling step `--write` also puts a text copy right that is out of step with its screen alone, as a merge that took one side of each file leaves it) |
+| `snapshots` | the snapshots of `cortex-tui`, `cortex-llm`, `cortex-index` and `cortex-config`, and the requests of the hand-written provider fixtures | the tiers 1 and 2 tests of those four crates, with `CORTEX_UPDATE_SNAPSHOTS=1` |
+
+It then lists the files that differ from `HEAD` in those places (a change to a snapshot is a change in what users see: it is read like code), and runs `links`, which writes nothing and checks what `regen` cannot write. **Left out, with `regen --list` saying so:** the tables of `docs/steps/<step>/ci.md`, which are a CI run's measurements (`ci-times RUN --write`, which needs `gh` and a run id); the index of `docs/outstanding/README.md`, whose lines are prose that an item's file does not hold (the area, the sentence, the owner), so there is nothing to generate it from, and `links` fails on an item left out or listed twice; the toolbox and the recorded provider fixtures, which are a paid API's answers (`record`); the golden transcript, which is not edited to make a test pass; and `Cargo.lock` and the break lists. **A test holds the lists to the code:** every `CORTEX_UPDATE_*` variable found in the code is run by one step or named as left to another command, and every place a step writes is a place the repository has, so a writing mode added later cannot be forgotten. On a tree that is right it changes nothing: measured at the desk, 46 s, of which the snapshots are 24 s, the screens 15 s and the configuration 6 s.
+
+### The copy of `xtask` that still runs
+
+In the middle of a change to `xtask` itself `cargo xtask replace` cannot run, because cargo builds `xtask` first and the build fails: the command that would edit the code that does not build is the one that cannot be used. Every `xtask` command that ends well keeps the binary that ran it in `target/xtask-last-good/xtask` (`xtask.exe`), beside `xtask.stamp`: the binary's size and modification time (which say whether it is the one already kept, so a run that changes nothing copies nothing), when it was copied, and the commit with a note when `xtask/` held changes that were not committed. A runner keeps none (`GITHUB_ACTIONS` is set): nobody uses its build again.
+
+- **`./x replace …` and `./x links` build first, and run the copy when the build fails.** A cargo that is not there is not a failed build: that is reported as it is. On Windows `cargo xtask` cannot fall back; run `target\xtask-last-good\xtask.exe replace …`.
+- **The copy says it is old,** on standard error, on every run: when it was built, how long ago, from which commit, and which files of `xtask/` are newer than it (or that none are, and the build is broken for another reason).
+- **It offers `replace` and `links` only.** Every other command is a check or a run whose answer depends on the code as it is, and a copy would answer for the code as it was.
+- **It never overwrites the copy in place:** a new one is written beside it and renamed over it, and where the system will not replace a program that is running (Windows) the old one is moved aside first, which it does allow. The copy does not refresh itself.
+
 ## Dependency hygiene
 
 - **Licences.** `cargo deny` allows: MIT, Apache-2.0 (with or without the LLVM exception), BSD-2-Clause, BSD-3-Clause, ISC, Zlib, 0BSD, BSL-1.0, CC0-1.0, Unlicense, Unicode-3.0, Unicode-DFS-2016, and CDLA-Permissive-2.0 (the certificate data). Everything else fails the check. The planned dependency set was checked against this list when these docs were written: all of it passes. The one copyleft licence seen anywhere in the candidates (MPL-2.0, through one of the scripting engines that was not chosen) is not in the planned set.
@@ -948,11 +970,12 @@ The commands, all through `cargo xtask` (or `./x`):
 | `combine` | This branch on top of open pull requests, checked by `ci` in a clone ("This branch on top of others"). |
 | `stress` | The tests of the crates named, many times over, each time under the next seed, optionally squeezed onto a few cores beside busy loops ("Running the tests many times over"). |
 | `mutate` | The breaks of `mutations/*.breaks`, on copies of the tree, two or `--jobs N` at a time ("Breaking the code on purpose"). |
-| `replace` | An edit of Rust code found by its tokens, or with `--text` of any file by its exact text; `--script FILE` makes many edits across many files, all of them or none ([CONTRIBUTING.md](../CONTRIBUTING.md), "Editing from a script"). |
+| `replace` | An edit of Rust code found by its tokens, or with `--text` of any file by its exact text; `--script FILE` makes many edits across many files, all of them or none ([CONTRIBUTING.md](../CONTRIBUTING.md), "Editing from a script"). When `xtask` does not build, `./x replace` and `./x links` run the last binary that ran a command to its end, kept in `target/xtask-last-good/` ("The copy of `xtask` that still runs", below). |
 | `scratch-test` | One throwaway test file run against a crate's integration tests, in a copy of the tree ("A throwaway test"). |
 | `owner-guard` | The owner guard: CI's form, `--pre-push` for the git hook, `--unpushed` by hand ("The owner guard"). |
 | `decide` | The permission engine's decision on a command line ("Asking the permission engine"). |
 | `links` | The part of `rules` that is about the docs: links inside the repository, and where the step records are. |
 | `schema` | Regenerates the protocol's JSON Schema and TypeScript declarations in `docs/protocol/`. `schema --check` only compares. |
 | `gen` | Regenerates every generated file: what `schema` writes, and the configuration schema and reference in `docs/configuration/`. |
+| `regen` | Rebuilds every generated file the tree can rebuild, with no network and no key: what `gen` writes, the reference screens and every snapshot; then lists what differs from `HEAD` and runs `links` ("Rebuilding the generated files", above). `--list` says what it covers and what it leaves out. |
 | `size`, `unused`, `advisories` | What the non-blocking workflows run: the `dist` build with its size and crate count (`--check` fails over the budget, `--target` names the target), cargo-machete, and `cargo deny check advisories`. |
