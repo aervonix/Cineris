@@ -190,15 +190,6 @@ replace: let data_end = start + header.data_len(time_len).unwrap_or(0);
 caught-by:
     cortex-base::it zone::a_zone_file_that_lies_about_its_counts_is_refused_without_a_large_allocation
 
-[break] the-first-block-is-trusted
-rule: A first block whose counts the file does not hold is refused.
-file: crates/cortex-base/src/zone/tzif.rs
-in: Transitions::parse
-find: let second_at = first.data_end(Header::LEN, 4, bytes.len())?;
-replace: let second_at = Header::LEN + first.data_len(4)?;
-caught-by:
-    cortex-base::it zone::a_zone_file_shorter_than_its_counts_is_refused
-
 # ----------------------------------------------- finding 5: the end's flush
 
 [break] the-end-waits-for-a-stuck-writer
@@ -209,6 +200,25 @@ find: if sleep.as_mut().poll(context).is_ready() {
 replace: if false {
 caught-by:
     cortex-core::it usage::a_stuck_statistics_writer_holds_the_end_at_most_two_seconds
+
+[break] the-end-does-not-give-up-on-the-writer
+rule: The end of a process gives up on a writer that is stuck, and the stuck-writer test's writer is stuck.
+file: crates/cortex-core/src/stats.rs
+in: flush
+find: give_up.now(); finished.await
+replace: finished.await
+packages: cortex-core
+caught-by:
+    cortex-core::it usage::a_stuck_statistics_writer_holds_the_end_at_most_two_seconds
+
+[break] a-key-shaped-code-reaches-the-refresh-error
+rule: A refresh's error keeps a provider's code only when the secret filter finds no credential in it.
+file: crates/cortex-core/src/usage.rs
+in: refresh_one
+find: if known || !cortex_base::redact::is_plain_code(&data.code) {
+replace: if !cortex_protocol::error::code::is_plain(&data.code) {
+caught-by:
+    cortex-core::it usage::a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer
 
 [break] a-flush-cannot-be-given-up
 rule: A flush that is given up returns at once.
@@ -415,8 +425,8 @@ caught-by:
 rule: A provider's code in which the secret filter finds a credential is not kept.
 file: crates/cortex-base/src/redact.rs
 in: is_plain_code
-find: && !SecretFilter::new().finds(code)
-replace:
+find: .any(|part| filter.finds(part))
+replace: .any(|_part| false)
 packages: cortex-base, cortex-stats
 caught-by:
     cortex-base redact::plain_code_tests::a_code_in_the_shape_of_a_key_is_not_plain

@@ -479,7 +479,13 @@ async fn refresh_one(
             // nothing else of the answer reaches the user, a client or a
             // log (found by the early review of the refresh).
             let mut data = failure.to_error_data_at(now);
-            if !cortex_base::redact::is_plain_code(&data.code) {
+            let known = inner
+                .providers
+                .filter
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .finds(&data.code);
+            if known || !cortex_base::redact::is_plain_code(&data.code) {
                 data.code = "refresh_refused".to_owned();
             }
             data.request_id = None;
