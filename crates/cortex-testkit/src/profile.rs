@@ -259,7 +259,13 @@ fn file_name(test: &str) -> String {
     let name = std::env::var("NEXTEST_TEST_NAME").unwrap_or_else(|_| test.to_owned());
     let plain: String = format!("{binary}__{name}")
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     format!("{plain}__{}.txt", std::process::id())
 }

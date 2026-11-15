@@ -63,7 +63,11 @@ struct Outcome {
     /// Each cell that differs: row, column, the reference's and ours.
     differences: Vec<(usize, usize, String, String)>,
     /// The rows that differ, drawn from our cells, for rewriting.
+    /// The rows that differ, drawn from our cells, for rewriting.
     rewritten: Vec<(usize, String)>,
+    /// How many of the differences are of style alone: the same text in
+    /// another colour, weight or slant.
+    style_only: usize,
 }
 
 fn capabilities(spec: Spec) -> Capabilities {
@@ -139,6 +143,7 @@ fn compare_screen(spec: Spec, background: &str, screen: &scenario::Screen) -> Ou
         not_built: Vec::new(),
         differences: Vec::new(),
         rewritten: Vec::new(),
+        style_only: 0,
     };
     for (index, row) in screen.rows.iter().enumerate() {
         if let Row::NotBuilt(what) = row {
@@ -155,6 +160,16 @@ fn compare_screen(spec: Spec, background: &str, screen: &scenario::Screen) -> Ou
         for (column, (a, b)) in reference.iter().zip(mine).enumerate() {
             if !same(a, b) {
                 differs = true;
+                let text = |cell: &Cell| {
+                    if cell.text.is_empty() {
+                        " ".to_owned()
+                    } else {
+                        cell.text.clone()
+                    }
+                };
+                if text(a) == text(b) && a.tail == b.tail {
+                    outcome.style_only += 1;
+                }
                 outcome
                     .differences
                     .push((index, column, describe(a), describe(b)));
@@ -329,6 +344,16 @@ fn run() -> (String, usize) {
                 "every row of screen {} is compared or counted as not built",
                 spec.id
             );
+            if !outcome.differences.is_empty() {
+                let _ = writeln!(
+                    report,
+                    "    {}-{}: {} cell(s) differ, {} of them in style alone",
+                    spec.id,
+                    background.0,
+                    outcome.differences.len(),
+                    outcome.style_only
+                );
+            }
             for (row, column, theirs, ours) in &outcome.differences {
                 let _ = writeln!(
                     report,
@@ -415,6 +440,95 @@ fn a_changed_cell_is_found_and_a_row_not_built_is_not_compared() {
     assert!(outcome.differences.is_empty());
     // Screen 1 is built whole, but for the row marked here.
     assert_eq!(outcome.compared, screen.rows.len() - 1);
+}
+
+/// `line` with the character at `column` (counted in characters, each one
+/// column wide) drawn in the style `change` makes of its own.
+fn restyle(line: &Line, column: usize, change: impl Fn(Style) -> Style) -> Line {
+    let mut out = Line::new();
+    let mut at = 0;
+    for span in line.spans() {
+        for character in span.text().chars() {
+            let style = if at == column {
+                change(span.style())
+            } else {
+                span.style()
+            };
+            out.push(cortex_term::Span::new(character.to_string(), style));
+            at += 1;
+        }
+    }
+    out
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "highlight"),
+    ignore = "the reference screens' code is highlighted"
+)]
+fn a_changed_colour_weight_or_background_is_found_and_an_unseen_one_is_not() {
+    // The first built row of screen 1 with a letter and a space in plain
+    // ASCII, so that a character is a column.
+    let spec = SPECS[1];
+    let screen = compose(spec, BACKGROUNDS[0].1);
+    let (at, line) = screen
+        .rows
+        .iter()
+        .enumerate()
+        .find_map(|(index, row)| match row {
+            Row::Built(line) if line.text().is_ascii() && line.text().trim().contains(' ') => {
+                Some((index, line.clone()))
+            }
+            _ => None,
+        })
+        .expect("a built row of plain text");
+    let text = line.text().into_owned();
+    let letter = text.find(|c: char| c.is_ascii_alphanumeric()).unwrap();
+    let space = letter + text[letter..].find(' ').unwrap();
+    let differs_at = |changed: Line, column: usize| {
+        let mut screen = compose(spec, BACKGROUNDS[0].1);
+        screen.rows[at] = Row::Built(changed);
+        let outcome = compare_screen(spec, "dark", &screen);
+        outcome
+            .differences
+            .iter()
+            .any(|(row, at_column, ..)| *row == at && *at_column == column)
+    };
+    let other = |color: Color| match color {
+        Color::Rgb(255, 0, 255) => Color::Rgb(0, 255, 0),
+        _ => Color::Rgb(255, 0, 255),
+    };
+
+    // The same text in another colour, or bold, or reversed: found.
+    assert!(differs_at(
+        restyle(&line, letter, |style| Style {
+            fg: other(style.fg),
+            ..style
+        }),
+        letter
+    ));
+    assert!(differs_at(
+        restyle(&line, letter, |style| Style {
+            bold: !style.bold,
+            ..style
+        }),
+        letter
+    ));
+    assert!(differs_at(
+        restyle(&line, space, |style| Style {
+            bg: other(style.bg),
+            ..style
+        }),
+        space
+    ));
+    // A space's foreground cannot be seen, and is not a difference.
+    assert!(!differs_at(
+        restyle(&line, space, |style| Style {
+            fg: other(style.fg),
+            ..style
+        }),
+        space
+    ));
 }
 
 #[test]
