@@ -2,12 +2,9 @@
 //! step 16: the day's account counted its own core's spending only), and
 //! refused with statistics off (the owner's decision, 2026-11-15).
 
-use std::time::Duration;
-
 use cortex_core::ClientInfo;
 use cortex_protocol::event::TurnOutcome;
 use cortex_protocol::session::SessionSettings;
-use cortex_testkit::join;
 
 use crate::{Front, World, says};
 
@@ -155,6 +152,10 @@ fn a_days_limit_with_statistics_off_is_refused_at_open() {
 #[cfg(target_os = "linux")]
 #[test]
 fn a_stalled_disk_holds_a_days_request_at_most_a_second() {
+    use std::time::Duration;
+
+    use cortex_testkit::join;
+
     let world = World::new("day_stalled", [says("Sent.")]);
     world.user_config("[limits.day]\nrequests = 5\n");
     let core = utc(&world);
