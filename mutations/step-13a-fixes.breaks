@@ -31,7 +31,7 @@ in: ShellSearch::find_windows
 find: path.is_absolute() && is_program(path, true)
 replace: is_program(path, true)
 caught-by:
-    cortex-tools::it shell_search::a_relative_comspec_or_system_root_is_not_believed
+    cortex-tools::it shell_search::sys_a_relative_comspec_or_system_root_is_not_believed
 
 [break] relative-system-root-believed
 rule: %SystemRoot% is believed only when it is absolute.
@@ -40,7 +40,7 @@ in: ShellSearch::find_windows
 find: self.system_root.clone().filter(|root| root.is_absolute())?
 replace: self.system_root.clone()?
 caught-by:
-    cortex-tools::it shell_search::a_relative_comspec_or_system_root_is_not_believed
+    cortex-tools::it shell_search::sys_a_relative_comspec_or_system_root_is_not_believed
 
 [break] shell-cache-keyed-by-the-path-as-found
 rule: The shells' versions are kept under the resolved path of the program.
@@ -333,6 +333,7 @@ rule: The harness starts git by the path found in an absolute directory of PATH,
 file: crates/cortex-base/src/git.rs
 find: let mut command = Command::new(&started.program);
 replace: let _ = &started.program; let mut command = Command::new("git");
+packages: cortex-base, cortex-session
 caught-by:
     cortex-session::it base::sys_git_is_never_found_through_a_relative_path_entry
 
