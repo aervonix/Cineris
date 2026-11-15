@@ -282,6 +282,11 @@ pub(crate) struct Inner {
     /// (`stats.enabled = false`) or there is no state directory. Making it
     /// touches no file; its writer is started when the first session opens.
     pub(crate) stats: Option<cortex_stats::Recorder>,
+    /// The account of today's spending limits (`[limits.day]`), shared by
+    /// every session of the core, and the local day it is for: made the
+    /// first time a session with a day limit opens, from what the day's
+    /// statistics already hold.
+    pub(crate) day: Mutex<Option<(cortex_base::LocalDate, cortex_agent::Account)>>,
 }
 
 /// What a shell was looked for with: `shell.program` and `shell.args`.
@@ -386,6 +391,7 @@ impl Core {
                 shutting_down: AtomicBool::new(false),
                 sandbox,
                 stats,
+                day: Mutex::new(None),
             }),
         })
     }

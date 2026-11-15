@@ -182,6 +182,9 @@ pub struct Session {
     last_turn: Option<TurnId>,
     /// The role the last summary counted was asked of.
     summary_role: ModelRole,
+    /// The span of the request in flight: its attempts are recorded on it
+    /// when its record is made.
+    request_span: tracing::Span,
 }
 
 impl std::fmt::Debug for Session {
@@ -453,6 +456,7 @@ impl Session {
             role_budgets: std::collections::BTreeMap::new(),
             last_turn: None,
             summary_role: ModelRole::Main,
+            request_span: tracing::Span::none(),
         };
         Ok((session, SessionHandle { shared }))
     }
@@ -693,6 +697,7 @@ impl Session {
                         model = %request.model.info.id,
                         attempts = tracing::field::Empty,
                     );
+                    self.request_span = span.clone();
                     self.respond(&mut turn, *request, prep)
                         .instrument(span)
                         .await
@@ -1940,7 +1945,7 @@ impl Session {
         let after = self.times.model_time(self.clock.monotonic());
         let spent = |at: usize| millis(after[at].saturating_sub(live.model_before[at]));
         let attempts = live.attempt;
-        tracing::Span::current().record("attempts", attempts);
+        self.request_span.record("attempts", attempts);
         self.stats.record(StatEvent::Request(RequestStat {
             session: self.shared.info.id.clone(),
             turn: turn.id.clone(),

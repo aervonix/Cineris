@@ -128,6 +128,20 @@ impl Account {
         }
     }
 
+    /// An account that has had `spent` drawn from it already: a day's, which
+    /// begins with what the day's earlier sessions spent.
+    #[must_use]
+    pub fn with_spent(
+        name: impl Into<String>,
+        budget: Budget,
+        clock: SharedClock,
+        spent: Spent,
+    ) -> Self {
+        let account = Self::new(name, budget, clock);
+        *account.lock() = spent;
+        account
+    }
+
     /// The account of a lease: its budget, under the lease's id.
     #[must_use]
     pub fn for_lease(lease: &Lease, clock: SharedClock) -> Self {

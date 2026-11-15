@@ -275,6 +275,87 @@ fn a_provider_with_no_documented_endpoint_has_no_refresh_and_only_a_user_may_ask
     assert!(transport.requests().is_empty());
 }
 
+/// The loop opens a `turn` span, a `request` span for each request and a
+/// `tool` span for each call, inside the session's: what the latency
+/// budgets and a trace recorder read (`docs/architecture/02-runtime.md`).
+#[test]
+fn the_loops_spans_reach_the_subscriber() {
+    let world = World::new(
+        "spans",
+        [
+            crate::calls(&[("c1", "read", serde_json::json!({"path": "a.txt"}))]),
+            says("Read."),
+        ],
+    );
+    world.put("a.txt", "hello\n");
+    let (subscriber, handle) = cortex_base::log::start(cortex_base::log::LogOptions::new(
+        Arc::new(world.clock.clone()),
+    ))
+    .unwrap();
+    let _installed = tracing::subscriber::set_default(subscriber);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("go").await;
+        front.close().await;
+    });
+    let timings = handle.timings();
+    let turns = timings.named("turn");
+    assert_eq!(turns.len(), 1, "{:?}", timings.all());
+    let requests = timings.named("request");
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.parent == Some(turns[0].id))
+    );
+    assert_eq!(requests[0].field("role"), Some("main"));
+    assert_eq!(requests[0].field("attempts"), Some("1"));
+    let tools = timings.named("tool");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].field("tool"), Some("read"));
+    // Opened inside the request whose response named it, or the turn.
+    assert!(
+        tools[0].parent == Some(requests[0].id) || tools[0].parent == Some(turns[0].id),
+        "{tools:?}"
+    );
+}
+
+/// The day's limits count what the day's earlier sessions spent, from the
+/// statistics, and every session of the day draws on one account.
+#[test]
+fn a_days_limit_counts_the_days_earlier_sessions() {
+    let world = World::new("day_limit", [says("One."), says("Two."), says("Not sent.")]);
+    world.user_config("[limits.day]\nrequests = 2\n");
+    let first = world.core_with(|options| options.zone = Some(cortex_base::Zone::utc()));
+    world.run(async {
+        let front = Front::start(&world, &first).await;
+        front.turn("one").await;
+        front.close().await;
+        first.shutdown().await;
+    });
+    let later = world.core_with(|options| options.zone = Some(cortex_base::Zone::utc()));
+    world.run(async {
+        let front = Front::start(&world, &later).await;
+        let second = front.turn("two").await;
+        assert_eq!(
+            second.outcome,
+            cortex_protocol::event::TurnOutcome::Completed
+        );
+        let third = front.turn("three").await;
+        assert_eq!(third.outcome, cortex_protocol::event::TurnOutcome::Limit);
+        let error = third.error.unwrap();
+        assert_eq!(error.code, "request_limit");
+        assert!(
+            error.message.contains("the day 2026-11-13"),
+            "{}",
+            error.message
+        );
+        front.close().await;
+    });
+    assert_eq!(world.provider.requests().len(), 2);
+}
+
 /// A user's catalog entry for a model priced at a dollar a million input
 /// tokens and `output` a million output tokens.
 fn house_model(output: f64) -> String {

@@ -1367,9 +1367,12 @@ pub(crate) fn assemble(
             cortex_protocol::session::SandboxStatus::Off
         },
     };
-    let ledger = Ledger::new(Arc::clone(&clock))
+    let mut ledger = Ledger::new(Arc::clone(&clock))
         .with_account(Account::for_lease(&lease, Arc::clone(&clock)))
         .with_turn_budget(budget(&settings.limits.turn));
+    if let Some(day) = crate::usage::day_account(inner, &settings.limits.day) {
+        ledger = ledger.with_account(day);
+    }
     // Every tool is held to a stop a confined command made.
     let names: Vec<String> = toolbox.names().map(str::to_owned).collect();
     for name in names {
