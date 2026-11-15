@@ -993,11 +993,12 @@ mod tests {
 
     #[test]
     fn a_cut_never_splits_a_character() {
-        let provider = ScriptedProvider::new([Response::new().text("aé€xyz").end(StopReason::End)]);
-        // Six bytes of "aé€": the euro sign takes bytes 3 to 5, so a limit of
-        // one token (three bytes) falls inside it.
+        let provider =
+            ScriptedProvider::new([Response::new().text("aaé€xyz").end(StopReason::End)]);
+        // The é takes bytes 2 and 3, so a limit of one token (three bytes)
+        // falls inside it, and the cut is before it.
         let events = play_limited(&provider, Some(1));
-        assert_eq!(block_ends(&events), [json!({"type": "text", "text": "aé"})]);
+        assert_eq!(block_ends(&events), [json!({"type": "text", "text": "aa"})]);
     }
 
     #[test]

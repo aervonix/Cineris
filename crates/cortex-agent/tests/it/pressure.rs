@@ -208,7 +208,9 @@ fn estimates(rig: &Rig) -> Vec<u64> {
 #[test]
 fn the_first_request_of_a_later_turn_is_sized_with_the_history_it_carries() {
     for kind in KINDS {
-        let world = World::new("fill_next", [says("One."), says("Two.")]);
+        // The first answer is long, so that what the history adds is more
+        // than any rounding.
+        let world = World::new("fill_next", [says(&"One. ".repeat(100)), says("Two.")]);
         let fast = ScriptedProvider::new([says("A summary.")]);
         let rig = setup(&world, kind, true, Some(&fast));
         rig.window(6_000);
@@ -240,7 +242,7 @@ fn the_first_request_of_a_later_turn_is_sized_with_the_history_it_carries() {
             "{kind:?}: {measured} is not between the thresholds: {filled:?}"
         );
         assert!(
-            filled.base_bytes > first * 3,
+            filled.base_bytes > first * 3 + 450,
             "{kind:?}: the history is in the twin's request: {filled:?}, first {first}"
         );
         assert_eq!(world.provider.requests().len(), 2, "{kind:?}");
@@ -251,8 +253,11 @@ fn the_first_request_of_a_later_turn_is_sized_with_the_history_it_carries() {
 /// A response that calls the `read` tool, and waits for `gate` when given
 /// one: what it says is the same either way.
 fn read_call(gate: Option<&cortex_testkit::Gate>) -> cortex_testkit::Response {
-    let response =
-        cortex_testkit::Response::new().tool_call("c1", "read", &serde_json::json!({"path": "a"}));
+    // Some text beside the call, so that the request after it is much
+    // larger than the request before it.
+    let response = cortex_testkit::Response::new()
+        .text(&"Reading it. ".repeat(50))
+        .tool_call("c1", "read", &serde_json::json!({"path": "a"}));
     match gate {
         Some(gate) => response.wait(gate),
         None => response,
