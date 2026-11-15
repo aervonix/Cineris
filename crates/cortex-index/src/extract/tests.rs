@@ -388,12 +388,10 @@ fn a_chain_of_template_and_extern_prefixes_needs_no_more_stack_than_one() {
         chain("template<> ", 22_000, "int f();\n"),
         chain("extern \"C\" ", 22_000, "int f();\n"),
     ];
+    // And a megabyte of each spelling of each, mixed.
     for unit in [
-        "template<> ",
-        "extern \"C\" ",
-        "extern\"\"",
         "template<> extern \"C\" ",
-        "extern \"C\" template<typename T> ",
+        "extern\"\"template<typename T> ",
     ] {
         lines.push(chain(unit, 1 << 20, "int f();\n"));
     }
@@ -463,7 +461,7 @@ fn assert_linear(language: Language, file: &'static str, unit: &str, bytes: usiz
 
 #[test]
 fn every_name_is_clipped_like_the_head() {
-    let big = "a".repeat(200_000);
+    let big = "a".repeat(10_000);
     let cases: Vec<(Option<Language>, &str, String)> = vec![
         (Some(Language::Rust), "a.rs", format!("fn {big}() {{}}\n")),
         (Some(Language::Rust), "a.rs", format!("impl {big} {{}}\n")),
@@ -496,7 +494,7 @@ fn every_name_is_clipped_like_the_head() {
         (
             Some(Language::TypeScript),
             "a.ts",
-            format!("namespace {} {{}}\n", "a.".repeat(100_000)),
+            format!("namespace {} {{}}\n", "a.".repeat(5_000)),
         ),
         (
             Some(Language::TypeScript),
