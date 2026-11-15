@@ -161,9 +161,10 @@ pub(crate) async fn report(
                         retention,
                     )
                     .map_err(read_failed)?;
-                if changed {
+                if changed && recording {
                     // Kept for the next report; one that cannot be written
-                    // is no reason to fail this one.
+                    // is no reason to fail this one. With statistics off
+                    // nothing is written.
                     let _ = aggregates.save(dir, clock.as_ref());
                 }
                 (aggregates.total(), LimitsFile::load(dir))
@@ -250,6 +251,17 @@ fn session_report(core: &Core, params: &UsageReportParams) -> Result<UsageReport
     })
 }
 
+/// Whether a provider's error code is a plain one (`invalid_api_key`,
+/// `rate_limit_exceeded`): lower-case letters, digits, `_`, `.` and `-`, at
+/// most 64 of them. Anything else is not shown.
+fn is_plain_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= 64
+        && code.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
+        })
+}
+
 /// An amount in billionths as an exact decimal number, with at least two
 /// places: `110.00`, `-0.5` as `-0.50`, `0.000000001`.
 pub(crate) fn decimal(nanos: i64) -> String {
@@ -315,12 +327,14 @@ pub(crate) async fn refresh(core: &Core, params: &UsageRefreshParams) -> UsageRe
     // is the user's alone, and a project's value of it was never taken.
     let settings = &inner.user.settings;
     let env = &inner.options.env;
-    let allowed: Vec<ProviderId> = settings
-        .usage
-        .refresh
-        .iter()
-        .map(|name| ProviderId::new(name.as_str()))
-        .collect();
+    let mut allowed: Vec<ProviderId> = Vec::new();
+    for name in &settings.usage.refresh {
+        let provider = ProviderId::new(name.as_str());
+        // One request a provider, however often it is listed.
+        if !allowed.contains(&provider) {
+            allowed.push(provider);
+        }
+    }
     let mut outcomes = Vec::new();
     for wanted in &params.providers {
         if !allowed.contains(wanted) {
@@ -351,7 +365,10 @@ pub(crate) async fn refresh(core: &Core, params: &UsageRefreshParams) -> UsageRe
         }
         outcomes.push(outcome);
     }
+    // With statistics off nothing is written: the figures are in the
+    // result, and are not kept.
     if !kept.is_empty()
+        && settings.stats.enabled
         && let Some(dir) = stats_dir(&inner.user)
     {
         let clock = Arc::clone(&inner.options.clock);
@@ -476,9 +493,17 @@ async fn refresh_one(
             error: None,
         },
         Err(failure) => {
-            // The classification names the status and the provider's code;
-            // the answer's own text is not carried.
+            // The classification names the status and the provider's code.
+            // A code is the answer's own text, so it is kept only when it
+            // looks like one, and the answer's request id not at all:
+            // nothing else of the answer reaches the user, a client or a
+            // log (found by the early review of the refresh).
             let mut data = failure.to_error_data_at(now);
+            if !is_plain_code(&data.code) {
+                data.code = "refresh_refused".to_owned();
+            }
+            data.request_id = None;
+            data.details = None;
             data.message = format!(
                 "`{provider}`'s usage endpoint refused the refresh ({}, status {status}).",
                 data.code

@@ -506,13 +506,25 @@ impl LimitsFile {
     ///
     /// # Errors
     ///
-    /// When it cannot be written.
+    /// When it cannot be read for any reason but its not being there (it
+    /// is then left as it is, so that a passing failure to read it cannot
+    /// lose the other providers' figures), or cannot be written.
     pub fn update(
         dir: &StatsDir,
         newer: impl IntoIterator<Item = ProviderLimits>,
         clock: &dyn Clock,
     ) -> io::Result<()> {
-        let mut file = Self::load(dir);
+        let mut file = match open_to_read(&dir.limits_file()) {
+            Ok(mut opened) => {
+                let mut text = Vec::new();
+                opened.read_to_end(&mut text)?;
+                // A file that is not one this build reads is replaced: it
+                // holds nothing that is not asked again.
+                serde_json::from_slice(&text).unwrap_or_default()
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
+            Err(error) => return Err(error),
+        };
         file.merge(newer);
         dir.ensure()?;
         let text = serde_json::to_vec(&file).map_err(io::Error::other)?;

@@ -124,8 +124,8 @@ caught-by:
 rule: With `usage.refresh` empty nothing connects: only the providers the user listed are asked.
 file: crates/cortex-core/src/usage.rs
 in: refresh
-find: let allowed: Vec<ProviderId> = settings.usage.refresh.iter().map(|name| ProviderId::new(name.as_str())).collect();
-replace: let allowed: Vec<ProviderId> = ["openrouter", "deepseek", "venice"].iter().map(|name| ProviderId::new(*name)).collect();
+find: for name in &settings.usage.refresh {
+replace: for name in &["openrouter".to_owned(), "deepseek".to_owned(), "venice".to_owned()] {
 caught-by:
     cortex-core::it usage::with_the_list_empty_nothing_is_asked_and_a_project_cannot_turn_it_on
     cortex-core::it usage::a_provider_with_no_documented_endpoint_has_no_refresh_and_only_a_user_may_ask
@@ -327,3 +327,30 @@ find: self.request_stat(turn, model, None, StopReason::ContextOverflow, Some(dat
 replace:
 caught-by:
     cortex-agent::it roles::a_request_refused_as_too_long_keeps_its_context_record
+
+[break] the-answers-code-reaches-the-error
+rule: Nothing of a failed refresh's answer reaches its error: a code that is not a plain one is not shown.
+file: crates/cortex-core/src/usage.rs
+in: refresh_one
+find: if !is_plain_code(&data.code) {
+replace: if false {
+caught-by:
+    cortex-core::it usage::a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer
+
+[break] a-refresh-is-kept-with-statistics-off
+rule: With statistics off a refresh's figures are answered and nothing is written.
+file: crates/cortex-core/src/usage.rs
+in: refresh
+find: && settings.stats.enabled
+replace:
+caught-by:
+    cortex-core::it usage::a_provider_listed_twice_is_asked_once_and_nothing_is_kept_with_statistics_off
+
+[break] a-provider-listed-twice-is-asked-twice
+rule: A provider is asked once, however often `usage.refresh` lists it.
+file: crates/cortex-core/src/usage.rs
+in: refresh
+find: if !allowed.contains(&provider) {
+replace: if true {
+caught-by:
+    cortex-core::it usage::a_provider_listed_twice_is_asked_once_and_nothing_is_kept_with_statistics_off

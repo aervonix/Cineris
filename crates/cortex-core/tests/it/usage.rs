@@ -186,7 +186,9 @@ fn a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer() {
             .header("content-type", "application/json")
             .send(KEY_ANSWER),
     );
-    server.push(ServerReply::status(401).send(r#"{"error":{"message":"BODY-TEXT-401"}}"#));
+    server.push(ServerReply::status(401).send(
+        r#"{"error":{"message":"BODY-TEXT-401","code":"BODY-TEXT in the code"},"request_id":"BODY-TEXT-id"}"#,
+    ));
     server.push(ServerReply::status(500).send("BODY-TEXT-500"));
     server.push(ServerReply::status(200).send("BODY-TEXT-not-json"));
     let never = Gate::new();
@@ -199,7 +201,9 @@ fn a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer() {
         let result = net(refresh(&core, ClientInfo::user())).unwrap();
         let error = result.providers[0].error.as_ref().unwrap();
         assert!(error.message.contains("openrouter"), "{}", error.message);
-        assert!(!error.message.contains("BODY-TEXT"), "{}", error.message);
+        // Nothing of the answer: not its message, its code or its id.
+        let whole = serde_json::to_string(error).unwrap();
+        assert!(!whole.contains("BODY-TEXT"), "{whole}");
         assert_eq!(limits_text(&world).unwrap(), kept, "what was kept stays");
     }
     // One that never answers is given up at its time limit.
@@ -211,6 +215,34 @@ fn a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer() {
     assert_eq!(error.code, "refresh_timeout");
     assert_eq!(limits_text(&world).unwrap(), kept);
     never.open();
+}
+
+/// A provider listed twice is asked once, and with statistics off the
+/// figures are answered and not kept.
+#[test]
+fn a_provider_listed_twice_is_asked_once_and_nothing_is_kept_with_statistics_off() {
+    let mut world = World::new("refresh_once", []);
+    with_key(&mut world);
+    let server = SseServer::start();
+    server.push(
+        ServerReply::status(200)
+            .header("content-type", "application/json")
+            .send(KEY_ANSWER),
+    );
+    world.user_config(&format!(
+        "[stats]\nenabled = false\n\n[usage]\nrefresh = [\"openrouter\", \"openrouter\"]\n\n\
+         [providers.openrouter]\nbase_url = \"{}/api/v1\"\n",
+        server.base_url()
+    ));
+    let core = world.core();
+    let result = net(refresh(&core, ClientInfo::user())).unwrap();
+    assert_eq!(server.requests().len(), 1);
+    assert_eq!(result.providers.len(), 1);
+    assert!(result.providers[0].limits.is_some());
+    assert!(
+        limits_text(&world).is_none(),
+        "nothing written with statistics off"
+    );
 }
 
 #[test]
