@@ -56,6 +56,8 @@ export interface ClientMethods {
   "session/rewind": { params: SessionRewindParams; result: SessionResult };
   /** Changes a session's settings: models, reasoning level, speed, level. */
   "session/set": { params: SessionSetParams; result: SessionResult };
+  /** Steps back before the last turn, putting its files back if asked. */
+  "session/undo": { params: SessionUndoParams; result: SessionResult };
   /** Stops the server cleanly. */
   shutdown: { params: Empty; result: Empty };
   /** Cancels the running turn. It is not an error when none is running. With `now`, running commands are killed at once. */
@@ -70,6 +72,8 @@ export interface ClientMethods {
   "usage/report": { params: UsageReportParams; result: UsageReport };
   /** Runs the project's checks now. The outcome arrives as events. */
   "verify/run": { params: SessionRef; result: Empty };
+  /** Lists the workspace's files, for file completion. */
+  "workspace/files": { params: WorkspaceFilesParams; result: WorkspaceFilesResult };
 }
 
 /** Requests the server sends to a client, by method name. Each pauses the turn until it is answered or times out. */
@@ -1547,6 +1551,8 @@ export interface SessionState {
   title?: string | null;
   /** The workspace root. An absolute path on the server's machine. */
   workspace: string;
+  /** The directories the session's commands may write to, as absolute paths: the workspace, the session's temporary directory and any the configuration adds. A front end keeps a program it runs for the person (an external editor) out of them, since a command could have put one there (since step 23). */
+  write_roots?: Array<string>;
 }
 
 /** A stored session, in a list. */
@@ -1567,6 +1573,14 @@ export interface SessionSummary {
   updated_at: Timestamp;
   /** The workspace root. */
   workspace: string;
+}
+
+/** `session/undo`: steps back before the session's last turn, its first included, and records the step as an undo (since step 23). */
+export interface SessionUndoParams {
+  /** Whether to put files back as they were before the turn, from its snapshots. */
+  restore_files?: boolean;
+  /** The session. */
+  session_id: SessionId;
 }
 
 /** Session metadata changed: title, models, speed, level, queue length. */
@@ -1879,10 +1893,12 @@ export interface TrustResource {
 }
 
 /** A kind of project resource that can run code or grant permissions. */
-export type TrustResourceKind = "rules" | "hook" | "extension" | "mcp_server" | "commands" | (string & {});
+export type TrustResourceKind = "rules" | "hook" | "extension" | "mcp_server" | "commands" | "repository" | "settings" | (string & {});
 
 /** The answer to `trust/request`. */
 export interface TrustResponse {
+  /** With `trusted` false: remember the refusal, so that the project is not asked about at later starts either (since step 23). It is kept beside the trusted projects, and `cortex permissions trust` lifts it. */
+  never?: boolean;
   /** Whether the resources listed may be used. */
   trusted?: boolean;
 }
@@ -2062,3 +2078,19 @@ export interface UserMessageItem {
 
 /** What the project's checks said at the end of a turn. */
 export type Verification = "passed" | "failed" | "skipped" | (string & {});
+
+/** `workspace/files`: the paths of a session's workspace, for a front end's file completion (since step 23). */
+export interface WorkspaceFilesParams {
+  /** The most paths to return. Absent: the server's own limit. */
+  limit?: number | null;
+  /** The session. */
+  session_id: SessionId;
+}
+
+/** The result of `workspace/files`. */
+export interface WorkspaceFilesResult {
+  /** The files, relative to the workspace's root with `/` between parts, the most recently changed first, as the ignore rules and the session's read rules leave them. */
+  paths: Array<string>;
+  /** Whether there were more than the limit. */
+  truncated?: boolean;
+}

@@ -237,6 +237,9 @@ pub struct SessionInfo {
     pub lease_id: Option<LeaseId>,
     /// Whether the sandbox confines the session's commands.
     pub sandbox: SandboxStatus,
+    /// The directories the session's commands may write to, for a front
+    /// end that keeps the programs it runs for the person out of them.
+    pub write_roots: Vec<String>,
 }
 
 impl SessionInfo {
@@ -253,6 +256,7 @@ impl SessionInfo {
             level: Level::Supervised,
             lease_id: None,
             sandbox: SandboxStatus::Off,
+            write_roots: Vec::new(),
         }
     }
 }

@@ -155,6 +155,7 @@ pub(crate) fn state() -> SessionState {
         seq: 0,
         running_turn: None,
         queue_length: 0,
+        write_roots: vec!["/work/app".to_owned()],
     }
 }
 

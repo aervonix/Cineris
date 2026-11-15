@@ -284,6 +284,44 @@ pub struct SessionRewindParams {
     pub restore_files: bool,
 }
 
+/// `session/undo`: steps back before the session's last turn, its first
+/// included, and records the step as an undo (since step 23).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SessionUndoParams {
+    /// The session.
+    pub session_id: SessionId,
+    /// Whether to put files back as they were before the turn, from its
+    /// snapshots.
+    #[serde(default)]
+    pub restore_files: bool,
+}
+
+/// `workspace/files`: the paths of a session's workspace, for a front end's
+/// file completion (since step 23).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct WorkspaceFilesParams {
+    /// The session.
+    pub session_id: SessionId,
+    /// The most paths to return. Absent: the server's own limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// The result of `workspace/files`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct WorkspaceFilesResult {
+    /// The files, relative to the workspace's root with `/` between parts,
+    /// the most recently changed first, as the ignore rules and the
+    /// session's read rules leave them.
+    pub paths: Vec<String>,
+    /// Whether there were more than the limit.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
 /// `session/compact`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -831,6 +869,12 @@ open_enum! {
         McpServer => "mcp_server",
         /// Learned or shared commands used for the safe list.
         Commands => "commands",
+        /// Git reading the repository's own configuration, which can name
+        /// programs for git to run (since step 23).
+        Repository => "repository",
+        /// A setting of the project's that raises cost or widens access,
+        /// held back until the project is trusted (since step 23).
+        Settings => "settings",
     }
 }
 
@@ -868,6 +912,11 @@ pub struct TrustResponse {
     /// Whether the resources listed may be used.
     #[serde(default)]
     pub trusted: bool,
+    /// With `trusted` false: remember the refusal, so that the project is
+    /// not asked about at later starts either (since step 23). It is kept
+    /// beside the trusted projects, and `cortex permissions trust` lifts it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub never: bool,
 }
 
 // ------------------------------------------------------- the method tables
@@ -1106,6 +1155,8 @@ methods! {
     SessionFork(SessionForkParams) -> SessionResult => "session/fork",
     /// Moves the active branch back to an earlier item.
     SessionRewind(SessionRewindParams) -> SessionResult => "session/rewind",
+    /// Steps back before the last turn, putting its files back if asked.
+    SessionUndo(SessionUndoParams) -> SessionResult => "session/undo",
     /// Stops using a session on this connection. The session is kept.
     SessionClose(SessionRef) -> Empty => "session/close",
     /// Sends a prompt. If a turn is running, `delivery` says whether to
@@ -1137,6 +1188,8 @@ methods! {
     VerifyRun(SessionRef) -> Empty => "verify/run",
     /// Reads the model catalog.
     ModelsList(Empty) -> ModelsListResult => "models/list",
+    /// Lists the workspace's files, for file completion.
+    WorkspaceFiles(WorkspaceFilesParams) -> WorkspaceFilesResult => "workspace/files",
     /// Reads the effective configuration.
     ConfigGet(ConfigGetParams) -> ConfigGetResult => "config/get",
     /// Re-reads the configuration files.

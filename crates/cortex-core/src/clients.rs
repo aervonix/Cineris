@@ -105,6 +105,11 @@ struct Open {
     /// What they were sent, for a client that joins while it is open.
     request: ServerRequest,
     answer: oneshot::Sender<ServerResponse>,
+    /// The request ends when every client it was put to has gone: one
+    /// about a session nobody else can join (a trust question while the
+    /// session is put together) or work that holds the session (a rewind's
+    /// question). Its answer's receiver is then told there is none.
+    ends_with_askers: bool,
 }
 
 /// The kinds of request, by the capability a client declares to be put
@@ -190,9 +195,15 @@ impl Clients {
 
     /// Removes a client. Its queue takes nothing more.
     pub(crate) fn disconnect(&self, client: ClientId) {
-        if let Some(entry) = lock(&self.clients).remove(&client.0) {
+        let mut clients = lock(&self.clients);
+        if let Some(entry) = clients.remove(&client.0) {
             entry.queue.close();
         }
+        // A request that ends with its askers, put to nobody connected now:
+        // dropping it tells whoever waits that no answer will come.
+        lock(&self.open).retain(|_, open| {
+            !open.ends_with_askers || open.asked.iter().any(|asked| clients.contains_key(asked))
+        });
     }
 
     pub(crate) fn queue(&self, client: ClientId) -> Option<Arc<EventQueue>> {
@@ -236,6 +247,28 @@ impl Clients {
         asked: &[u64],
         request: impl Fn(&RequestId) -> ServerRequest,
     ) -> (RequestId, oneshot::Receiver<ServerResponse>) {
+        self.put(session, asked, request, false)
+    }
+
+    /// Puts a request to `asked` that ends when they have all gone (see
+    /// [`Open::ends_with_askers`]): its answer's receiver is then told
+    /// there is none.
+    pub(crate) fn ask_once(
+        &self,
+        session: &SessionId,
+        asked: &[u64],
+        request: impl Fn(&RequestId) -> ServerRequest,
+    ) -> (RequestId, oneshot::Receiver<ServerResponse>) {
+        self.put(session, asked, request, true)
+    }
+
+    fn put(
+        &self,
+        session: &SessionId,
+        asked: &[u64],
+        request: impl Fn(&RequestId) -> ServerRequest,
+        ends_with_askers: bool,
+    ) -> (RequestId, oneshot::Receiver<ServerResponse>) {
         let number = self.next_request.fetch_add(1, Ordering::Relaxed) + 1;
         let id = RequestId::Number(i64::try_from(number).unwrap_or(i64::MAX));
         let (answer, receiver) = oneshot::channel();
@@ -249,6 +282,7 @@ impl Clients {
                 asked: asked.to_vec(),
                 request: request.clone(),
                 answer,
+                ends_with_askers,
             },
         );
         let clients = lock(&self.clients);

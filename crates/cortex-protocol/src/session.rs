@@ -126,6 +126,13 @@ pub struct SessionState {
     /// How many prompts are queued behind the running turn.
     #[serde(default)]
     pub queue_length: u32,
+    /// The directories the session's commands may write to, as absolute
+    /// paths: the workspace, the session's temporary directory and any the
+    /// configuration adds. A front end keeps a program it runs for the
+    /// person (an external editor) out of them, since a command could have
+    /// put one there (since step 23).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub write_roots: Vec<String>,
 }
 
 /// A stored session, in a list.

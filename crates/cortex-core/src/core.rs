@@ -23,7 +23,7 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -35,15 +35,16 @@ use cortex_base::{
 use cortex_config::{Env, LoadOptions, Loaded, Override, StateDir};
 use cortex_llm::{ImageSource, Protocol, SpeedCooldowns, Transport};
 use cortex_protocol::error::code;
-use cortex_protocol::event::{Actor, Event, PlanUpdated};
+use cortex_protocol::event::{Actor, Event, PlanUpdated, RequestResolved, Resolution};
 use cortex_protocol::item::NoticeSource;
 use cortex_protocol::jsonrpc::RequestId;
 use cortex_protocol::lease::{Level, Rule};
 use cortex_protocol::methods::{
     ApprovalScope, ClientRole, ConfigGetResult, Empty, ExtensionsStatusResult, InitializeResult,
     McpStatusResult, ModelsListResult, Op, OpResult, PROTOCOL_VERSION, PeerInfo,
-    PermissionsListResult, PlanResult, SUPPORTED_PROTOCOL_VERSIONS, ServerCapabilities,
-    ServerResponse, SessionListResult, SessionReadResult, SessionResult, UsageGetResult,
+    PermissionsListResult, PlanResult, QuestionRequest, QuestionResponse,
+    SUPPORTED_PROTOCOL_VERSIONS, ServerCapabilities, ServerRequest, ServerResponse,
+    SessionListResult, SessionReadResult, SessionResult, UsageGetResult, WorkspaceFilesResult,
     negotiate_version,
 };
 use cortex_protocol::model::ModelRole;
@@ -66,6 +67,24 @@ use crate::store::{Hooks, SharedLog};
 /// the user when it is made in a session that has history.
 const UNCACHED: &str = "The next request sends the whole conversation again without the \
                         provider's cached prefix: it costs more and takes longer, once.";
+
+/// The most paths `workspace/files` gives: past them a front end's
+/// completion is told the list was cut.
+const WORKSPACE_FILES: usize = 100_000;
+
+/// The answers of the question an undo or a rewind asks about files edited
+/// since the harness left them.
+const PUT_BACK: &str = "Put them back";
+const KEEP: &str = "Keep them as they are";
+
+/// Where a rewind goes back to.
+#[derive(Debug, Clone)]
+enum Back {
+    /// To after this item: `session/rewind`.
+    To(ItemId),
+    /// To before the last turn: `session/undo`.
+    Undo,
+}
 
 /// How long the end of a session waits for the capture of the workspace's
 /// starting state, when that has not finished.
@@ -1120,85 +1139,47 @@ impl Core {
             Op::SessionRewind(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
-                // History is not changed under a turn, and no turn starts
-                // while it is being changed: the rewind itself runs off
-                // this thread, and a prompt could arrive meanwhile. Both
-                // are decided under the session's own lock.
-                let change = live.handle.change_history()?;
-                let log = Arc::clone(&live.log);
-                let hooks = Arc::clone(&live.hooks);
-                let board = Arc::clone(&live.board);
-                let not_restored = Self::blocking(move || {
-                    // The change is held by the work, not by this
-                    // operation: the work is never cancelled, so if the
-                    // operation is given up (its client went away) no turn
-                    // starts until the log is no longer being rewritten.
-                    let mut change = change;
-                    let mut kept = lock(&log);
-                    let Some(disk) = kept.disk() else {
-                        return Err(error(
-                            ErrorKind::Usage,
-                            "session_not_stored",
-                            "A session with no log cannot be rewound.",
-                        ));
-                    };
-                    let to = disk
-                        .session
-                        .entry_of_item(&params.to)
-                        .cloned()
-                        .ok_or_else(|| {
-                            error(
-                                ErrorKind::Usage,
-                                "unknown_item",
-                                format!("The session has no item `{}`.", params.to),
-                            )
-                        })?;
-                    let plan = disk
-                        .session
-                        .plan_rewind(&to)
-                        .map_err(|failure| session_error(&failure))?;
-                    let restore = if params.restore_files {
-                        Restore::files()
-                    } else {
-                        Restore::conversation_only()
-                    };
-                    let done = disk
-                        .session
-                        .rewind(&plan, &restore)
-                        .map_err(|failure| session_error(&failure))?;
-                    // The table of seen files forgets every file, and the
-                    // loop reads the history again before its next turn.
-                    change.made();
-                    let entries = disk
-                        .session
-                        .read_branch()
-                        .map_err(|failure| session_error(&failure))?;
-                    // The plan goes back with the conversation, before a
-                    // turn can start on it.
-                    hooks.forget_plan_notices();
-                    board.restore(crate::store::plan_of(&entries).unwrap_or_default());
-                    drop(kept);
-                    drop(change);
-                    Ok(done.not_restored)
-                })
-                .await?;
-                live.handle.emit(Event::PlanUpdated(PlanUpdated {
-                    plan: live.board.get(),
-                    by: Actor::Harness,
-                }));
-                if !not_restored.is_empty() {
-                    live.hooks.tell(format!(
-                        "These files could not be put back as they were: {}.",
-                        not_restored
-                            .iter()
-                            .map(|(file, why)| format!("{file} ({why})"))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
-                }
+                self.rewind(&live, Back::To(params.to), params.restore_files)
+                    .await?;
                 Ok(OpResult::SessionRewind(SessionResult {
                     session: live.handle.state(),
                 }))
+            }
+            Op::SessionUndo(params) => {
+                let live = self.open_for(client, &params.session_id)?;
+                self.may_drive(client)?;
+                self.rewind(&live, Back::Undo, params.restore_files).await?;
+                Ok(OpResult::SessionUndo(SessionResult {
+                    session: live.handle.state(),
+                }))
+            }
+            Op::WorkspaceFiles(params) => {
+                let live = self.open_for(client, &params.session_id)?;
+                let workspace = live.handle.state().workspace;
+                let gate = cortex_agent::Policy::read_gate(live.policy.as_ref());
+                let limit = params
+                    .limit
+                    .map_or(WORKSPACE_FILES, |limit| (limit as usize).min(WORKSPACE_FILES));
+                let (paths, truncated) = Self::blocking(move || {
+                    let resolver = cortex_base::PathResolver::new(
+                        Path::new(&workspace),
+                        cortex_base::PathOptions::new(),
+                    )
+                    .map_err(|failure| {
+                        error(ErrorKind::Usage, "invalid_workspace", failure.to_string())
+                    })?;
+                    let root = resolver.resolve(".").map_err(|failure| {
+                        error(ErrorKind::Usage, "invalid_workspace", failure.to_string())
+                    })?;
+                    Ok(cortex_tools::workspace_files(
+                        &root,
+                        gate.as_ref(),
+                        &CancelToken::new(),
+                        limit,
+                    ))
+                })
+                .await?;
+                Ok(OpResult::WorkspaceFiles(WorkspaceFilesResult { paths, truncated }))
             }
             Op::SessionClose(params) => {
                 if let Ok(live) = self.live(&params.session_id) {
@@ -1390,6 +1371,188 @@ impl Core {
                 "An `observer` client watches a session and cannot change it.",
             )),
         }
+    }
+
+    /// Moves a session back: to an item (`session/rewind`), or to before
+    /// its last turn (`session/undo`), putting files back if asked.
+    ///
+    /// A file changed since the harness left it is put back only if the
+    /// person says so ([07-sessions-and-context.md], "Snapshots and undo"):
+    /// with a client that answers questions, the plan's files edited since
+    /// are put to it in one `question/ask`, and only "put them back"
+    /// overwrites them; no answer keeps them. No turn starts meanwhile: the
+    /// history change is held from the plan to the rewind.
+    async fn rewind(&self, live: &Arc<Live>, back: Back, restore_files: bool) -> Result<(), OpError> {
+        // History is not changed under a turn, and no turn starts while it
+        // is being changed: both are decided under the session's own lock.
+        let change = live.handle.change_history()?;
+        let log = Arc::clone(&live.log);
+        let (change, plan) = Self::blocking(move || {
+            let mut kept = lock(&log);
+            let Some(disk) = kept.disk() else {
+                return Err(error(
+                    ErrorKind::Usage,
+                    "session_not_stored",
+                    "A session with no log cannot be rewound.",
+                ));
+            };
+            let plan = match back {
+                Back::To(item) => {
+                    let to = disk.session.entry_of_item(&item).cloned().ok_or_else(|| {
+                        error(
+                            ErrorKind::Usage,
+                            "unknown_item",
+                            format!("The session has no item `{item}`."),
+                        )
+                    })?;
+                    disk.session
+                        .plan_rewind(&to)
+                        .map_err(|failure| session_error(&failure))?
+                }
+                Back::Undo => disk
+                    .session
+                    .plan_undo()
+                    .map_err(|failure| session_error(&failure))?
+                    .ok_or_else(|| {
+                        error(
+                            ErrorKind::Usage,
+                            "nothing_to_undo",
+                            "The session has no turn to undo.",
+                        )
+                    })?,
+            };
+            Ok((change, plan))
+        })
+        .await?;
+
+        let mut overwrite = Vec::new();
+        if restore_files {
+            let edited: Vec<String> = plan
+                .files
+                .iter()
+                .filter(|file| file.status == cortex_session::FileStatus::EditedSince)
+                .map(|file| file.path.clone())
+                .collect();
+            if !edited.is_empty() && self.put_them_back(live, &edited).await {
+                overwrite = edited;
+            }
+        }
+
+        let log = Arc::clone(&live.log);
+        let hooks = Arc::clone(&live.hooks);
+        let board = Arc::clone(&live.board);
+        let not_restored = Self::blocking(move || {
+            // The change is held by the work, not by this operation: the
+            // work is never cancelled, so if the operation is given up (its
+            // client went away) no turn starts until the log is no longer
+            // being rewritten.
+            let mut change = change;
+            let mut kept = lock(&log);
+            let Some(disk) = kept.disk() else {
+                return Err(error(
+                    ErrorKind::Usage,
+                    "session_not_stored",
+                    "A session with no log cannot be rewound.",
+                ));
+            };
+            let restore = if restore_files {
+                Restore {
+                    overwrite_edited: overwrite,
+                    ..Restore::files()
+                }
+            } else {
+                Restore::conversation_only()
+            };
+            let done = disk
+                .session
+                .rewind(&plan, &restore)
+                .map_err(|failure| session_error(&failure))?;
+            // The table of seen files forgets every file, and the loop
+            // reads the history again before its next turn.
+            change.made();
+            let entries = disk
+                .session
+                .read_branch()
+                .map_err(|failure| session_error(&failure))?;
+            // The plan goes back with the conversation, before a turn can
+            // start on it.
+            hooks.forget_plan_notices();
+            board.restore(crate::store::plan_of(&entries).unwrap_or_default());
+            drop(kept);
+            drop(change);
+            Ok(done.not_restored)
+        })
+        .await?;
+        live.handle.emit(Event::PlanUpdated(PlanUpdated {
+            plan: live.board.get(),
+            by: Actor::Harness,
+        }));
+        if !not_restored.is_empty() {
+            live.hooks.tell(format!(
+                "These files could not be put back as they were: {}.",
+                not_restored
+                    .iter()
+                    .map(|(file, why)| format!("{} ({why})", cortex_base::visible(file)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        Ok(())
+    }
+
+    /// Asks the session's clients that answer questions whether files
+    /// edited since the harness left them are to be put back. No client to
+    /// ask, no answer, a client that goes away and the end of the process
+    /// are all "keep them".
+    async fn put_them_back(&self, live: &Arc<Live>, edited: &[String]) -> bool {
+        let asked = self
+            .inner
+            .clients
+            .askable(&live.sink.subscribers(), crate::clients::Kind::Question);
+        if asked.is_empty() {
+            return false;
+        }
+        let names: Vec<String> = edited
+            .iter()
+            .map(|path| format!("`{}`", cortex_base::visible(path)))
+            .collect();
+        let question = QuestionRequest {
+            session_id: live.handle.id().clone(),
+            turn_id: None,
+            question: format!(
+                "{} {} changed after the turn that changed {}: {}. Put {} back as {} before that \
+                 turn, losing those changes?",
+                if edited.len() == 1 { "This file was" } else { "These files were" },
+                "",
+                if edited.len() == 1 { "it" } else { "them" },
+                names.join(", "),
+                if edited.len() == 1 { "it" } else { "them" },
+                if edited.len() == 1 { "it was" } else { "they were" },
+            )
+            .replace("  ", " "),
+            choices: vec![PUT_BACK.to_owned(), KEEP.to_owned()],
+            extension: None,
+        };
+        let session = live.handle.id().clone();
+        let (id, answer) =
+            self.inner
+                .clients
+                .ask_once(&session, &asked, |_| ServerRequest::Question(question.clone()));
+        let answered = self.inner.options.cancel.race(answer).await;
+        let resolution = if self.inner.clients.close(&id) {
+            Resolution::Cancelled
+        } else {
+            Resolution::Answered
+        };
+        live.handle.emit(Event::RequestResolved(RequestResolved {
+            request_id: id,
+            resolution,
+        }));
+        matches!(
+            answered,
+            Some(Ok(ServerResponse::Question(QuestionResponse { answer: Some(answer) })))
+                if answer == PUT_BACK
+        )
     }
 
     /// Changes a session's settings.

@@ -58,6 +58,7 @@ mod diff;
 mod matching;
 mod textfile;
 mod walk;
+pub use walk::workspace_files;
 
 #[cfg(test)]
 use cortex_testkit::cases;
