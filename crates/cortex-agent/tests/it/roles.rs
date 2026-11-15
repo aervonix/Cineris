@@ -96,6 +96,46 @@ fn with_no_fast_role_a_summary_goes_to_the_main_model() {
     assert_eq!(world.provider.requests()[0].role, ModelRole::Main);
 }
 
+/// A summary asked of the `fast` role's model at the trigger, which fails,
+/// is asked once of the main model, in the same compaction.
+#[test]
+fn a_summary_the_fast_role_fails_at_the_trigger_is_asked_of_the_main_model() {
+    let world = World::new(
+        "summary_fast_fails_inline",
+        [says("Goal: from the main model."), says("Done.")],
+    );
+    let fast = ScriptedProvider::new([Response::new().error(
+        cortex_llm::error::ProviderError::new(
+            cortex_base::ErrorKind::Provider,
+            "invalid_request",
+            "No.",
+        ),
+    )]);
+    let mut setup = Setup::new(&world);
+    setup.utility = Some(RoleModel::new(Arc::new(fast.clone()), fixtures::model()));
+    setup.context = cortex_agent::ContextSettings {
+        background: false,
+        ..cortex_agent::ContextSettings::default()
+    };
+    let rig = setup.start(&world);
+    rig.window(4_000);
+    rig.fill(Fill::Compacting, "go");
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    assert_eq!(
+        rig.events.ends()[0].outcome,
+        cortex_protocol::event::TurnOutcome::Completed,
+        "{:?}",
+        rig.events.ends()[0].error
+    );
+    assert_eq!(fast.requests().len(), 1);
+    let main = world.provider.requests();
+    assert_eq!(main[0].role, ModelRole::Main);
+    assert_eq!(summaries(&rig.stats.all()).len(), 2);
+}
+
 /// A summary in the background that is stopped part-way (the turn was
 /// interrupted) was paid for as far as it went: what the provider had said
 /// it used is counted at the next boundary, and recorded.
