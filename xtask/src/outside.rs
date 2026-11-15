@@ -234,12 +234,24 @@ fn spent(text: &str, since: Option<&str>) -> String {
     shown
 }
 
-/// The fuzz targets, and the fixtures each one starts from: the name of
-/// the protocol's fixture directory in `cortex-llm`.
+/// The fuzz targets, and the fixtures each one starts from, a directory
+/// under the repository: a protocol's recorded streams in `cortex-llm`, or
+/// the outline extractors' sample files in `cortex-index` (since the fixes
+/// of step 18's review).
 const FUZZ_TARGETS: &[(&str, &str)] = &[
-    ("sse_parser", "anthropic-messages"),
-    ("anthropic_decoder", "anthropic-messages"),
-    ("openai_chat_decoder", "openai-chat"),
+    (
+        "sse_parser",
+        "crates/cortex-llm/fixtures/anthropic-messages",
+    ),
+    (
+        "anthropic_decoder",
+        "crates/cortex-llm/fixtures/anthropic-messages",
+    ),
+    (
+        "openai_chat_decoder",
+        "crates/cortex-llm/fixtures/openai-chat",
+    ),
+    ("extractors", "crates/cortex-index/fixtures/outlines"),
 ];
 
 /// How long each fuzz target runs when no time is given, in seconds.
@@ -798,11 +810,8 @@ pub(crate) fn fuzz(arguments: &[String]) -> Result<()> {
             continue;
         }
         let corpus = package.join("corpus").join(target);
-        let seeded = seed(
-            &root.join("crates/cortex-llm/fixtures").join(fixtures),
-            &corpus,
-        )?;
-        println!("fuzz {target}: {seconds} s, starting from {seeded} recorded streams");
+        let seeded = seed(&root.join(fixtures), &corpus)?;
+        println!("fuzz {target}: {seconds} s, starting from {seeded} fixture files");
         // `cargo fuzz` builds with the nightly compiler that
         // `fuzz/rust-toolchain.toml` names, whatever toolchain this command
         // itself was started with.
@@ -877,9 +886,10 @@ fn host_of(version: &str) -> Option<String> {
         .filter(|host| !host.is_empty())
 }
 
-/// Copies the response streams of a fixture directory into a target's
-/// corpus, each with two bytes in front for the cuts the targets read
-/// there. Returns how many streams the corpus was given.
+/// Copies the fixtures of a directory into a target's corpus: a response
+/// stream (a directory's `response.sse`) with two bytes in front for the
+/// cuts the decoders' targets read there, twice; a file of its own, as it
+/// is, once. Returns how many fixtures the corpus was given.
 fn seed(fixtures: &Path, corpus: &Path) -> Result<usize> {
     fs::create_dir_all(corpus)
         .map_err(|error| format!("cannot make {}: {error}", corpus.display()))?;
@@ -888,11 +898,22 @@ fn seed(fixtures: &Path, corpus: &Path) -> Result<usize> {
     let mut seeded = 0;
     for entry in entries {
         let entry = entry.map_err(|error| format!("{}: {error}", fixtures.display()))?;
+        let name = entry.file_name();
+        // A file of its own (an extractor's sample) is an input as it is,
+        // once: its target reads the whole input as a file.
+        if entry.path().is_file() {
+            let bytes = fs::read(entry.path())
+                .map_err(|error| format!("{}: {error}", entry.path().display()))?;
+            let path = corpus.join(format!("fixture-{}", name.to_string_lossy()));
+            fs::write(&path, bytes)
+                .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+            seeded += 1;
+            continue;
+        }
         let stream = entry.path().join("response.sse");
         let Ok(bytes) = fs::read(&stream) else {
             continue;
         };
-        let name = entry.file_name();
         // The same stream at two speeds of cutting: whole, and in small
         // pieces.
         for (seed, label) in [([0u8, 0u8], "whole"), ([0x40, 0x07], "cut")] {
@@ -1167,12 +1188,7 @@ not a line of the ledger
                     .is_file(),
                 "{target}"
             );
-            assert!(
-                root.join("crates/cortex-llm/fixtures")
-                    .join(fixtures)
-                    .is_dir(),
-                "{fixtures}"
-            );
+            assert!(root.join(fixtures).is_dir(), "{fixtures}");
         }
     }
 }
