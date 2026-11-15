@@ -101,7 +101,5 @@ fn child_entry() {
     children::enter();
 }
 
-/// The argument that makes this binary the editor demo, with its options
-/// after it, separated by commas.
 /// This binary as the editor demo, with its options, separated by commas.
 pub(crate) const DEMO: cortex_testkit::role::Role = cortex_testkit::role::Role::new("cxtui-demo=");

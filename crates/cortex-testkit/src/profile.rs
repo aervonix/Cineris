@@ -417,6 +417,35 @@ mod tests {
     }
 
     #[test]
+    fn a_reports_file_is_named_for_its_test_and_its_process() {
+        let name = super::file_name("agent::x <y>");
+        assert!(
+            name.ends_with(&format!("__{}.txt", std::process::id())),
+            "{name}"
+        );
+        assert!(
+            name.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'),
+            "a file name of plain characters: {name}"
+        );
+        // Under nextest the test's name is nextest's, which names the test
+        // this is; outside it, the name given.
+        let given =
+            std::env::var("NEXTEST_TEST_NAME").unwrap_or_else(|_| "agent::x <y>".to_owned());
+        let plain: String = given
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        assert!(name.contains(&plain), "{name}");
+    }
+
+    #[test]
     fn a_report_lists_the_phases_and_waits_in_order_with_the_start() {
         let origin = Instant::now();
         let later = |ms: u64| origin + Duration::from_millis(ms);

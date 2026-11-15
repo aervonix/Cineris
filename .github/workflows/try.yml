@@ -61,7 +61,7 @@ on:
         required: false
         default: ""
       testkit:
-        description: "A test-kit switch for the tests: profile (CORTEX_TESTKIT_PROFILE, each test's report kept as a file). none: nothing set."
+        description: "A test-kit switch for the tests: profile (CORTEX_TESTKIT_PROFILE, each test's report kept as a file; not with against). none: nothing set."
         type: choice
         options: [none, profile]
         default: none
@@ -170,8 +170,8 @@ jobs:
           TRY_FILTER: ${{ inputs.filter }}
           TRY_AGAINST: ${{ inputs.against }}
           # The test kit's switches, from a list: each is set or left empty.
-          CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && '1' || '' }}
-          CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && format('{0}/target/testkit-profile', github.workspace) || '' }}
+          CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
+          CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}/target/testkit-profile', github.workspace) || '' }}
         run: |
           set -o pipefail
           cargo run --locked --quiet --package xtask -- try \
@@ -190,8 +190,8 @@ jobs:
           TRY_CORES: ${{ inputs.cores }}
           TRY_FILTER: ${{ inputs.filter }}
           TRY_AGAINST: ${{ inputs.against }}
-          CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && '1' || '' }}
-          CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && format('{0}\target\testkit-profile', github.workspace) || '' }}
+          CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
+          CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}\target\testkit-profile', github.workspace) || '' }}
         run: |
           # A line cargo writes to its standard error is not an error here.
           $ErrorActionPreference = 'Continue'

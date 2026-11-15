@@ -162,6 +162,9 @@ pub fn ignore_control_events() {
 #[must_use = "the interrupt stays blocked until this is dropped"]
 pub struct PendingInterrupt {
     previous: libc::sigset_t,
+    /// The mask is the creating thread's: dropped on another thread, it
+    /// would put back that thread's. So it stays where it was made.
+    _this_thread: std::marker::PhantomData<*const ()>,
 }
 
 #[cfg(unix)]
@@ -201,6 +204,7 @@ impl Drop for PendingInterrupt {
 pub fn interrupt_pending_here() -> io::Result<PendingInterrupt> {
     Ok(PendingInterrupt {
         previous: sys::pty::interrupt_pending_here()?,
+        _this_thread: std::marker::PhantomData,
     })
 }
 

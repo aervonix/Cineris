@@ -258,6 +258,9 @@ struct Summary {
 /// How many seeds of a failing test are listed.
 const SEEDS_SHOWN: usize = 12;
 
+/// How the test kit's timeout report begins (`cortex_testkit::watch`).
+const WATCH_REPORT: &str = "== cortex-testkit: this test has run";
+
 /// How many lines of a failure's text are shown.
 const LINES_SHOWN: usize = 6;
 
@@ -277,7 +280,12 @@ fn failure_lines(failure: &junit::Failure) -> (Vec<String>, usize) {
     let timed_out = failure.kind.contains("timeout");
     let source = if timed_out {
         lines.push(format!("timed out ({})", failure.kind));
-        &failure.stderr
+        // The test kit's timeout report comes late, after whatever else
+        // the test wrote: it starts there when it is there.
+        match failure.stderr.find(WATCH_REPORT) {
+            Some(at) => &failure.stderr[at..],
+            None => &failure.stderr,
+        }
     } else if failure.text.trim().is_empty() {
         lines.push(if failure.kind.is_empty() {
             "failed, and the report keeps no text for it".to_owned()
@@ -824,8 +832,10 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
     #[test]
     fn a_timeout_shows_what_the_test_wrote_and_a_failure_of_another_kind_is_named() {
         let xml = "<testsuite name=\"a@stress-0\"><testcase name=\"t\" classname=\"a\" \
-                   time=\"10\"><failure type=\"test timeout\"/><system-err>\nthe test kit: \
-                   still waiting after 8.0 s\n  the gate made at a.rs:4:2, 8.0 s\n\
+                   time=\"10\"><failure type=\"test timeout\"/><system-err>test seed 0\nnoise \
+                   1\nnoise 2\nnoise 3\nnoise 4\nnoise 5\nnoise 6\n\n== cortex-testkit: this \
+                   test has run 8.0 s of the 10 s it is given (x). What it is doing:\nwaits, and \
+                   for how long:\n     8.0 s  thread `main`: the gate made at a.rs:4:2\n\
                    </system-err></testcase></testsuite><testsuite name=\"a@stress-1\">\
                    <testcase name=\"t\" classname=\"a\" time=\"0.1\"><failure \
                    message=\"thread &apos;t&apos; (9) panicked at a.rs:9:1\" type=\"test \
@@ -840,9 +850,10 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
 
         assert!(
             summary.text.contains(
-                "  failure, under seed 0:\n    | timed out (test timeout)\n    | the test kit: \
-                 still waiting after 8.0 s\n    |   the gate made at a.rs:4:2, 8.0 s\n  \
-                 another failure, under seed 1: panicked at a.rs:9:1:\n  all of it:"
+                "  failure, under seed 0:\n    | timed out (test timeout)\n    | == cortex-testkit: \
+                 this test has run 8.0 s of the 10 s it is given (x). What it is doing:\n    | \
+                 waits, and for how long:\n    |      8.0 s  thread `main`: the gate made at \
+                 a.rs:4:2\n  another failure, under seed 1: panicked at a.rs:9:1:\n  all of it:"
             ),
             "{}",
             summary.text

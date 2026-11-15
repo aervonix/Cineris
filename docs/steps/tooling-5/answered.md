@@ -10,10 +10,10 @@ This step is not a numbered step of the build plan: it built the fifth round of 
 | How to read item 1's target, given that `main`'s tier 2 is 27 s on a fast Windows runner and 38 s on a slow one. | About a quarter of tier 2 cut, shown as a share of the tier in the A/B, so that a slow runner (38 s) lands near 29 s: the room is for the slow runners CI draws and for steps 16 and 18. |
 | Owner-only files on Windows, if they were the cost of a session's open. | A change to `cortex_base::private` is security-sensitive and is asked about first. The probes showed it is not the cost: no product change was made there. |
 | The lease's forced flush at a session's birth. | Not changed: it is behaviour around an enforced value. It is in [performance-budgets.md](../../performance-budgets.md) and an open item. |
-| Running the system tests after tiers 1 and 2. | An experiment on the scratch branch only, with the process group at 3 and at 4, against the job as it is, on both OSes. Adopting it is the owner's call, because it changes how the tier budgets are measured. |
+| Running the system tests after tiers 1 and 2. | An experiment on the scratch branch only, with the process group at 3 and at 4, against the job as it is, on both OSes. Adopting it is the owner's call, because it changes how the tier budgets are measured; the coordinator is taking the group-3 split to the owner, and it is held off the step branch until then. |
 | The colour decision's reach: code's strings and numbers, and a changed line drawn in its colour where there is no tint. | **Status text only** (the owner, 2026-11-15): the status marks, warnings, errors and measures, and a diff's signs, go bold on a light background; highlighted code and whole changed lines keep their weight, and stay under the target there by that choice. The palette's flag `warm_bold_code_and_lines` is off. |
 | The rig cuts (shared per-session set-up, a cheaper tear-down). | Skipped, as agreed: the probes put the rig's own share at about 2 ms a test on Windows (`World::new` 0.5 ms, `Core::start` 0.3 ms, dropping the world 1.5 ms), about 0.2 s of tier 2. A session's open, 4.6 ms there even with no store, is the core's own `assemble`, which a rig cannot share. |
-| The system tests after tiers 1 and 2. | Held off the step branch: the coordinator is taking the group-3 split to the owner. |
+
 
 ## The owner's colour decision
 
@@ -45,7 +45,7 @@ The reference screens were rewritten by `cargo xtask tui-screens --write`, and e
 | 8a-light | 21 |
 | 8b-light | 27 |
 
-The view snapshots that changed: `blocks`, `header-and-hint`, `round`, `rounded` and `theme`.
+The view snapshots that changed: `blocks`, `header-and-hint`, `round` and `theme`.
 
 ## Windows tier 2: where its time goes
 
@@ -96,3 +96,26 @@ The factors of `cargo xtask ci --tiers --like-runner` were measured from `main` 
 |---|---|
 | Does Windows 11's Notepad, the default external editor, wait? | Yes. The coordinator ran the Store Notepad, 11.2609, from a test on the desktop's interactive session on 2026-11-15: it waits until its window closes, with several tabs open too. The other half of the item stays open: [outstanding/the-default-editor-on-windows-11.md](../../outstanding/the-default-editor-on-windows-11.md). |
 | What `ci-wait` and `rx` do now. | `ci-wait` passes over dispatched and scheduled runs created more than `--fresh` minutes before it started, and runs already cancelled, naming each (`--any-age` turns that off); `rx` warns when a `ci` or `--tiers` run starts while a side run is going, or overlaps one. Both are the owner's scripts. |
+
+## The independent review
+
+A reviewer on Opus 5.5, which had not seen the session's reasoning, read the whole diff before the first push. It found no test that checks less than it did (each answer the agent rig's tests now give is the one the old default gave), nothing wrong with `try`'s new input (a choice, reaching the job only as constants through `env:`), and little added to the blocking checks. What it found, and what was done:
+
+| Finding | Done |
+|---|---|
+| `replace` by tokens passed over a comment at the start or end of `--from`, so the file's comment stayed and `--to`'s was put beside it: ten doubled or stale doc comments in this very diff came from it. | Refused, with the reason and to match such text as text; the ten places fixed, and one more the step had added since. Test and break. |
+| `replace --script` took `a.rs` and `./a.rs` for two files: one edit lost, the file changed, an error reported. And its rename dropped a file's mode (a hook would stop running) and replaced a link with a file. | Each edit's file is keyed by where it really is; the new file takes the old one's permissions; a link's target is what is replaced. Test and break. |
+| A retried test's failure text, as quick-junit writes it, held the test's own output. | Its text is its stack trace's, cut at the first nested element. Tests and a break. |
+| A fake timer's named wait was also a span of the time profile, so a time limit pending for a whole test showed as the test waiting. | Named for the timeout report only (`watch::naming`). The profile is read once a process, so no test holds this; it is listed under "Gaps" below. |
+| `ci-times --write` wrote a section the records do not have ("Both trees on one runner" for both OSes), labelled the base "Main" whatever it was, and would have replaced hand-written notes in a section. | One section an OS under the records' heading; the base named as it is; what it writes is between two marks, a section without them is refused, and a heading in fenced code is not one. Tests and a break. |
+| `stress` showed a timeout's first lines of standard error, where the test kit's report comes last. | It starts at the report when there is one. Test. |
+| The core `Front` counted a request another client answered, or an interruption withdrew, as one it must answer. | A resolved request is not open, and `turns()` looks again after settling. Test. |
+| `try` with the profile and `against` would mix both sides' profiles. | The profile is not set in an A/B. |
+| Smaller: the index rule counted a link in fenced code or a comment; `budget_text` wrote the system tier's budgets by hand; `download_root` lost its doc comment; `PendingInterrupt` could be dropped on another thread; the records listed a snapshot that did not change, and a question twice. | Each fixed; the first with a test. |
+| Behaviours no test held: the profile's file name, `--like-runner`'s thread count, `write_all`'s rollback, `ci-times`' arguments, the A/B reports' names, the `Front`'s settle before it fails. | Tests for the file name, the A/B section and the resolved request; the others are under "Gaps" below. |
+
+## Gaps
+
+- **Item 1's target is not met on the step branch.** It is met by the split of the test job (above), which is the owner's to decide.
+- **Not held by a test:** that a fake timer's wait is not a span of the time profile; that `--like-runner` runs at four test threads; `replace --script`'s rollback when a rename fails part way; `ci-times`' refusal of `--ab` with a run; how the A/B reports are found in a `try` run's artifact (exercised by hand on run 43663690282).
+- **The runner estimate on another tree** is to be measured on this branch's own A/B, and recorded in `ci.md`.

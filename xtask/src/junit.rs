@@ -182,7 +182,16 @@ fn child_text(element: &str, child: &str) -> (String, String) {
         String::new()
     } else {
         let body = element.get(tag.len() + 1..).unwrap_or_default();
-        unescape(body.split(&format!("</{child}>")).next().unwrap_or(body))
+        let body = body.split(&format!("</{child}>")).next().unwrap_or(body);
+        // A retry's element holds elements of its own (quick-junit writes
+        // `<stackTrace>`, `<system-out>` and `<system-err>` in a
+        // `<flakyFailure>`): its text is the stack trace's, and nothing of
+        // the output. Text is escaped, so a `<` begins an element.
+        let body = match body.split_once("<stackTrace>") {
+            Some((_, trace)) => trace.split("</stackTrace>").next().unwrap_or(trace),
+            None => body,
+        };
+        unescape(body.split('<').next().unwrap_or(body))
     };
     let text = if text.trim().is_empty() {
         message
@@ -443,6 +452,18 @@ pub(crate) mod tests {
         let failure = &super::failures(xml)[0];
         assert_eq!(failure.text, "could not start");
         assert_eq!(failure.stderr, "the end\n");
+        // A retry's element, as quick-junit writes one: its text is the
+        // stack trace, and its own output is not part of it.
+        let xml = r#"<testsuite name="a"><testcase name="t" classname="a"><flakyFailure message="first try" type="test failure"><stackTrace>thread &apos;t&apos; panicked at a.rs:1:1:
+lost the race</stackTrace><system-out>running 1 test</system-out><system-err>noise</system-err></flakyFailure></testcase></testsuite>"#;
+        let failure = &super::failures(xml)[0];
+        assert_eq!(
+            failure.text,
+            "thread 't' panicked at a.rs:1:1:\nlost the race"
+        );
+        // With no trace, the message stands in, never the nested markup.
+        let xml = r#"<testsuite name="a"><testcase name="t" classname="a"><flakyFailure message="first try" type="x"><system-out>running 1 test</system-out></flakyFailure></testcase></testsuite>"#;
+        assert_eq!(super::failures(xml)[0].text, "first try");
     }
 
     #[test]

@@ -258,7 +258,6 @@ struct TiersRequest {
     /// What `compare` is compared with: the main branch when not given.
     against: Option<Source>,
     /// What follows `--`: more arguments for nextest, a filter for example.
-    /// What follows `--`: more arguments for nextest, a filter for example.
     rest: Vec<String>,
     /// Run at a runner's test threads, and estimate what a runner of each
     /// OS would report (`like_runner`).

@@ -183,6 +183,22 @@ fn edit(source: &str, request: &Request, shown_as: &str) -> Result<(String, Stri
     if request.text {
         return edit_text(source, request, shown_as);
     }
+    // A match by tokens begins at the first token of --from and ends at its
+    // last: a comment before or after them is passed over, so the file's
+    // own comment there would stay, and --to's would be put in beside it.
+    let own = lex::tokens(&request.from);
+    if let (Some(first), Some(last)) = (own.first(), own.last())
+        && (!request.from[..first.start].trim().is_empty()
+            || !request.from[last.end..].trim().is_empty())
+    {
+        return Err(
+            "--from begins or ends with a comment, which a match by tokens passes over: the \
+             file's comment would stay and --to's be added beside it. Start and end --from \
+             with code, or match it as text (`--text`, or `@@ text` in a script). Nothing \
+             changed."
+                .to_owned(),
+        );
+    }
     let tokens = lex::tokens(source);
     let inside = request
         .within
@@ -481,6 +497,20 @@ fn run_script(arguments: &[String]) -> Result<()> {
     let text = fs::read_to_string(script)
         .map_err(|error| format!("could not read the script {script}: {error}"))?;
     let edits = parse_script(&text)?;
+    // One file is one file however the script spells it (`a.rs`, `./a.rs`,
+    // another case on Windows, a link to it): each is keyed by where it
+    // really is, shown from the working directory when it is under it.
+    let here = std::env::current_dir()
+        .and_then(fs::canonicalize)
+        .unwrap_or_default();
+    let mut edits = edits;
+    for edit in &mut edits {
+        if let Ok(real) = fs::canonicalize(&edit.request.file) {
+            edit.request.file = real
+                .strip_prefix(&here)
+                .map_or_else(|_| real.clone(), Path::to_path_buf);
+        }
+    }
     let (files, shown) = apply_script(&edits, |path| {
         fs::read_to_string(path)
             .map_err(|error| format!("could not read {}: {error}", path.display()))
@@ -508,7 +538,13 @@ fn write_all(files: &[(PathBuf, String)]) -> Result<()> {
         path.with_file_name(name)
     };
     for (index, (path, text)) in files.iter().enumerate() {
-        if let Err(error) = fs::write(beside(path), text) {
+        // The new file takes the old one's permissions (an executable
+        // script, a hook, stays one).
+        let written = fs::write(beside(path), text).and_then(|()| {
+            let permissions = fs::metadata(path)?.permissions();
+            fs::set_permissions(beside(path), permissions)
+        });
+        if let Err(error) = written {
             for (written, _) in &files[..=index] {
                 let _ = fs::remove_file(beside(written));
             }
@@ -635,6 +671,31 @@ fn budget(tier: Tier, os: Os) -> f64 {
         // there.
         let error = edit(source, &request("fourth,", "third,"), "a.rs").unwrap_err();
         assert!(error.contains("--from is not in a.rs"), "{error}");
+    }
+
+    #[test]
+    fn a_match_by_tokens_that_begins_or_ends_with_a_comment_is_refused() {
+        let source = "/// Old.\nfn f() {}\n";
+        for from in [
+            "/// Old.\nfn f() {}",
+            "fn f() {} // trailing",
+            "/* a */ fn f() {}",
+        ] {
+            let error = edit(source, &request(from, "/// New.\nfn f() {}"), "a.rs").unwrap_err();
+            assert!(
+                error.contains("begins or ends with a comment"),
+                "{from:?}: {error}"
+            );
+        }
+        // A comment inside the code is fine: it is passed over, and the
+        // match is still the code's.
+        let (edited, _) = edit(
+            "fn f() { a(); /* x */ b(); }\n",
+            &request("a(); /* y */ b();", "c();"),
+            "a.rs",
+        )
+        .unwrap();
+        assert_eq!(edited, "fn f() { c(); }\n");
     }
 
     #[test]
@@ -942,6 +1003,44 @@ _ => 61.0
             let error = parse_script(script).unwrap_err();
             assert!(error.contains(expected), "{script:?}: {error}");
         }
+    }
+
+    #[test]
+    fn a_file_named_two_ways_is_one_file_and_keeps_its_permissions() {
+        let dir =
+            std::env::temp_dir().join(format!("cortex-xtask-replace-two-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let a = dir.join("a.sh");
+        std::fs::write(&a, "one\ntwo\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&a, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let other = dir.join("sub").join("..").join("a.sh");
+        let script = dir.join("edits");
+        std::fs::write(
+            &script,
+            format!(
+                "@@ file: {}\n@@ from\none\n@@ to\nONE\n@@ end\n@@ file: {}\n@@ from\ntwo\n@@ \
+                 to\nTWO\n@@ end\n",
+                a.display(),
+                other.display()
+            ),
+        )
+        .unwrap();
+
+        super::run(&["--script".to_owned(), script.display().to_string()]).unwrap();
+
+        // Both edits are in it: the second saw what the first left.
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "ONE\nTWO\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&a).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o755, "the file kept its permissions");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

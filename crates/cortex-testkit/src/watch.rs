@@ -81,12 +81,25 @@ fn entries() -> &'static Mutex<Vec<Entry>> {
 /// none of the test kit's waits covers.
 #[must_use]
 pub fn doing(what: impl Into<String>) -> Doing {
+    doing_as(what.into(), true)
+}
+
+/// What [`doing`] does for the timeout report alone, with no span in the
+/// time profile: for a wait that is not real time spent, such as a fake
+/// timer's, which can stay pending for the whole test without taking any
+/// of it.
+#[must_use]
+pub(crate) fn naming(what: impl Into<String>) -> Doing {
+    doing_as(what.into(), false)
+}
+
+fn doing_as(what: String, profiled: bool) -> Doing {
     arm();
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let thread = std::thread::current();
-    let what = what.into();
-    let mark = crate::profile::enabled().then(|| Mutex::new(crate::profile::wait(|| what.clone())));
+    let mark = (profiled && crate::profile::enabled())
+        .then(|| Mutex::new(crate::profile::wait(|| what.clone())));
     let entry = Entry {
         id,
         thread: thread.name().unwrap_or("an unnamed thread").to_owned(),

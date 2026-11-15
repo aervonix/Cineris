@@ -63,7 +63,6 @@ struct Outcome {
     /// Each cell that differs: row, column, the reference's and ours.
     differences: Vec<(usize, usize, String, String)>,
     /// The rows that differ, drawn from our cells, for rewriting.
-    /// The rows that differ, drawn from our cells, for rewriting.
     rewritten: Vec<(usize, String)>,
     /// How many of the differences are of style alone: the same text in
     /// another colour, weight or slant.

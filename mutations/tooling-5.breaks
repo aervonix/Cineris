@@ -84,8 +84,8 @@ caught-by:
 rule: The core rig's Front fails a test at once on an approval it did not expect and nobody answers.
 file: crates/cortex-core/tests/it/main.rs
 in: Front::open_approval
-find: .find(|(id, _)| !answered.contains(id))
-replace: .find(|(id, _)| !answered.contains(id) && false)
+find: !answered.contains(id) && !resolved.contains(&id)
+replace: false
 packages: cortex-core
 caught-by:
     approvals::an_approval_the_test_did_not_expect_fails_it_at_once_naming_the_call
@@ -199,7 +199,7 @@ find: if before == after {
 replace: if true {
 packages: cortex-term
 caught-by:
-    system::sys_the_terminal_is_put_back_after_a_panic
+    system::sys_the_shell_says_when_the_terminal_was_not_put_back
 
 [break] the-guard-does-not-drain-a-pending-interrupt
 rule: An interrupt still pending as the guard ends is taken, not left to end the process.
@@ -248,15 +248,6 @@ replace: Os::Windows => 1.0
 caught-by:
     like_runner::tests::a_crate_is_scaled_by_its_own_factor_and_an_unknown_one_by_its_tiers
 
-[break] a-section-replaces-what-follows-it
-rule: Writing a ci.md section replaces it up to the next heading, and keeps the rest of the page.
-file: xtask/src/records.rs
-in: with_section
-find: if end < lines.len() {
-replace: if false {
-caught-by:
-    records::tests::a_section_is_replaced_in_place_or_added_at_the_end
-
 [break] an-ab-is-the-mean-of-its-rounds
 rule: An A/B's tables are of each test's median over the rounds.
 file: xtask/src/records.rs
@@ -274,3 +265,60 @@ find: info.branch == "main"
 replace: info.branch == "master"
 caught-by:
     records::tests::the_pull_requests_section_is_in_the_records_form
+
+# ------------------------------------------------- the review's fixes
+
+[break] replace-passes-over-an-edge-comment
+rule: A match by tokens whose --from begins or ends with a comment is refused, not made beside the file's comment.
+file: xtask/src/replace.rs
+in: edit
+find: && (!request.from[..first.start].trim().is_empty()
+replace: && (false
+caught-by:
+    replace::tests::a_match_by_tokens_that_begins_or_ends_with_a_comment_is_refused
+
+[break] a-file-named-two-ways-is-two-files
+rule: A script's file is one file however the script spells it.
+file: xtask/src/replace.rs
+in: run_script
+find: edit.request.file = real.strip_prefix(&here).map_or_else(|_| real.clone(), Path::to_path_buf);
+replace: let _ = &real;
+caught-by:
+    replace::tests::a_file_named_two_ways_is_one_file_and_keeps_its_permissions
+
+[break] a-rewritten-file-loses-its-permissions
+rule: A file replace --script rewrites keeps its permissions.
+file: xtask/src/replace.rs
+in: write_all
+find: fs::set_permissions(beside(path), permissions)
+replace: { let _ = permissions; Ok(()) }
+caught-by:
+    replace::tests::a_file_named_two_ways_is_one_file_and_keeps_its_permissions
+
+[break] a-retrys-text-holds-its-output
+rule: A failure's text ends at its first nested element: a retry's own output is not part of it.
+file: xtask/src/junit.rs
+in: child_text
+find: unescape(body.split('<').next().unwrap_or(body))
+replace: unescape(body)
+caught-by:
+    junit::tests::a_failures_text_kind_and_standard_error_are_read_and_a_pass_has_none
+
+[break] a-section-loses-the-notes-after-its-end-mark
+rule: Writing a ci.md section again keeps everything after what ci-times wrote.
+file: xtask/src/records.rs
+in: with_section
+find: out.push_str(&lines[start + 2 + close..].concat());
+replace:
+caught-by:
+    records::tests::a_section_is_written_between_its_marks_and_the_rest_of_the_page_is_kept
+
+[break] a-resolved-request-is-unexpected
+rule: The core rig's Front does not take a request that was resolved for one it must answer.
+file: crates/cortex-core/tests/it/main.rs
+in: Front::open_approval
+find: && !resolved.contains(&id)
+replace:
+packages: cortex-core
+caught-by:
+    approvals::a_request_another_client_answered_is_not_unexpected

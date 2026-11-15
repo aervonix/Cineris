@@ -221,13 +221,11 @@ pub struct Palette {
     pub code: Color,
     /// Inline code is bold as well: where its colour alone is under the
     /// contrast target for text.
-    /// Inline code is bold as well: where its colour alone is under the
-    /// contrast target for text.
     pub code_bold: bool,
-    /// Text in red, green or yellow is bold as well (success, warnings,
-    /// errors, a diff's colours and code's strings and numbers): where those
-    /// colours alone are under the contrast target for text, as the normal
-    /// colours are on a light background (decision 0033's amendment).
+    /// Status text in red, green or yellow is bold as well (success,
+    /// warnings, errors, a diff's signs): where those colours alone are under
+    /// the contrast target for text, as the normal colours are on a light
+    /// background (decision 0033's amendment).
     pub warm_bold: bool,
     /// [`warm_bold`](Self::warm_bold) reaches code's strings and numbers,
     /// and a changed line drawn in its colour where there is no tint, as
@@ -409,7 +407,6 @@ impl Theme {
     }
 }
 
-/// The style of one token. See [`Token`] for what each is.
 /// The style of one token. See [`Token`] for what each is.
 fn resolve(
     token: Token,
