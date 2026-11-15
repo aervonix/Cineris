@@ -1303,8 +1303,6 @@ impl Core {
         }
     }
 
-    /// Whether the client may change a session, start one or end the
-    /// core: an observer only watches.
     /// Only a `user` client: for what only the person at the keyboard may
     /// cause, such as a request to a provider's usage endpoint.
     fn require_user(&self, client: ClientId) -> Result<(), OpError> {
@@ -1318,6 +1316,8 @@ impl Core {
         }
     }
 
+    /// Whether the client may change a session, start one or end the
+    /// core: an observer only watches.
     pub(crate) fn may_drive(&self, client: ClientId) -> Result<(), OpError> {
         match self.inner.clients.info(client).map(|info| info.role) {
             Some(ClientRole::User | ClientRole::Supervisor) => Ok(()),
