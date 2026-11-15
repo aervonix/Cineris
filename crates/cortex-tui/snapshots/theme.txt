@@ -30,7 +30,7 @@ Answer|
 {fg=a8 bg=#132A17}DiffAddNumber|
 {fg=a8 bg=#361616}DiffDelNumber|
 {fg=a8}DiffContext|
-{fg=a13}SyntaxKeyword|
+{fg=a12}SyntaxKeyword|
 {fg=a14}SyntaxType|
 {fg=a10}SyntaxString|
 {fg=a11}SyntaxNumber|
@@ -68,7 +68,7 @@ Answer|
 {fg=a8 bg=#132A17}DiffAddNumber|
 {fg=a8 bg=#361616}DiffDelNumber|
 {fg=a8}DiffContext|
-{fg=a13}SyntaxKeyword|
+{fg=a12}SyntaxKeyword|
 {fg=a14}SyntaxType|
 {fg=a10}SyntaxString|
 {fg=a11}SyntaxNumber|
@@ -106,7 +106,7 @@ Answer|
 {fg=a8 bg=#132A17}DiffAddNumber|
 {fg=a8 bg=#361616}DiffDelNumber|
 {fg=a8}DiffContext|
-{fg=a13}SyntaxKeyword|
+{fg=a12}SyntaxKeyword|
 {fg=a14}SyntaxType|
 {fg=a10}SyntaxString|
 {fg=a11}SyntaxNumber|
@@ -144,7 +144,7 @@ Answer|
 {fg=a8 bg=#132A17}DiffAddNumber|
 {fg=a8 bg=#361616}DiffDelNumber|
 {fg=a8}DiffContext|
-{fg=a13}SyntaxKeyword|
+{fg=a12}SyntaxKeyword|
 {fg=a14}SyntaxType|
 {fg=a10}SyntaxString|
 {fg=a11}SyntaxNumber|
@@ -182,7 +182,7 @@ Answer|
 {fg=a8 bg=#132A17}DiffAddNumber|
 {fg=a8 bg=#361616}DiffDelNumber|
 {fg=a8}DiffContext|
-{fg=a13}SyntaxKeyword|
+{fg=a12}SyntaxKeyword|
 {fg=a14}SyntaxType|
 {fg=a10}SyntaxString|
 {fg=a11}SyntaxNumber|
@@ -220,7 +220,7 @@ Answer|
 {fg=a8 bg=#132A17}DiffAddNumber|
 {fg=a8 bg=#361616}DiffDelNumber|
 {fg=a8}DiffContext|
-{fg=a13}SyntaxKeyword|
+{fg=a12}SyntaxKeyword|
 {fg=a14}SyntaxType|
 {fg=a10}SyntaxString|
 {fg=a11}SyntaxNumber|
@@ -235,11 +235,11 @@ Text|
 {b}Title|
 {fg=a6 b}Code|
 {b}Heading|
-{fg=a2}Success|
-{fg=a3}Warning|
-{fg=a1}Error|
-{fg=a2}DiffAdd|
-{fg=a1}DiffDel|
+{fg=a2 b}Success|
+{fg=a3 b}Warning|
+{fg=a1 b}Error|
+{fg=a2 b}DiffAdd|
+{fg=a1 b}DiffDel|
 {bg=#DFEEE2}DiffAddBg|
 {bg=#F7E2E2}DiffDelBg|
 {b}DiffEmph|
@@ -253,15 +253,15 @@ Answer|
 {fg=#7A3CFB b}Selected|
 {bg=#DFEEE2}DiffAddLine|
 {bg=#F7E2E2}DiffDelLine|
-{fg=a2 bg=#DFEEE2}DiffAddSign|
-{fg=a1 bg=#F7E2E2}DiffDelSign|
+{fg=a2 bg=#DFEEE2 b}DiffAddSign|
+{fg=a1 bg=#F7E2E2 b}DiffDelSign|
 {fg=a8 bg=#DFEEE2}DiffAddNumber|
 {fg=a8 bg=#F7E2E2}DiffDelNumber|
 {fg=a8}DiffContext|
 {fg=a5}SyntaxKeyword|
 {fg=a6}SyntaxType|
-{fg=a2}SyntaxString|
-{fg=a3}SyntaxNumber|
+{fg=a2 b}SyntaxString|
+{fg=a3 b}SyntaxNumber|
 {fg=a8}SyntaxComment|
 
 == 80 columns, unicode, 16 colours, dark
@@ -296,7 +296,7 @@ Answer|
 {fg=a8}DiffAddNumber|
 {fg=a8}DiffDelNumber|
 {fg=a8}DiffContext|
-{fg=a13}SyntaxKeyword|
+{fg=a12}SyntaxKeyword|
 {fg=a14}SyntaxType|
 {fg=a10}SyntaxString|
 {fg=a11}SyntaxNumber|
@@ -311,11 +311,11 @@ Text|
 {b}Title|
 {fg=a6 b}Code|
 {b}Heading|
-{fg=a2}Success|
-{fg=a3}Warning|
-{fg=a1}Error|
-{fg=a2}DiffAdd|
-{fg=a1}DiffDel|
+{fg=a2 b}Success|
+{fg=a3 b}Warning|
+{fg=a1 b}Error|
+{fg=a2 b}DiffAdd|
+{fg=a1 b}DiffDel|
 DiffAddBg|
 DiffDelBg|
 {b}DiffEmph|
@@ -327,8 +327,8 @@ Answer|
 {fg=a8}Hint|
 {fg=a5 b}Key|
 {fg=a5 b}Selected|
-{fg=a2}DiffAddLine|
-{fg=a1}DiffDelLine|
+{fg=a2 b}DiffAddLine|
+{fg=a1 b}DiffDelLine|
 {fg=a2 b}DiffAddSign|
 {fg=a1 b}DiffDelSign|
 {fg=a8}DiffAddNumber|
@@ -336,8 +336,8 @@ Answer|
 {fg=a8}DiffContext|
 {fg=a5}SyntaxKeyword|
 {fg=a6}SyntaxType|
-{fg=a2}SyntaxString|
-{fg=a3}SyntaxNumber|
+{fg=a2 b}SyntaxString|
+{fg=a3 b}SyntaxNumber|
 {fg=a8}SyntaxComment|
 
 == 80 columns, unicode, 256 colours, dark
@@ -372,7 +372,7 @@ Answer|
 {fg=a8}DiffAddNumber|
 {fg=a8}DiffDelNumber|
 {fg=a8}DiffContext|
-{fg=a13}SyntaxKeyword|
+{fg=a12}SyntaxKeyword|
 {fg=a14}SyntaxType|
 {fg=a10}SyntaxString|
 {fg=a11}SyntaxNumber|

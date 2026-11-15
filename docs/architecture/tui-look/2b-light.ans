@@ -1,5 +1,5 @@
 [0;90m╭─────────────────────────────────────────────────────────────────────────────────────────────────╮[0m
-[0;90m│[0m [0;31m✗[0m [0;1mRun cargo publish --dry-run -p parser[0m  [0;31mblocked: network · 0.4s[0m                                [0;90m│[0m
+[0;90m│[0m [0;1;31m✗[0m [0;1mRun cargo publish --dry-run -p parser[0m  [0;1;31mblocked: network · 0.4s[0m                                [0;90m│[0m
 [0;90m│[0m   [0;90merror: failed to query the crates.io index: network unreachable[0m                               [0;90m│[0m
 [0;90m│[0m   [0;90m(sandbox.network is "off": confined commands have no network)[0m                                 [0;90m│[0m
 [0;90m╰─────────────────────────────────────────────────────────────────────────────────────────────────╯[0m

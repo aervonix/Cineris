@@ -72,7 +72,7 @@
 {fg=a8}│{}   {fg=a8}Knows 4 commands and 3 conventions here. /project shows t…{} {fg=a8}│|
 {fg=a8}╰──────────────────────────────────────────────────────────────╯|
   {fg=#7A3CFB}⣾{fg=a8} 14s  esc stops · enter steers this turn · tab queu…{}  {fg=a8}opus-5.5 high · {fg=#7A3CFB}fast{}  |
-  {fg=a8}this turn $0.03, session $0.61{}                  {fg=a8}opus-5.5 high · {fg=a1}91% context{}  |
+  {fg=a8}this turn $0.03, session $0.61{}                  {fg=a8}opus-5.5 high · {fg=a1 b}91% context{}  |
   {fg=a8}esc denies · ctrl+o shows it whole{}                     {fg=a8}opus-5.5 high · {fg=#7A3CFB}fast{}  |
 
 == 80 columns, unicode, 16 colours, dark
@@ -94,7 +94,7 @@
 {fg=a8}│{}   {fg=a8}Knows 4 commands and 3 conventions here. /project shows t…{} {fg=a8}│|
 {fg=a8}╰──────────────────────────────────────────────────────────────╯|
   {fg=a5}⣾{fg=a8} 14s  esc stops · enter steers this turn · tab queu…{}  {fg=a8}opus-5.5 high · {fg=a5}fast{}  |
-  {fg=a8}this turn $0.03, session $0.61{}                  {fg=a8}opus-5.5 high · {fg=a1}91% context{}  |
+  {fg=a8}this turn $0.03, session $0.61{}                  {fg=a8}opus-5.5 high · {fg=a1 b}91% context{}  |
   {fg=a8}esc denies · ctrl+o shows it whole{}                     {fg=a8}opus-5.5 high · {fg=a5}fast{}  |
 
 == 80 columns, unicode, 256 colours, dark

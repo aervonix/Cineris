@@ -386,3 +386,105 @@ fn mixing_rounds_half_to_even() {
     assert_eq!(rounded(contrast((0, 0, 0), (255, 255, 255))), 21.0);
     assert_eq!(contrast((5, 5, 5), (5, 5, 5)), 1.0);
 }
+
+#[test]
+fn on_a_light_background_red_green_and_yellow_text_is_bold() {
+    // The owner's decision (decision 0033's amendment): the normal red,
+    // green and yellow are under the target for text on One Half Light, so
+    // text drawn in them is bold there, as inline code is.
+    assert_eq!(
+        rounded(contrast(ONE_HALF_LIGHT.ansi[1], ONE_HALF_LIGHT.bg)),
+        3.5
+    );
+    assert_eq!(
+        rounded(contrast(ONE_HALF_LIGHT.ansi[2], ONE_HALF_LIGHT.bg)),
+        3.1
+    );
+    assert_eq!(
+        rounded(contrast(ONE_HALF_LIGHT.ansi[3], ONE_HALF_LIGHT.bg)),
+        3.1
+    );
+    for depth in [
+        ColorDepth::TrueColor,
+        ColorDepth::Indexed256,
+        ColorDepth::Ansi16,
+    ] {
+        let light = Theme::new(depth, Some(ONE_HALF_LIGHT.bg));
+        for (token, colour) in [
+            (Token::Success, 2),
+            (Token::Warning, 3),
+            (Token::Error, 1),
+            (Token::DiffAdd, 2),
+            (Token::DiffDel, 1),
+            (Token::DiffAddSign, 2),
+            (Token::DiffDelSign, 1),
+            (Token::SyntaxString, 2),
+            (Token::SyntaxNumber, 3),
+        ] {
+            let style = light.style(token);
+            assert_eq!(style.fg, Color::Ansi(colour), "{token:?} at {depth:?}");
+            assert!(style.bold, "{token:?} at {depth:?} is not bold");
+        }
+        // Where there is no tint, a changed line is drawn in its colour,
+        // bold; with one, it is the tint behind the default colour.
+        let line = light.style(Token::DiffAddLine);
+        if depth == ColorDepth::TrueColor {
+            assert_eq!((line.fg, line.bold), (Color::Default, false));
+        } else {
+            assert_eq!((line.fg, line.bold), (Color::Ansi(2), true), "{depth:?}");
+        }
+        // Colours over the target, and muted text, which is dim on
+        // purpose, are not made bold.
+        for token in [
+            Token::SyntaxKeyword,
+            Token::SyntaxType,
+            Token::Muted,
+            Token::Text,
+        ] {
+            assert!(!light.style(token).bold, "{token:?} at {depth:?}");
+        }
+    }
+    // On a dark background the bright colours reach the target, and nothing
+    // more is bold than before.
+    let dark = Theme::new(ColorDepth::TrueColor, Some(CAMPBELL.bg));
+    for (token, colour) in [
+        (Token::Success, 10),
+        (Token::Warning, 11),
+        (Token::Error, 9),
+    ] {
+        let ratio = contrast(CAMPBELL.ansi[colour], CAMPBELL.bg);
+        assert!(ratio >= TEXT_CONTRAST, "{token:?}: {ratio}");
+        assert!(!dark.style(token).bold, "{token:?}");
+    }
+    // Nor without colour, where meaning keeps its own attribute.
+    let mono = Theme::new(ColorDepth::Mono, Some(ONE_HALF_LIGHT.bg));
+    assert!(!mono.style(Token::Success).bold);
+}
+
+#[test]
+fn on_a_dark_background_keywords_are_bright_blue() {
+    // Bright magenta was 3.2 to 1 on Campbell; bright blue is 5.0.
+    assert_eq!(rounded(contrast(CAMPBELL.ansi[13], CAMPBELL.bg)), 3.2);
+    assert_eq!(rounded(contrast(CAMPBELL.ansi[12], CAMPBELL.bg)), 5.0);
+    assert!(contrast(CAMPBELL.ansi[12], CAMPBELL.bg) >= TEXT_CONTRAST);
+    for background in [Some(CAMPBELL.bg), None] {
+        for depth in [
+            ColorDepth::TrueColor,
+            ColorDepth::Indexed256,
+            ColorDepth::Ansi16,
+        ] {
+            let theme = Theme::new(depth, background);
+            assert_eq!(
+                theme.style(Token::SyntaxKeyword),
+                Style::PLAIN.fg(Color::Ansi(12)),
+                "{depth:?} on {background:?}"
+            );
+        }
+    }
+    // On a light background keywords keep the normal magenta.
+    let light = Theme::new(ColorDepth::TrueColor, Some(ONE_HALF_LIGHT.bg));
+    assert_eq!(
+        light.style(Token::SyntaxKeyword),
+        Style::PLAIN.fg(Color::Ansi(5))
+    );
+}

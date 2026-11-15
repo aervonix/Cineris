@@ -79,6 +79,16 @@ These hold for any look, and 09-tui now says each:
 - **Earlier detail waits for its round.** Details of calls that finish early in a round commit only when the round ends.
 - **Six live rows while streaming,** where the draft had four.
 
+## Amendment, 2026-11-15: the colours under the text target
+
+Step 22 found three colours of the default theme that carry text and are under 4.5 to 1 on one of the two sample schemes ([steps/22/answered.md](../steps/22/answered.md)): red, green and yellow on One Half Light (3.5, 3.1 and 3.1 to 1), bright black on Campbell (4.3), and the syntax colour for keywords, bright magenta, on Campbell (3.2). The owner decided, through the fifth tooling step:
+
+- **On a light background, text drawn in red, green or yellow is bold,** as inline code already is.
+- **On a dark background, and when none is reported** (which the theme treats as dark), **keywords in code are bright blue** (5.0 to 1 on Campbell) instead of bright magenta.
+- **Muted stays as it is:** it is dim on purpose.
+
+Code's strings and numbers, and a changed line drawn in its colour where there is no tint, are text in green, red or yellow too, and are bold under the same rule. Whether they should be is a question of the look the owner was asked on 2026-11-15; one flag of the palette turns that part off. The reference screens were rewritten from the real views (`cargo xtask tui-screens --write`): only styles changed, in 728 cells of 18 screens ([steps/tooling-5/answered.md](../steps/tooling-5/answered.md)). The theme's tests hold the contrast figures and the styles.
+
 ## Revisit when
 
 - Real use shows the live region's height or the box borders costing more than the budgets allow on a slow terminal.
