@@ -321,6 +321,7 @@ A review that confirms a finding writes a failing test for it. `cargo xtask scra
 
 - **The worktree is only read.** The run is made in a copy of the tree under `target/scratch-test/tree`, with a build directory of its own: the copy is brought up to date with the worktree (what git tracks and does not ignore, as `mutate`'s copies), the file goes beside `tests/it/main.rs` as `scratch_<its name>.rs` with its `mod` line, nextest runs that module alone, and the copy is brought up to date again, which takes it out. A run that is killed leaves the module in the copy, which git ignores, and the next run takes it out.
 - It fails when a test fails, and when no test ran.
+- **Arguments after `--` go to nextest,** and a filterset among them narrows the file's tests: `cargo xtask scratch-test cortex-stats f.rs -- -E 'test(/stuck/)'` runs the tests of `f.rs` whose names match (since the sixth tooling step; before it, nextest took the given filterset beside the module's own and ran every test of the file). Without a `.git`, as in `rx`'s copy, the tree is read as `mutate` reads it: every file outside `.git` and any `target` directory.
 - **The first run builds** the crate and what it needs in the copy's build directory (about 10 s for `cortex-base` on the desktop); later runs rebuild what changed. One run at a time.
 
 ### An adversarial confined command
@@ -412,7 +413,7 @@ mutations/step-07.breaks:41: break `step-07/cancellation-not-seen-in-wake`: its 
 - **`--fix-in --write`** rewrites the `in:` lines in the lists, only those: other lines, comments and line endings stay, and a value written on indented lines becomes one on the key's line. It then checks the lists again. Without `--write` nothing is changed and the check fails as before.
 - A break whose `in:` still holds its code, or that has none, or that fails for another reason (its `find` twice in the item), is not touched. Run `cargo xtask mutate BREAK` after, to see that the tests still catch it: the code is where it was meant, not necessarily doing what the rule says.
 
-**`cargo xtask mutate [BREAK…]`** runs the breaks: all of them, or the ones named (a break, a whole list, or the end of a name).
+**`cargo xtask mutate [BREAK…]`** runs the breaks: all of them, or the ones named (a break, a whole list, or the end of a name). **`--file PATH`** (since the sixth tooling step) runs the breaks of a list kept anywhere, and no others: a review's throwaway breaks need no file in `mutations/`, where one forgotten fails `check`. The list is named for its file, and a name that is already a list's of `mutations/` is refused.
 
 1. Every break is applied in memory, as `check` does. Nothing is built if one fails.
 2. **The work is done on a copy** of the tree under `target/mutate/`, with a build directory of its own. The working tree is only read. The copy is brought up to date at the start of each run, which also undoes a break that a killed run left in it. The first build of the copy is a whole build; after that each break rebuilds one crate.

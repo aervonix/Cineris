@@ -55,6 +55,10 @@ copy of the tree, and reports which tests fail. BREAK is a break's name
 (`step-12/deny-beats-allow`), a whole list (`step-12`) or the end of a name.
 Without one, every break.
 
+  --file PATH    Run the breaks of the list at PATH, which may be anywhere (a
+                 review's, kept out of mutations/), and no others. Given more
+                 than once, each list. Its name is the file's, and must not be
+                 a list's of mutations/.
   --check        Only check that every break still applies, and the pre-flight:
                  no `find` ending in a comma, no `in` naming two items, no two
                  breaks making one change. Runs nothing. Also checks that each
@@ -115,6 +119,37 @@ struct Request {
     fix_in: bool,
     /// `--fix-in --write`: rewrite those lines.
     write: bool,
+    /// `--file PATH`: lists read from anywhere, whose breaks are the ones
+    /// run (a reviewer's, kept out of `mutations/`).
+    files: Vec<std::path::PathBuf>,
+}
+
+/// The breaks of the lists `--file` names, each read as a list of
+/// `mutations/` is, under its file's name. A name that is already a list's
+/// there is refused: two lists of one name would give two breaks one name.
+fn load_files(known: &[Break], files: &[std::path::PathBuf]) -> Result<Vec<Break>> {
+    let names: std::collections::BTreeSet<&str> = known
+        .iter()
+        .filter_map(|one| one.id.split('/').next())
+        .collect();
+    let mut breaks = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(file)
+            .map_err(|error| format!("could not read {}: {error}", file.display()))?;
+        let list = list::parse(&file.display().to_string(), &text)?;
+        if let Some(one) = list.first()
+            && let Some(name) = one.id.split('/').next()
+            && names.contains(name)
+        {
+            return Err(format!(
+                "{} has the name of a list of {}/: `{name}`. Name it otherwise.",
+                file.display(),
+                list::DIRECTORY
+            ));
+        }
+        breaks.extend(list);
+    }
+    Ok(breaks)
 }
 
 /// How many breaks run at a time when the run does not say. Two: in wave 9,
@@ -168,6 +203,7 @@ impl Request {
             tests: false,
             fix_in: false,
             write: false,
+            files: Vec::new(),
         };
         let mut rest = arguments.iter();
         while let Some(argument) = rest.next() {
@@ -189,6 +225,11 @@ impl Request {
                 "--no-compile-check" => request.compile_check = false,
                 "--tests" => request.tests = true,
                 "--fix-in" => request.fix_in = true,
+                "--file" => request.files.push(
+                    rest.next()
+                        .ok_or_else(|| format!("`--file` needs a list's path\n\n{USAGE}"))?
+                        .into(),
+                ),
                 "--write" => request.write = true,
                 "--jobs" | "-j" => {
                     let text = rest
@@ -289,7 +330,9 @@ fn conclusion(outcome: &Result<drive::Finished>, again: bool) -> (u8, Option<Str
 fn run(arguments: &[String]) -> Result<drive::Finished> {
     let request = Request::parse(arguments)?;
     let root = workspace::root();
-    let all = list::load_all(&root)?;
+    let mut all = list::load_all(&root)?;
+    let from_files = load_files(&all, &request.files)?;
+    all.extend(from_files.iter().cloned());
     let done = drive::Finished::Complete { flagged: 0 };
 
     if request.mode == Mode::Check {
@@ -318,7 +361,11 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
         }
         return Ok(done);
     }
-    let chosen = choose(&all, &request.only)?;
+    let chosen = if request.files.is_empty() {
+        choose(&all, &request.only)?
+    } else {
+        choose(&from_files, &request.only)?
+    };
     if request.mode == Mode::List {
         for chosen in &chosen {
             println!("{}  ({})\n    {}", chosen.id, chosen.place(), chosen.rule);
@@ -1396,6 +1443,45 @@ replace: 5
     }
 
     #[test]
+    fn a_list_from_anywhere_is_read_and_may_not_take_a_lists_name() {
+        let dir = std::env::temp_dir().join(format!("cx-mutate-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let review = dir.join("review-16.breaks");
+        std::fs::write(
+            &review,
+            "[break] a\nrule: R.\nfile: x.rs\nfind: a\nreplace: b\n",
+        )
+        .unwrap();
+        let known = breaks(
+            "step-16",
+            "[break] b\nrule: R.\nfile: x.rs\nfind: c\nreplace: d\n",
+        );
+        let found = super::load_files(&known, std::slice::from_ref(&review)).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "review-16/a");
+        let clash = dir.join("step-16.breaks");
+        std::fs::write(
+            &clash,
+            "[break] a\nrule: R.\nfile: x.rs\nfind: a\nreplace: b\n",
+        )
+        .unwrap();
+        let error = super::load_files(&known, &[clash]).unwrap_err();
+        assert!(
+            error.contains("has the name of a list of mutations/: `step-16`"),
+            "{error}"
+        );
+        assert!(super::load_files(&known, &[dir.join("missing.breaks")]).is_err());
+        assert_eq!(
+            Request::parse(&strings(&["--file", "x.breaks"]))
+                .unwrap()
+                .files,
+            [std::path::PathBuf::from("x.breaks")]
+        );
+        assert!(Request::parse(&strings(&["--file"])).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_busy_disk_makes_a_run_of_several_jobs_one() {
         use crate::stall::Pressure;
         let at = |full_avg60: f64| Pressure {
@@ -1437,6 +1523,7 @@ replace: 5
                 tests: false,
                 fix_in: false,
                 write: false,
+                files: Vec::new(),
             }
         );
         assert_eq!(

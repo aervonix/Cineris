@@ -174,18 +174,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let root = workspace::root();
     let target = scratch_dir(&root).join("target");
     scratch_test(&root, &request, |copy, filter, rest| {
-        let mut command = vec![
-            "nextest".to_owned(),
-            "run".to_owned(),
-            "--locked".to_owned(),
-            "-p".to_owned(),
-            request.package.clone(),
-        ];
-        command.extend(workspace::implied_features(std::slice::from_ref(
-            &request.package,
-        )));
-        command.extend(["-E".to_owned(), filter.to_owned()]);
-        command.extend(rest.iter().cloned());
+        let command = nextest_command(&request.package, filter, rest);
         println!(
             "$ cargo {}   (in target/scratch-test/tree, building in target/scratch-test/target)",
             command.join(" ")
@@ -210,9 +199,63 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     })
 }
 
+/// `cargo nextest run` for the scratch module's tests: `filter` picks the
+/// module, and a filterset among `rest` (`-E 'test(/stuck/)'`) narrows it,
+/// joined with `and`. nextest runs a test that any of its filtersets
+/// matches, so given beside the module's own it would run every test of
+/// the file (the review of step 16 was misled by that).
+fn nextest_command(package: &str, filter: &str, rest: &[String]) -> Vec<String> {
+    let mut command = vec![
+        "nextest".to_owned(),
+        "run".to_owned(),
+        "--locked".to_owned(),
+        "-p".to_owned(),
+        package.to_owned(),
+    ];
+    command.extend(workspace::implied_features(&[package.to_owned()]));
+    let (given, rest) = crate::checks::filtersets(rest);
+    let filter = match given {
+        Some(given) => format!("({filter}) and ({given})"),
+        None => filter.to_owned(),
+    };
+    command.extend(["-E".to_owned(), filter]);
+    command.extend(rest);
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
+
+    #[test]
+    fn a_filter_after_the_separator_narrows_the_files_tests() {
+        let words = |text: &[&str]| {
+            text.iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let command = super::nextest_command(
+            "cortex-stats",
+            "test(/^scratch_f::/)",
+            &words(&["-E", "test(/stuck/)", "--no-capture"]),
+        );
+        assert_eq!(
+            command,
+            words(&[
+                "nextest",
+                "run",
+                "--locked",
+                "-p",
+                "cortex-stats",
+                "-E",
+                "(test(/^scratch_f::/)) and (test(/stuck/))",
+                "--no-capture",
+            ])
+        );
+        // Without one, the module's filter alone.
+        let command = super::nextest_command("cortex-stats", "test(/^scratch_f::/)", &[]);
+        assert_eq!(command[5..], words(&["-E", "test(/^scratch_f::/)"]));
+    }
     use std::path::Path;
 
     use super::{Request, module_name, scratch_test};
