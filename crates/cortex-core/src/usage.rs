@@ -422,6 +422,109 @@ async fn refresh_one(
     }
 }
 
+/// What `cortex stats` shows: what is stored, where, and how large.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatsSummary {
+    /// Whether events are recorded (`stats.enabled`).
+    pub enabled: bool,
+    /// The directory, with `~` for the home directory.
+    pub dir: Option<String>,
+    /// How many months a monthly file stays after its own.
+    pub retention: u32,
+    /// The months that have a file.
+    pub months: Vec<String>,
+    /// The bytes it all takes.
+    pub bytes: u64,
+    /// Requests on record, all time.
+    pub requests: u64,
+    /// Turns on record, all time.
+    pub turns: u64,
+    /// Tool calls on record, all time.
+    pub tool_calls: u64,
+    /// Events dropped because the writer's queue was full.
+    pub dropped: u64,
+    /// Lines that could not be read.
+    pub unreadable: u64,
+}
+
+impl Core {
+    /// What the statistics hold. It reads the aggregates, brought up to
+    /// date.
+    ///
+    /// # Errors
+    ///
+    /// When the files cannot be read.
+    pub async fn stats_summary(&self) -> Result<StatsSummary, OpError> {
+        let user = Arc::clone(&self.inner.user);
+        let zone = self.inner.options.zone.clone();
+        let clock = Arc::clone(&self.inner.options.clock);
+        let home = user.dirs.home.clone();
+        Self::blocking(move || {
+            let settings = &user.settings.stats;
+            let mut summary = StatsSummary {
+                enabled: settings.enabled,
+                dir: None,
+                retention: settings.retention,
+                months: Vec::new(),
+                bytes: 0,
+                requests: 0,
+                turns: 0,
+                tool_calls: 0,
+                dropped: 0,
+                unreadable: 0,
+            };
+            let Some(dir) = stats_dir(&user) else {
+                return Ok(summary);
+            };
+            summary.dir = Some(shortened(dir.root(), home.as_deref()));
+            summary.months = dir.months().map_err(read_failed)?;
+            let mut aggregates = Aggregates::load(&dir).map_err(read_failed)?;
+            let now = clock.now();
+            let zone = zone.unwrap_or_else(Zone::system);
+            aggregates
+                .sync(
+                    &dir,
+                    zone.date_of(now),
+                    &cortex_stats::month_of(now),
+                    settings.retention,
+                )
+                .map_err(read_failed)?;
+            let total = aggregates.total();
+            summary.requests = total.usage.values().map(|sum| sum.requests).sum();
+            summary.turns = total.time.values().map(|time| time.turns).sum();
+            summary.tool_calls = total.tools.values().map(|tool| tool.calls).sum();
+            summary.dropped = total.dropped;
+            summary.unreadable = total.unreadable;
+            summary.bytes = dir.size();
+            Ok(summary)
+        })
+        .await
+    }
+
+    /// Deletes every statistics file: `cortex stats reset`. Returns how
+    /// many were removed.
+    ///
+    /// # Errors
+    ///
+    /// When a file cannot be removed.
+    pub async fn stats_reset(&self) -> Result<u64, OpError> {
+        let Some(dir) = stats_dir(&self.inner.user) else {
+            return Ok(0);
+        };
+        Self::blocking(move || dir.reset().map_err(read_failed)).await
+    }
+}
+
+/// A path with the home directory written `~`.
+fn shortened(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
+    if let Some(home) = home
+        && let Ok(rest) = path.strip_prefix(home)
+    {
+        return std::path::Path::new("~").join(rest).display().to_string();
+    }
+    path.display().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

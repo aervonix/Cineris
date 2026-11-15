@@ -58,6 +58,40 @@ rules allow, and run what it defines. A change to its permission rules sets
 them aside again until it is approved with `{name} permissions trust`.
 "
         ),
+        Topic::Usage => format!(
+            "\
+Usage: {name} usage [--range R] [--by G] [--project KEY] [--json] [--refresh]
+
+What was used and what it cost, from the statistics on this machine, with
+where the turns' time went and the latest limits each provider reported.
+Nothing is sent anywhere, unless --refresh is given.
+
+Options:
+  --range R      today, week, month (the default) or all
+  --by G         Group by provider, model, project, source or speed: once
+                 for each, or several joined by commas, outermost first
+                 (provider,model by default)
+  --project KEY  One project's usage
+  --json         The report as one JSON object
+  --refresh      First ask each provider in `usage.refresh` (your own
+                 configuration) for its figures, at its documented usage
+                 endpoint, with its own key. Off when the list is empty.
+"
+        ),
+        Topic::Stats => format!(
+            "\
+Usage: {name} stats [show [--json] | reset]
+
+The local statistics: what is stored, where, and how large.
+
+Commands:
+  show    What is stored (the default)
+  reset   Delete every statistics file
+
+Statistics never leave this machine. Set `stats.enabled = false` to stop
+recording them; every feature then works on its defaults.
+"
+        ),
         Topic::Models => format!(
             "\
 Usage: {name} models
@@ -102,6 +136,8 @@ Commands:
   permissions   Stored approvals and project trust
   auth          Provider keys
   models        The models of the catalog
+  usage         What was used, what it cost, and where the time went
+  stats         The local statistics: show or reset
 
 Options:
 "
@@ -142,6 +178,8 @@ mod tests {
             Topic::Permissions,
             Topic::Auth,
             Topic::Models,
+            Topic::Usage,
+            Topic::Stats,
         ] {
             let as_cx = help(topic, "cx");
             assert!(as_cx.contains("Usage: cx "), "{topic:?}");

@@ -14,6 +14,7 @@ use cortex_testkit::{Reply, block_on, fixtures, join};
 use serde_json::json;
 
 use crate::{
+    next_event,
     HELLO, Harness, START, assert_kind, assert_well_formed, at, failure, final_error, hello, names,
     retries, secs,
 };
@@ -494,7 +495,7 @@ fn cancelling_during_a_backoff_ends_the_request_without_another_send() {
     let (events, ()) = block_on(join(
         async {
             let mut events = Vec::new();
-            while let Some(event) = stream.next().await {
+            while let Some(event) = next_event(&mut stream).await {
                 events.push(event);
             }
             events
@@ -527,13 +528,13 @@ fn a_stream_that_goes_silent_fails_at_the_idle_limit() {
         .stream(fixtures::request(fixtures::model()), CancelToken::new());
     block_on(async {
         assert!(matches!(
-            stream.next().await,
+            next_event(&mut stream).await,
             Some(ModelEvent::Start { .. })
         ));
 
         // The response has begun, so the limit that runs is the idle one:
         // 90 seconds. One second short of it, nothing has happened.
-        let (retry, ()) = join(stream.next(), async {
+        let (retry, ()) = join(next_event(&mut stream), async {
             harness.timer.sleeping().await;
             assert_eq!(harness.timer.running(), [secs(90)]);
             harness.timer.advance(secs(89));
@@ -551,7 +552,7 @@ fn a_stream_that_goes_silent_fails_at_the_idle_limit() {
         assert_eq!(harness.now(), at("2026-11-12T10:01:30Z"));
 
         // The backoff is a wait too. Let it pass, and the retry succeeds.
-        let (next, ()) = join(stream.next(), async {
+        let (next, ()) = join(next_event(&mut stream), async {
             harness.timer.sleeping().await;
             harness.timer.advance(secs(1));
         })
@@ -575,7 +576,7 @@ fn a_response_that_never_begins_fails_at_the_first_event_limit() {
             .client
             .stream(fixtures::request(fixtures::model()), CancelToken::new());
         block_on(async {
-            let (retry, ()) = join(stream.next(), async {
+            let (retry, ()) = join(next_event(&mut stream), async {
                 harness.timer.sleeping().await;
                 assert_eq!(harness.timer.running(), [secs(60)], "the first-event limit");
                 harness.timer.advance(secs(59));
@@ -626,7 +627,7 @@ fn a_provider_can_set_its_own_time_limits() {
         block_on(async {
             let mut events = Vec::new();
             loop {
-                let (event, ()) = join(stream.next(), async {
+                let (event, ()) = join(next_event(&mut stream), async {
                     if events.len() == usize::from(code == "idle_timeout") {
                         timer.sleeping().await;
                         assert_eq!(timer.running(), [expect], "{code}");
@@ -682,7 +683,7 @@ fn keep_alive_bytes_restart_the_wait_for_the_first_event() {
         .client
         .stream(fixtures::request(fixtures::model()), CancelToken::new());
     block_on(async {
-        let (event, ()) = join(stream.next(), async {
+        let (event, ()) = join(next_event(&mut stream), async {
             harness.timer.sleeping().await;
             assert_eq!(harness.timer.running(), [secs(60)], "the first-event limit");
             harness.timer.advance(secs(50));
@@ -723,7 +724,7 @@ fn a_connection_that_goes_dead_after_a_keep_alive_fails_at_the_ordinary_limit() 
         .client
         .stream(fixtures::request(fixtures::model()), CancelToken::new());
     block_on(async {
-        let (retry, ()) = join(stream.next(), async {
+        let (retry, ()) = join(next_event(&mut stream), async {
             harness.timer.sleeping().await;
             harness.timer.advance(secs(50));
             gate.open();
@@ -764,7 +765,7 @@ fn a_server_that_only_ever_says_it_is_alive_is_given_up_on() {
         .stream(fixtures::request(fixtures::model()), CancelToken::new());
     block_on(async {
         let mut rounds = 0;
-        let (retry, ()) = join(stream.next(), async {
+        let (retry, ()) = join(next_event(&mut stream), async {
             harness.timer.sleeping().await;
             for gate in &gates {
                 harness.timer.advance(secs(59));

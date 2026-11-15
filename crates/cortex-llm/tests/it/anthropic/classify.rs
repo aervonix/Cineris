@@ -837,7 +837,12 @@ impl Client {
     }
 
     fn run(&self, request: ModelRequest) -> Vec<ModelEvent> {
-        block_on(self.client.stream(request, CancelToken::new()).collect())
+        let events: Vec<ModelEvent> =
+            block_on(self.client.stream(request, CancelToken::new()).collect());
+        events
+            .into_iter()
+            .filter(|event| !matches!(event, ModelEvent::Answered))
+            .collect()
     }
 
     /// The `speed` of each request sent so far.

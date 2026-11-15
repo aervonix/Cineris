@@ -170,6 +170,35 @@ pub(crate) enum Command {
     Auth(AuthCommand),
     /// `cortex models`
     Models,
+    /// `cortex usage …`
+    Usage(UsageCommand),
+    /// `cortex stats …`
+    Stats(StatsCommand),
+}
+
+/// `cortex usage [--range R] [--by G]… [--project KEY] [--json] [--refresh]`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UsageCommand {
+    /// `--range`: `today`, `week`, `month` (the default) or `all`.
+    pub(crate) range: String,
+    /// `--by`, outermost first: `provider`, `model`, `project`, `source`,
+    /// `speed`.
+    pub(crate) by: Vec<String>,
+    /// `--project`: one project's key.
+    pub(crate) project: Option<String>,
+    /// `--json`
+    pub(crate) json: bool,
+    /// `--refresh`: ask the providers in `usage.refresh` first.
+    pub(crate) refresh: bool,
+}
+
+/// `cortex stats …`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StatsCommand {
+    /// `show [--json]`, or nothing.
+    Show { json: bool },
+    /// `reset`
+    Reset,
 }
 
 /// Whose help to print.
@@ -181,6 +210,8 @@ pub(crate) enum Topic {
     Permissions,
     Auth,
     Models,
+    Usage,
+    Stats,
 }
 
 /// What a headless run writes on standard output.
@@ -339,6 +370,8 @@ pub(crate) fn parse(arguments: Vec<OsString>) -> Result<Command, UsageError> {
             "permissions" => Some(Topic::Permissions),
             "auth" => Some(Topic::Auth),
             "models" => Some(Topic::Models),
+            "usage" => Some(Topic::Usage),
+            "stats" => Some(Topic::Stats),
             _ => None,
         };
         if let Some(topic) = topic {
@@ -465,6 +498,28 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
             Some(other) => Err(unexpected(&other)),
         };
     }
+    if topic == Topic::Usage {
+        return usage(parser);
+    }
+    if topic == Topic::Stats {
+        let mut action = None;
+        let mut json = false;
+        while let Some(argument) = parser.next()? {
+            match argument {
+                Arg::Short('h') | Arg::Long("help") => return Ok(Command::Help(topic)),
+                Arg::Long("json") => json = true,
+                Arg::Value(value) if action.is_none() => action = Some(value.string()?),
+                other => return Err(unexpected(&other)),
+            }
+        }
+        return match action.as_deref() {
+            None | Some("show") => Ok(Command::Stats(StatsCommand::Show { json })),
+            Some("reset") if !json => Ok(Command::Stats(StatsCommand::Reset)),
+            Some(other) => Err(UsageError(format!(
+                "'{other}' is not a subcommand of 'stats'"
+            ))),
+        };
+    }
     let Some(first) = parser.next()? else {
         return Ok(Command::Help(topic));
     };
@@ -482,6 +537,8 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 Topic::Permissions => "permissions",
                 Topic::Auth => "auth",
                 Topic::Models => "models",
+                Topic::Usage => "usage",
+                Topic::Stats => "stats",
                 Topic::Main => "",
             }
         ))
@@ -591,8 +648,51 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 other => Err(wrong(other)),
             }
         }
-        Topic::Main | Topic::Models => Err(wrong(&action)),
+        Topic::Main | Topic::Models | Topic::Usage | Topic::Stats => Err(wrong(&action)),
     }
+}
+
+/// `cortex usage …`
+fn usage(parser: &mut Parser) -> Result<Command, UsageError> {
+    let mut command = UsageCommand {
+        range: "month".to_owned(),
+        by: Vec::new(),
+        project: None,
+        json: false,
+        refresh: false,
+    };
+    while let Some(argument) = parser.next()? {
+        match argument {
+            Arg::Short('h') | Arg::Long("help") => return Ok(Command::Help(Topic::Usage)),
+            Arg::Long("range") => {
+                let range = text(parser)?;
+                if !["today", "week", "month", "all"].contains(&range.as_str()) {
+                    return Err(UsageError(format!(
+                        "'{range}' is not a range: use today, week, month or all (the open \
+                         session's own figures are /usage's)"
+                    )));
+                }
+                command.range = range;
+            }
+            Arg::Long("by") => {
+                for group in text(parser)?.split(',') {
+                    let group = group.trim();
+                    if !["provider", "model", "project", "source", "speed"].contains(&group) {
+                        return Err(UsageError(format!(
+                            "'{group}' is not a grouping: use provider, model, project, source \
+                             or speed"
+                        )));
+                    }
+                    command.by.push(group.to_owned());
+                }
+            }
+            Arg::Long("project") => command.project = Some(text(parser)?),
+            Arg::Long("json") => command.json = true,
+            Arg::Long("refresh") => command.refresh = true,
+            other => return Err(unexpected(&other)),
+        }
+    }
+    Ok(Command::Usage(command))
 }
 
 #[cfg(test)]

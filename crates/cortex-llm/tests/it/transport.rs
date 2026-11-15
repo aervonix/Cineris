@@ -20,7 +20,7 @@ use cortex_testkit::{
 };
 use serde_json::json;
 
-use crate::{START, assert_kind, final_error, names, secs};
+use crate::{START, assert_kind, final_error, names, next_event, secs};
 
 /// Runs a test's async body on a runtime of its own.
 fn run<F: Future>(body: F) -> F::Output {
@@ -369,12 +369,12 @@ fn a_stalled_response_ends_at_the_idle_limit_and_the_connection_is_closed() {
     run(async {
         let mut stream = client.stream(fixtures::request(fixtures::model()), CancelToken::new());
         assert!(matches!(
-            stream.next().await,
+            next_event(&mut stream).await,
             Some(ModelEvent::Start { .. })
         ));
 
         // The server has gone silent. Ninety seconds pass on the fake clock.
-        let (last, ()) = join(stream.next(), async {
+        let (last, ()) = join(next_event(&mut stream), async {
             timer.sleeping().await;
             assert_eq!(timer.running(), [secs(90)]);
             timer.advance(secs(90));
@@ -382,7 +382,7 @@ fn a_stalled_response_ends_at_the_idle_limit_and_the_connection_is_closed() {
         .await;
         let events = [last.unwrap()];
         assert_kind(final_error(&events), ErrorKind::Transient, "idle_timeout");
-        assert!(stream.next().await.is_none());
+        assert!(next_event(&mut stream).await.is_none());
 
         // Giving the response up closed the connection.
         closed.opened().await;
@@ -406,13 +406,13 @@ fn cancelling_a_request_through_the_client_closes_the_connection() {
     run(async {
         let mut stream = client.stream(fixtures::request(fixtures::model()), cancel.clone());
         assert!(matches!(
-            stream.next().await,
+            next_event(&mut stream).await,
             Some(ModelEvent::Start { .. })
         ));
         cancel.cancel();
-        let last = [stream.next().await.unwrap()];
+        let last = [next_event(&mut stream).await.unwrap()];
         assert_kind(final_error(&last), ErrorKind::Interrupted, "interrupted");
-        assert!(stream.next().await.is_none());
+        assert!(next_event(&mut stream).await.is_none());
         closed.opened().await;
     });
     assert_eq!(server.requests().len(), 1);

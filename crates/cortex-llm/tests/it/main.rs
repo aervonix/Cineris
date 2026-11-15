@@ -107,8 +107,12 @@ impl Harness {
         self.run_request(request_at(fixtures::model(), speed))
     }
 
+    /// The response's events. The client's word that the provider answered,
+    /// which is timing and comes before each attempt's response, is counted
+    /// by [`answered`](Self::answered) and left out here.
     fn run_request(&self, request: ModelRequest) -> Vec<ModelEvent> {
-        block_on(self.client.stream(request, CancelToken::new()).collect())
+        let events = block_on(self.client.stream(request, CancelToken::new()).collect());
+        without_answered(events)
     }
 
     /// The `speed` field of each request sent so far.
@@ -164,6 +168,25 @@ fn tier_refusal(status: u16, code: &str) -> Reply {
         code,
         "The tier is busy.",
     ))
+}
+
+/// The stream's next event that is not the client's word that the
+/// provider answered (timing, which comes before each attempt's response).
+pub(crate) async fn next_event(stream: &mut cortex_llm::ModelStream) -> Option<ModelEvent> {
+    loop {
+        match stream.next().await {
+            Some(ModelEvent::Answered) => {}
+            other => return other,
+        }
+    }
+}
+
+/// A stream's events without the client's word that the provider answered.
+fn without_answered(events: Vec<ModelEvent>) -> Vec<ModelEvent> {
+    events
+        .into_iter()
+        .filter(|event| !matches!(event, ModelEvent::Answered))
+        .collect()
 }
 
 /// One name per event, for asserting on the shape of a stream. The client's

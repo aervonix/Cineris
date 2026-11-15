@@ -36,6 +36,7 @@ mod headless;
 mod help;
 mod report;
 mod signals;
+mod usage_view;
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -107,6 +108,8 @@ fn dispatch(command: Command, name: &'static str, started: Instant) -> u8 {
         Command::Permissions(command) => commands::permissions(command, name),
         Command::Auth(command) => commands::auth(command, name),
         Command::Models => commands::models(name),
+        Command::Usage(command) => commands::usage(command, name),
+        Command::Stats(command) => commands::stats(command, name),
     }
 }
 
