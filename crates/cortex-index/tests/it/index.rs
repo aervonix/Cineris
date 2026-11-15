@@ -292,7 +292,9 @@ fn a_file_that_vanishes_or_changes_mid_pass_is_left_out_or_read_as_it_is() {
     let done = Arc::new(AtomicBool::new(false));
     let once = Arc::clone(&done);
     // The gate is asked about each file as the listing meets it, before
-    // the file is read: the last one asked changes the other two.
+    // the file is read: the question about `stays.rs` changes the other two,
+    // which the listing has met or not, in whatever order it walks. Either
+    // way each is left out or read as it is when it is read.
     let gate: Arc<dyn Gate> = Arc::new(move |path: &AbsPath| {
         if path.as_str().ends_with("/stays.rs") && !once.swap(true, Ordering::SeqCst) {
             let _ = std::fs::remove_file(workspace.join("gone.rs"));
@@ -678,12 +680,14 @@ fn tree_with_rules(test: Scratch) -> (Tree, Arc<dyn Gate>) {
     let tree = Tree::new(test);
     tree.write(".gitignore", "target/\n*.log\n");
     tree.write(".ignore", "vendor/\n");
-    for top in 0..4 {
+    // Made out of name order, so that no file system's own order of
+    // entries is name order by chance.
+    for top in [2, 0, 3, 1] {
         tree.write(&format!("p{top}/.gitignore"), "generated*.rs\n");
-        for sub in 0..5 {
+        for sub in [3, 0, 4, 1, 2] {
             let dir = format!("p{top}/s{sub}");
             tree.write(&format!("{dir}/.ignore"), "local.rs\n");
-            for n in 0..6 {
+            for n in [3, 0, 5, 1, 4, 2] {
                 tree.write(
                     &format!("{dir}/f{n}.rs"),
                     &rust_file(&format!("f{top}_{sub}_{n}")),
@@ -787,22 +791,103 @@ fn a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads() {
         max_listed: 60,
         ..Limits::default()
     };
-    let one = index_on(&tree, 1, limits, &gate);
-    let report = tree.pass(&one);
-    assert!(report.partial.contains(&Partial::Listing), "{report:?}");
-    let expected = cache_text(&one);
-    // The walk in name order reaches `p0` first, and the cap stops it well
-    // before `p3`.
-    assert!(expected.contains("p0/s0/f0.rs"), "{expected}");
-    assert!(!expected.contains("p3/"), "{expected}");
-    for threads in [2, 4] {
-        let several = index_on(&tree, threads, limits, &gate);
-        let got = tree.pass(&several);
-        assert_eq!(got.partial, report.partial, "{threads} threads");
-        assert_eq!(cache_text(&several), expected, "{threads} threads");
-        // And the next pass, which goes to one thread at once, the same.
-        tree.pass(&several);
-        assert_eq!(cache_text(&several), expected, "{threads} threads, again");
+    // In name order the walk meets the root, then `p0` (its directory, five
+    // more and their six files each: 36 entries), then `p1`, `p1/s0` and its
+    // six files, `p1/s1` and its seven (the gate refuses `token.rs` once it
+    // is listed), `p1/s2` and its six: 60 entries. `p1/s3` is the one past
+    // the cap.
+    let mut cut: Vec<String> = Vec::new();
+    for (top, subs) in [(0, 0..5), (1, 0..3)] {
+        for sub in subs {
+            for n in 0..6 {
+                cut.push(format!("p{top}/s{sub}/f{n}.rs"));
+            }
+        }
+    }
+    let expected_paths = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter_map(|line| line.strip_prefix("F\t"))
+            .map(|rest| rest.split('\t').next().unwrap_or_default().to_owned())
+            .collect()
+    };
+    let mut expected = None;
+    for threads in [1, 2, 4] {
+        let asked = Arc::new(AtomicU64::new(0));
+        let counting: Arc<dyn Gate> = {
+            let (asked, gate) = (Arc::clone(&asked), Arc::clone(&gate));
+            Arc::new(move |path: &AbsPath| {
+                asked.fetch_add(1, Ordering::SeqCst);
+                gate.may_index(path)
+            })
+        };
+        let index = index_on(&tree, threads, limits, &counting);
+        let report = tree.pass(&index);
+        assert!(
+            report.partial.contains(&Partial::Listing),
+            "{threads} threads: {report:?}"
+        );
+        let text = cache_text(&index);
+        assert_eq!(expected_paths(&text), cut, "{threads} threads:\n{text}");
+        let expected = expected.get_or_insert_with(|| text.clone());
+        assert_eq!(&text, expected, "{threads} threads");
+        // The next pass knows from the cache that the listing meets its cap,
+        // and walks in name order at once: no walk on threads to throw away.
+        let first = asked.swap(0, Ordering::SeqCst);
+        tree.pass(&index);
+        let second = asked.load(Ordering::SeqCst);
+        assert_eq!(&cache_text(&index), expected, "{threads} threads, again");
+        assert!(
+            second < first,
+            "{threads} threads: the second pass asked the gate {second} times, the first {first}"
+        );
+    }
+    // A cut listing is cut by its cap, not by the time: with no time at
+    // all, the pass still lists to the cap, reads one file, and writes.
+    let no_time = Limits {
+        pass_time: Duration::ZERO,
+        ..limits
+    };
+    let index = Index::new(
+        tree.root.clone(),
+        tree.scratch.join("state/no-time"),
+        no_time,
+        Arc::clone(&gate),
+        Arc::new(TickingClock {
+            inner: tree.clock.clone(),
+            ticks: AtomicU64::new(0),
+        }),
+    )
+    .with_threads(4);
+    let report = tree.pass(&index);
+    assert!(
+        report.written && report.partial.contains(&Partial::Listing),
+        "{report:?}"
+    );
+}
+
+/// An ignore file is known by its exact name, as `search` and `list` know
+/// it, on any number of threads: on a file system that does not tell case
+/// apart a `.GITIGNORE` is not a `.gitignore`.
+#[test]
+fn an_ignore_file_is_known_by_its_exact_name_on_any_number_of_threads() {
+    let tree = Tree::new(cortex_testkit::scratch!(
+        "an_ignore_file_is_known_by_its_exact_name"
+    ));
+    tree.write(".GITIGNORE", "skip/\n");
+    tree.write("skip/x.rs", &rust_file("x"));
+    tree.write("keep.rs", &rust_file("keep"));
+    let gate: Arc<dyn Gate> = Arc::new(OpenGate);
+    let mut expected = None;
+    for threads in [1, 4] {
+        let index = index_on(&tree, threads, Limits::default(), &gate);
+        let report = tree.pass(&index);
+        assert_eq!(report.indexed, 2, "{threads} threads: {report:?}");
+        let text = cache_text(&index);
+        assert_eq!(
+            &text,
+            expected.get_or_insert_with(|| text.clone()),
+            "{threads} threads"
+        );
     }
 }
 

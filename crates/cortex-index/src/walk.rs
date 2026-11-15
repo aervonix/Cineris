@@ -12,11 +12,12 @@
 //! - **Links are not followed** and not listed, wherever they point.
 //! - **A name the path rules refuse** (not valid Unicode, a Windows device
 //!   name) is stepped past, with everything under it.
-//! - **On several threads** (the pass's), each looking before each entry
-//!   whether to stop, and the files put in [`path_order`] after: the
-//!   listing a walk on one thread makes. One that meets its cap on entries
-//!   is made again on one thread, in name order, so that a cut listing is
-//!   the same on every machine.
+//! - **On the pass's threads,** with the walker `search` and `list` use,
+//!   each thread looking before each entry it is handed whether to stop, and
+//!   the files put in [`path_order`] after: the same listing on any number
+//!   of threads. One that meets its cap on entries is made again on one
+//!   thread, in name order, so that a cut listing is the same on every
+//!   machine.
 //! - **The caps:** a listing stops at [`Limits::max_listed`] entries (not at
 //!   the pass's time limit, which is the reading's). Past
 //!   [`Limits::max_files`] files, the shallowest of what was listed are
@@ -448,22 +449,30 @@ impl Drop for HandedOver<'_> {
 
 /// Lists the workspace at `root`, on `threads` threads.
 ///
-/// On several threads the entries come in no set order, and the files are
-/// put in [`path_order`] after, so the listing is the one a walk on one
-/// thread makes. A listing that reaches its cap on entries is made again
-/// on one thread, in name order: which entries several threads reach
-/// first differs from one run to the next, and the cut must be the same on
-/// every machine.
+/// The walk is the one `search` and `list` make, on however many threads:
+/// its entries come in no set order, and the files are put in
+/// [`path_order`] after, so the listing is the same on every machine. A
+/// listing that reaches its cap on entries is made again in name order, on
+/// one thread, since which entries the threads reach first differs from one
+/// run to the next and the cut must not; with `capped` (the last listing
+/// met the cap) it is made in name order at once.
+///
+/// The walk in name order opens each ignore file by its name, so on a file
+/// system that does not tell case apart it also honours one named in
+/// another case (`.GITIGNORE`), which the other walk, like `search` and
+/// `list`, passes over: only a listing at its cap can differ that way.
 pub(crate) fn list(
     root: &AbsPath,
     gate: &Arc<dyn Gate>,
     limits: &Limits,
     control: &Control<'_>,
     threads: usize,
+    capped: bool,
 ) -> Listing {
     let root_fs = root.to_fs_path();
-    if threads > 1
-        && let Some(listing) = list_on_threads(&root_fs, root, gate, limits, control, threads)
+    if !capped
+        && let Some(listing) =
+            list_on_threads(&root_fs, root, gate, limits, control, threads.max(1))
     {
         return listing;
     }
@@ -524,9 +533,10 @@ fn list_on_threads(
                 into: handed,
             };
             Box::new(move |entry| {
-                // Each thread looks before each entry, as the walk on one
-                // thread does: a turn that begins stops them all at their
-                // next entry.
+                // Each thread looks before each entry it is handed: a turn
+                // that begins stops them all at their next one. (The gate
+                // is asked about a directory's subdirectories as it is read,
+                // before they are handed on.)
                 if control.stop_listing().is_some() {
                     stopped.store(true, AtomicOrdering::SeqCst);
                     return WalkState::Quit;
@@ -602,4 +612,89 @@ fn finish(gathered: Vec<Gathered>, partial: Option<Partial>, limits: &Limits) ->
     all.sort_by(|one, other| path_order(&one.relative, &other.relative));
     listing.files = all;
     listing
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cortex_base::{CancelToken, PathOptions, PathResolver};
+    use cortex_testkit::Scratch;
+
+    use super::{Control, Gate, Limits, Listing, list_in_order, list_on_threads};
+
+    /// Each file's path, depth and size; how many were found; each
+    /// directory's count.
+    type Summary = (Vec<(String, usize, u64)>, usize, Vec<(String, usize)>);
+
+    fn summary(listing: &Listing) -> Summary {
+        (
+            listing
+                .files
+                .iter()
+                .map(|file| (file.relative.clone(), file.depth, file.stamp.size))
+                .collect(),
+            listing.found,
+            listing
+                .dirs
+                .iter()
+                .map(|(dir, count)| (dir.clone(), *count))
+                .collect(),
+        )
+    }
+
+    /// Below the cap the walk in name order and the walk on threads list
+    /// the same files, counts and directories, with ignore files at every
+    /// level and the gate: the walk in name order stands in for the other
+    /// only at the cap, and must cut the same workspace.
+    #[test]
+    fn the_walk_in_name_order_lists_what_the_walk_on_threads_lists() {
+        let scratch = Scratch::outside("cortex-index-unit", "the_walk_in_name_order_lists");
+        scratch.file("ws/.gitignore", "*.log\n");
+        scratch.file("ws/.ignore", "vendor/\n");
+        for top in [2, 0, 3, 1] {
+            scratch.file(format!("ws/p{top}/.gitignore"), "generated.rs\n");
+            for sub in [1, 0, 2] {
+                scratch.file(format!("ws/p{top}/s{sub}/.ignore"), "local.rs\n");
+                for name in ["b.rs", "generated.rs", "local.rs", "a.rs", "x.log"] {
+                    scratch.file(format!("ws/p{top}/s{sub}/{name}"), "fn f() {}\n");
+                }
+            }
+        }
+        scratch.file("ws/vendor/v.rs", "fn v() {}\n");
+        scratch.file("ws/secrets/k.rs", "fn k() {}\n");
+        scratch.file("ws/.hidden/h.rs", "fn h() {}\n");
+        let root = PathResolver::new(&scratch.dir("ws"), PathOptions::new())
+            .expect("a workspace")
+            .root()
+            .clone();
+        let gate: Arc<dyn Gate> =
+            Arc::new(|path: &cortex_base::AbsPath| !path.as_str().ends_with("/secrets"));
+        let cancel = CancelToken::new();
+        let control = Control {
+            cancel: &cancel,
+            give_way: &|| false,
+            out_of_time: &|| false,
+        };
+        let limits = Limits::default();
+        let root_fs = root.to_fs_path();
+        let in_order = list_in_order(&root_fs, &root, &gate, &limits, &control);
+        assert_eq!(
+            in_order.files.len(),
+            4 * 3 * 2,
+            "{:?}",
+            summary(&in_order).0
+        );
+        for threads in [1, 2, 4] {
+            let on_threads = list_on_threads(&root_fs, &root, &gate, &limits, &control, threads)
+                .expect("under the cap");
+            assert_eq!(
+                summary(&on_threads),
+                summary(&in_order),
+                "{threads} threads"
+            );
+            assert_eq!(on_threads.skipped, in_order.skipped, "{threads} threads");
+            assert_eq!(on_threads.partial, in_order.partial, "{threads} threads");
+        }
+    }
 }
