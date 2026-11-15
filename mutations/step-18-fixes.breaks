@@ -411,3 +411,250 @@ replace: let escaped = reason.lines().next().unwrap_or("");
 caught-by:
     cortex-tools walk::tests::a_skipped_entrys_reason_names_it_as_an_escape
     cortex-tools walk::tests::what_was_skipped_is_said_once_per_kind
+
+# --------------------------------------- findings 2, 7 and 8: the extractors
+#
+# The fixes to step 18's extractors, from its review: no input recurses or
+# is scanned once per prefix (finding 2); five common shapes that had a
+# wrong outline (finding 6); the bounds on names and on what an extractor
+# keeps (finding 7); `truncated` said only of a real cut; and Kotlin's
+# names in backticks.
+
+[break] a-template-chain-recurses
+rule: A chain of `template<…>` prefixes is stripped in a loop: no input recurses, so no line overflows a pass thread's stack, which would abort the process.
+file: crates/cortex-index/src/extract/langs.rs
+in: Cish::recognise
+find:
+    return Found::Attribute;
+    }
+    code = rest;
+    continue;
+replace:
+    return Found::Attribute;
+    }
+    return self.recognise(rest, scope);
+caught-by:
+    cortex-index extract::tests::a_chain_of_template_and_extern_prefixes_needs_no_more_stack_than_one
+
+[break] an-extern-chain-recurses
+rule: A chain of `extern "…"` prefixes is stripped in a loop: no input recurses, so no line overflows a pass thread's stack, which would abort the process.
+file: crates/cortex-index/src/extract/langs.rs
+in: Cish::recognise
+find:
+    return Found::Transparent;
+    }
+    code = rest;
+    continue;
+replace:
+    return Found::Transparent;
+    }
+    return self.recognise(rest, scope);
+caught-by:
+    cortex-index extract::tests::a_chain_of_template_and_extern_prefixes_needs_no_more_stack_than_one
+    cortex-index extract::tests::a_chain_of_extern_prefixes_costs_linear_time
+
+[break] what-follows-each-extern-prefix-is-scanned-again
+rule: What follows a prefix is looked at once, not once per prefix: a chain of `extern "…"` costs linear time.
+file: crates/cortex-index/src/extract/langs.rs
+in: Cish::recognise
+find: let rest = rest.trim_start();
+replace: let rest = rest.trim_start(); if rest.contains('\u{0}') { return Found::Nothing; }
+caught-by:
+    cortex-index extract::tests::a_chain_of_extern_prefixes_costs_linear_time
+
+[break] an-extern-c-function-is-taken-for-a-block
+rule: Only a `{` right after `extern "…"` opens an `extern "C" {` block; a function with C linkage and its body is a function, and what is in its body is not outlined.
+file: crates/cortex-index/src/extract/langs.rs
+in: Cish::recognise
+find: if rest.is_empty() || rest.starts_with('{') {
+replace: if rest.is_empty() || rest.ends_with('{') {
+caught-by:
+    cortex-index extract::tests::an_extern_c_function_with_a_body_is_a_function_and_not_a_block
+    cortex-index::it outlines::cpp
+
+[break] an-extern-c-block-whose-brace-is-on-the-next-line-hides-its-contents
+rule: `extern "C"` alone on its line opens a block whose brace comes on the next line, and what is in it is outlined at the level outside it.
+file: crates/cortex-index/src/extract/langs.rs
+in: Cish::recognise
+find: if rest.is_empty() || rest.starts_with('{') {
+replace: if rest.starts_with('{') {
+caught-by:
+    cortex-index extract::tests::an_extern_c_function_with_a_body_is_a_function_and_not_a_block
+    cortex-index::it outlines::cpp
+
+[break] a-module-named-by-a-string-is-named-from-the-blanked-code
+rule: TypeScript's `declare module "name"` is named by its string as the line writes it, not from the code, where a string's content is blanked.
+file: crates/cortex-index/src/extract/langs.rs
+in: quoted_name
+find: let raw = scope.raw.get(scope.raw.len().checked_sub(code.len())?..)?;
+replace: let raw = code;
+caught-by:
+    cortex-index extract::tests::a_typescript_module_declared_by_a_string_is_named_by_the_string
+    cortex-index::it outlines::typescript
+
+[break] a-regular-expression-is-read-as-code
+rule: In JavaScript and TypeScript a `/` where an expression begins opens a regular expression, whose content is blanked as a string's: a `//` or a `/*` in it is not a comment.
+file: crates/cortex-index/src/lex.rs
+find: regex: true
+replace: regex: false
+caught-by:
+    cortex-index extract::tests::a_regular_expression_with_two_slashes_is_not_a_comment
+    cortex-index extract::tests::a_regular_expression_with_slash_star_does_not_open_a_comment
+    cortex-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
+    cortex-index::it outlines::typescript
+    cortex-index::it outlines::javascript
+
+[break] every-slash-of-a-line-is-scanned-for-a-regular-expression
+rule: After a `/` that looked like a regular expression's start does not close on its line, no later `/` of the line is tried, so a line of them costs linear time.
+file: crates/cortex-index/src/lex.rs
+in: Lexer::code_at
+find: self.no_regex = true;
+replace:
+caught-by:
+    cortex-index extract::tests::a_line_of_regular_expressions_that_never_close_costs_linear_time
+
+[break] a-here-string-is-read-as-a-heredoc
+rule: A shell's here-string, `<<<word`, is code: its second `<` does not begin a heredoc that blanks the file down to a line `word`.
+file: crates/cortex-index/src/lex.rs
+in: Lexer::code_at
+find: if syntax.heredocs == Heredocs::Shell && rest.starts_with(b"<<<") {
+replace: if syntax.heredocs == Heredocs::Shell && rest.starts_with(b"<<<") && false {
+caught-by:
+    cortex-index extract::tests::a_shell_here_string_is_not_a_heredoc
+    cortex-index lex::tests::heredocs_are_skipped_to_their_tag
+    cortex-index::it outlines::shell
+
+[break] an-unclosed-python-bracket-hides-the-rest-of-the-file
+rule: In Python a `def` or a `class` no further in than the line that opened a bracket still open ends that bracket, so one bracket left open (a file in mid-edit) does not hide the rest of the file.
+file: crates/cortex-index/src/extract/indent.rs
+in: python
+find: if continuing && indent_of(raw) <= opener && defines(code) {
+replace: if continuing && indent_of(raw) < opener && defines(code) {
+caught-by:
+    cortex-index extract::tests::one_unclosed_bracket_in_python_does_not_hide_the_rest_of_the_file
+    cortex-index extract::tests::a_python_f_string_with_its_own_quotes_inside_does_not_hide_what_follows
+    cortex-index::it outlines::python
+
+[break] a-name-is-kept-whole
+rule: Every name an outline keeps is clipped to NAME_CHARS characters, whichever extractor found it.
+file: crates/cortex-index/src/extract/mod.rs
+in: Builder::push
+find: if entry.name.char_indices().nth(NAME_CHARS).is_some() {
+replace: if entry.name.char_indices().nth(NAME_CHARS).is_some() && false {
+caught-by:
+    cortex-index extract::tests::every_name_is_clipped_like_the_head
+
+[break] a-typedef-name-taken-at-its-close-is-kept-whole
+rule: The name a C `typedef struct { … } Name;` takes at its close is clipped like every other.
+file: crates/cortex-index/src/extract/brace.rs
+in: run
+find: entry.name = clip(&name, NAME_CHARS);
+replace: entry.name = name;
+caught-by:
+    cortex-index extract::tests::every_name_is_clipped_like_the_head
+
+[break] a-brace-that-opens-nothing-is-kept-as-a-frame
+rule: A brace that opens no definition is counted, not kept as a frame: a line of a million `{` costs a number, not megabytes.
+file: crates/cortex-index/src/extract/brace.rs
+in: Reader::push
+find:
+    Frame::Opaque { entry: None } => {
+        self.opaque += 1;
+        self.anonymous += 1;
+        return;
+    }
+replace:
+    Frame::Opaque { entry: None } => self.opaque += 1,
+caught-by:
+    cortex-index::it outlines::outlining_a_line_of_a_million_open_braces_takes_little_memory
+
+[break] braces-below-a-body-are-forgotten-when-it-closes
+rule: The braces that opened nothing and are open below a definition's body are open again when that body closes: the nesting is what it was when each brace was a frame.
+file: crates/cortex-index/src/extract/brace.rs
+in: Reader::pop
+find: self.anonymous = below;
+replace: self.anonymous = 0;
+caught-by:
+    cortex-index extract::tests::blocks_that_open_no_definition_nest_as_the_definitions_around_them
+
+[break] a-head-is-made-from-the-whole-line
+rule: A head is made from at most LINE_BYTES of each line, so a line of megabytes is not copied whole, several times over, to keep 160 characters of it.
+file: crates/cortex-index/src/extract/brace.rs
+in: run
+find: let head_part = prefix(part, LINE_BYTES);
+replace: let head_part = part;
+caught-by:
+    cortex-index::it outlines::outlining_a_name_of_a_megabyte_takes_little_memory
+
+[break] markdown-keeps-every-heading
+rule: Markdown keeps only its first MAX_ENTRIES headings, so a file of a million headings costs no more memory than one of a thousand.
+file: crates/cortex-index/src/extract/markdown.rs
+in: Headings::add
+find: if self.kept.len() < MAX_ENTRIES {
+replace: if self.kept.len() < usize::MAX {
+caught-by:
+    cortex-index::it outlines::outlining_a_megabyte_of_headings_takes_little_memory
+
+[break] markdown-counts-depth-from-the-kept-headings-only
+rule: Depth 0 is the shallowest level in the whole file, headings past the cap included.
+file: crates/cortex-index/src/extract/markdown.rs
+in: Headings::add
+find: self.shallowest = Some(self.shallowest.map_or(level, |least| least.min(level)));
+replace: if self.kept.len() < MAX_ENTRIES { self.shallowest = Some(self.shallowest.map_or(level, |least| least.min(level))); }
+caught-by:
+    cortex-index extract::tests::markdown_keeps_its_first_headings_and_the_files_shallowest_level
+
+[break] markdown-past-its-cap-does-not-say-so
+rule: An outline of the first MAX_ENTRIES headings of more says it is truncated.
+file: crates/cortex-index/src/extract/markdown.rs
+in: Headings::add
+find: self.more = true;
+replace:
+caught-by:
+    cortex-index extract::tests::markdown_keeps_its_first_headings_and_the_files_shallowest_level
+
+[break] the-fallback-keeps-every-line
+rule: The fallback looks at each non-blank line beside the next and keeps none, so a file of a million short lines costs no more memory than one of ten.
+file: crates/cortex-index/src/extract/indent.rs
+in: fallback
+find: .peekable();
+replace: .collect::<Vec<_>>().into_iter().peekable();
+caught-by:
+    cortex-index::it outlines::outlining_a_megabyte_of_short_lines_takes_little_memory
+
+[break] the-builder-holds-no-more-than-the-cap
+rule: The builder holds one entry more than the cap, so that `truncated` is said only when more definitions than the cap survive: past the cap, a C prototype that gets no body, or a typedef that gets no name, is no cut.
+file: crates/cortex-index/src/extract/mod.rs
+in: Builder::push
+find: if self.entries.len() > MAX_ENTRIES {
+replace: if self.entries.len() >= MAX_ENTRIES {
+caught-by:
+    cortex-index extract::tests::an_outline_is_truncated_only_when_more_definitions_than_the_cap_survive
+
+[break] a-typedef-that-gets-no-name-keeps-its-place
+rule: A `typedef struct { … }` that gets no name at its close is taken out there, so the definition after it can have its place under the cap.
+file: crates/cortex-index/src/extract/brace.rs
+in: run
+find: reader.out.drop_last(index);
+replace:
+caught-by:
+    cortex-index extract::tests::an_outline_is_truncated_only_when_more_definitions_than_the_cap_survive
+
+[break] a-typedef-whose-body-never-comes-keeps-its-place
+rule: A definition whose name was to come at its body's close, and whose body never comes, is taken out when the next definition begins.
+file: crates/cortex-index/src/extract/brace.rs
+in: Reader::without_body
+find: if done.needs_body || nameless {
+replace: if done.needs_body {
+caught-by:
+    cortex-index extract::tests::an_outline_is_truncated_only_when_more_definitions_than_the_cap_survive
+
+[break] a-kotlin-name-in-backticks-is-not-read
+rule: A Kotlin function named in backticks is outlined, its name being what is between them.
+file: crates/cortex-index/src/extract/langs.rs
+in: Kotlin::recognise
+find: if let Some(tick) = after.find('`')
+replace: if let Some(tick) = after.find('`').filter(|_| false)
+caught-by:
+    cortex-index extract::tests::a_kotlin_function_named_in_backticks_is_outlined
+    cortex-index::it outlines::kotlin
