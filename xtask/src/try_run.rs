@@ -351,7 +351,9 @@ impl Inputs {
         } else {
             "release"
         };
-        let mut command: Vec<String> = ["test", "--cargo-profile", profile, "--profile", "ci"]
+        // nextest's `perf` profile: a measurement's limit is half an hour,
+        // where tier 2's `ci` limit stops a test at 10 s.
+        let mut command: Vec<String> = ["test", "--cargo-profile", profile, "--profile", "perf"]
             .map(str::to_owned)
             .to_vec();
         for package in packages {
@@ -685,7 +687,7 @@ mod tests {
         assert_eq!(
             try_command(&["--command", "perf -p cortex-index"]),
             Ok(format!(
-                "test --cargo-profile release --profile ci -p cortex-index {tests}"
+                "test --cargo-profile release --profile perf -p cortex-index {tests}"
             ))
         );
         // The workflow's own default profile is `ci`: still a release build.
@@ -697,13 +699,13 @@ mod tests {
                 "ci"
             ]),
             Ok(format!(
-                "test --cargo-profile release --profile ci -p cortex-index -p cortex-session {tests}"
+                "test --cargo-profile release --profile perf -p cortex-index -p cortex-session {tests}"
             ))
         );
         assert_eq!(
             try_command(&["--command", "perf -p cortex-index", "--profile", "dist"]),
             Ok(format!(
-                "test --cargo-profile dist --profile ci -p cortex-index {tests}"
+                "test --cargo-profile dist --profile perf -p cortex-index {tests}"
             ))
         );
         // A name after the crate narrows the tests: nextest takes a test that
@@ -711,7 +713,7 @@ mod tests {
         assert_eq!(
             try_command(&["--command", "perf -p cortex-index warm"]),
             Ok(format!(
-                "test --cargo-profile release --profile ci -p cortex-index {tests} warm"
+                "test --cargo-profile release --profile perf -p cortex-index {tests} warm"
             ))
         );
         // Without a crate it is step 20's measurement, as it was.

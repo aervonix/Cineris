@@ -204,6 +204,7 @@ fn limit_of(profile: &str, test: &str) -> u64 {
     let system = test.starts_with("sys_") || test.contains("::sys_");
     match (profile, system) {
         ("properties", false) => 300,
+        ("perf", _) => 1800,
         (_, true) => 60,
         (_, false) => 10,
     }
@@ -493,12 +494,14 @@ mod tests {
         assert_eq!(limit_of("default", "shell::sys_quoting"), 60);
         assert_eq!(limit_of("ci", "sys_version"), 60);
         assert_eq!(limit_of("properties", "cases::a_property"), 300);
+        assert_eq!(limit_of("perf", "perf::perf_a_tree"), 1800);
         // The same numbers as the nextest configuration's.
         let configuration = include_str!("../../../.config/nextest.toml");
         for line in [
             r#"slow-timeout = { period = "2s", terminate-after = 5 }"#,
             r#"slow-timeout = { period = "10s", terminate-after = 6 }"#,
             r#"slow-timeout = { period = "60s", terminate-after = 5 }"#,
+            r#"slow-timeout = { period = "60s", terminate-after = 30 }"#,
         ] {
             assert!(
                 configuration.lines().any(|each| each.trim() == line),

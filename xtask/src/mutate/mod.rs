@@ -132,6 +132,7 @@ fn load_files(known: &[Break], files: &[std::path::PathBuf]) -> Result<Vec<Break
         .iter()
         .filter_map(|one| one.id.split('/').next())
         .collect();
+    let mut given: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut breaks = Vec::new();
     for file in files {
         let text = std::fs::read_to_string(file)
@@ -145,6 +146,15 @@ fn load_files(known: &[Break], files: &[std::path::PathBuf]) -> Result<Vec<Break
                 "{} has the name of a list of {}/: `{name}`. Name it otherwise.",
                 file.display(),
                 list::DIRECTORY
+            ));
+        }
+        if let Some(name) = list.first().and_then(|one| one.id.split('/').next())
+            && !given.insert(name.to_owned())
+        {
+            return Err(format!(
+                "{} has the name of another list given with `--file`: `{name}`. Two lists of \
+                 one name would give two breaks one name: name one otherwise.",
+                file.display()
             ));
         }
         breaks.extend(list);
@@ -1471,6 +1481,20 @@ replace: 5
             "{error}"
         );
         assert!(super::load_files(&known, &[dir.join("missing.breaks")]).is_err());
+        // Two lists of one name, from two folders.
+        let other = dir.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(
+            other.join("review-16.breaks"),
+            "[break] c\nrule: R.\nfile: x.rs\nfind: e\nreplace: f\n",
+        )
+        .unwrap();
+        let error = super::load_files(&known, &[review.clone(), other.join("review-16.breaks")])
+            .unwrap_err();
+        assert!(
+            error.contains("another list given with `--file`: `review-16`"),
+            "{error}"
+        );
         assert_eq!(
             Request::parse(&strings(&["--file", "x.breaks"]))
                 .unwrap()
