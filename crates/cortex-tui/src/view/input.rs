@@ -29,6 +29,9 @@ use crate::view::Look;
 /// What the empty input box says.
 pub const PLACEHOLDER: &str = "Describe a task, or ask a question";
 
+/// What the empty input box says while a turn runs (screens 1b to 1d).
+pub const RUNNING_PLACEHOLDER: &str = "Type to steer this turn";
+
 /// The input box's lines, and where the cursor is in them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputBox {
@@ -66,7 +69,18 @@ pub fn input(input: &Input, look: &Look, width: usize) -> InputBox {
     );
     let mut lines = vec![frame.top()];
     if editor.is_empty() {
-        let row = Line::from(mark).with(Span::new(PLACEHOLDER, look.theme.style(Token::Hint)));
+        // While a box or a panel has the focus the box holds its mark alone
+        // (screen 4): typing would not reach it.
+        let row = if input.focus().on_input() {
+            let placeholder = if input.running() {
+                RUNNING_PLACEHOLDER
+            } else {
+                PLACEHOLDER
+            };
+            Line::from(mark).with(Span::new(placeholder, look.theme.style(Token::Hint)))
+        } else {
+            Line::from(mark)
+        };
         lines.push(frame.row(&row, Style::PLAIN));
         lines.push(frame.bottom(None));
         return InputBox {

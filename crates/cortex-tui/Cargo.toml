@@ -23,6 +23,9 @@ demo = []
 cortex-protocol.workspace = true
 cortex-base.workspace = true
 cortex-term.workspace = true
+# The payloads of tool results and the arguments of tool calls, which the
+# protocol carries as JSON values.
+serde_json.workspace = true
 syntect = { workspace = true, optional = true }
 
 [dev-dependencies]

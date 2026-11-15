@@ -32,6 +32,8 @@
 //! | [`input`] | [`Input`](input::Input): the editor, its menus, history and focus driven by events | 21 |
 //! | [`external`] | The external-editor hand-off | 21 |
 //! | `view::input`, `view::menu` | The input box and the menus | 21 |
+//! | [`app`] | The application: the loop, the state, the link to the core, the dialogs | 23 |
+//! | `view::dialog` | The dialogs in the input box's place | 23 |
 //!
 //! Each module's code is in its own files, so that the steps that build
 //! this crate side by side do not edit the same ones.
@@ -55,6 +57,9 @@ pub mod history;
 pub mod input;
 pub mod keys;
 pub mod paste;
+
+// Step 23: the application.
+pub mod app;
 
 #[cfg(test)]
 mod testing;

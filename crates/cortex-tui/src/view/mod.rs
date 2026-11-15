@@ -28,6 +28,9 @@ pub mod round;
 pub mod input;
 pub mod menu;
 
+// Step 23: the application's dialogs.
+pub mod dialog;
+
 pub use blocks::{error, notice, reasoning, reasoning_live, turn_summary, user};
 pub use header::{Header, header};
 pub use hint::{Hint, HintRow, RunningKeys, Speed, hint_row};

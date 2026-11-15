@@ -406,6 +406,7 @@ dependencies = [
  "cortex-protocol",
  "cortex-term",
  "cortex-testkit",
+ "serde_json",
  "syntect",
 ]
 
