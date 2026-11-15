@@ -54,8 +54,12 @@ fn lines(dir: &StatsDir) -> Vec<Line> {
 
 /// A scale that is small and has a little of everything: every day worked,
 /// every provider, the fast tier, both billings, failed requests and a
-/// judge, at rates far above any real user's, so that three days show every
-/// kind a month can hold, and a test of the kinds does not need a month.
+/// judge, at rates far above any real user's, so that a day or two show
+/// the roles, speeds, billings, providers, failures and cache reads a month
+/// holds, and a test of them does not need a month. The kinds only a whole
+/// month shows (every outcome, verification and cache difference, a summary
+/// on the fast role, a speed's fallback) are left to the ignored
+/// `perf_a_heavy_month_has_every_kind_priced`.
 const MIXED: Scale = Scale {
     name: "mixed",
     weekday_active: 100,
@@ -561,7 +565,8 @@ fn assert_costs_are_priced(read: &[Line], at_least: u64) {
 
 // The measurements. Each makes whole months, which is what costs: they are
 // ignored in every ordinary run, and run by hand with
-// `cargo xtask test -p cortex-stats --run-ignored only perf_`. They print
+// `cargo xtask test -p cortex-stats --run-ignored only perf_ --no-capture`,
+// or on a runner with `try -f command="perf -p cortex-stats"`. They print
 // their times and assert on none of them.
 
 /// Light, typical and heavy months, made and timed, each read back and
