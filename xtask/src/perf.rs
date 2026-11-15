@@ -92,14 +92,56 @@ fn demo_binary(name: &str) -> PathBuf {
 
 /// `cargo xtask perf [--runs N] [--seconds N] [--json PATH] [--only
 /// term|editor|views]`.
+/// A glyph set a demo is run in, and how it is chosen: on Unix the
+/// terminal layer takes Unicode from a locale that names UTF-8
+/// (`cortex_term::Capabilities::detect`), so each demo runs under one and
+/// under the plain `C` locale. On Windows the console decides, and ConPTY
+/// gets the ASCII set: there is one run, in what the console gives.
+struct GlyphSet {
+    name: &'static str,
+    locale: Option<&'static str>,
+    /// What is added to a `--json` path for this run.
+    suffix: &'static str,
+}
+
+fn glyph_sets() -> Vec<GlyphSet> {
+    if cfg!(windows) {
+        vec![GlyphSet {
+            name: "the console's (ASCII under ConPTY)",
+            locale: None,
+            suffix: "",
+        }]
+    } else {
+        vec![
+            GlyphSet {
+                name: "Unicode",
+                locale: Some("C.UTF-8"),
+                suffix: "",
+            },
+            GlyphSet {
+                name: "ASCII",
+                locale: Some("C"),
+                suffix: ".ascii",
+            },
+        ]
+    }
+}
+
 pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let request = parse(arguments)?;
     let all = request.only.is_none();
-    if all || request.only == Some(Only::Term) {
-        terminal_demo(&request)?;
-    }
-    if all || request.only == Some(Only::Editor) {
-        editor_demo(&request)?;
+    for glyphs in glyph_sets() {
+        if all || request.only == Some(Only::Term) {
+            println!(
+                "\n== the terminal demo, in the {} glyph set ==",
+                glyphs.name
+            );
+            terminal_demo(&request, &glyphs)?;
+        }
+        if all || request.only == Some(Only::Editor) {
+            println!("\n== the editor demo, in the {} glyph set ==", glyphs.name);
+            editor_demo(&request, &glyphs)?;
+        }
     }
     if all || request.only == Some(Only::Views) {
         views()?;
@@ -108,7 +150,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
 }
 
 /// Step 20's demo against the TUI's budgets.
-fn terminal_demo(request: &Request) -> Result<()> {
+fn terminal_demo(request: &Request, glyphs: &GlyphSet) -> Result<()> {
     steps::cargo(&[
         "build",
         "--locked",
@@ -126,14 +168,21 @@ fn terminal_demo(request: &Request) -> Result<()> {
         .ok_or("the target directory's path is not Unicode")?;
     let runs = request.runs.map(|runs| runs.to_string());
     let seconds = request.seconds.map(|seconds| seconds.to_string());
+    let json = request
+        .json
+        .as_ref()
+        .map(|json| format!("{json}{}", glyphs.suffix));
     let mut variables = vec![("CORTEX_PERF_DEMO", demo)];
+    if let Some(locale) = glyphs.locale {
+        variables.push(("LC_ALL", locale));
+    }
     if let Some(runs) = &runs {
         variables.push(("CORTEX_PERF_RUNS", runs));
     }
     if let Some(seconds) = &seconds {
         variables.push(("CORTEX_PERF_SECONDS", seconds));
     }
-    if let Some(json) = &request.json {
+    if let Some(json) = &json {
         variables.push(("CORTEX_PERF_JSON", json));
     }
     outside::run_ignored(
@@ -154,7 +203,7 @@ fn views() -> Result<()> {
 }
 
 /// Step 21's editor demo against the key-latency budgets.
-fn editor_demo(request: &Request) -> Result<()> {
+fn editor_demo(request: &Request, glyphs: &GlyphSet) -> Result<()> {
     steps::cargo(&[
         "build",
         "--locked",
@@ -171,8 +220,14 @@ fn editor_demo(request: &Request) -> Result<()> {
         .to_str()
         .ok_or("the target directory's path is not Unicode")?;
     let seconds = request.seconds.map(|seconds| seconds.to_string());
-    let json = request.json.as_ref().map(|json| format!("{json}.editor"));
+    let json = request
+        .json
+        .as_ref()
+        .map(|json| format!("{json}.editor{}", glyphs.suffix));
     let mut variables = vec![("CORTEX_PERF_EDITOR_DEMO", demo)];
+    if let Some(locale) = glyphs.locale {
+        variables.push(("LC_ALL", locale));
+    }
     if let Some(seconds) = &seconds {
         variables.push(("CORTEX_PERF_SECONDS", seconds));
     }
