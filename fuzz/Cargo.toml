@@ -1,5 +1,6 @@
-# Coverage-guided fuzzing of the stream decoders (docs/testing-and-ci.md,
-# "Not blocking"). Run by the nightly workflow, and by hand:
+# Coverage-guided fuzzing of the stream decoders and the outline extractors
+# (docs/testing-and-ci.md, "Not blocking"). Run by the nightly workflow, and
+# by hand:
 #
 #   cargo xtask fuzz [--seconds N] [TARGET…]
 #
@@ -9,7 +10,7 @@
 # toolchain file, which pins the nightly to a date.
 [package]
 name = "cortex-fuzz"
-description = "Fuzz targets for the stream decoders of Cortex-Harness. Not shipped."
+description = "Fuzz targets for the stream decoders and the outline extractors of Cortex-Harness. Not shipped."
 version = "0.0.0"
 edition = "2024"
 license = "MIT"
@@ -22,6 +23,7 @@ cargo-fuzz = true
 doctest = false
 
 [dependencies]
+cortex-index = { path = "../crates/cortex-index" }
 cortex-llm = { path = "../crates/cortex-llm", default-features = false }
 cortex-protocol = { path = "../crates/cortex-protocol" }
 libfuzzer-sys = "0.4.13"
@@ -44,6 +46,13 @@ bench = false
 [[bin]]
 name = "openai_chat_decoder"
 path = "fuzz_targets/openai_chat_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extractors"
+path = "fuzz_targets/extractors.rs"
 test = false
 doc = false
 bench = false
