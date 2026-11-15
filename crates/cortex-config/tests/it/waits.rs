@@ -127,6 +127,33 @@ fn a_length_of_time_is_tightened_against_the_one_in_effect_in_any_units() {
     assert_eq!(layer_of(&loaded, "limits.turn.time"), "project");
 }
 
+/// What the backoff is multiplied by lengthens every later wait, so a
+/// project's file may lower it and may not raise it (a twin found by the
+/// review of this fix), compared as a number.
+#[test]
+fn a_project_may_lower_the_backoff_factor_and_not_raise_it() {
+    let mut machine = Machine::new("waits_factor");
+    machine.layer(LayerKind::Project, "[retry]\nbackoff_factor = 1.5\n");
+    let loaded = machine.load();
+    assert_eq!(value(&loaded, "retry.backoff_factor"), "1.5");
+    assert!(loaded.diagnostics.is_empty(), "{:?}", machine.said(&loaded));
+    machine.layer(LayerKind::Project, "[retry]\nbackoff_factor = 10\n");
+    for trusted in [false, true] {
+        if trusted {
+            machine.trusted();
+        }
+        let loaded = machine.load();
+        assert_eq!(value(&loaded, "retry.backoff_factor"), "2.0");
+        assert_eq!(layer_of(&loaded, "retry.backoff_factor"), "default");
+        let said = machine.said(&loaded);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].contains("10 is above the 2.0 in effect"),
+            "{said:?}"
+        );
+    }
+}
+
 /// Shortening stops at the floor: a project's file that sets a timeout a
 /// request could never meet is refused, as the user's own would be.
 #[test]
@@ -190,9 +217,9 @@ const UNBOUNDED: [(&str, &str); 4] = [
         "a limit stops on purpose and says so",
     ),
     ("limits.day.time", "a limit stops on purpose and says so"),
-    // The index holds it to at least 250 ms where it reads it, and a pass
-    // that runs out carries on when the session is idle: no request waits
-    // for it.
+    // The core holds it to at least 250 ms where it starts the index
+    // (`cortex-core`'s `repo_map`), and a pass that runs out carries on when
+    // the session is idle: no request waits for it.
     (
         "index.pass_time",
         "held to 250 ms at least where it is read",
@@ -208,7 +235,21 @@ fn every_number_a_project_can_set_has_a_range() {
             _ => false,
         }
     }
-    let mut flagged: Vec<String> = schema::keys()
+    let keys = schema::keys();
+    // A setting declared as a named collection of values (a `BTreeMap` of
+    // lengths of time, say) has no kind of its own here, and would pass
+    // the check unseen. There is none: one that comes is given a kind, or
+    // the check is taught to look inside it.
+    let unread: Vec<&str> = keys
+        .iter()
+        .filter(|key| key.effect.is_some() && key.kind.is_none())
+        .map(|key| key.path.as_str())
+        .collect();
+    assert!(
+        unread.is_empty(),
+        "settings this check cannot read: {unread:?}"
+    );
+    let mut flagged: Vec<String> = keys
         .into_iter()
         .filter(|key| key.trust != Trust::UserOnly && key.range.is_none())
         .filter(|key| key.kind.as_ref().is_some_and(counted))

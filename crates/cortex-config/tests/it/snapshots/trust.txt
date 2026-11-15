@@ -30,7 +30,7 @@ models.*                           user only
 http.*                             user only
 retry.attempts                     raises cost
 retry.backoff_base                 tighten only: a lower limit is a preference, a higher one user only
-retry.backoff_factor               preference
+retry.backoff_factor               tighten only: a lower limit is a preference, a higher one user only
 retry.backoff_cap                  tighten only: a lower limit is a preference, a higher one user only
 retry.max_wait                     tighten only: a lower limit is a preference, a higher one user only
 retry.idle_timeout                 tighten only: a lower limit is a preference, a higher one user only

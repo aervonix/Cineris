@@ -27,8 +27,9 @@ pub fn reference_page() -> String {
          `ms`, `s`, `m`, `h`, `d`). A list marked *joined* is added to by every layer; any other \
          list, like any other value, is replaced by a higher layer. **A range binds every \
          file,** the user's own included: a value outside it is an error, and the file is \
-         refused. A wait can be no shorter than its floor anywhere (`retry.max_wait`, for one, is \
-         never below a minute), so that no file can make every request fail.\n\
+         refused. A wait can be no shorter than its floor anywhere \
+         (`retry.first_event_timeout`, for one, is never below 30 seconds), so that no file can \
+         make every request fail.\n\
          - **From a project.** What happens to the key in a project's `.cortex/config.toml` or \
          `.cortex/config.local.toml`. *preference*: applied always. *runs code*, *widens \
          access* and *raises cost*: applied only after the user has trusted the project, and \
