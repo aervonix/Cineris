@@ -400,8 +400,10 @@ pub(crate) fn ci_times(arguments: &[String]) -> Result<()> {
 The first writes the section \"On the pull request\" of a step's ci.md (with
 --write), and prints it: which pull request and which main, each job's time,
 and each tier's time above the start against its budget. The second does the
-same for the section \"Both trees on one runner\" from a try run made with
--f against=REF, and prints the pull request's CI section from it.";
+same for each OS's section \"<OS>, both trees on one runner\" from a try run
+made with -f against=REF, and prints the pull request's CI section from it.
+What it writes goes between two marks, and writing again replaces only that;
+a section of that name it did not write is refused, and nothing is written.";
     let mut run = None;
     let mut ab = None;
     let mut against = None;

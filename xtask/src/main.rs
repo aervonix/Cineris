@@ -77,8 +77,8 @@ Checks and tests
                     ci.md, read through gh; --write puts them in its section
                     `On the pull request`.
   ci-times --ab TRY-RUN [--against REF] [--write FILE]
-                    A try A/B run's tiers on both sides, for the section
-                    `Both trees on one runner`, and the PR's CI section.
+                    A try A/B run's tiers on both sides, for each OS's section
+                    `<OS>, both trees on one runner`, and the PR's CI section.
   rules             The repo-rule checks alone: no home-directory paths, the
                     crate dependency rules, docs/dependencies.md, workflows,
                     links and the layout of the step records.

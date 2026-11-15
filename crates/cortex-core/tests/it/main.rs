@@ -603,9 +603,9 @@ impl Front {
                     }
                     // Resolved meanwhile (another client answered it, an
                     // interruption withdrew it): not this front's to answer.
-                    if self.open_approval().is_none() {
+                    let Some((_, request)) = self.open_approval() else {
                         continue;
-                    }
+                    };
                     panic!(
                         "the turn asked for an approval the test did not expect, and would wait \
                          for its answer for ever: tool `{}`, {:?}. Take it up with \

@@ -322,3 +322,21 @@ replace:
 packages: cortex-core
 caught-by:
     approvals::a_request_another_client_answered_is_not_unexpected
+
+[break] a-link-in-fenced-code-lists-an-item
+rule: A link to an open item inside fenced code or an HTML comment in the index lists nothing.
+file: xtask/src/rules/layout.rs
+in: unlisted
+find: let index = &prose(index);
+replace:
+caught-by:
+    rules::layout::tests::an_item_the_index_does_not_list_once_is_named
+
+[break] a-fenced-heading-starts-a-section
+rule: A heading inside fenced code is not one, when ci-times looks for a section.
+file: xtask/src/records.rs
+in: is_heading
+find: *fenced = !*fenced;
+replace:
+caught-by:
+    records::tests::a_section_is_written_between_its_marks_and_the_rest_of_the_page_is_kept

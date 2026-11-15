@@ -102,8 +102,6 @@ fn play(case: &str) {
 }
 
 /// Runs `case` in a pseudo-terminal, and returns its exit status and
-/// whether it said it survived.
-/// Runs `case` in a pseudo-terminal, and returns its exit status and
 /// whether it said it survived. A case expected to survive is waited for
 /// until it says so: the program can end before its last output is read.
 #[cfg(unix)]

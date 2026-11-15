@@ -398,15 +398,20 @@ pub(crate) fn with_section(text: &str, heading: &str, body: &str) -> Result<Stri
     Ok(out)
 }
 
-/// Writes `body` as the section `heading` of `file`.
-fn write_section(file: &Path, heading: &str, body: &str) -> Result<()> {
-    let text = std::fs::read_to_string(file)
+/// Writes each `(heading, body)` as a section of `file`, all of them or,
+/// when one is refused, none.
+fn write_sections(file: &Path, sections: &[(String, String)]) -> Result<()> {
+    let mut text = std::fs::read_to_string(file)
         .map_err(|error| format!("could not read {}: {error}", file.display()))?;
-    let written = with_section(&text, heading, body)
-        .map_err(|error| format!("{}: {error}", file.display()))?;
-    std::fs::write(file, written)
+    for (heading, body) in sections {
+        text = with_section(&text, heading, body)
+            .map_err(|error| format!("{}: {error}. Nothing was written.", file.display()))?;
+    }
+    std::fs::write(file, text)
         .map_err(|error| format!("could not write {}: {error}", file.display()))?;
-    println!("wrote the section \"{heading}\" of {}", file.display());
+    for (heading, _) in sections {
+        println!("wrote the section \"{heading}\" of {}", file.display());
+    }
     Ok(())
 }
 
@@ -474,15 +479,17 @@ pub(crate) fn ab_times(run: u64, against: &str, write: Option<&Path>) -> Result<
             "run {run} kept no `try-linux` or `try-windows` artifact"
         ));
     }
-    for one in &compared {
-        let section = ab_section(run, against, one);
-        let heading = ab_heading(one.os);
+    let sections: Vec<(String, String)> = compared
+        .iter()
+        .map(|one| (ab_heading(one.os), ab_section(run, against, one)))
+        .collect();
+    for (heading, section) in &sections {
         println!("## {heading}\n\n{section}");
-        if let Some(file) = write {
-            write_section(file, &heading, &section)?;
-        }
     }
     println!("{}", pr_ab_section(run, &compared));
+    if let Some(file) = write {
+        write_sections(file, &sections)?;
+    }
     Ok(())
 }
 
@@ -491,7 +498,7 @@ pub(crate) fn pr_times(runs: &[Measured], pr: Option<u64>, write: Option<&Path>)
     let section = pr_section(runs, pr);
     println!("## {PR_SECTION}\n\n{section}");
     if let Some(file) = write {
-        write_section(file, PR_SECTION, &section)?;
+        write_sections(file, &[(PR_SECTION.to_owned(), section)])?;
     }
     Ok(())
 }
@@ -666,17 +673,26 @@ mod tests {
         assert!(error.contains("ci-times did not write it"), "{error}");
         // A heading inside a fenced block is not one.
         let fenced = format!(
-            "# T\n\n## On the pull request\n\n{OPEN_MARK}\nold\n{CLOSE_MARK}\n\n```text\n## \
-             not a heading\n```\n"
+            "# T\n\n```text\n## On the pull request\n```\n\n## On the pull request\n\n{OPEN_MARK}\n\
+             old\n{CLOSE_MARK}\n\n```text\n## not a heading\n```\n"
         );
         let replaced = with_section(&fenced, PR_SECTION, "new").unwrap();
         assert!(
             replaced.contains("```text\n## not a heading\n```\n"),
             "{replaced}"
         );
+        assert!(
+            replaced.starts_with("# T\n\n```text\n## On the pull request\n```\n"),
+            "{replaced}"
+        );
+        assert!(
+            replaced.contains("\nnew\n") && !replaced.contains("\nold\n"),
+            "{replaced}"
+        );
+        // The fenced heading and the real one: nothing was added.
         assert_eq!(
             replaced.matches("## On the pull request").count(),
-            1,
+            2,
             "{replaced}"
         );
     }

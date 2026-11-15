@@ -29,7 +29,8 @@ usage: cargo xtask replace FILE (--from CODE | --from-file PATH)
                                                          `--script --help`)
 
 Replaces the code that --from matches, by its tokens, with --to, as text.
-White space and comments do not count in the match, so it holds however
+White space and comments do not count in the match (a --from that begins or
+ends with a comment is refused: match such text with --text), so it holds however
 rustfmt has laid the code out. The match must be in FILE exactly once, or
 inside the item --in names (`Round::spawn`; an impl block answers to every
 name in its header); --occurrence N picks one of several, counted from 1.

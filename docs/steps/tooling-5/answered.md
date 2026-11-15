@@ -114,8 +114,19 @@ A reviewer on Opus 5.5, which had not seen the session's reasoning, read the who
 | Smaller: the index rule counted a link in fenced code or a comment; `budget_text` wrote the system tier's budgets by hand; `download_root` lost its doc comment; `PendingInterrupt` could be dropped on another thread; the records listed a snapshot that did not change, and a question twice. | Each fixed; the first with a test. |
 | Behaviours no test held: the profile's file name, `--like-runner`'s thread count, `write_all`'s rollback, `ci-times`' arguments, the A/B reports' names, the `Front`'s settle before it fails. | Tests for the file name, the A/B section and the resolved request; the others are under "Gaps" below. |
 
+A second review, of the fixes alone, found the path keying sound (a missing file, a link, Windows' `\\?\` forms) and the workflow's expression safe. What it found:
+
+| Finding | Done |
+|---|---|
+| Two of the fixes' tests passed with the fix taken out: the index's link in fenced code and a comment (two hidden links made one "listed twice" finding either way), and the section search's fenced heading (it came after the marks). | Each case on its own, asserting the message; the fenced heading put before the real one. A break for each, both caught. |
+| The docs and help still described one A/B section, and a `--write` that replaces the whole section; nothing said a token match may not begin or end with a comment. | `testing-and-ci.md`, `CONTRIBUTING.md`, `xtask`'s help and `ci-times`' and `replace`'s usage say it. |
+| One more doubled doc comment (`signals.rs`), from a fix made after the first review read the diff. | Fixed; a scan of every changed file finds no other. |
+| `ci-times --ab --write` wrote the first OS's section before refusing the second. | All sections or none. |
+| The core `Front` could name the request that was resolved, not the one still open, when it failed. | It names the one still open. |
+
 ## Gaps
 
 - **Item 1's target is not met on the step branch.** It is met by the split of the test job (above), which is the owner's to decide.
 - **Not held by a test:** that a fake timer's wait is not a span of the time profile; that `--like-runner` runs at four test threads; `replace --script`'s rollback when a rename fails part way; `ci-times`' refusal of `--ab` with a run; how the A/B reports are found in a `try` run's artifact (exercised by hand on run 43663690282).
 - **The runner estimate on another tree** is to be measured on this branch's own A/B, and recorded in `ci.md`.
+- **Left from the reviews,** in three open items ([tests-the-fifth-tooling-step-left-unwritten](../../outstanding/tests-the-fifth-tooling-step-left-unwritten.md), [replace-and-the-comments-beside-a-match](../../outstanding/replace-and-the-comments-beside-a-match.md), [a-retried-tests-standard-error-in-the-report](../../outstanding/a-retried-tests-standard-error-in-the-report.md)), none of which makes a check pass what it should catch: no test holds that `turns()` looks again after settling (the resolution is usually drained before the first look); a `--to` that begins with a comment, on code with one, still stacks the two (adding a comment is a real use); on Windows, a read-only file's `.replace-new` may be left if its rename fails; `stress`'s copy of the timeout report's first words is not tied to `watch`'s by a test; and a retried test's standard error is read from its first attempt.
