@@ -350,6 +350,26 @@ fn check(action: Action, key: &str) {
             };
             assert_eq!(press(&mut input, key), expected, "{context}");
         }
+        // A dialog's keys are looked up in its own context, and the
+        // application's tests check what each answers (`app::dialog`).
+        Action::AllowOnce
+        | Action::AllowSession
+        | Action::AllowProject
+        | Action::Deny
+        | Action::DenyWithNote
+        | Action::ShowWhole => {
+            let map = cortex_tui::keys::KeyMap::defaults();
+            assert_eq!(
+                map.lookup(&[cortex_tui::keys::Context::Dialog], parse(key).unwrap()),
+                Some(action),
+                "{context}"
+            );
+            assert_eq!(
+                input().act(action),
+                Outcome::Ignored(action),
+                "{context}: the input never answers a dialog"
+            );
+        }
         other => panic!("{other} has a default key and no check here"),
     }
 }

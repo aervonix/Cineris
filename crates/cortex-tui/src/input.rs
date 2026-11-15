@@ -616,6 +616,15 @@ impl Input {
             }
             Action::FocusUp => self.on_focus(action, |target| Outcome::Move(target, false)),
             Action::FocusDown => self.on_focus(action, |target| Outcome::Move(target, true)),
+
+            // ---------------------------------------------------- dialog
+            // A dialog's keys are the dialog's: the input never has them.
+            Action::AllowOnce
+            | Action::AllowSession
+            | Action::AllowProject
+            | Action::Deny
+            | Action::DenyWithNote
+            | Action::ShowWhole => Outcome::Ignored(action),
         }
     }
 
