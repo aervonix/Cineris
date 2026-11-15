@@ -739,12 +739,12 @@
         },
         "backoff_factor": {
           "default": 2.0,
-          "description": "What the wait is multiplied by after each attempt.",
+          "description": "What the wait is multiplied by after each attempt. A project's file may lower it and may not raise it: a larger one makes every later wait longer.",
           "maximum": 10,
           "minimum": 1,
           "type": "number",
           "x-cortex-effect": "at once",
-          "x-cortex-trust": "preference"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
         },
         "first_event_timeout": {
           "default": "1m",

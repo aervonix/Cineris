@@ -235,3 +235,32 @@ find: Trust::Preference | Trust::RaisesCost | Trust::BySpeed
 replace: Trust::Preference | Trust::RaisesCost | Trust::BySpeed | Trust::TightenOnly
 caught-by:
     cortex-core::it settings::a_supervisor_cannot_start_a_session_above_the_level_it_could_set
+
+# ------------------------------------------------------- after the review
+
+[break] backoff-factor-a-preference
+rule: A project's file may lower retry.backoff_factor and may not raise it: a larger one makes every later wait longer.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 1..=10]
+replace: [Preference, Now, 1..=10]
+caught-by:
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it waits::a_project_may_lower_the_backoff_factor_and_not_raise_it
+
+[break] the-shell-default-past-the-longest
+rule: A command's default time limit is held to shell.max_timeout, so that the tool never offers a default it may not have.
+file: crates/cortex-core/src/assemble.rs
+in: shell_limits
+find: settings.shell.timeout.min(longest)
+replace: settings.shell.timeout
+caught-by:
+    cortex-core assemble::shell_limit_tests::a_commands_default_limit_is_held_to_the_longest
+
+[break] idle-timeout-of-a-day
+rule: retry.idle_timeout is at most an hour.
+file: crates/cortex-config/src/schema/sections.rs
+find: [TightenOnly, Now, 30_000..=3_600_000]
+occurrence: 1
+replace: [TightenOnly, Now, 30_000..=86_400_000]
+caught-by:
+    cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range

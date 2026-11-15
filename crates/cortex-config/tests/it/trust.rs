@@ -130,6 +130,7 @@ fn the_documented_classes_hold() {
         // them and may not make a session wait longer (the owner's
         // decision, 2026-11-15).
         "retry.backoff_base",
+        "retry.backoff_factor",
         "retry.backoff_cap",
         "retry.max_wait",
         "retry.idle_timeout",

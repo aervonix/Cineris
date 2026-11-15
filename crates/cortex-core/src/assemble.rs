@@ -865,6 +865,15 @@ fn confine_roots(inner: &Inner, loaded: &Loaded, root: &AbsPath) -> Vec<PathBuf>
     roots
 }
 
+/// A command's default time limit and the longest it may ask for. The
+/// default is held to the longest: a project's file may lower
+/// `shell.max_timeout` below `shell.timeout`, and the tool's description
+/// must not then offer the model a default it may not have.
+fn shell_limits(settings: &Settings) -> (std::time::Duration, std::time::Duration) {
+    let longest = settings.shell.max_timeout;
+    (settings.shell.timeout.min(longest), longest)
+}
+
 /// The shell tool's process runner.
 fn runner(inner: &Inner) -> Runner {
     if let Some(runner) = &inner.options.runner {
@@ -1274,9 +1283,10 @@ pub(crate) fn assemble(
     if let Some(shell) = shell {
         let mut env_remove = provider::key_variables(settings);
         env_remove.extend(settings.shell.env_remove.iter().cloned());
+        let (timeout, max_timeout) = shell_limits(settings);
         let config = ShellConfig {
-            timeout: settings.shell.timeout,
-            max_timeout: settings.shell.max_timeout,
+            timeout,
+            max_timeout,
             env_remove,
             detect_changes: true,
             // Without trust, the look for what a command changed does not
@@ -1605,5 +1615,27 @@ mod tests {
         assert!(super::cached_shell_is_usable(&shell, &roots));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod shell_limit_tests {
+    use std::time::Duration;
+
+    use cortex_config::Settings;
+
+    #[test]
+    fn a_commands_default_limit_is_held_to_the_longest() {
+        let mut settings = Settings::default();
+        settings.shell.max_timeout = Duration::from_secs(10);
+        assert_eq!(
+            super::shell_limits(&settings),
+            (Duration::from_secs(10), Duration::from_secs(10))
+        );
+        settings.shell.max_timeout = Duration::from_secs(600);
+        assert_eq!(
+            super::shell_limits(&settings),
+            (Duration::from_secs(120), Duration::from_secs(600))
+        );
     }
 }

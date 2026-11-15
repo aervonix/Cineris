@@ -860,6 +860,32 @@ mod tests {
 
     use super::*;
 
+    /// The built-in local servers' own stream timeouts lie inside the range
+    /// that a provider's entry, and the retry section, are held to: what the
+    /// harness gives a local server, a user's file can give it too.
+    #[test]
+    fn the_built_in_local_timeouts_are_inside_the_ranges() {
+        use cortex_llm::openai_chat::providers::{LOCAL_FIRST_EVENT, LOCAL_IDLE};
+        let keys = cortex_config::schema::keys();
+        for (key, value) in [
+            ("providers.*.idle_timeout", LOCAL_IDLE),
+            ("providers.*.first_event_timeout", LOCAL_FIRST_EVENT),
+            ("retry.idle_timeout", LOCAL_IDLE),
+            ("retry.first_event_timeout", LOCAL_FIRST_EVENT),
+        ] {
+            let (low, high) = keys
+                .iter()
+                .find(|known| known.path == key)
+                .and_then(|known| known.range)
+                .unwrap_or_else(|| panic!("{key} has no range"));
+            let milliseconds = value.as_secs_f64() * 1000.0;
+            assert!(
+                (low..=high).contains(&milliseconds),
+                "{key}: {value:?} is outside {low} ms to {high} ms"
+            );
+        }
+    }
+
     fn levels(effort: &str) -> Result<Option<String>, String> {
         // The fixture model has the levels low, medium and high.
         reasoning(

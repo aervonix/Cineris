@@ -305,8 +305,10 @@ settings! {
         /// raise it.
         [TightenOnly, Now, 100..=60_000]
         pub backoff_base: Duration = Duration::from_secs(1),
-        /// What the wait is multiplied by after each attempt.
-        [Preference, Now, 1..=10]
+        /// What the wait is multiplied by after each attempt. A project's
+        /// file may lower it and may not raise it: a larger one makes every
+        /// later wait longer.
+        [TightenOnly, Now, 1..=10]
         pub backoff_factor: f64 = 2.0,
         /// The longest wait between two attempts. From a second, so that the
         /// attempts span more than a moment, to five minutes, past which a
