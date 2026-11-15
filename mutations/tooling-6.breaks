@@ -871,3 +871,172 @@ find: if at > 0 && (whole.len() - at).is_multiple_of(3) {
 replace: if false {
 caught-by:
     cortex-testkit phases::tests::times_are_written_with_thousands_grouped
+
+# ------------------------------------------------ the stall check (item 2)
+
+[break] one-tests-timeout-is-a-stall
+rule: One test's timeout is never a stall: it takes three that ended together.
+file: xtask/src/stall.rs
+in: find
+find: if group.len() < AT_LEAST {
+replace: if group.is_empty() {
+packages: xtask
+caught-by:
+    stall::tests::one_tests_timeout_is_not_a_stall_nor_are_timeouts_apart
+
+[break] a-stall-of-timeouts-a-moment-apart-is-missed
+rule: Timeouts whose ends lie within 250 ms of each other are taken together, not only those that end in the same millisecond.
+file: xtask/src/stall.rs
+in: find
+find: while ends[last].0 - ends[first].0 > WINDOW_MS {
+replace: while ends[last].0 - ends[first].0 > 0 {
+packages: xtask
+caught-by:
+    stall::tests::timeouts_that_end_together_are_a_stall_whatever_time_each_started
+    stall::tests::the_largest_group_is_the_one_named
+
+[break] a-stall-is-judged-by-when-the-tests-started
+rule: A stall is told by when the tests were stopped (start plus time), whatever time each started.
+file: xtask/src/stall.rs
+in: find
+find: Some((start + took, format!("{} {}", failure.binary, failure.name)))
+replace: Some((start + took * 0, format!("{} {}", failure.binary, failure.name)))
+packages: xtask
+caught-by:
+    stall::tests::timeouts_that_end_together_are_a_stall_whatever_time_each_started
+
+[break] a-panic-counts-as-a-timeout
+rule: Only timeouts make a stall: a test that panicked beside them is not one.
+file: xtask/src/stall.rs
+in: find
+find: .filter(|failure| failure.kind.contains("timeout"))
+replace: .filter(|failure| !failure.kind.is_empty())
+packages: xtask
+caught-by:
+    stall::tests::timeouts_that_end_together_are_a_stall_whatever_time_each_started
+
+[break] a-stalled-baseline-is-not-run-again
+rule: mutate runs a set of tests with nothing broken that stalled again with one job, and says so.
+file: xtask/src/mutate/drive.rs
+in: drive_jobs
+find: if !stalled.is_empty() && runners.len() > 1 {
+replace: if !stalled.is_empty() && runners.len() > 1 && false {
+packages: xtask
+caught-by:
+    mutate::drive::tests::a_baseline_that_stalled_is_run_again_with_one_job_and_said_so
+
+[break] a-stalled-break-run-is-judged
+rule: A break's run that stalled is not a verdict: it is tried again by the next run.
+file: xtask/src/mutate/drive.rs
+in: drive_jobs
+find: Tested::Stalled(note) => Outcome::Broken(format!("the machine stalled. {note}"))
+replace: Tested::Stalled(_) => Outcome::Ran { failed: Vec::new(), seconds }
+packages: xtask
+caught-by:
+    mutate::drive::tests::a_break_whose_run_stalled_is_not_judged_and_is_tried_again
+
+[break] a-busy-disk-keeps-every-job
+rule: With every task waiting on the disk 10% or more of the last minute, a run of several jobs starts with one.
+file: xtask/src/mutate/mod.rs
+in: jobs_for
+find: pressure.full.1 >= PRESSURE_FOR_ONE_JOB
+replace: pressure.full.1 >= 100.0
+packages: xtask
+caught-by:
+    mutate::tests::a_busy_disk_makes_a_run_of_several_jobs_one
+
+[break] mutate-defaults-to-one-job
+rule: mutate runs two breaks at a time unless told otherwise.
+file: xtask/src/mutate/mod.rs
+find: const JOBS: usize = 2;
+replace: const JOBS: usize = 1;
+packages: xtask
+caught-by:
+    mutate::tests::jobs_are_a_number_from_one_to_sixteen
+    mutate::tests::a_request_is_read
+
+# ------------------------------------------- test --dependents (item 4)
+
+[break] an-indirect-dependent-is-left-out
+rule: test --dependents follows normal and build edges to any depth: a crate built on a crate built on the one named is in.
+file: xtask/src/dependents.rs
+in: dependents
+find: if built_on.len() == before {
+replace: if built_on.len() == before || true {
+packages: xtask
+caught-by:
+    dependents::tests::an_indirect_dependent_is_included
+
+[break] a-dev-dependency-is-passed-on
+rule: A dev-dependency is not passed on: the tests of a crate that uses another for its tests do not reach that crate's dependents.
+file: xtask/src/dependents.rs
+in: dependents
+find: && dependency.kind != DepKind::Dev
+replace:
+packages: xtask
+caught-by:
+    dependents::tests::a_dev_dependency_is_not_passed_on
+
+# ------------------------------------------ the slow-runner line (item 1)
+
+[break] a-slow-runner-is-called-usual
+rule: A Windows runner whose tests start in 11 ms or more is called a slow one, with what that implies.
+file: xtask/src/tiers.rs
+in: runner_line
+find: let speed = if ms >= slow_from {
+replace: let speed = if ms >= slow_from + 10.0 {
+packages: xtask
+caught-by:
+    tiers::tests::an_over_budget_run_says_what_its_runner_was
+
+# ------------------------------------------------ live by name (item 7)
+
+[break] a-headless-test-is-not-found-by-the-end-of-its-name
+rule: live --headless --test takes the end of a test's name.
+file: xtask/src/outside.rs
+in: headless_tests
+find: *test == want || own == want || own.ends_with(&format!("_{want}"))
+replace: *test == want || own == want
+packages: xtask
+caught-by:
+    outside::tests::a_headless_test_is_chosen_by_name_and_a_dry_run_sends_nothing
+
+[break] a-dry-run-needs-the-key
+rule: A dry run of the headless live tests needs no key file: it reads no key and sends nothing.
+file: xtask/src/outside.rs
+in: headless_tests
+find: if !dry_run {
+replace: if !dry_run || true {
+packages: xtask
+caught-by:
+    outside::tests::a_headless_test_is_chosen_by_name_and_a_dry_run_sends_nothing
+
+# --------------------- the shell tool, as the batched system tests see it
+
+[break] a-single-quote-is-not-escaped-for-a-posix-shell
+rule: A text is quoted for bash and sh with each single quote written as '\'' (the hostile texts, now one command with every text, on each shell).
+file: crates/cortex-tools/src/shell/kind.rs
+in: Shell::quote
+find: ShellKind::Bash | ShellKind::Posix => Ok(format!("'{}'", text.replace('\'', "'\\''"))),
+replace: ShellKind::Bash | ShellKind::Posix => Ok(format!("'{}'", text)),
+caught-by:
+    cortex-tools::it shell::bash::sys_hostile_arguments_arrive_unchanged
+    cortex-tools::it shell::sh::sys_hostile_arguments_arrive_unchanged
+
+[break] the-terminal-is-not-dumb
+rule: A command is told its terminal can do nothing (TERM=dumb): the environment, the listing and the input are read in one start.
+file: crates/cortex-tools/src/shell/env.rs
+find: ("TERM", "dumb")
+replace: ("TERM", "xterm")
+caught-by:
+    cortex-tools::it shell::bash::sys_the_environment_the_directory_and_the_input
+    cortex-tools::it shell::sh::sys_the_environment_the_directory_and_the_input
+
+[break] the-command-runs-where-the-harness-does
+rule: A command runs in the workspace root, or in `cwd`: read in the same start as its environment and input.
+file: crates/cortex-tools/src/process/mod.rs
+find: command.current_dir(&start.cwd).env_clear()
+replace: command.env_clear()
+caught-by:
+    cortex-tools::it shell::bash::sys_the_environment_the_directory_and_the_input
+    cortex-tools::it shell::sh::sys_the_environment_the_directory_and_the_input

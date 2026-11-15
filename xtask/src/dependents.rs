@@ -154,14 +154,16 @@ mod tests {
     /// base <- tools <- agent <- core <- cli; testkit dev-uses tools and is
     /// a dev-dependency of agent; stats is unrelated; gen build-depends on
     /// base; lone dev-depends on core.
+    /// Listed with each crate before what it depends on, so that one pass
+    /// over the list finds only the direct dependents.
     fn workspace() -> Vec<Package> {
         use DepKind::{Build, Dev, Normal};
         vec![
-            package("base", &[]),
-            package("tools", &[("base", Normal)]),
-            package("agent", &[("tools", Normal), ("testkit", Dev)]),
-            package("core", &[("agent", Normal)]),
             package("cli", &[("core", Normal)]),
+            package("core", &[("agent", Normal)]),
+            package("agent", &[("tools", Normal), ("testkit", Dev)]),
+            package("tools", &[("base", Normal)]),
+            package("base", &[]),
             package("testkit", &[("base", Normal), ("tools", Dev)]),
             package("stats", &[("base", Dev)]),
             package("gen", &[("base", Build)]),
