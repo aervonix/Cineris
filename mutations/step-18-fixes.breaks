@@ -572,7 +572,7 @@ caught-by:
 rule: The braces that opened nothing and are open below a definition's body are open again when that body closes: the nesting is what it was when each brace was a frame.
 file: crates/cortex-index/src/extract/brace.rs
 in: Reader::pop
-find: self.anonymous = below;
+find: self.anonymous = count;
 replace: self.anonymous = 0;
 caught-by:
     cortex-index extract::tests::blocks_that_open_no_definition_nest_as_the_definitions_around_them

@@ -151,12 +151,16 @@ const HEAD_LINES: usize = 4;
 struct Reader<'o> {
     out: &'o mut Builder,
     /// The open braces that opened a definition (or an `extern "C" {`
-    /// block), innermost last, each with the number of braces that opened
-    /// nothing open just below it.
-    stack: Vec<(Frame, usize)>,
+    /// block), innermost last.
+    stack: Vec<Frame>,
     /// The braces that opened nothing, open above the innermost frame of
     /// `stack`.
     anonymous: usize,
+    /// The braces that opened nothing and are open below a frame of
+    /// `stack`: the frame's place, and how many. Only a body opened while
+    /// a brace of its signature is still open makes one, so it is kept
+    /// apart and the frames stay small.
+    below: Vec<(usize, usize)>,
     /// The `Opaque` frames open, counted ones included.
     opaque: usize,
     /// The entries of the `Holds` frames on the stack, innermost last:
@@ -182,8 +186,11 @@ impl Reader<'_> {
             Frame::Holds { entry } => self.holds.push(entry),
             Frame::Transparent => {}
         }
-        let below = std::mem::take(&mut self.anonymous);
-        self.stack.push((frame, below));
+        if self.anonymous > 0 {
+            self.below
+                .push((self.stack.len(), std::mem::take(&mut self.anonymous)));
+        }
+        self.stack.push(frame);
     }
 
     fn pop(&mut self) -> Option<Frame> {
@@ -192,8 +199,13 @@ impl Reader<'_> {
             self.opaque = self.opaque.saturating_sub(1);
             return Some(Frame::Opaque { entry: None });
         }
-        let (frame, below) = self.stack.pop()?;
-        self.anonymous = below;
+        let frame = self.stack.pop()?;
+        if let Some(&(at, count)) = self.below.last()
+            && at == self.stack.len()
+        {
+            self.below.pop();
+            self.anonymous = count;
+        }
         match frame {
             Frame::Opaque { .. } => self.opaque = self.opaque.saturating_sub(1),
             Frame::Holds { .. } => {
@@ -259,6 +271,7 @@ pub(crate) fn run(mut language: Box<dyn Recogniser>, text: &str, out: &mut Build
         out,
         stack: Vec::new(),
         anonymous: 0,
+        below: Vec::new(),
         opaque: 0,
         holds: Vec::new(),
         pending: None,
