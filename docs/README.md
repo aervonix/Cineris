@@ -45,6 +45,7 @@ These docs are the specification that every build step works from. They were wri
 | [16-run-engine.md](architecture/16-run-engine.md) | The orchestration layer, parallel attempts, replay and evaluation, corrections as evaluation cases. |
 | [17-coordinator.md](architecture/17-coordinator.md) | The Coordinator: a Manager session running a team of Employee sessions. |
 | [18-usage.md](architecture/18-usage.md) | The `/usage` view: usage and cost over time, limits left, and usage recorded by other tools. |
+| [19-walking-the-workspace.md](architecture/19-walking-the-workspace.md) | Which directory walker `search`, `list`, `outline`, the repository index and the shell tool's look for changes use, with what options, and where the `ignore` crate's serial and parallel walkers differ (order, ignore-file names, when the permission gate is asked). |
 
 ### Quality
 

@@ -2,7 +2,7 @@
 
 A build session runs in a Claude Code worktree (`.claude/worktrees/<name>`). Claude Code then checks every shell command that names `git` before it runs it, and refuses one it "cannot verify stays inside the worktree". The refusal is a tool error, not a failed command: nothing ran.
 
-This page is what was found by trying, in the tooling-2 session on 2026-11-13, with Claude Code 2.1.323. Every row below was run as written, with a read-only or `--dry-run` git command. The guard is Claude Code's and may change with its version: when a form here is refused, try the next form down, and correct the page.
+This page is what was found by trying, in the tooling-2 session on 2026-11-13, with Claude Code 2.1.323. Every row below was run as written, with a read-only or `--dry-run` git command. The guard is Claude Code's and may change with its version: when a form here is refused, try the next form down, and correct the page. The rows and items added in the sixth tooling step were tried on 2026-11-15 with Claude Code 2.1.325, in a worktree-isolated agent session, whose refusals say "is isolated in the worktree" and give one of two reasons: "too complex to verify", or "runs a string through <word>".
 
 ## What it accepts and refuses
 
@@ -31,6 +31,17 @@ This page is what was found by trying, in the tooling-2 session on 2026-11-13, w
 
 Earlier sessions also saw `cargo nextest run -p cortex-base hash` refused, because `hash` is a shell builtin's name: spell such a filter `-E 'test(/ha.h::/)'`.
 
+**A word that is a shell builtin's name is refused anywhere in a command, as a plain argument, with no git in it** (found in wave 9, and tried again in the sixth tooling step):
+
+| Form | Result |
+|---|---|
+| `grep -n "complete" docs/shell-guard.md` | **refused**: "runs a string through complete" |
+| `grep -n "hash" docs/shell-guard.md` | **refused**: "runs a string through hash" |
+| `grep -n "complet" docs/shell-guard.md`, a prefix of the word | accepted |
+| `grep -n "compl[e]te" docs/shell-guard.md`, `grep -nE "ha[s]h" docs/shell-guard.md` | accepted: a bracket round one letter matches the same text and is not the builtin's name |
+
+Only the whole word is refused (`complet` is not). So search for such a word with a bracket in it, or with a prefix of it.
+
 ## The forms to use
 
 - **Edit and run.** Use the Edit or Write tool for a file. One heredoc a call. **For many edits across many files, `cargo xtask replace --script FILE` is the sanctioned way** (since the fifth tooling step): Write the script with the Write tool, then run the command as a call of its own. It makes every edit, Rust by its tokens and any other file by its text, or none of them, and names the edit that could not be made. Otherwise Write a script to `$CLAUDE_JOB_DIR/tmp/<name>.py` and run it as `python3 <file>`. Inside a script, `.git` can be written as it is. A heredoc to a file is fine when the redirect comes first: `cat > file <<'EOF'`, never `cat <<'EOF' > file`. For one Rust edit that must survive `rustfmt`, `cargo xtask replace FILE --from … --to …` matches by token.
@@ -45,6 +56,24 @@ Earlier sessions also saw `cargo nextest run -p cortex-base hash` refused, becau
 
 So never put a call in the same batch as a call it depends on: an edit and the commit of it, a commit and the push, a rebase and the push. Put independent reads in a batch; put each step that changes the tree or the remote in a call of its own, and read its result before the next.
 
+## What wave 9 added, and what was tried again
+
+Wave 9's sessions reported these refusals. The sixth tooling step tried each on 2026-11-15 (Claude Code 2.1.325, a worktree-isolated agent session), harmlessly: a `grep`, a `python3` that prints text, a loop that runs `gh` for something read-only.
+
+| Reported | Tried as | Result | The form that is accepted |
+|---|---|---|---|
+| A `grep` whose pattern holds `complete` or `hash` | `grep -n "complete" docs/shell-guard.md` | **Refused, reproduced**: "runs a string through complete" (and `hash` likewise) | A bracket round one letter: `grep -n "compl[e]te" …`, `grep -nE "ha[s]h" …`; or a prefix of the word. See above. |
+| A `python3 - <<'EOF'` whose text holds "git" | `python3 - <<'EOF'` with `print("git status")`; one with `subprocess.run(["git", "log", "--oneline", "-1"])`; one with `.git/info/exclude` and `git rev-parse` in a string | **Accepted; not reproduced.** | The same form, and always the form that holds up: Write the script to a file and run `python3 <file>`, which the guard does not read. |
+| A `for` loop around `gh` | `for r in 1 2; do gh pr view "$r" --json number; done`; the same with `gh api … --jq`; `gh auth status` twice; `while read -r r; do gh …; done`; `echo "run $(gh run list --limit 1 --json databaseId --jq '.[0].databaseId')"`; `ID=$(gh run list …); gh run view "$ID"` | **All accepted; not reproduced.** (A `for` loop around `git` was refused again in the same session.) | As tried. If a loop around `gh` is refused in a session, write it into a script file and run `sh <file>`. |
+| A long `cat > file <<'EOF'` script with no git in it | 28 lines with `for`, `if`/`elif`, `case`, `while`, `$(…)`, `$((…))` and `$?`, written by `cat > file <<'EOF'` from the worktree | **Accepted; not reproduced.** The refusals of this kind that were reproduced are the next two rows, which have a `&&` or a `cd` in front of the heredoc, not a long script. | One heredoc a call, `cat > file <<'EOF'` first on its line, or the Write tool. |
+| `mkdir -p DIR && cat > DIR/file <<'EOF'` | The same text, no git anywhere, from the worktree | **Refused**, "too complex to verify". Written as two lines (`mkdir -p DIR`, then `cat > DIR/file <<'EOF'`), **accepted**. | Separate the two commands with a newline, or Write the file. |
+| `cd DIR && cat > file <<'EOF'`, `DIR` outside the worktree | `cd /tmp/<dir> && cat > x <<'EOF'` | **Refused**, "too complex to verify". | A heredoc to a path written out (`cat > /tmp/<dir>/x <<'EOF'`), or the Write tool. |
+| Two heredocs, one after the other, each on its own line, from the worktree | `cat > a <<'EOF'` … `EOF`, then `cat > b <<'EOF'` … `EOF` | **Accepted**, where the same pair after a `mkdir -p … &&` was refused. | As tried. |
+
+Where a refusal could not be reproduced it is kept here, since the guard may decide by something a harmless trial does not have (the length of a whole call, a particular path, the text of the heredoc as a whole), and a session that meets one should do what the last column says and report it.
+
+**A refused call in a batch fails silently past it.** Seen again: a batch of four calls held two refused ones (the `grep` for `complete` and the one for `hash`), and the other two ran and answered as if nothing had happened. A refused `mkdir -p … && cat > … <<'EOF'` was followed, in the same batch, by a call that wrote into the directory it should have made, which failed with "No such file or directory": loud, because a write names its path. An edit or a `sed -i` after a refused call is not: it finds its text or does not, and says nothing of the call before. So after any batch in which a call was refused, **check that every edit of it landed** (read the file, or `git diff --stat`) before going on; and put a call that matters in a batch of its own.
+
 ## False positives
 
 These are refused although they stay inside the worktree. They are reported to the coordinator for Anthropic.
@@ -55,4 +84,5 @@ These are refused although they stay inside the worktree. They are reported to t
 4. `for f in AGENTS.md CONTRIBUTING.md; do git log --oneline -1 -- "$f"; done`.
 5. `git log --oneline -1 && cat > /path/file <<'EOF'`, a line `plain text`, `EOF`. The reverse order is accepted.
 6. Commands with no git in them at all, refused as "too complex to verify": two `cat > file <<'EOF'` heredocs in one command after a `mkdir -p … &&`; and a `cd <worktree> && python3 - <<'EOF'` edit followed by a `cargo` command. Each is listed in [steps/tooling-2/answered.md](steps/tooling-2/answered.md).
-7. Wave 8's, from its sessions' retrospectives: a heredoc whose Rust text holds `git(` (the identifier, as in a test's `git(…)` helper); a `cd` to a scratch folder outside the worktree to run git there (write a script and run `sh script.sh <folder>`); `printf … > file && rx …`, with no git in it; `rx -- bash -c "…"` with git in the text; and a read-only `git merge-base … && git rev-list --count …`. The fifth tooling step also met a `python3 - <<'EOF'` edit followed by `cargo` and `rx` in one call, refused, and a Write of a script then `cargo xtask replace --script` in its own call, accepted every time.
+7. Wave 9's, tried in the sixth tooling step ([above](#what-wave-9-added-and-what-was-tried-again)): `grep` with a pattern that is the word `complete` or `hash` (refused as "runs a string through" a builtin; a bracket round one letter is accepted); `mkdir -p DIR && cat > DIR/file <<'EOF'` and `cd DIR && cat > file <<'EOF'`, with no git in either (refused as "too complex to verify"). Reported by wave 9 and not reproduced: a Python heredoc whose text holds "git", a `for` loop around `gh`, a long `cat > file <<'EOF'` script with no git in it.
+8. Wave 8's, from its sessions' retrospectives: a heredoc whose Rust text holds `git(` (the identifier, as in a test's `git(…)` helper); a `cd` to a scratch folder outside the worktree to run git there (write a script and run `sh script.sh <folder>`); `printf … > file && rx …`, with no git in it; `rx -- bash -c "…"` with git in the text; and a read-only `git merge-base … && git rev-list --count …`. The fifth tooling step also met a `python3 - <<'EOF'` edit followed by `cargo` and `rx` in one call, refused, and a Write of a script then `cargo xtask replace --script` in its own call, accepted every time.
