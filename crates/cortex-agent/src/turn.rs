@@ -578,6 +578,8 @@ impl Session {
         // changed nothing keeps both.
         if changed {
             self.drop_background();
+            // The epoch's number may come again, for another history.
+            self.fast_refused = None;
         }
         // The request before was sent as it was, whatever is read now.
         self.settle_sent();

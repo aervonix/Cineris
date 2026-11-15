@@ -60,8 +60,8 @@ pub(crate) use budget::{Budget, Pressure, fraction_of, pressure, summary_room};
 pub(crate) use compact::{ARTIFACT_ROUNDS, Carried, SUMMARY_CUT, Touched, instructions_message};
 pub(crate) use history::{History, Source, message_bytes};
 pub(crate) use instructions::{
-    Change, Discovered, Found, Given, Place, date_text, discover, nested_dirs, notice_text, places,
-    read_one, shown as shown_in, told_date,
+    Change, Discovered, Found, Given, Place, cap_text, date_text, discover, nested_dirs,
+    notice_text, places, read_one, shown as shown_in, told_date,
 };
 pub(crate) use prefix::{InFlight, Shape, difference, excerpt, hash_of};
 pub(crate) use prompt::{Built, Sections, build};

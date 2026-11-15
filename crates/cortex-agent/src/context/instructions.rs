@@ -59,7 +59,10 @@ pub trait InstructionFiles: Send + Sync {
     /// When the file is there and could not be read, or is not read for a
     /// reason the user is to be told: a link out of the workspace, or a
     /// link of the user's that leads nowhere. The text says why, and the
-    /// user is warned with the file's name.
+    /// user is warned with the file's name when an epoch's prompt is built
+    /// and when a nested file is first looked for. A file that cannot be
+    /// read at a turn's start is not taken for removed: the model keeps
+    /// what it was given, and the next epoch says why.
     fn read(&self, path: &AbsPath, limit: usize) -> Result<Option<FileText>, String>;
 }
 
@@ -352,8 +355,8 @@ pub(crate) fn discover(io: &dyn InstructionFiles, places: &[Place], cap: usize) 
     }
     if !cut_files.is_empty() || !left_out.is_empty() {
         let mut message = format!(
-            "The instruction files hold more than the {} KiB they may, so ",
-            cap / 1024
+            "The instruction files hold more than the {} they may, so ",
+            cap_text(cap)
         );
         if !cut_files.is_empty() {
             message.push_str(&format!("the end of {} was", cut_files.join(", ")));
@@ -370,6 +373,17 @@ pub(crate) fn discover(io: &dyn InstructionFiles, places: &[Place], cap: usize) 
         out.warned.extend(left_out);
     }
     out
+}
+
+/// The cap on instruction files, as a warning says it: in KiB when it is
+/// a whole number of them, in bytes otherwise (a cap under 1 KiB was said
+/// as 0 KiB).
+pub(crate) fn cap_text(cap: usize) -> String {
+    if cap >= 1024 && cap.is_multiple_of(1024) {
+        format!("{} KiB", cap / 1024)
+    } else {
+        format!("{cap} bytes")
+    }
 }
 
 /// What is said at the end of a file that was cut.

@@ -106,6 +106,11 @@ enum Unfinished {
     TooLarge(String),
 }
 
+/// The least a summary is asked to write, however little room the trigger
+/// leaves: a summary shorter than that is of little use, and one that does
+/// not fit fails as too large for the new epoch, where it is seen.
+const SUMMARY_FLOOR: u64 = 512;
+
 /// The date of a time, as the model is told it.
 fn date_of(time: cortex_base::UtcTime) -> String {
     time.to_string().chars().take(10).collect()
@@ -274,6 +279,8 @@ impl Session {
             .await?;
         if epoch.reason != Some(EpochReason::Model) {
             self.drop_background();
+            // A new history: the `fast` role may hold it.
+            self.fast_refused = None;
         }
         self.context.begin(epoch, history);
         self.new_file_epoch();
@@ -546,6 +553,14 @@ impl Session {
                 continue;
             }
             if found.text.len() > room {
+                // Its directory is looked at again at the next boundary,
+                // which has room of its own: marked as looked, it would not
+                // be given in this epoch at all (found by the review of
+                // these fixes).
+                self.context
+                    .given
+                    .looked
+                    .remove(&crate::context::shown_in(&root, &found.place.dir));
                 left_out.push(found.place.shown.clone());
                 continue;
             }
@@ -559,9 +574,9 @@ impl Session {
                 Notice::Instructions(InstructionsNotice {
                     message: format!(
                         "The instruction files under the directories a tool touched hold more \
-                         than the {} KiB that are given at once, so {} was left out. \
+                         than the {} that are given at once, so {} was left out for now. \
                          `context.instructions_cap` sets the limit.",
-                        cap / 1024,
+                        crate::context::cap_text(cap),
                         left_out.join(", ")
                     ),
                     files: left_out,
@@ -737,15 +752,37 @@ impl Session {
     /// a change to the thinking parameters would lose the epoch's cache.
     /// Where the model's maximum cannot hold both, the summary has what the
     /// maximum leaves; a summary cut off there is marked as cut.
+    ///
+    /// **The summary's own share is at most half of what the trigger leaves
+    /// beyond the prompt and the tools**, the other half being the turns a
+    /// compaction replays ([`keep_room`](Self::keep_room)): a summary that
+    /// wrote more could not fit the new epoch, and a trigger set low would
+    /// make every compaction too large for it (found by the review of these
+    /// fixes). A summary cut off there is used, and marked as cut.
+    ///
+    /// **A request with a reasoning budget keeps its whole output in
+    /// reserve**, not the capped reserve of [`limit_of`]: Anthropic's models
+    /// before Claude 4.5 refuse a request with thinking whose input and
+    /// `max_tokens` together pass the window, with an error that is not an
+    /// overflow (the review of these fixes; the main request's own case is
+    /// `docs/outstanding/a-reasoning-budget-request-past-the-window-on-older-models.md`).
     fn summary_limit(&self, model: &RoleModel) -> (u64, u64, u64) {
         let window = self.window_of(model);
-        let cap = self.context.parts.settings.summary_max_output;
-        let wanted = model
-            .reasoning
-            .budget_tokens
-            .map_or(cap, |budget| budget.saturating_add(cap));
+        let (_, main_limit) = self.limit(&self.model);
+        let (trigger, _) = self.trigger(main_limit);
+        let share = (trigger.saturating_sub(self.fixed_tokens()) / 2).max(SUMMARY_FLOOR);
+        let cap = self.context.parts.settings.summary_max_output.min(share);
+        let budget = model.reasoning.budget_tokens;
+        let wanted = budget.map_or(cap, |budget| budget.saturating_add(cap));
         let max_output = wanted.min(model.entry.info.max_output);
-        (window, limit_of(window, max_output), max_output)
+        let limit = if budget.is_some() {
+            window
+                .saturating_sub(max_output)
+                .saturating_sub(window / 50)
+        } else {
+            limit_of(window, max_output)
+        };
+        (window, limit, max_output)
     }
 
     /// A summary request over the first `covered` messages of the epoch:
