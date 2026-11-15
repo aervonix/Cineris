@@ -615,8 +615,9 @@ impl Core {
         let span = tracing::info_span!("session", session = %handle.id());
         let task = tokio::spawn(tracing::Instrument::instrument(session.run(), span));
         // The repository index's first pass, now that the loop runs: never
-        // on the path that puts the session together.
-        if let Some(repo) = &repo {
+        // on the path that puts the session together. With no map there is
+        // nothing to make ahead: the `outline` tool reads what it needs.
+        if let Some(repo) = repo.as_ref().filter(|_| loaded.settings.index.map) {
             repo.warm();
         }
         self.probe_context(&handle, &loaded);

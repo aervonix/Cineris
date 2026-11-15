@@ -273,6 +273,14 @@ fn measure(
         format!("{BREAKDOWN} with `--no-session`"),
         headless(binary, &["--no-session"])?,
     ));
+    // In a real tree, the share of the repository index's first pass,
+    // which runs beside the run when the map is on.
+    if tree.is_some() {
+        rows.push((
+            format!("{BREAKDOWN} with `-c index.map=false`"),
+            headless(binary, &["-c", "index.map=false"])?,
+        ));
+    }
     let quick_shell = if cfg!(windows) {
         "shell.program=cmd"
     } else {
