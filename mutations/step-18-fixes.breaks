@@ -320,29 +320,21 @@ caught-by:
 
 # ---------------------------------------------------------------- the notes
 
+# The base state and the instruction files ask the engine in force too
+# (`EnginePolicy::keep_gate`), but no break of that can be caught: the base
+# state is taken as the session starts, before any change of level, and
+# for a `.md` file in the workspace `may_store` is the same under every
+# engine a session can come to (no level enters it, no such name looks like
+# a secret, and `deny` beats `ask` beats `allow`, so an approval for the
+# session cannot lift a rule that holds it back). The second review of the
+# fixes found the break that stood here surviving.
+
 [break] the-index-keeps-the-engine-of-the-assembly
 rule: The index asks the permission engine in force, not the one the session was put together with.
 file: crates/cortex-core/src/policy.rs
 in: EnginePolicy::index_gate
 find: now: Box::new(move || policy.upgrade().map(|policy| policy.engine()))
 replace: now: { let engine = self.engine(); Box::new(move || { let _ = &policy; Some(Arc::clone(&engine)) }) }
-caught-by:
-    cortex-core::it index::the_index_follows_the_engine_in_force_after_a_change_of_level
-
-[break] the-base-state-keeps-the-engine-of-the-assembly
-rule: The base state and the instruction files ask the permission engine in force, not the one the session was put together with.
-file: crates/cortex-core/src/policy.rs
-in: EnginePolicy::keep_gate
-find:
-    let policy = Arc::downgrade(self);
-    Arc::new(move |path: &AbsPath| {
-        policy
-            .upgrade()
-            .is_some_and(|policy| policy.engine().may_store(path))
-    })
-replace:
-    let engine = self.engine();
-    Arc::new(move |path: &AbsPath| engine.may_store(path))
 caught-by:
     cortex-core::it index::the_index_follows_the_engine_in_force_after_a_change_of_level
 
