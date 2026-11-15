@@ -174,8 +174,9 @@ enum Rule {
     /// A compiled zone file.
     Tzif(Transitions),
     /// The zone Windows is set to.
+    /// Boxed: the system's answer is a structure of several hundred bytes.
     #[cfg(windows)]
-    Windows(windows::SystemZone),
+    Windows(Box<windows::SystemZone>),
 }
 
 impl Zone {
@@ -225,7 +226,7 @@ impl Zone {
         #[cfg(windows)]
         {
             windows::SystemZone::read().map_or_else(Self::utc, |zone| Self {
-                rule: Rule::Windows(zone),
+                rule: Rule::Windows(Box::new(zone)),
                 name: "the system's zone".to_owned(),
             })
         }
