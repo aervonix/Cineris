@@ -5,8 +5,8 @@
 rule: A panic on a thread other than the one that entered the terminal does not put the terminal back: the program may catch it and go on drawing.
 file: crates/cortex-term/src/terminal.rs
 in: restores_on_panic
-find: == Some(std::thread::current().id())
-replace: .is_some()
+find: *ENTERED_ON.lock().unwrap_or_else(PoisonError::into_inner) == Some(std::thread::current().id())
+replace: ENTERED_ON.lock().unwrap_or_else(PoisonError::into_inner).is_some()
 caught-by:
     cortex-term::it system::sys_a_panic_caught_on_another_thread_leaves_the_terminal_to_the_program
 
@@ -75,8 +75,8 @@ caught-by:
 rule: A key read before a dialog's first frame was written never answers it.
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::takes_keys_at
-find: at >= shown &&
-replace:
+find: self.shown
+replace: Some(at)
 caught-by:
     app::tests::a_dialog_that_appears_while_the_person_types_takes_keys_only_after_a_grace
 
@@ -133,16 +133,12 @@ rule: After an item's resync its deltas are not taken, and the completed item's 
 file: crates/cortex-tui/src/app/items.rs
 in: Mapper::delta
 find:
-    if let Some(reasoning) = response.reasoning.take() {
-        finish_reasoning(transcript, reasoning, now);
+    if response.resync {
+        return;
     }
-    let answer = match response.answer {
+    if let Some(reasoning) = response.reasoning.take() {
 replace:
-    response.resync = false;
     if let Some(reasoning) = response.reasoning.take() {
-        finish_reasoning(transcript, reasoning, now);
-    }
-    let answer = match response.answer {
 caught-by:
     app::items::tests::an_answer_whose_deltas_stopped_is_completed_from_the_whole_item
 
