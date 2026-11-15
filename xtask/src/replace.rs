@@ -197,7 +197,12 @@ fn edit(source: &str, request: &Request, shown_as: &str) -> Result<(String, Stri
         request.occurrence,
     )
     .map_err(|missing| match missing {
-        lex::Missing::NothingToFind => "--from has no code in it".to_owned(),
+        lex::Missing::NothingToFind => {
+            "--from has no code in it: it is all comments and white space, which a \
+                                         match by tokens passes over. Match it as text: `--text`, \
+                                         or `@@ text` in a script."
+                .to_owned()
+        }
         lex::Missing::NoSuchItem { segment, within } => {
             if within.is_empty() {
                 format!("{shown_as} has no item called `{segment}`")
@@ -582,6 +587,33 @@ fn budget(tier: Tier, os: Os) -> f64 {
             shown,
             "budget.rs: lines 6-6 are now 6-6\n-     6          _ => 60.0,\n+     6          _ => 61.0,\n"
         );
+    }
+
+    #[test]
+    fn a_match_of_comments_alone_is_told_to_be_text() {
+        let asked = request("/// The changed lines are printed.", "/// Printed.");
+        let error = edit(
+            "/// The changed lines are printed.\nfn f() {}\n",
+            &asked,
+            "a.rs",
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("all comments and white space") && error.contains("`@@ text`"),
+            "{error}"
+        );
+        // As text it is made.
+        let text = Request {
+            text: true,
+            ..request("/// The changed lines are printed.", "/// Printed.")
+        };
+        let (edited, _) = edit(
+            "/// The changed lines are printed.\nfn f() {}\n",
+            &text,
+            "a.rs",
+        )
+        .unwrap();
+        assert_eq!(edited, "/// Printed.\nfn f() {}\n");
     }
 
     #[test]

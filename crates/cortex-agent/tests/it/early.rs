@@ -6,7 +6,7 @@
 //! A scripted response waits at a gate after a tool call's block, so the
 //! test can look at what has happened while the model "is still writing".
 
-use cortex_agent::Decision;
+use cortex_agent::{Decision, Verdict};
 use cortex_protocol::event::TurnOutcome;
 use cortex_protocol::item::{ToolOutcome, ToolResultItem};
 use cortex_protocol::{Item, Part, StopReason};
@@ -506,6 +506,8 @@ fn a_call_approved_while_the_model_writes_still_waits_for_the_end_if_it_has_side
     let world = World::new("approved_early", [response, says("Done.")]);
     let rig = Setup::new(&world).start(&world);
     rig.policy.decide_for("write", Decision::Ask);
+    // Each question is answered by allowing the call.
+    rig.policy.answer_all(Verdict::Allow);
     world.run(async {
         rig.prompt("go");
         // Asked and answered (allowed) during the stream.
