@@ -17,6 +17,7 @@
 //! | [`private`] | Files and directories that only the current user can open, on Linux and on Windows. |
 //! | [`framing`] | The newline-delimited JSON reader and writer of the RPC protocol. |
 //! | [`watch`] | [`WatchList`]: the modification-time check behind hot-reload. |
+//! | [`zone`] | [`Zone`] and [`LocalDate`]: the local date at a moment, for the usage view's days. |
 //!
 //! # Blocking and async
 //!
@@ -36,11 +37,13 @@
 //!
 //! # Unsafe code
 //!
-//! One module of this crate may use `unsafe`: `private::windows`, which sets
-//! access lists through the Windows API, and reads the reparse tag of an
-//! open file for [`nofollow`]
-//! (`docs/decisions/0029-owner-only-files-on-windows.md`). Everywhere else
-//! in the crate the workspace's `unsafe_code = "deny"` holds.
+//! Two modules of this crate may use `unsafe`, both on Windows only:
+//! `private::windows`, which sets access lists through the Windows API, and
+//! reads the reparse tag of an open file for [`nofollow`]
+//! (`docs/decisions/0029-owner-only-files-on-windows.md`); and
+//! `zone::windows`, which reads the system's time zone, which only that API
+//! can give. Everywhere else in the crate the workspace's
+//! `unsafe_code = "deny"` holds.
 
 pub mod atomic;
 pub mod cancel;
@@ -62,6 +65,7 @@ pub mod text;
 pub mod time;
 pub mod timer;
 pub mod watch;
+pub mod zone;
 
 #[cfg(test)]
 mod cases;
@@ -84,5 +88,6 @@ pub use redact::SecretFilter;
 pub use rng::{Rng, SeededRng, SystemRng};
 pub use secret::Secret;
 pub use time::{TimeError, UtcTime};
+pub use zone::{LocalDate, Zone};
 pub use timer::{SharedTimer, Sleep, Timer};
 pub use watch::{FileStamp, TimedStamp, WatchList};

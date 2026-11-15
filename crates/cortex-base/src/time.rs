@@ -322,11 +322,11 @@ impl From<UtcTime> for Timestamp {
     }
 }
 
-const fn is_leap_year(year: i64) -> bool {
+pub(crate) const fn is_leap_year(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-const fn days_in_month(year: i64, month: i64) -> i64 {
+pub(crate) const fn days_in_month(year: i64, month: i64) -> i64 {
     match month {
         4 | 6 | 9 | 11 => 30,
         2 if is_leap_year(year) => 29,
@@ -339,7 +339,7 @@ const fn days_in_month(year: i64, month: i64) -> i64 {
 /// calendar. The year is counted from March, so that the leap day is the
 /// last day of the counted year, and years are grouped into the calendar's
 /// 400-year cycle of 146,097 days.
-const fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+pub(crate) const fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let counted_year = if month <= 2 { year - 1 } else { year };
     let cycle = counted_year.div_euclid(400);
     let year_of_cycle = counted_year.rem_euclid(400);
@@ -351,7 +351,7 @@ const fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 }
 
 /// The date `days` after 1970-01-01: the inverse of [`days_from_civil`].
-const fn civil_from_days(days: i64) -> (i64, i64, i64) {
+pub(crate) const fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let shifted = days + 719_468;
     let cycle = shifted.div_euclid(146_097);
     let day_of_cycle = shifted.rem_euclid(146_097);
