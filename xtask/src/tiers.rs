@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 use crate::junit::{self, TestCase};
+use crate::stall;
 use crate::steps;
 use crate::workspace;
 
@@ -144,24 +145,72 @@ pub(crate) fn ci_report_path() -> PathBuf {
 }
 
 /// The step that follows the test run in `cargo xtask ci test`.
+///
+/// **It does not judge a run that stalled.** The test runs leave what the
+/// pressure said of them (`stall::record_path`), and when every task waited
+/// on I/O for [`stall::STALLED_SHARE`] of the runs' time or more, away
+/// from CI, the tiers' times are the disk's as much as the tests', and the
+/// step says `not judged: the machine stalled` with the numbers and neither
+/// passes nor fails a budget. On CI (`GITHUB_ACTIONS` set) the budgets are
+/// held as they always were, whatever the pressure ([`stall::judge`]).
 pub(crate) fn check_ci_report() -> Result<()> {
-    check_report(&ci_report_path(), Os::here(), SLOWEST_IN_CI)
+    check_ci_report_in(
+        &workspace::root(),
+        std::env::var_os("GITHUB_ACTIONS").is_some(),
+        true,
+    )
+}
+
+/// [`check_ci_report`] for the tree at `root`, run on CI or not, with the
+/// job's summary page written or not.
+fn check_ci_report_in(root: &Path, in_actions: bool, summary: bool) -> Result<()> {
+    let records = stall::read_records(&stall::record_path(root));
+    check_report_with(
+        &workspace::nextest_report(root, "ci"),
+        Os::here(),
+        SLOWEST_IN_CI,
+        stall::judge(in_actions, &records),
+        summary,
+    )
 }
 
 /// Prints the tier totals of a report and each tier's `slowest` slowest
 /// tests, and fails when a tier is far over its budget.
 pub(crate) fn check_report(report: &Path, os: Os, slowest: usize) -> Result<()> {
+    check_report_with(report, os, slowest, None, true)
+}
+
+/// [`check_report`], or, for a run that `stalled`, the same tables with no
+/// verdict: no mark on a tier, no warning, no failure, and a line that
+/// says why.
+fn check_report_with(
+    report: &Path,
+    os: Os,
+    slowest: usize,
+    stalled: Option<stall::Stalled>,
+    summary: bool,
+) -> Result<()> {
     let cases = junit::read(report)?;
-    let (table, over) = summarise(&cases, os);
+    let (table, over) = summarise_marked(&cases, os, stalled.is_none());
+    if let Some(stalled) = &stalled {
+        println!("{}", stalled.message());
+    }
     print!("{table}");
     print!("{}", crates_text(&cases, CRATES_SHOWN));
     print!("{}", slowest_tests(&cases, slowest));
-    steps::append_job_summary(&format!(
-        "### Test time by tier\n\n{}\n{}\n{}\n",
-        markdown(&cases, os),
-        crates_markdown(&cases),
-        slowest_markdown(&cases, slowest)
-    ));
+    if summary {
+        steps::append_job_summary(&format!(
+            "### Test time by tier\n\n{}{}\n{}\n{}\n",
+            stalled.map_or_else(String::new, |stalled| format!("{}\n\n", stalled.message())),
+            markdown(&cases, os),
+            crates_markdown(&cases),
+            slowest_markdown(&cases, slowest)
+        ));
+    }
+    if stalled.is_some() {
+        // No verdict: the tiers are neither over nor within their budgets.
+        return Ok(());
+    }
 
     let names = |wanted: Verdict| -> Vec<&str> {
         let tiers = over.iter().filter(|(_, verdict)| *verdict == wanted);
@@ -364,6 +413,12 @@ fn start_line(start: f64, sample: usize) -> String {
 
 /// The table for the terminal, and the tiers that are over budget.
 fn summarise(cases: &[TestCase], os: Os) -> (String, Vec<(Tier, Verdict)>) {
+    summarise_marked(cases, os, true)
+}
+
+/// [`summarise`], with a mark on a tier that is over its budget only when
+/// `marked`: a run that is not judged has none.
+fn summarise_marked(cases: &[TestCase], os: Os, marked: bool) -> (String, Vec<(Tier, Verdict)>) {
     let (start, sample) = start_of(cases);
     let mut table = format!(
         "  {}\n  tier             tests   time    above start  budget  used\n",
@@ -378,7 +433,7 @@ fn summarise(cases: &[TestCase], os: Os) -> (String, Vec<(Tier, Verdict)>) {
         } = total(cases, tier, start);
         let budget = tier.budget(os);
         let used = 100.0 * above_start / budget;
-        let verdict = verdict(above_start, budget);
+        let verdict = verdict(above_start, budget).filter(|_| marked);
         let mark = match verdict {
             None => "",
             Some(Verdict::OverBudget) => "  over budget (warning)",
@@ -989,5 +1044,91 @@ mod tests {
         assert_eq!(verdict(20.1, 20.0), Some(Verdict::OverBudget));
         assert_eq!(verdict(30.0, 20.0), Some(Verdict::OverBudget));
         assert_eq!(verdict(30.1, 20.0), Some(Verdict::Failing));
+    }
+
+    use super::{check_ci_report_in, summarise_marked};
+    use crate::{stall, workspace};
+
+    /// A report of `cases`, as much of one as the tier check reads.
+    fn report_of(cases: &[TestCase]) -> String {
+        let mut text = String::from("<testsuites name=\"nextest-run\">\n");
+        for case in cases {
+            text.push_str(&format!(
+                "<testsuite name=\"{binary}\"><testcase name=\"{name}\" classname=\"{binary}\" \
+                 time=\"{}\"/></testsuite>\n",
+                case.seconds,
+                binary = case.binary,
+                name = case.name
+            ));
+        }
+        text.push_str("</testsuites>\n");
+        text
+    }
+
+    /// The tree of a CI run whose unit tier is far over its budget (as in
+    /// `a_tier_far_over_its_budget_fails`), and whose test runs left `record`
+    /// (a line of `stall::Record`'s form) when it is given.
+    fn tree_with(label: &str, record: Option<&str>) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("xtask-tiers-{label}-{}", std::process::id()));
+        let report = workspace::nextest_report(&root, "ci");
+        std::fs::create_dir_all(report.parent().unwrap()).unwrap();
+        std::fs::write(&report, report_of(&unit_tests_taking(6.5))).unwrap();
+        if let Some(record) = record {
+            std::fs::write(stall::record_path(&root), record).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn a_stalled_run_is_not_judged_at_a_desk_and_is_on_ci_whatever_the_pressure() {
+        // 90 s of every task waiting, in test runs of 100 s.
+        let stalled = "elapsed_ms=100000 full_us=90000000\n";
+        // Not judged at a desk: far over its budget, and neither fails.
+        let root = tree_with("desk-stalled", Some(stalled));
+        let desk = check_ci_report_in(&root, false, false);
+        // Judged on CI whatever the pressure: the same run fails.
+        let actions = check_ci_report_in(&root, true, false);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(desk, Ok(()), "a stalled run was judged at a desk");
+        assert!(
+            actions.is_err_and(|error| error.contains("times over its time budget")),
+            "CI judges a run whatever the pressure"
+        );
+    }
+
+    #[test]
+    fn a_run_whose_disk_did_not_stall_is_judged_at_a_desk_as_it_always_was() {
+        // 5 s of 100: under the threshold. And a run with no record at all,
+        // where the pressure could not be read.
+        for (label, record) in [
+            ("quiet", Some("elapsed_ms=100000 full_us=5000000\n")),
+            ("unread", None),
+            ("short", Some("elapsed_ms=100000 full_us=9900000\n")),
+        ] {
+            let root = tree_with(label, record);
+            let checked = check_ci_report_in(&root, false, false);
+            std::fs::remove_dir_all(&root).unwrap();
+            assert!(
+                checked.is_err_and(|error| error.contains("times over its time budget")),
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_that_is_not_judged_has_no_mark_on_any_tier() {
+        let cases = unit_tests_taking(6.5);
+        let (marked, over) = summarise_marked(&cases, Os::Linux, true);
+        assert!(marked.contains("FAR OVER BUDGET"));
+        assert_eq!(over.len(), 1);
+        let (plain, over) = summarise_marked(&cases, Os::Linux, false);
+        assert!(!plain.contains("OVER BUDGET") && !plain.contains("over budget"));
+        assert!(over.is_empty());
+        // The numbers are the same.
+        assert_eq!(
+            marked.replace("  FAR OVER BUDGET", ""),
+            plain,
+            "only the marks differ"
+        );
     }
 }

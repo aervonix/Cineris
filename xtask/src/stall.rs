@@ -21,10 +21,39 @@
 //! and again at its end, so the message gives the share of the run itself
 //! that was spent stalled, beside the averages. Elsewhere, or where the
 //! file cannot be read, the message says so.
+//!
+//! **A run's stall is a number, and two commands act on it.** [`Observed`]
+//! is what the pressure said of one run: the share of its time in which
+//! every task waited on I/O. `cargo xtask ci` runs a cluster of timeouts
+//! again once when that share is [`STALLED_SHARE`] or more ([`rerun`]), and
+//! its tier check does not judge a run at a desk whose share is that high
+//! ([`judge`]). Both decisions are pure functions of the pressures and the
+//! JUnit report, so that tests give them a recorded pressure and never a
+//! real stall; [`PRESSURE_FILE_VARIABLE`] names a file to read in place of
+//! the kernel's, for the same reason.
 
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::junit::Failure;
+
+pub(crate) mod rerun;
+
+/// The share of a run's time, in percent, in which every task waited on
+/// I/O (`full` of `/proc/pressure/io`), from which the run is taken to have
+/// stalled: `cargo xtask ci` runs a cluster of timeouts again, and does not
+/// hold the tiers to their budgets at a desk.
+///
+/// It is `mutate`'s figure for a busy disk (`full avg60` of 10%, from which
+/// it starts with one job): a run that spent a tenth of its time with every
+/// task waiting on the disk has lost a tenth of its time to it, which is
+/// 2 s of a tier's 20 s and more than the tiers' own run-to-run variation
+/// on a quiet machine, and the runs of wave 11 that were stalled read 54%
+/// and more where a quiet desk reads under 1%. A lower figure would take
+/// every busy afternoon of the desktop for a stall and run tests again for
+/// nothing; a higher one would call a run that lost a fifth of its time
+/// judged.
+pub(crate) const STALLED_SHARE: f64 = 10.0;
 
 /// How close together, in milliseconds, the ends of the timeouts must lie.
 pub(crate) const WINDOW_MS: i64 = 250;
@@ -65,10 +94,16 @@ pub(crate) fn stopped_late(took_ms: i64) -> bool {
 /// ([`stopped_late`]) and whose ends lie within [`WINDOW_MS`] of each
 /// other, when it has [`AT_LEAST`] of them.
 pub(crate) fn find(failures: &[Failure]) -> Option<Stall> {
-    let mut ends: Vec<(i64, String)> = failures
+    find_cases(failures).map(|(stall, _)| stall)
+}
+
+/// [`find`], with the places in `failures` of the cases it found.
+pub(crate) fn find_cases(failures: &[Failure]) -> Option<(Stall, Vec<usize>)> {
+    let mut ends: Vec<(i64, String, usize)> = failures
         .iter()
-        .filter(|failure| failure.kind.contains("timeout"))
-        .filter_map(|failure| {
+        .enumerate()
+        .filter(|(_, failure)| failure.kind.contains("timeout"))
+        .filter_map(|(place, failure)| {
             let start = instant_ms(&failure.started)?;
             // Rounded to the millisecond: nextest writes three decimals.
             #[expect(
@@ -76,8 +111,13 @@ pub(crate) fn find(failures: &[Failure]) -> Option<Stall> {
                 reason = "a test's time in milliseconds fits an i64"
             )]
             let took = (failure.seconds * 1000.0).round() as i64;
-            stopped_late(took)
-                .then(|| (start + took, format!("{} {}", failure.binary, failure.name)))
+            stopped_late(took).then(|| {
+                (
+                    start + took,
+                    format!("{} {}", failure.binary, failure.name),
+                    place,
+                )
+            })
         })
         .collect();
     ends.sort();
@@ -95,10 +135,11 @@ pub(crate) fn find(failures: &[Failure]) -> Option<Stall> {
     if group.len() < AT_LEAST {
         return None;
     }
-    Some(Stall {
-        tests: group.iter().map(|(_, test)| test.clone()).collect(),
+    let stall = Stall {
+        tests: group.iter().map(|(_, test, _)| test.clone()).collect(),
         spread_ms: group[group.len() - 1].0 - group[0].0,
-    })
+    };
+    Some((stall, group.iter().map(|(_, _, place)| *place).collect()))
 }
 
 /// Milliseconds since 1970 of a time as nextest writes one:
@@ -183,8 +224,33 @@ pub(crate) fn parse_pressure(text: &str) -> Option<Pressure> {
 /// Where the kernel says it.
 const PRESSURE_FILE: &str = "/proc/pressure/io";
 
-/// The I/O pressure now, or why it cannot be read.
+/// The environment variable that names a file to read the pressure from in
+/// place of the kernel's, on any system: how the tests of the commands that
+/// act on a stall, and a person trying one by hand, give it a pressure that
+/// was recorded or made up and never a real stall. The file is in the
+/// kernel's own form (`some avg10=… avg60=… avg300=… total=…`, and `full`).
+pub(crate) const PRESSURE_FILE_VARIABLE: &str = "CORTEX_PRESSURE_FILE";
+
+/// The I/O pressure now, or why it cannot be read: from the file that
+/// [`PRESSURE_FILE_VARIABLE`] names, when it is set and not empty, else the
+/// kernel's.
 pub(crate) fn read_pressure() -> Result<Pressure, String> {
+    match std::env::var_os(PRESSURE_FILE_VARIABLE).filter(|file| !file.is_empty()) {
+        Some(file) => read_pressure_from(Path::new(&file)),
+        None => read_kernel_pressure(),
+    }
+}
+
+/// The pressure a file says, in the kernel's form.
+pub(crate) fn read_pressure_from(file: &Path) -> Result<Pressure, String> {
+    let shown = file.display();
+    let text = std::fs::read_to_string(file).map_err(|error| {
+        format!("{shown} ({PRESSURE_FILE_VARIABLE}) could not be read: {error}")
+    })?;
+    parse_pressure(&text).ok_or_else(|| format!("{shown} was not in the form expected"))
+}
+
+fn read_kernel_pressure() -> Result<Pressure, String> {
     if !cfg!(target_os = "linux") {
         return Err(format!(
             "{PRESSURE_FILE} is Linux's, and this is {}",
@@ -199,7 +265,7 @@ pub(crate) fn read_pressure() -> Result<Pressure, String> {
 /// A run being watched: the pressure when it started.
 #[derive(Debug)]
 pub(crate) struct Watch {
-    before: Option<Pressure>,
+    before: Result<Pressure, String>,
     started: Instant,
 }
 
@@ -207,9 +273,20 @@ impl Watch {
     /// Notes the pressure now.
     pub(crate) fn start() -> Self {
         Self {
-            before: read_pressure().ok(),
+            before: read_pressure(),
             started: Instant::now(),
         }
+    }
+
+    /// What the pressure said of the run since [`Watch::start`], or why it
+    /// cannot say: it could not be read at the start or cannot be now.
+    pub(crate) fn observe(&self) -> Result<Observed, String> {
+        let before = self.before.clone()?;
+        Ok(Observed {
+            before,
+            after: read_pressure()?,
+            elapsed: self.started.elapsed(),
+        })
     }
 
     /// What to say of a run whose report holds `failures`: nothing unless
@@ -218,11 +295,173 @@ impl Watch {
         let stall = find(failures)?;
         Some(explain(
             &stall,
-            self.before.as_ref(),
+            self.before.as_ref().ok(),
             &read_pressure(),
             self.started.elapsed(),
         ))
     }
+}
+
+/// What the pressure said of one run: its values when the run started and
+/// when it ended, and the time between.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Observed {
+    pub(crate) before: Pressure,
+    pub(crate) after: Pressure,
+    pub(crate) elapsed: Duration,
+}
+
+impl Observed {
+    /// The seconds in which every task waited on I/O during the run.
+    pub(crate) fn stalled_seconds(&self) -> f64 {
+        micros_to_seconds(self.after.full_total.saturating_sub(self.before.full_total))
+    }
+
+    /// The share of the run, in percent, in which every task waited on I/O.
+    /// Nothing for a run that took no time.
+    pub(crate) fn share(&self) -> f64 {
+        share(self.stalled_seconds(), self.elapsed.as_secs_f64())
+    }
+
+    /// What of the run the tier check needs ([`Record`]).
+    pub(crate) fn record(&self) -> Record {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a run's milliseconds fit a u64"
+        )]
+        let elapsed_ms = self.elapsed.as_millis() as u64;
+        Record {
+            elapsed_ms,
+            full_us: self.after.full_total.saturating_sub(self.before.full_total),
+        }
+    }
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "microseconds of a run, in seconds to a tenth"
+)]
+fn micros_to_seconds(micros: u64) -> f64 {
+    micros as f64 / 1e6
+}
+
+/// `stalled` seconds as a percentage of `run` seconds: 0 for no time.
+fn share(stalled: f64, run: f64) -> f64 {
+    if run > 0.0 {
+        100.0 * stalled / run
+    } else {
+        0.0
+    }
+}
+
+/// How long a run was and how long every task waited on I/O in it: one
+/// line of the file the test runs of `cargo xtask ci` leave for its tier
+/// check, which is another step and reads it ([`judge`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Record {
+    pub(crate) elapsed_ms: u64,
+    pub(crate) full_us: u64,
+}
+
+/// Where the records of a CI run in the tree at `root` are kept: beside its
+/// report.
+pub(crate) fn record_path(root: &Path) -> PathBuf {
+    crate::workspace::nextest_report(root, "ci").with_file_name("pressure.txt")
+}
+
+/// Adds a run's record to the file at `path`.
+pub(crate) fn append_record(path: &Path, record: &Record) -> crate::Result<()> {
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("could not open {}: {error}", path.display()))?;
+    writeln!(
+        file,
+        "elapsed_ms={} full_us={}",
+        record.elapsed_ms, record.full_us
+    )
+    .map_err(|error| format!("could not write {}: {error}", path.display()))
+}
+
+/// The records in a file's text. A line that is not one is left out.
+pub(crate) fn parse_records(text: &str) -> Vec<Record> {
+    text.lines()
+        .filter_map(|line| {
+            let field = |name: &str| {
+                line.split_whitespace()
+                    .find_map(|word| word.strip_prefix(name)?.strip_prefix('='))?
+                    .parse()
+                    .ok()
+            };
+            Some(Record {
+                elapsed_ms: field("elapsed_ms")?,
+                full_us: field("full_us")?,
+            })
+        })
+        .collect()
+}
+
+/// The records a CI run left, none when there is no file.
+pub(crate) fn read_records(path: &Path) -> Vec<Record> {
+    std::fs::read_to_string(path)
+        .map(|text| parse_records(&text))
+        .unwrap_or_default()
+}
+
+/// What the stall of a run keeps its tiers from being judged by.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Stalled {
+    /// The share of the runs' time, in percent, in which every task waited.
+    pub(crate) share: f64,
+    /// That time, in seconds.
+    pub(crate) stalled_seconds: f64,
+    /// The runs' time, in seconds.
+    pub(crate) run_seconds: f64,
+}
+
+impl Stalled {
+    /// What the tier check says in place of its verdict.
+    pub(crate) fn message(&self) -> String {
+        format!(
+            "not judged: the machine stalled. Every task waited on I/O for {:.1} s of the test \
+             runs' {:.0} s ({:.0}%, from {PRESSURE_FILE}; a run is taken to have stalled at \
+             {STALLED_SHARE:.0}%), so the tiers' times are the disk's as much as the tests', and \
+             no tier is held to its budget. Run the tests again when the machine is quiet. CI's \
+             runners are always judged.",
+            self.stalled_seconds, self.run_seconds, self.share
+        )
+    }
+}
+
+/// Whether the tiers of a run can be held to their budgets, given the
+/// records of its test runs and where it ran: the stall when they cannot.
+///
+/// On CI (`in_actions`: `GITHUB_ACTIONS` is set) the tiers are always
+/// judged, whatever the pressure: the budgets are the pull request's, a
+/// hosted runner's disk is its own, and a verdict that moved with a reading
+/// nobody can check there would be a loophole. Elsewhere, a run that
+/// stalled for [`STALLED_SHARE`] or more of its time is not judged, and one
+/// with no record (the pressure could not be read, or nothing wrote one) is.
+pub(crate) fn judge(in_actions: bool, records: &[Record]) -> Option<Stalled> {
+    if in_actions {
+        return None;
+    }
+    let elapsed_ms: u64 = records.iter().map(|record| record.elapsed_ms).sum();
+    let full_us: u64 = records.iter().map(|record| record.full_us).sum();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "milliseconds of a run, in seconds to a tenth"
+    )]
+    let run_seconds = elapsed_ms as f64 / 1e3;
+    let stalled_seconds = micros_to_seconds(full_us);
+    let share = share(stalled_seconds, run_seconds);
+    (share >= STALLED_SHARE).then_some(Stalled {
+        share,
+        stalled_seconds,
+        run_seconds,
+    })
 }
 
 /// How many of a stall's tests are named.
@@ -283,7 +522,10 @@ pub(crate) fn explain(
 mod tests {
     use std::time::Duration;
 
-    use super::{Pressure, explain, find, instant_ms, parse_pressure};
+    use super::{
+        Observed, Pressure, Record, Stalled, append_record, explain, find, find_cases, instant_ms,
+        judge, parse_pressure, read_pressure_from, read_records,
+    };
     use crate::junit::Failure;
 
     fn timeout(name: &str, started: &str, seconds: f64) -> Failure {
@@ -515,5 +757,152 @@ mod tests {
             unread.contains("The I/O pressure could not be read: it is not Linux."),
             "{unread}"
         );
+    }
+
+    fn observed(before_total: u64, after_total: u64, elapsed: Duration) -> Observed {
+        let pressure = |full_total| Pressure {
+            some: (0.0, 0.0),
+            full: (0.0, 0.0),
+            some_total: full_total,
+            full_total,
+        };
+        Observed {
+            before: pressure(before_total),
+            after: pressure(after_total),
+            elapsed,
+        }
+    }
+
+    #[test]
+    fn a_runs_stall_is_the_share_of_its_own_time_every_task_waited() {
+        // 30.2 s of 312 s.
+        let run = observed(500_000, 30_700_000, Duration::from_secs(312));
+        assert!((run.stalled_seconds() - 30.2).abs() < 1e-9);
+        assert!((run.share() - 9.679_487).abs() < 1e-5, "{}", run.share());
+        assert_eq!(
+            run.record(),
+            Record {
+                elapsed_ms: 312_000,
+                full_us: 30_200_000
+            }
+        );
+        // A run that took no time stalled for none of it, and counters that
+        // went back (a reboot) are no stall.
+        assert_eq!(observed(0, 5, Duration::ZERO).share(), 0.0);
+        assert_eq!(observed(9, 1, Duration::from_secs(10)).share(), 0.0);
+    }
+
+    #[test]
+    fn a_run_that_stalled_for_a_tenth_of_its_time_is_not_judged_away_from_ci() {
+        let record = |full_s: u64, elapsed_s: u64| Record {
+            elapsed_ms: elapsed_s * 1000,
+            full_us: full_s * 1_000_000,
+        };
+        // Judged under the threshold, not judged at it, and over.
+        assert_eq!(judge(false, &[record(9, 100)]), None);
+        let at = judge(false, &[record(10, 100)]).expect("not judged at a tenth");
+        assert!((at.share - 10.0).abs() < 1e-9);
+        assert!(judge(false, &[record(60, 100)]).is_some());
+        // Judged on CI whatever the pressure.
+        assert_eq!(judge(true, &[record(90, 100)]), None);
+        // Judged when there is nothing to read, or a run with no time.
+        assert_eq!(judge(false, &[]), None);
+        assert_eq!(judge(false, &[record(5, 0)]), None);
+        // Two runs are one: 8 s of 40 and 14 s of 60 is 22 s of 100.
+        let both = judge(false, &[record(8, 40), record(14, 60)]).expect("22%");
+        assert!((both.share - 22.0).abs() < 1e-9);
+        assert!((both.stalled_seconds - 22.0).abs() < 1e-9);
+        assert!((both.run_seconds - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_message_of_a_run_that_is_not_judged_has_the_numbers() {
+        let message = Stalled {
+            share: 34.4,
+            stalled_seconds: 41.3,
+            run_seconds: 120.0,
+        }
+        .message();
+        assert!(
+            message.starts_with(
+                "not judged: the machine stalled. Every task waited on I/O for 41.3 s of the \
+                 test runs' 120 s (34%"
+            ),
+            "{message}"
+        );
+        assert!(message.contains("stalled at 10%"), "{message}");
+        assert!(
+            message.contains("CI's runners are always judged"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_runs_record_is_kept_in_a_file_and_read_back_and_a_missing_file_is_none() {
+        let folder = std::env::temp_dir().join(format!("xtask-records-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("pressure.txt");
+        let first = Record {
+            elapsed_ms: 1500,
+            full_us: 250,
+        };
+        let second = Record {
+            elapsed_ms: 99,
+            full_us: 0,
+        };
+        let missing = read_records(&path);
+        append_record(&path, &first).unwrap();
+        append_record(&path, &second).unwrap();
+        let both = read_records(&path);
+        std::fs::write(
+            &path,
+            "garbage\nelapsed_ms=1 full_us=2\nelapsed_ms=x full_us=2\n",
+        )
+        .unwrap();
+        let tolerant = read_records(&path);
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert!(missing.is_empty());
+        assert_eq!(both, [first, second]);
+        assert_eq!(
+            tolerant,
+            [Record {
+                elapsed_ms: 1,
+                full_us: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn a_pressure_can_be_read_from_the_file_a_variable_names() {
+        let folder = std::env::temp_dir().join(format!("xtask-psi-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("io");
+        std::fs::write(
+            &path,
+            "some avg10=12.50 avg60=3.10 avg300=0.80 total=41300000\n\
+             full avg10=9.00 avg60=2.00 avg300=0.50 total=30200000\n",
+        )
+        .unwrap();
+        let read = read_pressure_from(&path);
+        let missing = read_pressure_from(&folder.join("nothing"));
+        std::fs::write(&path, "nonsense").unwrap();
+        let wrong = read_pressure_from(&path);
+        std::fs::remove_dir_all(&folder).unwrap();
+        assert_eq!(read.unwrap().full_total, 30_200_000);
+        assert!(missing.unwrap_err().contains("CORTEX_PRESSURE_FILE"));
+        assert!(wrong.unwrap_err().contains("not in the form expected"));
+    }
+
+    #[test]
+    fn the_cluster_is_found_with_the_places_of_its_cases() {
+        let failures = [
+            timeout("early", "2026-11-15T09:00:00.000+00:00", 11.0),
+            timeout("a", "2026-11-15T10:00:00.000+00:00", 14.0),
+            timeout("b", "2026-11-15T10:00:02.000+00:00", 12.1),
+            timeout("c", "2026-11-15T10:00:03.900+00:00", 10.3),
+        ];
+        let (stall, places) = find_cases(&failures).expect("a stall");
+        assert_eq!(places, [1, 2, 3]);
+        assert_eq!(Some(stall), find(&failures));
     }
 }

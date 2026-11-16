@@ -172,6 +172,19 @@ pub(crate) struct Failure {
 /// an `<error>` or, for a test that passed on its retry, a
 /// `<flakyFailure>` or `<flakyError>`, with the first of them.
 pub(crate) fn failures(xml: &str) -> Vec<Failure> {
+    failures_among(xml, &["failure", "error", "flakyFailure", "flakyError"])
+}
+
+/// The cases of a report that failed, in its order: with a `<failure>` or
+/// an `<error>`. A test that passed on its retry is not among them, as it
+/// is not a failure of the run ([`TestCase::failed`]).
+pub(crate) fn failed(xml: &str) -> Vec<Failure> {
+    failures_among(xml, &["failure", "error"])
+}
+
+/// The cases with one of the elements `wanted`, each with the first of
+/// them.
+fn failures_among(xml: &str, wanted: &[&str]) -> Vec<Failure> {
     let mut found = Vec::new();
     for suite in xml.split("<testsuite ").skip(1) {
         let suite_tag = suite.split('>').next().unwrap_or(suite);
@@ -186,7 +199,7 @@ pub(crate) fn failures(xml: &str) -> Vec<Failure> {
             }
             let after_tag = &element[tag.len()..];
             let children = after_tag.split("</testcase>").next().unwrap_or(after_tag);
-            let first = ["failure", "error", "flakyFailure", "flakyError"]
+            let first = wanted
                 .iter()
                 .filter_map(|child| {
                     // `<failure` must not be the start of `<failures`.
@@ -228,6 +241,119 @@ pub(crate) fn failures(xml: &str) -> Vec<Failure> {
         }
     }
     found
+}
+
+/// One `<testcase>` of a report, where it lies in the text.
+struct Span {
+    start: usize,
+    end: usize,
+    binary: String,
+    name: String,
+}
+
+/// Where each `<testcase>` of a report lies, in the order of the text.
+fn spans(xml: &str) -> Vec<Span> {
+    const CLOSE: &str = "</testcase>";
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(at) = xml[from..].find("<testcase ") {
+        let start = from + at;
+        let Some(tag_length) = xml[start..].find('>') else {
+            break;
+        };
+        let tag = &xml[start..start + tag_length];
+        let end = if tag.ends_with('/') {
+            start + tag_length + 1
+        } else {
+            match xml[start..].find(CLOSE) {
+                Some(close) => start + close + CLOSE.len(),
+                None => break,
+            }
+        };
+        if let (Some(name), Some(binary)) = (attribute(tag, "name"), attribute(tag, "classname")) {
+            found.push(Span {
+                start,
+                end,
+                binary: unescape(binary),
+                name: unescape(name),
+            });
+        }
+        from = end;
+    }
+    found
+}
+
+/// A report in which the cases of `tests` (a binary and a name each) are
+/// the ones `rerun` has, in the places of the ones `first` has: what
+/// `cargo xtask ci` leaves behind when it has run tests again after a stall
+/// (`stall::rerun`). A test that `rerun` has no case for keeps its case
+/// from `first`, so that a test that went missing is still the failure it
+/// was. The counts of failures and errors, of each suite and of the whole,
+/// are made again from the cases, so that the report does not say a
+/// failure that is no longer in it.
+pub(crate) fn replace_cases(first: &str, rerun: &str, tests: &[(String, String)]) -> String {
+    let theirs = spans(rerun);
+    let mut out = first.to_owned();
+    // From the end, so that a replacement does not move the places of the
+    // ones before it.
+    for ours in spans(first).iter().rev() {
+        if !tests
+            .iter()
+            .any(|(binary, name)| *binary == ours.binary && *name == ours.name)
+        {
+            continue;
+        }
+        if let Some(new) = theirs
+            .iter()
+            .find(|new| new.binary == ours.binary && new.name == ours.name)
+        {
+            out.replace_range(ours.start..ours.end, &rerun[new.start..new.end]);
+        }
+    }
+    recount(&out)
+}
+
+/// Whether the text of a case has an element named `child`.
+fn has_child(case: &str, child: &str) -> bool {
+    [" ", ">", "/"]
+        .iter()
+        .any(|after| case.contains(&format!("<{child}{after}")))
+}
+
+/// A report with the `failures` and `errors` of each suite, and of the
+/// root, counted from its cases again. A report that cannot be read as one
+/// is returned as it is.
+fn recount(xml: &str) -> String {
+    let Ok((open, body)) = root(xml) else {
+        return xml.to_owned();
+    };
+    let mut failures_total = 0_usize;
+    let mut errors_total = 0_usize;
+    let mut text = String::new();
+    for (index, suite) in body.split("<testsuite ").enumerate() {
+        if index == 0 {
+            text.push_str(suite);
+            continue;
+        }
+        let tag = suite.split('>').next().unwrap_or(suite);
+        let (mut failures, mut errors) = (0, 0);
+        for case in spans(suite) {
+            let case = &suite[case.start..case.end];
+            failures += usize::from(has_child(case, "failure"));
+            errors += usize::from(has_child(case, "error"));
+        }
+        failures_total += failures;
+        errors_total += errors;
+        let new_tag = with_attribute(tag, "failures", &failures.to_string());
+        let new_tag = with_attribute(&new_tag, "errors", &errors.to_string());
+        text.push_str("<testsuite ");
+        text.push_str(&new_tag);
+        text.push_str(&suite[tag.len()..]);
+    }
+    let open = with_attribute(open, "failures", &failures_total.to_string());
+    let open = with_attribute(&open, "errors", &errors_total.to_string());
+    let close = &xml[xml.rfind("</testsuites>").unwrap_or(xml.len())..];
+    format!("{open}{text}{close}")
 }
 
 /// The `type` of the element `child` that `element` begins with, and its
@@ -560,6 +686,80 @@ lost the race</stackTrace><system-out>running 1 test</system-out><system-err>noi
         assert!(merged.starts_with(r#"<?xml version="1.0""#));
         assert_eq!(merged.matches("<testsuites").count(), 1);
         assert!(merged.trim_end().ends_with("</testsuites>"));
+    }
+
+    #[test]
+    fn the_cases_that_failed_leave_out_a_test_that_passed_on_its_retry() {
+        let names = |xml: &str| -> Vec<String> {
+            super::failed(xml)
+                .into_iter()
+                .map(|failure| failure.name)
+                .collect()
+        };
+        assert_eq!(
+            names(REPORT),
+            ["loop_::stops_at_the_refused_call", "loop_::never_ends"]
+        );
+        // `failures` has the retry's too.
+        assert_eq!(super::failures(REPORT).len(), 3);
+    }
+
+    #[test]
+    fn cases_put_in_the_place_of_others_leave_the_rest_and_the_counts_true() {
+        let rerun = r#"<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="2" failures="0" errors="0" time="0.2">
+    <testsuite name="cortex-agent::it" tests="2" disabled="0" errors="0" failures="0">
+        <testcase name="loop_::never_ends" classname="cortex-agent::it" timestamp="2026-11-16T09:00:00.000+00:00" time="0.040"/>
+    </testsuite>
+</testsuites>
+"#;
+        let tests = [
+            (
+                "cortex-agent::it".to_owned(),
+                "loop_::never_ends".to_owned(),
+            ),
+            // Not in the re-run's report: its case stays as it was.
+            (
+                "cortex-agent::it".to_owned(),
+                "loop_::stops_at_the_refused_call".to_owned(),
+            ),
+        ];
+        let combined = super::replace_cases(REPORT, rerun, &tests);
+
+        let cases = parse(&combined);
+        assert_eq!(cases.len(), parse(REPORT).len());
+        let timeout = cases
+            .iter()
+            .find(|case| case.name == "loop_::never_ends")
+            .unwrap();
+        assert!(!timeout.failed);
+        assert!((timeout.seconds - 0.04).abs() < 1e-9);
+        // The other cases are the same, in the same order, and the one the
+        // re-run had no case for is still a failure.
+        let mut expected = parse(REPORT);
+        expected[3] = timeout.clone();
+        assert_eq!(cases, expected);
+        assert_eq!(super::failed(&combined).len(), 1);
+        // The counts are of the cases that are there.
+        assert!(
+            combined.contains(
+                r#"<testsuites name="nextest-run" tests="7" failures="1" errors="0" time="0.9">"#
+            ),
+            "{combined}"
+        );
+        assert!(combined.contains(
+            r#"<testsuite name="cortex-agent::it" tests="3" disabled="0" errors="0" failures="1">"#
+        ));
+        assert!(combined.contains(
+            r#"<testsuite name="cortex-base" tests="1" disabled="0" errors="0" failures="0">"#
+        ));
+        // A name that is only the end of another is another test.
+        let none = super::replace_cases(
+            REPORT,
+            rerun,
+            &[("cortex-agent::it".to_owned(), "never_ends".to_owned())],
+        );
+        assert_eq!(parse(&none), parse(REPORT));
     }
 
     #[test]
