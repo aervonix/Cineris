@@ -449,7 +449,7 @@ impl EnginePolicy {
         })
     }
 
-    fn outcome(&self, call: &PlannedCall<'_>) -> Outcome {
+    pub(crate) fn outcome(&self, call: &PlannedCall<'_>) -> Outcome {
         let Some(accesses) = accesses(call) else {
             // The engine cannot be shown the whole of what the call does,
             // so it cannot be asked to allow it.
