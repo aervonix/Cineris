@@ -231,8 +231,9 @@ Builds `cortex` and reports its size and the crates in the build.
                    x86_64-pc-windows-msvc)
   --against-main   the difference from the size `main` last recorded (dist only)
   --profile P      `dist` (the shipped binary, and the default) or `release`
-                   (thin LTO, a fraction of the build time: not the shipped
-                   size, so it has no budget and no `main` to compare with)
+                   (thin LTO, stripped as dist is, a fraction of the build time:
+                   not the shipped size, so it has no budget and no `main` to
+                   compare with)
   --breakdown      the bytes of the binary by crate, from the symbols of an
                    unstripped build of the same code (Linux targets; builds twice)
   --top N          how many crates the breakdown lists (25 when not given)
@@ -501,12 +502,17 @@ pub(crate) fn size(arguments: &[String]) -> Result<()> {
         Some(directory) => directory.clone(),
         None => workspace::metadata(&tree)?.target_directory,
     };
+    let stripping = stripped_as_shipped(&request.profile);
+    let variables: Vec<(&str, &str)> = stripping
+        .iter()
+        .map(|(name, value)| (name.as_str(), *value))
+        .collect();
     shipped::build_with(&shipped::Options {
         profile: &request.profile,
         target: Some(&target),
         tree: archive.as_ref().map(|archive| archive.tree.as_path()),
         target_dir: own_target.as_deref(),
-        variables: &[],
+        variables: &variables,
     })?;
 
     let binary = binary_in(&target_directory, &target, &request.profile);
@@ -656,9 +662,20 @@ fn breakdown(
     Ok(())
 }
 
-/// The environment variable that turns a profile's `strip` off.
+/// The environment variable that sets a profile's `strip`.
 fn strip_variable(profile: &str) -> String {
     format!("CARGO_PROFILE_{}_STRIP", profile.to_uppercase())
+}
+
+/// What a build of `profile` is given so that it is stripped, as `dist` is
+/// (`strip = true` in the manifest): `release` is not, and its size would
+/// be mostly the symbol table's. Nothing for the shipped profile.
+fn stripped_as_shipped(profile: &str) -> Vec<(String, &'static str)> {
+    if profile == PROFILE {
+        Vec::new()
+    } else {
+        vec![(strip_variable(profile), "symbols")]
+    }
 }
 
 /// A symbol of the binary: its size in bytes and its demangled name.
@@ -1062,6 +1079,15 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
     fn the_strip_setting_of_a_profile_is_turned_off_by_its_variable() {
         assert_eq!(strip_variable("dist"), "CARGO_PROFILE_DIST_STRIP");
         assert_eq!(strip_variable("release"), "CARGO_PROFILE_RELEASE_STRIP");
+    }
+
+    #[test]
+    fn a_release_build_is_stripped_as_the_shipped_one_is_and_dist_is_left_alone() {
+        assert_eq!(stripped_as_shipped("dist"), Vec::<(String, &str)>::new());
+        assert_eq!(
+            stripped_as_shipped("release"),
+            [("CARGO_PROFILE_RELEASE_STRIP".to_owned(), "symbols")]
+        );
     }
 
     /// `nm --print-size --demangle --radix=d --defined-only`, as GNU's prints

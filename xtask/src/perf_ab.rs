@@ -325,7 +325,11 @@ fn verdict(series: &Series) -> (String, &'static str) {
     };
     let apart = head_least > base_most || head_most < base_least;
     (
-        format!("{change:+.3}{percent}"),
+        format!(
+            "{}{}{percent}",
+            if change < 0.0 { '-' } else { '+' },
+            figure(change.abs())
+        ),
         if apart { "apart" } else { "within noise" },
     )
 }
@@ -779,12 +783,12 @@ perf: index.rate 50.5 MB/s
         };
         assert_eq!(
             verdict(&series(&[10.0, 10.2, 10.4], &[12.0, 12.2, 12.4])),
-            ("+2.000 (+19.6%)".to_owned(), "apart")
+            ("+2.00 (+19.6%)".to_owned(), "apart")
         );
         // Faster by more than the spread is apart too, and signed.
         assert_eq!(
             verdict(&series(&[10.0, 10.2, 10.4], &[8.0, 8.1, 8.2])),
-            ("-2.100 (-20.6%)".to_owned(), "apart")
+            ("-2.10 (-20.6%)".to_owned(), "apart")
         );
         // A head whose range reaches into the base's is not told from noise.
         assert_eq!(
@@ -796,7 +800,7 @@ perf: index.rate 50.5 MB/s
         // A base of nothing has no percentage.
         assert_eq!(
             verdict(&series(&[0.0, 0.0], &[1.0, 1.0])),
-            ("+1.000".to_owned(), "apart")
+            ("+1.00".to_owned(), "apart")
         );
     }
 
@@ -838,7 +842,7 @@ perf: index.rate 50.5 MB/s
             .expect("a row");
         assert!(row.contains("28.50 (28.00 to 29.00)"), "{row}");
         assert!(row.contains("31.50 (31.00 to 32.50)"), "{row}");
-        assert!(row.contains("+3.000 (+10.5%)"), "{row}");
+        assert!(row.contains("+3.00 (+10.5%)"), "{row}");
         assert!(row.ends_with("apart"), "{row}");
         assert!(text.contains("nothing here judges"), "{text}");
         let empty = render(&Results {

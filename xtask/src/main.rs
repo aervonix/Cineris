@@ -194,13 +194,21 @@ Before a push
                     are not touched. `combine --help` has the rest.
 
 Not blocking (the `main` and `nightly` workflows run these)
-  size [--check] [--target TRIPLE] [--against-main]
+  size [--check] [--target TRIPLE] [--against-main] [--profile release|dist]
+       [--breakdown [--top N]] [--at COMMIT]
                     Build the `dist` profile, with the build machine's folders
                     taken out of its paths, and report the binary's size and
                     the number of crates in it. It fails when the binary holds
                     a path under a home folder; --check fails over the budget
                     too. --against-main also reports the difference from the
                     size the `main` workflow last recorded (through gh).
+                    --profile release builds the thin-LTO profile (no budget,
+                    no main to compare with). --breakdown adds the bytes by
+                    crate, from the symbols of a second, unstripped build
+                    (Linux targets, needs nm). --at COMMIT builds that
+                    commit's tree, read from the repository's history. The
+                    budgets are of the musl build on Linux: pass --target
+                    x86_64-unknown-linux-musl.
   home-paths FILE...
                     Fail when a built file holds a path under a home folder
                     (/home/…, /Users/…, C:\\Users\\…) or under cargo's home.
