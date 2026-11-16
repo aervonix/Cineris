@@ -18,7 +18,7 @@ Item 2: a list of known flaky tests that the tools read. One sentence a line.
   A test that is not listed is never run again.
 - **`ci`:** after each of its two test runs, and after the stall's re-run, the listed tests among what still failed are run again in one run, with no retry; not one the stall's re-run already ran, and nothing when a run ended other than with failed tests.
   The report keeps the second run's cases (`junit::replace_cases`), so the tier check reads their real times, and the job's summary page has a table of each flake, its item and its second run.
-- **CI's blocking jobs run nothing again.** Under GitHub Actions (`GITHUB_ACTIONS=true`) `ci` names the listed tests that failed, on the log and the summary page, and fails as it did.
+- **CI's blocking jobs run nothing again.** Under GitHub Actions (`GITHUB_ACTIONS` set, to anything) `ci` names the listed tests that failed, on the log and the summary page, and fails as it did.
   That is the only change to what CI does: a line of output and a table, and no change to what passes.
 - **`stress`** runs a listed test that failed on some repeat once more, under the seed of the first repeat it failed on, with the run's other arguments and inside its `--cores`/`--load` squeeze, and puts the stress report back afterwards.
   It says how many known flakes passed once more and are not counted as failures of the run.
@@ -63,6 +63,7 @@ An independent reviewer read the whole diff against the specification, and confi
 - **`stress`'s run once more, `--strict` and the report written back were untested:** `known_flakes` takes the run as a function now, and is tested with a pretend one (passes, fails again, nextest fails though its report passed, `--strict`, an exit status other than 100, not listed); it forgets the old report before each run once more.
 - **`mutate`'s second run that stalls was untested,** and its count of flakes that passed was read from its notes' words: a pretend runner's knob stalls it, and the count is carried (`flaky-mutate-a-stalled-second-run-passes`, `flaky-mutate-not-counted`).
 - **The marks' check required a list, and found a function anywhere in the crate:** it now accepts no marks, and looks for an integration binary's test in the file of its first module (`every_known_flake_names_a_test_where_its_binary_and_module_put_it`).
+- **The second round** (the same reviewer, on the fixes) confirmed both bugs closed with tests of its own, and found: the marks' check looked for a binary target's test (`bin/…`) or one at the top of `main.rs` where neither is (fixed: a binary's tests are looked for in the crate's sources, a test of one segment in the binary's `main.rs`); `stress` could leave its report deleted when cargo could not be started for a run once more (fixed: the stress run's report is written back whatever those runs did); and this record said `GITHUB_ACTIONS=true` (corrected). `ci`'s call that reads the variable stays untested, as above.
 - **Left, as within the specification:** `stress` excuses a known flake that passed once more whatever its rate of failure in the run (the rate is printed); a stall during `mutate`'s second run of a flake stops the run, where a stall of the first run is run again with one job (the safe side).
 
 ## Left open

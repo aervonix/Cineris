@@ -342,37 +342,42 @@ fn known_flakes(
         return Ok(0);
     }
     let mut passed = 0;
-    for (flake, seed) in &flakes {
-        let arguments = request.once_command(std::slice::from_ref(&flake.test));
-        say(&format!(
-            "Running {} {} once more, under seed {seed}, the first it failed with:\n$ {SEED}={seed} \
+    let ran = (|| -> Result<()> {
+        for (flake, seed) in &flakes {
+            let arguments = request.once_command(std::slice::from_ref(&flake.test));
+            say(&format!(
+                "Running {} {} once more, under seed {seed}, the first it failed with:\n$ {SEED}={seed} \
              cargo {}",
-            flake.test.binary,
-            flake.test.name,
-            arguments.join(" ")
-        ));
-        // A report the run before left must not be read as this run's.
-        workspace::forget_report(report)?;
-        let succeeded = run_once(&arguments, *seed)?;
-        let verdict = std::fs::read_to_string(report).map_or(Verdict::Missing, |second| {
-            rerun::verdicts(std::slice::from_ref(&flake.test), &second)[0]
-        });
-        let ok = succeeded && verdict == Verdict::Passed;
-        say(&format!(
-            "  {} {} {}",
-            flake.test.binary,
-            flake.test.name,
-            if ok || verdict != Verdict::Passed {
-                flaky::says(verdict)
-            } else {
-                "passed, but nextest failed: counted as a failure"
-            }
-        ));
-        passed += usize::from(ok);
-    }
-    // The report the summary pointed at is the stress run's.
+                flake.test.binary,
+                flake.test.name,
+                arguments.join(" ")
+            ));
+            // A report the run before left must not be read as this run's.
+            workspace::forget_report(report)?;
+            let succeeded = run_once(&arguments, *seed)?;
+            let verdict = std::fs::read_to_string(report).map_or(Verdict::Missing, |second| {
+                rerun::verdicts(std::slice::from_ref(&flake.test), &second)[0]
+            });
+            let ok = succeeded && verdict == Verdict::Passed;
+            say(&format!(
+                "  {} {} {}",
+                flake.test.binary,
+                flake.test.name,
+                if ok || verdict != Verdict::Passed {
+                    flaky::says(verdict)
+                } else {
+                    "passed, but nextest failed: counted as a failure"
+                }
+            ));
+            passed += usize::from(ok);
+        }
+        Ok(())
+    })();
+    // The report the summary pointed at is the stress run's, whatever
+    // happened to the runs once more.
     std::fs::write(report, xml)
         .map_err(|error| format!("could not write {} back: {error}", report.display()))?;
+    ran?;
     say(&format!(
         "{passed} of {} known flake(s) passed when run once more, and are not counted as \
          failures of this run; a known flake that failed again is.",
