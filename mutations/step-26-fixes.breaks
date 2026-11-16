@@ -157,7 +157,7 @@ caught-by:
 [break] an-unconfined-command-keeps-the-baseline
 rule: After a command that left the sandbox, the continuity baseline is dropped, so the next confined command does not report the approved change as one from outside.
 file: crates/cortex-core/src/checkpoints.rs
-in: RecordingShell::run
+in: RecordingShell::run_by
 find: self.sandbox.forget_after();
 replace: let _ = &self.sandbox;
 packages: cortex-core

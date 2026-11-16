@@ -438,11 +438,7 @@ fn a_project_may_turn_verification_down_and_never_choose_its_commands() {
         let loaded = machine.load();
         // Up is the user's alone, trusted or not; so are the commands.
         assert_eq!(value(&loaded, "verify.mode"), "\"ask\"", "{trust:?}");
-        assert_eq!(
-            loaded.settings.verify.commands,
-            ["cargo test"],
-            "{trust:?}"
-        );
+        assert_eq!(loaded.settings.verify.commands, ["cargo test"], "{trust:?}");
         assert_eq!(value(&loaded, "verify.rounds"), "2", "{trust:?}");
         assert_eq!(value(&loaded, "verify.turn_time"), "\"4m\"", "{trust:?}");
         // Shorter applies.

@@ -35,8 +35,8 @@ caught-by:
 rule: A command that ran and failed has still changed what its look found: `sed -i … && make` that fails has edited.
 file: crates/cortex-tools/src/touched.rs
 in: changed_by
-find: ToolOutcome::Denied => Vec::new(),
-replace: ToolOutcome::Denied | ToolOutcome::Error => Vec::new(),
+find: ToolOutcome::Denied => Vec::new()
+replace: ToolOutcome::Denied | ToolOutcome::Error => Vec::new()
 caught-by:
     cortex-tools touched::tests::a_command_changed_what_its_look_found_and_not_the_workspace_it_declared
     cortex-agent::it verifying::a_command_sends_the_turn_to_the_checks_by_what_its_look_found
@@ -74,8 +74,8 @@ caught-by:
 rule: A round is told the time the turn's and the session's limits leave, so that no check runs past them.
 file: crates/cortex-agent/src/turn.rs
 in: Session::verify
-find: deadline: self.ledger.time_left(),
-replace: deadline: None,
+find: deadline: self.ledger.time_left()
+replace: deadline: None
 caught-by:
     cortex-agent::it verifying::a_round_is_told_its_place_and_the_time_the_turns_limits_leave
 
@@ -92,8 +92,8 @@ caught-by:
 rule: A check that made the turn stop (a protected path changed, a process that could not be cleared) ends the turn `denied`, as a tool round the policy stopped does.
 file: crates/cortex-agent/src/turn.rs
 in: Session::verify
-find: outcome: TurnOutcome::Denied,
-replace: outcome: TurnOutcome::Completed,
+find: outcome: TurnOutcome::Denied
+replace: outcome: TurnOutcome::Completed
 caught-by:
     cortex-agent::it verifying::a_check_that_stops_the_turn_ends_it_denied_and_the_model_is_told_why
 
@@ -101,8 +101,8 @@ caught-by:
 rule: The verdict of the turn's checks is carried whenever a round ran, however the turn then ended: a failure is not lost when the turn runs out of time.
 file: crates/cortex-agent/src/turn.rs
 in: Session::finish
-find: (Some(verdict), _) => Some(verdict.clone()),
-replace: (Some(_), _) if end.outcome != TurnOutcome::Completed => None, (Some(verdict), _) => Some(verdict.clone()),
+find: (Some(verdict), _) => Some(verdict.clone())
+replace: (Some(_), _) if end.outcome != TurnOutcome::Completed => None, (Some(verdict), _) => Some(verdict.clone())
 caught-by:
     cortex-agent::it verifying::the_verdict_stays_with_a_turn_that_then_runs_out_of_time
 
@@ -112,8 +112,9 @@ caught-by:
 rule: A project may turn verification down (`off` < `ask` < `auto`) and never up: up is the user's alone.
 file: crates/cortex-config/src/schema/mod.rs
 in: Trust::class
-find: (Some(wanted), Some(now)) if wanted <= now => TrustClass::Preference,
-replace: (Some(_), Some(_)) => TrustClass::Preference,
+occurrence: 2
+find: (Some(wanted), Some(now)) if wanted <= now => TrustClass::Preference
+replace: (Some(_), Some(_)) => TrustClass::Preference
 caught-by:
     cortex-config::it trust::a_project_may_turn_verification_down_and_never_choose_its_commands
 
@@ -126,3 +127,218 @@ caught-by:
     cortex-config::it trust::a_project_may_turn_verification_down_and_never_choose_its_commands
     cortex-config::it trust::the_documented_classes_hold
     cortex-config::it trust::every_key_has_a_trust_class
+
+# ------------------------------------------------- who chooses a check
+
+[break] a-check-runs-in-a-project-not-trusted
+rule: No check runs in a project the user has not trusted: it would run the repository's own code at the end of every turn, and nobody is asked.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::round
+find: if !self.parts.trusted {
+replace: if false {
+caught-by:
+    cortex-core::it verify::in_a_project_the_user_has_not_trusted_no_check_runs
+
+[break] a-check-runs-at-read-only
+rule: No check runs at the read-only level, where a command writes nothing.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::round
+find: *self.parts.policy.engine().level() == Level::ReadOnly
+replace: *self.parts.policy.engine().level() == Level::Unrestricted
+caught-by:
+    cortex-core::it verify::at_the_read_only_level_no_check_runs
+
+[break] an-entry-active-by-observation-is-a-check
+rule: Only command entries the user accepted, or wrote, are checks: one that became active by observation alone is in the prompt and nowhere else.
+file: crates/cortex-core/src/verify.rs
+in: choose
+find: for entry in snapshot.runs_unasked(now) {
+replace: for entry in snapshot.in_use(now) {
+caught-by:
+    cortex-core verify::tests::a_round_chooses_the_users_lines_then_the_accepted_tests_and_checks
+    cortex-core::it verify::sys_only_the_users_lines_and_the_commands_the_user_accepted_run
+
+[break] a-build-or-a-formatter-is-a-check
+rule: Of the profile's commands, those of purpose test and check are checks; a build, a formatter or a run is not.
+file: crates/cortex-core/src/verify.rs
+in: choose
+find: if !matches!(command.purpose, Purpose::Test | Purpose::Check) {
+replace: if false {
+caught-by:
+    cortex-core verify::tests::a_round_chooses_the_users_lines_then_the_accepted_tests_and_checks
+
+[break] the-same-check-runs-twice
+rule: The same line in the same directory runs once a round, whichever places name it.
+file: crates/cortex-core/src/verify.rs
+in: choose
+find: if !seen.insert(check.key()) {
+replace: if !seen.insert((check.line.clone(), check.cwd.clone())) {
+caught-by:
+    cortex-core verify::tests::the_same_line_in_the_same_place_runs_once_and_a_round_runs_at_most_eight
+
+[break] a-round-runs-past-eight-checks
+rule: A round runs at most eight checks.
+file: crates/cortex-core/src/verify.rs
+in: choose
+find: if chosen.checks.len() == MOST_CHECKS {
+replace: if false {
+caught-by:
+    cortex-core verify::tests::the_same_line_in_the_same_place_runs_once_and_a_round_runs_at_most_eight
+
+[break] an-ask-holds-back-the-users-own-line
+rule: The user's own line runs where the engine would ask: it is the user's word.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::run_once
+find: Decision::Ask if check.source == CheckSource::User => None
+replace: Decision::Ask if false => None
+caught-by:
+    cortex-core::it verify::sys_a_failed_check_goes_back_to_the_model_marked_as_its_output_and_passes_when_fixed
+    cortex-core::it verify::sys_a_known_flaky_test_that_fails_runs_once_more_and_passing_is_said_to_be_flaky
+
+[break] an-ask-runs-a-profile-check
+rule: An entry of the profile runs only where the engine allows it unasked; one that would ask does not run, and a check never asks.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::run_once
+find: Decision::Ask if check.source == CheckSource::User => None
+replace: Decision::Ask => None
+caught-by:
+    cortex-core::it verify::an_accepted_check_the_engine_would_ask_about_does_not_run
+
+[break] a-rule-that-refuses-does-not-hold-back-the-users-line
+rule: A rule that refuses a command refuses it as a check too, the user's own line included.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::run_once
+find: if let Some(refused) = refused {
+replace: if let Some(refused) = refused.filter(|ran| !ran.note.as_deref().is_some_and(|note| note.starts_with("A rule refuses"))) {
+caught-by:
+    cortex-core::it verify::a_users_check_that_a_rule_refuses_does_not_run
+
+[break] an-entry-turned-off-still-runs
+rule: An entry of the profile is looked up again just before it runs: one turned off, or lapsed, since the round began does not run.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::run_once
+find: let still = current.as_ref().is_some_and(|(snapshot, now)| {
+replace: let still = true || current.as_ref().is_some_and(|(snapshot, now)| {
+caught-by:
+    cortex-core::it verify::sys_an_entry_turned_off_while_its_round_runs_does_not_run
+
+[break] a-check-teaches-the-profile
+rule: A check is the harness's run: it confirms what the profile holds and teaches it no new command.
+file: crates/cortex-core/src/knowledge.rs
+in: Knowledge::observe
+find: && (!harness || held.as_ref().is_some_and(|held| confirms(held, learnt, now)))
+replace: && (true || held.as_ref().is_some_and(|held| confirms(held, learnt, now)))
+caught-by:
+    cortex-core::it verify::sys_a_check_confirms_what_the_profile_holds_and_teaches_it_nothing_new
+
+[break] a-check-is-told-as-the-models-run
+rule: The shell tells the observer that a check's run was the harness's.
+file: crates/cortex-core/src/checkpoints.rs
+in: RecordingShell::run_by
+find: By::Harness => knowledge.observed_check(&run)
+replace: By::Harness => knowledge.observed(&run)
+caught-by:
+    cortex-core::it verify::sys_a_check_confirms_what_the_profile_holds_and_teaches_it_nothing_new
+
+# ------------------------------------------------------------ time
+
+[break] a-check-has-the-whole-round-whatever-the-turn-left
+rule: A check runs with no more than the turn's limit leaves, after its earlier rounds.
+file: crates/cortex-core/src/verify.rs
+in: time_left
+find: .min(settings.turn_time.saturating_sub(used + in_round));
+replace: .min(settings.turn_time);
+caught-by:
+    cortex-core verify::tests::a_check_has_the_least_of_what_the_round_the_turn_and_the_limits_leave
+
+[break] a-check-runs-past-the-turns-own-time-limit
+rule: A check runs with no more than the turn's and the session's own time limits leave.
+file: crates/cortex-core/src/verify.rs
+in: time_left
+find: left = left.min(deadline.saturating_sub(in_round));
+replace: left = left.min(deadline);
+caught-by:
+    cortex-core verify::tests::a_check_has_the_least_of_what_the_round_the_turn_and_the_limits_leave
+
+[break] a-check-longer-than-the-limit-runs
+rule: A check that usually takes longer than a round's limit is skipped, with a note.
+file: crates/cortex-core/src/verify.rs
+in: too_long
+find: && usual > round_time
+replace: && false
+caught-by:
+    cortex-core verify::tests::a_check_is_not_started_when_it_usually_takes_longer_than_it_has
+
+[break] a-check-starts-with-no-time-to-finish
+rule: A check is not started with less time than it usually takes, or ten seconds when that is not known.
+file: crates/cortex-core/src/verify.rs
+in: too_long
+find: (left < needs || left.is_zero()).then(|| {
+replace: (left.is_zero()).then(|| {
+caught-by:
+    cortex-core verify::tests::a_check_is_not_started_when_it_usually_takes_longer_than_it_has
+
+[break] a-timeout-is-the-models-fault
+rule: A check stopped at its limit is a failure for the model only when it usually takes less than half the time it had.
+file: crates/cortex-core/src/verify.rs
+in: classify
+find: if usual.is_some_and(|usual| usual.saturating_mul(2) <= limit) {
+replace: if true {
+caught-by:
+    cortex-core verify::tests::a_check_stopped_at_its_limit_is_a_failure_only_when_it_usually_ends_well_within_it
+    cortex-core::it verify::sys_a_check_over_its_time_limit_is_stopped_and_said_and_not_fed_back
+
+[break] a-flaky-test-is-not-retried
+rule: A known flaky test that fails runs once more before it is reported.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::check
+find: || !flaky.contains(&check.key())
+replace: || true
+caught-by:
+    cortex-core::it verify::sys_a_known_flaky_test_that_fails_runs_once_more_and_passing_is_said_to_be_flaky
+
+[break] a-blocked-check-is-a-failure
+rule: A check the sandbox blocked is not a failure of the model's work, and is not fed back.
+file: crates/cortex-core/src/verify.rs
+in: classify
+find: } else if let (Some(line), false) = (blocked, ran.exit_code == Some(0)) {
+replace: } else if let (Some(line), true) = (blocked, false) {
+caught-by:
+    cortex-core verify::tests::a_result_is_read_by_what_the_shell_says_of_it
+
+# --------------------------------------------- what the model is told
+
+[break] a-checks-output-is-not-marked
+rule: Every line of what a check printed is marked as the command's, so none can begin a line of the report.
+file: crates/cortex-core/src/verify.rs
+in: report
+find: text.push_str(MARK);
+replace: text.push_str("");
+caught-by:
+    cortex-core verify::tests::what_a_check_printed_cannot_pass_for_the_harness_or_the_user
+    cortex-core::it verify::sys_a_failed_check_goes_back_to_the_model_marked_as_its_output_and_passes_when_fixed
+
+[break] a-checks-output-is-not-escaped
+rule: Every line of what a check printed passes `visible`: nothing unseen reaches the model.
+file: crates/cortex-core/src/verify.rs
+in: report
+find: text.push_str(&visible_keeping(line, &['\t']));
+replace: text.push_str(line);
+caught-by:
+    cortex-core verify::tests::what_a_check_printed_cannot_pass_for_the_harness_or_the_user
+
+[break] a-users-check-loses-the-lines-that-matter
+rule: The shell keeps the lines that report a problem for the user's own checks, whatever the table classes them as.
+file: crates/cortex-core/src/assemble.rs
+find: lines: settings.verify.commands.clone()
+replace: lines: Vec::new()
+caught-by:
+    cortex-core::it verify::sys_what_a_failed_check_printed_keeps_the_lines_that_report_a_problem
+
+[break] the-sandboxs-line-is-not-in-the-payload
+rule: The shell's payload carries what the launcher said its confinement blocked, for the checks to tell a blocked command from a failed one.
+file: crates/cortex-tools/src/shell/mod.rs
+find: fields.insert("sandbox".to_owned(), Json::String(line));
+replace: let _ = (fields, line);
+caught-by:
+    cortex-tools::it shell::sys_what_the_sandbox_blocked_is_in_the_payload

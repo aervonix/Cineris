@@ -765,7 +765,7 @@ caught-by:
 [break] a-command-with-a-credential-is-observed
 rule: A command line that holds what looks like a credential is not observed.
 file: crates/cortex-core/src/knowledge.rs
-in: Knowledge::observed
+in: Knowledge::observe
 find: || self.finds_secret(&run.command)
 replace:
 caught-by:
@@ -774,7 +774,7 @@ caught-by:
 [break] learning-is-on-when-the-setting-is-off
 rule: With `project.learn` off nothing is observed.
 file: crates/cortex-core/src/knowledge.rs
-in: Knowledge::observed
+in: Knowledge::observe
 find: !self.learn ||
 replace:
 caught-by:

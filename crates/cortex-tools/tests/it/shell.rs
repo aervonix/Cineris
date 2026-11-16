@@ -522,6 +522,63 @@ for_shell!(powershell, "powershell");
 #[cfg(windows)]
 for_shell!(cmd, "cmd");
 
+/// A launcher that confines nothing, and says that its confinement
+/// blocked any command that failed: what a sandbox says of a build kept
+/// off the network.
+#[cfg(unix)]
+#[derive(Debug)]
+struct SaysBlocked;
+
+#[cfg(unix)]
+impl cortex_tools::process::Launcher for SaysBlocked {
+    fn launch(
+        &self,
+        command: cortex_tools::process::CommandLine,
+        cx: &cortex_tools::process::LaunchCx<'_>,
+    ) -> Result<cortex_tools::process::Launch, String> {
+        cortex_tools::process::Direct.launch(command, cx)
+    }
+
+    fn explain(&self, exit: Option<cortex_tools::process::Exit>, _output: &str) -> Option<String> {
+        (exit != Some(cortex_tools::process::Exit::Code(0)))
+            .then(|| "[The sandbox kept the command off the network.]".to_owned())
+    }
+}
+
+/// What the launcher said it blocked is in the payload as well as in the
+/// text, for the verification stage to tell a check the sandbox blocked
+/// from one that failed (step 19).
+#[cfg(unix)]
+#[test]
+fn sys_what_the_sandbox_blocked_is_in_the_payload() {
+    let Some(shell) = bench::shell("sh") else {
+        return;
+    };
+    let bench = Bench::new("blocked_payload", shell);
+    let bench = Bench {
+        tool: bench.tool.with_launcher(Arc::new(SaysBlocked)),
+        ..bench
+    };
+    let failed = bench.command("exit 4");
+    assert_eq!(
+        failed.payload("sandbox"),
+        json!("[The sandbox kept the command off the network.]")
+    );
+    assert!(
+        failed.text().contains("off the network"),
+        "{}",
+        failed.text()
+    );
+    let passed = bench.command("exit 0");
+    assert_eq!(
+        passed
+            .result
+            .payload()
+            .and_then(|payload| payload.get("sandbox")),
+        None
+    );
+}
+
 /// Git Bash, where the machine has it: bash on Windows is spoken to as
 /// bash anywhere.
 #[cfg(windows)]

@@ -161,7 +161,12 @@ mod tests {
             }
         }
         // A look that did not finish: something may have changed.
-        let changed = changed_by(&effects, &ToolOutcome::Success, Some(&found("git", false)), &root);
+        let changed = changed_by(
+            &effects,
+            &ToolOutcome::Success,
+            Some(&found("git", false)),
+            &root,
+        );
         assert_eq!(names(&changed, &root), ["new.rs", "src/a.rs", "."]);
         let none = json!({"exit_code": 0, "changes": {"method": "none", "complete": true}});
         let changed = changed_by(&effects, &ToolOutcome::Success, Some(&none), &root);
@@ -176,7 +181,13 @@ mod tests {
         let unlooked = json!({"exit_code": 0, "changes": null});
         assert!(changed_by(&effects, &ToolOutcome::Success, Some(&unlooked), &root).is_empty());
         assert!(
-            changed_by(&effects, &ToolOutcome::Denied, Some(&found("git", true)), &root).is_empty()
+            changed_by(
+                &effects,
+                &ToolOutcome::Denied,
+                Some(&found("git", true)),
+                &root
+            )
+            .is_empty()
         );
         assert!(changed_by(&effects, &ToolOutcome::Error, None, &root).is_empty());
     }

@@ -92,7 +92,10 @@ fn a_command_sends_the_turn_to_the_checks_by_what_its_look_found() {
     };
     // A command declares a write of the whole workspace: that alone is
     // not a change.
-    assert_eq!(ran("verify_cmd_quiet", json!({"payload": changes(&[], true)})), []);
+    assert_eq!(
+        ran("verify_cmd_quiet", json!({"payload": changes(&[], true)})),
+        []
+    );
     assert_eq!(ran("verify_cmd_unlooked", json!({})), []);
     // What its look found is.
     assert_eq!(
@@ -112,14 +115,20 @@ fn a_command_sends_the_turn_to_the_checks_by_what_its_look_found() {
     );
     // A look that did not finish: something may have changed.
     assert_eq!(
-        ran("verify_cmd_unknown", json!({"payload": changes(&[], false)})),
+        ran(
+            "verify_cmd_unknown",
+            json!({"payload": changes(&[], false)})
+        ),
         [(1, 1)]
     );
 }
 
 #[test]
 fn a_check_that_stops_the_turn_ends_it_denied_and_the_model_is_told_why() {
-    let (world, rig) = Rig::one("verify_stopped", [writes("a"), says("Done."), says("Never.")]);
+    let (world, rig) = Rig::one(
+        "verify_stopped",
+        [writes("a"), says("Done."), says("Never.")],
+    );
     lock(&rig.verifier.outcomes).push_back(VerifyOutcome::Stopped {
         reason: "`cargo test` changed `.git/hooks/pre-commit`, a protected path.".to_owned(),
     });
@@ -253,7 +262,10 @@ fn no_round_starts_once_the_turns_time_is_spent() {
 
 #[test]
 fn the_verdict_stays_with_a_turn_that_then_runs_out_of_time() {
-    let world = World::new("verify_then_limit", [writes("a"), says("Done."), says("Never.")]);
+    let world = World::new(
+        "verify_then_limit",
+        [writes("a"), says("Done."), says("Never.")],
+    );
     let clock = world.clock.clone();
     let verifier = Arc::new(Told {
         seen: std::sync::Mutex::default(),
@@ -316,7 +328,10 @@ fn an_interrupt_waits_for_the_round_to_stop_what_it_runs() {
         }
         // The check has not stopped yet, so the turn has not ended: a turn
         // that ended here would leave it running.
-        assert!(rig.events.ends().is_empty(), "the turn waits for its checks");
+        assert!(
+            rig.events.ends().is_empty(),
+            "the turn waits for its checks"
+        );
         let _ = rig.handle.interrupt_now();
         rig.events.turns(1).await;
     });

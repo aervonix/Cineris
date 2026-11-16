@@ -150,9 +150,7 @@ pub(crate) fn choose(
     let usual_of = |key: &Key| -> Option<Duration> {
         snapshot?.entries().iter().find_map(|entry| {
             let command = entry.command.as_ref()?;
-            (entry.kind == Kind::Command
-                && key_line(&command.run) == key.0
-                && command.cwd == key.1)
+            (entry.kind == Kind::Command && key_line(&command.run) == key.0 && command.cwd == key.1)
                 .then_some(command.usual_ms)
                 .flatten()
                 .map(Duration::from_millis)
@@ -356,6 +354,53 @@ pub(crate) fn classify(result: &ToolResult, limit: Duration, usual: Option<Durat
     ran
 }
 
+/// The time a check may have, `in_round` into its round: what is left of
+/// the round's limit, of the turn's (`used` by its earlier rounds), and of
+/// the turn's and the session's own time limits (`deadline`, as the round
+/// began).
+pub(crate) fn time_left(
+    settings: &Settings,
+    used: Duration,
+    deadline: Option<Duration>,
+    in_round: Duration,
+) -> Duration {
+    let mut left = settings
+        .round_time
+        .saturating_sub(in_round)
+        .min(settings.turn_time.saturating_sub(used + in_round));
+    if let Some(deadline) = deadline {
+        left = left.min(deadline.saturating_sub(in_round));
+    }
+    left
+}
+
+/// Why a check is not started for its time, when it is not: it usually
+/// takes longer than a round's limit (15-efficiency's rule), or longer than
+/// what is `left` (at least [`LEAST_TIME`] when its usual time is not
+/// known).
+pub(crate) fn too_long(
+    usual: Option<Duration>,
+    round_time: Duration,
+    left: Duration,
+) -> Option<String> {
+    if let Some(usual) = usual
+        && usual > round_time
+    {
+        return Some(format!(
+            "It usually takes {}, longer than a round's limit of {}.",
+            shown_time(usual),
+            shown_time(round_time)
+        ));
+    }
+    let needs = usual.unwrap_or(LEAST_TIME);
+    (left < needs || left.is_zero()).then(|| {
+        format!(
+            "Not enough of the round's time was left: {}.",
+            shown_time(left)
+        )
+    })
+}
+
 /// A length of time as the reports say it.
 fn shown_time(time: Duration) -> String {
     let seconds = time.as_secs();
@@ -448,12 +493,17 @@ pub(crate) fn report(
     for (check, ran) in results {
         let said = match ran.ended {
             Ended::Passed => "passed".to_owned(),
-            Ended::Flaky => "failed, then passed when run again: it is a known flaky test".to_owned(),
-            Ended::TimedOut => "was stopped at its time limit, which is not taken for a failure of \
+            Ended::Flaky => {
+                "failed, then passed when run again: it is a known flaky test".to_owned()
+            }
+            Ended::TimedOut => {
+                "was stopped at its time limit, which is not taken for a failure of \
                                 your changes"
-                .to_owned(),
-            Ended::Blocked => "was blocked by the sandbox, which is not a failure of your changes"
-                .to_owned(),
+                    .to_owned()
+            }
+            Ended::Blocked => {
+                "was blocked by the sandbox, which is not a failure of your changes".to_owned()
+            }
             Ended::Skipped => "was not run, for its time".to_owned(),
             Ended::NotRun => "was not run".to_owned(),
             Ended::Failed | Ended::Stopped(_) | Ended::Interrupted => continue,
@@ -570,12 +620,11 @@ impl CoreVerifier {
 
     /// The project's knowledge as it is now. `None` with no store, or when
     /// the read could not be made.
-    async fn current(
-        &self,
-        cx: &VerifyCx<'_>,
-    ) -> Option<(Arc<Snapshot>, cortex_base::UtcTime)> {
+    async fn current(&self, cx: &VerifyCx<'_>) -> Option<(Arc<Snapshot>, cortex_base::UtcTime)> {
         let knowledge = Arc::clone(self.parts.knowledge.as_ref()?);
-        run_blocking(cx.cancel, move |_| knowledge.current()).await.ok()
+        run_blocking(cx.cancel, move |_| knowledge.current())
+            .await
+            .ok()
     }
 
     async fn round(&self, cx: VerifyCx<'_>) -> VerifyOutcome {
@@ -617,9 +666,7 @@ impl CoreVerifier {
             return VerifyOutcome::Skipped;
         }
         if *self.parts.policy.engine().level() == Level::ReadOnly {
-            self.tell_once(
-                "The project's checks do not run at the read-only level.".to_owned(),
-            );
+            self.tell_once("The project's checks do not run at the read-only level.".to_owned());
             return VerifyOutcome::Skipped;
         }
         let Some(shell) = &self.parts.shell else {
@@ -712,9 +759,10 @@ impl CoreVerifier {
                 ended: Ended::Flaky,
                 note: Some(format!(
                     "It failed with {}, then passed when run again: it is a known flaky test.",
-                    first
-                        .exit_code
-                        .map_or_else(|| "no exit code".to_owned(), |code| format!("exit code {code}"))
+                    first.exit_code.map_or_else(
+                        || "no exit code".to_owned(),
+                        |code| format!("exit code {code}")
+                    )
                 )),
                 ..second
             },
@@ -729,48 +777,17 @@ impl CoreVerifier {
         let cx = round.cx;
         let settings = &self.parts.settings;
         // The time it may have.
-        let in_round = self
-            .parts
-            .clock
-            .monotonic()
-            .saturating_sub(round.started);
-        let mut left = settings
-            .round_time
-            .saturating_sub(in_round)
-            .min(settings.turn_time.saturating_sub(cx.used + in_round));
-        if let Some(deadline) = cx.deadline {
-            left = left.min(deadline.saturating_sub(in_round));
-        }
-        if let Some(usual) = check.usual
-            && usual > settings.round_time
-        {
-            return Ran::not(
-                Ended::Skipped,
-                format!(
-                    "It usually takes {}, longer than a round's limit of {}.",
-                    shown_time(usual),
-                    shown_time(settings.round_time)
-                ),
-            );
-        }
-        let needs = check.usual.unwrap_or(LEAST_TIME);
-        if left < needs || left.is_zero() {
-            return Ran::not(
-                Ended::Skipped,
-                format!(
-                    "Not enough of the round's time was left: {}.",
-                    shown_time(left)
-                ),
-            );
+        let in_round = self.parts.clock.monotonic().saturating_sub(round.started);
+        let left = time_left(settings, cx.used, cx.deadline, in_round);
+        if let Some(why) = too_long(check.usual, settings.round_time, left) {
+            return Ran::not(Ended::Skipped, why);
         }
         // An entry of the profile must still be one that runs unasked: it
         // may have been turned off, or have lapsed, since the round began.
         if let Some(entry) = &check.entry {
             let current = self.current(cx).await;
             let still = current.as_ref().is_some_and(|(snapshot, now)| {
-                snapshot
-                    .runs_unasked(*now)
-                    .any(|held| &held.id == entry)
+                snapshot.runs_unasked(*now).any(|held| &held.id == entry)
             });
             if !still {
                 return Ran::not(
@@ -825,29 +842,36 @@ impl CoreVerifier {
             }
             Err(_) => return Ran::not(Ended::Interrupted, "The turn was interrupted."),
         };
-        match decision {
-            Decision::Allow => {}
-            Decision::AllowReadOnly => plan.concurrency = Concurrency::ReadOnly,
-            // The user's own line is the user's word.
-            Decision::Ask if check.source == CheckSource::User => {}
-            Decision::Ask => {
-                return Ran::not(
-                    Ended::NotRun,
-                    "It would ask before it runs, and a check never asks: accept the entry \
-                     again, or trust the project, for its learned rule to apply.",
-                );
+        // What the engine says decides, but for one thing: the user's own
+        // line runs where the engine would ask, as the user's word. A check
+        // never puts a question.
+        let refused = match decision {
+            Decision::Allow => None,
+            Decision::AllowReadOnly => {
+                plan.concurrency = Concurrency::ReadOnly;
+                None
             }
-            Decision::Deny { reason } => {
-                return Ran::not(
-                    Ended::NotRun,
-                    format!(
-                        "A rule refuses it: {}",
-                        visible(reason.as_deref().unwrap_or("no reason was given."))
-                    ),
-                );
-            }
-            Decision::Stop { reason } => return Ran::not(Ended::Stopped(reason.clone()), reason),
-            _ => return Ran::not(Ended::NotRun, "The engine's answer is not one this build knows."),
+            Decision::Ask if check.source == CheckSource::User => None,
+            Decision::Ask => Some(Ran::not(
+                Ended::NotRun,
+                "It would ask before it runs, and a check never asks: its line is not one a \
+                 rule can allow exactly, or the project is not trusted for its learned rule.",
+            )),
+            Decision::Deny { reason } => Some(Ran::not(
+                Ended::NotRun,
+                format!(
+                    "A rule refuses it: {}",
+                    visible(reason.as_deref().unwrap_or("no reason was given."))
+                ),
+            )),
+            Decision::Stop { reason } => Some(Ran::not(Ended::Stopped(reason.clone()), reason)),
+            _ => Some(Ran::not(
+                Ended::NotRun,
+                "The engine's answer is not one this build knows.",
+            )),
+        };
+        if let Some(refused) = refused {
+            return refused;
         }
         if let Some(reason) = self.parts.policy.stopped_turn(cx.number) {
             return Ran::not(Ended::Stopped(reason.clone()), reason);
@@ -862,13 +886,9 @@ impl CoreVerifier {
         .with_limits(self.parts.limits)
         .with_gate(self.parts.policy.read_gate())
         .with_turn(cx.number);
-        let result = cortex_tools::execute(
-            &AsCheck(round.shell.as_ref()),
-            plan,
-            &run_cx,
-            &mut NoOutput,
-        )
-        .await;
+        let result =
+            cortex_tools::execute(&AsCheck(round.shell.as_ref()), plan, &run_cx, &mut NoOutput)
+                .await;
         let mut ran = classify(&result, left, check.usual);
         // The look after it, or the look before it, may have stopped the
         // turn: nothing more of it runs, and the turn ends.
@@ -919,17 +939,14 @@ impl CoreVerifier {
                 .iter()
                 .all(|(_, ran)| matches!(ran.ended, Ended::Passed | Ended::Flaky));
         let (outcome, verdict) = if let Some(reason) = stopped {
-            (
-                VerifyOutcome::Stopped { reason },
-                Verification::Incomplete,
-            )
+            (VerifyOutcome::Stopped { reason }, Verification::Incomplete)
         } else if !failing.is_empty() {
             let earlier: Vec<&Check> = failing
                 .iter()
                 .filter(|held| {
-                    !results.iter().any(|(check, ran)| {
-                        check.key() == held.key() && ran.ended == Ended::Failed
-                    })
+                    !results
+                        .iter()
+                        .any(|(check, ran)| check.key() == held.key() && ran.ended == Ended::Failed)
                 })
                 .collect();
             (
@@ -947,10 +964,7 @@ impl CoreVerifier {
         };
         let message = match &verdict {
             Verification::Passed => "The project's checks passed.".to_owned(),
-            Verification::Failed => format!(
-                "The project's checks failed: {}.",
-                names(&failing)
-            ),
+            Verification::Failed => format!("The project's checks failed: {}.", names(&failing)),
             Verification::Skipped => "None of the project's checks ran.".to_owned(),
             _ => "The project's checks did not all run to a result.".to_owned(),
         };
