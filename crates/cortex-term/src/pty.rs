@@ -275,6 +275,20 @@ pub fn interrupt_pending_here() -> io::Result<PendingInterrupt> {
     })
 }
 
+/// Makes this process the reaper of its descendants' orphans (Linux's
+/// `PR_SET_CHILD_SUBREAPER`): a grandchild whose parent ends becomes this
+/// process's child, and stays as a zombie once it ends, since nothing waits
+/// for it, so that a test can still read how it ended from `/proc`. Nothing
+/// happens on other systems.
+///
+/// # Errors
+///
+/// When the system refuses.
+#[cfg(unix)]
+pub fn adopt_orphans() -> io::Result<()> {
+    sys::pty::adopt_orphans()
+}
+
 /// Raises SIGHUP on the calling thread: its handler has run when this
 /// returns. Unix only.
 ///

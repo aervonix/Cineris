@@ -912,6 +912,14 @@ pub(crate) mod pty {
         Ok(())
     }
 
+    /// Makes this process the reaper of its descendants' orphans, on Linux.
+    pub(crate) fn adopt_orphans() -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        // SAFETY: `prctl` with this option reads nothing but its arguments.
+        check(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) })?;
+        Ok(())
+    }
+
     /// Whether a read error on the master means the other side has gone:
     /// Linux reports that as EIO once every program in the terminal has
     /// closed it.
