@@ -327,9 +327,11 @@ fn close_the_terminal(case: &str, test: &str, job: bool) -> String {
     }
     drop(pty);
     let mut text = wait_result(&report, job);
-    if !text.contains("RESULT") {
+    if !(text.contains("RESULT") && (!job || text.contains("ALIVE"))) {
         // Where the application is, or how it ended: a signal's default
-        // action (SIGALRM is the watchdog), a panic, or still running.
+        // action (SIGALRM is the watchdog), a panic, or still running. A
+        // job that wrote its result and was then ended part-way is
+        // described too.
         let pid = text
             .lines()
             .find_map(|line| line.strip_prefix("pid "))
