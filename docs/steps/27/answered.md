@@ -14,15 +14,26 @@ Step 27 builds the RPC server in `cortex-rpc`: `cortex serve --stdio` and `--soc
 | **Refusing the server's own commands** (Job Object on Windows, ancestry on Linux). | **Yes,** with security.md's residual risks saying it. | Point 1 |
 | **`rpc.approval_timeout` 10 minutes, `rpc.stalled_client` 30 s, the user's alone.** | **Yes;** in the owner's summary. | "The `[rpc]` settings" |
 | **A prompt refused `turn_running` at a turn's edge.** | **Sent again once, with `queue`.** | Point 5 |
-| **Events unfiltered by the secret filter.** | **To the owner,** as a security trade-off; the item says what a client of the same user sees that the TUI's user also sees. | [outstanding/secret-filter-on-what-clients-are-sent.md](../../outstanding/secret-filter-on-what-clients-are-sent.md) |
+| **Events unfiltered by the secret filter.** | **To the owner,** as a security trade-off; the item said what a client of the same user sees that the TUI's user also sees. | "The owner's answers", below |
 | **The TypeScript client.** | **Not in the blocking jobs** (rule 2): in a job that is not required, run when `cortex-protocol`, `cortex-rpc`, `docs/protocol/` or its workflow changes, as `pr-size` is, and in the nightly; its failure is read as a failure in the step's reports. | Point 7 |
 | **The crate rules' edges** for `cortex-rpc` (`cortex-base`; its tests' `cortex-config` and `cortex-tools`). | **Yes,** with 01-workspace changed to match. | [architecture/01-workspace.md](../../architecture/01-workspace.md) |
+
+## The owner's answers
+
+| Question | The owner's answer, 2026-11-16 | Recorded in |
+|---|---|---|
+| **Supervisor routing,** with "a user's answer always wins" read as: a user may answer until the request is settled, and the first answer taken settles it; a supervisor settles one only within its grant. | **Approved as built.** | Point 2; [architecture/11-rpc-protocol.md](../../architecture/11-rpc-protocol.md); [architecture/06-permissions-and-sandbox.md](../../architecture/06-permissions-and-sandbox.md) |
+| **An observer never ends a session; a client that closes its view leaves that session's open questions.** | **Approved as built;** both items are settled (below). | Point 2 |
+| **What goes to a client is left unfiltered by the secret filter.** | **Approved;** the item is settled (below). | [security.md](../../security.md), section 4 |
+| **The changes to `cortex-core`** as the least the "Done when" needs. | **Approved.** | "What changes outside `cortex-rpc` and `cortex-cli`, for the coordinator to approve", below |
+| **The `[rpc]` settings' defaults:** `rpc.approval_timeout` 10 minutes, `rpc.stalled_client` 30 s. | **Approved.** | "The `[rpc]` settings", below |
 
 ## Open items settled
 
 | Item | Settled | Recorded in |
 |---|---|---|
 | `approval-time-limit-setting` | **Closed:** `rpc.approval_timeout`, 10 minutes by default, `"0s"` none, the user's alone; `serve` sets `CoreOptions::approval_timeout` from it, and the TUI sets none | [architecture/11-rpc-protocol.md](../../architecture/11-rpc-protocol.md), "As built in step 27"; [configuration/reference.md](../../configuration/reference.md) |
+| `secret-filter-on-what-clients-are-sent` | **Closed by the owner's answer:** what goes to a client stays unfiltered, and security.md says why | [security.md](../../security.md), section 4 |
 | `shutdown-and-a-session-being-put-together` | **Closed:** the server shuts the core down and then waits, bounded, for its requests under way, so an open being put together ends itself in the core before the exit; `cortex-rpc`'s `wire::a_shutdown_waits_for_the_requests_under_way_before_it_answers` | [architecture/11-rpc-protocol.md](../../architecture/11-rpc-protocol.md), "As built in step 27" |
 
 ## The design, before building
