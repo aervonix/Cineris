@@ -338,6 +338,11 @@ pub(crate) fn core_options(
     options.profile.clone_from(&run.common.profile);
     options.overrides = crate::headless::overrides(run);
     options.loaded = Some(loaded.clone());
+    // A reload of `log.level` changes the log's level, unless the command
+    // line or `CORTEX_LOG` chose it, which outrank the file (step 24).
+    if run.log_level.is_none() && env.get("CORTEX_LOG").is_none() {
+        options.log = log.cloned();
+    }
     for (texts, action) in [
         (&run.allow, cortex_protocol::lease::RuleAction::Allow),
         (&run.deny, cortex_protocol::lease::RuleAction::Deny),
