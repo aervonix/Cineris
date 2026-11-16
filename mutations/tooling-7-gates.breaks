@@ -156,6 +156,7 @@ replace: let _ = fs::write(&target, b""); let prepared = (|| {
 packages: cortex-base
 caught-by:
     cortex-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
+    cortex-base::it atomic::a_reader_racing_the_replaces_never_sees_a_mixture
 
 [break] a-new-file-appears-empty-before-its-content
 rule: A file that is created is not there until its content is complete: the name appears at the rename.
