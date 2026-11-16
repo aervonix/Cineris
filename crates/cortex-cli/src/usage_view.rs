@@ -451,6 +451,7 @@ mod tests {
             time: None,
             tools: Vec::new(),
             zone: Some("UTC".to_owned()),
+            notes: Vec::new(),
         };
         let text = usage(&report, now());
         assert!(text.contains("anthropic · claude-opus-5-5"), "{text}");

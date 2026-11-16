@@ -338,6 +338,21 @@ pub(crate) fn insert(table: &mut toml::Table, key: &KeyPath, value: Value) {
     table.insert(last.clone(), value);
 }
 
+/// Takes the value at a key path out, leaving the tables on the way.
+pub(crate) fn remove(table: &mut toml::Table, key: &KeyPath) {
+    let Some((last, tables)) = key.parts().split_last() else {
+        return;
+    };
+    let mut table = table;
+    for name in tables {
+        let Some(Value::Table(next)) = table.get_mut(name) else {
+            return;
+        };
+        table = next;
+    }
+    table.remove(last);
+}
+
 /// Adds an entry to the list at a key path, creating the list.
 fn push(table: &mut toml::Table, key: &KeyPath, entry: Value) {
     let mut entries = match get(table, key) {

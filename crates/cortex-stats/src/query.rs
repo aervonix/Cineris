@@ -247,6 +247,7 @@ pub fn report(
         time: (all_time.turns > 0).then_some(all_time),
         tools,
         zone: Some(zone.name().to_owned()),
+        notes: Vec::new(),
     }
 }
 

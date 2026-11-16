@@ -16,8 +16,8 @@ export type ProtocolVersion = 1;
 export interface ClientMethods {
   /** Reads the effective configuration. */
   "config/get": { params: ConfigGetParams; result: ConfigGetResult };
-  /** Re-reads the configuration files. */
-  "config/reload": { params: Empty; result: ConfigReloadResult };
+  /** Re-reads the configuration files, judges the project's trust again, and applies what changed to the open sessions. */
+  "config/reload": { params: ConfigReloadParams; result: ConfigReloadResult };
   /** The state of the extensions. */
   "extensions/status": { params: Empty; result: ExtensionsStatusResult };
   /** The handshake. It must be the first request on a connection. */
@@ -38,6 +38,8 @@ export interface ClientMethods {
   "project/list": { params: ProjectListParams; result: ProjectEntriesResult };
   /** Accepts, edits, disables, deletes or promotes entries. */
   "project/update": { params: ProjectUpdateParams; result: ProjectEntriesResult };
+  /** Reads a stored artifact of a session. */
+  "session/artifact": { params: SessionArtifactParams; result: SessionArtifactResult };
   /** Stops using a session on this connection. The session is kept. */
   "session/close": { params: SessionRef; result: Empty };
   /** Compacts now, with optional focus instructions. */
@@ -74,6 +76,8 @@ export interface ClientMethods {
   "verify/run": { params: SessionRef; result: Empty };
   /** Lists the workspace's files, for file completion. */
   "workspace/files": { params: WorkspaceFilesParams; result: WorkspaceFilesResult };
+  /** Reads ahead files a person named, so that the model's first read of them finds them in the system's cache. Answers at once. */
+  "workspace/warm": { params: WorkspaceWarmParams; result: Empty };
 }
 
 /** Requests the server sends to a client, by method name. Each pauses the turn until it is answered or times out. */
@@ -326,6 +330,18 @@ export interface ComponentStatus {
   tools?: number;
 }
 
+/** What a reload of the configuration changed for a session, whoever asked for it: a front end, another client, or the look the core takes at the start of a turn. Each client of the session is sent it, so that one that keeps settings of its own (a terminal's theme and key bindings) takes them up whoever found the change. Added in step 24. */
+export interface ConfigChanged {
+  /** Keys whose new values are in force. */
+  applied?: Array<string>;
+  /** What was wrong with a file. The configuration in force stays. */
+  errors?: Array<string>;
+  /** What to tell the person, a sentence each. */
+  notes?: Array<string>;
+  /** Keys whose new values wait; `notes` says for what. */
+  pending?: Array<string>;
+}
+
 /** `config/get` */
 export interface ConfigGetParams {
   /** Only these keys, in dotted form. Empty: everything. */
@@ -338,16 +354,67 @@ export interface ConfigGetParams {
 export interface ConfigGetResult {
   /** The effective configuration, as the configuration file would have it. Credentials are never in it. */
   config: { [key: string]: unknown };
+  /** Where each key of `config` came from, by the same dotted key. A key with no entry has its built-in default. Added in step 24. */
+  origins?: { [key: string]: ConfigOrigin };
 }
 
-/** The result of `config/reload`. */
+/** The layer of the configuration a value came from (`docs/architecture/08-configuration.md`, "Layers"). */
+export type ConfigLayer = "default" | "managed" | "user" | "project" | "project-local" | "profile" | "environment" | "command-line" | (string & {});
+
+/** Where one value of the configuration came from. Added in step 24. */
+export interface ConfigOrigin {
+  /** The file, as a person reads it (`~` for the home directory). Absent for a layer that is not a file. */
+  file?: string | null;
+  /** The layer. */
+  layer: ConfigLayer;
+  /** The line in the file, from 1. */
+  line?: number | null;
+}
+
+/** `config/reload`. Every field may be left out: `{}` reloads every open session and the core's own configuration, whether or not a file changed. Before step 24 it took no parameters. */
+export interface ConfigReloadParams {
+  /** Reload only where a file, or the trust store, changed since it was last looked at: the check a front end makes when the terminal regains focus or a key is pressed. */
+  changed_only?: boolean;
+  /** Load the session with this settings profile (`/profile`). Needs `session_id`, and a `user` client. The session's own choices of level, models and speeds give way to the profile's. */
+  profile?: string | null;
+  /** Only this session. Absent: every open session, and the core's own configuration. */
+  session_id?: SessionId | null;
+}
+
+/** The result of `config/reload`, over every session it reloaded. */
 export interface ConfigReloadResult {
   /** Keys whose new values are in force. */
   applied?: Array<string>;
-  /** What was wrong with a file. When this is not empty the old configuration stays in force. */
+  /** What was wrong with a file, or with what a change needs. When this is not empty the configuration in force stays as it was, except that trust taken away is taken away. */
   errors?: Array<string>;
-  /** Keys whose new values wait for the next context epoch. */
+  /** What to tell the person, a sentence each: what waits and for what, what trust held back or took away, which of the session's own choices a profile replaced. Added in step 24. */
+  notes?: Array<string>;
+  /** Keys whose new values wait: for the session's next context epoch (a compaction, or the session opened again), for sessions opened from now on, or for the harness to be started again. `notes` says which. */
   pending?: Array<string>;
+}
+
+/** What one request's context held, by category, in tokens as the harness estimates them (`docs/architecture/15-efficiency.md`, "Context profiler"). Added in step 24. */
+export interface ContextBreakdown {
+  /** The model's answers and calls. */
+  assistant?: number;
+  /** The whole request. */
+  estimate?: number;
+  /** The most the request may hold: the window less the room kept for the answer and a margin. */
+  limit?: number;
+  /** The harness's notices. */
+  notices?: number;
+  /** A compaction's summary. */
+  summary?: number;
+  /** The system prompt. */
+  system?: number;
+  /** The tools' results. */
+  tool_results?: number;
+  /** The tools' definitions. */
+  tools?: number;
+  /** The person's messages. */
+  user?: number;
+  /** The model's context window. */
+  window?: number;
 }
 
 /** Whether a cooldown began or ended. */
@@ -521,7 +588,9 @@ export type Event = ({
     type: "session.idle";
   } & SessionIdle) | ({
     type: "session.updated";
-  } & SessionUpdated);
+  } & SessionUpdated) | ({
+    type: "config.changed";
+  } & ConfigChanged);
 
 /** When a lease ends. */
 export interface Expiry {
@@ -1079,6 +1148,8 @@ export type PlanEdit = ({
   } & PlanReorder) | ({
     kind: "skip";
   } & PlanItemRef) | ({
+    kind: "restore";
+  } & PlanItemRef) | ({
     kind: "reword";
   } & PlanReword) | ({
     kind: "add";
@@ -1469,6 +1540,24 @@ export interface ServerCapabilities {
   sessions?: boolean;
 }
 
+/** `session/artifact`: a stored artifact of a session, such as the whole output of a check. Added in step 24. */
+export interface SessionArtifactParams {
+  /** The artifact. */
+  artifact: ArtifactId;
+  /** The session. */
+  session_id: SessionId;
+}
+
+/** The result of `session/artifact`. */
+export interface SessionArtifactResult {
+  /** Its whole size in bytes. */
+  bytes: number;
+  /** Whether `text` holds less than all of it. */
+  cut?: boolean;
+  /** Its text, as stored, up to the server's limit. Not UTF-8 where it is stored is replaced with `U+FFFD`. */
+  text: string;
+}
+
 /** `session/compact`: an idle session compacts in a turn of its own that sends nothing else; a running one at its next safe boundary. A turn whose last request is under way has none left: when it ends, the turn that follows takes the compaction at its first boundary, and when none follows, a turn that only compacts runs. An interrupt drops it. */
 export interface SessionCompactParams {
   /** What the summary should keep in particular. */
@@ -1671,6 +1760,8 @@ export interface SessionUsage {
   by_model?: Array<ModelUsage>;
   /** Cache reads as a share of all input tokens sent, from 0 to 1. */
   cache_hit_rate?: number | null;
+  /** What the context of the most recent request to the main model held, by category: estimates, as the harness counts them. Added in step 24. */
+  context?: ContextBreakdown | null;
   /** The tokens in the context of the most recent request to the main model. */
   context_tokens?: number | null;
   /** The most recent request. */
@@ -2075,6 +2166,8 @@ export interface UsageReport {
   group_by: Array<UsageGroup>;
   /** The latest limits each provider reported. */
   limits?: Array<ProviderLimits>;
+  /** What to tell the person of the statistics behind the report, a sentence each: a file set aside because it could not be read, one a newer build wrote. Added in step 24. */
+  notes?: Array<string>;
   /** The range covered. */
   range: UsageRange;
   /** Whether usage history is being recorded. When statistics are off, only the session range has figures. */
@@ -2191,4 +2284,12 @@ export interface WorkspaceFilesResult {
   paths: Array<string>;
   /** Whether there were more than the limit. */
   truncated?: boolean;
+}
+
+/** `workspace/warm`: files a person named with `@` in a prompt not yet sent, to be read ahead into the system's cache. Added in step 24. */
+export interface WorkspaceWarmParams {
+  /** The files, relative to the workspace's root with `/` between parts. */
+  paths: Array<string>;
+  /** The session. */
+  session_id: SessionId;
 }

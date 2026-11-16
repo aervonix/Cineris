@@ -61,6 +61,10 @@ pub fn reads(op: &Op) -> bool {
             | Op::PlanGet(_)
             | Op::UsageGet(_)
             | Op::UsageReport(_)
+            | Op::UsageRefresh(_)
+            | Op::ProjectList(_)
+            | Op::SessionArtifact(_)
+            | Op::WorkspaceWarm(_)
             | Op::McpStatus(_)
             | Op::ExtensionsStatus(_)
     )
@@ -84,6 +88,15 @@ impl Routes {
         // lane, behind a fork's close of the session it forked (the
         // re-review of step 23's second pull request).
         if matches!(op, Op::WorkspaceFiles(_)) {
+            return Route::Beside;
+        }
+        // Nor do two reads of step 24's panels: a refresh of the usage
+        // limits may wait up to 20 s on a provider and must never hold a
+        // prompt behind it in the lane, and reading named files ahead
+        // depends on nothing a write changes (the review of step 24's
+        // design, finding 7). A refresh reads `usage.refresh` as it is in
+        // force when it runs.
+        if matches!(op, Op::UsageRefresh(_) | Op::WorkspaceWarm(_)) {
             return Route::Beside;
         }
         if self.in_flight.load(Ordering::SeqCst) > 0 {
@@ -308,6 +321,50 @@ mod tests {
         }));
         assert!(panicked.is_err());
         assert_eq!(routes.route(&list(&session)), Route::Beside);
+    }
+
+    /// The panels' reads (step 24): a refresh of the usage limits and the
+    /// files read ahead never wait in the lane, even behind a write, so a
+    /// refresh that waits on a provider never holds a prompt behind it;
+    /// the project's entries and an artifact are reads, which wait for the
+    /// writes sent before them and run beside the lane otherwise; a reload
+    /// changes sessions, and runs in the lane.
+    #[test]
+    fn the_panels_reads_run_beside_the_lane_and_a_refresh_never_waits_in_it() {
+        use cortex_protocol::methods::{
+            ConfigReloadParams, ProjectListParams, SessionArtifactParams, UsageRefreshParams,
+            WorkspaceWarmParams,
+        };
+        let session = SessionId::from("s_1");
+        let routes = Routes::default();
+        let entries = || {
+            Op::ProjectList(ProjectListParams {
+                session_id: Some(session.clone()),
+                ..ProjectListParams::default()
+            })
+        };
+        let artifact = || {
+            Op::SessionArtifact(SessionArtifactParams {
+                session_id: session.clone(),
+                artifact: cortex_protocol::ArtifactId::from("a_1"),
+            })
+        };
+        let refresh = || Op::UsageRefresh(UsageRefreshParams::default());
+        let warm = || {
+            Op::WorkspaceWarm(WorkspaceWarmParams {
+                session_id: session.clone(),
+                paths: vec!["src/lib.rs".to_owned()],
+            })
+        };
+        for read in [entries(), artifact(), refresh(), warm()] {
+            assert_eq!(routes.route(&read), Route::Beside, "{read:?}");
+        }
+        let reload = Op::ConfigReload(ConfigReloadParams::default());
+        assert_eq!(routes.route(&reload), Route::Lane { write: true });
+        assert_eq!(routes.route(&entries()), Route::Lane { write: false });
+        assert_eq!(routes.route(&artifact()), Route::Lane { write: false });
+        assert_eq!(routes.route(&refresh()), Route::Beside, "a refresh waited");
+        assert_eq!(routes.route(&warm()), Route::Beside, "a warm waited");
     }
 
     /// An operation that panics in the lane is answered as failed, and the

@@ -8,12 +8,14 @@
 //! and responses, using [`Op::from_wire`] and its companions, and adds no
 //! behaviour of its own.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::event::SessionEvent;
 use crate::ids::{
-    ApprovalId, CallId, ItemId, ProjectKey, ProviderId, SessionId, Timestamp, TurnId,
+    ApprovalId, ArtifactId, CallId, ItemId, ProjectKey, ProviderId, SessionId, Timestamp, TurnId,
 };
 use crate::item::{Delivery, Item, Plan};
 use crate::jsonrpc::{self, ErrorObject, Notification, Request, RequestId};
@@ -618,22 +620,131 @@ pub struct ConfigGetResult {
     /// The effective configuration, as the configuration file would have it.
     /// Credentials are never in it.
     pub config: Map<String, Value>,
+    /// Where each key of `config` came from, by the same dotted key. A key
+    /// with no entry has its built-in default. Added in step 24.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub origins: BTreeMap<String, ConfigOrigin>,
 }
 
-/// The result of `config/reload`.
+open_enum! {
+    /// The layer of the configuration a value came from
+    /// (`docs/architecture/08-configuration.md`, "Layers").
+    pub enum ConfigLayer {
+        /// Built into the harness.
+        Default => "default",
+        /// The managed file an administrator writes.
+        Managed => "managed",
+        /// The user's own file.
+        User => "user",
+        /// The project's committed file.
+        Project => "project",
+        /// The project's local file, not committed.
+        ProjectLocal => "project-local",
+        /// A profile, from whichever file defines it.
+        Profile => "profile",
+        /// An environment variable.
+        Environment => "environment",
+        /// The command line, or a choice made in the session.
+        CommandLine => "command-line",
+    }
+}
+
+/// Where one value of the configuration came from. Added in step 24.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ConfigOrigin {
+    /// The layer.
+    pub layer: ConfigLayer,
+    /// The file, as a person reads it (`~` for the home directory). Absent
+    /// for a layer that is not a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// The line in the file, from 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+}
+
+/// `config/reload`. Every field may be left out: `{}` reloads every open
+/// session and the core's own configuration, whether or not a file
+/// changed. Before step 24 it took no parameters.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ConfigReloadParams {
+    /// Only this session. Absent: every open session, and the core's own
+    /// configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
+    /// Load the session with this settings profile (`/profile`). Needs
+    /// `session_id`, and a `user` client. The session's own choices of
+    /// level, models and speeds give way to the profile's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Reload only where a file, or the trust store, changed since it was
+    /// last looked at: the check a front end makes when the terminal
+    /// regains focus or a key is pressed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub changed_only: bool,
+}
+
+/// The result of `config/reload`, over every session it reloaded.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigReloadResult {
     /// Keys whose new values are in force.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub applied: Vec<String>,
-    /// Keys whose new values wait for the next context epoch.
+    /// Keys whose new values wait: for the session's next context epoch
+    /// (a compaction, or the session opened again), for sessions opened
+    /// from now on, or for the harness to be started again. `notes` says
+    /// which.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending: Vec<String>,
-    /// What was wrong with a file. When this is not empty the old
-    /// configuration stays in force.
+    /// What was wrong with a file, or with what a change needs. When this is
+    /// not empty the configuration in force stays as it was, except that
+    /// trust taken away is taken away.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
+    /// What to tell the person, a sentence each: what waits and for what,
+    /// what trust held back or took away, which of the session's own
+    /// choices a profile replaced. Added in step 24.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+/// `session/artifact`: a stored artifact of a session, such as the whole
+/// output of a check. Added in step 24.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SessionArtifactParams {
+    /// The session.
+    pub session_id: SessionId,
+    /// The artifact.
+    pub artifact: ArtifactId,
+}
+
+/// The result of `session/artifact`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SessionArtifactResult {
+    /// Its text, as stored, up to the server's limit. Not UTF-8 where it is
+    /// stored is replaced with `U+FFFD`.
+    pub text: String,
+    /// Its whole size in bytes.
+    pub bytes: u64,
+    /// Whether `text` holds less than all of it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cut: bool,
+}
+
+/// `workspace/warm`: files a person named with `@` in a prompt not yet
+/// sent, to be read ahead into the system's cache. Added in step 24.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct WorkspaceWarmParams {
+    /// The session.
+    pub session_id: SessionId,
+    /// The files, relative to the workspace's root with `/` between parts.
+    pub paths: Vec<String>,
 }
 
 open_enum! {
@@ -1226,10 +1337,16 @@ methods! {
     ModelsList(Empty) -> ModelsListResult => "models/list",
     /// Lists the workspace's files, for file completion.
     WorkspaceFiles(WorkspaceFilesParams) -> WorkspaceFilesResult => "workspace/files",
+    /// Reads ahead files a person named, so that the model's first read of
+    /// them finds them in the system's cache. Answers at once.
+    WorkspaceWarm(WorkspaceWarmParams) -> Empty => "workspace/warm",
+    /// Reads a stored artifact of a session.
+    SessionArtifact(SessionArtifactParams) -> SessionArtifactResult => "session/artifact",
     /// Reads the effective configuration.
     ConfigGet(ConfigGetParams) -> ConfigGetResult => "config/get",
-    /// Re-reads the configuration files.
-    ConfigReload(Empty) -> ConfigReloadResult => "config/reload",
+    /// Re-reads the configuration files, judges the project's trust again,
+    /// and applies what changed to the open sessions.
+    ConfigReload(ConfigReloadParams) -> ConfigReloadResult => "config/reload",
     /// Lists the approvals in force for a session.
     PermissionsList(SessionRef) -> PermissionsListResult => "permissions/list",
     /// Removes stored approvals.

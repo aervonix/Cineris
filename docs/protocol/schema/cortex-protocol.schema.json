@@ -910,6 +910,40 @@
       ],
       "type": "object"
     },
+    "ConfigChanged": {
+      "description": "What a reload of the configuration changed for a session, whoever asked\nfor it: a front end, another client, or the look the core takes at the\nstart of a turn. Each client of the session is sent it, so that one that\nkeeps settings of its own (a terminal's theme and key bindings) takes\nthem up whoever found the change. Added in step 24.",
+      "properties": {
+        "applied": {
+          "description": "Keys whose new values are in force.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "errors": {
+          "description": "What was wrong with a file. The configuration in force stays.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "notes": {
+          "description": "What to tell the person, a sentence each.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pending": {
+          "description": "Keys whose new values wait; `notes` says for what.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ConfigGetParams": {
       "description": "`config/get`",
       "properties": {
@@ -941,6 +975,13 @@
           "additionalProperties": true,
           "description": "The effective configuration, as the configuration file would have it.\nCredentials are never in it.",
           "type": "object"
+        },
+        "origins": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ConfigOrigin"
+          },
+          "description": "Where each key of `config` came from, by the same dotted key. A key\nwith no entry has its built-in default. Added in step 24.",
+          "type": "object"
         }
       },
       "required": [
@@ -948,8 +989,107 @@
       ],
       "type": "object"
     },
+    "ConfigLayer": {
+      "anyOf": [
+        {
+          "const": "default",
+          "description": "Built into the harness."
+        },
+        {
+          "const": "managed",
+          "description": "The managed file an administrator writes."
+        },
+        {
+          "const": "user",
+          "description": "The user's own file."
+        },
+        {
+          "const": "project",
+          "description": "The project's committed file."
+        },
+        {
+          "const": "project-local",
+          "description": "The project's local file, not committed."
+        },
+        {
+          "const": "profile",
+          "description": "A profile, from whichever file defines it."
+        },
+        {
+          "const": "environment",
+          "description": "An environment variable."
+        },
+        {
+          "const": "command-line",
+          "description": "The command line, or a choice made in the session."
+        },
+        {
+          "description": "A value this version of the protocol does not know. Receivers need a default branch.",
+          "type": "string",
+          "x-cortex-open": true
+        }
+      ],
+      "description": "The layer of the configuration a value came from (`docs/architecture/08-configuration.md`, \"Layers\")."
+    },
+    "ConfigOrigin": {
+      "description": "Where one value of the configuration came from. Added in step 24.",
+      "properties": {
+        "file": {
+          "description": "The file, as a person reads it (`~` for the home directory). Absent\nfor a layer that is not a file.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "layer": {
+          "$ref": "#/$defs/ConfigLayer",
+          "description": "The layer."
+        },
+        "line": {
+          "description": "The line in the file, from 1.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "layer"
+      ],
+      "type": "object"
+    },
+    "ConfigReloadParams": {
+      "description": "`config/reload`. Every field may be left out: `{}` reloads every open\nsession and the core's own configuration, whether or not a file\nchanged. Before step 24 it took no parameters.",
+      "properties": {
+        "changed_only": {
+          "description": "Reload only where a file, or the trust store, changed since it was\nlast looked at: the check a front end makes when the terminal\nregains focus or a key is pressed.",
+          "type": "boolean"
+        },
+        "profile": {
+          "description": "Load the session with this settings profile (`/profile`). Needs\n`session_id`, and a `user` client. The session's own choices of\nlevel, models and speeds give way to the profile's.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Only this session. Absent: every open session, and the core's own\nconfiguration."
+        }
+      },
+      "type": "object"
+    },
     "ConfigReloadResult": {
-      "description": "The result of `config/reload`.",
+      "description": "The result of `config/reload`, over every session it reloaded.",
       "properties": {
         "applied": {
           "description": "Keys whose new values are in force.",
@@ -959,18 +1099,101 @@
           "type": "array"
         },
         "errors": {
-          "description": "What was wrong with a file. When this is not empty the old\nconfiguration stays in force.",
+          "description": "What was wrong with a file, or with what a change needs. When this is\nnot empty the configuration in force stays as it was, except that\ntrust taken away is taken away.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "notes": {
+          "description": "What to tell the person, a sentence each: what waits and for what,\nwhat trust held back or took away, which of the session's own\nchoices a profile replaced. Added in step 24.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "pending": {
-          "description": "Keys whose new values wait for the next context epoch.",
+          "description": "Keys whose new values wait: for the session's next context epoch\n(a compaction, or the session opened again), for sessions opened\nfrom now on, or for the harness to be started again. `notes` says\nwhich.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ContextBreakdown": {
+      "description": "What one request's context held, by category, in tokens as the harness\nestimates them (`docs/architecture/15-efficiency.md`, \"Context\nprofiler\"). Added in step 24.",
+      "properties": {
+        "assistant": {
+          "default": 0,
+          "description": "The model's answers and calls.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "estimate": {
+          "default": 0,
+          "description": "The whole request.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "limit": {
+          "default": 0,
+          "description": "The most the request may hold: the window less the room kept for the\nanswer and a margin.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "notices": {
+          "default": 0,
+          "description": "The harness's notices.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "summary": {
+          "default": 0,
+          "description": "A compaction's summary.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "system": {
+          "default": 0,
+          "description": "The system prompt.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool_results": {
+          "default": 0,
+          "description": "The tools' results.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tools": {
+          "default": 0,
+          "description": "The tools' definitions.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "user": {
+          "default": 0,
+          "description": "The person's messages.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window": {
+          "default": 0,
+          "description": "The model's context window.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -1934,6 +2157,25 @@
           "description": "Session metadata changed."
         },
         {
+          "allOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "config.changed"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "$ref": "#/$defs/ConfigChanged"
+            }
+          ],
+          "description": "A reload of the configuration changed what is in force for the session, or what waits. Added in step 24."
+        },
+        {
           "description": "A variant this version of the protocol does not know. Receivers skip it or show it generically.",
           "properties": {
             "type": {
@@ -1952,7 +2194,8 @@
                   "request.resolved",
                   "turn.completed",
                   "session.idle",
-                  "session.updated"
+                  "session.updated",
+                  "config.changed"
                 ]
               },
               "type": "string"
@@ -4098,6 +4341,25 @@
             {
               "properties": {
                 "kind": {
+                  "const": "restore"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "$ref": "#/$defs/PlanItemRef"
+            }
+          ],
+          "description": "Put a skipped item back to be done. Added in step 24."
+        },
+        {
+          "allOf": [
+            {
+              "properties": {
+                "kind": {
                   "const": "reword"
                 }
               },
@@ -4158,6 +4420,7 @@
                 "enum": [
                   "reorder",
                   "skip",
+                  "restore",
                   "reword",
                   "add",
                   "remove"
@@ -5359,6 +5622,48 @@
       ],
       "type": "object"
     },
+    "SessionArtifactParams": {
+      "description": "`session/artifact`: a stored artifact of a session, such as the whole\noutput of a check. Added in step 24.",
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactId",
+          "description": "The artifact."
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The session."
+        }
+      },
+      "required": [
+        "session_id",
+        "artifact"
+      ],
+      "type": "object"
+    },
+    "SessionArtifactResult": {
+      "description": "The result of `session/artifact`.",
+      "properties": {
+        "bytes": {
+          "description": "Its whole size in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cut": {
+          "description": "Whether `text` holds less than all of it.",
+          "type": "boolean"
+        },
+        "text": {
+          "description": "Its text, as stored, up to the server's limit. Not UTF-8 where it is\nstored is replaced with `U+FFFD`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "bytes"
+      ],
+      "type": "object"
+    },
     "SessionCompactParams": {
       "description": "`session/compact`: an idle session compacts in a turn of its own that\nsends nothing else; a running one at its next safe boundary. A turn\nwhose last request is under way has none left: when it ends, the turn\nthat follows takes the compaction at its first boundary, and when none\nfollows, a turn that only compacts runs. An interrupt drops it.",
       "properties": {
@@ -5935,6 +6240,17 @@
             "number",
             "null"
           ]
+        },
+        "context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextBreakdown"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the context of the most recent request to the main model held,\nby category: estimates, as the harness counts them. Added in step 24."
         },
         "context_tokens": {
           "description": "The tokens in the context of the most recent request to the main model.",
@@ -7333,6 +7649,13 @@
           },
           "type": "array"
         },
+        "notes": {
+          "description": "What to tell the person of the statistics behind the report, a\nsentence each: a file set aside because it could not be read, one a\nnewer build wrote. Added in step 24.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "range": {
           "$ref": "#/$defs/UsageRange",
           "description": "The range covered."
@@ -7755,6 +8078,27 @@
         "paths"
       ],
       "type": "object"
+    },
+    "WorkspaceWarmParams": {
+      "description": "`workspace/warm`: files a person named with `@` in a prompt not yet\nsent, to be read ahead into the system's cache. Added in step 24.",
+      "properties": {
+        "paths": {
+          "description": "The files, relative to the workspace's root with `/` between parts.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The session."
+        }
+      },
+      "required": [
+        "session_id",
+        "paths"
+      ],
+      "type": "object"
     }
   },
   "$ref": "#/$defs/JsonRpcMessage",
@@ -7773,9 +8117,9 @@
         }
       },
       "config/reload": {
-        "description": "Re-reads the configuration files.",
+        "description": "Re-reads the configuration files, judges the project's trust again, and applies what changed to the open sessions.",
         "params": {
-          "$ref": "#/$defs/Empty"
+          "$ref": "#/$defs/ConfigReloadParams"
         },
         "result": {
           "$ref": "#/$defs/ConfigReloadResult"
@@ -7869,6 +8213,15 @@
         },
         "result": {
           "$ref": "#/$defs/ProjectEntriesResult"
+        }
+      },
+      "session/artifact": {
+        "description": "Reads a stored artifact of a session.",
+        "params": {
+          "$ref": "#/$defs/SessionArtifactParams"
+        },
+        "result": {
+          "$ref": "#/$defs/SessionArtifactResult"
         }
       },
       "session/close": {
@@ -8031,6 +8384,15 @@
         },
         "result": {
           "$ref": "#/$defs/WorkspaceFilesResult"
+        }
+      },
+      "workspace/warm": {
+        "description": "Reads ahead files a person named, so that the model's first read of them finds them in the system's cache. Answers at once.",
+        "params": {
+          "$ref": "#/$defs/WorkspaceWarmParams"
+        },
+        "result": {
+          "$ref": "#/$defs/Empty"
         }
       }
     },

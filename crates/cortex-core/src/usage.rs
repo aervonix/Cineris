@@ -238,6 +238,7 @@ fn session_report(
         recording: core.inner.stats.is_some(),
         time: None,
         tools: Vec::new(),
+        notes: Vec::new(),
         zone: None,
     })
 }

@@ -1038,6 +1038,93 @@ impl Loaded {
         )
     }
 
+    /// This configuration with the values of `keys` taken from `newer`,
+    /// and every other key as it is here: the configuration a running
+    /// session has in force after a reload that applies some of what
+    /// changed and keeps the rest waiting (`docs/steps/24/answered.md`,
+    /// "The design, before building", point 1).
+    ///
+    /// Each key is a setting as [`changes_since`](Self::changes_since)
+    /// names it: its value, where it came from, and whether it was held
+    /// back for trust are all taken from `newer`, or dropped when `newer`
+    /// does not set it (the default then applies). What describes the files
+    /// (the diagnostics, the profile, the files, the layers as read, the
+    /// locks) is `newer`'s; the directories stay as they are here, since
+    /// they move only at a restart.
+    ///
+    /// # Errors
+    ///
+    /// When the mix does not read as settings: a key that cannot stand
+    /// without one that was not taken. Nothing is half taken.
+    pub fn taking(&self, newer: &Self, keys: &[KeyPath]) -> Result<Self, LoadFailure> {
+        let taken = |key: &KeyPath| keys.iter().any(|taken| key.is_at_or_under(taken));
+        let mut values = self.values.clone();
+        let mut origins = self.origins.clone();
+        let mut entry_origins = self.entry_origins.clone();
+        for key in keys {
+            match merge::get(&newer.values, key) {
+                Some(value) => merge::insert(&mut values, key, value.clone()),
+                None => merge::remove(&mut values, key),
+            }
+            origins.retain(|at, _| !at.is_at_or_under(key));
+            entry_origins.retain(|at, _| !at.is_at_or_under(key));
+        }
+        origins.extend(
+            newer
+                .origins
+                .iter()
+                .filter(|(at, _)| taken(at))
+                .map(|(at, origin)| (at.clone(), origin.clone())),
+        );
+        entry_origins.extend(
+            newer
+                .entry_origins
+                .iter()
+                .filter(|(at, _)| taken(at))
+                .map(|(at, origins)| (at.clone(), origins.clone())),
+        );
+        let settings =
+            Settings::read(&Value::Table(values.clone())).map_err(|message| LoadFailure {
+                diagnostics: vec![Diagnostic {
+                    severity: Severity::Error,
+                    layer: None,
+                    file: None,
+                    line: None,
+                    key: None,
+                    message: format!(
+                        "the settings that changed could not be applied without others that \
+                         wait: {message}"
+                    ),
+                }],
+            })?;
+        let withheld = self
+            .withheld
+            .iter()
+            .filter(|withheld| !taken(&withheld.key))
+            .chain(
+                newer
+                    .withheld
+                    .iter()
+                    .filter(|withheld| taken(&withheld.key)),
+            )
+            .cloned()
+            .collect();
+        Ok(Self {
+            settings,
+            diagnostics: newer.diagnostics.clone(),
+            withheld,
+            profile: newer.profile.clone(),
+            project_profiles: newer.project_profiles.clone(),
+            dirs: self.dirs.clone(),
+            files: newer.files.clone(),
+            values,
+            origins,
+            entry_origins,
+            layers: newer.layers.clone(),
+            locks: newer.locks.clone(),
+        })
+    }
+
     /// What differs between an earlier configuration and this one, with
     /// when each change takes effect.
     #[must_use]

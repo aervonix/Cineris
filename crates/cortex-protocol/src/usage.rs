@@ -375,6 +375,10 @@ pub struct SessionUsage {
     /// The tokens in the context of the most recent request to the main model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_tokens: Option<u64>,
+    /// What the context of the most recent request to the main model held,
+    /// by category: estimates, as the harness counts them. Added in step 24.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextBreakdown>,
     /// The latest limits each provider reported.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limits: Vec<ProviderLimits>,
@@ -483,4 +487,48 @@ pub struct UsageReport {
     /// Added in step 16.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone: Option<String>,
+    /// What to tell the person of the statistics behind the report, a
+    /// sentence each: a file set aside because it could not be read, one a
+    /// newer build wrote. Added in step 24.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+/// What one request's context held, by category, in tokens as the harness
+/// estimates them (`docs/architecture/15-efficiency.md`, "Context
+/// profiler"). Added in step 24.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ContextBreakdown {
+    /// The system prompt.
+    #[serde(default)]
+    pub system: u64,
+    /// The tools' definitions.
+    #[serde(default)]
+    pub tools: u64,
+    /// A compaction's summary.
+    #[serde(default)]
+    pub summary: u64,
+    /// The person's messages.
+    #[serde(default)]
+    pub user: u64,
+    /// The model's answers and calls.
+    #[serde(default)]
+    pub assistant: u64,
+    /// The tools' results.
+    #[serde(default)]
+    pub tool_results: u64,
+    /// The harness's notices.
+    #[serde(default)]
+    pub notices: u64,
+    /// The whole request.
+    #[serde(default)]
+    pub estimate: u64,
+    /// The most the request may hold: the window less the room kept for the
+    /// answer and a margin.
+    #[serde(default)]
+    pub limit: u64,
+    /// The model's context window.
+    #[serde(default)]
+    pub window: u64,
 }

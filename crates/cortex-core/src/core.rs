@@ -308,6 +308,8 @@ pub(crate) struct Live {
     template: Mutex<EngineTemplate>,
     loaded: Arc<Loaded>,
     images: Arc<dyn ImageSource>,
+    /// The session's store of versions and artifacts.
+    pub(crate) content: Arc<dyn cortex_tools::ContentStore>,
     lease_count: AtomicU64,
     /// The project's knowledge as this session has it.
     pub(crate) knowledge: Option<Arc<crate::knowledge::Knowledge>>,
@@ -682,6 +684,7 @@ impl Core {
             template,
             loaded,
             images,
+            content,
             notices,
             lease_count,
             repo,
@@ -722,6 +725,7 @@ impl Core {
             template: Mutex::new(template),
             loaded,
             images,
+            content,
             lease_count: AtomicU64::new(lease_count),
             knowledge,
             verifier,
@@ -1322,6 +1326,12 @@ impl Core {
                     truncated,
                 }))
             }
+            Op::WorkspaceWarm(params) => Ok(OpResult::WorkspaceWarm(crate::reads::warm(
+                self, client, params,
+            )?)),
+            Op::SessionArtifact(params) => Ok(OpResult::SessionArtifact(
+                crate::reads::artifact(self, client, params).await?,
+            )),
             Op::SessionClose(params) => {
                 if let Ok(live) = self.live(&params.session_id) {
                     live.sink.unsubscribe(client.0);
@@ -1463,7 +1473,10 @@ impl Core {
                         config.insert(key, value);
                     }
                 }
-                Ok(OpResult::ConfigGet(ConfigGetResult { config }))
+                Ok(OpResult::ConfigGet(ConfigGetResult {
+                    config,
+                    origins: std::collections::BTreeMap::new(),
+                }))
             }
             Op::ConfigReload(_) => not_built(
                 "Reloading configuration",

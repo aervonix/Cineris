@@ -276,9 +276,11 @@ fn add_unknown_fields(value: &mut Value, depth: usize) {
     match value {
         Value::Object(map) => {
             for (name, child) in map.iter_mut() {
-                if name == "roles" {
-                    // A map from role to settings: its keys are data, and
-                    // its values are objects the protocol defines.
+                if name == "roles" || name == "origins" {
+                    // A map from role to settings, or from a configuration
+                    // key to where its value came from (step 24): its keys
+                    // are data, and its values are objects the protocol
+                    // defines.
                     for settings in child
                         .as_object_mut()
                         .into_iter()
