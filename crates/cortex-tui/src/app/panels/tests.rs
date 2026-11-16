@@ -79,6 +79,10 @@ impl Panel for StandIn {
         self.items
     }
 
+    fn least_rows(&self, focused: usize, _draw: &Draw<'_>) -> usize {
+        1 + if focused < self.items { self.rows } else { 0 }
+    }
+
     fn item(&self, index: usize) -> Option<ItemKey> {
         (index < self.items).then(|| ItemKey {
             id: index.to_string(),
@@ -247,6 +251,35 @@ fn a_panel_that_would_not_be_drawn_focused_cannot_be_reached() {
     );
 }
 
+/// What a panel says of its fewest rows is what its rows are: the plan's
+/// and the review's, on every item.
+#[test]
+fn each_panel_says_the_fewest_rows_it_draws() {
+    let now = Instant::now() + Duration::from_secs(1);
+    let (mut app, ids) = four_panels(now, false);
+    let look = app.look().clone();
+    let draw = Draw {
+        width: 59,
+        look: &look,
+        tick: 0,
+    };
+    for id in ids {
+        let panels = app.panels_mut();
+        let slot = panels.slot(id).unwrap();
+        for focused in 0..=slot.panel.items() {
+            let rows = slot.panel.expanded(focused, &draw);
+            let head = rows.iter().take_while(|row| row.item.is_none()).count();
+            let drawn = head + rows.iter().filter(|row| row.item == Some(focused)).count();
+            assert_eq!(
+                slot.panel.least_rows(focused, &draw),
+                drawn,
+                "{} on {focused}",
+                slot.panel.name()
+            );
+        }
+    }
+}
+
 #[test]
 fn the_window_keeps_the_wanted_rows_and_moves_as_little_as_it_can() {
     assert_eq!(window(5, 8, 2..3, 0), (0, 5, false), "all of it fits");
@@ -286,12 +319,12 @@ fn plan_event() -> Event {
     })
 }
 
-/// A turn that edited two files and ran its checks, with a call still
-/// running when `running`: its round's box is live.
+/// A turn that edited two files and ran its checks, with a call of the
+/// next round still running when `running`: its round's box is live.
 fn turn_events(running: bool) -> Vec<Event> {
-    let call = |id: &str, name: &str| {
+    let call = |response: &str, id: &str, name: &str| {
         Event::ItemDelta(ItemDelta {
-            item_id: ItemId::from("m1"),
+            item_id: ItemId::from(response),
             delta: Delta::ToolCall(ToolCallDelta {
                 call_id: CallId::from(id),
                 name: name.to_owned(),
@@ -334,9 +367,8 @@ fn turn_events(running: bool) -> Vec<Event> {
             tool: None,
             call_id: None,
         }),
-        call("c1", "edit"),
-        call("c2", "edit"),
-        call("c3", "shell"),
+        call("m1", "c1", "edit"),
+        call("m1", "c2", "edit"),
         edit("c1", "src/lex.rs"),
         edit("c2", "tests/lex.rs"),
         Event::Notice(Notice::Verification(VerificationNotice {
@@ -348,7 +380,17 @@ fn turn_events(running: bool) -> Vec<Event> {
             verdict: Some(cortex_protocol::event::Verification::Passed),
         })),
     ];
-    if !running {
+    if running {
+        // The next round, its call still running: its box is live, the
+        // round and the notice before it committed.
+        events.push(Event::ItemStarted(ItemStarted {
+            item_id: ItemId::from("m2"),
+            kind: ItemKind::AssistantMessage,
+            tool: None,
+            call_id: None,
+        }));
+        events.push(call("m2", "c3", "shell"));
+    } else {
         events.push(Event::TurnCompleted(TurnCompleted {
             outcome: TurnOutcome::Completed,
             stop_reason: None,
@@ -380,14 +422,36 @@ fn four_panels(now: Instant, running: bool) -> (App, [u64; 4]) {
     (app, [plan, review, tall, tiny])
 }
 
-#[test]
-fn the_live_region_keeps_its_limit_and_a_focused_panel_is_drawn_or_the_input_has_the_focus() {
+/// The sweep of the live region (`docs/architecture/09-tui.md`, "The panels
+/// as built"): every window height from 4 to 60 rows, every set of the four
+/// panels, each focused or none, with a round running or not, and with a
+/// menu open: the region is never taller than half the window or the
+/// bottom; a focused panel is drawn with its focused rows, or the input has
+/// the focus; no row is wider than the width. At 40 columns, where the hint
+/// row is short, so that the thousands of frames cost little.
+fn sweep(running: bool) {
     let now = Instant::now() + Duration::from_secs(1);
-    let columns = 60;
+    let columns = 40;
     let width = columns - 1;
-    for running in [false, true] {
+    {
         let (mut app, ids) = four_panels(now, running);
         assert_eq!(app.running(), running);
+        let look = app.look().clone();
+        let draw = Draw {
+            width,
+            look: &look,
+            tick: 0,
+        };
+        // Each panel's focused rows, as its focus starts, which no height
+        // changes.
+        let wanted: Vec<Vec<Line>> = ids
+            .iter()
+            .map(|id| {
+                app.panels_mut().set_open(&ids);
+                app.focus_panel(Some(*id));
+                app.panels_mut().focused_lines(*id, &draw)
+            })
+            .collect();
         for set in 0..16_u32 {
             let open: Vec<u64> = (0..4)
                 .filter(|bit| set & (1 << bit) != 0)
@@ -399,31 +463,34 @@ fn the_live_region_keeps_its_limit_and_a_focused_panel_is_drawn_or_the_input_has
                     app.focus_panel(focus);
                     app.resize(width, rows);
                     let (_, live, _) = app.frame(now);
-                    let context =
-                        format!("running {running}, panels {open:?}, {rows} rows, focus {focus:?}");
+                    let context = || {
+                        format!("running {running}, panels {open:?}, {rows} rows, focus {focus:?}")
+                    };
                     // The input box (3 rows) and the hint row are the bottom.
                     let limit = (rows / 2).max(4);
-                    assert!(live.len() <= limit, "{context}: {} rows", live.len());
-                    let problems = testing::problems(&live, width);
-                    assert!(problems.is_empty(), "{context}: {problems:?}");
+                    assert!(live.len() <= limit, "{}: {} rows", context(), live.len());
+                    // What the rows hold is the hostile-text tests' to check;
+                    // here, their width.
+                    assert!(
+                        live.iter().all(|line| line.width() <= width),
+                        "{}: {:?}",
+                        context(),
+                        testing::problems(&live, width)
+                    );
                     match app.input().focus().focused() {
                         Target::Panel(id) => {
-                            assert_eq!(app.panel_drawn(), Some(id), "{context}");
-                            let look = app.look().clone();
-                            let draw = Draw {
-                                width,
-                                look: &look,
-                                tick: 0,
-                            };
-                            let wanted = texts(&app.panels_mut().focused_lines(id, &draw));
-                            let shown = texts(&live);
+                            assert_eq!(app.panel_drawn(), Some(id), "{}", context());
+                            let wanted = &wanted[ids.iter().position(|at| *at == id).unwrap()];
                             assert!(
-                                wanted.iter().all(|row| shown.contains(row)),
-                                "{context}: {wanted:?} not in {shown:#?}"
+                                wanted.iter().all(|row| live.contains(row)),
+                                "{}: {:?} not in {:#?}",
+                                context(),
+                                texts(wanted),
+                                texts(&live)
                             );
                         }
                         Target::Input | Target::ToolBox(_) => {
-                            assert_eq!(app.panel_drawn(), None, "{context}");
+                            assert_eq!(app.panel_drawn(), None, "{}", context());
                         }
                     }
                 }
@@ -445,6 +512,16 @@ fn the_live_region_keeps_its_limit_and_a_focused_panel_is_drawn_or_the_input_has
             assert!(live.len() <= (rows / 2).max(3 + menu), "{rows} rows");
         }
     }
+}
+
+#[test]
+fn the_live_region_keeps_its_limit_and_a_focused_panel_is_drawn_or_the_input_has_the_focus() {
+    sweep(false);
+}
+
+#[test]
+fn the_live_region_keeps_its_limit_with_a_round_running() {
+    sweep(true);
 }
 
 #[test]

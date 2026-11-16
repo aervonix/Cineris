@@ -149,6 +149,11 @@ impl Panel for PlanPanel {
         self.plan.items.len()
     }
 
+    fn least_rows(&self, focused: usize, _draw: &Draw<'_>) -> usize {
+        // Its first row, and the focused item's one.
+        1 + usize::from(focused < self.plan.items.len())
+    }
+
     fn item(&self, index: usize) -> Option<ItemKey> {
         let item = self.plan.items.get(index)?;
         Some(ItemKey {

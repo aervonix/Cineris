@@ -205,6 +205,18 @@ pub(crate) trait Panel: std::fmt::Debug + Send {
         0
     }
 
+    /// The fewest rows it is drawn in with the focus on `focused`: the
+    /// first rows of [`expanded`](Self::expanded), those of no item, and
+    /// the rows of `focused`. Asked of every open panel each frame, to know
+    /// which can be focused in the room there is: a kind whose rows are
+    /// costly to draw says it without drawing them, and must say what
+    /// `expanded` would draw.
+    fn least_rows(&self, focused: usize, draw: &Draw<'_>) -> usize {
+        let rows = self.expanded(focused, draw);
+        let head = rows.iter().take_while(|row| row.item.is_none()).count();
+        head + rows.iter().filter(|row| row.item == Some(focused)).count()
+    }
+
     /// The keys the hint row shows while it has the focus, on `focused`,
     /// each with its key as `keymap` names it (`space skips`).
     fn hint(&self, focused: usize, keymap: &KeyMap) -> Vec<String>;
@@ -534,11 +546,6 @@ impl Panels {
             .filter(|id| Some(**id) != focused)
             .filter_map(|id| Some((*id, self.slot(*id)?.panel.collapsed(draw))))
             .collect();
-        let fold_key = keymap
-            .keys_of(Action::FocusNext)
-            .into_iter()
-            .next()
-            .map(name);
         let need = focused.map_or(0, |id| {
             least
                 .iter()
@@ -566,12 +573,13 @@ impl Panels {
             laid.focused = Some(id);
         }
         if shown_others && folded > 0 {
-            laid.lines.push(views::folded(
-                folded,
-                fold_key.as_deref(),
-                draw.width,
-                draw.look,
-            ));
+            let key = keymap
+                .keys_of(Action::FocusNext)
+                .into_iter()
+                .next()
+                .map(name);
+            laid.lines
+                .push(views::folded(folded, key.as_deref(), draw.width, draw.look));
         }
         for id in self.open.clone() {
             if Some(id) == focused {
@@ -609,9 +617,7 @@ impl Panels {
         } else {
             slot.panel.first_focus()
         };
-        let rows = slot.panel.expanded(focus, draw);
-        let head = rows.iter().take_while(|row| row.item.is_none()).count();
-        head + rows.iter().filter(|row| row.item == Some(focus)).count()
+        slot.panel.least_rows(focus, draw)
     }
 
     /// `id` drawn focused in at most `room` rows: its first rows, then as

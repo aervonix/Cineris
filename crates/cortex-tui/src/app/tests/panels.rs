@@ -731,6 +731,22 @@ fn the_grace_starts_again_with_a_new_key_map() {
     });
 }
 
+/// A dialog that comes while a panel has the focus takes it at once, not
+/// at its first frame: a key read in between is typing for the hidden
+/// editor, as any key in a dialog's grace, never a key of the panel's.
+#[test]
+fn a_key_between_a_dialog_and_its_frame_is_typed_not_lost() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_plan(now);
+    let ready = plan_focused(&mut app, now);
+    link.give(Inbound::Request(RequestId::Number(4), approval("c_4")));
+    drain(&mut app, ready);
+    assert!(app.input().focus().on_input(), "before any frame");
+    key(&mut app, "d", ms(ready, 5));
+    assert!(edits(&link).is_empty());
+    assert_eq!(app.input().editor().expanded(), "d", "typed, not lost");
+}
+
 #[test]
 fn a_letter_with_a_box_or_a_panel_focused_reaches_the_editor() {
     let now = Instant::now() + Duration::from_secs(20);
@@ -759,13 +775,14 @@ fn a_letter_with_a_box_or_a_panel_focused_reaches_the_editor() {
     let _ = app.frame(now);
     press(&mut app, "ctrl+p", now);
     assert!(matches!(app.input().focus().focused(), Target::ToolBox(_)));
+    // A letter no key of the focus's, then one of a panel's own.
     feed(
         &mut app,
         &Cadence::starting(now)
-            .typing("yes, and", Duration::from_millis(60))
+            .typing("ok, yes", Duration::from_millis(60))
             .strokes(),
     );
-    assert_eq!(app.input().editor().expanded(), "yes, and");
+    assert_eq!(app.input().editor().expanded(), "ok, yes");
     assert!(app.input().focus().on_input());
     // A panel: its keys and others alike, none lost or reordered.
     let (mut app, link) = with_plan(now);
