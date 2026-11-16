@@ -141,3 +141,22 @@ Two things these tables show that are not this step's: `main`'s own Linux run at
 
 For step 33: a quarter of it is the crate and a fifth is `toml`'s writer, which a store that wrote its own file would not need, if the size is wanted back.
 
+## The third pull request: the commands
+
+<!-- written by cargo xtask ci-times, section "commands-ab": it replaces this up to the end mark -->
+### Windows, both trees on one runner
+
+`try` with `-f against=main` (run 43876287467), the median of 5 runs each, on one runner at 5.0 ms a process start:
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 9.1 s (2,309 tests) | 9.3 s (2,299) | −0.2 s | 20 s |
+| 2, integration | 19.7 s (1,337 tests) | 19.5 s (1,335) | +0.2 s | 40 s |
+| 3, system | 48.4 s (166 tests) | 49.5 s (164) | −1.1 s | 90 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "commands-ab" -->
+
+The A/B above was taken before the branch was rebased onto the re-decide step's change (`ffe45b6`); the new system test starts the binary twelve times and no shell.
+
+**The breaks:** `mutations/step-17.breaks` has 123, 15 of them the third pull request's. On its last commit, the 58 that the change touches (`cargo xtask mutate step-17 --changed origin/main`: 18 new or changed in the list, 29 by their file, 11 by a test they name) each did what the list expects; the other 65 were run on the second pull request's last commit. **Stress:** `cortex-cli`, `cortex-core` and `cortex-knowledge`, 453 tests, 50 times each under seeds 0 to 49, every test passing every time.
+
