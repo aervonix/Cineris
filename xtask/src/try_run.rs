@@ -617,7 +617,7 @@ impl Inputs {
         }
         if !matches!(verb.as_str(), "test" | "stress" | "perf") {
             return Err(format!(
-                "`--dependents` adds the crates whose tests can see a change to the ones                  named with `-p`: it goes with `test`, `stress` or `perf -p`, not `{verb}`"
+                "`--dependents` adds the crates whose tests can see a change to the ones named with `-p`: it goes with `test`, `stress` or `perf -p`, not `{verb}`"
             ));
         }
         let expanded = crate::dependents::expand_in(rest, &packages()?)?;
@@ -644,7 +644,7 @@ impl Inputs {
         ] {
             if given {
                 return Err(format!(
-                    "`{flag}` does not go with `mutate`, which runs the breaks of the lists                      named once, to the end"
+                    "`{flag}` does not go with `mutate`, which runs the breaks of the lists named once, to the end"
                 ));
             }
         }
@@ -661,12 +661,12 @@ impl Inputs {
             match word.as_str() {
                 "--check" | "--list" | "--report" | "--tests" | "--fix-in" | "--write" => {
                     return Err(format!(
-                        "`{word}` runs no break: it is for a desk, which reads the lists and                          the tree. A try run runs the breaks"
+                        "`{word}` runs no break: it is for a desk, which reads the lists and the tree. A try run runs the breaks"
                     ));
                 }
                 "--minutes" => {
                     return Err(
-                        "`--minutes`: a try run gives `--minutes 0` itself, so that the run                          goes to its end in one job"
+                        "`--minutes`: a try run gives `--minutes 0` itself, so that the run goes to its end in one job"
                             .to_owned(),
                     );
                 }
@@ -694,7 +694,7 @@ impl Inputs {
         }
         if !named {
             return Err(
-                "name the breaks to run (`mutate step-12`, or a break's name, or the end of                  one): the whole of every list is more than one job's time"
+                "name the breaks to run (`mutate step-12`, or a break's name, or the end of one): the whole of every list is more than one job's time"
                     .to_owned(),
             );
         }

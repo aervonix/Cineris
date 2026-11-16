@@ -14,7 +14,7 @@
 #   gh workflow run try --ref <branch> -f os=linux -f command=ci
 #   gh workflow run try --ref <branch> -f os=windows -f command=test -f testkit=profile
 #   gh workflow run try --ref <branch> -f os=windows -f command="test --dependents -p cortex-config"
-#   gh workflow run try --ref <branch> -f os=windows -f command="mutate tooling-7-try-ab --jobs 2"
+#   gh workflow run try --ref <branch> -f os=windows -f command="mutate tooling-7 --jobs 2"
 #   gh workflow run try --ref <branch> -f commit=<40-digit commit hash> -f command="test -p cortex-base"
 #   ci-wait --workflow try                    (from the branch, for its head commit)
 #

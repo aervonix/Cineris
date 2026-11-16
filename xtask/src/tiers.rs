@@ -282,7 +282,7 @@ pub(crate) fn start_warning(os: Os, start: f64, sample: usize) -> Option<String>
         return None;
     }
     Some(format!(
-        "the start of a test's process, {:.0} ms, is above {:.0} ms, more than the slowest          runner's: a cost every test process shares (a larger test binary, a global initialiser,          a heavier harness) is in it, and is taken off every test unseen by the budgets. Compare          the start of `main`'s last run, and look for what every test now pays.",
+        "the start of a test's process, {:.0} ms, is above {:.0} ms, more than the slowest runner's: a cost every test process shares (a larger test binary, a global initialiser, a heavier harness) is in it, and is taken off every test unseen by the budgets. Compare the start of `main`'s last run, and look for what every test now pays.",
         1000.0 * start,
         1000.0 * ceiling,
     ))
