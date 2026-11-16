@@ -78,16 +78,18 @@ enum Pending {
     Said,
     /// `/sessions`: the list, for its picker.
     Sessions,
-    /// `/undo`.
-    Undo,
+    /// `/undo` of this session: its result is the session's only while it
+    /// is still the one open.
+    Undo(SessionId),
     /// `/permissions`: the list, for its picker.
     Permissions,
-    /// `/status` or `/config`.
-    Config(Shown),
-    /// A change of the session's settings, from a picker.
-    Set,
-    /// A page of a stored session's history, to draw.
-    History,
+    /// `/status` or `/config` of this session.
+    Config(Shown, SessionId),
+    /// A change of this session's settings, from a picker.
+    Set(SessionId),
+    /// A page of this stored session's history, to draw while it is the
+    /// one being read.
+    History(SessionId),
     /// The workspace's files, for `@` completion.
     Files,
 }
@@ -174,6 +176,9 @@ pub struct App {
     /// A stored session's history is being read: its events wait, and
     /// those it already holds (`seq` up to the read's) are dropped.
     reading: bool,
+    /// The items the read has drawn so far: `None` for one drawn whole,
+    /// the `seq` of its page for one drawn as it was then, in progress.
+    history_items: HashMap<String, Option<u64>>,
     /// The viewer, while it is open.
     viewer: Option<viewer::Viewer>,
     /// The worker that filters `@` completion off the key's path, once the
@@ -307,6 +312,7 @@ impl App {
             files_asked: 0,
             editor_wanted: false,
             reading: false,
+            history_items: HashMap::new(),
             forked_from: None,
             opening: false,
             held: Vec::new(),
@@ -801,21 +807,8 @@ impl App {
 
     /// A prompt was sent from the editor.
     fn submit(&mut self, text: String, delivery: Delivery, at: Instant) {
-        if let Some(command) = text.strip_prefix('/') {
-            let (name, rest) = command
-                .split_once(char::is_whitespace)
-                .unwrap_or((command, ""));
-            if COMMANDS.iter().any(|(known, _)| *known == name) {
-                self.command(name, rest.trim(), at);
-                return;
-            }
-            if NOT_YET.contains(&name) {
-                self.say(&format!(
-                    "/{name} is not in this build yet. /help lists the commands there are."
-                ));
-                self.give_back(&text);
-                return;
-            }
+        if self.slash_command(&text, at) {
+            return;
         }
         self.last_cost = None;
         let Some(session) = self.session.as_ref().map(|s| s.session_id.clone()) else {
@@ -845,6 +838,30 @@ impl App {
         }));
         self.pending
             .insert(ticket, Pending::Prompt { text, started });
+    }
+
+    /// A slash command this build has is done, and one it does not have
+    /// yet is said to be missing and given back. Says whether `text` was
+    /// either; anything else is a prompt.
+    fn slash_command(&mut self, text: &str, at: Instant) -> bool {
+        let Some(command) = text.strip_prefix('/') else {
+            return false;
+        };
+        let (name, rest) = command
+            .split_once(char::is_whitespace)
+            .unwrap_or((command, ""));
+        if COMMANDS.iter().any(|(known, _)| *known == name) {
+            self.command(name, rest.trim(), at);
+            return true;
+        }
+        if NOT_YET.contains(&name) {
+            self.say(&format!(
+                "/{name} is not in this build yet. /help lists the commands there are."
+            ));
+            self.give_back(text);
+            return true;
+        }
+        false
     }
 
     fn start_running(&mut self, at: Instant) {
@@ -1069,7 +1086,11 @@ impl App {
             (Pending::Sessions, Ok(OpResult::SessionList(list))) => {
                 self.sessions_listed(list.sessions);
             }
-            (Pending::Undo, Ok(OpResult::SessionUndo(result))) => {
+            // A result for a session left meanwhile is not this one's.
+            (Pending::Undo(id) | Pending::Set(id) | Pending::Config(_, id), Ok(_))
+                if !self.is_open(&id) => {}
+            (Pending::History(id), _) if !(self.reading && self.is_open(&id)) => {}
+            (Pending::Undo(_), Ok(OpResult::SessionUndo(result))) => {
                 self.session = Some(result.session);
                 self.say(
                     "The last turn is undone: it is out of the conversation, and the files it \
@@ -1079,13 +1100,15 @@ impl App {
             (Pending::Permissions, Ok(OpResult::PermissionsList(list))) => {
                 self.permissions_listed(list.approvals);
             }
-            (Pending::Config(shown), Ok(OpResult::ConfigGet(result))) => {
+            (Pending::Config(shown, _), Ok(OpResult::ConfigGet(result))) => {
                 self.config_shown(shown, &result.config);
             }
-            (Pending::Set, Ok(OpResult::SessionSet(result))) => {
+            (Pending::Set(_), Ok(OpResult::SessionSet(result))) => {
                 self.session = Some(result.session);
             }
-            (Pending::History, Ok(OpResult::SessionRead(page))) => self.history_read(page, now),
+            (Pending::History(id), Ok(OpResult::SessionRead(page))) => {
+                self.history_read(id, page, now);
+            }
             (Pending::Files, Ok(OpResult::WorkspaceFiles(files))) => {
                 // Matched on a thread of their own: at the core's cap a
                 // match takes longer than a key's budget. With no thread,
@@ -1099,8 +1122,9 @@ impl App {
                     None => self.input.set_files(files.paths),
                 }
             }
-            (Pending::History, Err(error)) => {
+            (Pending::History(_), Err(error)) => {
                 self.reading = false;
+                self.history_items.clear();
                 let held = std::mem::take(&mut self.held);
                 for event in held {
                     self.event(event, now);
@@ -1155,7 +1179,7 @@ impl App {
             self.say("A turn is running: wait for it to end, or stop it with esc.");
             return;
         }
-        if self.opening {
+        if self.opening || self.reading {
             self.say("A session is being opened: /new can start another once it is.");
             return;
         }
@@ -1184,12 +1208,13 @@ impl App {
         if text.is_empty() {
             return;
         }
-        let mut now = self.input.editor().expanded();
+        // What is there keeps its chips.
+        let mut now = self.input.editor().fragment();
         if !now.is_empty() {
-            now.push('\n');
+            now.push(Fragment::text("\n"));
         }
-        now.push_str(text);
-        self.input.external_result(Some(Fragment::text(now)));
+        now.push(Fragment::text(text));
+        self.input.external_result(Some(now));
     }
 
     /// A session is open; `stored` when it was opened from the store (a
@@ -1237,8 +1262,14 @@ impl App {
             }
         }
         let prompts: Vec<String> = self.held_prompts.drain(..).collect();
+        let held = !prompts.is_empty();
         let mut first = true;
         for text in prompts {
+            // The command line's prompt is a command when it is one, as a
+            // typed one is: it was never through `submit`.
+            if self.slash_command(&text, now) {
+                continue;
+            }
             let delivery = if first {
                 Delivery::Prompt
             } else {
@@ -1247,31 +1278,42 @@ impl App {
             first = false;
             self.submit_open(text, delivery);
         }
+        if held && first {
+            self.stop_running();
+        }
     }
 
     /// Asks for a page of the session's history.
     fn read_history(&mut self, session_id: SessionId, cursor: Option<String>) {
         let ticket = self.link.send(Op::SessionRead(
             cortex_protocol::methods::SessionReadParams {
-                session_id,
+                session_id: session_id.clone(),
                 item_id: None,
                 limit: Some(HISTORY_PAGE),
                 cursor,
             },
         ));
-        self.pending.insert(ticket, Pending::History);
+        self.pending.insert(ticket, Pending::History(session_id));
     }
 
-    /// A page of the history: its finished items drawn as they ended. At
-    /// its last page, the events held meanwhile that came after the read
-    /// follow; those it already held are dropped.
-    fn history_read(&mut self, page: cortex_protocol::methods::SessionReadResult, now: Instant) {
+    /// A page of the history of `session`: its finished items drawn as they
+    /// ended, and those in progress drawn as they are, to go on live
+    /// (`docs/architecture/11-rpc-protocol.md`, `session/read`). At its last
+    /// page, the events held meanwhile follow, but for those the read
+    /// already holds.
+    fn history_read(
+        &mut self,
+        session: SessionId,
+        page: cortex_protocol::methods::SessionReadResult,
+        now: Instant,
+    ) {
         for item in page.items {
             let incomplete = item
                 .id()
                 .is_some_and(|id| page.incomplete.iter().any(|open| open.as_str() == id));
-            if incomplete {
-                continue;
+            if let Some(id) = item.id() {
+                self.history_items
+                    .insert(id.to_owned(), incomplete.then_some(page.seq));
             }
             // Each prompt began a turn, a queued one too, and a steering
             // message did not: the history's turns are counted from one.
@@ -1281,47 +1323,74 @@ impl App {
                 let number = self.turns.map_or(1, |(_, last)| last + 1);
                 self.note_turn(number);
             }
-            self.mapper.event(
-                &mut self.transcript,
-                &Event::ItemCompleted(cortex_protocol::event::ItemCompleted { item }),
-                now,
-            );
+            if incomplete {
+                self.mapper.in_progress(&mut self.transcript, &item, now);
+            } else {
+                self.mapper.event(
+                    &mut self.transcript,
+                    &Event::ItemCompleted(cortex_protocol::event::ItemCompleted { item }),
+                    now,
+                );
+            }
         }
-        if let (Some(cursor), Some(session)) = (page.next_cursor, self.session_id_now()) {
+        if let Some(cursor) = page.next_cursor {
             self.read_history(session, Some(cursor));
             return;
         }
         self.reading = false;
-        let running = self
+        let drawn = std::mem::take(&mut self.history_items);
+        let held = std::mem::take(&mut self.held);
+        // Whether a turn was running when the read was taken: an item in
+        // progress says so, and else the turn's events held up to it.
+        let mut running = self
             .session
             .as_ref()
             .is_some_and(|session| session.running_turn.is_some());
-        if !running {
+        for event in held.iter().filter(|event| event.seq <= page.seq) {
+            match &event.event {
+                Event::TurnStarted(_) => running = true,
+                Event::TurnCompleted(_) => running = false,
+                Event::SessionUpdated(updated) => {
+                    running = updated.session.running_turn.is_some();
+                }
+                _ => {}
+            }
+        }
+        if drawn.values().any(Option::is_some) {
+            running = true;
+        }
+        if running {
+            // A turn this client did not start (another's, or one begun
+            // before the open) is running: `Enter` steers it.
+            self.start_running(now);
+        } else {
             // A call the history holds with no result was cut off.
             self.mapper.turn_done(&mut self.transcript, now);
         }
-        // An item's events the read already holds are dropped: the history
-        // drew it. Anything else (the open's notices) is shown.
-        let held = std::mem::take(&mut self.held);
+        // An item the read drew whole has nothing more to show; one it drew
+        // in progress goes on from the read's `seq`; of any other item, what
+        // came before the read is of an item that came to nothing. Anything
+        // else (the open's notices, the turn's events) is shown.
         for event in held {
-            let of_an_item = matches!(
-                event.event,
-                Event::ItemStarted(_)
-                    | Event::ItemDelta(_)
-                    | Event::ItemCompleted(_)
-                    | Event::ItemResync(_)
-                    | Event::ItemReset(_)
-            );
-            if event.seq > page.seq || !of_an_item {
+            let shown = match item_of(&event.event) {
+                None => true,
+                Some(id) => match drawn.get(id) {
+                    Some(None) => false,
+                    Some(Some(seq)) => event.seq > *seq,
+                    None => event.seq > page.seq,
+                },
+            };
+            if shown {
                 self.event(event, now);
             }
         }
     }
 
-    fn session_id_now(&self) -> Option<SessionId> {
+    /// Whether `session` is the one open here.
+    fn is_open(&self, session: &SessionId) -> bool {
         self.session
             .as_ref()
-            .map(|session| session.session_id.clone())
+            .is_some_and(|open| open.session_id == *session)
     }
 
     /// Sends a prompt held while the session opened.
@@ -1348,10 +1417,12 @@ impl App {
     }
 
     fn event(&mut self, event: SessionEvent, now: Instant) {
-        if let Some(session) = &self.session
-            && session.session_id != event.session_id
-        {
-            return;
+        match &self.session {
+            Some(session) if session.session_id != event.session_id => return,
+            // With none open, an event is of one closed or that failed to
+            // open: only what it said is shown.
+            None if !matches!(event.event, Event::Notice(_)) => return,
+            _ => {}
         }
         match &event.event {
             Event::TurnStarted(_) => {
@@ -1651,6 +1722,17 @@ pub struct Drained {
     pub more: bool,
     /// A request arrived: a dialog to draw at once.
     pub request: bool,
+}
+
+/// The item an event is of, if it is of one.
+fn item_of(event: &Event) -> Option<&str> {
+    match event {
+        Event::ItemStarted(started) => Some(started.item_id.as_str()),
+        Event::ItemDelta(delta) => Some(delta.item_id.as_str()),
+        Event::ItemCompleted(completed) => completed.item.id(),
+        Event::ItemResync(item) | Event::ItemReset(item) => Some(item.item_id.as_str()),
+        _ => None,
+    }
 }
 
 fn new_session(workspace: String, settings: SessionSettings, ephemeral: bool) -> Op {

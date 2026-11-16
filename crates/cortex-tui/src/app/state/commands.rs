@@ -83,10 +83,10 @@ impl App {
             return;
         };
         let ticket = self.link.send(Op::SessionSet(SessionSetParams {
-            session_id: session,
+            session_id: session.clone(),
             settings,
         }));
-        self.pending.insert(ticket, Pending::Set);
+        self.pending.insert(ticket, Pending::Set(session));
     }
 
     fn open_picker(&mut self, name: &str, picker: Picker, menu: Menu) {
@@ -133,10 +133,10 @@ impl App {
                     return;
                 };
                 let ticket = self.link.send(Op::SessionUndo(SessionUndoParams {
-                    session_id: session,
+                    session_id: session.clone(),
                     restore_files: true,
                 }));
-                self.pending.insert(ticket, Pending::Undo);
+                self.pending.insert(ticket, Pending::Undo(session));
             }
             "model" => self.pick_model(),
             "effort" => self.pick_effort(),
@@ -218,10 +218,10 @@ impl App {
             Shown::Config => Vec::new(),
         };
         let ticket = self.link.send(Op::ConfigGet(ConfigGetParams {
-            session_id: Some(session),
+            session_id: Some(session.clone()),
             keys,
         }));
-        self.pending.insert(ticket, Pending::Config(shown));
+        self.pending.insert(ticket, Pending::Config(shown, session));
     }
 
     /// What `config/get` gave, shown.
@@ -577,6 +577,12 @@ impl App {
     fn switch_to(&mut self, session: SessionId) {
         if self.running.is_some() {
             self.say("A turn is running: wait for it to end, or stop it with esc.");
+            return;
+        }
+        // Until the one under way is open and drawn, what comes back is
+        // its: another is switched to after.
+        if self.opening || self.reading {
+            self.say("A session is being opened: /sessions can switch once it is.");
             return;
         }
         if let Some(open) = self.session.take() {

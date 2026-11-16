@@ -35,9 +35,9 @@ use crate::keys::{KeyMap, parse};
 use crate::testing::{app_frame, assert_app_frame};
 
 mod dialogs;
-mod trust_standing;
-
 mod output;
+mod sessions;
+mod trust_standing;
 
 /// What the scripted link has seen, and what it will give.
 #[derive(Debug, Default)]
