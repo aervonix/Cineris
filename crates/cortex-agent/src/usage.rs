@@ -137,6 +137,12 @@ pub(crate) struct UsageBook {
 }
 
 impl UsageBook {
+    /// What the context of the latest request to the main model held, by
+    /// category (step 24's `/context`), as the request is made.
+    pub(crate) fn set_context(&mut self, context: cortex_protocol::usage::ContextBreakdown) {
+        self.usage.context = Some(context);
+    }
+
     /// The usage as it stands.
     pub(crate) fn snapshot(&self) -> SessionUsage {
         self.usage.clone()

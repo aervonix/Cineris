@@ -205,6 +205,79 @@ fn stop_of(outcome: &Result<Written, ErrorData>) -> StopReason {
 }
 
 impl Session {
+    /// Applies what a reload changed that applies at once (step 24): taken
+    /// as a request is prepared, so nothing under way changes.
+    pub(super) fn take_reconfigured(&mut self) {
+        let Some(change) = self.shared.lock().reconfigured.take() else {
+            return;
+        };
+        if let Some(accounts) = change.accounts {
+            self.ledger.set_accounts(accounts);
+        }
+        if let Some(budget) = change.turn_budget {
+            self.ledger.set_turn_budget(budget);
+        }
+        if let Some(compaction) = change.compaction {
+            let settings = &mut self.context.parts.settings;
+            settings.auto_compact = compaction.auto_compact;
+            settings.background = compaction.background;
+            settings.compact_at = compaction.compact_at;
+            settings.prepare_at = compaction.prepare_at;
+            // A setting held to what a compaction needs is said again.
+            self.told_trigger = false;
+            self.told_keep = false;
+        }
+        if let Some(rounds) = change.verify_rounds {
+            self.config.verify_rounds = rounds;
+        }
+    }
+
+    /// Takes what waited for the next context epoch, as a compaction begins
+    /// (step 24). The context's settings apply at once, before the
+    /// compaction chooses what to keep: a summary prepared in the
+    /// background with another `keep_recent_tokens` covers other turns, and
+    /// is not used. The models wait for the new epoch's prompt
+    /// ([`Self::take_epoch_models`]), so that the summary is written by the
+    /// model of the epoch it summarises, from its cache.
+    pub(super) fn take_next_epoch(&mut self) {
+        let Some(mut change) = self.shared.lock().next_epoch.take() else {
+            return;
+        };
+        if let Some(context) = change.context.take() {
+            let settings = &mut self.context.parts.settings;
+            settings.keep_recent_tokens = context.keep_recent_tokens;
+            settings.instruction_names = context.instruction_names;
+            settings.instructions_cap = context.instructions_cap;
+            self.told_keep = false;
+        }
+        // A change taken by a compaction that did not finish waits for the
+        // next one, unless a newer one came.
+        self.epoch_waiting = Some(change);
+    }
+
+    /// The models that waited for this epoch, put in force as its prompt is
+    /// built, and whoever set them told: they are in force from here, and
+    /// a compaction that fails after this leaves them so (its next request
+    /// then begins an epoch for the change of model).
+    fn take_epoch_models(&mut self) {
+        let Some(change) = self.epoch_waiting.take() else {
+            return;
+        };
+        if !change.models.is_empty() {
+            let mut inbox = self.shared.lock();
+            let mut models = inbox.models.clone();
+            for (role, model) in change.models {
+                models = models.with_role(role, model);
+            }
+            inbox.models = models;
+            self.shared.emit_updated(&inbox);
+        }
+        self.refresh_main();
+        if let Some(taken) = change.taken {
+            taken();
+        }
+    }
+
     /// The main role's model as the session is set now, for this request.
     pub(super) fn refresh_main(&mut self) {
         let inbox = self.shared.lock();
@@ -1363,6 +1436,9 @@ impl Session {
     pub(super) async fn compacting(&mut self, turn: &mut Turn, prep: Prep) -> Phase {
         self.enter(TurnState::Compacting);
         self.manual = false;
+        // A compaction begins the next epoch: what waited for it is taken
+        // before anything about the new epoch is chosen.
+        self.take_next_epoch();
         let focus = self
             .manual_focus
             .take()
@@ -1620,6 +1696,8 @@ impl Session {
         written: &Written,
         covered: &Cover,
     ) -> Result<u64, Unfinished> {
+        // The new epoch's models, before its prompt is built.
+        self.take_epoch_models();
         let (built, discovered) = self.build_prompt().await;
         self.warn_instructions(turn, &discovered);
         let root = self.root();
@@ -1747,13 +1825,30 @@ impl Session {
             messages: self.context.history.fingerprints(),
         };
         self.context.sent_bytes = self.context.content_bytes();
+        let sources = self.context.sources();
+        let estimate = self.estimate();
+        if request.role == ModelRole::Main {
+            self.usage
+                .set_context(cortex_protocol::usage::ContextBreakdown {
+                    system: sources.system,
+                    tools: sources.tools,
+                    summary: sources.summary,
+                    user: sources.user,
+                    assistant: sources.assistant,
+                    tool_results: sources.tool_results,
+                    notices: sources.notices,
+                    estimate,
+                    limit,
+                    window,
+                });
+        }
         self.pending_context = Some(ContextStat {
             session: self.shared.info.id.clone(),
             turn: turn.id.clone(),
             model: info.id.clone(),
             epoch: self.context.epoch_number,
-            sources: self.context.sources(),
-            estimate: self.estimate(),
+            sources,
+            estimate,
             limit,
             window,
             // Said when the request is settled.

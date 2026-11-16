@@ -324,6 +324,20 @@ fn apply_one(
                 changes.push(format!("skipped `{}` ({})", item.id, item.text));
             }
         }
+        PlanEdit::Restore(named) => {
+            // A skipped item is to be done again (step 24: `Space` on a
+            // skipped item in the plan panel). One that is not skipped is
+            // left as it is, and nobody is told.
+            let at = position(items, &named.id)?;
+            let item = &mut items[at];
+            if item.status == PlanStatus::Skipped {
+                item.status = PlanStatus::Pending;
+                changes.push(format!(
+                    "restored `{}` ({}), to be done",
+                    item.id, item.text
+                ));
+            }
+        }
         PlanEdit::Reword(reword) => {
             let text = checked_text(&reword.text).map_err(PlanEditError::BadText)?;
             let at = position(items, &reword.id)?;

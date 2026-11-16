@@ -177,6 +177,10 @@ pub struct Session {
     /// The context record of the request in flight, sent with its
     /// `Request` event.
     pending_context: Option<ContextStat>,
+    /// The models that wait for the epoch a compaction under way begins,
+    /// and whom to tell once it has (step 24's reload): taken from the
+    /// inbox as the compaction began, applied as its epoch is built.
+    epoch_waiting: Option<crate::reconfigure::EpochChange>,
     /// Where the running turn's time has gone (`crate::timing`).
     times: TurnClock,
     /// The budget of each utility role whose requests have taught it
@@ -394,6 +398,7 @@ impl Session {
         let opened = store.open().await?;
         let mut context = Context::new(context, &tools.specs());
         context.load(&opened);
+        context.fix_variants(&models.main().variants);
 
         let emitter = Arc::new(Emitter::new(info.id.clone(), events));
         let env = Arc::new(RoundEnv {
@@ -441,6 +446,8 @@ impl Session {
                 history: !opened.items.is_empty(),
                 windows: std::collections::BTreeMap::new(),
                 closed: false,
+                reconfigured: None,
+                next_epoch: None,
             }),
         });
         let told_roles = shared.state(&shared.lock()).roles.into_values().collect();
@@ -474,6 +481,7 @@ impl Session {
             manual: false,
             manual_focus: None,
             pending_context: None,
+            epoch_waiting: None,
             times: TurnClock::new(Duration::ZERO),
             role_budgets: std::collections::BTreeMap::new(),
             last_turn: None,
@@ -658,6 +666,7 @@ impl Session {
             self.context.last_prefix = None;
         }
         self.context.load(&opened);
+        self.context.fix_variants(&self.model.variants);
         self.shared.lock().history = !opened.items.is_empty();
         let next = self.item_ids.peek().max(opened.last_item.saturating_add(1));
         self.item_ids = IdCounter::new(ITEM_PREFIX).after(next - 1);
@@ -839,6 +848,8 @@ impl Session {
             }
         }
 
+        // What a reload changed applies from here: no request is under way.
+        self.take_reconfigured();
         // The model of this request: what the role is set to now. A change
         // of it starts a context epoch, before anything else is sent.
         self.refresh_main();

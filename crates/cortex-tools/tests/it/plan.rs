@@ -205,6 +205,39 @@ fn the_user_can_reorder_skip_reword_add_and_remove() {
     );
 }
 
+/// A skipped item restored is to be done again, and the model is told so
+/// the way it is told of a skip (step 24); restoring an item that is not
+/// skipped changes nothing and tells nobody.
+#[test]
+fn the_user_can_restore_a_skipped_item_and_the_model_is_told() {
+    let ws = Workspace::new("plan_user_restore");
+    let board = Arc::new(PlanBoard::new());
+    ok(&ws.call(&PlanTool::new(Arc::clone(&board)), three()));
+    board.apply(&[PlanEdit::Skip(named("test"))]).unwrap();
+    assert_eq!(shape(&board), ["read:done", "fix:active", "test:skipped"]);
+
+    let change = board.apply(&[PlanEdit::Restore(named("test"))]).unwrap();
+    assert_eq!(shape(&board), ["read:done", "fix:active", "test:pending"]);
+    assert_eq!(
+        change.notice.as_deref(),
+        Some(
+            "The user edited the plan:\n\
+             - restored `test` (Add a test), to be done\n\
+             The plan is now (revision 3):\n\
+             1. [done] read: Read the parser\n\
+             2. [active] fix: Fix the off-by-one\n\
+             3. [pending] test: Add a test\n\
+             Work from this plan. A `plan` call replaces the whole list, so base your next one \
+             on it."
+        )
+    );
+
+    let again = board.apply(&[PlanEdit::Restore(named("fix"))]).unwrap();
+    assert_eq!(again.notice, None);
+    assert_eq!(board.get().revision, 3);
+    assert!(board.apply(&[PlanEdit::Restore(named("nothing"))]).is_err());
+}
+
 #[test]
 fn an_edit_that_does_not_fit_changes_nothing_and_one_that_changes_nothing_tells_nobody() {
     let ws = Workspace::new("plan_bad_edits");
