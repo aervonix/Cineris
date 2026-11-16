@@ -63,7 +63,6 @@ find: ("verify", "Run the project's checks now")
 replace: ("verify-not", "Run the project's checks now")
 caught-by:
     cortex-tui app::tests::commands::verify_asks_for_the_checks_and_says_why_none_could_run
-    cortex-tui app::tests::help_lists_every_command_and_the_keys
 
 [break] more-than-sixteen-read-ahead
 rule: At most 16 files are read ahead for one prompt, as the core reads.
