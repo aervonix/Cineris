@@ -311,6 +311,8 @@ pub(crate) struct Live {
     lease_count: AtomicU64,
     /// The project's knowledge as this session has it.
     pub(crate) knowledge: Option<Arc<crate::knowledge::Knowledge>>,
+    /// The session's verifier, for `verify/run`.
+    verifier: Arc<crate::verify::CoreVerifier>,
 }
 
 impl Inner {
@@ -684,6 +686,7 @@ impl Core {
             lease_count,
             repo,
             knowledge,
+            verifier,
         } = assembled;
         // The client is listening before the session can say anything.
         sink.subscribe(client.0, queue);
@@ -721,6 +724,7 @@ impl Core {
             images,
             lease_count: AtomicU64::new(lease_count),
             knowledge,
+            verifier,
         });
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
         // The client may have left, or a shutdown begun, while the session
@@ -1418,16 +1422,17 @@ impl Core {
             Op::ProjectUpdate(params) => Ok(OpResult::ProjectUpdate(
                 crate::knowledge::update(self, client, params).await?,
             )),
-            // Running the checks on request needs a turn that only
-            // verifies, a transition the owner has not allowed yet
-            // (`docs/outstanding/verify-run-a-turn-that-only-verifies.md`).
-            Op::VerifyRun(_) => Err(error(
-                ErrorKind::Usage,
-                "not_available",
-                "Running the project's checks on request is not in this build yet: it waits for a \
-                 choice of how, with `/verify`. The checks run by themselves at the end of a turn \
-                 that changed files.",
-            )),
+            // A turn that only verifies (`SessionHandle::verify`), when a
+            // check could run: what would stop every one is said at once.
+            Op::VerifyRun(params) => {
+                let live = self.open_for(client, &params.session_id)?;
+                self.may_drive(client)?;
+                if let Some(why) = live.verifier.why_none().await {
+                    return Err(error(ErrorKind::Usage, code::NO_CHECKS, why.message()));
+                }
+                live.handle.verify()?;
+                Ok(OpResult::VerifyRun(Empty {}))
+            }
             Op::ModelsList(_) => Ok(OpResult::ModelsList(ModelsListResult {
                 models: self
                     .inner

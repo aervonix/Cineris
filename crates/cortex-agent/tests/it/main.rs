@@ -894,6 +894,9 @@ pub struct ScriptedVerifier {
     /// The rounds that ran: the round number and how many files had been
     /// written.
     pub rounds: Mutex<Vec<(u32, usize)>>,
+    /// Whether each round was asked for (`verify/run`), and the most rounds
+    /// its turn had.
+    pub asked: Mutex<Vec<(bool, u32)>>,
     pub gate: Mutex<Option<Gate>>,
 }
 
@@ -901,6 +904,7 @@ impl Verifier for ScriptedVerifier {
     fn verify<'a>(&'a self, cx: VerifyCx<'a>) -> BoxFuture<'a, VerifyOutcome> {
         Box::pin(async move {
             lock(&self.rounds).push((cx.round, cx.written.len()));
+            lock(&self.asked).push((cx.asked, cx.rounds));
             let gate = lock(&self.gate).clone();
             if let Some(gate) = gate
                 && cx.cancel.race(gate.opened()).await.is_none()

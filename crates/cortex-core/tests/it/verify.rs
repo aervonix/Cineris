@@ -5,8 +5,8 @@
 //!
 //! On Windows a shell's start is a third of a second on a hosted runner, so
 //! the tests that start one there are few: a failure fed back and fixed,
-//! a time limit, and a flaky test's retry. The rest of what runs is the
-//! same code on both systems, and runs on Linux.
+//! a time limit, a flaky test's retry, and `verify/run` in `ask` mode. The
+//! rest of what runs is the same code on both systems, and runs on Linux.
 
 use cortex_protocol::Item;
 use cortex_protocol::event::{
@@ -921,26 +921,132 @@ fn in_ask_mode_the_checks_are_offered_and_in_off_mode_nothing_is_said() {
     }
 }
 
+/// Asks for the project's checks now (`verify/run`).
+async fn verify_run(front: &Front) -> Result<(), cortex_core::OpError> {
+    front
+        .op(Op::VerifyRun(SessionRef {
+            session_id: front.session.clone(),
+        }))
+        .await
+        .map(|_| ())
+}
+
 #[test]
-fn running_the_checks_on_request_is_not_available_and_says_why() {
-    let world = World::new("verify_run_not_yet", []);
-    let core = world.core_with(|options| options.trust_project = true);
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        let error = front
-            .op(Op::VerifyRun(SessionRef {
-                session_id: front.session.clone(),
-            }))
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, "not_available", "{error:?}");
-        assert!(
-            error
-                .message
-                .contains("at the end of a turn that changed files"),
-            "{error:?}"
+fn verify_run_says_why_no_check_could_run_and_starts_no_turn() {
+    // (what the user's file holds, whether the project is trusted, the
+    // level, what the answer says)
+    let cases = [
+        ("", true, None, "No check could be chosen"),
+        (
+            "[verify]\ncommands = ['./missing-check']\n",
+            false,
+            None,
+            "have not trusted",
+        ),
+        (
+            "[verify]\ncommands = ['./missing-check']\n",
+            true,
+            Some(Level::ReadOnly),
+            "read-only level",
+        ),
+    ];
+    for (config, trusted, level, says_why) in cases {
+        let world = World::new("verify_run_none", []);
+        if !config.is_empty() {
+            world.user_config(config);
+        }
+        let core = world.core_with(|options| options.trust_project = trusted);
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            if let Some(level) = level {
+                front
+                    .op(Op::SessionSet(SessionSetParams {
+                        session_id: front.session.clone(),
+                        settings: SessionSettings {
+                            level: Some(level),
+                            ..SessionSettings::default()
+                        },
+                    }))
+                    .await
+                    .expect("the level is set");
+            }
+            let error = verify_run(&front).await.expect_err("nothing could run");
+            assert_eq!(error.code, "no_checks", "{says_why}: {error:?}");
+            assert!(error.message.contains(says_why), "{error:?}");
+            assert!(front.ends().is_empty(), "no turn: {:?}", front.ends());
+            assert!(world.provider.requests().is_empty());
+            front.close().await;
+        });
+    }
+}
+
+/// `verify/run`: the checks run in a turn of their own, whatever
+/// `verify.mode` says and with nothing changed; the model is sent nothing,
+/// and a session with no prompt yet has no log after it. `ask` is the mode
+/// in which the application offers the checks; `off` is set by the
+/// project's file, which is told as at a turn's end. On Windows, where a
+/// shell's start is a third of a second, only `ask` runs.
+#[test]
+fn sys_verify_run_runs_the_checks_in_a_turn_of_their_own_and_sends_the_model_nothing() {
+    let modes: &[&str] = if cfg!(windows) {
+        &["ask"]
+    } else {
+        &["off", "ask"]
+    };
+    for mode in modes {
+        let world = World::new(&format!("verify_run_runs_{mode}"), [says("Hello.")]);
+        let check = program(
+            &world,
+            "check",
+            "echo 'boom: it broke'; exit 1",
+            "echo boom: it broke\r\nexit /b 1",
         );
-        assert!(world.provider.requests().is_empty());
-        front.close().await;
-    });
+        // `off` from the project's file, which may only lower the mode.
+        if *mode == "off" {
+            user_checks(&world, &[check.as_str()], "");
+            world.project_config("[verify]\nmode = \"off\"\n");
+        } else {
+            user_checks(&world, &[check.as_str()], &format!("mode = \"{mode}\"\n"));
+        }
+        let core = world.core_with(|options| options.trust_project = true);
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            verify_run(&front).await.expect("the checks run");
+            front.turns(1).await;
+            let ended = front.ends().pop().expect("the turn ended");
+            assert_eq!(ended.outcome, TurnOutcome::Completed, "{mode}");
+            assert_eq!(ended.verification, Some(Verification::Failed), "{mode}");
+            assert_eq!(
+                rounds(&front),
+                [
+                    (VerificationPhase::Started, vec![(check.clone(), None)]),
+                    (
+                        VerificationPhase::Finished,
+                        vec![(check.clone(), Some(CheckOutcome::Failed))]
+                    ),
+                ],
+                "{mode}: run, not offered"
+            );
+            assert_eq!(told(&front)[0].rounds, 1, "one round");
+            assert!(
+                world.provider.requests().is_empty(),
+                "the model is sent nothing"
+            );
+            assert!(world.logs().is_empty(), "no log: {:?}", world.logs());
+            assert_eq!(
+                front
+                    .notices()
+                    .iter()
+                    .any(|notice| notice.contains("The project's configuration sets `verify.mode`")),
+                *mode == "off",
+                "{mode}: {:?}",
+                front.notices()
+            );
+            // The next prompt's request holds no report of the checks.
+            front.turn("hello").await;
+            let sent = texts(&world.provider.requests()[0].messages[0]);
+            assert!(!sent.contains("boom"), "{sent}");
+            front.close().await;
+        });
+    }
 }

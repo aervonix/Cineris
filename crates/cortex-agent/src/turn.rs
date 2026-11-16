@@ -228,6 +228,8 @@ struct Turn {
     verify_used: Duration,
     /// The verdict of its last round of checks.
     verification: Option<Verification>,
+    /// The turn only runs the project's checks: `verify/run`.
+    only_verify: bool,
     /// Why the last response ended.
     stop: Option<StopReason>,
 }
@@ -580,7 +582,8 @@ impl Session {
         }
     }
 
-    /// A limit of the ledger refused a request: the turn ends with it.
+    /// A limit of the ledger refused a request, or a turn that only
+    /// verifies its round: the turn ends with it.
     async fn limit_reached(&mut self, turn: &mut Turn, reached: &LimitReached) -> Phase {
         let message = reached.message();
         self.notify(
@@ -591,9 +594,11 @@ impl Session {
                 reached: true,
             }),
         );
-        if let Err(error) = self
-            .record_notice(turn, NoticeSource::Limit, message.clone())
-            .await
+        // A turn that only verifies records nothing.
+        if !turn.only_verify
+            && let Err(error) = self
+                .record_notice(turn, NoticeSource::Limit, message.clone())
+                .await
         {
             return Phase::Finishing(End::store(&error));
         }
@@ -687,6 +692,7 @@ impl Session {
             verify_rounds: 0,
             verify_used: Duration::ZERO,
             verification: None,
+            only_verify: prompt.verify,
             stop: None,
         };
         self.ledger.begin_turn();
@@ -701,6 +707,9 @@ impl Session {
         let ready = if reload { self.reload().await } else { Ok(()) };
         let only = prompt.compact.is_some();
         let begun = match ready {
+            // A turn that only verifies records nothing: no epoch, no
+            // notice, no prompt. The notices waiting stay for the next turn.
+            Ok(()) if turn.only_verify => Ok(()),
             Ok(()) => self.begin(&turn, prompt).await,
             Err(error) => Err(error),
         };
@@ -709,6 +718,12 @@ impl Session {
         // again for that request (the review of step 18).
         self.map_turn_started();
         let mut phase = match begun {
+            // A time limit that is spent ends a turn that only verifies
+            // before any check starts, as it ends a turn before its request.
+            Ok(()) if turn.only_verify => match self.ledger.out_of_time() {
+                Some(reached) => self.limit_reached(&mut turn, &reached).await,
+                None => Phase::Verifying,
+            },
             Ok(()) if only => Phase::Compacting(Prep {
                 only: true,
                 ..Prep::default()
@@ -1603,12 +1618,20 @@ impl Session {
         let notify = move |notice: VerificationNotice| {
             emitter.emit(Some(&turn_id), Event::Notice(Notice::Verification(notice)));
         };
+        // A turn that only verifies has one round, and its failure goes to
+        // no model.
+        let rounds = if turn.only_verify {
+            1
+        } else {
+            self.config.verify_rounds
+        };
         let cx = VerifyCx {
             session: &self.shared.info.id,
             turn: &turn.id,
             number: turn.number,
             round: turn.verify_rounds,
-            rounds: self.config.verify_rounds,
+            rounds,
+            asked: turn.only_verify,
             written: &turn.written,
             used: turn.verify_used,
             deadline: self.ledger.time_left(),
@@ -1646,7 +1669,7 @@ impl Session {
             }
             VerifyOutcome::Failed { report } => {
                 turn.verification = Some(Verification::Failed);
-                if turn.verify_rounds >= self.config.verify_rounds {
+                if turn.verify_rounds >= rounds {
                     // The round limit: the turn completes and reports the
                     // failing state to the user, and the model is not
                     // sent it (`docs/architecture/15-efficiency.md`).
@@ -1673,14 +1696,18 @@ impl Session {
                     Verification::Incomplete
                 });
                 // The model is told why, as a stopped tool round tells it
-                // in the call's result.
-                let note =
-                    format!("The project's checks were stopped, and this turn with them: {reason}");
-                if let Err(error) = self
-                    .record_notice(turn, NoticeSource::Verification, note)
-                    .await
-                {
-                    return Phase::Finishing(End::store(&error));
+                // in the call's result. A turn that only verifies sent the
+                // model nothing, and records nothing.
+                if !turn.only_verify {
+                    let note = format!(
+                        "The project's checks were stopped, and this turn with them: {reason}"
+                    );
+                    if let Err(error) = self
+                        .record_notice(turn, NoticeSource::Verification, note)
+                        .await
+                    {
+                        return Phase::Finishing(End::store(&error));
+                    }
                 }
                 let message = format!("A check stopped the turn: {reason}");
                 self.notify(
@@ -1831,20 +1858,24 @@ impl Session {
         };
         let outcome = completed.outcome.clone();
         let now = ended;
-        self.stats.record(StatEvent::Turn(TurnStat {
-            session: self.shared.info.id.clone(),
-            turn: turn.id.clone(),
-            provider: self.model.entry.info.provider.clone(),
-            model: self.model.entry.info.id.clone(),
-            variants: self.epoch_variants(),
-            effort: self.model.effort.clone(),
-            requests: turn.requests,
-            tool_calls: turn.tool_calls,
-            outcome: outcome.clone(),
-            verification: completed.verification.clone(),
-            duration: now.saturating_sub(turn.started),
-            times: self.times.finish(now),
-        }));
+        // A turn that only verifies is not the model's: the statistics of
+        // the model's turns, the quality signal of a set-up, leave it out.
+        if !turn.only_verify {
+            self.stats.record(StatEvent::Turn(TurnStat {
+                session: self.shared.info.id.clone(),
+                turn: turn.id.clone(),
+                provider: self.model.entry.info.provider.clone(),
+                model: self.model.entry.info.id.clone(),
+                variants: self.epoch_variants(),
+                effort: self.model.effort.clone(),
+                requests: turn.requests,
+                tool_calls: turn.tool_calls,
+                outcome: outcome.clone(),
+                verification: completed.verification.clone(),
+                duration: now.saturating_sub(turn.started),
+                times: self.times.finish(now),
+            }));
+        }
         // The session's state changes before the end is told: a front end
         // that acts on `turn.completed` (an undo the moment the idle box
         // shows) finds the turn no longer running (found by the review of
@@ -1911,6 +1942,7 @@ impl Session {
                 input,
                 delivery: Some(Delivery::Steer),
                 compact: None,
+                verify: false,
             };
             (inbox.turn_ids.next_id(), prompt)
         } else if let Some(queued) = inbox.queue.pop_front() {
@@ -1945,6 +1977,7 @@ impl Session {
             input: Vec::new(),
             delivery: None,
             compact: Some(focus),
+            verify: false,
         };
         let running = Running {
             id: inbox.turn_ids.next_id(),
@@ -1971,6 +2004,7 @@ impl Session {
                         input,
                         delivery: Some(Delivery::Steer),
                         compact: None,
+                        verify: false,
                     },
                 });
             }

@@ -252,7 +252,34 @@ Headless's report, `verify/run`, the measurements on the hosted runners and the 
 
   Each can be patched, but together the patches rebuild a turn outside the state machine, without its tests. As asked, B is not sound (points 1 and 2).
 
-**Until the owner allows `Preparing → Verifying`,** `verify/run` answers `not_available`, saying that the checks run by themselves at the end of a turn that changed files (`verify::running_the_checks_on_request_is_not_available_and_says_why`). The choice is [an item](../../outstanding/verify-run-a-turn-that-only-verifies.md) for step 24. The turn that only verifies was built as the last commit of the pull request, on its own, to be dropped if the owner had not allowed it by the time the rest was ready. The owner had not answered, so it is kept on a branch of its own, **`worktree-step-19-verify-turn`**, on top of this pull request: built, tested (both systems), stressed, broken on purpose and reviewed twice. That branch's `answered.md` records how it was built and the reviews' findings on it, all fixed there; the reviews found nothing against the bar.
+**Built: A,** as one commit on top of the second pull request, on the branch `worktree-step-19-verify-turn`. The owner had not answered by the time the rest was ready, so the pull request shipped without it (`verify/run` answers `not_available`, and the choice is filed for step 24); this commit, merged on the owner's yes, settles both.
+
+| Point | As built |
+|---|---|
+| **The turn** | `SessionHandle::verify` starts it on an idle session, as `compact` does; `Prompt::verify` marks it, and the loop goes from `Preparing` to `Verifying` at once (`TRANSITIONS`, and the scenario `only_verifying`). It records nothing: no epoch, no notice, no prompt, so a session with no prompt yet writes no log. |
+| **One round** | `VerifyCx::asked` is set and `rounds` is 1: a failure ends the turn `completed` with the verdict `failed`, and goes to no model, as at the round limit (Q5). A stop ends it `denied`, told to the user and recorded for no model. The verifier does not read `verify.mode`, and tells the user each reason nothing ran, every time. |
+| **While a turn runs** | `turn_running`, to be sent again once the turn has ended (with `verify.mode = "auto"` its end runs the checks when it changed files). Nothing is queued for later, which would run checks the user may no longer want. |
+| **Its limits, its statistics, undo** | A time limit that is spent ends it `limit` before a check starts, with the limit's notice told and not recorded (`Ledger::out_of_time`). It records no `TurnStat`: it is not the model's turn, and the statistics of the model's turns are the quality signal of a set-up ([14-adaptation.md](../../architecture/14-adaptation.md)). What its checks changed is its checkpoint, so an undo right after it puts that back; with nothing changed, an undo takes the turn before. |
+| **Nothing could run** | The core asks the verifier first (`CoreVerifier::why_none`, the same `ready` a round uses: none known, not trusted, `read-only`, no shell) and answers `no_checks` with the reason; no turn starts. Each check is still decided as it runs. `no_checks` is a new error code, an addition to the protocol. |
+
+**The review of the second pull request** (independent, the whole diff) found nothing against the bar. Its findings, each fixed with a test and a break, or written down:
+
+| # | Finding | Fix | Held by |
+|---|---|---|---|
+| 1 | **A spent time limit:** the turn that only verifies started, told the user "did not run again: this turn's time for them is spent" (the session's limit, not `verify.turn_time`), once a session, and ended `skipped`. | It ends `limit` before any check, as a turn ends before its request; the round's message names the turn's or the session's limit when that is what is spent. | `verifying::a_turn_that_only_verifies_with_its_time_spent_ends_at_the_limit_and_runs_nothing` (the turn's limit and the session's); the round's message, by reading (it is reached only in the moment between the two looks) |
+| 2 | **`turn_running` promised checks** that `off` and `ask` do not run at a turn's end. | It says to send it again once the turn has ended, and when `auto` runs them. | by reading |
+| 3 | **Each `verify/run` was counted as the model's turn** in the statistics, with the model the last turn had. | No `TurnStat` for it. | `verifying::a_turn_that_only_verifies_is_not_counted_as_the_models_turn` |
+| 4, 5 | **`ask` mode under `verify/run` was not tested, nor anything of it on Windows.** | The core's test runs `off` and `ask` on Linux, and `ask` on Windows (one shell start); a project's lowered mode is told as at a turn's end. | `verify::sys_verify_run_runs_the_checks_in_a_turn_of_their_own_and_sends_the_model_nothing` |
+| 6 | **Docs:** the picture's arrows, the `Verifying` row, `turn_running`'s meaning, `verify/run` in 15-efficiency, and the `no_checks` texts. | Each corrected. | |
+| 7 | **What waits behind the turn, and its log,** were not tested. | A steer, a queued prompt and a notice follow it; a session with no prompt has no log after it. | `verifying::what_waits_behind_a_turn_that_only_verifies_follows_it`; the core's test above (`World::logs`) |
+| 8 | **Undo after it** takes back what its checks changed, or the turn before when they changed nothing. | As designed: said in 03-agent-loop. | by reading |
+| 9 | A commit that changed the protocol without its generated files. | Squashed. | |
+
+**The second read** (the fixes alone) found nothing against the bar and no change to another turn's behaviour. It found the test of finding 1 held only the turn's own limit, not the session's (a test case and a break added); the project's lowered mode, told under `verify/run`, held by nothing (the core's test now sets `off` in the project's file); and five places in the docs, a comment and a break's rule that lagged the fixes (each corrected).
+
+Written down, not changed: `verify/run` asks the verifier before it looks for a running turn, so a running session with nothing to run answers `no_checks`; its answer is `{}`, and the turn's id comes with `turn.started`, as for `session/compact` (an optional `turn_id` in the answer would be an addition, for step 24 to ask for); `TRANSITIONS` allows `Preparing → Verifying` for any turn, so the table's check in debug builds does not tell a turn that only verifies from another; the reason told when a check is ready at `verify/run` and not at its round (the race between the two) has no test.
+
+Held by `transitions::a_turn_that_only_verifies_goes_from_preparing_to_its_checks`, `verifying::a_turn_that_only_verifies_runs_one_round_and_sends_and_records_nothing`, `verify_is_refused_while_a_turn_runs`, `an_interrupted_turn_that_only_verifies_says_nothing_of_the_checks`, `a_check_that_stops_a_turn_that_only_verifies_tells_the_user_and_not_the_model`, and the core's `verify::verify_run_says_why_no_check_could_run_and_starts_no_turn` and `sys_verify_run_runs_the_checks_in_a_turn_of_their_own_and_sends_the_model_nothing`; the breaks are in `mutations/step-19.breaks`, "a turn that only verifies".
 
 ## Measured
 

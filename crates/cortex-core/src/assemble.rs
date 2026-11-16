@@ -210,6 +210,9 @@ pub(crate) struct Assembled {
     /// The project's knowledge as this session has it. `None` with no
     /// state directory to keep it in.
     pub(crate) knowledge: Option<Arc<crate::knowledge::Knowledge>>,
+    /// The session's verifier, which `verify/run` asks first whether any
+    /// check could run.
+    pub(crate) verifier: Arc<crate::verify::CoreVerifier>,
 }
 
 /// The root of the workspace at `path`, as a session opened there would
@@ -2025,6 +2028,27 @@ pub(crate) fn assemble(
             .as_ref()
             .map(|knowledge| Arc::clone(knowledge) as Arc<dyn cortex_agent::ProfileSource>),
     };
+    let verifier = Arc::new(crate::verify::CoreVerifier::new(crate::verify::Parts {
+        settings: crate::verify::Settings::of(&settings.verify, shell_limits(settings).1),
+        shell: checks_shell,
+        policy: Arc::clone(&policy),
+        knowledge: knowledge.clone(),
+        trusted: repository_trusted,
+        lowered_by_project: {
+            let origin = loaded.origin(&cortex_config::KeyPath::new(["verify", "mode"]));
+            matches!(
+                rule_source(origin.layer, origin.defined_in),
+                RuleSource::Project
+            )
+        },
+        sandbox: Arc::clone(&sandbox),
+        hooks: Arc::clone(&hooks),
+        paths: Arc::clone(&resolver),
+        content: Arc::clone(&workspace.content),
+        files: Arc::clone(&workspace.files),
+        limits: workspace.limits,
+        clock: Arc::clone(&clock),
+    }));
     let parts = SessionParts {
         info,
         models,
@@ -2052,27 +2076,7 @@ pub(crate) fn assemble(
             }
             None => Arc::new(NoStats),
         },
-        verifier: Arc::new(crate::verify::CoreVerifier::new(crate::verify::Parts {
-            settings: crate::verify::Settings::of(&settings.verify, shell_limits(settings).1),
-            shell: checks_shell,
-            policy: Arc::clone(&policy),
-            knowledge: knowledge.clone(),
-            trusted: repository_trusted,
-            lowered_by_project: {
-                let origin = loaded.origin(&cortex_config::KeyPath::new(["verify", "mode"]));
-                matches!(
-                    rule_source(origin.layer, origin.defined_in),
-                    RuleSource::Project
-                )
-            },
-            sandbox: Arc::clone(&sandbox),
-            hooks: Arc::clone(&hooks),
-            paths: Arc::clone(&resolver),
-            content: Arc::clone(&workspace.content),
-            files: Arc::clone(&workspace.files),
-            limits: workspace.limits,
-            clock: Arc::clone(&clock),
-        })),
+        verifier: Arc::clone(&verifier) as Arc<dyn cortex_agent::Verifier>,
         clock,
         cooldowns: inner.providers.cooldowns.clone(),
         ledger,
@@ -2111,6 +2115,7 @@ pub(crate) fn assemble(
         lease_count: lease_count + 1,
         repo,
         knowledge,
+        verifier,
     })
 }
 

@@ -41,6 +41,9 @@ pub struct VerifyCx<'a> {
     pub round: u32,
     /// The most rounds the turn gets: on the last, a failure ends the turn.
     pub rounds: u32,
+    /// The user asked for this round (`verify/run`): the turn only
+    /// verifies, has this one round, and `verify.mode` is not read.
+    pub asked: bool,
     /// What the turn's calls have changed so far, each a real location,
     /// sorted: the workspace root stands for a change whose files are not
     /// known (`cortex_tools::changed_by`).
@@ -65,6 +68,7 @@ impl std::fmt::Debug for VerifyCx<'_> {
             .field("turn", self.turn)
             .field("round", &self.round)
             .field("rounds", &self.rounds)
+            .field("asked", &self.asked)
             .field("written", &self.written.len())
             .field("deadline", &self.deadline)
             .finish_non_exhaustive()

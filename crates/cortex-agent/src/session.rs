@@ -106,6 +106,9 @@ pub(crate) struct Prompt {
     /// A turn that only compacts the conversation, with what the summary
     /// should keep in particular: `session/compact` on an idle session.
     pub(crate) compact: Option<Option<String>>,
+    /// A turn that only runs the project's checks: `verify/run` on an idle
+    /// session.
+    pub(crate) verify: bool,
 }
 
 /// A prompt waiting to become a turn, with the id that turn will have.
@@ -316,6 +319,7 @@ impl SessionHandle {
                 input,
                 delivery: None,
                 compact: None,
+                verify: false,
             });
             // What was held follows this prompt, ahead of anything queued
             // from here on.
@@ -345,6 +349,7 @@ impl SessionHandle {
                         input,
                         delivery: Some(Delivery::Queue),
                         compact: None,
+                        verify: false,
                     },
                 });
                 shared.emit_updated(&inbox);
@@ -481,6 +486,59 @@ impl SessionHandle {
             input: Vec::new(),
             delivery: None,
             compact: Some(focus),
+            verify: false,
+        });
+        drop(inbox);
+        shared.wake.notify_one();
+        Ok(TurnStartResult {
+            turn_id: turn,
+            disposition: Disposition::Started,
+        })
+    }
+
+    /// Runs the project's checks now (`verify/run`): a turn that only
+    /// verifies, which runs one round of them whatever `verify.mode` says,
+    /// sends the model nothing and records nothing in the history. It ends
+    /// with `turn.completed`, whose `verification` is the round's verdict.
+    ///
+    /// # Errors
+    ///
+    /// `session_not_open` after [`close`](Self::close); `history_changing`
+    /// while the history is being changed; `turn_running` while a turn
+    /// runs (with `verify.mode = "auto"`, its end runs the checks when it
+    /// changed files).
+    pub fn verify(&self) -> Result<TurnStartResult, Box<ErrorData>> {
+        let shared = &self.shared;
+        let mut inbox = shared.lock();
+        if inbox.closed {
+            return Err(Box::new(ErrorData::new(
+                ErrorKind::Usage,
+                code::SESSION_NOT_OPEN,
+                "The session has been closed.",
+            )));
+        }
+        if inbox.changing {
+            return Err(history_changing());
+        }
+        if inbox.running.is_some() {
+            return Err(Box::new(ErrorData::new(
+                ErrorKind::Usage,
+                code::TURN_RUNNING,
+                "A turn is running: run the checks once it has ended. With `verify.mode = \"auto\"` \
+                 its end runs them when it changed files.",
+            )));
+        }
+        let turn: TurnId = inbox.turn_ids.next_id();
+        inbox.running = Some(Running {
+            id: turn.clone(),
+            cancel: shared.cancel.child(),
+            kill: CancelToken::new(),
+        });
+        inbox.starting = Some(Prompt {
+            input: Vec::new(),
+            delivery: None,
+            compact: None,
+            verify: true,
         });
         drop(inbox);
         shared.wake.notify_one();
