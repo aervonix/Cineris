@@ -110,6 +110,7 @@ mod enabled {
         state: Mutex::new(RegistryState {
             holds: Vec::new(),
             seen: Vec::new(),
+            waiting: 0,
         }),
         freed: Condvar::new(),
     };
@@ -125,6 +126,9 @@ mod enabled {
         holds: Vec<Arc<Shared>>,
         /// The points reached while a hold was alive, each once.
         seen: Vec<&'static str>,
+        /// How many holds are waiting for another hold of their point to
+        /// end, for the test of that wait.
+        waiting: usize,
     }
 
     /// Marks a place in library code that a test can make the thread stop
@@ -319,11 +323,13 @@ mod enabled {
                      tests of one process hold one point, which `cargo test` allows and nextest \
                      (a process for each test) does not meet"
                 );
+                registry.waiting += 1;
                 registry = REGISTRY
                     .freed
                     .wait_timeout(registry, left)
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .0;
+                registry.waiting -= 1;
             }
             if registry.holds.is_empty() {
                 registry.seen.clear();
@@ -555,13 +561,34 @@ mod enabled {
         fn a_second_hold_of_a_point_waits_for_the_first_to_end() {
             const AT: &str = "hook tests: two holds";
             let first = Hold::new(AT);
-            let second = std::thread::spawn(|| {
-                let hold = Hold::new(AT);
-                hold.arrivals()
+            let made = Arc::new(AtomicBool::new(false));
+            let second = std::thread::spawn({
+                let made = Arc::clone(&made);
+                move || {
+                    // A bound far past the test's own limit: only the end of
+                    // the first hold can let it go in time.
+                    let hold = Hold::with_limit(AT, Duration::from_secs(600));
+                    made.store(true, Ordering::Release);
+                    hold.arrivals()
+                }
             });
-            // The second is waiting for the name; ending the first frees it.
+            // Until the second is seen waiting, with the first alive.
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while lock(&REGISTRY.state).waiting == 0 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the second hold never waited"
+                );
+                std::thread::yield_now();
+            }
+            assert!(
+                !made.load(Ordering::Acquire),
+                "the second hold was made while the first was alive"
+            );
+            // Ending the first wakes it.
             drop(first);
             assert_eq!(second.join().unwrap(), 0);
+            assert!(made.load(Ordering::Acquire));
         }
 
         #[test]
