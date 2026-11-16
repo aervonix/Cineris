@@ -167,6 +167,19 @@ mod tests {
     }
 
     #[test]
+    fn a_row_pattern_needs_every_text_it_holds() {
+        let pattern = RowPattern::starting_with("|")
+            .containing("model-x")
+            .containing("high");
+        assert!(pattern.matches("| model-x high"));
+        assert!(!pattern.matches("| model-x low"));
+        assert!(!pattern.matches("| model-y high"));
+        // No start asks for none; no text asks for none.
+        assert!(RowPattern::default().matches("anything"));
+        assert!(RowPattern::default().containing("any").matches("anything"));
+    }
+
+    #[test]
     fn a_prefix_is_taken_off_in_whichever_set_the_row_has() {
         let spell = |g: &Set| format!("{} {} ", g.side, g.prompt);
         assert_eq!(SETS.strip_prefix("│ ◆ typed", spell), Some("typed"));
