@@ -119,3 +119,27 @@ The PR's run is 43878054090, at `5949de0`.
 | Tier 3, system (60 s on Linux, 90 s on Windows) | 19.1 s | 25.3 s | 83.8 s | 56.4 s |
 
 <!-- end of what cargo xtask ci-times wrote, section "after-the-review-pr2-trust" -->
+
+## after-the-review-pr2-output
+
+<!-- written by cargo xtask ci-times, section "after-the-review-pr2-output": it replaces this up to the end mark -->
+Pull request 74, on `main` at `fa8b464`. "Main" is main's own run at `fa8b464` (run 43873311224).
+The PR's run is 43879984102, at `39b6348`.
+
+| Job | Main, `fa8b464` | The PR at `39b6348` |
+|---|---|---|
+| `lint-linux` | 47 s | 58 s |
+| `test-linux` | 109 s | 120 s |
+| `lint-windows` | 76 s | 96 s |
+| `test-windows` | 251 s | 177 s |
+| `pr-size-${{ matrix.name }}` (blocks nothing) | — | — |
+| `pr-size-linux` (blocks nothing) | — | 206 s |
+| `pr-size-windows` (blocks nothing) | — | 347 s |
+
+| Time above process start, against the budget | Linux, main (3 ms) | Linux, `39b6348` (4 ms) | Windows, main (9 ms) | Windows, `39b6348` (6 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 9.5 s | 20.4 s | 17.8 s | 11.6 s |
+| Tier 2, integration (40 s) | 14.9 s | 46.0 s | 38.5 s | 24.5 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 19.1 s | 35.1 s | 83.8 s | 65.0 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "after-the-review-pr2-output" -->
