@@ -27,8 +27,18 @@ A plain `cargo build --profile dist` at the desk (at `61bd1a0`), then `cargo xta
 
 ### Breaks
 
-`mutations/step-33-size-fix.breaks`, run with `cargo xtask mutate step-33-size-fix --jobs 2`: MUTATE_VERDICTS
+`mutations/step-33-size-fix.breaks`, run with `cargo xtask mutate step-33-size-fix --jobs 2` at the desk: **18 breaks, each caught by the test it names, none flagged.** They break the binary check (it is skipped; a path packed against the string before it is passed over; the cargo home in one spelling or one case; the user's name shown; a name outside ASCII; the build's own home not looked for; a longer folder taken for it), the remapping (no folder remapped; the flags already set dropped; the home folder after cargo's), `size`'s ending (a home path passing a run without `--check`; over the budget passing; the difference from `main` losing its sign), and the refusal of a host outside ASCII (not found; the port taken for the host; the transport handing it to the URL library; the core taking a provider's). The first run found one break no test caught (the build's own home folder, which only `check_file` looked up): a test of `own_folders` was added. Not broken: the pin itself, which a break could move only with a new lockfile, and the paths the `changes` action counts, which are shell outside any crate's tests (checked by hand against ten sets of paths).
 
 ### The independent review
 
-REVIEW_FINDINGS
+A fresh reviewer, which had not seen this work's reasoning, read the whole diff against the brief before the first push. It found nothing that must be fixed: the branch's `main` run had shown the remapping and the check working on both runners. What it found, and what became of each:
+
+| Finding | What was done |
+|---|---|
+| **The size job skipped a change to the `xtask` files the shipped build goes through.** Only `shipped.rs` counted; a pull request that broke `steps.rs`'s environment or `workspace.rs`'s folders would have lost the remapping and shown it only after the merge. | **Fixed.** `nonblocking.rs`, `steps.rs`, `workspace.rs` and `rules/home_paths.rs` count too (the `changes` action, `testing-and-ci.md`); the classification was run against ten sets of paths. |
+| **The binary check missed two real cases:** a user's name starting with a letter outside ASCII (`/home/émile`), and a home folder of no common shape (`/root`, a container's). | **Fixed,** with a test and three breaks: in a binary a name's bytes may be 0x80 and above, and the build's own home folder is looked for by name, as a whole folder, as its cargo home is. |
+| **`CARGO_ENCODED_RUSTFLAGS` takes the place of every `rustflags` in cargo's configuration,** not only `RUSTFLAGS`. | **Said** in `encoded_rustflags`' documentation: the repository sets none. |
+| **`ci-wait --pr` and `ci-times` count `pr-size` with the blocking jobs;** the difference is from `main`'s newest record, not the base; a change to the job is not run on its own pull request. | **Outstanding:** [the-pr-size-jobs-rough-edges](../../outstanding/the-pr-size-jobs-rough-edges.md). |
+| **The message gives an example's `xn--` form, not the host's own;** a percent-encoded host gets the URL library's message; a full-width port reads as part of the host. | **Outstanding:** [the-message-for-a-host-outside-ascii](../../outstanding/the-message-for-a-host-outside-ascii.md). |
+
+Classes it found nothing in: a build of the shipped binary that skips the remapping (the order of the remaps, nested folders, a drive's root, `\\?\` spellings, a relative `CARGO_HOME`, `OUT_DIR` or `CARGO_MANIFEST_DIR` text in shipped code); the job's permissions and the workflow rules; the `code` output; the pin (`~1.0.0` is in the resolved graph, and a crate that needs 1.2 fails resolution loudly); a measurement at a profile other than the shipped one; panics and missing documentation. It traced every break to the test that catches it.
