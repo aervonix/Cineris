@@ -22,7 +22,7 @@ use serde_json::json;
 
 use crate::transitions::overflow;
 use crate::{
-    DATE, Rig, Setup, World, assert_valid_history, calls, last_request, lock, says, text_of,
+    DATE, Fill, Rig, Setup, World, assert_valid_history, calls, last_request, lock, says, text_of,
 };
 
 fn turn(world: &World, rig: &Rig, turns: usize) {
@@ -253,10 +253,11 @@ fn a_compaction_whose_epoch_was_not_recorded_goes_on_from_what_the_log_holds() {
         rig.prompt("one");
         rig.events.turns(1).await;
     });
-    // The summary is recorded, and the epoch after it is not.
+    // The second turn's first request is past the trigger. The summary is
+    // recorded, and the epoch after it is not.
+    rig.fill_next(Fill::Compacting, "two");
     *lock(&store.fail_epoch) = Some(cortex_agent::EpochReason::Compaction);
     world.run(async {
-        rig.bulk(9_000);
         rig.prompt("two");
         rig.events.turns(2).await;
     });
@@ -772,7 +773,7 @@ fn compaction_notices(rig: &Rig) -> Vec<String> {
 fn a_compaction_is_shown_as_it_starts_and_ends() {
     let (world, rig) = Rig::one("compaction_notices", [says("A summary."), says("Done.")]);
     rig.window(4_000);
-    rig.bulk(6_000);
+    rig.fill(Fill::Compacting, "go");
     turn(&world, &rig, 1);
     assert_eq!(
         compaction_notices(&rig),

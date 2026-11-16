@@ -22,7 +22,7 @@ use cortex_protocol::{Speed, StopReason};
 use cortex_testkit::{Gate, Response};
 use serde_json::json;
 
-use crate::{Rig, Setup, World, calls, lock, says};
+use crate::{Fill, Rig, Setup, World, calls, lock, says};
 
 use TurnState::{
     Backoff, Compacting, Deciding, Finishing, Idle, Interrupted, Preparing, Requesting, Streaming,
@@ -100,11 +100,12 @@ fn tool_round(name: &str) -> Vec<TurnState> {
     walk(&world, &rig)
 }
 
-/// A small window and a large notice: the first request is over the
-/// trigger before it is sent.
+/// A small window and a notice that puts the first request over the
+/// trigger before it is sent, its size chosen from what the session really
+/// sends ([`Rig::fill`]), not counted by hand.
 fn over_budget(rig: &Rig) {
     rig.window(4_000);
-    rig.bulk(6_000);
+    rig.fill(Fill::Compacting, "go");
 }
 
 fn compaction_for_budget(name: &str) -> Vec<TurnState> {
