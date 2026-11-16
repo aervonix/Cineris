@@ -640,7 +640,6 @@ in: Core::shutdown
 find: self.inner.clients.withdraw(None);
 replace:
 caught-by:
-    cortex-core::it asking::an_undos_question_ends_when_the_core_ends
     cortex-core::it trusting::the_core_ending_ends_a_trust_question
 
 [break] workspace-files-walk-under-a-fresh-token
@@ -720,3 +719,73 @@ find: owner_only: true
 replace: owner_only: false
 caught-by:
     cortex-cli::bin/cortex history::tests::a_long_file_keeps_each_projects_newest
+
+# The second review of the core's part of the fixes.
+
+[break] a-trust-question-put-after-shutdown-stays-open
+rule: A trust question put after the core's end began (its withdrawal came before the question) is taken back at once.
+file: crates/cortex-core/src/core.rs
+in: Core::trust_for
+find:
+    if self.inner.shutting_down.load(Ordering::SeqCst) {
+            self.inner.clients.close(&id);
+        }
+replace:
+caught-by:
+    cortex-core::it trusting::a_trust_question_put_as_the_core_ends_is_taken_back
+
+[break] an-undos-question-put-after-its-end-stays-open
+rule: A rewind's question put after its session ended (its end withdrew what was open then) is taken back at once.
+file: crates/cortex-core/src/core.rs
+in: Core::put_them_back
+find:
+    if !still_open {
+            self.inner.clients.close(&id);
+        }
+replace:
+caught-by:
+    cortex-core::it asking::an_undos_question_put_as_the_core_ends_is_taken_back
+
+[break] a-yes-after-untrust-is-not-kept
+rule: A yes to a rules-changed question whose project another process untrusted meanwhile trusts it afresh, and is kept.
+file: crates/cortex-core/src/assemble.rs
+in: answer_trust
+find: .is_ok_and(|now| !now.is_trusted())
+replace: .is_ok_and(|_| false)
+caught-by:
+    cortex-core::it trusting::a_yes_after_another_process_untrusted_the_project_trusts_it_afresh
+
+[break] an-unkept-yes-after-the-rules-changed-trusts-them
+rule: A yes the trust store cannot keep, after the rules changed while the question was open, sets aside what the new rules could loosen.
+file: crates/cortex-core/src/assemble.rs
+in: trusted_unkept
+find: if Definition::of_project_rules(&rules) == question.pin {
+replace: if true {
+caught-by:
+    cortex-core::it trusting::a_yes_the_store_cannot_keep_after_the_rules_changed_sets_them_aside
+
+[break] a-locked-out-profiles-settings-are-listed
+rule: A profile the managed file's lock keeps from being selected has none of its settings listed, and the locked profile's are not listed under its name.
+file: crates/cortex-core/src/assemble.rs
+in: held_back_settings
+find: if other.profile.as_deref() != Some(name.as_str()) {
+replace: if false {
+caught-by:
+    cortex-core::it trusting::a_profile_the_managed_file_locks_out_is_not_listed
+
+[break] a-delta-merges-across-a-read
+rule: A delta is not merged into one queued at or below the seq a client read the session at, so the events after the read hold only what came after it.
+file: crates/cortex-core/src/events.rs
+in: EventQueue::push
+find: .is_none_or(|fence| last.seq > *fence)
+replace: .is_none_or(|_| true)
+caught-by:
+    cortex-core events::tests::a_read_and_the_events_after_it_hold_each_part_once
+
+[break] the-status-names-only-the-command-line
+rule: /status says of a session-only trust what is true of both its causes, not "--trust-project" alone.
+file: crates/cortex-tui/src/app/state/commands.rs
+find: TrustStanding::ForTheRun =>
+replace: TrustStanding::Trusted =>
+caught-by:
+    cortex-tui app::tests::trust_standing::status_says_a_trust_kept_for_now_only_without_naming_one_cause

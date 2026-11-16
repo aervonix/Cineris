@@ -543,13 +543,9 @@ caught-by:
 [break] deltas-never-merged
 rule: A delta that follows a delta of the same kind for the same item, with nothing between, is merged into it.
 file: crates/cortex-core/src/events.rs
-find:
-    if let Some(Outgoing::Event(last)) = state.items.back_mut()
-        && merge(last, &event)
-replace:
-    if let Some(Outgoing::Event(last)) = state.items.back_mut()
-        && false
-        && merge(last, &event)
+in: EventQueue::push
+find: && merge(last, &event)
+replace: && false && merge(last, &event)
 caught-by:
     cortex-core events::tests::deltas_of_one_item_and_kind_are_merged_while_the_reader_is_behind
     cortex-core events::tests::only_neighbours_of_the_same_item_and_kind_merge

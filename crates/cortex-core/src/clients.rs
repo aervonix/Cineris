@@ -334,8 +334,6 @@ impl Clients {
         }
     }
 
-    /// Closes a request that will not be answered through here any more:
-    /// it timed out, or was withdrawn. Says whether it was open.
     /// Withdraws the open requests that end with their askers (a trust
     /// question, a rewind's question) of one session, or of every session
     /// with `None`: whoever waits for one is told that no answer will
@@ -348,6 +346,8 @@ impl Clients {
         });
     }
 
+    /// Closes a request that will not be answered through here any more:
+    /// it timed out, or was withdrawn. Says whether it was open.
     pub(crate) fn close(&self, id: &RequestId) -> bool {
         lock(&self.open).remove(id).is_some()
     }

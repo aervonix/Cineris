@@ -616,7 +616,20 @@ pub(crate) fn answer_trust(
         TrustAnswer::Yes => {
             let pin = [question.pin.clone()];
             let kept = if question.rules_only {
-                store.approve(&question.key, &pin)
+                match store.approve(&question.key, &pin) {
+                    // Another process took the project's trust away while
+                    // the question was open: there is nothing to approve,
+                    // and this yes trusts it afresh (the review of step
+                    // 23's fixes). Not a store that could not keep it.
+                    Err(cortex_policy::TrustError::NotUnderstood { .. })
+                        if store
+                            .project(&question.key)
+                            .is_ok_and(|now| !now.is_trusted()) =>
+                    {
+                        store.trust(&question.key, &question.root, &pin)
+                    }
+                    other => other,
+                }
             } else {
                 store.trust(&question.key, &question.root, &pin)
             };

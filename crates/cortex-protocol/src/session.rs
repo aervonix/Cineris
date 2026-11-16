@@ -156,7 +156,9 @@ open_enum! {
         RulesChanged => "rules_changed",
         /// The user said never to trust it: it is not asked about.
         Never => "never",
-        /// Trusted for this run by the command line (`--trust-project`).
+        /// Trusted for now only, with nothing kept: for the run by the
+        /// command line (`--trust-project`), or for the session by a yes
+        /// the trust store could not keep (since the review of step 23).
         ForTheRun => "for_the_run",
     }
 }

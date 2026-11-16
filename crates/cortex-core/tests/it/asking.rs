@@ -289,8 +289,77 @@ fn an_undos_question_ends_when_the_core_ends() {
         let (asking, client, op) = (core.clone(), front.client.id, undo(&front));
         let undoing = tokio::spawn(async move { asking.handle(client, op).await });
         asked(&front).await;
+        let (id, ..) = questions(&front).remove(0);
         core.shutdown().await;
-        let _ = undoing.await.unwrap();
+        let undone = undoing.await.unwrap();
+        assert_eq!(
+            undone.map(|_| ()).map_err(|error| error.code),
+            Err("session_not_open".to_owned())
+        );
+        let late = core.respond(
+            front.client.id,
+            &id,
+            ServerResponse::Question(QuestionResponse {
+                answer: Some("Put them back".to_owned()),
+            }),
+        );
+        assert_eq!(
+            late.map_err(|error| error.code),
+            Err("request_not_open".to_owned())
+        );
+        assert_eq!(world.read("a.txt").as_deref(), Some("edited by hand\n"));
+    });
+}
+
+/// The core begins to end after an undo's plan is made and before its
+/// question is put: the question, put after the end withdrew what was open,
+/// is taken back at once, so the undo does not wait for a person past the
+/// end and an answer is refused (the review of step 23's fixes).
+#[test]
+fn an_undos_question_put_as_the_core_ends_is_taken_back() {
+    let mut world = changed_world("undo_planned_shutdown");
+    // Each piece of blocking work waits one turn: polled once, the undo
+    // waits for its plan, and the core ends before the plan is made.
+    world.one_turn_each();
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("change it").await;
+        world.put("a.txt", "edited by hand\n");
+        let mut undoing = std::pin::pin!(core.handle(front.client.id, undo(&front)));
+        std::future::poll_fn(|context| {
+            let _ = undoing.as_mut().poll(context);
+            std::task::Poll::Ready(())
+        })
+        .await;
+        core.shutdown().await;
+        let answering = async {
+            asked(&front).await;
+            let (id, ..) = questions(&front).remove(0);
+            front.core.respond(
+                front.client.id,
+                &id,
+                ServerResponse::Question(QuestionResponse {
+                    answer: Some("Put them back".to_owned()),
+                }),
+            )
+        };
+        let mut answering = std::pin::pin!(answering);
+        let mut answered = None;
+        let undone = std::future::poll_fn(|context| {
+            if answered.is_none()
+                && let std::task::Poll::Ready(result) = answering.as_mut().poll(context)
+            {
+                answered = Some(result.map_err(|error| error.code));
+            }
+            undoing.as_mut().poll(context)
+        })
+        .await;
+        assert_eq!(answered, Some(Err("request_not_open".to_owned())));
+        assert_eq!(
+            undone.map(|_| ()).map_err(|error| error.code),
+            Err("session_not_open".to_owned())
+        );
         assert_eq!(world.read("a.txt").as_deref(), Some("edited by hand\n"));
     });
 }

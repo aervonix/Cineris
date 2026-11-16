@@ -6803,7 +6803,7 @@
         },
         {
           "const": "for_the_run",
-          "description": "Trusted for this run by the command line (`--trust-project`)."
+          "description": "Trusted for now only, with nothing kept: for the run by the command line (`--trust-project`), or for the session by a yes the trust store could not keep (since the review of step 23)."
         },
         {
           "description": "A value this version of the protocol does not know. Receivers need a default branch.",
