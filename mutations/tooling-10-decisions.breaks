@@ -30,3 +30,38 @@ replace: matches!(hit.by, By::Rule(_))
 packages: cortex-policy, cortex-core
 caught-by:
     cortex-core::it verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does
+
+[break] managed-ask-loses-a-tie
+rule: Of rules of one strength the managed configuration's is the hit, so a managed `ask` beside another layer's `ask` on the same call is still marked.
+file: crates/cortex-policy/src/rules.rs
+in: RuleSet::strongest
+find: compiled.rule.source == RuleSource::Managed
+replace: false
+caught-by:
+    managed_ask::a_managed_ask_is_marked_beside_another_layers_ask_in_either_order
+
+[break] managed-ask-on-a-named-path-is-not-marked
+rule: A managed rule's `ask` on a path a command only names is marked.
+file: crates/cortex-policy/src/engine.rs
+in: Engine::judge_named_path
+find: By::Rule(_) => Finding::asked_by(reason, &hit)
+replace: By::Rule(_) => Finding::ask(reason)
+caught-by:
+    managed_ask::an_ask_of_the_managed_configuration_is_marked_whichever_way_it_comes
+
+[break] managed-ask-on-a-path-is-not-marked
+rule: A managed rule's `ask` on a path a call reads or writes is marked.
+file: crates/cortex-policy/src/engine.rs
+in: Engine::judge_path
+find: Finding::asked_by(format!("{what} is asked about by {}.", hit.describe()), &hit)
+replace: Finding::ask(format!("{what} is asked about by {}.", hit.describe()))
+caught-by:
+    managed_ask::an_ask_of_the_managed_configuration_is_marked_whichever_way_it_comes
+
+[break] managed-ask-is-forgotten-by-a-later-reason
+rule: A question is managed when any of its reasons is a managed rule's, whatever comes after it.
+file: crates/cortex-policy/src/engine.rs
+find: managed |= by_managed;
+replace: managed = by_managed;
+caught-by:
+    managed_ask::an_ask_of_the_managed_configuration_is_marked_whichever_way_it_comes

@@ -509,8 +509,9 @@ impl Finding {
         }
     }
 
-    /// An `ask` that the rule of `hit` decided: managed when the rule is
-    /// the managed configuration's.
+    /// An `ask` that the rule of `hit` decided, an `ask` rule or a rule
+    /// that holds a path back the call only names: managed when the rule
+    /// is the managed configuration's.
     fn asked_by(reason: impl Into<String>, hit: &Hit<'_>) -> Self {
         Self::Ask {
             reason: reason.into(),
@@ -2030,7 +2031,7 @@ impl Engine {
                         reason,
                         built_in: true,
                     },
-                    By::Rule(_) => Finding::ask(reason),
+                    By::Rule(_) => Finding::asked_by(reason, &hit),
                 })
             }
             None => (self.is_secret(path)
@@ -2056,7 +2057,7 @@ impl Engine {
                     reason,
                     built_in: true,
                 },
-                By::Rule(_) => Finding::ask(reason),
+                By::Rule(_) => Finding::asked_by(reason, &hit),
             });
         }
         self.is_sensitive(rules, path).then(|| {
@@ -2152,11 +2153,14 @@ impl Engine {
                 return found;
             }
             if deep && let Some(hit) = rules.held_back_under(&base) {
-                return Some(Finding::ask(format!(
-                    "`{shown}` names `{text}`, a pattern zsh expands at any depth, under `{base}`, \
-                     where {} holds a path back.",
-                    hit.describe()
-                )));
+                return Some(Finding::asked_by(
+                    format!(
+                        "`{shown}` names `{text}`, a pattern zsh expands at any depth, under \
+                         `{base}`, where {} holds a path back.",
+                        hit.describe()
+                    ),
+                    &hit,
+                ));
             }
             // What the directory holds now: each match is judged as a name
             // written out, through any link. Where nothing can have made
@@ -2186,11 +2190,14 @@ impl Engine {
             }
             // Otherwise, by its text: what it could match.
             if let Some(hit) = rules.protected_under(&base) {
-                return Some(Finding::ask(format!(
-                    "`{shown}` names `{text}`, a pattern the shell may expand to a path protected \
-                     by {}.",
-                    hit.describe()
-                )));
+                return Some(Finding::asked_by(
+                    format!(
+                        "`{shown}` names `{text}`, a pattern the shell may expand to a path \
+                         protected by {}.",
+                        hit.describe()
+                    ),
+                    &hit,
+                ));
             }
             let secret_names = || {
                 std::iter::once("HEAD".to_owned())
@@ -2728,11 +2735,14 @@ impl Engine {
         reason = "a judgement like the others, which do read the engine"
     )]
     fn searched(&self, shown: &str, tree: &AbsPath, hit: &Hit<'_>) -> Finding {
-        Finding::ask(format!(
-            "`{shown}` reads every file it finds in `{tree}`, and {} protects something there. \
-             The `search` tool makes the same search and leaves protected files out.",
-            hit.describe()
-        ))
+        Finding::asked_by(
+            format!(
+                "`{shown}` reads every file it finds in `{tree}`, and {} protects something \
+                 there. The `search` tool makes the same search and leaves protected files out.",
+                hit.describe()
+            ),
+            hit,
+        )
     }
 
     // ----------------------------------------------------------- approvals
