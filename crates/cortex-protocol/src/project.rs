@@ -180,6 +180,31 @@ pub struct ProjectEntry {
     /// A test that shows it still holds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<EntryCheck>,
+    /// When the user accepted it. For a `command` entry this is what puts
+    /// it on the project's safe list; an entry that became active by
+    /// itself has none. Added in step 17.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_at: Option<Timestamp>,
+    /// For an observed entry: how many times the harness saw it hold.
+    /// Added in step 17.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observations: Option<u32>,
+}
+
+/// An entry the user writes: it is active at once. Added in step 17.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct NewEntry {
+    /// What it is.
+    pub kind: EntryKind,
+    /// The entry in words.
+    pub text: String,
+    /// For a `command` entry: the command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<EntryCommand>,
+    /// A test that shows it still holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<EntryCheck>,
 }
 
 open_enum! {
