@@ -236,6 +236,34 @@ export interface CacheWriteTokens {
 /** One tool call. The provider chose it, so it is unique only within its session. */
 export type CallId = string;
 
+/** How one check ended. */
+export type CheckOutcome = "passed" | "failed" | "timed_out" | "flaky" | "blocked" | "skipped" | "not_run" | (string & {});
+
+/** One check, as a [`VerificationNotice`] tells of it. */
+export interface CheckReport {
+  /** All of what it printed, when the notice to the model held less. */
+  artifact?: ArtifactRef | null;
+  /** The command line. */
+  command: string;
+  /** The directory it runs in, relative to the workspace root. Absent: the root. */
+  cwd?: string | null;
+  /** How long it ran, in milliseconds. */
+  duration_ms?: number | null;
+  /** The project profile's entry it came from. */
+  entry?: EntryId | null;
+  /** Its exit code, when it exited with one. */
+  exit_code?: number | null;
+  /** What else to say of it, in words: why it was not run, what it left running, what the sandbox blocked. */
+  note?: string | null;
+  /** How it ended. Absent in a notice of a round that is starting, and of checks that are offered. */
+  outcome?: CheckOutcome | null;
+  /** Where it came from. */
+  source: CheckSource;
+}
+
+/** Where a check came from. */
+export type CheckSource = "user" | "profile" | (string & {});
+
 /** What a client can handle. A capability that is absent is `false`: the server never sends what the client did not ask for. */
 export interface ClientCapabilities {
   /** It answers `approval/request`. */
@@ -927,7 +955,9 @@ export type Notice = ({
     kind: "speed_cooldown";
   } & SpeedCooldown) | ({
     kind: "info";
-  } & InfoNotice);
+  } & InfoNotice) | ({
+    kind: "verification";
+  } & VerificationNotice);
 
 /** A message the harness added to the conversation. The model sees it. This is not the `notice` event ([`Notice`](crate::event::Notice)), which tells front ends about something transient and is never sent to the model. */
 export interface NoticeItem {
@@ -2114,7 +2144,26 @@ export interface UserMessageItem {
 }
 
 /** What the project's checks said at the end of a turn. */
-export type Verification = "passed" | "failed" | "skipped" | (string & {});
+export type Verification = "passed" | "failed" | "skipped" | "incomplete" | (string & {});
+
+/** Notice: the project's checks, at the end of a turn that changed files (`docs/architecture/15-efficiency.md`, "Automatic verification"; since step 19). */
+export interface VerificationNotice {
+  /** The checks. */
+  checks?: Array<CheckReport>;
+  /** The notice in words. */
+  message: string;
+  /** Which moment it tells of. */
+  phase: VerificationPhase;
+  /** The round, counted from 1 in its turn. 0 in a notice that offers the checks. */
+  round: number;
+  /** The most rounds the turn gets. */
+  rounds: number;
+  /** The turn's verdict so far, when a round ended. */
+  verdict?: Verification | null;
+}
+
+/** Which moment of verification a [`VerificationNotice`] tells of. */
+export type VerificationPhase = "started" | "finished" | "offered" | (string & {});
 
 /** `workspace/files`: the paths of a session's workspace, for a front end's file completion (since step 23). */
 export interface WorkspaceFilesParams {

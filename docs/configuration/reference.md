@@ -149,6 +149,16 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | `context.instruction_names` | list of text | `[]` | raises cost | next epoch | More names of instruction files, read after `AGENTS.md` and `CLAUDE.md` in each directory. From a project, after trust: what they hold is sent with every request. |
 | `context.instructions_cap` | whole number, 0 to 100000000 | `49152` | raises cost | next epoch | The most the instruction files may hold in all, in bytes. Past it the innermost files are cut, and the user is warned. From a project, after trust. |
 
+## `[verify]`
+
+| Key | Type | Default | From a project | Takes effect | What it is |
+|---|---|---|---|---|---|
+| `verify.mode` | `"auto"`, `"ask"`, `"off"` | `"auto"` | lower only: at or below the mode in effect (`off` < `ask` < `auto`) is a preference, a higher one is user only | at once | `auto`: the checks run, and a failure goes back to the model. `ask`: they are offered, and run when the user asks. `off`: they run only when the user asks. A project's file may turn it down, and may not turn it up. |
+| `verify.commands` | list of text, joined | `[]` | user only | at once | The user's own checks, each a command line run in the workspace root, before the accepted test and check commands of the project profile. Every one of the user's layers adds to the list. The user's alone: a repository proposes its checks as command entries of `.cortex/profile.toml`, which each user accepts. |
+| `verify.rounds` | whole number, 1 to 5 | `2` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | at once | The most rounds of checks one turn gets: a failure is given to the model, and the checks run again when it has changed files, until this many have run. A project's file may lower it. |
+| `verify.round_time` | length of time, 10s to 1h | `"2m"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | at once | The time one round's checks may take together. From ten seconds to an hour. A project's file may lower it. |
+| `verify.turn_time` | length of time, 10s to 4h | `"4m"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | at once | The time one turn's checks may take, every round together. From ten seconds to four hours. A project's file may lower it. |
+
 ## `[adapt]`
 
 | Key | Type | Default | From a project | Takes effect | What it is |
@@ -238,7 +248,6 @@ These sections belong to parts of the harness that are not built yet. A file may
 | `[models]` | user only | Catalog overrides and additions: limits, prices, reasoning control, capability flags. Each `[models.<name>]` table is one whole catalog entry, with the keys of a `[[model]]` table of the built-in catalog, and replaces the built-in entry for the same provider and model. The entries are read by the model catalog itself when the program starts, which refuses one it does not understand: nothing is started then, and the error names the file, the entry and what is wrong. |
 | `[http]` | user only | The HTTP client: the connect timeout, a proxy, and extra certificate authorities. |
 | `[tools]` | user only | Enabled tools, output limits and per-tool settings. |
-| `[verify]` | runs code | The verification mode, commands and time limits. |
 | `[runs]` | user only | The run engine: concurrency, workspaces, budgets. |
 | `[rpc]` | user only | The RPC server: socket path, token, client timeouts. |
 | `[hooks]` | runs code | Hooks by name. |

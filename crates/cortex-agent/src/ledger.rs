@@ -398,6 +398,21 @@ impl Ledger {
             .map(|catch_up| catch_up.id().to_owned())
     }
 
+    /// The time the wall-clock limits leave, the turn's own included:
+    /// `None` when no account has one. A request is held to it before it is
+    /// sent; the project's checks are held to it while they run, since they
+    /// run between two requests (step 19).
+    pub(crate) fn time_left(&self) -> Option<Duration> {
+        self.turn
+            .iter()
+            .chain(&self.accounts)
+            .filter_map(|account| {
+                let limit = account.budget().wall_clock_ms?;
+                Some(Duration::from_millis(limit).saturating_sub(account.elapsed()))
+            })
+            .min()
+    }
+
     /// Charges one request to every account, before it is sent. When an
     /// account refuses, nothing is charged to any. The accounts are as up
     /// to date as the last [`catch_up`](Self::catch_up) left them.

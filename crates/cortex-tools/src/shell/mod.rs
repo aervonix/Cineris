@@ -498,11 +498,23 @@ impl Tool for ShellTool {
                 Some(profile) if profile.is_build_or_test(&call.command) => Keep::Important,
                 _ => Keep::HeadAndTail,
             };
-            let payload = payload(&self.shell, &finished, changes.as_ref());
+            let mut payload = payload(&self.shell, &finished, changes.as_ref());
             let incomplete = changes.as_ref().and_then(|changes| changes.incomplete);
             let limits = cx.limits;
             let store = Arc::clone(&cx.store);
-            let explain = move |exit: Option<Exit>, output: &str| launcher.explain(exit, output);
+            // What the launcher says its confinement blocked goes in the
+            // payload too, for a caller that must tell a command the
+            // sandbox stopped from one that failed (the verification
+            // stage, step 19).
+            let explained: Arc<Mutex<Option<String>>> = Arc::default();
+            let seen = Arc::clone(&explained);
+            let explain = move |exit: Option<Exit>, output: &str| {
+                let line = launcher.explain(exit, output);
+                seen.lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone_from(&line);
+                line
+            };
             let fallback = finished.clone();
             let written = run_blocking(&free, move |_| {
                 write_result(
@@ -519,6 +531,14 @@ impl Tool for ShellTool {
                 // The store panicked. The status is still told.
                 (status_line(&fallback), None)
             });
+            if let Some(line) = explained
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+                && let Some(fields) = payload.as_object_mut()
+            {
+                fields.insert("sandbox".to_owned(), Json::String(line));
+            }
             let mut result = match fallback.ending {
                 Ending::Interrupted => ToolResult::interrupted(text),
                 Ending::Exited if fallback.exit == Some(Exit::Code(0)) => ToolResult::success(text),

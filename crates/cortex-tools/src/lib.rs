@@ -20,6 +20,7 @@
 //! | [`shell`] | [`ShellTool`], and what it needs: which [`Shell`] there is and how each kind is spoken to, the environment a command gets, and which files it changed. |
 //! | [`registry`] | [`ToolRegistry`], where MCP and extension tools register, and the tools [`ToolSearch`] and [`ToolCall`] that reach them. |
 //! | [`toolbox`] | [`Toolbox`]: the tools a session declares to the model. |
+//! | [`touched`] | [`changed_by`]: what a finished call changed, from its effects and its result, which sends a turn to the project's checks. |
 //!
 //! # Running a tool
 //!
@@ -49,6 +50,7 @@ pub mod search;
 pub mod shell;
 pub mod store;
 pub mod toolbox;
+pub mod touched;
 pub mod write;
 
 mod args;
@@ -90,6 +92,7 @@ pub use search::SearchTool;
 pub use shell::{Shell, ShellConfig, ShellKind, ShellSearch, ShellTool};
 pub use store::{ArtifactWriter, ContentStore, MemoryStore, StoreError};
 pub use toolbox::Toolbox;
+pub use touched::changed_by;
 pub use write::WriteTool;
 
 /// Runs a planned call and applies the output policy to its result.

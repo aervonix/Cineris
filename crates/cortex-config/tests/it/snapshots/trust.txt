@@ -73,7 +73,11 @@ context.prepare_at                 raises cost
 context.keep_recent_tokens         raises cost
 context.instruction_names          raises cost
 context.instructions_cap           raises cost
-verify.*                           runs code
+verify.mode                        lower only: at or below the mode in effect (`off` < `ask` < `auto`) is a preference, a higher one is user only
+verify.commands                    user only
+verify.rounds                      tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
+verify.round_time                  tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
+verify.turn_time                   tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
 adapt.variants.*.edit_format       user only
 adapt.variants.*.tool_schema       user only
 adapt.variants.*.prompt_style      user only

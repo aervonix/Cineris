@@ -479,6 +479,34 @@ impl Weekday {
 }
 
 choice! {
+    /// Whether the project's checks run at the end of a turn that changed
+    /// files (`docs/architecture/15-efficiency.md`, "Automatic
+    /// verification").
+    pub enum VerifyMode {
+        /// They run, and a failure goes back to the model.
+        Auto => "auto",
+        /// They are offered, and run when the user asks.
+        Ask => "ask",
+        /// They do not run unless the user asks.
+        Off => "off",
+    }
+}
+
+impl VerifyMode {
+    /// Where a mode stands in the order a project may only go down:
+    /// `off`, then `ask`, then `auto`. `None` for a word that is no mode.
+    #[must_use]
+    pub fn rank_of(word: &str) -> Option<u8> {
+        match word {
+            "off" => Some(0),
+            "ask" => Some(1),
+            "auto" => Some(2),
+            _ => None,
+        }
+    }
+}
+
+choice! {
     /// How the usage view's week and month are counted.
     pub enum UsageRanges {
         /// The calendar week and month.

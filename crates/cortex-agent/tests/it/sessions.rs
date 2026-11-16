@@ -739,6 +739,7 @@ fn checks_that_still_fail_at_the_round_limit_end_the_turn_and_say_so() {
         [
             writes("a"),
             says("Done."),
+            writes("b"),
             says("I tried."),
             says("Never sent."),
         ],
@@ -763,7 +764,7 @@ fn checks_that_still_fail_at_the_round_limit_end_the_turn_and_say_so() {
     );
     assert_eq!(
         world.provider.requests().len(),
-        3,
+        4,
         "the second failure is not fed back"
     );
 }

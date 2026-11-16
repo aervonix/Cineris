@@ -48,12 +48,12 @@ pub use sections::{
     AdaptSettings, CompatSettings, CredentialSettings, KeySettings, LimitSet, LimitSettings,
     LogSettings, ManagedSettings, ModelSettings, PermissionSettings, ProviderSettings,
     RetrySettings, RoleSettings, SandboxSettings, SessionSettings, Settings, StatsSettings,
-    TerminalSettings, TuiSettings, UsageSettings, VariantSettings,
+    TerminalSettings, TuiSettings, UsageSettings, VariantSettings, VerifySettings,
 };
 pub use types::{
     Bindings, ColorChoice, DensityChoice, EnvText, GlyphChoice, Headers, Profiles, ReasoningShown,
     ReasoningVisibility, Reserved, SessionDurability, StoreChoice, ToolOutputChoice, UsageRanges,
-    Weekday,
+    VerifyMode, Weekday,
 };
 pub(crate) use types::{magnitude, milliseconds_as_text};
 
@@ -106,6 +106,11 @@ pub enum Trust {
     /// cost. A fast tier costs about twice as much per token, and an
     /// untrusted repository must not be able to raise what its user spends.
     BySpeed,
+    /// Whether the project's checks run (`verify.mode`, since step 19): a
+    /// value at or below the one in effect, in the order `off`, `ask`,
+    /// `auto`, is a preference, since it runs fewer commands; a higher one
+    /// is the user's alone.
+    ByVerifyMode,
     /// A limit: a value at or below the one already in effect is a
     /// preference. The first limit where there was none applies only once
     /// the user trusts the project, since a limit of nothing (`time =
@@ -211,6 +216,13 @@ impl Trust {
                 Some("standard") => TrustClass::Preference,
                 _ => TrustClass::RaisesCost,
             },
+            Self::ByVerifyMode => {
+                let rank = |value: &Value| value.as_str().and_then(types::VerifyMode::rank_of);
+                match (rank(value), current.and_then(rank)) {
+                    (Some(wanted), Some(now)) if wanted <= now => TrustClass::Preference,
+                    _ => TrustClass::UserOnly,
+                }
+            }
             Self::TightenOnly => {
                 match (types::magnitude(value), current.and_then(types::magnitude)) {
                     (Some(_), None) => TrustClass::FirstLimit,
@@ -240,6 +252,10 @@ impl Trust {
             }
             Self::ByNetwork => "by value: `off` is a preference, `full` widens access",
             Self::BySpeed => "by value: `standard` is a preference, any other tier raises cost",
+            Self::ByVerifyMode => {
+                "lower only: at or below the mode in effect (`off` < `ask` < `auto`) is a \
+                 preference, a higher one is user only"
+            }
             Self::TightenOnly => {
                 "tighten only: a lower limit is a preference, a first limit where there was \
                  none waits for trust, a higher one is user only"

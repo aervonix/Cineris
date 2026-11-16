@@ -1252,10 +1252,66 @@
       "type": "object"
     },
     "verify": {
-      "description": "The verification mode, commands and time limits.",
-      "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "runs code"
+      "additionalProperties": true,
+      "description": "The project's checks at the end of a turn: whether they run, the user's own commands, the rounds and the time limits.",
+      "properties": {
+        "commands": {
+          "default": [],
+          "description": "The user's own checks, each a command line run in the workspace root, before the accepted test and check commands of the project profile. Every one of the user's layers adds to the list. The user's alone: a repository proposes its checks as command entries of `.cortex/profile.toml`, which each user accepts.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-cortex-effect": "at once",
+          "x-cortex-joined": true,
+          "x-cortex-trust": "user only"
+        },
+        "mode": {
+          "default": "auto",
+          "description": "`auto`: the checks run, and a failure goes back to the model. `ask`: they are offered, and run when the user asks. `off`: they run only when the user asks. A project's file may turn it down, and may not turn it up.",
+          "enum": [
+            "auto",
+            "ask",
+            "off"
+          ],
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "lower only: at or below the mode in effect (`off` < `ask` < `auto`) is a preference, a higher one is user only"
+        },
+        "round_time": {
+          "default": "2m",
+          "description": "The time one round's checks may take together. From ten seconds to an hour. A project's file may lower it.",
+          "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+          "type": "string",
+          "x-cortex-effect": "at once",
+          "x-cortex-milliseconds": {
+            "maximum": 3600000,
+            "minimum": 10000
+          },
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+        },
+        "rounds": {
+          "default": 2,
+          "description": "The most rounds of checks one turn gets: a failure is given to the model, and the checks run again when it has changed files, until this many have run. A project's file may lower it.",
+          "maximum": 5,
+          "minimum": 1,
+          "type": "integer",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+        },
+        "turn_time": {
+          "default": "4m",
+          "description": "The time one turn's checks may take, every round together. From ten seconds to four hours. A project's file may lower it.",
+          "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+          "type": "string",
+          "x-cortex-effect": "at once",
+          "x-cortex-milliseconds": {
+            "maximum": 14400000,
+            "minimum": 10000
+          },
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+        }
+      },
+      "type": "object"
     }
   },
   "title": "Cortex-Harness configuration",

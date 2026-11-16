@@ -290,7 +290,7 @@ const SCENARIOS: &[Scenario] = &[
         verified(
             name,
             vec![failed, VerifyOutcome::Passed],
-            vec![writes(), says("Done."), says("Fixed.")],
+            vec![writes(), says("Done."), writes(), says("Fixed.")],
         )
     }),
     ("interrupted_verifying", interrupted_verifying),
@@ -437,10 +437,12 @@ fn verification_runs_when_the_turn_wrote_files() {
     passes.extend([Finishing, Idle]);
     assert_eq!(run("verification_passes", "walk"), passes);
 
-    // A failure goes back to the model, and its answer is verified again.
+    // A failure goes back to the model, and what it changes then is
+    // verified again.
     let mut feeds_back = written_then_done.to_vec();
     feeds_back.extend([
-        Preparing, Requesting, Streaming, Deciding, Verifying, Finishing, Idle,
+        Preparing, Requesting, Streaming, Deciding, ToolRound, Preparing, Requesting, Streaming,
+        Deciding, Verifying, Finishing, Idle,
     ]);
     assert_eq!(run("verification_feeds_back", "walk"), feeds_back);
 }

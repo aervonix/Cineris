@@ -15,7 +15,7 @@ use cortex_protocol::{Level, ModelRole, Speed};
 use super::types::{
     Bindings, ColorChoice, DensityChoice, GlyphChoice, Headers, Profiles, ReasoningShown,
     ReasoningVisibility, Reserved, SessionDurability, StoreChoice, ToolOutputChoice, UsageRanges,
-    Weekday,
+    VerifyMode, Weekday,
 };
 use super::{CONFIG_VERSION, settings};
 
@@ -99,9 +99,10 @@ settings! {
         /// are read.
         [nested]
         pub context: ContextSettings,
-        /// The verification mode, commands and time limits.
-        [reserved RunsCode]
-        pub verify: Reserved,
+        /// The project's checks at the end of a turn: whether they run,
+        /// the user's own commands, the rounds and the time limits.
+        [nested]
+        pub verify: VerifySettings,
         /// Variant overrides per model.
         [nested]
         pub adapt: AdaptSettings,
@@ -526,6 +527,41 @@ settings! {
         /// is sent with every request.
         [TightenOnly, NextEpoch, 0..=8_000]
         pub profile_tokens: u64 = 1_500,
+    }
+}
+
+settings! {
+    /// The project's checks, run at the end of a turn that changed files
+    /// (`docs/architecture/15-efficiency.md`, "Automatic verification").
+    /// They run only in a project the user trusts, and never at the
+    /// `read-only` level.
+    pub struct VerifySettings {
+        /// `auto`: the checks run, and a failure goes back to the model.
+        /// `ask`: they are offered, and run when the user asks. `off`: they
+        /// run only when the user asks. A project's file may turn it down,
+        /// and may not turn it up.
+        [ByVerifyMode, Now]
+        pub mode: VerifyMode = VerifyMode::Auto,
+        /// The user's own checks, each a command line run in the workspace
+        /// root, before the accepted test and check commands of the project
+        /// profile. Every one of the user's layers adds to the list. The
+        /// user's alone: a repository proposes its checks as command
+        /// entries of `.cortex/profile.toml`, which each user accepts.
+        [UserOnly, Now, joined]
+        pub commands: Vec<String>,
+        /// The most rounds of checks one turn gets: a failure is given to
+        /// the model, and the checks run again when it has changed files,
+        /// until this many have run. A project's file may lower it.
+        [TightenOnly, Now, 1..=5]
+        pub rounds: u64 = 2,
+        /// The time one round's checks may take together. From ten
+        /// seconds to an hour. A project's file may lower it.
+        [TightenOnly, Now, 10s..=1h]
+        pub round_time: Duration = Duration::from_secs(120),
+        /// The time one turn's checks may take, every round together. From
+        /// ten seconds to four hours. A project's file may lower it.
+        [TightenOnly, Now, 10s..=4h]
+        pub turn_time: Duration = Duration::from_secs(240),
     }
 }
 

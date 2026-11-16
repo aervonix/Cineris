@@ -56,6 +56,11 @@ tui.turn_summary = false
 usage.ranges = "calendar"
 usage.refresh = []
 usage.week_start = "monday"
+verify.commands = []
+verify.mode = "auto"
+verify.round_time = "2m"
+verify.rounds = 2
+verify.turn_time = "4m"
 
 ## managed
 managed.locked = ["sandbox.enabled"]  # managed: ~/managed/config.toml:3
