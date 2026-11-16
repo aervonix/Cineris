@@ -103,7 +103,8 @@ impl Core {
     /// own), with where its key would come from. Nothing is sent anywhere.
     #[must_use]
     pub fn credentials(&self) -> Vec<ProviderCredential> {
-        let settings = &self.inner.user.settings;
+        let user = self.inner.user();
+        let settings = &user.settings;
         let mut names: Vec<String> = builtin_names().map(str::to_owned).collect();
         for name in settings.providers.keys() {
             if !names.contains(name) {

@@ -80,7 +80,8 @@ pub(crate) async fn report(
     if params.range == UsageRange::Session {
         return session_report(core, client, params);
     }
-    let settings = &inner.user.settings;
+    let user = inner.user();
+    let settings = &user.settings;
     let recording = settings.stats.enabled;
     let query = Query {
         range: params.range.clone(),
@@ -89,7 +90,7 @@ pub(crate) async fn report(
         week_start: settings.usage.week_start.from_monday(),
         rolling: settings.usage.ranges == cortex_config::schema::UsageRanges::Rolling,
     };
-    let dir = stats_dir(&inner.user);
+    let dir = stats_dir(&inner.user());
     let zone = inner.options.zone.clone();
     let clock = Arc::clone(&inner.options.clock);
     let retention = settings.stats.retention;
@@ -306,7 +307,8 @@ pub(crate) async fn refresh(core: &Core, params: &UsageRefreshParams) -> UsageRe
     let inner = &core.inner;
     // The user's own configuration, with no project's layers: the setting
     // is the user's alone, and a project's value of it was never taken.
-    let settings = &inner.user.settings;
+    let user = inner.user();
+    let settings = &user.settings;
     let env = &inner.options.env;
     let mut allowed: Vec<ProviderId> = Vec::new();
     for name in &settings.usage.refresh {
@@ -350,7 +352,7 @@ pub(crate) async fn refresh(core: &Core, params: &UsageRefreshParams) -> UsageRe
     // result, and are not kept.
     if !kept.is_empty()
         && settings.stats.enabled
-        && let Some(dir) = stats_dir(&inner.user)
+        && let Some(dir) = stats_dir(&inner.user())
     {
         let clock = Arc::clone(&inner.options.clock);
         let written = Core::blocking(move || {
@@ -545,7 +547,7 @@ impl Core {
     ///
     /// When the files cannot be read.
     pub async fn stats_summary(&self) -> Result<StatsSummary, OpError> {
-        let user = Arc::clone(&self.inner.user);
+        let user = self.inner.user();
         let zone = self.inner.options.zone.clone();
         let clock = Arc::clone(&self.inner.options.clock);
         let home = user.dirs.home.clone();
@@ -605,7 +607,7 @@ impl Core {
     ///
     /// When a file cannot be removed.
     pub async fn stats_reset(&self) -> Result<u64, OpError> {
-        let Some(dir) = stats_dir(&self.inner.user) else {
+        let Some(dir) = stats_dir(&self.inner.user()) else {
             return Ok(0);
         };
         Self::blocking(move || dir.reset().map_err(read_failed)).await

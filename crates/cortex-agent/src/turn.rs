@@ -448,6 +448,7 @@ impl Session {
                 closed: false,
                 reconfigured: None,
                 next_epoch: None,
+                trust: None,
             }),
         });
         let told_roles = shared.state(&shared.lock()).roles.into_values().collect();

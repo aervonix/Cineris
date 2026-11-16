@@ -96,7 +96,7 @@ fn in_git(root: &AbsPath) -> bool {
 /// `[compat]` is for readers of other tools' files only
 /// (`docs/architecture/08-configuration.md`; the review of step 15, its
 /// fourth note, found both turned off with it).
-fn context_settings(settings: &Settings) -> ContextSettings {
+pub(crate) fn context_settings(settings: &Settings) -> ContextSettings {
     let context = &settings.context;
     let mut names: Vec<String> = if settings.compat.instructions {
         cortex_agent::context::DEFAULT_NAMES
@@ -212,9 +212,20 @@ pub(crate) struct Assembled {
     /// The project's knowledge as this session has it. `None` with no
     /// state directory to keep it in.
     pub(crate) knowledge: Option<Arc<crate::knowledge::Knowledge>>,
+    /// What a reload of the configuration works from and changes (step
+    /// 24): the configuration in force and how it was loaded.
+    pub(crate) config: crate::reload::SessionConfig,
     /// The session's verifier, which `verify/run` asks first whether any
-    /// check could run.
+    /// check could run, and whose settings a reload changes.
     pub(crate) verifier: Arc<crate::verify::CoreVerifier>,
+    /// The accounts the ledger draws on, the lease's first and the day's
+    /// after it: a reload changes their budgets and keeps what was spent.
+    pub(crate) accounts: Vec<Account>,
+    /// The shell's settings a reload changes, when there is a shell.
+    pub(crate) shell_live: Arc<cortex_tools::ShellLive>,
+    /// Whether git may read the repository's own configuration: the shell's
+    /// look and the base capture read it, and a reload lowers it.
+    pub(crate) repository: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// The root of the workspace at `path`, as a session opened there would
@@ -252,7 +263,7 @@ pub(crate) fn resolve_dir(path: &Path) -> Option<AbsPath> {
 }
 
 /// The source of a rule the configuration holds, by the layer it is in.
-fn rule_source(layer: LayerKind, defined_in: Option<LayerKind>) -> RuleSource {
+pub(crate) fn rule_source(layer: LayerKind, defined_in: Option<LayerKind>) -> RuleSource {
     match layer {
         LayerKind::Managed => RuleSource::Managed,
         LayerKind::Project | LayerKind::ProjectLocal => RuleSource::Project,
@@ -869,7 +880,7 @@ fn trust(
 
 /// The session's settings as configuration overrides, which rank as the
 /// command line does: they are the user's own.
-fn settings_overrides(settings: &SessionSettings) -> Vec<Override> {
+pub(crate) fn settings_overrides(settings: &SessionSettings) -> Vec<Override> {
     let text = |value: &str| toml::Value::String(value.to_owned()).to_string();
     let mut overrides = Vec::new();
     let mut set = |key: String, value: String| {
@@ -967,28 +978,6 @@ fn engine_parts(
         None => Vec::new(),
     };
 
-    // A path the user wrote, as where it really is. One that cannot be
-    // placed is passed on as written, for the engine to refuse by name.
-    let place = |entry: &String| -> String {
-        let expanded = cortex_config::load::expand_home(entry, home_dir.as_deref());
-        let absolute = match expanded {
-            Some(path) if path.is_absolute() => Some(path),
-            Some(path) => Some(root.to_fs_path().join(path)),
-            None => None,
-        };
-        absolute
-            .as_deref()
-            .and_then(resolve_dir)
-            .map_or_else(|| entry.clone(), |resolved| resolved.as_str().to_owned())
-    };
-    let temporary = sandbox::temp_path(session);
-    let mut writable: Vec<String> = resolve_dir(&temporary)
-        .map(|path| path.as_str().to_owned())
-        .into_iter()
-        .collect();
-    writable.extend(settings.sandbox.write.iter().map(place));
-    let protect: Vec<String> = settings.sandbox.protect.iter().map(place).collect();
-
     let mut protected = Protected::none();
     let dirs = &loaded.dirs;
     if let Some(config) = dirs.config.as_deref().and_then(resolve_dir) {
@@ -1033,11 +1022,7 @@ fn engine_parts(
         level: settings.permissions.mode.clone(),
         rules,
         approved,
-        sandbox_policy: {
-            let mut policy = default_sandbox(&root, &writable, &protect);
-            policy.network = settings.sandbox.network;
-            policy
-        },
+        sandbox_policy: sandbox_grant(inner, loaded, &root, session),
         sandbox: inner.sandbox.state(settings.sandbox.enabled).0,
         models: Vec::new(),
         budget: budget(&settings.limits.session),
@@ -1054,6 +1039,174 @@ fn engine_parts(
     }
 }
 
+/// What the session's sandbox grants, from `loaded`: the workspace, the
+/// session's temporary directory and `sandbox.write` to write, the
+/// protected paths, and `sandbox.network`.
+pub(crate) fn sandbox_grant(
+    inner: &Inner,
+    loaded: &Loaded,
+    root: &AbsPath,
+    session: &SessionId,
+) -> cortex_protocol::lease::SandboxPolicy {
+    let settings = &loaded.settings;
+    let home_dir = inner.options.env.home();
+    // A path the user wrote, as where it really is. One that cannot be
+    // placed is passed on as written, for the engine to refuse by name.
+    let place = |entry: &String| -> String {
+        let expanded = cortex_config::load::expand_home(entry, home_dir.as_deref());
+        let absolute = match expanded {
+            Some(path) if path.is_absolute() => Some(path),
+            Some(path) => Some(root.to_fs_path().join(path)),
+            None => None,
+        };
+        absolute
+            .as_deref()
+            .and_then(resolve_dir)
+            .map_or_else(|| entry.clone(), |resolved| resolved.as_str().to_owned())
+    };
+    let temporary = sandbox::temp_path(session);
+    let mut writable: Vec<String> = resolve_dir(&temporary)
+        .map(|path| path.as_str().to_owned())
+        .into_iter()
+        .collect();
+    writable.extend(settings.sandbox.write.iter().map(place));
+    let protect: Vec<String> = settings.sandbox.protect.iter().map(place).collect();
+    let mut policy = default_sandbox(root, &writable, &protect);
+    policy.network = settings.sandbox.network;
+    policy
+}
+
+/// The engine's parts after a reload (step 24): the template's, with the
+/// rules, the level, the sandbox's grant, the session's budget and the
+/// project's trust taken from `loaded`, the configuration now in force.
+/// What the template holds besides (the approvals' store, the protected
+/// paths, the shell's syntax) is the session's own.
+pub(crate) fn reloaded_parts(
+    inner: &Inner,
+    template: &Parts,
+    loaded: &Loaded,
+    trusted: bool,
+    repository_trusted: bool,
+    session: &SessionId,
+) -> Parts {
+    let mut parts = template.clone();
+    let mut rules = sourced_rules(loaded);
+    rules.extend(
+        inner
+            .options
+            .rules
+            .iter()
+            .cloned()
+            .map(|rule| SourcedRule::new(rule, RuleSource::CommandLine)),
+    );
+    parts.rules = rules;
+    parts.level = loaded.settings.permissions.mode.clone();
+    parts.sandbox_policy = sandbox_grant(inner, loaded, &template.workspace, session);
+    parts.budget = budget(&loaded.settings.limits.session);
+    parts.trusted = trusted;
+    parts.repository_trusted = repository_trusted;
+    parts
+}
+
+/// The project's trust now, judged as a start judges it (`trust`), and
+/// nothing loaded for it put in force: what step 24's reload decides the
+/// one load it makes with. `rules` is `None` when the project's files could
+/// not be read to compare its rules with what was pinned: the reload then
+/// keeps the trust in force, and its load reports the error.
+pub(crate) struct Judged {
+    pub(crate) rules: Option<bool>,
+    pub(crate) repository: bool,
+    pub(crate) problem: Option<String>,
+    pub(crate) standing: TrustStanding,
+}
+
+/// See [`Judged`]. Blocks: it reads the trust store and the project's
+/// files.
+pub(crate) fn judge(
+    inner: &Inner,
+    state: Option<&StateDir>,
+    root: &AbsPath,
+    options: &LoadOptions,
+) -> Judged {
+    if inner.options.trust_project {
+        return Judged {
+            rules: Some(true),
+            repository: true,
+            problem: None,
+            standing: TrustStanding::ForTheRun,
+        };
+    }
+    let (stored, problem) = match state {
+        Some(state) => {
+            let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
+            match store.project(&root.project_key()) {
+                Ok(trust) => (trust, None),
+                Err(error) => (
+                    cortex_policy::ProjectTrust::untrusted(),
+                    Some(format!(
+                        "The trust store could not be read, so this project is treated as not \
+                         trusted: {error}"
+                    )),
+                ),
+            }
+        }
+        None => (cortex_policy::ProjectTrust::untrusted(), None),
+    };
+    if !stored.is_trusted() {
+        let standing = if stored.is_refused() {
+            TrustStanding::Never
+        } else {
+            TrustStanding::Untrusted
+        };
+        return Judged {
+            rules: Some(false),
+            repository: false,
+            problem,
+            standing,
+        };
+    }
+    let peek = |profile: Option<&str>| {
+        let mut options = options.clone();
+        options.trust = cortex_config::ProjectTrust::Trusted;
+        if let Some(profile) = profile {
+            options.profile = Some(profile.to_owned());
+        }
+        cortex_config::load(&options).map_err(|failure| {
+            Box::new(ErrorData::new(
+                ErrorKind::Config,
+                "invalid_configuration",
+                failure.render(&inner.options.env),
+            ))
+        })
+    };
+    let pinned =
+        peek(None).and_then(|peeked| pinned_rules(&peeked, &|profile| peek(Some(profile))));
+    match pinned {
+        Ok(pins) if stored.project_rules_approved(&pins) => Judged {
+            rules: Some(true),
+            repository: true,
+            problem,
+            standing: TrustStanding::Trusted,
+        },
+        Ok(_) => Judged {
+            rules: Some(false),
+            repository: true,
+            problem: Some(
+                "This project's permission rules have changed since it was trusted, so its \
+                 settings and its allow rules are set aside until the change is approved."
+                    .to_owned(),
+            ),
+            standing: TrustStanding::RulesChanged,
+        },
+        Err(_) => Judged {
+            rules: None,
+            repository: true,
+            problem,
+            standing: TrustStanding::Trusted,
+        },
+    }
+}
+
 /// Whether a write root of `policy` holds the harness's configuration,
 /// state or data directory, or is one, or lies inside one; or holds the
 /// user's configuration file, as named or where a link leads (a dotfiles
@@ -1061,7 +1214,7 @@ fn engine_parts(
 /// with; or holds the program started as the launcher, which a confined
 /// command could then replace with one that confines nothing (found by the
 /// second review of step 26).
-fn holds_harness_files(
+pub(crate) fn holds_harness_files(
     policy: &cortex_protocol::lease::SandboxPolicy,
     loaded: &Loaded,
     state: Option<&StateDir>,
@@ -1120,7 +1273,7 @@ pub(crate) fn start_engine(parts: Parts) -> Result<Engine, Box<ErrorData>> {
 }
 
 /// The models of a session, by role, from its settings.
-fn models(
+pub(crate) fn models(
     inner: &Inner,
     settings: &Settings,
     images: &Arc<dyn ImageSource>,
@@ -1163,7 +1316,7 @@ fn models(
 }
 
 /// The speeds a session starts at.
-fn speeds(settings: &Settings) -> SpeedSettings {
+pub(crate) fn speeds(settings: &Settings) -> SpeedSettings {
     let mut speeds = SpeedSettings {
         session: settings.model.speed.clone(),
         ..SpeedSettings::default()
@@ -1237,7 +1390,7 @@ fn find_shell(
     // miss the session goes on without the version, and the shell is asked
     // on a thread of its own for the sessions after this one.
     let asks = matches!(shell.kind(), ShellKind::Bash | ShellKind::Pwsh);
-    let cache = StateDir::from_dirs(&inner.user.dirs)
+    let cache = StateDir::from_dirs(&inner.user().dirs)
         .map(|state| (state.root().join(shell_cache::FILE), state));
     let stamp = shell_cache::Stamp::of(shell.program());
     match (asks, cache, stamp) {
@@ -1365,7 +1518,7 @@ fn confine_roots(inner: &Inner, loaded: &Loaded, root: &AbsPath) -> Vec<PathBuf>
 /// default is held to the longest: a project's file may lower
 /// `shell.max_timeout` below `shell.timeout`, and the tool's description
 /// must not then offer the model a default it may not have.
-fn shell_limits(settings: &Settings) -> (std::time::Duration, std::time::Duration) {
+pub(crate) fn shell_limits(settings: &Settings) -> (std::time::Duration, std::time::Duration) {
     let longest = settings.shell.max_timeout;
     (settings.shell.timeout.min(longest), longest)
 }
@@ -1408,6 +1561,10 @@ pub(crate) fn assemble(
         state,
     } = place(inner, &wanted)?;
     let project = root.project_key();
+    // What a reload works from: the session's own choices, apart from the
+    // rest of what it was loaded with, and where its state is.
+    let wanted_choices = settings_overrides(&wanted.settings);
+    let state_dir = state.clone();
     // Where the repository index keeps its cache: the project's, by its key.
     let index_dir = state.as_ref().and_then(|state| state.index_dir(&project));
     // Where the project's knowledge is kept: named here, read at the first
@@ -1812,6 +1969,13 @@ pub(crate) fn assemble(
         }));
     // The session's shell, which the project's checks run through too.
     let mut checks_shell: Option<Arc<RecordingShell>> = None;
+    // What of the shell a reload changes: the repository's trust and the
+    // providers' key variables, for the next command.
+    let shell_live = Arc::new(cortex_tools::ShellLive::new(
+        repository_trusted,
+        provider::key_variables(settings),
+    ));
+    let repository = Arc::new(std::sync::atomic::AtomicBool::new(repository_trusted));
     if let Some(shell) = shell {
         let mut env_remove = provider::key_variables(settings);
         env_remove.extend(settings.shell.env_remove.iter().cloned());
@@ -1826,7 +1990,9 @@ pub(crate) fn assemble(
             // run a program.
             repository_trusted,
         };
-        let mut tool = ShellTool::new(shell, config).with_runner(runner(inner));
+        let mut tool = ShellTool::new(shell, config)
+            .with_runner(runner(inner))
+            .with_live(Arc::clone(&shell_live));
         tool = tool
             .with_launcher(Arc::clone(&sandbox) as Arc<dyn cortex_tools::process::Launcher>)
             .with_git(Arc::clone(&session_git) as Arc<dyn cortex_base::git::Confinement>);
@@ -1880,9 +2046,9 @@ pub(crate) fn assemble(
             // Taken on a thread of its own, with the answer about the
             // repository's trust, and appended when it is ready: the first
             // prompt never waits for it.
-            match BaseCapture::start(
+            match BaseCapture::start_watching(
                 root.clone(),
-                repository_trusted,
+                Arc::clone(&repository),
                 disk.session.store(),
                 Arc::clone(&git),
                 Arc::clone(&clock),
@@ -1981,12 +2147,15 @@ pub(crate) fn assemble(
             cortex_protocol::session::SandboxStatus::Off
         },
         write_roots,
-        trust: Some(standing),
+        trust: Some(standing.clone()),
     };
+    let lease_account = Account::for_lease(&lease, Arc::clone(&clock));
+    let mut accounts = vec![lease_account.clone()];
     let mut ledger = Ledger::new(Arc::clone(&clock))
-        .with_account(Account::for_lease(&lease, Arc::clone(&clock)))
+        .with_account(lease_account)
         .with_turn_budget(budget(&settings.limits.turn));
     if let Some(day) = crate::day::day_account(inner, &settings.limits.day)? {
+        accounts.push(day.clone());
         ledger = ledger.with_account(day);
     }
     // Every tool is held to a stop a confined command made.
@@ -2118,7 +2287,23 @@ pub(crate) fn assemble(
         lease_count: lease_count + 1,
         repo,
         knowledge,
+        config: crate::reload::SessionConfig::new(
+            load,
+            wanted_choices,
+            Arc::clone(&loaded),
+            crate::reload::Trusted {
+                rules: rules_trusted,
+                repository: repository_trusted,
+            },
+            standing,
+            root.clone(),
+            state_dir,
+            &inner.options,
+        ),
         verifier,
+        accounts,
+        shell_live,
+        repository,
     })
 }
 

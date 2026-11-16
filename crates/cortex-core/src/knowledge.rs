@@ -205,7 +205,9 @@ pub(crate) struct Knowledge {
     hooks: Arc<Hooks>,
     syntax: ShellSyntax,
     filter: Arc<RwLock<SecretFilter>>,
-    tokens: u32,
+    /// `project.profile_tokens`: a reload changes it as the session's next
+    /// epoch begins (step 24).
+    tokens: std::sync::atomic::AtomicU32,
     learn: bool,
     rounds: Option<Arc<crate::checkpoints::Rounds>>,
     shared_file: Option<cortex_base::AbsPath>,
@@ -295,7 +297,7 @@ impl Knowledge {
             hooks: parts.hooks,
             syntax: parts.syntax,
             filter: parts.filter,
-            tokens: parts.tokens,
+            tokens: std::sync::atomic::AtomicU32::new(parts.tokens),
             learn: parts.learn,
             rounds: parts.rounds,
             shared_file: parts.shared_file,
@@ -733,20 +735,35 @@ impl Knowledge {
     }
 }
 
+impl Knowledge {
+    /// The profile's budget in tokens now.
+    pub(crate) fn tokens(&self) -> u32 {
+        self.tokens.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The profile's budget from now on: a reload's `project.profile_tokens`
+    /// as the session's next epoch begins, which builds its prompt again.
+    pub(crate) fn set_tokens(&self, tokens: u32) {
+        self.tokens
+            .store(tokens, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl cortex_agent::ProfileSource for Knowledge {
     fn section(&self) -> String {
         let snapshot = self.refresh(false);
         let section = cortex_knowledge::render::render_with(
             &snapshot,
             self.project.now(),
-            self.tokens,
+            self.tokens(),
             &|line| !self.finds_secret(line),
         );
         if section.left_out > 0 {
             self.tell_once(format!(
                 "The project profile is larger than its budget of {} tokens: {} of its entries \
                  are left out of the prompt. `cortex project list` shows them all.",
-                self.tokens, section.left_out
+                self.tokens(),
+                section.left_out
             ));
         }
         if section.withheld > 0 {
