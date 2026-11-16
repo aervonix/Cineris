@@ -8,7 +8,7 @@
 //! | Seam | Here |
 //! |---|---|
 //! | The loop's `Policy::decide` | The plan's effects as the engine's accesses, and its outcome as the loop's decision. |
-//! | The loop's `Policy::ask` | The question put to the front ends that may answer, the wait and its time limit, and the answer recorded. |
+//! | The loop's `Policy::ask` | The question put to the front ends that may answer, the wait and its time limit, and the answer recorded; a supervisor's allow judged against its grant. |
 //! | The tools' `ReadGate` | `Engine::may_read`. |
 //! | The base state's `KeepGate` | `Engine::may_store`. |
 //!
@@ -23,6 +23,16 @@
 //! (`CoreOptions::keep_sessions`) asks later instead where the session has
 //! no client at all: the question is put to nobody, and waits for a `user`
 //! client to open the session, until its time limit.
+//!
+//! # A supervisor's answer
+//!
+//! A `supervisor` with a grant is put every approval of the session, at
+//! once with the users (`crate::clients`). Its allow is taken only where
+//! the grant allows the call ([`within_grant`]): an engine made from the
+//! session's own engine template, with the session's standing lease
+//! narrowed by the grant for its scope, and the grant's level and allow
+//! rules for who decides. A call it allows is allowed once, and nothing is
+//! recorded: a supervisor never reaches `Engine::record`.
 
 #![allow(
     clippy::disallowed_types,
@@ -36,10 +46,10 @@ use std::time::Duration;
 
 use cortex_agent::{Decision, PlannedCall, Policy, Verdict};
 use cortex_base::{AbsPath, SharedTimer};
-use cortex_policy::{Access, Engine, Outcome, Question, Request};
+use cortex_policy::{Access, Engine, LeaseExt, Outcome, Question, Request};
 use cortex_protocol::event::{Event, RequestResolved, Resolution};
 use cortex_protocol::jsonrpc::RequestId;
-use cortex_protocol::lease::Effect as EffectKind;
+use cortex_protocol::lease::{Effect as EffectKind, Lease, Level, RuleAction};
 use cortex_protocol::methods::{
     ApprovalChoice, ApprovalDetail, ApprovalRequest, ApprovalResponse, CommandDetail, DiffDetail,
     ServerRequest, ServerResponse, TargetDetail, ToolDetail,
@@ -48,7 +58,8 @@ use cortex_protocol::{CallId, ItemId, TurnId};
 use cortex_session::KeepGate;
 use cortex_tools::{BoxFuture, Effect, NetworkTarget, ReadGate};
 
-use crate::clients::Clients;
+use crate::assemble::EngineTemplate;
+use crate::clients::{Answer, Clients, Judge};
 use crate::events::SessionSink;
 use crate::store::Hooks;
 
@@ -217,6 +228,9 @@ pub(crate) struct EnginePolicy {
     clients: Arc<Clients>,
     sink: Arc<SessionSink>,
     hooks: Arc<Hooks>,
+    /// What the session's engine was made from, as a change of level
+    /// leaves it: what a supervisor's grant is judged with.
+    template: Arc<Mutex<EngineTemplate>>,
     timer: SharedTimer,
     /// How long an approval may wait for its answer. `None`: as long as it
     /// takes.
@@ -271,6 +285,7 @@ pub(crate) struct PolicyParts {
     pub(crate) clients: Arc<Clients>,
     pub(crate) sink: Arc<SessionSink>,
     pub(crate) hooks: Arc<Hooks>,
+    pub(crate) template: Arc<Mutex<EngineTemplate>>,
     pub(crate) timer: SharedTimer,
     pub(crate) timeout: Option<Duration>,
     pub(crate) fail_on_denial: bool,
@@ -300,6 +315,7 @@ impl EnginePolicy {
             clients: parts.clients,
             sink: parts.sink,
             hooks: parts.hooks,
+            template: parts.template,
             timer: parts.timer,
             timeout: parts.timeout,
             fail_on_denial: parts.fail_on_denial,
@@ -505,6 +521,26 @@ impl EnginePolicy {
         }
     }
 
+    /// What judges a supervisor's allow of `call`: whether its grant
+    /// allows the call ([`within_grant`]), with the session's engine
+    /// template and standing lease as they are now. `None` for a call whose
+    /// effects the engine cannot be shown: no grant covers it.
+    fn judge(&self, call: &PlannedCall<'_>) -> Option<Judge> {
+        let accesses = accesses(call)?;
+        let parts = self
+            .template
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .parts
+            .clone();
+        let standing = self.engine().lease().clone();
+        let tool = call.spec.name.clone();
+        let default = call.spec.permission;
+        Some(Arc::new(move |grant: &Lease| {
+            within_grant(&parts, &standing, grant, &tool, default, &accesses)
+        }))
+    }
+
     fn resolved(&self, id: &RequestId, resolution: Resolution) {
         self.hooks.emit(Event::RequestResolved(RequestResolved {
             request_id: id.clone(),
@@ -547,6 +583,70 @@ fn accesses(call: &PlannedCall<'_>) -> Option<Vec<Access>> {
             })
         })
         .collect()
+}
+
+/// Whether a supervisor's `grant` allows a call of `tool` with these
+/// `accesses`, in a session whose engine is made from `template` and holds
+/// the `standing` lease (`docs/architecture/06-permissions-and-sandbox.md`,
+/// "When a session is supervised").
+///
+/// An engine is made from the session's own template with a lease of:
+///
+/// - **the session's scope, narrowed by the grant:** `standing.narrow(grant)`,
+///   so the writable roots, the protected paths, the network and every
+///   `deny` and `ask` rule are the session's or narrower, and a grant never
+///   widens what the session holds. A narrow that fails covers nothing.
+/// - **who decides, from the grant:** its level, at most `autonomous`
+///   (`unrestricted` is never handed on), and its allow rules. Narrowed
+///   alone, both would be the session's, under which the call was asked
+///   about, and no grant could cover any call the session asks about.
+///
+/// It decides the call, and only `allow` is within. A level the session
+/// could not hold (`autonomous` where the sandbox does not enforce) covers
+/// nothing either. The session's stored and session approvals are not in
+/// it: they are the user's, and the call was asked about despite them.
+pub(crate) fn within_grant(
+    template: &cortex_policy::Parts,
+    standing: &Lease,
+    grant: &Lease,
+    tool: &str,
+    default: RuleAction,
+    accesses: &[Access],
+) -> bool {
+    let Ok(mut lease) = standing.narrow(grant, template.sandbox) else {
+        return false;
+    };
+    lease.grant.level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
+    for rule in &grant.grant.rules {
+        if rule.action == RuleAction::Allow && !lease.grant.rules.contains(rule) {
+            lease.grant.rules.push(rule.clone());
+        }
+    }
+    let mut parts = template.clone();
+    parts.level = lease.grant.level;
+    parts.rules = lease
+        .grant
+        .rules
+        .into_iter()
+        .map(|rule| cortex_policy::SourcedRule::new(rule, cortex_policy::RuleSource::Lease))
+        .collect();
+    parts.approved = Vec::new();
+    parts.sandbox_policy = lease.grant.sandbox;
+    parts.models = lease.grant.models;
+    parts.budget = lease.grant.budget;
+    parts.limits = lease.grant.limits;
+    parts.store = None;
+    let Ok(engine) = Engine::start(parts) else {
+        return false;
+    };
+    matches!(
+        engine.decide(&Request {
+            tool,
+            default,
+            accesses,
+        }),
+        Outcome::Allow { .. }
+    )
 }
 
 /// Exactly what an approval would let happen, for the front end to show.
@@ -680,16 +780,19 @@ impl Policy for EnginePolicy {
                     })
                     .collect(),
             };
-            let (id, mut answer) = self.clients.ask(call.session, &asked, |_| {
-                ServerRequest::Approval(request.clone())
-            });
+            let (id, mut answer) = self.clients.ask(
+                call.session,
+                &asked,
+                |_| ServerRequest::Approval(request.clone()),
+                self.judge(&call),
+            );
             let mut open = Asked {
                 policy: self,
                 id: id.clone(),
                 settled: false,
             };
             let mut limit = self.timeout.map(|limit| self.timer.sleep(limit));
-            let answered: Option<ApprovalResponse> = poll_fn(|cx| {
+            let answered: Option<(ApprovalResponse, bool)> = poll_fn(|cx| {
                 if let Poll::Ready(response) = std::pin::Pin::new(&mut answer).poll(cx) {
                     return Poll::Ready(response.ok().and_then(approval_of));
                 }
@@ -710,7 +813,7 @@ impl Policy for EnginePolicy {
                 other => other,
             };
 
-            let Some(response) = answered else {
+            let Some((response, by_supervisor)) = answered else {
                 // Nobody answered in time: a denial, as the protocol says.
                 self.resolved(&id, Resolution::TimedOut);
                 return Verdict::Deny {
@@ -728,6 +831,19 @@ impl Policy for EnginePolicy {
             // review of step 26).
             if let Some(reason) = self.stopped(&call) {
                 return Verdict::Stop { reason };
+            }
+            // A supervisor's answer settles this call alone: an allow within
+            // its grant (taken as `allow_once`), or a denial. Nothing is
+            // recorded for it.
+            if by_supervisor {
+                return if response.choice == ApprovalChoice::AllowOnce {
+                    self.remember_allowed(&call, question);
+                    Verdict::Allow
+                } else {
+                    Verdict::Deny {
+                        note: response.note,
+                    }
+                };
             }
 
             // In the engine in force when it is recorded, never in one a
@@ -824,11 +940,12 @@ impl<T: Send + Sync + 'static> cortex_index::Gate for InForce<T> {
     }
 }
 
-/// An approval's answer, from the table's answers of every kind: the table
-/// refuses an answer of another kind, so nothing else arrives here.
-fn approval_of(response: ServerResponse) -> Option<ApprovalResponse> {
-    match response {
-        ServerResponse::Approval(response) => Some(response),
+/// An approval's answer, and whether a supervisor gave it, from the
+/// table's answers of every kind: the table refuses an answer of another
+/// kind, so nothing else arrives here.
+fn approval_of(answer: Answer) -> Option<(ApprovalResponse, bool)> {
+    match answer.response {
+        ServerResponse::Approval(response) => Some((response, answer.by_supervisor)),
         _ => None,
     }
 }
@@ -899,6 +1016,158 @@ mod tests {
         cortex_policy::test_support::TestParts::at(path("/work/app"))
             .home(path("/users/dev"))
             .engine()
+    }
+
+    // ------------------------------------------------- a supervisor's grant
+
+    /// The parts of a session's engine at `supervised` in `/work/app`, with
+    /// `rules` of the user's own.
+    fn session_parts(rules: Vec<cortex_protocol::lease::Rule>) -> cortex_policy::Parts {
+        cortex_policy::test_support::TestParts::at(path("/work/app"))
+            .home(path("/users/dev"))
+            .rules(
+                rules
+                    .into_iter()
+                    .map(|rule| {
+                        cortex_policy::SourcedRule::new(rule, cortex_policy::RuleSource::User)
+                    })
+                    .collect(),
+            )
+            .parts()
+    }
+
+    fn rule(
+        effect: cortex_protocol::lease::Effect,
+        pattern: &str,
+        action: RuleAction,
+    ) -> cortex_protocol::lease::Rule {
+        cortex_protocol::lease::Rule {
+            effect,
+            pattern: pattern.to_owned(),
+            action,
+        }
+    }
+
+    /// A grant at `level` with `rules`, that writes and reads anywhere: its
+    /// scope is narrowed to the session's.
+    fn grant(level: Level, rules: Vec<cortex_protocol::lease::Rule>) -> Lease {
+        use cortex_protocol::lease::{NetworkAccess, PathSet, SandboxPolicy};
+        let everything = PathSet {
+            all: true,
+            roots: Vec::new(),
+        };
+        let mut lease = cortex_policy::standing_lease(
+            cortex_protocol::ids::LeaseId::new("l_grant"),
+            cortex_policy::StandingTerms {
+                level: Level::ReadOnly,
+                rules,
+                sandbox: SandboxPolicy {
+                    read: everything.clone(),
+                    write: everything,
+                    protect: PathSet::default(),
+                    network: NetworkAccess::Full,
+                },
+                models: Vec::new(),
+                budget: cortex_protocol::lease::Budget::default(),
+                limits: cortex_protocol::lease::HardLimits::default(),
+            },
+            cortex_policy::SandboxState::Enforcing,
+        )
+        .expect("a lease");
+        lease.grant.level = level;
+        lease
+    }
+
+    fn command(line: &str) -> Vec<Access> {
+        vec![Access::Exec {
+            command: line.to_owned(),
+            cwd: path("/work/app"),
+        }]
+    }
+
+    /// Whether `grant` covers `accesses` in a session made from `parts`.
+    fn covers(parts: &cortex_policy::Parts, grant: &Lease, accesses: &[Access]) -> bool {
+        let standing = Engine::start(parts.clone())
+            .expect("the session's engine")
+            .lease()
+            .clone();
+        within_grant(parts, &standing, grant, "shell", RuleAction::Ask, accesses)
+    }
+
+    /// The grant decides who decides: a command its allow rule names is
+    /// within it, and one it does not name is not, as the session's own
+    /// level would ask about both. A grant with no rule at the session's
+    /// level covers nothing the session asks about.
+    #[test]
+    fn a_grant_covers_what_its_rules_and_level_allow() {
+        use cortex_protocol::lease::Effect;
+        let parts = session_parts(Vec::new());
+        let make = grant(
+            Level::Supervised,
+            vec![rule(Effect::Exec, "make", RuleAction::Allow)],
+        );
+        assert!(covers(&parts, &make, &command("make")));
+        assert!(!covers(&parts, &make, &command("ninja")));
+        assert!(!covers(
+            &parts,
+            &grant(Level::Supervised, Vec::new()),
+            &command("make")
+        ));
+        // At `autonomous`, inside an enforcing sandbox, a command is the
+        // holder's: any command in the session's scope is within.
+        assert!(covers(
+            &parts,
+            &grant(Level::Autonomous, Vec::new()),
+            &command("ninja")
+        ));
+    }
+
+    /// A grant never widens what the session holds: the session's `ask` and
+    /// `deny` rules beat the grant's allow; a path beyond the session's
+    /// scope stays beyond it; `unrestricted` is not handed on; a level the
+    /// session could not hold, and a narrow that fails, cover nothing.
+    #[test]
+    fn a_grant_never_widens_what_the_session_holds() {
+        use cortex_protocol::lease::Effect;
+        let make = |level| grant(level, vec![rule(Effect::Exec, "make", RuleAction::Allow)]);
+        // The user's own `ask` and `deny` hold.
+        for action in [RuleAction::Ask, RuleAction::Deny] {
+            let parts = session_parts(vec![rule(Effect::Exec, "make", action)]);
+            assert!(
+                !covers(&parts, &make(Level::Supervised), &command("make")),
+                "{action:?}"
+            );
+        }
+        let parts = session_parts(Vec::new());
+        // A write outside the session's writable roots, which the grant's
+        // own roots would reach.
+        let outside = vec![Access::Write {
+            path: path("/elsewhere/notes.txt"),
+        }];
+        assert!(!covers(&parts, &make(Level::Autonomous), &outside));
+        // `unrestricted` would make that write the holder's: it is read as
+        // `autonomous`.
+        assert!(!covers(&parts, &make(Level::Unrestricted), &outside));
+        assert!(covers(&parts, &make(Level::Unrestricted), &command("make")));
+        // `autonomous` where the sandbox does not enforce cannot be held.
+        let unconfined = cortex_policy::test_support::TestParts::at(path("/work/app"))
+            .home(path("/users/dev"))
+            .sandbox(cortex_policy::SandboxState::NotEnforcing(
+                cortex_policy::NoSandbox::TurnedOff,
+            ))
+            .parts();
+        assert!(!covers(
+            &unconfined,
+            &make(Level::Autonomous),
+            &command("ninja")
+        ));
+        // A grant whose models the session has none of.
+        let mut models = parts.clone();
+        models.models = vec![cortex_protocol::ids::ModelId::new("m_session")];
+        let mut other = make(Level::Supervised);
+        other.grant.models = vec![cortex_protocol::ids::ModelId::new("m_other")];
+        assert!(!covers(&models, &other, &command("make")));
+        assert!(covers(&models, &make(Level::Supervised), &command("make")));
     }
 
     /// The question about `cargo build`, which "allow for this session"

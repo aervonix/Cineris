@@ -201,10 +201,14 @@ caught-by:
     cortex-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
 
 [break] every-approver-is-asked
-rule: Only `user` clients that answer approvals are asked whether a call may run.
+rule: Only `user` clients that answer approvals are asked whether a call may run (and, since step 27, a `supervisor` with a grant).
 file: crates/cortex-core/src/clients.rs
-find: entry.info.role == ClientRole::User && kind.declared(&entry.info.capabilities)
-replace: kind.declared(&entry.info.capabilities)
+find:
+                            _ => false,
+                        }
+replace:
+                            _ => true,
+                        }
 caught-by:
     cortex-core clients::tests::an_answer_counts_only_from_a_user_client_that_was_asked
     cortex-core::it approvals::only_a_user_client_is_asked_and_only_its_answer_counts
@@ -212,8 +216,14 @@ caught-by:
 [break] answer-taken-from-any-role
 rule: Only a `user` client's answer to an approval counts.
 file: crates/cortex-core/src/clients.rs
-find: if role != Some(ClientRole::User) {
-replace: if role.is_none() {
+find:
+            Some((ClientRole::User, _)) => None,
+            Some((ClientRole::Supervisor, Some(grant))) => Some(grant),
+            _ => {
+replace:
+            Some((ClientRole::Supervisor, Some(grant))) => Some(grant),
+            Some(_) => None,
+            _ => {
 caught-by:
     cortex-core clients::tests::an_answer_counts_only_from_a_user_client_that_was_asked
 

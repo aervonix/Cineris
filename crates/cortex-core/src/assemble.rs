@@ -265,7 +265,7 @@ pub(crate) struct Assembled {
     pub(crate) policy: Arc<EnginePolicy>,
     pub(crate) board: Arc<PlanBoard>,
     pub(crate) sandbox: Arc<SessionSandbox>,
-    pub(crate) template: EngineTemplate,
+    pub(crate) template: Arc<std::sync::Mutex<EngineTemplate>>,
     pub(crate) loaded: Arc<Loaded>,
     pub(crate) images: Arc<dyn ImageSource>,
     /// The session's store of versions and artifacts.
@@ -2231,8 +2231,8 @@ pub(crate) fn assemble(
         enforcing_with = None;
     }
     parts.sandbox = sandbox_state;
-    let template = EngineTemplate { parts };
-    let engine = start_engine(template.parts.clone())?;
+    let engine = start_engine(parts.clone())?;
+    let template = Arc::new(std::sync::Mutex::new(EngineTemplate { parts }));
     let lease = engine.lease().clone();
     let sandbox_notice = engine.sandbox_notice();
     let level = engine.level().clone();
@@ -2274,6 +2274,7 @@ pub(crate) fn assemble(
         clients: Arc::clone(&inner.clients),
         sink: Arc::clone(&sink),
         hooks: Arc::clone(&hooks),
+        template: Arc::clone(&template),
         timer: Arc::clone(&options.timer),
         timeout: options.approval_timeout,
         fail_on_denial: options.fail_on_denial,

@@ -593,6 +593,30 @@ impl SessionSink {
         }
     }
 
+    /// Adds a client's queue as [`subscribe`](Self::subscribe) does, unless
+    /// a client that has the session open already is one `excludes` names:
+    /// then adds nothing and says so. Looked at and added under one lock,
+    /// so two clients that may not share a session are never both added.
+    pub(crate) fn subscribe_unless(
+        &self,
+        client: u64,
+        queue: Arc<EventQueue>,
+        excludes: impl Fn(u64) -> bool,
+    ) -> bool {
+        let mut subscribers = lock(&self.subscribers);
+        if subscribers
+            .iter()
+            .any(|(known, _)| *known != client && excludes(*known))
+        {
+            return false;
+        }
+        if !subscribers.iter().any(|(known, _)| *known == client) {
+            queue.unfence(&self.session);
+            subscribers.push((client, queue));
+        }
+        true
+    }
+
     /// Removes a client's queue, and the fence it kept for this session.
     /// Says whether it was there.
     pub(crate) fn unsubscribe(&self, client: u64) -> bool {
