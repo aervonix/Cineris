@@ -49,6 +49,11 @@ use crate::assemble;
 use crate::clients::ClientId;
 use crate::core::{Core, CoreOptions, Inner, Live, OpError, error};
 
+/// Where a reload has judged the project's trust and not yet loaded with
+/// it: a point a test can hold the reload at (`cortex_base::hook`).
+pub const TRUST_JUDGED: &str =
+    "reload: the project's trust is judged, and the load that uses it has not begun";
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -438,10 +443,16 @@ async fn reload_session(
     live: &Arc<Live>,
     asked: &Asked,
 ) -> Result<(ConfigChanged, bool), OpError> {
-    let inner = Arc::clone(&core.inner);
-    let held = Arc::clone(live);
-    let asked_now = asked.clone();
-    let looked = Core::blocking(move || Ok(look(&inner, &held, &asked_now))).await?;
+    let (inner, held, asked_now) = (Arc::clone(&core.inner), Arc::clone(live), asked.clone());
+    let judging = Core::blocking(move || Ok(judge(&inner, &held, &asked_now))).await?;
+    let Some(judging) = judging else {
+        return Ok((ConfigChanged::default(), false));
+    };
+    // A test holds the reload here, to change the trust store between the
+    // judgement and the load: the load uses the trust just judged.
+    cortex_base::hook::await_point!(TRUST_JUDGED);
+    let (inner, held, asked_now) = (Arc::clone(&core.inner), Arc::clone(live), asked.clone());
+    let looked = Core::blocking(move || Ok(load(&inner, &held, &asked_now, judging))).await?;
     let Some(looked) = looked else {
         return Ok((ConfigChanged::default(), false));
     };
@@ -464,9 +475,15 @@ async fn reload_session(
     Ok((changed, news))
 }
 
-/// Looks at the session's files and the trust store, judges trust, and
-/// loads with it. `None`: nothing changed. Blocks.
-fn look(inner: &Inner, live: &Live, asked: &Asked) -> Option<Looked> {
+/// What the judgement of trust found, before the load that uses it.
+struct Judging {
+    judged: assemble::Judged,
+    trusted: Trusted,
+}
+
+/// Looks at the session's files and the trust store and judges trust,
+/// from loads that are never in force. `None`: nothing changed. Blocks.
+fn judge(inner: &Inner, live: &Live, asked: &Asked) -> Option<Judging> {
     let mut config = lock(&live.config);
     let files = match config.live.as_mut() {
         Some(watched) => watched.has_changed(),
@@ -480,16 +497,24 @@ fn look(inner: &Inner, live: &Live, asked: &Asked) -> Option<Looked> {
         return None;
     }
     let keep_choices = asked.profile.is_none();
-    // Judged first, from loads that are never in force: what the project
-    // may do is decided before anything of it is loaded to be used.
+    // Judged first: what the project may do is decided before anything of
+    // it is loaded to be used.
     let judging = config.options_with(true, asked.profile.as_deref(), keep_choices);
     let judged = assemble::judge(inner, config.state.as_ref(), &config.root, &judging);
-    let rules = judged.rules.unwrap_or(config.trusted.rules);
     let trusted = Trusted {
-        rules,
+        rules: judged.rules.unwrap_or(config.trusted.rules),
         repository: judged.repository,
     };
-    let options = config.options_with(rules, asked.profile.as_deref(), keep_choices);
+    Some(Judging { judged, trusted })
+}
+
+/// Loads the session's configuration once, with the trust `judging` found:
+/// a change of the trust store since is the next look's. Blocks.
+fn load(inner: &Inner, live: &Live, asked: &Asked, judging: Judging) -> Option<Looked> {
+    let Judging { judged, trusted } = judging;
+    let mut config = lock(&live.config);
+    let keep_choices = asked.profile.is_none();
+    let options = config.options_with(trusted.rules, asked.profile.as_deref(), keep_choices);
     let clock = Arc::clone(&config.clock);
     let reload = match config.live.as_mut() {
         Some(watched) => watched.update(|now| *now = options),
