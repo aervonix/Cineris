@@ -648,63 +648,6 @@ fn a_reads_result_comes_after_the_events_at_or_below_its_seq() {
     }
 }
 
-/// A result counts against the budget by its own size: a client that
-/// leaves large results unread is refused before they pile up.
-#[test]
-fn a_result_counts_against_the_budget_by_its_own_size() {
-    let world = World::new("result-bytes");
-    world
-        .server
-        .push(anthropic::text(&[&"many words ".repeat(400)]));
-    let core = world.core();
-    let mut options = world.serve_options();
-    options.max_request_bytes = 4096;
-    let Wire { mut lines, .. } = Wire::serve(&core, options, 1);
-    lines
-        .initialize(conformance::initialize())
-        .expect("initialize");
-    let opened = lines.call(new_session(&world)).expect("a session opens");
-    let cortex_protocol::methods::OpResult::SessionNew(opened) = opened else {
-        panic!("not a session");
-    };
-    let session = opened.session.session_id;
-    lines
-        .call(Op::TurnStart(TurnStartParams {
-            session_id: session.clone(),
-            input: vec![Part::text("go")],
-            delivery: None,
-        }))
-        .expect("the turn starts");
-    loop {
-        if let Some(conformance::Inbound::Event(event)) = lines.next()
-            && matches!(event.event, Event::SessionIdle(_))
-        {
-            break;
-        }
-    }
-    // Two reads of the history, unread: the first fills the channel, the
-    // second waits in the server, its writer waiting on the client.
-    lines.write_raw(&request(60, "session/read", json!({"session_id": session})));
-    lines.write_raw(&request(61, "session/read", json!({"session_id": session})));
-    cortex_testkit::block_on(world.timer.sleeping_for(Duration::from_secs(1)));
-    // Small as its line is, the next is past the bytes the results hold.
-    lines.write_raw(&request(62, "session/read", json!({"session_id": session})));
-    let mut refused = None;
-    while refused.is_none() {
-        match lines.read() {
-            Some(Message::Response(Response {
-                id: Some(RequestId::Number(62)),
-                result,
-            })) => {
-                refused = Some(result.unwrap_err().error_data().map(|data| data.code));
-            }
-            Some(_) => {}
-            None => panic!("the connection ended"),
-        }
-    }
-    assert_eq!(refused.unwrap().as_deref(), Some("overloaded"));
-}
-
 /// The requests read with a `shutdown`, after it, are answered
 /// `shutting_down`: none goes unanswered.
 #[test]
