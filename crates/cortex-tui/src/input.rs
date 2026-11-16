@@ -281,9 +281,29 @@ impl Input {
     /// The workspace's paths, for `@` completion, in the order to show
     /// them before anything is typed.
     pub fn set_files(&mut self, paths: Vec<String>) {
-        self.files = Some(Candidates::new(paths));
+        self.set_file_candidates(Candidates::new(paths));
+    }
+
+    /// As [`set_files`](Self::set_files), with the paths prepared already.
+    pub fn set_file_candidates(&mut self, files: Candidates) {
+        self.files = Some(files);
         self.file_filter.reset();
         self.refresh_menu();
+    }
+
+    /// Whether the text asks for the workspace's paths: an `@` menu is open
+    /// and nothing has been given to fill it, by
+    /// [`set_files`](Self::set_files) or
+    /// [`filter_files_elsewhere`](Self::filter_files_elsewhere). The
+    /// application lists them only then, on the first `@` typed.
+    #[must_use]
+    pub fn wants_files(&self) -> bool {
+        self.files.is_none()
+            && self.elsewhere.is_none()
+            && self
+                .menu
+                .as_ref()
+                .is_some_and(|menu| matches!(menu.kind, Kind::Files { .. }))
     }
 
     /// Hands the `@` filtering out (since step 23): each query the text asks
