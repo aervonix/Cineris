@@ -270,9 +270,14 @@ impl Trust {
 pub enum Effect {
     /// At once: on the next frame, tool call or request.
     Now,
-    /// At the next context epoch, because it shapes the system prompt, the
-    /// tool list or the model. A notice says what is pending.
+    /// At the session's next context epoch (a compaction, or the session
+    /// opened again), because it shapes the system prompt, the tool list or
+    /// the model. A notice says what is pending.
     NextEpoch,
+    /// In sessions opened from then on: what a session is made with once,
+    /// as it opens (its shell, its sandbox's switch and protected paths),
+    /// which no epoch of a running session can take. Since step 24.
+    NextSession,
     /// When the harness is next started.
     Restart,
 }
@@ -284,6 +289,7 @@ impl Effect {
         match self {
             Self::Now => "at once",
             Self::NextEpoch => "next epoch",
+            Self::NextSession => "next session",
             Self::Restart => "restart",
         }
     }

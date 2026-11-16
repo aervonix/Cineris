@@ -367,7 +367,7 @@ settings! {
     pub struct SandboxSettings {
         /// Whether commands are confined by the OS sandbox where there is
         /// one.
-        [UserOnly, Now]
+        [UserOnly, NextSession]
         pub enabled: bool = true,
         /// Paths a command may write besides the workspace. Every layer
         /// adds to the list.
@@ -375,7 +375,7 @@ settings! {
         pub write: Vec<String>,
         /// Paths a command may not change, besides the built-in ones. Every
         /// layer adds to the list.
-        [Preference, Now, joined]
+        [Preference, NextSession, joined]
         pub protect: Vec<String>,
         /// Whether a command may use the network. `off`: no TCP or UDP,
         /// to this machine's own addresses included, and no Unix socket,
@@ -588,7 +588,7 @@ settings! {
         /// epoch's first request, and a repository's file must not make
         /// the sessions in it wait (found by the independent review of step
         /// 18).
-        [UserOnly, NextEpoch, 0s..=1s]
+        [UserOnly, NextSession, 0s..=1s]
         pub map_wait: Option<Duration>,
         /// The most files the index reads. Past it, the files nearest the
         /// top of the tree are indexed, and the map says it is partial.
@@ -617,13 +617,13 @@ settings! {
         /// and `CLAUDE.md`, in the workspace. Off, only the names in
         /// `context.instruction_names` are read there; the user's own files
         /// in the configuration directory are read either way.
-        [UserOnly, NextEpoch]
+        [UserOnly, NextSession]
         pub instructions: bool = true,
         /// MCP server definitions of other clients, offered for import.
-        [UserOnly, NextEpoch]
+        [UserOnly, NextSession]
         pub mcp: bool = true,
         /// Agent Skills folders: `.agents/skills` and `.claude/skills`.
-        [UserOnly, NextEpoch]
+        [UserOnly, NextSession]
         pub skills: bool = true,
     }
 }
@@ -639,31 +639,31 @@ settings! {
         /// PowerShell 7, then Windows PowerShell, then cmd.exe. A
         /// project's file may not choose the program that runs every
         /// command.
-        [UserOnly, NextEpoch]
+        [UserOnly, NextSession]
         pub program: Option<String>,
         /// The arguments before the command, in place of the shell's own:
         /// `["-l", "-c"]` for a login bash. The command is always passed
         /// after them, last.
-        [UserOnly, NextEpoch]
+        [UserOnly, NextSession]
         pub args: Option<Vec<String>>,
         /// The time limit of a command that asks for none, held to
         /// `max_timeout`. From a second, below which every command would
         /// fail, to half an hour, past which a command that hangs holds up
         /// its turn too long. A project's file may lower it and may not
         /// raise it.
-        [TightenOnly, NextEpoch, 1s..=30m]
+        [TightenOnly, NextSession, 1s..=30m]
         pub timeout: Duration = Duration::from_secs(120),
         /// The longest time limit a command may ask for. From ten seconds,
         /// below which a build or a test run could never finish, to a day.
         /// A project's file may lower it and may not raise it.
-        [TightenOnly, NextEpoch, 10s..=1d]
+        [TightenOnly, NextSession, 10s..=1d]
         pub max_timeout: Duration = Duration::from_secs(30 * 60),
         /// Environment variables that commands are not given, besides
         /// the key variables of the providers, which are always removed.
         /// A name may end with `*` for every variable that starts so.
         /// Every layer adds to the list. A project's entries wait for
         /// trust: `"*"` would take `PATH` away and stop every command.
-        [StopsCommands, NextEpoch, joined]
+        [StopsCommands, NextSession, joined]
         pub env_remove: Vec<String>,
     }
 }
@@ -718,9 +718,9 @@ settings! {
         /// How many months a monthly file of events stays after its own
         /// month: 3 by default. What it added up to stays in the
         /// aggregates, every all-time figure with it, so only the raw
-        /// events go (a heavy user's are about 90 MB a month). Read when
-        /// the harness starts.
-        [UserOnly, Restart, 1..=1200]
+        /// events go (a heavy user's are about 90 MB a month). Read each
+        /// time the files are pruned, so a reload changes it at once.
+        [UserOnly, Now, 1..=1200]
         pub retention: u32 = 3,
     }
 }
@@ -729,18 +729,18 @@ settings! {
     /// The usage view (`docs/architecture/18-usage.md`).
     pub struct UsageSettings {
         /// The first day of a week: `monday` to `sunday`.
-        [UserOnly, Restart]
+        [UserOnly, Now]
         pub week_start: Weekday = Weekday::Monday,
         /// `calendar` weeks and months, or `rolling`: the last 7 and 30
         /// days.
-        [UserOnly, Restart]
+        [UserOnly, Now]
         pub ranges: UsageRanges = UsageRanges::Calendar,
         /// The providers whose documented usage endpoint
         /// `cortex usage --refresh` may ask, with that provider's own key:
         /// `["openrouter"]`. Empty, nothing is ever asked. Only when the
         /// user asks, never on its own. The user's alone: a project's file
         /// cannot turn it on.
-        [UserOnly, Restart]
+        [UserOnly, Now]
         pub refresh: Vec<String>,
     }
 }

@@ -38,6 +38,7 @@ mod knowledge;
 mod manage;
 mod policy;
 mod provider;
+mod reads;
 mod redact;
 mod repo_map;
 mod rules;

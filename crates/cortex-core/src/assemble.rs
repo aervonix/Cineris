@@ -202,6 +202,8 @@ pub(crate) struct Assembled {
     pub(crate) template: EngineTemplate,
     pub(crate) loaded: Arc<Loaded>,
     pub(crate) images: Arc<dyn ImageSource>,
+    /// The session's store of versions and artifacts.
+    pub(crate) content: Arc<dyn ContentStore>,
     /// What to tell front ends once the session is open.
     pub(crate) notices: Vec<Event>,
     pub(crate) lease_count: u64,
@@ -1939,7 +1941,7 @@ pub(crate) fn assemble(
     let main = models.main().clone();
     let workspace = Workspace {
         paths: Arc::clone(&resolver),
-        content,
+        content: Arc::clone(&content),
         files,
         limits: OutputLimits::default(),
         outliner: repo
@@ -2111,6 +2113,7 @@ pub(crate) fn assemble(
         template,
         loaded: Arc::clone(&loaded),
         images,
+        content,
         notices,
         lease_count: lease_count + 1,
         repo,

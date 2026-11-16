@@ -110,5 +110,16 @@
 {"jsonrpc":"2.0","method":"session/event","params":{"session_id":"s_01JCX4T9Q2","seq":35,"turn_id":"t_4","type":"notice","kind":"verification","message":"Running the project's checks (round 1 of 2): `cargo clippy`, `cargo test`.","phase":"started","round":1,"rounds":2,"checks":[{"command":"cargo clippy","source":"user"},{"command":"cargo test","cwd":"crates/app","source":"profile","entry":"k_3"}]}}
 {"jsonrpc":"2.0","method":"session/event","params":{"session_id":"s_01JCX4T9Q2","seq":36,"turn_id":"t_4","type":"notice","kind":"verification","message":"The project's checks did not all run to a result: `cargo test` was blocked by the sandbox.","phase":"finished","round":1,"rounds":2,"checks":[{"command":"cargo clippy","source":"user","outcome":"passed","exit_code":0,"duration_ms":4100},{"command":"cargo test","cwd":"crates/app","source":"profile","entry":"k_3","outcome":"blocked","exit_code":101,"duration_ms":900,"note":"The sandbox kept the command off the network.","artifact":{"id":"a_7","label":"full output of shell","bytes":48211}}],"verdict":"incomplete"}}
 {"jsonrpc":"2.0","method":"session/event","params":{"session_id":"s_01JCX4T9Q2","seq":37,"turn_id":"t_4","type":"turn.completed","outcome":"completed","stop_reason":"end","usage":{"tokens":{"input":0,"cache_read":0,"cache_write":0,"output":0},"requests":1},"verification":"incomplete","duration_ms":6200}}
+{"jsonrpc":"2.0","id":36,"method":"workspace/warm","params":{"session_id":"s_01JCX4T9Q2","paths":["src/lib.rs","crates/app/src/main.rs"]}}
+{"jsonrpc":"2.0","id":36,"result":{}}
+{"jsonrpc":"2.0","id":37,"method":"session/artifact","params":{"session_id":"s_01JCX4T9Q2","artifact":"a_7"}}
+{"jsonrpc":"2.0","id":37,"result":{"text":"running 48 tests\ntest lex::numbers ... ok\n","bytes":48211,"cut":true}}
+{"jsonrpc":"2.0","id":38,"method":"plan/update","params":{"session_id":"s_01JCX4T9Q2","edits":[{"kind":"restore","id":"p1"}]}}
+{"jsonrpc":"2.0","id":38,"result":{"plan":{"items":[{"id":"p1","text":"Find why the build fails","status":"pending"}],"revision":5}}}
+{"jsonrpc":"2.0","id":39,"method":"config/reload","params":{"session_id":"s_01JCX4T9Q2","profile":"review","changed_only":true}}
+{"jsonrpc":"2.0","id":39,"result":{"applied":["permissions.mode"],"pending":["model.main","shell.program"],"notes":["`model.main` takes effect at this session's next context epoch: a compaction, or the session opened again.","`shell.program` takes effect in sessions opened from now on."]}}
+{"jsonrpc":"2.0","method":"session/event","params":{"session_id":"s_01JCX4T9Q2","seq":38,"type":"config.changed","applied":["permissions.mode"],"pending":["model.main","shell.program"],"notes":["`shell.program` takes effect in sessions opened from now on."]}}
+{"jsonrpc":"2.0","id":40,"method":"config/get","params":{"session_id":"s_01JCX4T9Q2","keys":["model.main"]}}
+{"jsonrpc":"2.0","id":40,"result":{"config":{"model":{"main":"claude-opus-5-5"}},"origins":{"model.main":{"layer":"user","file":"~/.config/cortex-harness/config.toml","line":2}}}}
 {"jsonrpc":"2.0","id":31,"method":"shutdown","params":{}}
 {"jsonrpc":"2.0","id":31,"result":{}}

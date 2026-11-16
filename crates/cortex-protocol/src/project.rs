@@ -311,6 +311,8 @@ open_union! {
         Reorder(PlanReorder) => "reorder",
         /// Mark an item as skipped.
         Skip(PlanItemRef) => "skip",
+        /// Put a skipped item back to be done. Added in step 24.
+        Restore(PlanItemRef) => "restore",
         /// Replace an item's text.
         Reword(PlanReword) => "reword",
         /// Add an item.

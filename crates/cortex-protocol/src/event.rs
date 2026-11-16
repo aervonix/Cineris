@@ -555,7 +555,32 @@ open_union! {
         SessionIdle(SessionIdle) => "session.idle",
         /// Session metadata changed.
         SessionUpdated(SessionUpdated) => "session.updated",
+        /// A reload of the configuration changed what is in force for the
+        /// session, or what waits. Added in step 24.
+        ConfigChanged(ConfigChanged) => "config.changed",
     }
+}
+
+/// What a reload of the configuration changed for a session, whoever asked
+/// for it: a front end, another client, or the look the core takes at the
+/// start of a turn. Each client of the session is sent it, so that one that
+/// keeps settings of its own (a terminal's theme and key bindings) takes
+/// them up whoever found the change. Added in step 24.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ConfigChanged {
+    /// Keys whose new values are in force.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied: Vec<String>,
+    /// Keys whose new values wait; `notes` says for what.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<String>,
+    /// What was wrong with a file. The configuration in force stays.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+    /// What to tell the person, a sentence each.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// An event with its envelope: which session, where in its sequence, and

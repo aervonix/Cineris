@@ -78,9 +78,9 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `sandbox.enabled` | `true` or `false` | `true` | user only | at once | Whether commands are confined by the OS sandbox where there is one. Fails closed. |
+| `sandbox.enabled` | `true` or `false` | `true` | user only | next session | Whether commands are confined by the OS sandbox where there is one. Fails closed. |
 | `sandbox.write` | list of text, joined | `[]` | widens access | at once | Paths a command may write besides the workspace. Every layer adds to the list. Fails closed. |
-| `sandbox.protect` | list of text, joined | `[]` | preference | at once | Paths a command may not change, besides the built-in ones. Every layer adds to the list. Fails closed. |
+| `sandbox.protect` | list of text, joined | `[]` | preference | next session | Paths a command may not change, besides the built-in ones. Every layer adds to the list. Fails closed. |
 | `sandbox.network` | `"off"`, `"full"` | `"off"` | by value: `off` is a preference, `full` widens access | at once | Whether a command may use the network. `off`: no TCP or UDP, to this machine's own addresses included, and no Unix socket, so a test suite that starts a server on loopback or on a Unix socket fails in the sandbox; such a run needs `full`, or one approved run outside the sandbox. `full`: the network (TCP and UDP, loopback included), and nothing else: still no Unix socket (the session bus, an agent, the Docker socket), no virtual machine's socket to its host, no raw socket. Fails closed. |
 
 ## `[limits]`
@@ -117,9 +117,9 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `compat.instructions` | `true` or `false` | `true` | user only | next epoch | Instruction files under the names other tools use, `AGENTS.md` and `CLAUDE.md`, in the workspace. Off, only the names in `context.instruction_names` are read there; the user's own files in the configuration directory are read either way. |
-| `compat.mcp` | `true` or `false` | `true` | user only | next epoch | MCP server definitions of other clients, offered for import. |
-| `compat.skills` | `true` or `false` | `true` | user only | next epoch | Agent Skills folders: `.agents/skills` and `.claude/skills`. |
+| `compat.instructions` | `true` or `false` | `true` | user only | next session | Instruction files under the names other tools use, `AGENTS.md` and `CLAUDE.md`, in the workspace. Off, only the names in `context.instruction_names` are read there; the user's own files in the configuration directory are read either way. |
+| `compat.mcp` | `true` or `false` | `true` | user only | next session | MCP server definitions of other clients, offered for import. |
+| `compat.skills` | `true` or `false` | `true` | user only | next session | Agent Skills folders: `.agents/skills` and `.claude/skills`. |
 
 ## `[log]`
 
@@ -131,11 +131,11 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `shell.program` | text | not set | user only | next epoch | The shell: a program's name on `PATH`, or its path. How it is spoken to follows its name: `bash`, `pwsh`, `powershell` and `cmd` each by their own rules, and any other as a POSIX shell. Unset, it is bash and then sh on Linux, and on Windows PowerShell 7, then Windows PowerShell, then cmd.exe. A project's file may not choose the program that runs every command. |
-| `shell.args` | list of text | not set | user only | next epoch | The arguments before the command, in place of the shell's own: `["-l", "-c"]` for a login bash. The command is always passed after them, last. |
-| `shell.timeout` | length of time, 1s to 30m | `"2m"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | next epoch | The time limit of a command that asks for none, held to `max_timeout`. From a second, below which every command would fail, to half an hour, past which a command that hangs holds up its turn too long. A project's file may lower it and may not raise it. |
-| `shell.max_timeout` | length of time, 10s to 1d | `"30m"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | next epoch | The longest time limit a command may ask for. From ten seconds, below which a build or a test run could never finish, to a day. A project's file may lower it and may not raise it. |
-| `shell.env_remove` | list of text, joined | `[]` | stops commands | next epoch | Environment variables that commands are not given, besides the key variables of the providers, which are always removed. A name may end with `*` for every variable that starts so. Every layer adds to the list. A project's entries wait for trust: `"*"` would take `PATH` away and stop every command. |
+| `shell.program` | text | not set | user only | next session | The shell: a program's name on `PATH`, or its path. How it is spoken to follows its name: `bash`, `pwsh`, `powershell` and `cmd` each by their own rules, and any other as a POSIX shell. Unset, it is bash and then sh on Linux, and on Windows PowerShell 7, then Windows PowerShell, then cmd.exe. A project's file may not choose the program that runs every command. |
+| `shell.args` | list of text | not set | user only | next session | The arguments before the command, in place of the shell's own: `["-l", "-c"]` for a login bash. The command is always passed after them, last. |
+| `shell.timeout` | length of time, 1s to 30m | `"2m"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | next session | The time limit of a command that asks for none, held to `max_timeout`. From a second, below which every command would fail, to half an hour, past which a command that hangs holds up its turn too long. A project's file may lower it and may not raise it. |
+| `shell.max_timeout` | length of time, 10s to 1d | `"30m"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | next session | The longest time limit a command may ask for. From ten seconds, below which a build or a test run could never finish, to a day. A project's file may lower it and may not raise it. |
+| `shell.env_remove` | list of text, joined | `[]` | stops commands | next session | Environment variables that commands are not given, besides the key variables of the providers, which are always removed. A name may end with `*` for every variable that starts so. Every layer adds to the list. A project's entries wait for trust: `"*"` would take `PATH` away and stop every command. |
 
 ## `[context]`
 
@@ -173,7 +173,7 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
 | `stats.enabled` | `true` or `false` | `true` | user only | restart | Whether events are recorded. Off, nothing is written, every adaptive feature uses its default, and the usage view has the open session's figures alone. |
-| `stats.retention` | whole number, 1 to 1200 | `3` | user only | restart | How many months a monthly file of events stays after its own month: 3 by default. What it added up to stays in the aggregates, every all-time figure with it, so only the raw events go (a heavy user's are about 90 MB a month). Read when the harness starts. |
+| `stats.retention` | whole number, 1 to 1200 | `3` | user only | at once | How many months a monthly file of events stays after its own month: 3 by default. What it added up to stays in the aggregates, every all-time figure with it, so only the raw events go (a heavy user's are about 90 MB a month). Read each time the files are pruned, so a reload changes it at once. |
 
 ## `[index]`
 
@@ -181,7 +181,7 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 |---|---|---|---|---|---|
 | `index.map` | `true` or `false` | `true` | preference | next epoch | Whether each context epoch is given the repository map: the workspace's directories and its most relevant files with their main definitions. The `outline` tool works either way. |
 | `index.map_tokens` | whole number, 0 to 50000 | `1500` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | next epoch | The map's budget, in tokens. A project's file may lower it and may not raise it: the map is sent with every request of an epoch. |
-| `index.map_wait` | length of time, 0s to 1s | not set | user only | next epoch | How long the first request of an epoch waits for the map when it is not ready yet; past it, the map follows as a notice at the next boundary where it is. Unset, 150 ms in the interactive app and none in a headless run, whose start it would otherwise slow. At most one second. The user's alone: the wait is paid by every epoch's first request, and a repository's file must not make the sessions in it wait (found by the independent review of step 18). |
+| `index.map_wait` | length of time, 0s to 1s | not set | user only | next session | How long the first request of an epoch waits for the map when it is not ready yet; past it, the map follows as a notice at the next boundary where it is. Unset, 150 ms in the interactive app and none in a headless run, whose start it would otherwise slow. At most one second. The user's alone: the wait is paid by every epoch's first request, and a repository's file must not make the sessions in it wait (found by the independent review of step 18). |
 | `index.max_files` | whole number, 1 to 10000000 | `20000` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | restart | The most files the index reads. Past it, the files nearest the top of the tree are indexed, and the map says it is partial. |
 | `index.max_file_bytes` | whole number, 1 to 1073741824 | `1048576` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | restart | The largest file the index reads, in bytes. A larger one is listed and not outlined, unless the `outline` tool is asked for it. |
 | `index.pass_time` | length of time | `"2s"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | restart | The most time one pass of the index spends reading files, after its listing (which its cap on entries bounds). One that runs out carries on when the session is next idle. At least 250 ms is used, whatever is set: less would make an idle session pass over the workspace again for every few files. |
@@ -197,9 +197,9 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `usage.week_start` | `"monday"`, `"tuesday"`, `"wednesday"`, `"thursday"`, `"friday"`, `"saturday"`, `"sunday"` | `"monday"` | user only | restart | The first day of a week: `monday` to `sunday`. |
-| `usage.ranges` | `"calendar"`, `"rolling"` | `"calendar"` | user only | restart | `calendar` weeks and months, or `rolling`: the last 7 and 30 days. |
-| `usage.refresh` | list of text | `[]` | user only | restart | The providers whose documented usage endpoint `cortex usage --refresh` may ask, with that provider's own key: `["openrouter"]`. Empty, nothing is ever asked. Only when the user asks, never on its own. The user's alone: a project's file cannot turn it on. |
+| `usage.week_start` | `"monday"`, `"tuesday"`, `"wednesday"`, `"thursday"`, `"friday"`, `"saturday"`, `"sunday"` | `"monday"` | user only | at once | The first day of a week: `monday` to `sunday`. |
+| `usage.ranges` | `"calendar"`, `"rolling"` | `"calendar"` | user only | at once | `calendar` weeks and months, or `rolling`: the last 7 and 30 days. |
+| `usage.refresh` | list of text | `[]` | user only | at once | The providers whose documented usage endpoint `cortex usage --refresh` may ask, with that provider's own key: `["openrouter"]`. Empty, nothing is ever asked. Only when the user asks, never on its own. The user's alone: a project's file cannot turn it on. |
 
 ## `[tui]`
 

@@ -615,3 +615,71 @@ fn a_link_to_a_share_that_appears_after_the_load_is_never_followed() {
     );
     assert!(live.check().is_none(), "reported once");
 }
+
+/// A running session takes the keys that apply at once and keeps the
+/// others as they were (step 24): the mix has the new retry and speed, the
+/// old model and map, and where each came from follows the value. A key
+/// the newer configuration no longer sets goes back to its default, and
+/// the directories never move.
+#[test]
+fn taking_some_keys_keeps_the_rest_as_they_were() {
+    let machine = Machine::new("reload_taking");
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"first\"\n[retry]\nattempts = 3\n[index]\nmap = false\n\
+         [context]\ncompact_at = 0.8\n",
+        60,
+    );
+    let (mut live, _clock) = start(&machine);
+    let before = live.current();
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"second\"\nspeed = \"fast\"\n[retry]\nattempts = 2\n\
+         [index]\nmap = true\n",
+        30,
+    );
+    let Some(Reload::Applied { changes, .. }) = live.check() else {
+        panic!("expected the change to be applied");
+    };
+    let newer = live.current();
+    let now: Vec<KeyPath> = changes
+        .iter()
+        .filter(|change| change.effect == Effect::Now)
+        .map(|change| change.key.clone())
+        .collect();
+    let names: Vec<String> = now.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        names,
+        ["context.compact_at", "model.speed", "retry.attempts"]
+    );
+
+    let mix = before.taking(&newer, &now).unwrap();
+    assert_eq!(mix.settings.retry.attempts, 2);
+    assert_eq!(value(&mix, "model.speed"), "\"fast\"");
+    // Gone from the file: its default.
+    assert_eq!(value(&mix, "context.compact_at"), "0.85");
+    assert_eq!(
+        mix.origin(&KeyPath::parse("context.compact_at").unwrap())
+            .layer,
+        LayerKind::Default
+    );
+    // What waits is as it was.
+    assert_eq!(value(&mix, "model.main"), "\"first\"");
+    assert!(!mix.settings.index.map);
+    assert_eq!(
+        mix.origin(&KeyPath::parse("retry.attempts").unwrap()),
+        newer.origin(&KeyPath::parse("retry.attempts").unwrap())
+    );
+    assert_eq!(mix.dirs, before.dirs);
+    // Taking what was left gives the newer configuration's settings.
+    let rest: Vec<KeyPath> = changes
+        .iter()
+        .filter(|change| change.effect != Effect::Now)
+        .map(|change| change.key.clone())
+        .collect();
+    let whole = mix.taking(&newer, &rest).unwrap();
+    assert_eq!(whole.settings, newer.settings);
+    assert!(whole.changes_since(&newer).is_empty());
+}
