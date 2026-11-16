@@ -202,7 +202,7 @@ An independent reviewer read the whole diff against the specification, without t
 
 **Written down, not changed:**
 
-- **A managed `ask` rule** does not hold back the user's own check line: an `ask` from any layer lets the user's own line through. The managed file is the machine's administrator's; a `deny` there still refuses it.
+- **A managed `ask` rule** does not hold back the user's own check line: an `ask` from any layer lets the user's own line through. The managed file is the machine's administrator's; a `deny` there still refuses it. Whether a managed `ask` should hold it back is the owner's choice, and [an item](../../outstanding/a-managed-ask-and-the-users-own-check.md) of its own, with a recommendation.
 - **Trust is read when the session is put together,** as for the engine's rules: trust taken away from a running session stops its checks at its next session.
 - **The look after a check that stopped the turn** has no break: its test (`verify::sys_a_check_that_changes_a_protected_path_stops_the_turn_and_undo_puts_it_back`) returns early where the sandbox does not enforce, which the desk's machine does not; CI's Linux runner does.
 - **`lowered_by_project`** is true whenever a project's file gave the value; the notice says that the project's configuration sets it, which is so whatever the user's own file says.
@@ -223,6 +223,36 @@ The same pull request's second and last round: a reviewer read the fixes above a
 
 **Written down, not changed:** the look after a check whose stop overwrote its result has no break of its own (its test needs an enforcing sandbox, which the desk's machine has not).
 
+## As built: the second pull request
+
+Headless's report, `verify/run`, the measurements on the hosted runners and the records, on `worktree-step-19`.
+
+| Point | As built |
+|---|---|
+| **Headless's result** | `HeadlessResult::verification` (`HeadlessVerification`): the turn's verdict as `turn.completed` gave it, how many rounds ended, and the last round's checks. Absent for a turn with no verdict. The exit code does not follow it ([architecture/10-headless.md](../../architecture/10-headless.md), "`json`"). |
+| **What later steps inherit** | In the build plan, step 19's "What later steps inherit": the notices and the verdict for step 24, the stage's contract for step 42, the harness's run and its policy for step 43. |
+| **A managed `ask`** | [An item](../../outstanding/a-managed-ask-and-the-users-own-check.md) for the owner, with the recommendation that it holds the user's line back. |
+
+### `verify/run`: the two ways
+
+`verify/run` runs the project's checks now: one round, chosen as at the end of a turn (trust, the level, the engine), whatever `verify.mode` says, with no request to the model. It is `/verify`'s (step 24). Two ways to build it, for the owner (Q7):
+
+- **A. A turn that only verifies** (recommended). `verify/run` on an idle session starts a turn, as `session/compact` does for a turn that only compacts, which goes `Idle → Preparing → Verifying → Finishing → Idle`. The new edge, `Preparing → Verifying`, is the one change to the table, and it changes `Preparing`, which the step's "Must not change" names. Everything a turn has, the checks then have:
+  - the session is busy, so nothing of the model's runs beside a check;
+  - an interrupt reaches them, and waits for the check's processes;
+  - a check that changes a protected path stops the turn, which ends `denied`;
+  - what a check changed is that turn's checkpoint, for undo;
+  - `turn.completed` carries the verdict, the one event every client and headless wait for.
+- **B. The core calls the verifier outside any turn,** with a cancel token of its own, and its result as a notice. The loop is untouched, but:
+  1. the session is not busy: a prompt can start a turn beside a running check, and the look at protected paths of each reads the other's writes as a change made from outside, which stops the model's turn;
+  2. a check that changes a protected path has no turn to stop, and the next command does not see the change;
+  3. what a check changed lands in the next turn's checkpoint;
+  4. an interrupt does not reach it without a route of its own;
+  5. no `turn.completed` ends it.
+
+  Each can be patched, but together the patches rebuild a turn outside the state machine, without its tests. As asked, B is not sound (points 1 and 2).
+
+**Until the owner allows `Preparing → Verifying`,** `verify/run` answers `not_available`, saying that the checks run by themselves at the end of a turn that changed files (`verify::running_the_checks_on_request_is_not_available_and_says_why`). The choice is [an item](../../outstanding/verify-run-a-turn-that-only-verifies.md) for step 24. The turn that only verifies is built as the last commit of the pull request, on its own, to be dropped if the owner has not allowed it by the time the rest is ready.
 
 ## Measured
 

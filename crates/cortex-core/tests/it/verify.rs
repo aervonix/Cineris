@@ -13,7 +13,7 @@ use cortex_protocol::event::{
     CheckOutcome, Event, Notice, TurnOutcome, Verification, VerificationNotice, VerificationPhase,
 };
 use cortex_protocol::lease::Level;
-use cortex_protocol::methods::{Op, SessionSetParams};
+use cortex_protocol::methods::{Op, SessionRef, SessionSetParams};
 use cortex_protocol::session::SessionSettings;
 use cortex_testkit::Response;
 use serde_json::json;
@@ -919,4 +919,28 @@ fn in_ask_mode_the_checks_are_offered_and_in_off_mode_nothing_is_said() {
             front.close().await;
         });
     }
+}
+
+#[test]
+fn running_the_checks_on_request_is_not_available_and_says_why() {
+    let world = World::new("verify_run_not_yet", []);
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let error = front
+            .op(Op::VerifyRun(SessionRef {
+                session_id: front.session.clone(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "not_available", "{error:?}");
+        assert!(
+            error
+                .message
+                .contains("at the end of a turn that changed files"),
+            "{error:?}"
+        );
+        assert!(world.provider.requests().is_empty());
+        front.close().await;
+    });
 }

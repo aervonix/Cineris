@@ -57,6 +57,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-core
 
+- [verify-run-a-turn-that-only-verifies](verify-run-a-turn-that-only-verifies.md): `verify/run` answers `not_available`; running the checks on request needs a turn that only verifies (`Preparing → Verifying`), the owner's to allow. Recommendation: that turn.
 - [a-managed-ask-and-the-users-own-check](a-managed-ask-and-the-users-own-check.md): A managed `ask` rule lets the user's own verification line through, as any `ask` does; whether it should hold it back is the owner's choice. Recommendation: it holds it back.
 - [the-core-thread-waits-on-a-revokes-write](the-core-thread-waits-on-a-revokes-write.md): A change of level waits on the core thread for a revoke's or a record's write of the project's approvals, under the lock that keeps them from losing each other. Owner: the next change to the core's policy, or step 32.
 - [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it; one CI flake. Owner: the next step that changes the base capture, or step 32.
