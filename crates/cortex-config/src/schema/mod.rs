@@ -85,6 +85,11 @@ pub enum Trust {
     /// after trust; until then the user's own applies (the owner's
     /// decision, 2026-11-13).
     RaisesCost,
+    /// It can keep every command from working: the variables a command is
+    /// not given (`shell.env_remove = ["*"]` takes `PATH` away). A project's
+    /// value applies only after trust (the owner's decision of 2026-11-16,
+    /// after the review of step 23).
+    StopsCommands,
     /// The user's alone. A project's value is ignored, with a warning.
     UserOnly,
     /// A permission rule: `deny` and `ask` are preferences, `allow` widens
@@ -123,6 +128,8 @@ pub enum TrustClass {
     WidensAccess,
     /// Applied after trust: it can raise what the user spends.
     RaisesCost,
+    /// Applied after trust: it can keep every command from working.
+    StopsCommands,
     /// Never applied from a project.
     UserOnly,
 }
@@ -137,6 +144,7 @@ impl TrustClass {
             Self::RunsCode => "runs code",
             Self::WidensAccess => "widens access",
             Self::RaisesCost => "raises cost",
+            Self::StopsCommands => "stops commands",
             Self::UserOnly => "user only",
         }
     }
@@ -147,7 +155,11 @@ impl TrustClass {
     pub fn needs_trust(self) -> bool {
         matches!(
             self,
-            Self::FirstLimit | Self::RunsCode | Self::WidensAccess | Self::RaisesCost
+            Self::FirstLimit
+                | Self::RunsCode
+                | Self::WidensAccess
+                | Self::RaisesCost
+                | Self::StopsCommands
         )
     }
 }
@@ -163,6 +175,7 @@ impl Trust {
             Self::RunsCode => TrustClass::RunsCode,
             Self::WidensAccess => TrustClass::WidensAccess,
             Self::RaisesCost => TrustClass::RaisesCost,
+            Self::StopsCommands => TrustClass::StopsCommands,
             Self::UserOnly => TrustClass::UserOnly,
             Self::ByRuleAction => {
                 // Anything but a plain `deny` or `ask` is treated as an
@@ -216,6 +229,7 @@ impl Trust {
             Self::RunsCode => "runs code",
             Self::WidensAccess => "widens access",
             Self::RaisesCost => "raises cost",
+            Self::StopsCommands => "stops commands",
             Self::UserOnly => "user only",
             Self::ByRuleAction => {
                 "by action: `deny` and `ask` are preferences, `allow` widens access"

@@ -1288,6 +1288,35 @@ fn a_compaction_asked_for_during_the_last_request_runs_when_the_turn_ends() {
     assert_eq!(world.provider.requests().len(), 2);
 }
 
+/// The same when the turn fails (the review of step 23): no turn follows
+/// to take the compaction, so a turn that only compacts runs, and the
+/// session is idle after it.
+#[test]
+fn a_compaction_asked_for_during_a_turn_that_fails_runs_when_it_ends() {
+    let more = Gate::new();
+    let fails = Response::new()
+        .text("Half")
+        .wait(&more)
+        .error(crate::transitions::refused());
+    let world = World::new("compact_after_failed", [fails, says("Goal: the summary.")]);
+    let rig = Setup::new(&world).start(&world);
+    world.run(async {
+        rig.prompt("go");
+        rig.events.seen("delta:text", 1).await;
+        rig.handle.compact(None).map_err(|error| *error).unwrap();
+        more.open();
+        rig.events.seen("idle", 1).await;
+    });
+    let ends: Vec<TurnOutcome> = rig
+        .events
+        .ends()
+        .into_iter()
+        .map(|end| end.outcome)
+        .collect();
+    assert_eq!(ends, [TurnOutcome::Failed, TurnOutcome::Completed]);
+    assert_eq!(rig.store.summaries().len(), 1, "the compaction ran");
+}
+
 #[test]
 fn a_summary_too_large_for_the_new_epoch_fails_the_compaction_and_records_nothing() {
     let world = World::new(

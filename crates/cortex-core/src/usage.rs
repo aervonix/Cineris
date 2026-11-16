@@ -17,7 +17,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cortex_base::{CancelToken, Zone};
+use cortex_base::Zone;
 use cortex_config::{Loaded, StateDir};
 use cortex_llm::openai_chat::account::{self, AccountUsage};
 use cortex_llm::{HttpRequest, Transport};
@@ -413,7 +413,8 @@ async fn refresh_one(
     if let Err(failure) = auth.authorize(&mut request).await {
         return failed("auth_failed", failure.to_string());
     }
-    let cancel = CancelToken::new();
+    // Ends with the core, as a session's requests do.
+    let cancel = inner.options.cancel.child();
     let transport: Arc<dyn Transport> = Arc::clone(&inner.providers.transport);
     let exchange = async {
         let response = transport.send(request, cancel.clone()).await?;

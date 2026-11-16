@@ -648,3 +648,40 @@ fn a_profile_that_does_not_exist_is_an_error_that_lists_the_ones_that_do() {
         ]
     );
 }
+
+/// A profile only the project's file defines can be selected: a load with
+/// the workspace applies it (a setting that needs trust held back until the
+/// project is trusted), and one with no workspace, which cannot see it,
+/// does not refuse it (the review of step 23).
+#[test]
+fn a_profile_only_the_project_defines_can_be_selected() {
+    let mut machine = Machine::new("layers_project_profile");
+    machine.layer(LayerKind::User, "[model]\nmain = \"a\"\n");
+    machine.layer(
+        LayerKind::Project,
+        "[profiles.ci]\nmodel.main = \"b\"\nmodel.speed_fallback = false\n",
+    );
+    machine.options.profile = Some("ci".to_owned());
+    let loaded = machine.load();
+    assert_eq!(loaded.profile.as_deref(), Some("ci"));
+    assert_eq!(value(&loaded, "model.speed_fallback"), "false");
+    assert_eq!(value(&loaded, "model.main"), "\"a\"", "held back");
+    let held: Vec<String> = loaded.withheld.iter().map(|h| h.key.to_string()).collect();
+    assert_eq!(held, ["model.main"]);
+    assert_eq!(value(&machine.trusted().load(), "model.main"), "\"b\"");
+
+    // The same with no workspace: nothing of the project's is applied, and
+    // the name is not refused.
+    machine.options.workspace = None;
+    let loaded = machine.load();
+    assert_eq!(loaded.profile.as_deref(), Some("ci"));
+    assert_eq!(value(&loaded, "model.main"), "\"a\"");
+    // A misspelt name is still refused once the workspace is read.
+    machine.options.profile = Some("cl".to_owned());
+    machine.load();
+    machine.options.workspace = Some(machine.home().join("work").join("app"));
+    assert_eq!(
+        machine.failure(),
+        ["error: command-line: profile: there is no profile named `cl`. The profiles are: ci"]
+    );
+}

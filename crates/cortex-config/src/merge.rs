@@ -263,6 +263,7 @@ impl Merger {
             | TrustClass::RunsCode
             | TrustClass::WidensAccess
             | TrustClass::RaisesCost
+            | TrustClass::StopsCommands
                 if self.trusted =>
             {
                 true
@@ -270,7 +271,8 @@ impl Merger {
             TrustClass::FirstLimit
             | TrustClass::RunsCode
             | TrustClass::WidensAccess
-            | TrustClass::RaisesCost => {
+            | TrustClass::RaisesCost
+            | TrustClass::StopsCommands => {
                 self.withheld.push(Withheld {
                     key: key.clone(),
                     class,

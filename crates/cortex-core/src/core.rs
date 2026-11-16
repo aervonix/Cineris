@@ -772,17 +772,24 @@ impl Core {
         let answered = self.inner.options.cancel.race(answer).await;
         self.inner.clients.close(&id);
         let answer = match answered {
-            Some(Ok(ServerResponse::Trust(TrustResponse { trusted: true, .. }))) => {
-                Some(TrustAnswer::Yes)
-            }
-            Some(Ok(ServerResponse::Trust(TrustResponse { never: true, .. }))) => {
-                Some(TrustAnswer::Never)
-            }
+            // Only a yes and nothing else is a yes: an answer that says
+            // both is refused where it is given, and would be read here as
+            // not trusted.
+            Some(Ok(ServerResponse::Trust(TrustResponse {
+                trusted: true,
+                never: false,
+            }))) => Some(TrustAnswer::Yes),
+            Some(Ok(ServerResponse::Trust(TrustResponse {
+                trusted: false,
+                never: true,
+            }))) => Some(TrustAnswer::Never),
             Some(Ok(_)) => Some(TrustAnswer::NotNow),
             // The client went away, or the core is ending.
             Some(Err(_)) | None => None,
         };
-        if self.inner.options.cancel.is_cancelled() {
+        if self.inner.options.cancel.is_cancelled()
+            || self.inner.shutting_down.load(Ordering::SeqCst)
+        {
             return Err(Self::shutting_down());
         }
         let Some(answer) = answer else {
@@ -869,6 +876,9 @@ impl Core {
         let Some(live) = lock(&self.inner.sessions).remove(session) else {
             return;
         };
+        // A question that holds the session (an undo's) ends as no answer:
+        // nothing it would do runs on a session that has ended.
+        self.inner.clients.withdraw(Some(session));
         live.handle.close();
         let task = lock(&live.task).take();
         if let Some(task) = task {
@@ -962,6 +972,11 @@ impl Core {
     /// in the table, and ends itself.
     pub async fn shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
+        // Every trust and rewind question still open ends as no answer, so
+        // that no open and no undo waits for a person past the end
+        // (`docs/architecture/06-permissions-and-sandbox.md`, "Project
+        // trust"; the review of step 23).
+        self.inner.clients.withdraw(None);
         let sessions: Vec<SessionId> = lock(&self.inner.sessions).keys().cloned().collect();
         for session in sessions {
             self.end(&session).await;
@@ -1142,10 +1157,10 @@ impl Core {
             }
             Op::SessionRead(params) => {
                 let live = self.open_for(client, &params.session_id)?;
-                // The `seq` first: an event after it is not in the answer,
-                // and the client gets it live.
-                let seq = live.sink.seq();
-                let progress = live.sink.in_progress();
+                // The `seq` and what is in progress, taken together: an
+                // event after it is not in the answer, and the client gets
+                // it live.
+                let (seq, progress) = live.sink.snapshot();
                 let log = Arc::clone(&live.log);
                 let mut items = Self::blocking(move || {
                     lock(&log)
@@ -1269,6 +1284,8 @@ impl Core {
                 let limit = params.limit.map_or(WORKSPACE_FILES, |limit| {
                     (limit as usize).min(WORKSPACE_FILES)
                 });
+                // The walk ends with the core (the review of step 23).
+                let cancel = self.inner.options.cancel.child();
                 let (paths, truncated) = Self::blocking(move || {
                     let resolver = cortex_base::PathResolver::new(
                         Path::new(&workspace),
@@ -1283,7 +1300,7 @@ impl Core {
                     Ok(cortex_tools::workspace_files(
                         &root,
                         gate.as_ref(),
-                        &CancelToken::new(),
+                        &cancel,
                         limit,
                     ))
                 })
@@ -1569,6 +1586,8 @@ impl Core {
         let log = Arc::clone(&live.log);
         let hooks = Arc::clone(&live.hooks);
         let board = Arc::clone(&live.board);
+        let inner = Arc::clone(&self.inner);
+        let this = Arc::clone(live);
         let not_restored = Self::blocking(move || {
             // The change is held by the work, not by this operation: the
             // work is never cancelled, so if the operation is given up (its
@@ -1576,6 +1595,20 @@ impl Core {
             // being rewritten.
             let mut change = change;
             let mut kept = lock(&log);
+            // A session that ended while its question was open, or since,
+            // is not rewound: its log is closed, and its files are left as
+            // they are (the review of step 23). Its end takes it out of the
+            // table before it closes the log under this lock.
+            let open = lock(&inner.sessions)
+                .get(this.handle.id())
+                .is_some_and(|now| Arc::ptr_eq(now, &this));
+            if !open {
+                return Err(error(
+                    ErrorKind::Usage,
+                    code::SESSION_NOT_OPEN,
+                    "The session was closed before it could be moved back: nothing was changed.",
+                ));
+            }
             let Some(disk) = kept.disk() else {
                 return Err(error(
                     ErrorKind::Usage,
@@ -2034,9 +2067,10 @@ fn session_error(failure: &cortex_session::SessionError) -> OpError {
 }
 
 /// Refuses a session's configuration overrides from a client that is not a
-/// `user` when they set anything but a preference, or a choice that raises
+/// `user` when they set anything but a preference, a choice that raises
 /// what is spent (a model, a speed: what `session/set` lets such a client
-/// choose). Such overrides rank as the user's own command line, so the
+/// choose), or the variables commands are not given (a project's wait for
+/// trust because they could stop every command; a client's are its own). Such overrides rank as the user's own command line, so the
 /// rest is the user's to give:
 ///
 /// - anything under `[permissions]`, `[sandbox]` or `[limits]`, in a
@@ -2057,7 +2091,7 @@ fn only_preferences(overrides: &[Override]) -> Result<(), OpError> {
     let preference = |trust: &Trust| {
         matches!(
             trust,
-            Trust::Preference | Trust::RaisesCost | Trust::BySpeed
+            Trust::Preference | Trust::RaisesCost | Trust::BySpeed | Trust::StopsCommands
         )
     };
     for one in overrides {

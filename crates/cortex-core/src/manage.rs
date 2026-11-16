@@ -30,7 +30,7 @@ use cortex_protocol::methods::{ProjectEntriesResult, StoredApproval};
 use cortex_protocol::project::{EntryChange, NewEntry};
 use cortex_protocol::{ApprovalId, ErrorKind, ProjectKey};
 
-use crate::assemble::{pinned_rules, resolve_dir};
+use crate::assemble::{held_back_settings, pinned_rules, resolve_dir};
 use crate::core::{Core, OpError, error};
 use crate::provider::{builtin_names, key_variable};
 
@@ -87,8 +87,10 @@ pub struct Trusted {
     /// files define, with the profile (`None`: outside any). These are what
     /// a later start compares.
     pub rules: Vec<(Option<String>, Rule)>,
-    /// The project's settings that wait for trust, which now apply.
-    pub settings: Vec<Withheld>,
+    /// The project's settings that wait for trust, which now apply:
+    /// outside any profile and in each profile its files define, with the
+    /// profile (`None`: outside any), as the trust question lists them.
+    pub settings: Vec<(Option<String>, Withheld)>,
     /// Whether the project was trusted before (its rules are approved
     /// again) or is trusted now for the first time.
     pub was_trusted: bool,
@@ -289,7 +291,10 @@ impl Core {
     pub fn trust_project(&self, project: &Project) -> Result<Trusted, OpError> {
         let rules = self.pinned(project)?;
         // What an untrusted load holds back is what trust now turns on.
-        let settings = self.load(project, ConfigTrust::Untrusted)?.withheld;
+        let settings =
+            held_back_settings(&self.load(project, ConfigTrust::Untrusted)?, &|profile| {
+                self.load_profile(project, profile, ConfigTrust::Untrusted)
+            })?;
         let store = self.trust_store()?;
         let failed = |failure: cortex_policy::TrustError| {
             error(ErrorKind::Internal, "store_failed", failure.to_string())
@@ -463,22 +468,32 @@ impl Core {
     fn pinned(&self, project: &Project) -> Result<cortex_policy::ProjectRules, OpError> {
         let loaded = self.load_trusted(project)?;
         pinned_rules(&loaded, &|profile| {
-            let options = &self.inner.options;
-            let mut load = LoadOptions::new(options.env.clone());
-            if let Some(dirs) = &options.dirs {
-                load.dirs = dirs.clone();
-            }
-            load.workspace = Some(project.root.clone());
-            load.profile = Some(profile.to_owned());
-            load.overrides.clone_from(&options.overrides);
-            load.trust = ConfigTrust::Trusted;
-            cortex_config::load(&load).map_err(|failure| {
-                error(
-                    ErrorKind::Config,
-                    "invalid_configuration",
-                    failure.render(&options.env),
-                )
-            })
+            self.load_profile(project, profile, ConfigTrust::Trusted)
+        })
+    }
+
+    /// The project's configuration with `profile` selected.
+    fn load_profile(
+        &self,
+        project: &Project,
+        profile: &str,
+        trust: ConfigTrust,
+    ) -> Result<Loaded, OpError> {
+        let options = &self.inner.options;
+        let mut load = LoadOptions::new(options.env.clone());
+        if let Some(dirs) = &options.dirs {
+            load.dirs = dirs.clone();
+        }
+        load.workspace = Some(project.root.clone());
+        load.profile = Some(profile.to_owned());
+        load.overrides.clone_from(&options.overrides);
+        load.trust = trust;
+        cortex_config::load(&load).map_err(|failure| {
+            error(
+                ErrorKind::Config,
+                "invalid_configuration",
+                failure.render(&options.env),
+            )
         })
     }
 }

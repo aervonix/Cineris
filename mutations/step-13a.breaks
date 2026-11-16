@@ -55,6 +55,7 @@ caught-by:
 [break] trust-not-given-to-configuration
 rule: Configuration is loaded with the answer about the project's trust: a trusted project's settings that need trust apply.
 file: crates/cortex-core/src/assemble.rs
+in: trust
 find:
     options.trust = if trusted {
         cortex_config::ProjectTrust::Trusted

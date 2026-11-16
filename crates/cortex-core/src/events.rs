@@ -500,21 +500,25 @@ impl SessionSink {
             .collect()
     }
 
-    /// The items in progress, with what each has so far.
-    pub(crate) fn in_progress(&self) -> Vec<Item> {
-        lock(&self.progress).items()
-    }
-
-    /// The `seq` of the last event the session sent.
-    pub(crate) fn seq(&self) -> u64 {
-        lock(&self.last).0
+    /// The `seq` of the last event and the items in progress, taken
+    /// together: the items hold exactly the events up to that `seq`, so a
+    /// reader that takes the events after it draws nothing twice (found
+    /// beside the review of step 23).
+    pub(crate) fn snapshot(&self) -> (u64, Vec<Item>) {
+        let progress = lock(&self.progress);
+        let seq = lock(&self.last).0;
+        (seq, progress.items())
     }
 }
 
 impl EventSink for SessionSink {
     fn emit(&self, event: SessionEvent) {
-        lock(&self.progress).observe(&event.event);
-        *lock(&self.last) = (event.seq, event.turn_id.clone());
+        {
+            // One step under the items' lock, which a snapshot takes too.
+            let mut progress = lock(&self.progress);
+            progress.observe(&event.event);
+            *lock(&self.last) = (event.seq, event.turn_id.clone());
+        }
         let subscribers = lock(&self.subscribers);
         if let Some(((_, last), rest)) = subscribers.split_last() {
             for (_, queue) in rest {
@@ -924,9 +928,9 @@ mod tests {
                 text: "compiling\n".to_owned(),
             }),
         ));
-        assert_eq!(sink.seq(), 8);
+        assert_eq!(sink.snapshot().0, 8);
 
-        let items = sink.in_progress();
+        let items = sink.snapshot().1;
         assert_eq!(items.len(), 2);
         let Item::AssistantMessage(message) = &items[0] else {
             panic!("not an assistant message");
@@ -953,12 +957,12 @@ mod tests {
                 item_id: ItemId::new("i_1"),
             }),
         ));
-        let Item::AssistantMessage(message) = &sink.in_progress()[0] else {
+        let Item::AssistantMessage(message) = &sink.snapshot().1[0] else {
             panic!("not an assistant message");
         };
         assert!(message.parts.is_empty());
         sink.emit(completed(10, "i_2"));
-        assert_eq!(sink.in_progress().len(), 1);
+        assert_eq!(sink.snapshot().1.len(), 1);
 
         // The client that wanted deltas got them; the other got the whole
         // events only.
@@ -971,6 +975,6 @@ mod tests {
         sink.emit(completed(11, "i_1"));
         assert!(two.is_empty());
         assert_eq!(one.len(), 1);
-        assert!(sink.in_progress().is_empty());
+        assert!(sink.snapshot().1.is_empty());
     }
 }

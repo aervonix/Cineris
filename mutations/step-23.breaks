@@ -698,7 +698,7 @@ caught-by:
 [break] a-compaction-left-for-the-next-prompt
 rule: A compaction asked for during a turn's last request runs in a turn of its own when that turn ends and nothing follows it.
 file: crates/cortex-agent/src/turn.rs
-in: Session::next_turn
+in: Session::compact_turn
 find: .position(|pending| matches!(pending, Pending::Compact(_)))?;
 replace: .position(|pending| matches!(pending, Pending::Steer(_)))?;
 packages: cortex-agent

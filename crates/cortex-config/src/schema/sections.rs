@@ -624,8 +624,9 @@ settings! {
         /// Environment variables that commands are not given, besides
         /// the key variables of the providers, which are always removed.
         /// A name may end with `*` for every variable that starts so.
-        /// Every layer adds to the list.
-        [Preference, NextEpoch, joined]
+        /// Every layer adds to the list. A project's entries wait for
+        /// trust: `"*"` would take `PATH` away and stop every command.
+        [StopsCommands, NextEpoch, joined]
         pub env_remove: Vec<String>,
     }
 }

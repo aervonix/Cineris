@@ -21,7 +21,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cortex_protocol::error::code;
 use cortex_protocol::jsonrpc::RequestId;
-use cortex_protocol::methods::{ClientCapabilities, ClientRole, ServerRequest, ServerResponse};
+use cortex_protocol::methods::{
+    ClientCapabilities, ClientRole, ServerRequest, ServerResponse, TrustResponse,
+};
 use cortex_protocol::{ErrorData, ErrorKind, SessionId};
 use tokio::sync::oneshot;
 
@@ -334,6 +336,18 @@ impl Clients {
 
     /// Closes a request that will not be answered through here any more:
     /// it timed out, or was withdrawn. Says whether it was open.
+    /// Withdraws the open requests that end with their askers (a trust
+    /// question, a rewind's question) of one session, or of every session
+    /// with `None`: whoever waits for one is told that no answer will
+    /// come, and an answer that comes later is refused. For a session's
+    /// end and the core's (the review of step 23: an undo's question
+    /// outlived both).
+    pub(crate) fn withdraw(&self, session: Option<&SessionId>) {
+        lock(&self.open).retain(|_, open| {
+            !open.ends_with_askers || session.is_some_and(|session| *session != open.session)
+        });
+    }
+
     pub(crate) fn close(&self, id: &RequestId) -> bool {
         lock(&self.open).remove(id).is_some()
     }
@@ -379,6 +393,20 @@ impl Clients {
             return Err(refused(
                 "request_not_open",
                 format!("No request `{id}` of that kind is waiting for an answer."),
+            ));
+        }
+        // A grant that contradicts itself is refused, as an unknown value
+        // of a grant is, and the question stays open for an answer that
+        // can be read (the review of step 23: it was taken as a yes).
+        if let ServerResponse::Trust(TrustResponse {
+            trusted: true,
+            never: true,
+        }) = &response
+        {
+            return Err(refused(
+                "invalid_answer",
+                "A trust answer cannot be both `trusted` and `never`: `never` goes with \
+                 `trusted` false.",
             ));
         }
         let Some(request) = open.remove(id) else {

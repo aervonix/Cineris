@@ -548,6 +548,36 @@ fn a_session_can_be_told_to_read_its_history_again_but_not_under_a_turn() {
     assert_eq!(closed.code, code::SESSION_NOT_OPEN);
 }
 
+/// The session's state has changed by the time `turn.completed` is told: a
+/// front end that undoes the moment the idle box shows finds no turn
+/// running (found by the review of the eighth tooling step). The loop is
+/// held just after the event is told, and the history is changed from
+/// another thread there.
+#[test]
+fn a_turn_is_not_running_once_its_end_is_told() {
+    let (world, rig) = Rig::one("told_then_idle", [says("Done.")]);
+    let hold = Arc::new(cortex_testkit::Hold::new(
+        cortex_agent::turn::TURN_COMPLETED_TOLD,
+    ));
+    let looking = {
+        let (hold, handle) = (Arc::clone(&hold), rig.handle.clone());
+        std::thread::spawn(move || {
+            hold.reach();
+            let changed = handle
+                .change_history()
+                .map(drop)
+                .map_err(|error| error.code);
+            hold.release();
+            changed
+        })
+    };
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    assert_eq!(looking.join().unwrap(), Ok(()));
+}
+
 // ------------------------------------------------------------- statistics
 
 #[test]

@@ -1527,7 +1527,7 @@ export interface SessionResult {
   session: SessionState;
 }
 
-/** `session/rewind` */
+/** `session/rewind`: moves the active branch back to an item, putting files back if asked. **It may ask a question** (since step 23). With `restore_files`, a file edited since the harness left it is put back only if the person says so: the session's `user` clients that answer questions are put one `question/ask` naming those files, with the choices "Put them back" and "Keep them as they are". No client to ask, no answer, a client that goes away, the session's close and the core's end all keep the files. The result comes once the question is settled; a session closed meanwhile is not moved back (`session_not_open`). */
 export interface SessionRewindParams {
   /** Whether to put files back as they were at that point, from the snapshots of the turns that are undone. */
   restore_files?: boolean;
@@ -1585,7 +1585,7 @@ export interface SessionState {
   trust?: TrustStanding | null;
   /** The workspace root. An absolute path on the server's machine. */
   workspace: string;
-  /** The directories the session's commands may write to, as absolute paths: the workspace, the session's temporary directory and any the configuration adds. A front end keeps a program it runs for the person (an external editor) out of them, since a command could have put one there (since step 23). */
+  /** The directories the session's commands may write to, as absolute paths: the workspace, the session's temporary directory and any the configuration adds. A front end keeps a program it runs for the person (an external editor) out of them, since a command could have put one there (since step 23). The list is the same whether or not commands are confined: where they are not (the sandbox off, the `unrestricted` level, or a system the sandbox does not confine yet) a command may write anywhere, and keeping out of these protects nothing then. */
   write_roots?: Array<string>;
 }
 
@@ -1609,7 +1609,7 @@ export interface SessionSummary {
   workspace: string;
 }
 
-/** `session/undo`: steps back before the session's last turn, its first included, and records the step as an undo (since step 23). */
+/** `session/undo`: steps back before the session's last turn, its first included, and records the step as an undo (since step 23). **It may ask a question** (since step 23). With `restore_files`, a file edited since the harness left it is put back only if the person says so: the session's `user` clients that answer questions are put one `question/ask` naming those files, with the choices "Put them back" and "Keep them as they are". No client to ask, no answer, a client that goes away, the session's close and the core's end all keep the files. The result comes once the question is settled; a session closed meanwhile is not moved back (`session_not_open`). */
 export interface SessionUndoParams {
   /** Whether to put files back as they were before the turn, from its snapshots. */
   restore_files?: boolean;
@@ -1931,7 +1931,7 @@ export type TrustResourceKind = "rules" | "hook" | "extension" | "mcp_server" | 
 
 /** The answer to `trust/request`. */
 export interface TrustResponse {
-  /** With `trusted` false: remember the refusal, so that the project is not asked about at later starts either (since step 23). It is kept beside the trusted projects, and `cortex permissions trust` lifts it. */
+  /** With `trusted` false: remember the refusal, so that the project is not asked about at later starts either (since step 23). It is kept beside the trusted projects, and `cortex permissions trust` lifts it. An answer with both `trusted` and `never` is refused (`invalid_answer`), and the question stays open. */
   never?: boolean;
   /** Whether the resources listed may be used. */
   trusted?: boolean;

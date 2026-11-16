@@ -5434,7 +5434,7 @@
       "type": "object"
     },
     "SessionRewindParams": {
-      "description": "`session/rewind`",
+      "description": "`session/rewind`: moves the active branch back to an item, putting files\nback if asked.\n\n**It may ask a question** (since step 23). With `restore_files`, a file\nedited since the harness left it is put back only if the person says so:\nthe session's `user` clients that answer questions are put one\n`question/ask` naming those files, with the choices \"Put them back\" and\n\"Keep them as they are\". No client to ask, no answer, a client that goes\naway, the session's close and the core's end all keep the files. The\nresult comes once the question is settled; a session closed meanwhile is\nnot moved back (`session_not_open`).",
       "properties": {
         "restore_files": {
           "default": false,
@@ -5608,7 +5608,7 @@
           "type": "string"
         },
         "write_roots": {
-          "description": "The directories the session's commands may write to, as absolute\npaths: the workspace, the session's temporary directory and any the\nconfiguration adds. A front end keeps a program it runs for the\nperson (an external editor) out of them, since a command could have\nput one there (since step 23).",
+          "description": "The directories the session's commands may write to, as absolute\npaths: the workspace, the session's temporary directory and any the\nconfiguration adds. A front end keeps a program it runs for the\nperson (an external editor) out of them, since a command could have\nput one there (since step 23). The list is the same whether or not\ncommands are confined: where they are not (the sandbox off, the\n`unrestricted` level, or a system the sandbox does not confine yet)\na command may write anywhere, and keeping out of these protects\nnothing then.",
           "items": {
             "type": "string"
           },
@@ -5692,7 +5692,7 @@
       "type": "object"
     },
     "SessionUndoParams": {
-      "description": "`session/undo`: steps back before the session's last turn, its first\nincluded, and records the step as an undo (since step 23).",
+      "description": "`session/undo`: steps back before the session's last turn, its first\nincluded, and records the step as an undo (since step 23).\n\n**It may ask a question** (since step 23). With `restore_files`, a file\nedited since the harness left it is put back only if the person says so:\nthe session's `user` clients that answer questions are put one\n`question/ask` naming those files, with the choices \"Put them back\" and\n\"Keep them as they are\". No client to ask, no answer, a client that goes\naway, the session's close and the core's end all keep the files. The\nresult comes once the question is settled; a session closed meanwhile is\nnot moved back (`session_not_open`).",
       "properties": {
         "restore_files": {
           "default": false,
@@ -6772,7 +6772,7 @@
       "description": "The answer to `trust/request`.",
       "properties": {
         "never": {
-          "description": "With `trusted` false: remember the refusal, so that the project is\nnot asked about at later starts either (since step 23). It is kept\nbeside the trusted projects, and `cortex permissions trust` lifts it.",
+          "description": "With `trusted` false: remember the refusal, so that the project is\nnot asked about at later starts either (since step 23). It is kept\nbeside the trusted projects, and `cortex permissions trust` lifts it.\nAn answer with both `trusted` and `never` is refused\n(`invalid_answer`), and the question stays open.",
           "type": "boolean"
         },
         "trusted": {
