@@ -85,6 +85,12 @@ Without one, every break.
                  Not with break names, a list or --file.
   --find CODE    The code to replace, read by token, there once in FILE (or
                  in --in's item). Needs --break.
+  --in-string TEXT
+                 In the place of --find: change TEXT inside a string literal,
+                 and nothing else of it. Looked for only in the string literals
+                 of FILE (or --in's item), as they are written in the source,
+                 and there exactly once (or --occurrence). --replace is the
+                 text to put in its place. Needs --break.
   --replace CODE What to put there (may be empty). Needs --break.
   --in ITEM      The item the code is in, as a list's `in:` (`Round::spawn`).
   --occurrence N Which match of --find is meant, counted from 1.
@@ -306,8 +312,8 @@ impl Request {
                     mode(Mode::Merge)?;
                     request.merge = Some(step.clone());
                 }
-                "--break" | "--find" | "--replace" | "--in" | "--packages" | "--test"
-                | "--occurrence" => {
+                "--break" | "--find" | "--in-string" | "--replace" | "--in" | "--packages"
+                | "--test" | "--occurrence" => {
                     let value = rest
                         .next()
                         .ok_or_else(|| format!("`{argument}` needs a value\n\n{USAGE}"))?
@@ -316,6 +322,7 @@ impl Request {
                     match argument.as_str() {
                         "--break" => one.file = Some(value),
                         "--find" => one.find = Some(value),
+                        "--in-string" => one.in_string = Some(value),
                         "--replace" => one.replace = Some(value),
                         "--in" => one.anchor = Some(value),
                         "--test" => one.tests.push(value),
@@ -406,8 +413,8 @@ impl Request {
         if one_off {
             if self.one_off.file.is_none() {
                 return Err(format!(
-                    "`--find`, `--replace`, `--in`, `--occurrence`, `--packages` and `--test` \
-                     are for use with `--break FILE`\n\n{USAGE}"
+                    "`--find`, `--in-string`, `--replace`, `--in`, `--occurrence`, `--packages` \
+                     and `--test` are for use with `--break FILE`\n\n{USAGE}"
                 ));
             }
             if !self.only.is_empty() || !self.files.is_empty() {
@@ -425,9 +432,18 @@ impl Request {
             if matches!(self.mode, Mode::Merge) {
                 return Err(format!("`--merge` goes with no other option\n\n{USAGE}"));
             }
-            if self.one_off.find.is_none() || self.one_off.replace.is_none() {
+            if self.one_off.find.is_some() && self.one_off.in_string.is_some() {
                 return Err(format!(
-                    "`--break FILE` needs `--find CODE` and `--replace CODE`\n\n{USAGE}"
+                    "`--find` and `--in-string` do not go together: `--find` replaces code, \
+                     `--in-string` changes text inside a string literal\n\n{USAGE}"
+                ));
+            }
+            if (self.one_off.find.is_none() && self.one_off.in_string.is_none())
+                || self.one_off.replace.is_none()
+            {
+                return Err(format!(
+                    "`--break FILE` needs `--find CODE` (or `--in-string TEXT`) and `--replace \
+                     CODE`\n\n{USAGE}"
                 ));
             }
         }
@@ -859,7 +875,10 @@ fn check(root: &Path, breaks: &[Break]) -> Vec<String> {
             }
         };
         problems.extend(preflight(one, source, tokens, &items));
-        let change = change_of(source, code, &range, &one.replace);
+        let change = match literal_change(one, source, tokens, &range) {
+            Some((literal, text)) => change_of(source, code, &literal, &text),
+            None => change_of(source, code, &range, &one.replace),
+        };
         if let Some(first) = changes.get(&(one.file.as_str(), change.clone())) {
             problems.push(format!(
                 "{}: break `{}` makes the same change as `{first}`: once the code is read by \
@@ -893,6 +912,32 @@ fn check(root: &Path, breaks: &[Break]) -> Vec<String> {
         }
     }
     problems
+}
+
+/// For a break whose `find` is an `in-string` text: the whole string literal
+/// the range `inside` is in, and the text of that literal with the break's
+/// `replace` put over the range. The change of such a break to the file, as
+/// a change of one token. `None` for any other break.
+fn literal_change(
+    one: &Break,
+    source: &str,
+    tokens: &[lex::Token],
+    inside: &Range<usize>,
+) -> Option<(Range<usize>, String)> {
+    if !one.in_string {
+        return None;
+    }
+    let literal = lex::literal_around(source, tokens, inside)?;
+    let mut text = String::with_capacity(literal.len() + one.replace.len());
+    text.push_str(&source[literal.start..inside.start]);
+    text.push_str(&one.replace);
+    text.push_str(&source[inside.end..literal.end]);
+    Some((literal, text))
+}
+
+/// Whether `text` is exactly one string literal.
+fn is_one_string(text: &str) -> bool {
+    lex::string_content(text).is_some() && lex::code_texts(text).len() == 1
 }
 
 /// What a change does to a file, read by token: how many tokens it keeps
@@ -967,7 +1012,7 @@ fn preflight(
     items: &[Range<usize>],
 ) -> Vec<String> {
     let mut problems = Vec::new();
-    if ends_in_a_layout_comma(&one.find) {
+    if !one.in_string && ends_in_a_layout_comma(&one.find) {
         problems.push(format!(
             "{}: break `{}` has a `find` that ends in a comma, which rustfmt moves: the break \
              stops applying when the line is wrapped or joined.\n  End `find` before the comma.",
@@ -1120,15 +1165,13 @@ fn locate(
         .as_ref()
         .map(|anchor| format!(" inside `{anchor}`"))
         .unwrap_or_default();
-    let located = lex::locate_with_items(
-        source,
-        tokens,
-        one.anchor.as_deref(),
-        &one.find,
-        one.occurrence,
-    );
+    let located = one.locate_with_items(source, tokens, one.anchor.as_deref());
     let (range, items) = located.map_err(|missing| {
         let (why, fix) = match missing {
+            lex::Missing::NothingToFind if one.in_string => (
+                "its `in-string` has no text in it".to_owned(),
+                "Give `in-string` the text to change.".to_owned(),
+            ),
             lex::Missing::NothingToFind => (
                 "its `find` has no code in it".to_owned(),
                 "Give `find` the code to replace.".to_owned(),
@@ -1143,6 +1186,17 @@ fn locate(
                     )
                 },
                 how_to_fix(one),
+            ),
+            lex::Missing::NotFound if one.in_string => (
+                format!(
+                    "its `in-string` text is not in any string literal of `{}`{inside}",
+                    one.file
+                ),
+                format!(
+                    "{} The text is looked for as the literal is written in the source, escapes \
+                     as they are typed.",
+                    how_to_fix(one)
+                ),
             ),
             lex::Missing::NotFound => match comma_before_a_bracket(one, source, tokens) {
                 Some(line) => (
@@ -1161,7 +1215,12 @@ fn locate(
             },
             lex::Missing::Ambiguous(lines) => (
                 format!(
-                    "its `find` is in `{}`{inside} {} times, at lines {}",
+                    "its {} is in `{}`{inside} {} times, at lines {}",
+                    if one.in_string {
+                        "`in-string` text"
+                    } else {
+                        "`find`"
+                    },
                     one.file,
                     lines.len(),
                     lines
@@ -1170,14 +1229,19 @@ fn locate(
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-                "Make `find` longer, name the item it is in with `in:`, or say which one \
-                     is meant with `occurrence:` (counted from 1)."
+                "Make it longer (with the characters around it), name the item it is in with \
+                     `in:`, or say which one is meant with `occurrence:` (counted from 1)."
                     .to_owned(),
             ),
             lex::Missing::NoSuchOccurrence { asked, found } => (
                 format!(
-                    "it asks for occurrence {asked} of its `find`, which is in `{}`{inside} \
+                    "it asks for occurrence {asked} of its {}, which is in `{}`{inside} \
                          {found} time(s)",
+                    if one.in_string {
+                        "`in-string` text"
+                    } else {
+                        "`find`"
+                    },
                     one.file
                 ),
                 how_to_fix(one),
@@ -1189,6 +1253,31 @@ fn locate(
             one.id
         )
     })?;
+    // Inside a string literal, the change is to its text, and the literal
+    // must still be one string after it: a `"` in `replace` that no
+    // backslash escapes would end it.
+    if one.in_string {
+        if source[range.clone()] == one.replace {
+            return Err(format!(
+                "{}: break `{}` changes nothing: its `replace` is the text of its `in-string`.\n  \
+                 Give `replace` the broken text.",
+                one.place(),
+                one.id
+            ));
+        }
+        if let Some((_, text)) = literal_change(one, source, tokens, &range)
+            && !is_one_string(&text)
+        {
+            return Err(format!(
+                "{}: break `{}` makes a string literal that is not one string: its `replace` \
+                 holds a `\"` that no backslash escapes, or ends in a backslash.\n  Write the \
+                 quote as `\\\"`.",
+                one.place(),
+                one.id
+            ));
+        }
+        return Ok((range, items));
+    }
     // Judged on the code that is replaced: the rest of the file is the same
     // text on both sides.
     if lex::same_tokens(&source[range.clone()], &one.replace) {
@@ -1885,6 +1974,7 @@ replace: 5
                 file: Some("crates/demo/src/lib.rs".to_owned()),
                 anchor: Some("over".to_owned()),
                 find: Some("seconds > budget".to_owned()),
+                in_string: None,
                 replace: Some(String::new()),
                 occurrence: Some(2),
                 packages: strings(&["demo", "other"]),
@@ -2014,11 +2104,11 @@ replace: 5
             (&["--test", "a::b"], "are for use with `--break FILE`"),
             (
                 &["--break", "f.rs"],
-                "needs `--find CODE` and `--replace CODE`",
+                "needs `--find CODE` (or `--in-string TEXT`) and `--replace CODE`",
             ),
             (
                 &["--break", "f.rs", "--find", "a"],
-                "needs `--find CODE` and `--replace CODE`",
+                "needs `--find CODE` (or `--in-string TEXT`) and `--replace CODE`",
             ),
             (
                 &[
@@ -2079,6 +2169,239 @@ replace: 5
             (&["--merge", "step-9", "--check"], "say one of"),
             (&["--dry-run"], "`--dry-run` is for use with `--merge`"),
             (&["--check", "--flagged"], "`--flagged` is for a run"),
+        ] {
+            let error = Request::parse(&strings(arguments)).unwrap_err();
+            assert!(error.contains(expected), "{arguments:?}: {error}");
+        }
+    }
+
+    /// A source with strings: the same words in code and in literals.
+    const STRINGS: &str = "\
+pub fn kind(code: u16) -> &'static str {
+    let overloaded = code == 503;
+    match code {
+        413 => \"too large\",
+        503 => \"overloaded, retry\",
+        _ => \"other\",
+    }
+}
+
+pub fn raw() -> &'static str {
+    r#\"a \"raw\" overloaded one\"#
+}
+
+pub fn budget() -> &'static str {
+    \"budget\"
+}
+";
+
+    /// The problems of `list` against `STRINGS`, in a tree named for `test`.
+    fn string_problems(test: &str, list: &str) -> Vec<String> {
+        let root = super::drive::tests::tree(
+            test,
+            &[
+                ("crates/demo/Cargo.toml", "[package]\n"),
+                ("crates/demo/src/lib.rs", STRINGS),
+            ],
+        );
+        let problems = check(&root, &breaks("demo", list));
+        let _ = std::fs::remove_dir_all(&root);
+        problems
+    }
+
+    fn in_string(body: &str) -> Break {
+        one(&format!("{body}\n"))
+    }
+
+    #[test]
+    fn an_in_string_changes_a_word_in_a_literal_and_nothing_else_of_it() {
+        let broken = apply(
+            &in_string("in: kind\nin-string: retry\nreplace: give up"),
+            STRINGS,
+        )
+        .unwrap();
+
+        assert_eq!(
+            broken,
+            STRINGS.replace("overloaded, retry", "overloaded, give up")
+        );
+        // The same text laid out in another way in a raw string, by its
+        // content as written.
+        let broken = apply(
+            &in_string("in-string: \"raw\" overloaded\nreplace: \"raw\" busy"),
+            STRINGS,
+        )
+        .unwrap();
+        assert!(broken.contains("a \"raw\" busy one"), "{broken}");
+        // An empty `replace` takes the text out.
+        let broken = apply(&in_string("in-string: , retry\nreplace:"), STRINGS).unwrap();
+        assert!(broken.contains("\"overloaded\","), "{broken}");
+    }
+
+    #[test]
+    fn an_in_string_is_looked_for_in_literals_only_and_must_be_there_once() {
+        // `overloaded` is a name in the code, and in two literals.
+        let error = apply(&in_string("in-string: overloaded\nreplace: busy"), STRINGS).unwrap_err();
+        assert!(
+            error.contains("its `in-string` text is in `src/lib.rs` 2 times, at lines 5, 11"),
+            "{error}"
+        );
+        assert!(error.contains("`occurrence:`"), "{error}");
+        let second = apply(
+            &in_string("in-string: overloaded\nreplace: busy\noccurrence: 2"),
+            STRINGS,
+        )
+        .unwrap();
+        assert!(second.contains("a \"raw\" busy one"), "{second}");
+        assert!(second.contains("\"overloaded, retry\""), "{second}");
+        // Code is not a string: a name that is no literal's text is not found.
+        let error = apply(&in_string("in-string: code\nreplace: x"), STRINGS).unwrap_err();
+        assert!(
+            error.contains("its `in-string` text is not in any string literal of `src/lib.rs`"),
+            "{error}"
+        );
+        // The item narrows it, and a text outside the item is not found there.
+        let error =
+            apply(&in_string("in: raw\nin-string: retry\nreplace: x"), STRINGS).unwrap_err();
+        assert!(error.contains("inside `raw`"), "{error}");
+        let error = apply(
+            &in_string("in-string: too large\nreplace: x\noccurrence: 3"),
+            STRINGS,
+        )
+        .unwrap_err();
+        assert!(error.contains("asks for occurrence 3"), "{error}");
+    }
+
+    #[test]
+    fn an_in_string_that_would_not_leave_one_string_or_change_nothing_is_refused() {
+        let same = apply(&in_string("in-string: retry\nreplace: retry"), STRINGS).unwrap_err();
+        assert!(same.contains("changes nothing"), "{same}");
+        for replace in ["re\"try", "retry\\", "\"; drop(); \""] {
+            let error = apply(
+                &in_string(&format!("in-string: retry\nreplace: {replace}")),
+                STRINGS,
+            )
+            .unwrap_err();
+            assert!(error.contains("not one string"), "{replace}: {error}");
+        }
+        // A quote with its backslash is part of the text.
+        let broken = apply(
+            &in_string("in-string: retry\nreplace: say \\\"x\\\""),
+            STRINGS,
+        )
+        .unwrap();
+        assert!(broken.contains("\"overloaded, say \\\"x\\\"\""), "{broken}");
+    }
+
+    #[test]
+    fn an_in_string_that_makes_the_change_of_another_break_is_refused_as_a_copy() {
+        let list = "\
+[break] whole
+rule: r
+file: crates/demo/src/lib.rs
+in: budget
+find: \"budget\"
+replace: \"other\"
+
+[break] word
+rule: r
+file: crates/demo/src/lib.rs
+in: budget
+in-string: budget
+replace: other
+
+[break] elsewhere
+rule: r
+file: crates/demo/src/lib.rs
+in: kind
+in-string: retry
+replace: give up
+";
+        let problems = string_problems("string-copy", list);
+
+        assert_eq!(problems.len(), 1, "{problems:#?}");
+        assert!(
+            problems[0].starts_with(
+                "mutations/demo.breaks:8: break `demo/word` makes the same change as `demo/whole`"
+            ),
+            "{}",
+            problems[0]
+        );
+    }
+
+    #[test]
+    fn a_comma_at_the_end_of_an_in_string_is_text_and_not_a_layout_comma() {
+        let list = "\
+[break] comma
+rule: r
+file: crates/demo/src/lib.rs
+in: kind
+in-string: overloaded,
+replace: overloaded;
+";
+        assert_eq!(string_problems("string-comma", list), [] as [String; 0]);
+    }
+
+    #[test]
+    fn a_break_given_with_an_in_string_is_checked_like_one_of_a_list() {
+        let given = |arguments: &[&str]| {
+            Request::parse(&strings(arguments)).and_then(|request| request.one_off.to_break())
+        };
+
+        let one = given(&[
+            "--break",
+            "crates/demo/src/lib.rs",
+            "--in-string",
+            "retry",
+            "--replace",
+            "give up",
+        ])
+        .unwrap();
+        assert!(one.in_string);
+        assert_eq!(one.find, "retry");
+        assert!(one.id.starts_with("one-off/lib-"), "{}", one.id);
+        let root = super::drive::tests::tree(
+            "one-off-in-string",
+            &[
+                ("crates/demo/Cargo.toml", "[package]\n"),
+                ("crates/demo/src/lib.rs", STRINGS),
+            ],
+        );
+        assert_eq!(check(&root, &[one.clone()]), [] as [String; 0]);
+        let _ = std::fs::remove_dir_all(&root);
+        // The same words with `--find` are another break.
+        let plain = given(&[
+            "--break",
+            "crates/demo/src/lib.rs",
+            "--find",
+            "retry",
+            "--replace",
+            "give up",
+        ])
+        .unwrap();
+        assert_ne!(plain.id, one.id);
+        for (arguments, expected) in [
+            (
+                &[
+                    "--break",
+                    "f.rs",
+                    "--find",
+                    "a",
+                    "--in-string",
+                    "b",
+                    "--replace",
+                    "c",
+                ][..],
+                "`--find` and `--in-string` do not go together",
+            ),
+            (
+                &["--break", "f.rs", "--replace", "c"][..],
+                "needs `--find CODE` (or `--in-string TEXT`)",
+            ),
+            (
+                &["--in-string", "b", "--replace", "c"][..],
+                "are for use with `--break FILE`",
+            ),
         ] {
             let error = Request::parse(&strings(arguments)).unwrap_err();
             assert!(error.contains(expected), "{arguments:?}: {error}");

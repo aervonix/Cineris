@@ -156,7 +156,7 @@ pub(crate) fn numbered(name: &str, job: usize) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use cortex_testkit::Gate;
 
@@ -206,15 +206,15 @@ mod tests {
                 if asked >= 2 {
                     // The jobs are let go before the answer is written
                     // down. Each is given the chance to look for a next
-                    // piece in that moment: they find the answer, since
-                    // taking a piece waits for the lock this question is
-                    // asked under. A bound on yields, not on time: a job
-                    // that is let go takes microseconds to look.
+                    // piece in that moment (a few milliseconds of the
+                    // clock, which a job that is let go needs far less
+                    // of): they find the answer, since taking a piece
+                    // waits for the lock this question is asked under.
                     gate.open();
-                    for _ in 0..2_000 {
-                        if started.lock().unwrap().len() > 2 {
-                            break;
-                        }
+                    let moment = Instant::now();
+                    while moment.elapsed() < Duration::from_millis(5)
+                        && started.lock().unwrap().len() <= 2
+                    {
                         std::thread::yield_now();
                     }
                 }

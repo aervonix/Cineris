@@ -367,6 +367,140 @@ pub(crate) fn find_everywhere(source: &str, all: &[Token], find: &str) -> Vec<Ra
         .collect()
 }
 
+/// The bytes of a string literal that are its text, between its quotes: the
+/// range inside `literal`, which is a whole token. `None` when the token is
+/// not a string literal (or one that is not closed).
+///
+/// The text is as it is written: an escape is its backslash and its letter,
+/// and a raw string is what is between its quotes.
+pub(crate) fn string_content(literal: &str) -> Option<Range<usize>> {
+    let bytes = literal.as_bytes();
+    let mut at = 0;
+    if matches!(bytes.first(), Some(b'b' | b'c')) {
+        at += 1;
+    }
+    let raw = bytes.get(at) == Some(&b'r');
+    if raw {
+        at += 1;
+    }
+    let mut hashes = 0;
+    while raw && bytes.get(at) == Some(&b'#') {
+        hashes += 1;
+        at += 1;
+    }
+    if bytes.get(at) != Some(&b'"') {
+        return None;
+    }
+    let start = at + 1;
+    // The literal ends at the first closing quote: the first `"` that no
+    // backslash escapes (and that its hashes follow, in a raw one), and it
+    // must be the last byte, or what follows is not part of the literal.
+    let end = if raw {
+        let closing = format!("\"{}", "#".repeat(hashes));
+        start + literal[start..].find(&closing)?
+    } else {
+        let mut at = start;
+        loop {
+            match bytes.get(at)? {
+                b'\\' => at += 2,
+                b'"' => break at,
+                _ => at += 1,
+            }
+        }
+    };
+    (end + 1 + hashes == literal.len()).then_some(start..end)
+}
+
+/// Where `word` is in the string literals of `source`: the bytes of each
+/// match, in source order, from the tokens `scope` of `all` (a break's
+/// `in-string`). A match is inside a literal's text, never across two
+/// literals or into its quotes, and matches do not overlap.
+fn strings_matching(
+    source: &str,
+    all: &[Token],
+    word: &str,
+    scope: Range<usize>,
+) -> Vec<Range<usize>> {
+    let mut found = Vec::new();
+    for token in &all[scope] {
+        let literal = token.text(source);
+        let Some(content) = string_content(literal) else {
+            continue;
+        };
+        let text = &literal[content.clone()];
+        for (at, _) in text.match_indices(word) {
+            let start = token.start + content.start + at;
+            found.push(start..start + word.len());
+        }
+    }
+    found
+}
+
+/// [`locate_with_items`] for a break's `in-string`: where `word` is in the
+/// string literals of the items `anchor` names (of the whole file without
+/// one), exactly once unless `occurrence` picks one. The range is the
+/// word's bytes, which `replace` goes over; the items are the anchor's.
+pub(crate) fn locate_in_strings(
+    source: &str,
+    all: &[Token],
+    anchor: Option<&str>,
+    word: &str,
+    occurrence: Option<usize>,
+) -> Result<(Range<usize>, Vec<Range<usize>>), Missing> {
+    if word.is_empty() {
+        return Err(Missing::NothingToFind);
+    }
+    let scopes = match anchor {
+        Some(anchor) => items_of(source, all, anchor)?,
+        None => std::iter::once(0..all.len()).collect(),
+    };
+    // Scopes can overlap, so a match is counted once.
+    let mut matches: Vec<Range<usize>> = Vec::new();
+    for scope in scopes.iter().cloned() {
+        matches.extend(strings_matching(source, all, word, scope));
+    }
+    matches.sort_unstable_by_key(|range| range.start);
+    matches.dedup();
+    match (matches.as_slice(), occurrence) {
+        ([], _) => Err(Missing::NotFound),
+        (found, Some(asked)) => match asked.checked_sub(1).and_then(|index| found.get(index)) {
+            Some(range) => Ok((range.clone(), scopes)),
+            None => Err(Missing::NoSuchOccurrence {
+                asked,
+                found: found.len(),
+            }),
+        },
+        ([only], None) => Ok((only.clone(), scopes)),
+        (several, None) => Err(Missing::Ambiguous(
+            several
+                .iter()
+                .map(|range| line_of(source, range.start))
+                .collect(),
+        )),
+    }
+}
+
+/// [`find_everywhere`] for a break's `in-string`.
+pub(crate) fn strings_everywhere(source: &str, all: &[Token], word: &str) -> Vec<Range<usize>> {
+    if word.is_empty() {
+        return Vec::new();
+    }
+    strings_matching(source, all, word, 0..all.len())
+}
+
+/// The string literal of `source` that holds the byte range `inside`: its
+/// whole bytes, quotes and prefix included.
+pub(crate) fn literal_around(
+    source: &str,
+    all: &[Token],
+    inside: &Range<usize>,
+) -> Option<Range<usize>> {
+    all.iter()
+        .find(|token| token.start <= inside.start && inside.end <= token.end)
+        .filter(|token| string_content(token.text(source)).is_some())
+        .map(|token| token.start..token.end)
+}
+
 /// An item that holds a place in the source, and the name an `in:` gives it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Enclosing {
@@ -1170,5 +1304,98 @@ mod tests {
         assert!(!same_tokens("f(a, b)", "f(a, c)"));
         assert!(!same_tokens("f(a, b)", "f(a, b"));
         assert!(!same_tokens("\"a b\"", "\"a  b\""));
+    }
+
+    #[test]
+    fn the_text_of_a_string_literal_is_what_is_between_its_quotes() {
+        use super::string_content;
+        fn text(literal: &str) -> Option<&str> {
+            string_content(literal).map(|range| &literal[range])
+        }
+        assert_eq!(text("\"a b\""), Some("a b"));
+        assert_eq!(text("\"\""), Some(""));
+        assert_eq!(text("\"say \\\"x\\\"\""), Some("say \\\"x\\\""));
+        assert_eq!(text("b\"ab\""), Some("ab"));
+        assert_eq!(text("c\"ab\""), Some("ab"));
+        assert_eq!(text("r\"a\\b\""), Some("a\\b"));
+        assert_eq!(text("r#\"a \"quoted\" b\"#"), Some("a \"quoted\" b"));
+        assert_eq!(text("br##\"x\"#y\"##"), Some("x\"#y"));
+        // Not literals: words, characters, numbers, a literal that is not
+        // closed, an escaped quote at its end, a second literal after it.
+        for not in [
+            "b",
+            "r",
+            "br",
+            "bar",
+            "r#raw",
+            "'\"'",
+            "1",
+            "\"open",
+            "\"a\\\"",
+            "\"a\" \"b\"",
+        ] {
+            assert_eq!(text(not), None, "{not}");
+        }
+    }
+
+    #[test]
+    fn a_text_is_found_only_inside_the_string_literals() {
+        use super::{locate_in_strings, strings_everywhere};
+        let source = "fn limit() -> &'static str {\n    let overloaded = 1; // overloaded\n    \
+                      note(\"overloaded\", r\"x overloaded\");\n    \"too\" // \"overloaded\"\n}\n\
+                      fn other() { b\"overloaded\" }\n";
+        let all = tokens(source);
+
+        // The two of `limit` and the one of `other`, in source order, none
+        // of the code or the comments.
+        let everywhere = strings_everywhere(source, &all, "overloaded");
+        assert_eq!(
+            everywhere
+                .iter()
+                .map(|range| line_of(source, range.start))
+                .collect::<Vec<_>>(),
+            [3, 3, 6]
+        );
+        for range in &everywhere {
+            assert_eq!(&source[range.clone()], "overloaded");
+        }
+        let error = locate_in_strings(source, &all, None, "overloaded", None).unwrap_err();
+        assert_eq!(error, Missing::Ambiguous(vec![3, 3, 6]));
+        let (range, _) = locate_in_strings(source, &all, Some("limit"), "x over", None).unwrap();
+        assert_eq!(&source[range], "x over");
+        let (range, _) = locate_in_strings(source, &all, None, "overloaded", Some(3)).unwrap();
+        assert_eq!(line_of(source, range.start), 6);
+        assert_eq!(
+            locate_in_strings(source, &all, None, "overloaded", Some(4)).unwrap_err(),
+            Missing::NoSuchOccurrence { asked: 4, found: 3 }
+        );
+        // The item narrows it: `other` has one.
+        let (range, items) =
+            locate_in_strings(source, &all, Some("other"), "overloaded", None).unwrap();
+        assert_eq!((line_of(source, range.start), items.len()), (6, 1));
+        // The quotes are not text, and nothing matches across two literals.
+        for not in [
+            "\"overloaded",
+            "overloaded\"",
+            "overloaded\", r\"x",
+            "limit",
+        ] {
+            assert_eq!(
+                locate_in_strings(source, &all, None, not, None).unwrap_err(),
+                Missing::NotFound,
+                "{not}"
+            );
+        }
+        assert_eq!(
+            locate_in_strings(source, &all, None, "", None).unwrap_err(),
+            Missing::NothingToFind
+        );
+        assert_eq!(
+            locate_in_strings(source, &all, Some("nothing"), "x", None).unwrap_err(),
+            Missing::NoSuchItem {
+                segment: "nothing".to_owned(),
+                within: String::new()
+            }
+        );
     }
 }

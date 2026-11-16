@@ -36,6 +36,14 @@
 //!   layout, its comments and its trailing commas do not matter, and
 //!   `rustfmt` cannot make it stop applying. It must be in the file (or the
 //!   item) exactly once, unless `occurrence` picks one.
+//! - `in-string`: instead of `find`, a text to change **inside a string
+//!   literal**, with `replace` the text to put in its place. The text is
+//!   looked for only in the string literals of the file (or the item `in`
+//!   names), as they are written in the source, and must be in them exactly
+//!   once, unless `occurrence` picks one. It is for a word of a message, a
+//!   name or a path kept in a constant, which `find` could change only by
+//!   repeating the whole literal. A `find` and an `in-string` do not go
+//!   together.
 //! - `replace`: what to put there. Required, and may be empty.
 //! - `occurrence`: which match of `find` is meant, counted from 1. Optional.
 //! - `packages`: the crates whose tests to run, separated by commas.
@@ -56,8 +64,10 @@
 //! given twice, a break without a required key.
 
 use std::fs;
+use std::ops::Range;
 use std::path::Path;
 
+use super::lex;
 use crate::Result;
 
 /// The directory of the break lists, relative to the repository.
@@ -126,7 +136,12 @@ pub(crate) struct Break {
     pub(crate) rule: String,
     pub(crate) file: String,
     pub(crate) anchor: Option<String>,
+    /// The code to replace, or, when `in_string`, the text to change inside
+    /// a string literal.
     pub(crate) find: String,
+    /// Whether `find` is an `in-string` text: looked for only inside the
+    /// string literals, and changed there without the rest of the literal.
+    pub(crate) in_string: bool,
     pub(crate) replace: String,
     pub(crate) occurrence: Option<usize>,
     /// Empty: the crate the file is in.
@@ -151,6 +166,33 @@ impl Break {
     /// Whether the break was given on the command line, not in a list.
     pub(crate) fn is_one_off(&self) -> bool {
         self.list == ONE_OFF
+    }
+
+    /// Where the break's `find` (or `in-string` text) is in `source`, inside
+    /// the items `anchor` names: the bytes `replace` goes over, and the
+    /// items. `anchor` is the break's own `in`, or another to try
+    /// ([`super::fix`]).
+    pub(crate) fn locate_with_items(
+        &self,
+        source: &str,
+        tokens: &[lex::Token],
+        anchor: Option<&str>,
+    ) -> std::result::Result<(Range<usize>, Vec<Range<usize>>), lex::Missing> {
+        if self.in_string {
+            lex::locate_in_strings(source, tokens, anchor, &self.find, self.occurrence)
+        } else {
+            lex::locate_with_items(source, tokens, anchor, &self.find, self.occurrence)
+        }
+    }
+
+    /// Every place the break's `find` (or `in-string` text) is in `source`,
+    /// whatever item it is in.
+    pub(crate) fn find_everywhere(&self, source: &str, tokens: &[lex::Token]) -> Vec<Range<usize>> {
+        if self.in_string {
+            lex::strings_everywhere(source, tokens, &self.find)
+        } else {
+            lex::find_everywhere(source, tokens, &self.find)
+        }
     }
 
     /// Whether this system is the one the break is for (any, when none is
@@ -198,6 +240,9 @@ impl Break {
         );
         if let Some(os) = self.os {
             text.push_str(&format!("\nos {}", os.word()));
+        }
+        if self.in_string {
+            text.push_str("\nin-string");
         }
         if self.is_one_off() {
             text.push_str("\none-off");
@@ -259,11 +304,12 @@ pub(crate) fn load_all(root: &Path) -> Result<Vec<Break>> {
 }
 
 /// The keys of a break, in the order the format's description gives them.
-const KEYS: [&str; 10] = [
+const KEYS: [&str; 11] = [
     "rule",
     "file",
     "in",
     "find",
+    "in-string",
     "replace",
     "occurrence",
     "packages",
@@ -402,6 +448,29 @@ pub(crate) fn parse(list: &str, text: &str) -> Result<Vec<Break>> {
 
     let mut breaks = Vec::new();
     for mut draft in drafts {
+        // `in-string` stands for `find`: the text to change inside a string.
+        let in_string = draft.take("in-string");
+        let mut text_to_change = None;
+        if let Some((line, value)) = &in_string {
+            if let Some((find_line, _)) = draft.take("find") {
+                error(
+                    find_line,
+                    format!(
+                        "break `{}` has a `find` and an `in-string`: say one of them",
+                        draft.name
+                    ),
+                );
+            }
+            if value.trim().is_empty() {
+                error(
+                    *line,
+                    format!("`in-string` is empty in break `{}`", draft.name),
+                );
+            } else {
+                text_to_change = Some(value.clone());
+            }
+        }
+        let in_string = in_string.is_some();
         let mut required = |key: &str, may_be_empty: bool| match draft.take(key) {
             Some((line, value)) if value.trim().is_empty() && !may_be_empty => {
                 error(line, format!("`{key}` is empty in break `{}`", draft.name));
@@ -415,7 +484,11 @@ pub(crate) fn parse(list: &str, text: &str) -> Result<Vec<Break>> {
         };
         let rule = required("rule", false);
         let file = required("file", false);
-        let find = required("find", false);
+        let find = if in_string {
+            text_to_change
+        } else {
+            required("find", false)
+        };
         let replace = required("replace", true);
         let anchor = draft.take("in").map(|(_, value)| value);
         let occurrence = match draft.take("occurrence") {
@@ -501,6 +574,7 @@ pub(crate) fn parse(list: &str, text: &str) -> Result<Vec<Break>> {
                 file,
                 anchor,
                 find,
+                in_string,
                 replace,
                 occurrence,
                 packages,
@@ -532,6 +606,9 @@ pub(crate) struct OneOff {
     pub(crate) file: Option<String>,
     pub(crate) anchor: Option<String>,
     pub(crate) find: Option<String>,
+    /// `--in-string`: the text to change inside a string literal, in the
+    /// place of `--find`.
+    pub(crate) in_string: Option<String>,
     pub(crate) replace: Option<String>,
     pub(crate) occurrence: Option<usize>,
     pub(crate) packages: Vec<String>,
@@ -552,13 +629,22 @@ impl OneOff {
             .file
             .clone()
             .ok_or("`--find` and the others need `--break FILE`")?;
-        let find = self.find.clone().ok_or("`--break` needs `--find CODE`")?;
+        if self.find.is_some() && self.in_string.is_some() {
+            return Err("`--find` and `--in-string` do not go together: say one".to_owned());
+        }
+        let find = self
+            .find
+            .clone()
+            .or_else(|| self.in_string.clone())
+            .ok_or("`--break` needs `--find CODE` or `--in-string TEXT`")?;
         let replace = self
             .replace
             .clone()
             .ok_or("`--break` needs `--replace CODE`")?;
         if find.trim().is_empty() {
-            return Err("`--find` is empty: give the code to replace".to_owned());
+            return Err(
+                "`--find` is empty: give the code to replace (or `--in-string` text)".to_owned(),
+            );
         }
         if !is_repository_path(&file) {
             return Err(format!(
@@ -583,6 +669,7 @@ impl OneOff {
                 .clone()
                 .filter(|anchor| !anchor.trim().is_empty()),
             find,
+            in_string: self.in_string.is_some(),
             replace,
             occurrence: self.occurrence,
             packages: self.packages.clone(),
@@ -758,6 +845,7 @@ expect: survives
                     find: "if cancelled.as_mut().poll(context).is_ready() {\n\n    return \
                            Poll::Ready(Woke::Cancelled);\n}"
                         .to_owned(),
+                    in_string: false,
                     replace: "let _ = &mut cancelled;".to_owned(),
                     occurrence: None,
                     packages: vec![],
@@ -776,6 +864,7 @@ expect: survives
                     file: "xtask/src/steps.rs".to_owned(),
                     anchor: None,
                     find: "results.push((step.name, elapsed, outcome));".to_owned(),
+                    in_string: false,
                     replace: String::new(),
                     occurrence: Some(1),
                     packages: vec!["xtask".to_owned(), "cortex-base".to_owned()],
@@ -1090,5 +1179,40 @@ expect: survives
         assert!(!names_test("a_refused_call_stops_the_turn", binary, name));
         assert!(!names_test(&format!("cortex-agent {name}"), binary, name));
         assert!(!names_test("rounds::*", binary, name));
+    }
+
+    #[test]
+    fn an_in_string_stands_for_a_find_and_the_two_do_not_go_together() {
+        let text = |keys: &str| {
+            format!("[break] a\nrule: r\nfile: crates/demo/src/lib.rs\n{keys}replace: busy\n")
+        };
+
+        let one = parse("mutations/demo.breaks", &text("in-string: overloaded\n"))
+            .unwrap()
+            .remove(0);
+        assert_eq!((one.find.as_str(), one.in_string), ("overloaded", true));
+        let plain = parse("mutations/demo.breaks", &text("find: overloaded\n"))
+            .unwrap()
+            .remove(0);
+        assert!(!plain.in_string);
+        // The same words are two breaks: what a result is kept for differs.
+        assert_ne!(one.definition(), plain.definition());
+        // A plain break's definition has not changed, so its results stay.
+        assert!(!plain.definition().contains("in-string"));
+
+        for (keys, expected) in [
+            (
+                "find: a\nin-string: b\n",
+                "demo.breaks:4: break `a` has a `find` and an `in-string`",
+            ),
+            (
+                "in-string:\n",
+                "demo.breaks:4: `in-string` is empty in break `a`",
+            ),
+            ("", "demo.breaks:1: break `a` has no `find`"),
+        ] {
+            let error = parse("mutations/demo.breaks", &text(keys)).unwrap_err();
+            assert!(error.contains(expected), "{keys}: {error}");
+        }
     }
 }
