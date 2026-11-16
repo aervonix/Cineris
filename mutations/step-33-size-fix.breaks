@@ -144,3 +144,32 @@ find: if let Some(host) = cortex_llm::http::host_outside_ascii(&info.base_url) {
 replace: if let Some(host) = cortex_llm::http::host_outside_ascii(&info.base_url[..0]) {
 caught-by:
     provider::tests::a_base_url_whose_host_is_outside_ascii_is_refused_with_its_xn_form_named
+
+# Added after the independent review: the two cases the check missed.
+
+[break] a-name-outside-ascii-is-passed-over
+rule: In a binary, a home folder whose user's name starts with a letter outside ASCII is still found.
+file: xtask/src/rules/home_paths.rs
+in: find_in
+find: is_name_byte(byte) || (packed && byte >= 0x80)
+replace: is_name_byte(byte)
+caught-by:
+    shipped::tests::a_name_outside_ascii_and_the_builds_own_home_are_found
+
+[break] the-builds-own-home-is-not-looked-for
+rule: The build's own home folder is looked for by name, whatever its shape (`/root` in a container).
+file: xtask/src/shipped.rs
+in: own_folders
+find: ("the build's home folder", home_folder())
+replace: ("the build's home folder", None)
+caught-by:
+    shipped::tests::a_name_outside_ascii_and_the_builds_own_home_are_found
+
+[break] a-longer-folder-is-taken-for-the-home
+rule: The build's own folder is matched as a whole folder, not as the start of a longer name.
+file: xtask/src/shipped.rs
+in: home_paths
+find: if bytes.get(end).is_none_or(|&byte| !is_folder_name_byte(byte)) {
+replace: if true {
+caught-by:
+    shipped::tests::a_name_outside_ascii_and_the_builds_own_home_are_found

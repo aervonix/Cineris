@@ -136,6 +136,12 @@ fn sysroot() -> Option<PathBuf> {
 /// for the build (`CARGO_ENCODED_RUSTFLAGS`, else `RUSTFLAGS`, which cargo
 /// would otherwise read and which this replaces), then one
 /// `--remap-path-prefix` for each of `remaps`.
+///
+/// Set, it also takes the place of every `rustflags` in cargo's
+/// configuration (`build.rustflags`, `target.<triple>.rustflags` and their
+/// variables). The repository sets none (`.cargo/config.toml` holds only the
+/// `xtask` alias); one added there would not reach the shipped build unless
+/// it is read here too.
 pub(crate) fn encoded_rustflags(
     encoded: Option<&str>,
     plain: Option<&str>,
@@ -191,10 +197,12 @@ pub(crate) fn build(target: Option<&str>) -> Result<()> {
 }
 
 /// How many places a file holds a path under a home folder, each kind
-/// once: `/home/<user>`, `C:\Users\<user>` and the build's cargo home, as
-/// descriptions with the user's name left out, each with how often it
-/// occurs and an example of what follows it.
-pub(crate) fn home_paths(bytes: &[u8], cargo_home: Option<&Path>) -> Vec<String> {
+/// once: `/home/<user>`, `C:\Users\<user>`, and each of `own`, this
+/// build's own folders by name (its cargo home, its home folder, which may
+/// be of no common shape: `/root` in a container), as descriptions with the
+/// user's name left out, each with how often it occurs and an example of
+/// what follows it.
+pub(crate) fn home_paths(bytes: &[u8], own: &[(&str, &Path)]) -> Vec<String> {
     let mut found: Vec<(String, usize, String)> = Vec::new();
     let mut note = |kind: String, end: usize| {
         let example: String = String::from_utf8_lossy(&bytes[end..bytes.len().min(end + 60)])
@@ -209,15 +217,23 @@ pub(crate) fn home_paths(bytes: &[u8], cargo_home: Option<&Path>) -> Vec<String>
     for (start, path) in home_paths::find_in_binary(bytes) {
         note(without_the_user(&path), start + path.len());
     }
-    if let Some(cargo_home) = cargo_home {
-        let text = cargo_home.to_string_lossy();
-        // A short one would be found in ordinary text.
-        if text.len() >= 4 {
-            let mut spellings = vec![text.to_string(), text.replace('\\', "/")];
-            spellings.dedup();
-            for spelling in spellings {
-                for start in find_all(bytes, spelling.as_bytes()) {
-                    note("the build's CARGO_HOME".to_owned(), start + spelling.len());
+    for (name, folder) in own {
+        let text = folder.to_string_lossy();
+        // A drive's root, or a short name, would be found in ordinary text.
+        if folder.parent().is_none() || text.len() < 4 {
+            continue;
+        }
+        let mut spellings = vec![text.to_string(), text.replace('\\', "/")];
+        spellings.dedup();
+        for spelling in spellings {
+            for start in find_all(bytes, spelling.as_bytes()) {
+                let end = start + spelling.len();
+                // The folder itself, not a longer name that starts with it.
+                if bytes
+                    .get(end)
+                    .is_none_or(|&byte| !is_folder_name_byte(byte))
+                {
+                    note((*name).to_owned(), end);
                 }
             }
         }
@@ -228,6 +244,23 @@ pub(crate) fn home_paths(bytes: &[u8], cargo_home: Option<&Path>) -> Vec<String>
             format!("{kind}, {count} times; the first followed by `{example}`")
         })
         .collect()
+}
+
+/// A byte that can continue a folder's name: the end of a match is not
+/// the end of the folder when one follows.
+fn is_folder_name_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-') || byte >= 0x80
+}
+
+/// This build's own folders, for [`home_paths`].
+fn own_folders() -> Vec<(&'static str, PathBuf)> {
+    [
+        ("the build's CARGO_HOME", cargo_home()),
+        ("the build's home folder", home_folder()),
+    ]
+    .into_iter()
+    .filter_map(|(name, folder)| Some((name, folder?)))
+    .collect()
 }
 
 /// A home path with the user's name taken out: `/home/<user>`.
@@ -256,9 +289,14 @@ fn find_all(bytes: &[u8], needle: &[u8]) -> Vec<usize> {
 pub(crate) fn check_file(path: &Path) -> Result<()> {
     let bytes =
         fs::read(path).map_err(|error| format!("could not read {}: {error}", path.display()))?;
-    let found = home_paths(&bytes, cargo_home().as_deref());
+    let own = own_folders();
+    let own: Vec<(&str, &Path)> = own
+        .iter()
+        .map(|(name, folder)| (*name, folder.as_path()))
+        .collect();
+    let found = home_paths(&bytes, &own);
     if found.is_empty() {
-        println!("  paths    none under a home folder or cargo's home");
+        println!("  paths    none under a home folder, cargo's home or this build's home");
         return Ok(());
     }
     Err(format!(
@@ -366,7 +404,7 @@ mod tests {
         }
         bytes.extend_from_slice(windows.as_bytes());
         bytes.push(0);
-        let found = home_paths(&bytes, None);
+        let found = home_paths(&bytes, &[]);
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(
             found[0].starts_with("/home/<user>, 3 times")
@@ -384,7 +422,7 @@ mod tests {
     fn a_path_packed_against_the_string_before_it_is_found() {
         // A binary's strings have nothing between them.
         let bytes = format!("src/lib.rs{}/src/x.rs", joined(&["", "home", "ada"], "/"));
-        let found = home_paths(bytes.as_bytes(), None);
+        let found = home_paths(bytes.as_bytes(), &[]);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].starts_with("/home/<user>, 1 times"), "{found:?}");
     }
@@ -395,10 +433,26 @@ mod tests {
         let backslashes = joined(&["d:", "A", "_temp", "cargo", "registry"], "\\");
         let forward = joined(&["D:", "a", "_temp", "cargo", "git"], "/");
         let bytes = format!("x{backslashes}\0{forward}\0").into_bytes();
-        let found = home_paths(&bytes, Some(&cargo_home));
+        let found = home_paths(&bytes, &[("the build's CARGO_HOME", cargo_home.as_path())]);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(
             found[0].starts_with("the build's CARGO_HOME, 2 times"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_name_outside_ascii_and_the_builds_own_home_are_found() {
+        let accented = joined(&["", "home", "\u{e9}mile", "src"], "/");
+        let root = joined(&["", "root", ".cargo", "registry"], "/");
+        let bytes = format!("{accented}\0{root}\0/rootfs/etc\0").into_bytes();
+        let found = home_paths(&bytes, &[("the build's home folder", Path::new("/root"))]);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found[0].starts_with("/home/<user>, 1 times"), "{found:?}");
+        // `/rootfs` is another folder, not the home folder.
+        assert!(
+            found[1].starts_with("the build's home folder, 1 times")
+                && found[1].ends_with("`/.cargo/registry`"),
             "{found:?}"
         );
     }
@@ -410,7 +464,10 @@ mod tests {
             ./target/dist/build/x/out/generated.rs\0/rustc/58cf8f9c3/library/core/src/str/mod.rs\0\
             ~/.config/cortex-harness\0";
         assert_eq!(
-            home_paths(bytes, Some(Path::new("/opt/cargo"))),
+            home_paths(
+                bytes,
+                &[("the build's CARGO_HOME", Path::new("/opt/cargo"))]
+            ),
             Vec::<String>::new()
         );
     }
