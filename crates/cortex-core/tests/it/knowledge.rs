@@ -189,34 +189,6 @@ fn waiting(id: &str) -> cortex_testkit::Response {
     run(id, WAITS)
 }
 
-/// Sends a prompt and waits for its turn to end, refusing every call that
-/// is asked about. Returns the tools that were asked about, in order.
-///
-/// A test that only needs to know that a command asks refuses it: a
-/// command that runs costs a shell's start, which on Windows is a third
-/// of a second.
-async fn turn_denying(front: &Front, text: &str) -> Vec<String> {
-    let before = front.ends().len();
-    front.prompt(text).await;
-    let mut asked = Vec::new();
-    loop {
-        front
-            .until(|seen| {
-                front.ends().len() > before
-                    || crate::requests_in(seen)
-                        .iter()
-                        .any(|(id, _)| !front.answered.borrow().contains(id))
-            })
-            .await;
-        if front.ends().len() > before {
-            return asked;
-        }
-        let (id, request) = front.approval().await;
-        asked.push(request.tool.clone());
-        front.answer(&id, ApprovalChoice::Deny).unwrap();
-    }
-}
-
 /// A test command the observer saw succeed twice in this project: active,
 /// with an expiry, and not accepted.
 fn learned(world: &World, line: &str) -> (Project, cortex_protocol::ids::EntryId) {
@@ -319,7 +291,7 @@ fn sys_a_command_seen_to_succeed_twice_is_learned_told_and_runs_unasked_once_acc
 
         // Active is not accepted: it reaches the model, as a notice in the
         // epoch that began without it, and it still asks.
-        assert_eq!(turn_denying(&front, "a third time").await, ["shell"]);
+        assert_eq!(front.turn_denying("a third time").await, ["shell"]);
         let third = world.provider.requests()[4].clone();
         let sent: String = third.messages.iter().map(texts).collect();
         assert!(sent.contains(PROFILE_CHANGED), "{sent}");
@@ -336,7 +308,7 @@ fn sys_a_command_seen_to_succeed_twice_is_learned_told_and_runs_unasked_once_acc
 
         // Turned off, it asks again, at once.
         change(&front, &id, EntryAction::Disable).await;
-        assert_eq!(turn_denying(&front, "a fifth").await, ["shell"]);
+        assert_eq!(front.turn_denying("a fifth").await, ["shell"]);
         // And it is not learned again from that run.
         assert_eq!(list(&front).await[0].status, EntryStatus::Disabled);
         front.close().await;
@@ -372,7 +344,7 @@ fn an_accepted_command_waits_for_the_projects_trust() {
     let core = world.core();
     world.run(async {
         let front = Front::start(&world, &core).await;
-        assert_eq!(turn_denying(&front, "test it").await, ["shell"]);
+        assert_eq!(front.turn_denying("test it").await, ["shell"]);
         assert!(
             front
                 .notices()
@@ -521,7 +493,7 @@ fn sys_a_repositorys_shared_file_is_proposals_until_the_user_accepts_them() {
         let front = Front::start(&world, &core).await;
         // Even in a trusted project: nothing of it in the prompt, and the
         // command asks.
-        assert_eq!(turn_denying(&front, "test it").await, ["shell"]);
+        assert_eq!(front.turn_denying("test it").await, ["shell"]);
         let first = &world.provider.requests()[0];
         assert!(
             !first.system.contains("Project profile"),
@@ -639,7 +611,7 @@ fn sys_a_change_of_level_keeps_what_was_accepted_and_nothing_that_was_turned_off
         change(&front, &id, EntryAction::Disable).await;
         level(Level::ReadOnly).await.unwrap();
         level(Level::Supervised).await.unwrap();
-        assert_eq!(turn_denying(&front, "again").await, ["shell"]);
+        assert_eq!(front.turn_denying("again").await, ["shell"]);
         front.close().await;
     });
 }
@@ -1461,17 +1433,13 @@ fn sys_a_learned_command_turned_off_while_an_earlier_call_waits_is_asked_about()
         front.turns(2).await;
         // Results are listed as they completed: the command's is found by
         // its tool.
-        assert_eq!(
-            front
-                .results()
-                .into_iter()
-                .find(|result| result.0 == "shell")
-                .map(|result| result.1)
-                .as_deref(),
-            Some("denied"),
-            "{:?}",
-            front.results()
-        );
+        let shell = front
+            .results()
+            .into_iter()
+            .find(|result| result.0 == "shell")
+            .map(|result| result.1)
+            .expect("a shell result");
+        assert_eq!(shell, "denied", "{:?}", front.results());
         front.close().await;
     });
 }
@@ -1505,7 +1473,7 @@ fn sys_a_command_turned_off_while_the_level_changes_stays_off() {
         level.await.unwrap();
         // At `read-only` a command no rule allows is asked about; the
         // learned rule would have let it run.
-        assert_eq!(turn_denying(&front, "test it").await, ["shell"]);
+        assert_eq!(front.turn_denying("test it").await, ["shell"]);
         front.close().await;
     });
 }
@@ -1688,7 +1656,7 @@ fn sys_a_snapshot_another_change_overtook_does_not_put_a_rule_back() {
             assert_eq!(look.timed_out(), 0);
         });
         assert_eq!(
-            turn_denying(&front, "again").await,
+            front.turn_denying("again").await,
             ["shell"],
             "the command that was turned off ran without asking"
         );
