@@ -96,6 +96,19 @@ pub struct ListenOptions {
     pub widen_access_for_tests: bool,
 }
 
+impl ListenOptions {
+    /// A listener's options: at the server's own default place when
+    /// `own_folder`, at one the user named otherwise.
+    #[must_use]
+    pub fn new(own_folder: bool) -> Self {
+        Self {
+            own_folder,
+            #[cfg(feature = "test-hooks")]
+            widen_access_for_tests: false,
+        }
+    }
+}
+
 /// What a listener's next connection came to.
 #[derive(Debug)]
 pub enum Accepted {

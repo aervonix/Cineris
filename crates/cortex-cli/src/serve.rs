@@ -94,6 +94,12 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
         };
     let rpc = &loaded.settings.rpc;
     options.approval_timeout = approval_timeout(rpc);
+    // Only the server's own command line or configuration may let a client
+    // ask for `unrestricted`.
+    let allow_unrestricted = matches!(
+        loaded.settings.permissions.mode,
+        cortex_protocol::lease::Level::Unrestricted
+    );
     let stalled_client = rpc.stalled_client;
     let over = match serve.socket.clone() {
         None => Over::Stdio,
@@ -117,7 +123,7 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
         .spawn(move || {
             let code = core_thread(
                 options,
-                (stalled_client, over),
+                (stalled_client, allow_unrestricted, over),
                 (&core_stop, &core_ending),
                 &ready,
                 name,
@@ -243,7 +249,7 @@ async fn poll_either(first: impl Future<Output = ()>, second: impl Future<Output
 /// exit code.
 fn core_thread(
     options: cortex_core::CoreOptions,
-    (stalled_client, over): (Duration, Over),
+    (stalled_client, allow_unrestricted, over): (Duration, bool, Over),
     (stop, ending): (&CancelToken, &CancelToken),
     ready: &std::sync::mpsc::Receiver<()>,
     name: &str,
@@ -276,6 +282,7 @@ fn core_thread(
         let timer: SharedTimer = Arc::new(TokioTimer);
         let mut serving = ServeOptions::new(timer);
         serving.stalled_client = stalled_client;
+        serving.allow_unrestricted = allow_unrestricted;
         let Over::Socket {
             named,
             runtime,
@@ -296,10 +303,7 @@ fn core_thread(
                 }
             },
         };
-        let listen = ListenOptions {
-            own_folder,
-            ..ListenOptions::default()
-        };
+        let listen = ListenOptions::new(own_folder);
         let listener = match Listener::bind(&place, &listen) {
             Ok(listener) => listener,
             Err(error) => {

@@ -264,3 +264,107 @@ replace: Some(rpc.approval_timeout)
 caught-by:
     cortex-cli::bin/cortex serve::tests::the_approval_time_limit_is_the_settings_and_nothing_is_none
 
+[break] unrestricted-reaches-the-core-from-any-client
+rule: A client may ask for a session at `unrestricted` only when the server's own command line or configuration allows it.
+file: crates/cortex-rpc/src/connection.rs
+in: Connection::request
+find: op if !self.shared.options.allow_unrestricted && asks_for_unrestricted(&op) => {
+replace: op if false && asks_for_unrestricted(&op) => {
+caught-by:
+    cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
+
+[break] an-override-of-the-mode-passes-the-gate
+rule: A configuration override of `permissions.mode` to `unrestricted`, nested, dotted or in a profile, is refused as the level is.
+file: crates/cortex-rpc/src/connection.rs
+in: sets_unrestricted
+find: && (key == "permissions.mode" || key.ends_with(".permissions.mode"))
+replace: && key == "level"
+caught-by:
+    cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
+
+[break] the-servers-own-command-is-served
+rule: A peer whose line of parents reaches the server's process is one of its own commands, and is closed unanswered.
+file: crates/cortex-rpc/src/socket/unix.rs
+in: descends_from
+find: Some(parent) if parent == server => return true,
+replace: Some(parent) if parent == server => return false,
+caught-by:
+    cortex-rpc::it socket::sys_one_of_the_servers_own_commands_is_refused
+
+[break] another-users-peer-is-served
+rule: Every peer's credentials must name the server's own effective uid.
+file: crates/cortex-rpc/src/socket/unix.rs
+in: Listener::accept
+find: if peer.uid() != self.uid {
+replace: if peer.uid() == u32::MAX {
+caught-by:
+    cortex-cli::system serve::sys_another_user_is_refused_at_the_socket
+
+[break] the-socket-keeps-the-umasks-mode
+rule: The socket is made 0600 right after it is bound.
+file: crates/cortex-rpc/src/socket/unix.rs
+in: Listener::bind
+find: std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+replace: let _ = 0;
+caught-by:
+    cortex-rpc::it socket::the_socket_is_the_users_alone_and_is_removed_at_the_end
+
+[break] a-live-socket-is-removed
+rule: A socket at the path is removed only when a connect to it is refused: a live server's is kept.
+file: crates/cortex-rpc/src/socket/unix.rs
+in: clear
+find:
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            format!("a server already listens at {}", socket.display()),
+        )),
+replace:
+        Ok(_) => std::fs::remove_file(socket),
+caught-by:
+    cortex-rpc::it socket::a_place_in_use_is_refused_and_a_stale_socket_cleared
+
+[break] a-folder-others-write-in-is-taken
+rule: A folder the user names must be theirs with no write for group or others, or root's with the sticky bit.
+file: crates/cortex-rpc/src/socket/unix.rs
+in: check_named_folder
+find: let theirs = found.uid() == uid && mode & 0o022 == 0;
+replace: let theirs = found.uid() == uid;
+caught-by:
+    cortex-rpc::it socket::the_folder_is_secured_before_the_socket_exists
+
+[break] the-own-folder-is-not-checked
+rule: The server's own folder must be its user's alone: an existing one open to others refuses the start.
+file: crates/cortex-rpc/src/socket/unix.rs
+in: check_own_folder
+find: if found.mode() & 0o077 != 0 {
+replace: if found.mode() & 0o077 == 0o077 {
+caught-by:
+    cortex-rpc::it socket::the_folder_is_secured_before_the_socket_exists
+
+[break] a-silent-connection-is-kept
+rule: A socket's connection that does not say `initialize` within its bound is closed.
+file: crates/cortex-rpc/src/connection.rs
+in: Connection::serve
+find:
+            let Some(step) = step else {
+                return Ended::Silent;
+            };
+replace:
+            let Some(step) = step else {
+                continue;
+            };
+caught-by:
+    cortex-rpc::it socket::silent_connections_and_too_many_are_closed
+
+[break] one-clients-shutdown-ends-only-its-own
+rule: A client's `shutdown` ends the server: every other connection with it.
+file: crates/cortex-rpc/src/server.rs
+in: serve_socket
+find:
+                        // Every other connection ends with this one.
+                        stop.cancel();
+replace:
+                        // Every other connection ends with this one.
+caught-by:
+    cortex-rpc::it socket::a_clients_shutdown_ends_the_server
+
