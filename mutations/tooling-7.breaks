@@ -68,3 +68,2326 @@ find: Os::Windows => 0.015
 replace: Os::Windows => 0.008
 caught-by:
     tiers::tests::a_start_above_the_ceiling_warns_and_one_below_does_not
+
+# From mutations/tooling-7-api.breaks (part `api`).
+# The seventh tooling step, `api-diff` and the options of `scratch-test` that
+# make it a measurement. Written with the code, and run with
+# `cargo xtask mutate tooling-7`.
+
+# ----------------------------------------------------------- api-diff: reading
+
+[break] api-reads-a-format-it-was-not-written-for
+rule: A rustdoc JSON file of a format this reader was not written for is refused, with the numbers.
+file: xtask/src/api_diff/read.rs
+in: read
+find: if !SUPPORTED_FORMATS.contains(&version) {
+replace: if false {
+caught-by:
+    api_diff::read::tests::a_format_the_reader_was_not_written_for_is_refused_with_both_numbers
+
+[break] api-reads-json-that-has-private-items
+rule: JSON made with the private items in it is refused: it would list what a user cannot reach.
+file: xtask/src/api_diff/read.rs
+in: read
+find: if json.get("includes_private").and_then(Value::as_bool) == Some(true) {
+replace: if false {
+caught-by:
+    api_diff::read::tests::json_with_private_items_is_refused
+
+[break] api-lists-what-is-not-public
+rule: Only an item that is public is listed.
+file: xtask/src/api_diff/read.rs
+in: walk
+find: if child["visibility"] != "public" {
+replace: if false {
+caught-by:
+    api_diff::read::tests::only_what_is_public_is_listed
+
+[break] api-compares-the-names-of-arguments
+rule: The names of a function's arguments are shown and do not make a change: a caller does not see them.
+file: xtask/src/api_diff/read.rs
+in: both_styles
+find: (make(Style { names: true }), make(Style { names: false }))
+replace: (make(Style { names: true }), make(Style { names: true }))
+caught-by:
+    api_diff::read::tests::the_names_of_arguments_are_shown_and_do_not_count
+
+[break] api-lists-the-impls-rustdoc-adds-to-every-type
+rule: The auto-trait and blanket impls rustdoc adds to every type are left out.
+file: xtask/src/api_diff/read.rs
+in: impl_rows
+find: if !imp["blanket_impl"].is_null()
+replace: if false
+caught-by:
+    api_diff::read::tests::what_rustdoc_adds_to_every_type_is_left_out_and_a_type_that_is_not_send_is_not
+
+[break] api-lists-the-auto-trait-impls
+rule: An auto-trait impl rustdoc adds (`Sync`) is left out.
+file: xtask/src/api_diff/read.rs
+in: impl_rows
+find: (flag(&imp["is_synthetic"]) && !flag(&imp["is_negative"]))
+replace: false
+caught-by:
+    api_diff::read::tests::what_rustdoc_adds_to_every_type_is_left_out_and_a_type_that_is_not_send_is_not
+
+[break] api-drops-the-impl-of-a-type-that-is-not-send
+rule: A type that is not `Send` is an `impl !Send` and stays in the list: becoming not `Send` is a change.
+file: xtask/src/api_diff/read.rs
+in: impl_rows
+find: (flag(&imp["is_synthetic"]) && !flag(&imp["is_negative"]))
+replace: flag(&imp["is_synthetic"])
+caught-by:
+    api_diff::read::tests::what_rustdoc_adds_to_every_type_is_left_out_and_a_type_that_is_not_send_is_not
+
+[break] api-merges-members-of-one-path
+rule: Two entries of one path (a method of one name in two `impl`s) are told apart by their `impl`, not one over the other.
+file: xtask/src/api_diff/read.rs
+in: finish
+find: if counts.get(&key).copied().unwrap_or(0) > 1 {
+replace: if false {
+caught-by:
+    api_diff::read::tests::methods_of_one_name_in_two_impls_are_told_apart_by_the_impl
+
+[break] api-prefers-a-reexport-to-where-an-item-is-defined
+rule: An item defined in a public module is full at that path, and a reexport of it is a `use`.
+file: xtask/src/api_diff/read.rs
+in: api
+find: !exposure.direct
+replace: exposure.direct
+caught-by:
+    api_diff::read::tests::an_item_defined_in_a_public_module_is_there_and_a_reexport_is_a_use_of_it
+
+[break] api-prefers-the-longest-path-of-a-reexport
+rule: An item that is reached only by reexports is full at the shortest of the paths, and a `use` at the others.
+file: xtask/src/api_diff/read.rs
+in: api
+find: exposure.path.matches("::").count()
+replace: 0
+caught-by:
+    api_diff::read::tests::an_item_in_a_private_module_is_at_the_shortest_of_the_paths_that_reexport_it
+
+[break] api-puts-a-field-in-the-namespace-of-methods
+rule: A field and a method of one name are two entries.
+file: xtask/src/api_diff/read.rs
+in: field_rows
+find: Space::Field
+replace: Space::Value
+caught-by:
+    api_diff::read::tests::a_field_and_a_method_of_one_name_are_not_one_entry
+
+[break] api-forgets-non-exhaustive
+rule: An item that is `#[non_exhaustive]` says so: it cannot be built or matched by hand.
+file: xtask/src/api_diff/read.rs
+in: attr_prefix
+find: if attr == "non_exhaustive" {
+replace: if false {
+caught-by:
+    api_diff::read::tests::a_real_crate_is_read_as_the_signatures_its_source_has
+
+[break] api-forgets-that-a-trait-method-has-a-default
+rule: A trait method with a default says so; a required one does not (adding a required method breaks implementors).
+file: xtask/src/api_diff/read.rs
+in: member_row
+find: if in_trait && flag(&inner["has_body"]) {
+replace: if false {
+caught-by:
+    api_diff::read::tests::a_trait_method_with_a_default_says_so_and_a_required_one_does_not
+
+[break] api-forgets-the-private-fields-of-a-struct
+rule: A struct with a private field says so: it cannot be built with a literal.
+file: xtask/src/api_diff/read.rs
+in: item_rows
+find: if flag(&plain["has_stripped_fields"]) {
+replace: if false {
+caught-by:
+    api_diff::read::tests::a_real_crate_is_read_as_the_signatures_its_source_has
+
+[break] api-lists-the-generics-impl-trait-makes-up
+rule: The parameter that `impl Trait` in an argument makes up is not a generic parameter of the function.
+file: xtask/src/api_diff/read.rs
+in: params
+find: .filter(|param| !is_synthetic(param))
+replace: .filter(|_| true)
+caught-by:
+    api_diff::read::tests::bounds_are_written_as_rust_writes_them
+
+[break] api-writes-a-maybe-bound-as-a-bound
+rule: `?Sized` is written as it is: it relaxes a bound.
+file: xtask/src/api_diff/read.rs
+in: bound
+find: Some("maybe") => "?".to_owned(),
+replace: Some("maybe") => String::new(),
+caught-by:
+    api_diff::read::tests::bounds_are_written_as_rust_writes_them
+
+[break] api-forgets-the-variadic-argument
+rule: A C-variadic function says so.
+file: xtask/src/api_diff/read.rs
+in: function
+find: if flag(&sig["is_c_variadic"]) {
+replace: if false {
+caught-by:
+    api_diff::read::tests::a_real_crate_is_read_as_the_signatures_its_source_has
+
+[break] api-says-nothing-of-the-impl-a-method-is-in
+rule: A method of an `impl` with generics or bounds says which `impl`: its bounds are part of when it can be called.
+file: xtask/src/api_diff/read.rs
+in: member_row
+find: shown.push_str(&format!(" (in {context})"));
+replace: let _ = &context;
+caught-by:
+    api_diff::read::tests::methods_of_one_name_in_two_impls_are_told_apart_by_the_impl
+
+[break] api-gives-an-impl-no-owner
+rule: An `impl` belongs to the local type or trait it is for, so that it is left out of a report beside the type that was added with it.
+file: xtask/src/api_diff/read.rs
+in: impl_rows
+find: let owner = self_home.or(trait_home).cloned();
+replace: let owner: Option<String> = None;
+caught-by:
+    api_diff::read::tests::an_impl_and_what_it_fixes_belong_to_the_type_they_are_for
+
+[break] api-gives-what-an-impl-fixes-no-owner
+rule: The associated type an `impl` fixes belongs to the same owner as the `impl`.
+file: xtask/src/api_diff/read.rs
+in: impl_rows
+find: row.entry.owner.clone_from(&owner);
+replace: let _ = &owner;
+caught-by:
+    api_diff::read::tests::an_impl_and_what_it_fixes_belong_to_the_type_they_are_for
+
+# ----------------------------------------------------------- api-diff: comparing
+
+[break] api-judges-a-change-on-what-is-shown
+rule: A change is judged on the signature without the names of arguments, not on how it is shown.
+file: xtask/src/api_diff/diff.rs
+in: compare
+find: old.kind != entry.kind || old.identity != entry.identity
+replace: old.kind != entry.kind || old.shown != entry.shown
+caught-by:
+    api_diff::diff::tests::a_change_is_judged_on_the_identity_and_not_on_what_is_shown
+
+[break] api-ignores-a-change-of-kind
+rule: An item that became another kind is changed even if its signature reads the same.
+file: xtask/src/api_diff/diff.rs
+in: compare
+find: old.kind != entry.kind ||
+replace: false ||
+caught-by:
+    api_diff::diff::tests::an_item_that_became_another_kind_is_changed_even_with_one_signature
+
+[break] api-lists-the-impls-of-an-added-type
+rule: The impls of a type added in the same change come with the type and are not listed beside it.
+file: xtask/src/api_diff/diff.rs
+in: compare
+find: .is_some_and(|owner| added_paths.contains(owner));
+replace: .is_some_and(|owner| owner.is_empty());
+caught-by:
+    api_diff::diff::tests::the_impls_of_a_type_added_or_removed_with_it_are_not_listed_beside_it
+
+[break] api-lists-the-impls-of-a-removed-type
+rule: The impls of a type removed in the same change go with the type and are not listed beside it.
+file: xtask/src/api_diff/diff.rs
+in: compare
+find: .is_some_and(|owner| removed_paths.contains(owner));
+replace: .is_some_and(|owner| owner.is_empty());
+caught-by:
+    api_diff::diff::tests::the_impls_of_a_type_added_or_removed_with_it_are_not_listed_beside_it
+
+[break] api-lists-in-the-wrong-order
+rule: The report is in the order of the paths, the same every run.
+file: xtask/src/api_diff/diff.rs
+in: compare
+find: deltas.sort_by(|a, b| a.key.cmp(&b.key));
+replace: deltas.sort_by(|a, b| b.key.cmp(&a.key));
+caught-by:
+    api_diff::diff::tests::items_added_removed_and_changed_come_out_in_the_order_of_their_paths
+
+[break] api-breaks-a-markdown-table-on-a-bar
+rule: A `|` in a signature is escaped in a Markdown table, or it ends the cell.
+file: xtask/src/api_diff/diff.rs
+in: code
+find: text.replace('|', "\\|")
+replace: text.to_owned()
+caught-by:
+    api_diff::diff::tests::the_report_as_markdown_is_a_table_for_each_crate_with_changes
+
+[break] api-names-the-crates-that-changed-as-unchanged
+rule: The crates with no difference are named on one line, and those with differences are not.
+file: xtask/src/api_diff/diff.rs
+in: unchanged
+find: .filter(|krate| krate.deltas.is_empty())
+replace: .filter(|krate| !krate.deltas.is_empty())
+caught-by:
+    api_diff::diff::tests::the_report_as_text_has_a_line_for_an_addition_and_three_for_a_change
+    api_diff::diff::tests::the_report_as_markdown_is_a_table_for_each_crate_with_changes
+
+# ----------------------------------------------------------- api-diff: the command
+
+[break] api-names-a-crate-twice
+rule: A crate named twice is compared once.
+file: xtask/src/api_diff.rs
+in: select
+find: if !chosen.contains(name) {
+replace: if true {
+caught-by:
+    api_diff::tests::the_crates_are_those_named_or_every_one_with_a_library_in_either_tree
+
+[break] api-compares-a-crate-with-no-library
+rule: A crate with no library is refused by name, where there is no API to compare.
+file: xtask/src/api_diff.rs
+in: select
+find: } else if packages.iter().any(|package| &package.name == name) {
+replace: } else if false {
+caught-by:
+    api_diff::tests::the_crates_are_those_named_or_every_one_with_a_library_in_either_tree
+
+[break] api-has-no-proc-macro-libraries
+rule: A proc-macro crate has a library to compare.
+file: xtask/src/api_diff.rs
+in: libraries
+find: "lib" | "rlib" | "proc-macro"
+replace: "lib" | "rlib"
+caught-by:
+    api_diff::tests::a_library_is_a_package_with_a_lib_target_and_its_file_has_underscores
+
+[break] api-looks-for-a-json-file-with-dashes
+rule: rustdoc writes a library's JSON file under its name with underscores.
+file: xtask/src/api_diff.rs
+in: libraries
+find: target.name.replace('-', "_")
+replace: target.name.clone()
+caught-by:
+    api_diff::tests::a_library_is_a_package_with_a_lib_target_and_its_file_has_underscores
+
+[break] api-has-no-main-to-fall-back-from
+rule: Where there is no `main` the default ref is `origin/main`, which a checkout of a branch from the remote has.
+file: xtask/src/api_diff.rs
+in: resolve
+find: _ if reference.is_none() => git(
+replace: _ if false => git(
+caught-by:
+    api_diff::tests::sys_main_is_the_default_ref_and_falls_back_to_origin_main
+
+[break] api-checks-out-in-a-clone-that-is-not-one
+rule: A damaged clone is not checked out in: git would find the session's own repository above it.
+file: xtask/src/api_diff.rs
+in: prepare_base
+find: .is_ok_and(|dir| dir == ".git")
+replace: .is_ok()
+caught-by:
+    api_diff::tests::sys_the_other_tree_moves_between_commits_and_the_repository_is_left_alone
+
+[break] api-runs-two-at-once
+rule: One `api-diff` at a time: a second is refused while the first holds the lock.
+file: xtask/src/workspace.rs
+in: lock_for_one_run
+find: match file.try_lock() {
+replace: match Ok::<(), TryLockError>(()) {
+caught-by:
+    api_diff::tests::a_second_run_is_refused_while_the_first_holds_the_lock
+
+[break] api-takes-markdown-for-text
+rule: `--format markdown` is read, and anything else but `text` is refused.
+file: xtask/src/api_diff.rs
+in: parse
+find: "markdown" | "md" => Format::Markdown,
+replace: "markdown" | "md" => Format::Text,
+caught-by:
+    api_diff::tests::a_request_is_read
+
+[break] api-documents-with-the-stable-compiler-alone
+rule: rustdoc's JSON needs unstable options, which the pinned stable toolchain takes with RUSTC_BOOTSTRAP=1.
+file: xtask/src/api_diff.rs
+in: document
+find: .env("RUSTC_BOOTSTRAP", "1")
+replace: .env("RUSTC_BOOTSTRAP", "0")
+expect: survives
+
+[break] api-asks-rustdoc-for-html
+rule: The flags ask rustdoc for JSON. Only the ignored `sys_the_real` test of `api_diff` runs rustdoc, and `mutate` runs no ignored test, so it is not caught here; `cargo xtask test -p xtask --run-ignored only sys_the_real` is what catches it.
+file: xtask/src/api_diff.rs
+find: const RUSTDOCFLAGS: &str = "-Z unstable-options --output-format json";
+replace: const RUSTDOCFLAGS: &str = "-Z unstable-options";
+expect: survives
+
+# ----------------------------------------------------------- scratch-test options
+
+[break] scratch-test-drops-the-cargo-profile
+rule: `--cargo-profile P` builds and runs the file in profile P.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: command.extend(["--cargo-profile".to_owned(), profile.clone()]);
+replace: let _ = profile;
+caught-by:
+    scratch_test::tests::a_cargo_profile_is_passed_to_nextest
+
+[break] scratch-test-ignored-runs-everything
+rule: `--ignored` runs the file's ignored tests alone.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: Ignored::Only => command.extend(["--run-ignored".to_owned(), "only".to_owned()]),
+replace: Ignored::Only => command.extend(["--run-ignored".to_owned(), "all".to_owned()]),
+caught-by:
+    scratch_test::tests::the_ignored_tests_are_run_alone_one_at_a_time_with_their_output_under_the_perf_profile
+
+[break] scratch-test-measures-under-the-default-limit
+rule: A run of ignored tests is a measurement and has nextest's `perf` profile, whose limit is half an hour.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: if measuring && !says(rest, "--profile", Some("-P")) {
+replace: if false {
+caught-by:
+    scratch_test::tests::the_ignored_tests_are_run_alone_one_at_a_time_with_their_output_under_the_perf_profile
+
+[break] scratch-test-overrides-the-callers-profile
+rule: A nextest profile the caller gave after `--` is theirs.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: if measuring && !says(rest, "--profile", Some("-P")) {
+replace: if measuring {
+caught-by:
+    scratch_test::tests::a_profile_or_no_capture_of_the_callers_is_not_given_twice
+
+[break] scratch-test-shows-no-output-of-a-measurement
+rule: A run of ignored tests shows the tests' output: a measurement is its output.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: if (measuring || options.no_capture) && !says(rest, "--no-capture", None) {
+replace: if options.no_capture && !says(rest, "--no-capture", None) {
+caught-by:
+    scratch_test::tests::the_ignored_tests_are_run_alone_one_at_a_time_with_their_output_under_the_perf_profile
+
+[break] scratch-test-gives-no-capture-twice
+rule: `--no-capture` is not given to nextest twice, which it refuses.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: (measuring || options.no_capture) && !says(rest, "--no-capture", None)
+replace: measuring || options.no_capture
+caught-by:
+    scratch_test::tests::a_profile_or_no_capture_of_the_callers_is_not_given_twice
+
+[break] scratch-test-takes-a-profile-that-is-a-flag
+rule: A cargo profile is a name, and `--cargo-profile=--x` is not one.
+file: xtask/src/scratch_test.rs
+in: parse
+find: profile.starts_with(['-', '_'])
+replace: false
+caught-by:
+    scratch_test::tests::the_options_are_read_and_a_bad_one_is_refused
+
+[break] scratch-test-takes-both-ignored-flags
+rule: `--ignored` and `--include-ignored` are two answers to one question: one is given.
+file: xtask/src/scratch_test.rs
+in: parse
+find: if options.ignored != Ignored::No && options.ignored != wanted {
+replace: if false {
+caught-by:
+    scratch_test::tests::the_options_are_read_and_a_bad_one_is_refused
+
+# From mutations/tooling-7-corpus.breaks (part `corpus`).
+# The seventh tooling step, the corpus of real code: `cargo xtask corpus`,
+# `cortex_testkit::corpus` and the fetch that `try`'s `perf -p CRATE` makes.
+# Written with the code, and run with `cargo xtask mutate tooling-7`.
+
+# ----------------------------------------------------------------- the hash
+
+[break] corpus-hash-ignores-the-content
+rule: The hash is of every file's content: a changed byte changes it.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: measure
+find: hash.write(&content);
+replace: let _ = &content;
+caught-by:
+    cortex-testkit corpus::tests::a_changed_byte_is_refused
+    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+
+[break] corpus-hash-ignores-the-path
+rule: The hash is of every file's path: the same bytes under another name are another corpus.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: measure
+find: hash.write(relative.as_bytes());
+replace: let _ = relative;
+caught-by:
+    cortex-testkit corpus::tests::a_file_under_another_name_is_refused
+    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+
+[break] corpus-listing-is-not-sorted
+rule: The files are hashed in the byte order of their paths, the same on every system.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: list
+find: files.sort_unstable();
+replace: files.reverse();
+caught-by:
+    cortex-testkit corpus::tests::the_listing_is_in_the_byte_order_of_the_paths_whatever_the_folder_says
+    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+
+[break] corpus-path-separator-is-the-systems
+rule: A file's path in the hash is written with `/` on every system, or the same corpus would hash differently on Windows.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: list
+find: format!("{prefix}/{name}")
+replace: format!("{prefix}{name}")
+caught-by:
+    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+
+[break] corpus-link-is-followed-as-a-file
+rule: A link is not a file of the corpus: it is refused, not followed.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: list
+find: } else if kind.is_file() {
+replace: } else if !kind.is_dir() {
+caught-by:
+    cortex-testkit corpus::tests::a_link_is_not_followed
+
+# ------------------------------------------------------------- verification
+
+[break] corpus-verify-accepts-any-hash
+rule: A corpus whose hash is not the pin's is refused: a changed byte of the same length, or a file renamed.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: verify
+find: if found.hash != pin.hash {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_changed_byte_is_refused
+    cortex-testkit corpus::tests::a_file_under_another_name_is_refused
+
+[break] corpus-verify-accepts-any-size
+rule: A corpus whose size is not the pin's is refused: a line ending that changed is a different size.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: verify
+find: if found.bytes != pin.bytes {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_line_ending_that_changed_is_refused
+
+[break] corpus-verify-accepts-any-count
+rule: A corpus with a file missing, or one that is not meant to be there, is refused by its count.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: verify
+find: if found.files != pin.files {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_missing_file_is_refused
+    cortex-testkit corpus::tests::an_extra_file_is_refused_even_when_empty
+
+[break] corpus-verify-accepts-a-folder-that-is-not-there
+rule: A corpus that is not there is refused, not measured as empty.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: verify
+find: if !dir.is_dir() {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_folder_that_is_not_there_is_refused
+
+[break] corpus-real-code-checks-the-repositorys-pin-whatever-it-is-asked
+rule: A corpus is checked against the pin it is asked for.
+file: crates/cortex-testkit/src/corpus.rs
+in: try_real_code_in
+find: shared::verify(&folder, pin)
+replace: shared::verify(&folder, &Pin::pinned())
+caught-by:
+    cortex-testkit corpus::tests::a_corpus_that_is_not_fetched_or_not_whole_fails_with_the_command_that_fetches_it
+
+# ----------------------------------------------------------- the pin's text
+
+[break] corpus-pin-takes-a-key-twice
+rule: A pin that gives a key twice is refused.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: Pin::parse
+find: if taken.is_some() {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_pin_is_read_from_its_text_and_a_bad_one_is_refused
+
+[break] corpus-pin-takes-a-short-hash
+rule: A pin's hash is sixteen digits, so that a cut-off line is not taken for a hash.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: parse_hash
+find: if value.len() != 16 {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_pin_is_read_from_its_text_and_a_bad_one_is_refused
+
+[break] corpus-folder-name-is-not-sixteen-digits
+rule: The corpus's folder is named by its hash in sixteen hexadecimal digits.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: Pin::name
+find: format!("{:016x}", self.hash)
+replace: format!("{:x}", self.hash)
+caught-by:
+    cortex-testkit corpus::tests::the_folder_of_a_corpus_is_named_by_its_hash
+
+# ----------------------------------------------------- where it is kept
+
+[break] corpus-variable-does-not-win
+rule: CORTEX_CORPUS_DIR names the place to keep corpora, before the system's own.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: cache_root
+find: if let Some(root) = given(ROOT_VARIABLE) {
+replace: if let Some(root) = given(ROOT_VARIABLE).filter(|_| false) {
+caught-by:
+    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+
+[break] corpus-empty-variable-is-a-place
+rule: A variable that is set and empty is not set.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: cache_root
+find: variable(name).filter(|value| !value.is_empty())
+replace: variable(name)
+caught-by:
+    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+
+[break] corpus-relative-variable-is-a-place
+rule: A relative place is refused: it would be another place in every folder the command runs in.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: cache_root
+find: if !root.is_absolute() {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+
+[break] corpus-windows-keeps-it-in-the-home
+rule: On Windows the corpus is kept in the local application data folder, not under `.cache` in the home folder.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: cache_root
+find: let base = if windows {
+replace: let base = if false {
+caught-by:
+    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+
+[break] corpus-relative-cache-folder-is-used
+rule: A cache folder (XDG_CACHE_HOME) that is not absolute is not used.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: cache_root
+find: .filter(|path| path.is_absolute())
+replace: .filter(|_| true)
+caught-by:
+    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+
+# ------------------------------------------------------------------ fetching
+
+[break] corpus-copies-more-than-rust
+rule: Only the `.rs` files of a crate are copied into the corpus.
+file: xtask/src/corpus.rs
+in: copy_rust_files
+find: entry.path().extension().is_some_and(|ext| ext == "rs")
+replace: entry.path().extension().is_some()
+caught-by:
+    corpus::tests::only_rust_files_are_copied_byte_for_byte_and_dated
+
+[break] corpus-copy-changes-a-byte
+rule: A file is copied byte for byte, line endings included.
+file: xtask/src/corpus.rs
+in: copy_rust_files
+find: file.write_all(&content)
+replace: file.write_all(&content[..content.len() - 1])
+caught-by:
+    corpus::tests::only_rust_files_are_copied_byte_for_byte_and_dated
+
+[break] corpus-copy-keeps-no-date
+rule: Every file of the corpus has the same old date, so that a freshly fetched tree is not one modified a moment ago.
+file: xtask/src/corpus.rs
+in: copy_rust_files
+find: .and_then(|()| file.set_modified(date))
+replace: .and_then(|()| Ok::<(), std::io::Error>(()))
+caught-by:
+    corpus::tests::only_rust_files_are_copied_byte_for_byte_and_dated
+
+[break] corpus-lock-takes-a-package-from-a-repository
+rule: The corpus is crates from a registry, at checksums: a package from a repository is refused.
+file: xtask/src/corpus.rs
+in: registry_packages
+find: if !(source.starts_with("registry+") || source.starts_with("sparse+")) {
+replace: if false {
+caught-by:
+    corpus::tests::the_lock_gives_each_registry_crate_and_refuses_one_from_elsewhere
+
+[break] corpus-fetch-puts-a-wrong-corpus-in-place
+rule: What was made is checked against the pin before it is put in place.
+file: xtask/src/corpus.rs
+in: must_be_the_pin
+find: if measured.as_pin() == *pin {
+replace: if true {
+caught-by:
+    corpus::tests::a_corpus_that_is_not_the_pin_is_refused_and_nothing_is_put_in_place
+
+[break] corpus-fetch-remakes-a-corpus-that-is-there
+rule: A corpus that is there and whole is used as it is, not fetched again.
+file: xtask/src/corpus.rs
+in: ensure
+find: return Ok((folder, measured));
+replace: drop(measured);
+caught-by:
+    corpus::tests::a_corpus_that_is_there_and_whole_is_not_made_again
+
+[break] corpus-fetch-keeps-a-corpus-that-is-not-whole
+rule: A corpus that is there and is not the pin is removed and made again.
+file: xtask/src/corpus.rs
+in: ensure
+find: remove(&folder)?;
+replace: ();
+caught-by:
+    corpus::tests::a_corpus_that_is_not_whole_is_made_again
+
+[break] corpus-fetch-leaves-its-work-folder
+rule: The folder a fetch works in is removed whatever came of it.
+file: xtask/src/corpus.rs
+in: ensure
+find: remove(&work).ok();
+replace: ();
+caught-by:
+    corpus::tests::a_missing_corpus_is_made_checked_and_put_in_place_and_nothing_is_left
+    corpus::tests::a_corpus_that_is_not_the_pin_is_refused_and_nothing_is_put_in_place
+
+[break] corpus-install-puts-nothing-in-place
+rule: A corpus that was made is put in its place.
+file: xtask/src/corpus.rs
+in: install
+find: if fs::rename(made, folder).is_ok() {
+replace: if true {
+caught-by:
+    corpus::tests::a_missing_corpus_is_made_checked_and_put_in_place_and_nothing_is_left
+    corpus::tests::a_corpus_another_fetch_put_in_place_meanwhile_is_kept_if_it_is_whole
+
+# ------------------------------------------------------------------- try
+
+[break] try-fetches-the-corpus-for-every-test-run
+rule: Only a run of the crates' perf tests fetches the corpus: a `test` run does not wait for it.
+file: xtask/src/try_run.rs
+in: reads_the_corpus
+find: pair[1] == "perf"
+replace: pair[1] != "zzz"
+caught-by:
+    try_run::tests::only_the_crates_perf_tests_fetch_the_corpus_of_real_code
+
+[break] try-fetches-no-corpus-for-perf-tests
+rule: `perf -p CRATE` fetches the corpus before it builds anything.
+file: xtask/src/try_run.rs
+in: reads_the_corpus
+find: command.first().is_some_and(|verb| verb == "test")
+replace: command.first().is_some_and(|verb| verb == "perf")
+caught-by:
+    try_run::tests::only_the_crates_perf_tests_fetch_the_corpus_of_real_code
+
+# From mutations/tooling-7-gates.breaks (part `gates`).
+# The seventh tooling step, gates: the points library code marks for a test
+# to hold (`cortex_base::hook`, `cortex_testkit::hold`), their rule in
+# `cargo xtask rules`, the race test of `write_atomic` that uses one, and
+# the stalled file of the reviewer's kit. Written with the code, and run
+# with `cargo xtask mutate tooling-7`.
+
+# ------------------------------------------------------------- the points
+
+[break] a-point-never-stops
+rule: A thread that reaches a point a test holds stops there.
+file: crates/cortex-base/src/hook.rs
+find: arrive(name);
+replace:
+packages: cortex-base, cortex-testkit
+caught-by:
+    hook::enabled::tests::a_thread_stops_at_a_held_point_until_the_hold_releases_it
+    hold::tests::a_hold_stops_a_thread_of_the_library_until_the_test_lets_it_go
+    cortex-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
+
+[break] a-release-does-not-release
+rule: Releasing a hold lets every thread stopped at its point go on.
+file: crates/cortex-base/src/hook.rs
+in: Hold::release
+find: lock(&self.shared.state).released = true;
+replace: lock(&self.shared.state).released = false;
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_thread_stops_at_a_held_point_until_the_hold_releases_it
+    hook::enabled::tests::the_nth_arrival_is_the_one_that_stops
+
+[break] a-dropped-hold-does-not-release
+rule: A hold that is dropped lets go what it stopped, so that a failing test never leaves a thread stopped.
+file: crates/cortex-base/src/hook.rs
+in: Hold::drop
+find: self.release();
+replace:
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_dropped_hold_releases_what_it_stopped
+
+[break] one-let-go-lets-every-thread-go
+rule: `let_one_go` lets one stopped thread go and keeps the others.
+file: crates/cortex-base/src/hook.rs
+in: Shared::arrive
+find: state.permits -= 1;
+replace:
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::one_thread_is_let_go_and_the_others_stay
+
+[break] the-first-arrival-stops-in-place-of-the-nth
+rule: With `skipping(n)` the first n arrivals pass and the next one stops.
+file: crates/cortex-base/src/hook.rs
+in: Shared::arrive
+find: state.arrivals <= state.skip
+replace: state.arrivals < state.skip
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::the_nth_arrival_is_the_one_that_stops
+
+[break] two-holds-of-one-point-live-together
+rule: A second hold of a point waits for the first to end, and fails within its bound when it does not.
+file: crates/cortex-base/src/hook.rs
+in: Hold::with_limit
+find: while registry.holds.iter().any(|hold| hold.point == point)
+replace: while false
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_second_hold_that_waits_too_long_fails_and_does_not_hang
+
+# --------------------------------------------------------- every wait is bounded
+
+[break] a-stopped-thread-has-no-bound
+rule: A thread stopped at a point goes on by itself when the hold's bound has passed, and the hold says so.
+file: crates/cortex-base/src/hook.rs
+in: Shared::arrive
+find: .wait_timeout_while(state, self.limit, |state| {
+replace: .wait_timeout_while(state, Duration::MAX, |state| {
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::the_bound_lets_a_thread_go_on_and_says_so
+
+[break] the-wait-for-the-library-has-no-bound
+rule: The test's wait for the library to reach a point ends at its limit and says whether it did.
+file: crates/cortex-base/src/hook.rs
+in: Hold::wait_reached_times
+find: .wait_timeout_while(state, limit, |state| state.stops < stops)
+replace: .wait_timeout_while(state, Duration::MAX, |state| state.stops < stops)
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_wait_for_a_point_nothing_reaches_ends_at_its_bound
+
+[break] the-wait-for-a-thread-to-go-on-has-no-bound
+rule: The test's wait for a thread to go on ends at its limit too.
+file: crates/cortex-base/src/hook.rs
+in: Hold::wait_stopped
+find: .wait_timeout_while(state, limit, |state| state.waiting.len() != stopped)
+replace: .wait_timeout_while(state, Duration::MAX, |state| state.waiting.len() != stopped)
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_wait_for_a_point_nothing_reaches_ends_at_its_bound
+
+# ------------------------------------------------------ the test kit's side
+
+[break] the-timeout-report-leaves-out-a-stopped-thread
+rule: The timeout report names the threads that a hold has stopped at a library point.
+file: crates/cortex-testkit/src/watch.rs
+in: waits
+find: cortex_base::hook::stopped().into_iter()
+replace: Vec::<cortex_base::hook::Stopped>::new().into_iter()
+packages: cortex-testkit
+caught-by:
+    hold::tests::the_report_of_a_test_that_runs_out_of_time_names_a_thread_stopped_at_a_point
+
+[break] a-point-that-never-came-says-nothing-of-the-points-that-did
+rule: A test whose point never comes fails with the points the library did reach, so that a misspelled name is found.
+file: crates/cortex-testkit/src/hold.rs
+in: Hold::reach_within
+find: seen()
+replace: Vec::<&'static str>::new()
+packages: cortex-testkit
+caught-by:
+    hold::tests::a_point_nobody_reaches_fails_with_the_points_that_were_reached
+
+# ------------------------------------------------------------ the rule in `rules`
+
+[break] a-normal-dependency-turns-test-hooks-on
+rule: Only a dev-dependency, or the test kit, turns a `test-hooks` feature on; `cortex-base`'s included.
+file: xtask/src/rules/crate_graph.rs
+in: check_test_hooks
+find: dependency.kind != DepKind::Dev
+replace: false
+packages: xtask
+caught-by:
+    rules::crate_graph::tests::a_crate_turns_its_own_test_hooks_on_for_its_tests_through_a_dev_dependency_on_itself
+    rules::crate_graph::tests::test_hooks_are_turned_on_by_dev_dependencies_only
+
+[break] a-crate-may-depend-on-itself-in-production
+rule: Only a dev-dependency on the crate itself is no edge: a normal one is refused like any edge the table does not allow.
+file: xtask/src/rules/crate_graph.rs
+in: check_edges
+find: if to == name && dependency.kind == DepKind::Dev {
+replace: if to == name {
+packages: xtask
+caught-by:
+    rules::crate_graph::tests::a_crate_turns_its_own_test_hooks_on_for_its_tests_through_a_dev_dependency_on_itself
+
+# ------------------------------------------------------------ the race test
+
+[break] a-write-truncates-the-target-before-the-rename
+rule: A reader sees the old content or the new, never a mixture: the target is not touched until the rename.
+file: crates/cortex-base/src/atomic.rs
+in: write_atomic
+find: let prepared = (|| {
+replace: let _ = fs::write(&target, b""); let prepared = (|| {
+packages: cortex-base
+caught-by:
+    cortex-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
+    cortex-base::it atomic::a_reader_racing_the_replaces_never_sees_a_mixture
+
+[break] a-new-file-appears-empty-before-its-content
+rule: A file that is created is not there until its content is complete: the name appears at the rename.
+file: crates/cortex-base/src/atomic.rs
+in: write_atomic
+find: let (temporary, mut file) =
+replace: if existing.is_none() { let _ = fs::write(&target, b""); } let (temporary, mut file) =
+packages: cortex-base
+caught-by:
+    cortex-base::it atomic::a_file_that_is_created_is_not_there_until_its_content_is_complete
+
+[break] the-rename-comes-before-its-point
+rule: The point is where the content is complete and the rename has not happened: a reader at it sees the old content.
+file: crates/cortex-base/src/atomic.rs
+in: write_atomic
+find: crate::hook::point(BEFORE_THE_RENAME);
+replace: crate::hook::point(BEFORE_THE_RENAME); let _ = fs::rename(&temporary, &target);
+packages: cortex-base
+caught-by:
+    cortex-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
+
+# ------------------------------------------------------------ the stalled file
+
+[break] a-stalled-file-is-an-ordinary-file
+rule: A stalled file is a FIFO, so that opening it waits.
+file: crates/cortex-testkit/src/stalled.rs
+in: stalled_file
+find: .arg(path)
+replace: .arg("--version")
+packages: cortex-testkit
+caught-by:
+    stalled::tests::sys_a_stalled_file_is_a_fifo_and_holds_an_opener_until_it_is_released
+
+[break] a-stalled-file-is-never-released
+rule: Releasing a stalled file lets the opener that waits go on.
+file: crates/cortex-testkit/src/stalled.rs
+in: Stalled::release
+find: if let Ok(mut other_end) = File::open(path) {
+replace: if let Ok(mut other_end) = File::open("/dev/null") {
+packages: cortex-testkit
+caught-by:
+    stalled::tests::sys_a_stalled_file_is_a_fifo_and_holds_an_opener_until_it_is_released
+
+# From mutations/tooling-7-mutate.breaks (part `mutate`).
+# Tooling 7, the `mutate` part: a break given on the command line, `--flagged`,
+# `--merge`, the `os:` key of a break, and the copy's lock that is tried again.
+# Written with the code, and run with `cargo xtask mutate tooling-7`.
+
+# ----------------------------------------------------------- a one-off break
+
+[break] one-off-is-not-marked-in-its-results
+rule: A break given with `--break` is kept by its own mark, so that its result is never the result of a list's break of the same code.
+file: xtask/src/mutate/list.rs
+in: definition
+find: if self.is_one_off() {
+replace: if self.is_one_off() && false {
+caught-by:
+    mutate::list::tests::a_break_given_on_the_command_line_is_one_of_its_own
+    mutate::drive::tests::a_break_given_on_its_own_is_run_once_and_its_result_is_never_a_lists
+
+[break] one-off-has-one-name-for-all-text
+rule: A break given with `--break` is named for what it is made of, so that the same text is the same break and another text is another.
+file: xtask/src/mutate/list.rs
+in: to_break
+find: hash.0 >> 32
+replace: 0
+caught-by:
+    mutate::list::tests::a_break_given_on_the_command_line_is_one_of_its_own
+
+[break] one-off-takes-a-file-outside-the-repository
+rule: The file of a break given with `--break` is a path inside the repository, as in a list.
+file: xtask/src/mutate/list.rs
+in: to_break
+find: if !is_repository_path(&file) {
+replace: if false {
+caught-by:
+    mutate::list::tests::a_break_given_on_the_command_line_is_refused_for_what_a_list_would_refuse
+
+[break] one-off-takes-occurrence-zero
+rule: An occurrence is counted from 1, here as in a list.
+file: xtask/src/mutate/list.rs
+in: to_break
+find: if self.occurrence == Some(0) {
+replace: if false {
+caught-by:
+    mutate::list::tests::a_break_given_on_the_command_line_is_refused_for_what_a_list_would_refuse
+
+[break] one-off-goes-with-a-lists-names
+rule: A break given with `--break` is refused beside break names, a list's name and `--file`.
+file: xtask/src/mutate/mod.rs
+in: refuse_what_does_not_go_together
+find: if !self.only.is_empty() || !self.files.is_empty() {
+replace: if false {
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+[break] one-off-needs-only-one-of-find-and-replace
+rule: A break given with `--break` has both `--find` and `--replace`.
+file: xtask/src/mutate/mod.rs
+in: refuse_what_does_not_go_together
+find: self.one_off.find.is_none() || self.one_off.replace.is_none()
+replace: self.one_off.find.is_none() && self.one_off.replace.is_none()
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+[break] one-off-options-are-not-read
+rule: The options of a break given with `--break` are read into its parts: the item, the occurrence, the crates and each test.
+file: xtask/src/mutate/mod.rs
+in: parse
+find: "--test" => one.tests.push(value),
+replace: "--test" => one.tests = vec![value],
+caught-by:
+    mutate::tests::a_break_given_on_the_command_line_is_read_with_all_its_options
+
+# ----------------------------------------------------------------- --flagged
+
+[break] flagged-skips-a-run-that-could-not-be-judged
+rule: A break whose test run failed without naming a failed test is left without a verdict, and `--flagged` chooses it.
+file: xtask/src/mutate/drive.rs
+in: without_a_verdict
+find: Some(("COULD NOT BE JUDGED", detail))
+replace: None
+caught-by:
+    mutate::drive::tests::only_the_breaks_left_without_a_verdict_are_chosen_and_each_says_why
+
+[break] flagged-skips-a-break-that-does-not-compile
+rule: A break that does not compile (found by the compile of every break) is left without a verdict, and `--flagged` chooses it.
+file: xtask/src/mutate/drive.rs
+in: without_a_verdict
+find: Some(Some(error)) => Some(Outcome::DoesNotCompile(error)),
+replace: Some(Some(_)) => None,
+caught-by:
+    mutate::drive::tests::a_break_that_does_not_compile_is_chosen_and_a_change_to_the_code_forgets_what_was_left
+
+[break] flagged-chooses-a-verdict-too
+rule: A break with a verdict of the tests (caught, NOT CAUGHT) is not chosen by `--flagged`: asking again gives the same.
+file: xtask/src/mutate/drive.rs
+in: without_a_verdict
+find: Some(Outcome::Ran { .. }) | None => None
+replace:
+    Some(Outcome::Ran { .. }) => Some(("NOT CAUGHT", String::new())),
+    None => None
+caught-by:
+    mutate::drive::tests::only_the_breaks_left_without_a_verdict_are_chosen_and_each_says_why
+
+[break] flagged-is-asked-of-another-codes-results
+rule: What `--flagged` reads is what was found for the code as it is: after a change to the code nothing is left without a verdict.
+file: xtask/src/mutate/drive.rs
+in: without_a_verdict
+find: let code = code_hash(root, &files)?;
+replace: let code = 0;
+caught-by:
+    mutate::drive::tests::a_break_that_does_not_compile_is_chosen_and_a_change_to_the_code_forgets_what_was_left
+
+# ------------------------------------------------------------------- --merge
+
+[break] merge-takes-the-parts-of-other-steps
+rule: A step's parts are the files named `<step>-<part>.breaks`: step-9's do not include step-10's list.
+file: xtask/src/mutate/merge.rs
+in: plan
+find: .strip_prefix(&format!("{step}-"))
+replace: .strip_prefix("step-")
+caught-by:
+    mutate::merge::tests::the_parts_become_the_list_with_their_comments_and_each_part_named
+
+[break] merge-forgets-the-list-that-is-there
+rule: A list that is already there is kept, and the parts follow it.
+file: xtask/src/mutate/merge.rs
+in: merged_text
+find: text.push_str(existing.trim_end());
+replace: let _ = existing;
+caught-by:
+    mutate::merge::tests::a_list_that_is_there_is_kept_and_the_parts_follow_it
+
+[break] merge-does-not-say-where-a-block-came-from
+rule: Each part is put under a comment line that names the part it came from.
+file: xtask/src/mutate/merge.rs
+in: merged_text
+find: part.file, part.name
+replace: part.file, ""
+caught-by:
+    mutate::merge::tests::the_parts_become_the_list_with_their_comments_and_each_part_named
+
+[break] merge-allows-two-breaks-of-one-name
+rule: Two breaks of one name cannot be one list: the merge refuses them and says which files.
+file: xtask/src/mutate/merge.rs
+in: name_problems
+find: seen.iter().find(|(seen, _)| *seen == name)
+replace: seen.iter().find(|(seen, _)| *seen == name && false)
+caught-by:
+    mutate::merge::tests::two_breaks_of_one_name_are_refused_with_both_files_and_nothing_is_written
+
+[break] merge-skips-the-preflight
+rule: The whole pre-flight is run on the merged list before anything is written.
+file: xtask/src/mutate/merge.rs
+in: run
+find: problems = preflight(root, &plan)?;
+replace: problems = Vec::new();
+caught-by:
+    mutate::merge::tests::two_breaks_that_make_one_change_are_refused_by_the_preflight
+    mutate::merge::tests::a_break_that_does_not_apply_stops_the_merge_and_a_dry_run_changes_nothing
+
+[break] merge-dry-run-writes
+rule: With `--dry-run` nothing is written and no part is deleted.
+file: xtask/src/mutate/merge.rs
+in: run
+find:
+    if dry_run {
+        println!("--dry-run: nothing was written and no part deleted.");
+replace:
+    if false {
+        println!("--dry-run: nothing was written and no part deleted.");
+caught-by:
+    mutate::merge::tests::a_break_that_does_not_apply_stops_the_merge_and_a_dry_run_changes_nothing
+
+[break] merge-leaves-the-parts
+rule: The parts are deleted once the merged list is written.
+file: xtask/src/mutate/merge.rs
+in: run
+find: fs::remove_file(&path)
+replace: Ok::<(), std::io::Error>(())
+caught-by:
+    mutate::merge::tests::the_parts_become_the_list_with_their_comments_and_each_part_named
+    mutate::merge::tests::a_list_that_is_there_is_kept_and_the_parts_follow_it
+
+[break] merge-goes-with-other-options
+rule: `--merge` goes with no option but `--dry-run`.
+file: xtask/src/mutate/mod.rs
+in: refuse_what_does_not_go_together
+find: if others {
+replace: if false {
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+[break] dry-run-without-merge
+rule: `--dry-run` is for use with `--merge`.
+file: xtask/src/mutate/mod.rs
+in: refuse_what_does_not_go_together
+find: } else if self.dry_run {
+replace: } else if false {
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+# ------------------------------------------------------------------ the `os:`
+
+[break] os-windows-is-read-as-linux
+rule: `os: windows` is the system `cfg!(windows)` decides.
+file: xtask/src/mutate/list.rs
+in: parse
+find: "windows" => Some(Os::Windows),
+replace: "windows" => Some(Os::Linux),
+caught-by:
+    mutate::list::tests::a_break_of_one_system_says_so_and_runs_only_there
+
+[break] os-takes-any-word
+rule: An `os` other than `windows` and `linux` is refused.
+file: xtask/src/mutate/list.rs
+in: parse
+find: "linux" => Some(Os::Linux),
+replace: "linux" | "macos" | "unix" | "" => Some(Os::Linux),
+caught-by:
+    mutate::list::tests::a_break_of_one_system_says_so_and_runs_only_there
+
+[break] os-runs-on-the-other-system
+rule: A break of one system's code is run on that system only.
+file: xtask/src/mutate/list.rs
+in: runs_here
+find: self.os.is_none_or(|os| os == Os::here())
+replace: self.os.is_none_or(|os| os != Os::here())
+caught-by:
+    mutate::list::tests::a_break_of_one_system_says_so_and_runs_only_there
+    mutate::tests::the_breaks_are_split_by_the_system_that_builds_their_code
+
+[break] os-is-not-in-what-results-are-kept-by
+rule: A break of one system and the same code for any are not one break: what is kept for one is not kept for the other.
+file: xtask/src/mutate/list.rs
+in: definition
+find: if let Some(os) = self.os {
+replace: if let Some(os) = self.os.filter(|_| false) {
+caught-by:
+    mutate::list::tests::a_break_of_one_system_says_so_and_runs_only_there
+
+[break] os-break-is-not-applied-by-the-preflight-on-the-other-system
+rule: The pre-flight applies a break of the other system's code in memory, on every system, so that its code is held.
+file: xtask/src/mutate/mod.rs
+in: check
+find: for one in breaks {
+replace: for one in breaks.iter().filter(|one| one.runs_here()) {
+caught-by:
+    mutate::tests::a_break_of_the_other_systems_code_is_applied_by_the_preflight_here
+
+[break] os-break-names-are-checked-against-tests-not-built-here
+rule: A `caught-by` check against the kept lists of tests skips a break of the other system's code: its tests are not built here.
+file: xtask/src/mutate/names.rs
+in: check
+find: || !one.runs_here()
+replace:
+caught-by:
+    mutate::names::tests::a_break_of_the_other_systems_code_has_no_tests_built_here_and_is_not_checked_for_names
+
+[break] os-break-names-the-wrong-runner
+rule: What is left to the other system is said with the command that runs it on that system.
+file: xtask/src/mutate/mod.rs
+in: left_elsewhere
+find: os.word(), first.id
+replace: os.name(), first.id
+caught-by:
+    mutate::tests::what_is_left_to_the_other_system_is_said_with_the_command_that_runs_it_there
+
+# The Windows-only rule that demonstrates `os: windows`: run it on a Windows
+# runner, `gh workflow run try --ref <branch> -f os=windows -f
+# command="mutate tooling-7/nofollow-windows-follows-a-reparse-point"`.
+[break] nofollow-windows-follows-a-reparse-point
+rule: On Windows a reparse point that is not a placeholder (a symbolic link, a junction) is never followed: the open is refused as a link.
+file: crates/cortex-base/src/nofollow.rs
+in: open_unfollowed
+find: if !is_placeholder_tag(tag) { return Err(OpenError::Link); }
+replace: if !is_placeholder_tag(tag) && false { return Err(OpenError::Link); }
+os: windows
+packages: cortex-base
+caught-by:
+    cortex-base::it nofollow::windows::sys_a_junction_is_never_followed
+    cortex-base::it nofollow::windows::a_symbolic_link_is_never_followed
+    cortex-base::it nofollow::windows::a_file_swapped_for_a_link_after_the_look_is_not_followed
+
+# ----------------------------------------------------------- the copy's lock
+
+[break] lock-is-not-tried-again
+rule: A lock that is held a moment by a process another thread forked is tried again for a short while, and taken when it is let go.
+file: xtask/src/workspace.rs
+in: lock_for_one_run
+find: Err(TryLockError::WouldBlock) if tries < LOCK_TRIES => {
+replace: Err(TryLockError::WouldBlock) if false => {
+caught-by:
+    mutate::drive::tests::a_lock_a_forked_child_still_holds_for_a_moment_is_taken_when_it_lets_go
+
+[break] lock-is-tried-for-too-short-a-time
+rule: A lock that another run really holds is tried for 200 ms (20 times, 10 ms apart) and then refused.
+file: xtask/src/workspace.rs
+find: const LOCK_TRIES: u32 = 20;
+replace: const LOCK_TRIES: u32 = 2;
+caught-by:
+    mutate::drive::tests::a_lock_that_stays_held_is_refused_after_a_short_wait_that_took_no_time
+
+[break] lock-is-tried-again-with-no-wait
+rule: The tries of a lock that is held are apart: each is after a wait.
+file: xtask/src/workspace.rs
+in: lock_for_one_run
+find: pause(LOCK_EVERY);
+replace:
+caught-by:
+    mutate::drive::tests::a_lock_a_forked_child_still_holds_for_a_moment_is_taken_when_it_lets_go
+    mutate::drive::tests::a_lock_that_stays_held_is_refused_after_a_short_wait_that_took_no_time
+
+# From mutations/tooling-7-names.breaks (part `names`).
+# The seventh tooling step, the part on hostile names: the one set in the test
+# kit (`cortex_testkit::hostile`) and the tests moved onto it. Written with the
+# code, and run with `cargo xtask mutate tooling-7`.
+
+# ------------------------------------------------------------------ the set
+
+[break] names-a-line-feed-that-differs-by-system
+rule: The set has no cfg: an entry is the same on every system, so what a test checks does not depend on where it runs.
+file: crates/cortex-testkit/src/hostile.rs
+in: line_breaks
+find: one(Kind::LineBreak, "LF line feed", '\n')
+replace: one(Kind::LineBreak, "LF line feed", if cfg!(windows) { '\u{2028}' } else { '\n' })
+caught-by:
+    cortex-testkit hostile::tests::the_set_has_no_cfg_that_changes_it
+
+[break] names-a-kind-with-no-entries
+rule: Every kind of hostile name has entries.
+file: crates/cortex-testkit/src/hostile.rs
+in: of
+find: Kind::Replacement => replacement()
+replace: Kind::Replacement => Vec::new()
+caught-by:
+    cortex-testkit hostile::tests::every_kind_has_entries_and_all_is_all_of_them
+
+[break] names-the-line-breaks-lose-crlf
+rule: The line breaks are LF, CR, CRLF, NEL, U+2028 and U+2029, all six.
+file: crates/cortex-testkit/src/hostile.rs
+in: line_breaks
+find: Name::new(Kind::LineBreak, "CRLF", "\r\n").shown("\\r\\n")
+replace: one(Kind::LineBreak, "CR again", '\r')
+caught-by:
+    cortex-testkit hostile::tests::the_line_breaks_are_the_six_and_only_the_six
+
+[break] names-a-bidi-entry-that-is-not-a-control
+rule: An entry of the bidi kind holds a bidirectional control, and every control of the family is there alone.
+file: crates/cortex-testkit/src/hostile.rs
+in: bidi
+find: ('\u{061C}', "ALM arabic letter mark")
+replace: ('\u{0041}', "ALM arabic letter mark")
+caught-by:
+    cortex-testkit hostile::tests::a_bidi_entry_holds_a_bidirectional_control
+
+[break] names-a-format-entry-that-is-not-format
+rule: An entry of the format kind holds a character of Unicode's category Cf.
+file: crates/cortex-testkit/src/hostile.rs
+in: format_characters
+find: ('\u{FEFF}', "byte-order mark")
+replace: ('\u{0041}', "byte-order mark")
+caught-by:
+    cortex-testkit hostile::tests::a_format_entry_holds_a_format_character_and_the_tags_are_among_them
+
+[break] names-a-control-set-without-del
+rule: The control entries are all of C0 but the line breaks, DEL, and all of C1 but NEL, each alone.
+file: crates/cortex-testkit/src/hostile.rs
+in: control
+find: (0x00..=0x1Fu32).chain([0x7F]).chain(0x80..=0x9F)
+replace: (0x00..=0x1Fu32).chain(0x80..=0x9F)
+caught-by:
+    cortex-testkit hostile::tests::a_control_entry_is_a_control_character_that_is_not_a_line_break
+
+[break] names-a-long-name-of-the-wrong-length
+rule: A long name has the length its label claims.
+file: crates/cortex-testkit/src/hostile.rs
+in: long
+find: repeated("255 bytes of ASCII, the most a name holds on Linux", "a", 255)
+replace: repeated("255 bytes of ASCII, the most a name holds on Linux", "a", 254)
+caught-by:
+    cortex-testkit hostile::tests::a_long_name_has_the_length_it_claims
+
+[break] names-a-device-that-is-not-one
+rule: An entry of the reserved kind is a name Windows keeps for a device, in a form it still takes for it.
+file: crates/cortex-testkit/src/hostile.rs
+in: reserved
+find: add("CONIN$".into(), "CONIN$".into());
+replace: add("CONIN$".into(), "CONINX".into());
+caught-by:
+    cortex-testkit hostile::tests::a_reserved_entry_is_a_windows_device_in_a_form_windows_still_takes_for_it
+
+[break] names-an-entry-shown-as-it-is
+rule: What an entry says it is shown as is how the harness shows it, so the function is checked against something that is not itself.
+file: crates/cortex-testkit/src/hostile.rs
+in: one
+find: Name::new(kind, label, character.to_string()).shown(escape(character))
+replace: Name::new(kind, label, character.to_string())
+caught-by:
+    cortex-testkit hostile::tests::every_entry_is_shown_as_it_says
+
+[break] names-a-slash-in-an-escape-entry
+rule: A name holds no slash, but the punctuation that is about paths on purpose.
+file: crates/cortex-testkit/src/hostile.rs
+in: escapes
+find: "\u{1b}]8;;link.invalid\u{1b}\\link\u{1b}]8;;\u{1b}\\"
+replace: "\u{1b}]8;;https://link.invalid/\u{1b}\\link\u{1b}]8;;\u{1b}\\"
+caught-by:
+    cortex-testkit hostile::tests::only_a_punctuation_entry_holds_a_slash
+
+[break] names-a-probe-that-takes-every-name
+rule: Whether a file system takes a name is known by making the file and reading back what the directory holds.
+file: crates/cortex-testkit/src/hostile.rs
+in: takes_file_name
+find: let exact = made && held.len() == 1 && held[0].as_os_str() == std::ffi::OsStr::new(name);
+replace: let exact = true;
+caught-by:
+    cortex-testkit hostile::tests::a_file_system_that_takes_a_name_is_known_by_making_the_file
+
+[break] names-a-probe-that-leaves-its-directory
+rule: The probe's directory is removed again.
+file: crates/cortex-testkit/src/hostile.rs
+in: takes_file_name
+find: let _ = std::fs::remove_dir_all(&probe);
+replace:
+caught-by:
+    cortex-testkit hostile::tests::a_file_system_that_takes_a_name_is_known_by_making_the_file
+
+[break] names-a-test-that-checks-no-name
+rule: A test that makes files fails when the file system takes none of the line breaks, so that it cannot check nothing and pass.
+file: crates/cortex-tools/tests/it/main.rs
+in: breaks_in_names
+find: .filter(|name| hostile::takes_file_name(&ws.dir, &format!("x{}y", name.text)))
+replace: .filter(|_| false)
+caught-by:
+    cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
+    cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
+    cortex-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
+    cortex-tools::it outline::a_directory_named_to_start_lines_of_its_own_is_an_escape_in_every_message
+
+# ------------------------------------------------- the tests moved onto it
+
+[break] names-read-shows-its-path-as-it-is
+rule: A path `read` shows is written with every character that acts unseen as an escape, for every line break of the set and not for one.
+file: crates/cortex-tools/src/read.rs
+in: read_file
+find: let shown = path.shown();
+replace: let shown = path.data();
+caught-by:
+    cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
+
+[break] names-a-skipped-entrys-error-is-not-escaped
+rule: What the walk says of an entry it could not read names it as an escape, and a line break in it does not cut the reason short.
+file: crates/cortex-tools/src/walk.rs
+in: Skipped::unreadable
+find: let escaped = cortex_base::visible(reason);
+replace: let escaped = std::borrow::Cow::Borrowed(reason);
+caught-by:
+    cortex-tools walk::tests::a_skipped_entrys_reason_names_it_as_an_escape
+
+[break] names-a-skipped-entrys-refusal-is-not-escaped
+rule: What the walk says of an entry whose name was refused names it as an escape.
+file: crates/cortex-tools/src/walk.rs
+in: Skipped::refuse
+find: cortex_base::visible(&reason).into_owned()
+replace: reason
+caught-by:
+    cortex-tools walk::tests::a_skipped_entrys_reason_names_it_as_an_escape
+
+[break] names-the-engines-reasons-are-not-escaped
+rule: A reason names a path from the workspace as an escape, so that it cannot start lines of its own.
+file: crates/cortex-policy/src/engine.rs
+in: escaped
+find: match cortex_base::visible(&reason) {
+replace: match std::borrow::Cow::Borrowed(reason.as_str()) {
+caught-by:
+    cortex-policy::it files::a_reason_writes_the_path_it_names_as_an_escape
+
+[break] names-an-outlines-head-is-not-escaped
+rule: A head is shown through `cortex_base::visible`.
+file: crates/cortex-index/src/outline.rs
+in: Outline::render
+find: visible(&entry.head)
+replace: &entry.head
+caught-by:
+    cortex-index outline::tests::an_outline_shows_what_would_act_unseen_as_escapes
+
+[break] names-an-outlines-doc-is-not-escaped
+rule: A doc is shown through `cortex_base::visible`.
+file: crates/cortex-index/src/outline.rs
+in: Outline::render
+find: let _ = write!(text, "  — {}", visible(doc));
+replace: let _ = write!(text, "  — {}", doc);
+caught-by:
+    cortex-index outline::tests::an_outline_shows_what_would_act_unseen_as_escapes
+
+[break] names-unix-refuses-a-windows-device-name
+rule: A Unix path takes every name of the hostile set that Windows keeps for a device, as it takes any other.
+file: crates/cortex-base/src/path/lexical.rs
+in: check_name
+find: if style == PathStyle::Posix {
+replace: if false {
+packages: cortex-base, cortex-tools
+caught-by:
+    cortex-tools::it paths_unix::names_that_only_windows_refuses_are_ordinary_here
+
+# From mutations/tooling-7-runs.breaks (part `runs`).
+# The seventh tooling step, the runs part: `ci --tiers --compare --os both` and
+# a `try` run as a source, `ci-times --ab`'s detail, `ci-times --section` and
+# `--heading`, and `try-result`. Written with the code, and run with
+# `cargo xtask mutate tooling-7`.
+
+# ------------------------------------------------------- the reports it reads
+
+[break] runs-reads-no-try-runs-report
+rule: A run of the `try` workflow is a source of tiers: its `try-<os>` artifact holds the report when the run kept no `junit-<os>`.
+file: xtask/src/runs.rs
+in: which_artifact
+find: for name in [artifact_name(os), try_artifact_name(os)] {
+replace: for name in [artifact_name(os)] {
+caught-by:
+    runs::try_artifact_tests::a_report_is_the_ci_workflows_or_failing_that_a_try_runs_and_an_expired_one_is_an_error
+
+[break] runs-reads-an-expired-report-as-there
+rule: A report that has expired is an error naming it, never a report to read or a column left out.
+file: xtask/src/runs.rs
+in: which_artifact
+find:
+    return Err(format!(
+        "run {run}'s `{name}` has expired: a run's reports are kept for 14 days"
+    ));
+replace: continue;
+caught-by:
+    runs::try_artifact_tests::a_report_is_the_ci_workflows_or_failing_that_a_try_runs_and_an_expired_one_is_an_error
+
+[break] runs-compares-an-ab-run-as-one-run
+rule: A `try` A/B run holds two trees' rounds and no one report: it is refused, with the commands that read it.
+file: xtask/src/runs.rs
+in: report_of_try
+find: if files.iter().any(is_ab) {
+replace: if false {
+caught-by:
+    runs::try_artifact_tests::a_try_runs_report_is_found_wherever_the_runners_paths_put_it
+
+[break] runs-takes-any-file-of-the-tail-for-the-report
+rule: A report is the file at the end of the path's names, all of them, whatever the runner's folders above them.
+file: xtask/src/runs.rs
+in: ends_with_names
+find: .all(|(part, name)| part.as_os_str() == *name)
+replace: .any(|(part, name)| part.as_os_str() == *name)
+caught-by:
+    runs::try_artifact_tests::a_path_ends_with_names_whatever_the_separator_or_the_depth
+
+[break] runs-reads-any-side-as-a-sides-report
+rule: Only `base-round-N.xml` and `head-round-N.xml` are an A/B round's reports.
+file: xtask/src/runs.rs
+in: ab_report_name
+find: (side == "base" || side == "head").then_some((side, round))
+replace: Some((side, round))
+caught-by:
+    runs::try_artifact_tests::an_ab_reports_name_says_its_side_and_round_and_nothing_else_is_one
+
+[break] runs-picks-main-for-one-os-alone
+rule: A comparison of both OSes reads them from one run of `main`, which kept both reports.
+file: xtask/src/runs.rs
+in: needs_of
+find: oses.iter().map(|os| artifact_name(*os)).collect()
+replace: oses.iter().take(1).map(|os| artifact_name(*os)).collect()
+caught-by:
+    runs::try_artifact_tests::a_run_of_main_must_have_kept_every_oses_report_so_that_both_are_of_one_commit
+
+# ------------------------------------------------------------------ --os both
+
+[break] compare-ignores-os-both
+rule: `--os both` compares each OS in turn.
+file: xtask/src/checks.rs
+in: TiersRequest::parse
+find: request.both = true;
+replace: request.both = false;
+caught-by:
+    checks::tests::both_oses_are_compared_from_runs_and_never_from_one_file
+
+[break] compare-both-reads-one-oses-file
+rule: A report on disk is of one OS: `--os both` takes runs, never a file.
+file: xtask/src/checks.rs
+in: TiersRequest::parse
+find: if matches!(source, Source::File(_)) {
+replace: if false {
+caught-by:
+    checks::tests::both_oses_are_compared_from_runs_and_never_from_one_file
+
+[break] compare-both-lists-one-os
+rule: `--os both` is Linux's comparison and then Windows'.
+file: xtask/src/checks.rs
+in: TiersRequest::oses
+find: if self.both {
+replace: if false {
+caught-by:
+    checks::tests::both_oses_are_compared_from_runs_and_never_from_one_file
+
+[break] compare-both-hides-the-failing-os
+rule: One OS whose report cannot be read is named, and the command fails after the last; it does not hide the other's comparison, nor end quietly.
+file: xtask/src/checks.rs
+in: join_comparisons
+find: failed.push(format!("{os:?}: {error}"));
+replace: failed.extend(Vec::<String>::new());
+caught-by:
+    checks::tests::each_oses_comparison_is_printed_in_turn_and_one_failing_hides_no_other
+
+[break] compare-both-prints-no-heading
+rule: Each OS's comparison is under its name when there are several.
+file: xtask/src/checks.rs
+in: join_comparisons
+find: if several {
+replace: if false {
+caught-by:
+    checks::tests::each_oses_comparison_is_printed_in_turn_and_one_failing_hides_no_other
+
+[break] compare-one-oses-error-is-lost
+rule: With one OS the error is the error, and no table is printed in its place.
+file: xtask/src/checks.rs
+in: join_comparisons
+find: Err(error) if !several => return (text, Err(error)),
+replace: Err(error) if false => return (text, Err(error)),
+caught-by:
+    checks::tests::each_oses_comparison_is_printed_in_turn_and_one_failing_hides_no_other
+
+# ----------------------------------------------------- what moved, by crate
+
+[break] detail-lists-crates-that-did-not-move
+rule: A crate is listed in a tier only when it moved by a twentieth of a second or more.
+file: xtask/src/compare.rs
+in: detail
+find: (new - old).abs() >= CRATE_MOVED
+replace: (new - old).abs() >= 0.0
+caught-by:
+    compare::tests::the_detail_of_two_fixed_reports_is_exactly_this
+    compare::tests::the_crates_that_moved_come_largest_first_and_the_rest_are_counted
+
+[break] detail-orders-crates-by-name
+rule: The crates that moved come largest change first.
+file: xtask/src/compare.rs
+in: detail
+find: (b.2 - b.1)
+replace: (a.2 - a.1)
+caught-by:
+    compare::tests::the_crates_that_moved_come_largest_first_and_the_rest_are_counted
+
+[break] detail-names-every-crate
+rule: Only the ten crates that moved most are named, and the rest are counted.
+file: xtask/src/compare.rs
+in: detail
+find: if crates.len() > CRATES_MOVED_SHOWN {
+replace: if false {
+caught-by:
+    compare::tests::the_crates_that_moved_come_largest_first_and_the_rest_are_counted
+
+[break] detail-lists-tests-with-top-zero
+rule: `--top 0` lists no tests.
+file: xtask/src/compare.rs
+in: detail
+find: if !tests.is_empty() && top > 0 {
+replace: if !tests.is_empty() {
+caught-by:
+    compare::tests::the_detail_of_two_fixed_reports_is_exactly_this
+
+[break] detail-takes-each-sides-own-start
+rule: The two sides of an A/B were measured on one machine and are held to one start cost.
+file: xtask/src/compare.rs
+in: detail
+find: let tests = moved(new, old, start, start, tier);
+replace: let tests = moved(new, old, start, 0.0, tier);
+caught-by:
+    compare::tests::the_detail_of_two_fixed_reports_is_exactly_this
+
+# ---------------------------------------------------------- A/B rounds read
+
+[break] ab-reads-a-failed-round-as-finished
+rule: A round in which either side's report has a failed test is left out of the comparison, as `ab` leaves it out.
+file: xtask/src/records.rs
+in: sides_of
+find: .filter(|case| case.failed)
+replace: .filter(|case| !case.failed)
+caught-by:
+    records::tests::a_failed_round_or_a_lone_report_is_left_out_with_its_reason_and_the_rest_keep_their_numbers
+
+[break] ab-keeps-a-failed-round
+rule: A round that is left out is in neither side's runs.
+file: xtask/src/records.rs
+in: sides_of
+find: if !reasons.is_empty() {
+replace: if false {
+caught-by:
+    records::tests::a_failed_round_or_a_lone_report_is_left_out_with_its_reason_and_the_rest_keep_their_numbers
+
+[break] ab-renumbers-the-rounds-it-kept
+rule: A round kept has its own number, counted from 1, whatever was left out before it.
+file: xtask/src/records.rs
+in: sides_of
+find: sides.numbers.push(round);
+replace: sides.numbers.push(sides.base.len());
+caught-by:
+    records::tests::a_failed_round_or_a_lone_report_is_left_out_with_its_reason_and_the_rest_keep_their_numbers
+
+[break] ab-blames-the-wrong-side-for-a-missing-report
+rule: A round with one side's report missing says which side.
+file: xtask/src/records.rs
+in: sides_of
+find: _ => "head"
+replace: _ => "base"
+caught-by:
+    records::tests::a_failed_round_or_a_lone_report_is_left_out_with_its_reason_and_the_rest_keep_their_numbers
+
+[break] ab-renumbers-the-rounds-table
+rule: The rounds table keeps the numbers of the rounds that were compared.
+file: xtask/src/records.rs
+in: compare
+find: if sides.numbers.len() == rounds {
+replace: if false {
+caught-by:
+    records::tests::the_rounds_that_were_compared_keep_their_numbers_in_the_rounds_table
+
+[break] ab-detail-hides-the-rounds-left-out
+rule: The rounds left out of an A/B, and why, are printed with its tables, even when no detail is asked for.
+file: xtask/src/records.rs
+in: ab_detail_text
+find: if !one.left_out.is_empty() {
+replace: if false {
+caught-by:
+    records::tests::what_moved_in_an_ab_is_each_tiers_crates_and_tests_with_the_rounds_left_out
+
+[break] ab-detail-prints-with-top-zero
+rule: `--top 0` prints no detail and no rounds' table.
+file: xtask/src/records.rs
+in: ab_detail_text
+find: if top > 0 {
+replace: if false {
+occurrence: 1
+caught-by:
+    records::tests::what_moved_in_an_ab_is_each_tiers_crates_and_tests_with_the_rounds_left_out
+
+# ------------------------------------------------- --section and --heading
+
+[break] section-replaces-past-its-end-mark
+rule: Writing a named section again replaces what is between its marks and nothing else.
+file: xtask/src/records.rs
+in: with_named_section
+find: out.push_str(&lines[close + 1..].concat());
+replace: out.push_str(&lines[*close..].concat());
+caught-by:
+    records::tests::writing_a_named_section_again_replaces_only_it_wherever_it_has_gone
+
+[break] section-writes-over-a-heading-of-its-own
+rule: A heading the tool did not write, an older page's by hand, is never written over or written under twice.
+file: xtask/src/records.rs
+in: with_named_section
+find: if there {
+replace: if false {
+caught-by:
+    records::tests::a_named_section_never_writes_over_what_it_did_not_write
+
+[break] section-takes-marks-out-of-order
+rule: Marks that are out of order are refused.
+file: xtask/src/records.rs
+in: with_named_section
+find: ([open], [close]) if open < close => {
+replace: ([open], [close]) if open != close => {
+caught-by:
+    records::tests::marks_that_are_not_one_pair_in_order_are_refused_and_nothing_is_guessed
+
+[break] section-reads-marks-inside-a-fence
+rule: A mark or a heading inside a fenced block is text, not a mark.
+file: xtask/src/records.rs
+in: mark_lines
+find: } else if !fenced && line.trim_end() == mark {
+replace: } else if line.trim_end() == mark {
+caught-by:
+    records::tests::a_named_section_never_writes_over_what_it_did_not_write
+
+[break] section-heading-alone-is-not-a-name
+rule: A heading alone is the section's name too, so that an older page's new section is found again.
+file: xtask/src/records.rs
+in: Placing::resolve
+find: (None, Some(heading)) => (Some(heading.clone()), heading.clone()),
+replace: (None, Some(heading)) => (None, heading.clone()),
+caught-by:
+    records::tests::a_placing_decides_the_name_and_the_heading_and_refuses_text_it_could_not_find_again
+
+[break] section-accepts-white-space-at-the-ends
+rule: A name or a heading with white space at either end could not be found again: refused.
+file: xtask/src/records.rs
+in: Placing::text_ok
+find: if text.trim() != text || text.is_empty() {
+replace: if text.is_empty() {
+caught-by:
+    records::tests::a_placing_decides_the_name_and_the_heading_and_refuses_text_it_could_not_find_again
+
+[break] section-accepts-a-mark-ender
+rule: A name with `-->` in it would end its own mark: refused.
+file: xtask/src/records.rs
+in: Placing::text_ok
+find: if text.contains(['\n', '\r']) || text.contains("-->") {
+replace: if text.contains(['\n', '\r']) {
+caught-by:
+    records::tests::a_placing_decides_the_name_and_the_heading_and_refuses_text_it_could_not_find_again
+
+[break] section-writes-an-abs-oses-as-headings-of-their-own
+rule: A named A/B section holds both OSes' tables as `###` parts of it.
+file: xtask/src/records.rs
+in: ab_sections
+find: format!("### {heading}\n\n{}", body.trim_end())
+replace: format!("## {heading}\n\n{}", body.trim_end())
+caught-by:
+    records::tests::an_abs_sections_are_one_for_each_os_or_one_named_with_a_part_for_each
+
+[break] section-writes-each-section-as-it-goes
+rule: A write is all of its sections or none: the file is written once, after every section was accepted.
+file: xtask/src/records.rs
+in: write_sections
+find: text = match &section.name {
+replace: std::fs::write(file, &text).ok(); text = match &section.name {
+caught-by:
+    records::tests::a_write_into_an_older_page_adds_its_sections_and_changes_nothing_else
+
+[break] times-writes-a-section-nowhere
+rule: `--section` and `--heading` say where `--write` puts the tables: without `--write` they mean nothing and are refused.
+file: xtask/src/runs.rs
+in: TimesRequest::parse
+find: if request.placing.is_given() && request.write.is_none() {
+replace: if request.placing.is_given() && request.write.is_none() && false {
+caught-by:
+    runs::try_artifact_tests::ci_times_reads_its_sections_and_refuses_what_it_could_not_place
+
+[break] times-takes-ab-with-a-pull-request
+rule: `--ab` takes a try run alone.
+file: xtask/src/runs.rs
+in: TimesRequest::parse
+find: if request.ab.is_some() && (request.run.is_some() || request.pr.is_some()) {
+replace: if request.ab.is_some() && request.run.is_some() {
+caught-by:
+    runs::try_artifact_tests::ci_times_reads_its_sections_and_refuses_what_it_could_not_place
+
+# ------------------------------------------------------------- try-result
+
+[break] try-result-takes-every-runner-for-os
+rule: `--os` narrows to that runner's job alone, and `linux` is not the Ubuntu 22.04 runner.
+file: xtask/src/try_result.rs
+in: chosen_jobs
+find: .filter(|job| os.is_none_or(|os| runner(job).as_deref() == Some(os)))
+replace: .filter(|job| os.is_none_or(|os| runner(job).is_some_and(|name| name.starts_with(os))))
+caught-by:
+    try_result::tests::the_jobs_of_a_try_run_are_chosen_by_runner
+
+[break] try-result-reads-another-workflows-run
+rule: A run of another workflow is refused, not read as a `try` run.
+file: xtask/src/try_result.rs
+in: chosen_jobs
+find: if !status.workflow.is_empty() && status.workflow != "try" {
+replace: if false {
+caught-by:
+    try_result::tests::the_jobs_of_a_try_run_are_chosen_by_runner
+
+[break] try-result-names-the-wrong-ref
+rule: The ref an A/B compared with is the one its log names in `== building the base (REF) ==`.
+file: xtask/src/try_result.rs
+in: against_of
+find: rest.split(") ==").next().map(str::to_owned)
+replace: rest.split(") ==").nth(1).map(str::to_owned)
+caught-by:
+    try_result::tests::the_log_says_what_an_ab_compared_with_and_a_stress_run_began_at
+
+[break] try-result-starts-seeds-at-one
+rule: A stress run's seeds are counted from the first seed its log shows, and from 0 when it shows none.
+file: xtask/src/try_result.rs
+in: first_seed_of
+find: .unwrap_or(0)
+replace: .unwrap_or(1)
+caught-by:
+    try_result::tests::the_log_says_what_an_ab_compared_with_and_a_stress_run_began_at
+
+[break] try-result-takes-nextests-skipped-for-the-list
+rule: The tests an A/B skipped are the block `ab` writes, which says how many failed on both sides, not nextest's own count of skipped tests.
+file: xtask/src/try_result.rs
+in: skipped_block
+find: lower.contains("test(s) failed on both sides")
+replace: lower.contains("skipped") || lower.contains("both sides")
+caught-by:
+    try_result::tests::skipped_tests_are_read_wherever_the_log_names_them_and_nowhere_else
+
+[break] try-result-lists-a-retried-test-as-failed
+rule: A test that passed on its retry is not a failed test.
+file: xtask/src/try_result.rs
+in: failures_in
+find: case.failed
+replace: true
+caught-by:
+    try_result::tests::a_runner_is_held_to_its_oses_budgets_and_a_retried_test_is_not_a_failure
+
+[break] try-result-forgets-a-job-that-failed
+rule: A job that did not end as a success is a failure of the run, named, whatever its reports say.
+file: xtask/src/try_result.rs
+in: job_result
+find: if ended != "success" {
+replace: if ended == "success" {
+caught-by:
+    try_result::tests::a_test_run_prints_its_tiers_against_the_budgets_of_its_os_and_a_clean_job_nothing_else
+    try_result::tests::an_ab_job_prints_its_tables_its_rounds_and_the_tests_that_failed
+
+[break] try-result-shows-too-much-of-a-log
+rule: A job that failed with no failed test in a report shows the last lines of its log, as many as `--tail` says.
+file: xtask/src/try_result.rs
+in: tail_text
+find: let skipped = lines.len().saturating_sub(tail);
+replace: let skipped = lines.len().saturating_sub(tail + 1);
+caught-by:
+    try_result::tests::a_job_that_failed_with_no_report_shows_the_end_of_its_log
+
+[break] try-result-shows-the-log-of-a-stress-failure-twice
+rule: A stress run's summary carries its failures: its log is not shown beside it.
+file: xtask/src/try_result.rs
+in: job_result
+find: failed.is_empty() && !stress_failed
+replace: failed.is_empty()
+caught-by:
+    try_result::tests::a_stress_run_prints_its_summary_and_fails_on_a_test_that_failed
+
+[break] try-result-holds-windows-to-linuxs-budgets
+rule: A runner is held to its OS's budgets: tier 3 has 90 s on Windows.
+file: xtask/src/try_result.rs
+in: os_of
+find: if name.contains("windows") {
+replace: if name.contains("windowz") {
+caught-by:
+    try_result::tests::a_runner_is_held_to_its_oses_budgets_and_a_retried_test_is_not_a_failure
+
+# From mutations/tooling-7-try-ab.breaks (part `try-ab`).
+# The seventh tooling step's part on `ab` and `try`: a test that failed on both
+# sides of an A/B, a commit for the branch's side, `mutate` and `--dependents`
+# through `try`, and the words `try` refuses before anything is built. Written
+# with the code, and run with `cargo xtask mutate tooling-7`.
+
+# ------------------------------------------------ ab: a test failed on both
+
+[break] ab-takes-a-test-that-failed-on-one-side-for-both
+rule: A test that failed on one side only is a failure of its round: the two sides must name the same failed tests.
+file: xtask/src/ab.rs
+in: failed_on_both
+find: ids(base) != ids(head)
+replace: false
+caught-by:
+    ab::tests::a_test_that_failed_on_one_side_only_is_still_a_failed_round
+
+[break] ab-takes-a-run-that-broke-for-the-tests-failing
+rule: A round is compared past its failed tests only when every failed run failed by its tests.
+file: xtask/src/ab.rs
+in: failed_on_both
+find: if !base.by_tests || !head.by_tests || base.cases.is_empty() || head.cases.is_empty() {
+replace: if base.cases.is_empty() || head.cases.is_empty() {
+caught-by:
+    ab::tests::a_failure_that_the_tests_do_not_explain_is_not_a_test_failing_on_both_sides
+
+[break] ab-takes-a-report-that-names-no-failure-as-the-tests
+rule: A report that names no failed test explains nothing of a failed run.
+file: xtask/src/ab.rs
+in: failure_of
+find: let explained = by_tests && !report.failed.is_empty();
+replace: let explained = by_tests;
+caught-by:
+    ab::tests::a_failed_run_names_the_tests_its_report_says_failed
+
+[break] ab-takes-a-run-with-no-report-as-the-tests
+rule: A run that wrote no report is not explained by its tests.
+file: xtask/src/ab.rs
+in: failure_of
+find: by_tests: false
+replace: by_tests: true
+caught-by:
+    ab::tests::a_failed_run_names_the_tests_its_report_says_failed
+
+[break] ab-leaves-a-round-with-a-shared-failure-out
+rule: A round in which the same tests failed on both sides is compared, without them.
+file: xtask/src/ab.rs
+in: comparable
+find: if failed_on_both(round).is_some() => {
+replace: if false => {
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-skips-a-test-only-in-the-round-it-failed
+rule: A test that failed on both sides in a round is left out of every round, not only that one.
+file: xtask/src/ab.rs
+in: comparable
+find: .filter(|case| !skipped.contains_key(&case.id()))
+replace: .filter(|_| true)
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-forgets-which-rounds-a-skipped-test-failed-in
+rule: A skipped test is named with each round it failed on both sides in.
+file: xtask/src/ab.rs
+in: comparable
+find: .push(index + 1);
+replace: .push(1);
+occurrence: 1
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-swaps-the-sides-messages
+rule: A skipped test's message for each side is that side's own.
+file: xtask/src/ab.rs
+in: comparable
+find: base: base.message.clone()
+replace: base: head.message.clone()
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-lists-a-compared-round-as-failed
+rule: A round that is compared past a shared failure is not listed as a failed round.
+file: xtask/src/ab.rs
+in: failed_rounds
+find: if failed_on_both(round).is_some() {
+replace: if false {
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-names-no-skipped-test-when-there-is-none
+rule: With no test failed on both sides there is nothing to say of one.
+file: xtask/src/ab.rs
+in: skipped_text
+find: if skipped.is_empty() {
+replace: if false {
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-says-the-whole-message-not-its-first-line
+rule: A failure is shown by the first line of its message.
+file: xtask/src/ab.rs
+in: first_line
+find: text.lines()
+replace: std::iter::once(text)
+caught-by:
+    ab::tests::a_report_names_each_failed_test_with_the_first_line_of_its_message
+
+[break] ab-takes-an-exit-code-for-the-tests
+rule: A run failed by its tests when nextest's exit code says so and its report names a failed test.
+file: xtask/src/ab.rs
+in: end_of
+find: } else if code == Some(TEST_RUN_FAILED) && a_test_failed {
+replace: } else if a_test_failed {
+caught-by:
+    ab::tests::a_run_is_the_tests_failing_only_by_nextests_code_and_a_failed_test_in_its_report
+
+[break] ab-takes-a-code-for-the-tests-with-no-failed-test
+rule: A run whose report names no failed test is not known to have failed by its tests.
+file: xtask/src/ab.rs
+in: end_of
+find: } else if code == Some(TEST_RUN_FAILED) && a_test_failed {
+replace: } else if code == Some(TEST_RUN_FAILED) {
+caught-by:
+    ab::tests::a_run_is_the_tests_failing_only_by_nextests_code_and_a_failed_test_in_its_report
+
+[break] ab-takes-the-wrong-exit-code-for-failing-tests
+rule: nextest exits 100 when tests failed in a run.
+file: xtask/src/ab.rs
+find: pub(crate) const TEST_RUN_FAILED: i32 = 100;
+replace: pub(crate) const TEST_RUN_FAILED: i32 = 101;
+caught-by:
+    ab::tests::a_run_is_the_tests_failing_only_by_nextests_code_and_a_failed_test_in_its_report
+
+# --------------------------------------------- ab: the job's two runs
+
+[break] ab-stops-the-job-at-its-first-failing-run-when-keeping-going
+rule: With --keep-going a failure in tiers 1 and 2 does not leave the system tests unmeasured.
+file: xtask/src/ab.rs
+in: drive_job
+find: let stop = failed && !keep_going;
+replace: let stop = failed;
+caught-by:
+    ab::tests::a_failure_in_the_first_run_does_not_stop_the_second_with_keep_going
+
+[break] ab-keeps-going-without-being-asked-in-the-job
+rule: Without --keep-going the first failing run ends the job.
+file: xtask/src/ab.rs
+in: drive_job
+find: let stop = failed && !keep_going;
+replace: let stop = false;
+caught-by:
+    ab::tests::without_keep_going_the_first_failing_run_ends_the_job
+
+[break] ab-sets-a-report-aside-when-it-is-the-jobs-last
+rule: The job's last run, or the one that ended it, brings the reports together.
+file: xtask/src/ab.rs
+in: drive_job
+find: index + 1 == runs || stop
+replace: index + 1 == runs
+caught-by:
+    ab::tests::without_keep_going_the_first_failing_run_ends_the_job
+
+[break] ab-takes-a-run-that-broke-for-its-tests
+rule: A job in which a run broke is not failed by its tests.
+file: xtask/src/ab.rs
+in: drive_job
+find: RunEnd::Broke(said) => { errors.push(said); by_tests = false;
+replace: RunEnd::Broke(said) => { errors.push(said);
+caught-by:
+    ab::tests::a_run_that_broke_or_a_report_that_could_not_be_put_together_is_not_the_tests
+
+[break] ab-takes-reports-that-would-not-come-together-for-the-tests
+rule: A job whose reports could not be put together is not failed by its tests.
+file: xtask/src/ab.rs
+in: drive_job
+find: if let Err(error) = after(index, index + 1 == runs || stop) { errors.push(error); by_tests = false;
+replace: if let Err(error) = after(index, index + 1 == runs || stop) { errors.push(error);
+caught-by:
+    ab::tests::a_run_that_broke_or_a_report_that_could_not_be_put_together_is_not_the_tests
+
+[break] ab-takes-the-first-rounds-count-as-a-refusal
+rule: A count of rounds that ab refuses is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "ab" => crate::ab::check_arguments(arguments).map_err(refused),
+replace: "ab" => Ok(()),
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+# ----------------------------------------------------- try: a commit
+
+[break] try-takes-a-short-hash-for-a-commit
+rule: A commit is the full 40 digits of a hash.
+file: xtask/src/try_run.rs
+in: commit_hash
+find: text.len() == 40
+replace: text.len() >= 7
+caught-by:
+    try_run::tests::a_commit_is_a_full_lower_case_hash_or_nothing
+
+[break] try-takes-upper-case-for-a-commit
+rule: A commit is in lower case.
+file: xtask/src/try_run.rs
+in: commit_hash
+find: b'a'..=b'f'
+replace: b'a'..=b'f' | b'A'..=b'F'
+caught-by:
+    try_run::tests::a_commit_is_a_full_lower_case_hash_or_nothing
+
+[break] try-takes-a-name-for-a-commit
+rule: A commit is hexadecimal digits and nothing else.
+file: xtask/src/try_run.rs
+in: commit_hash
+find: text.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+replace: text.bytes().all(|byte| byte.is_ascii_alphanumeric())
+caught-by:
+    try_run::tests::a_commit_is_a_full_lower_case_hash_or_nothing
+
+[break] try-runs-in-a-checkout-that-is-not-the-commit
+rule: A run asked for one commit never measures another.
+file: xtask/src/try_run.rs
+in: check_checkout
+find: if head.trim() == commit {
+replace: if true {
+caught-by:
+    try_run::tests::the_checkout_must_be_the_commit_asked_for
+
+[break] try-says-nothing-of-the-commit
+rule: The plan says which commit the branch's side is.
+file: xtask/src/try_run.rs
+in: plan
+find: if let Some(commit) = &inputs.commit {
+replace: if let Some(commit) = inputs.commit.as_ref().filter(|_| false) {
+caught-by:
+    try_run::tests::a_commit_is_said_in_the_plan
+
+# ------------------------------------------------------- try: mutate
+
+[break] try-mutate-has-a-time-budget
+rule: A mutate run on a runner goes to its end in one job.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: ["mutate", "--minutes", "0"]
+replace: ["mutate", "--minutes", "5"]
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-runs-no-break-with-check
+rule: Options that run no break are refused with mutate.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: "--check" | "--list" | "--report" | "--tests" | "--fix-in" | "--write" => {
+replace: "--list" | "--report" | "--tests" | "--fix-in" | "--write" => {
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-names-nothing
+rule: A mutate run names the breaks to run.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: if !named {
+replace: if false {
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-against-a-ref
+rule: A mutate run is refused --against.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: (self.against.is_some(), "--against")
+replace: (false, "--against")
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-with-a-count
+rule: A mutate run is refused --count.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: (self.count.is_some(), "--count")
+replace: (false, "--count")
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-with-a-load
+rule: A mutate run is refused --load.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: (self.load.is_some(), "--load")
+replace: (false, "--load")
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-with-cores
+rule: A mutate run is refused --cores.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: (self.cores.is_some(), "--cores")
+replace: (false, "--cores")
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-in-another-profile
+rule: A mutate run is in the ci profile.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: if self.profile != "ci" {
+replace: if false {
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-with-its-own-minutes
+rule: A mutate run is given --minutes 0 by try, not by the caller.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: "--minutes" => {
+replace: "--minutes-x" => {
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-does-not-read-mutates-options
+rule: What mutate would refuse (a number of jobs out of range) is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "mutate" => crate::mutate::check_arguments(arguments).map_err(refused),
+replace: "mutate" => Ok(()),
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+# -------------------------------------------- try: --dependents and words
+
+[break] try-leaves-dependents-for-nextest
+rule: --dependents beside -p is resolved by try into the crates it adds.
+file: xtask/src/try_run.rs
+in: Inputs::resolve_dependents
+find: if !before.any(|word| word == "--dependents") {
+replace: if !before.any(|word| word == "--dependents-x") {
+caught-by:
+    try_run::tests::dependents_become_the_crates_the_job_runs_and_are_named
+
+[break] try-resolves-dependents-for-any-command
+rule: --dependents goes with test, stress and perf -p.
+file: xtask/src/try_run.rs
+in: Inputs::resolve_dependents
+find: if !matches!(verb.as_str(), "test" | "stress" | "perf") {
+replace: if false {
+caught-by:
+    try_run::tests::dependents_that_cannot_be_resolved_are_refused_before_anything_is_built
+
+[break] try-does-not-name-the-crates-dependents-added
+rule: The crates --dependents added are named.
+file: xtask/src/try_run.rs
+in: plan
+find: notes.push(expanded.said());
+replace: let _ = expanded.said();
+caught-by:
+    try_run::tests::dependents_become_the_crates_the_job_runs_and_are_named
+
+[break] try-reads-the-workspace-for-every-run
+rule: The workspace is read only when --dependents is there.
+file: xtask/src/try_run.rs
+in: Inputs::resolve_dependents
+find: if !before.any(|word| word == "--dependents") {
+replace: if false {
+caught-by:
+    try_run::tests::dependents_that_cannot_be_resolved_are_refused_before_anything_is_built
+
+[break] try-passes-a-word-after-the-commands-own-separator-to-the-check
+rule: A word after the command's own `--` is the test binaries', and is not looked at.
+file: xtask/src/try_run.rs
+in: refuse_foreign_words
+find: .take_while(|word| *word != "--")
+replace: .take_while(|_| true)
+caught-by:
+    try_run::tests::a_word_that_nextest_would_not_take_is_refused_with_its_reason
+
+[break] try-reads-an-option-with-a-value-as-another-word
+rule: An option given as --name=value is the option.
+file: xtask/src/try_run.rs
+in: refuse_foreign_words
+find: let flag = word.split_once('=').map_or(word.as_str(), |(flag, _)| flag);
+replace: let flag = word.as_str();
+caught-by:
+    try_run::tests::a_word_that_nextest_would_not_take_is_refused_with_its_reason
+
+[break] try-refuses-a-stress-runs-own-options
+rule: A stress run takes --count, --load, --cores and --first-seed itself.
+file: xtask/src/try_run.rs
+in: refuse_foreign_words
+find: if into_stress && STRESS_OWN.contains(&flag) {
+replace: if false {
+caught-by:
+    try_run::tests::a_word_that_nextest_would_not_take_is_refused_with_its_reason
+
+[break] try-takes-a-count-for-a-stress-runs-in-an-ab-run
+rule: With `against` a count is rounds: a --count word is nextest's to refuse, so try refuses it.
+file: xtask/src/try_run.rs
+in: Inputs::refuse_words
+find: verb == "stress" || verb == "test" && self.count.is_some() && self.against.is_none()
+replace: verb == "stress" || verb == "test" && self.count.is_some()
+caught-by:
+    try_run::tests::a_word_that_nextest_would_not_take_is_refused_with_its_reason
+
+[break] try-refuses-nothing-of-perf-with-crates
+rule: The words of perf -p CRATE go to nextest, and are checked as a test's are.
+file: xtask/src/try_run.rs
+in: Inputs::refuse_words
+find: "perf" => !packages_and_others(rest)?.0.is_empty(),
+replace: "perf" => false,
+caught-by:
+    try_run::tests::a_word_that_nextest_would_not_take_is_refused_with_its_reason
+
+[break] try-lets-ci-take-any-words
+rule: What `cargo xtask ci` would refuse is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "ci" => crate::checks::check_ci_arguments(arguments).map_err(refused),
+replace: "ci" => Ok(()),
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+[break] try-lets-stress-take-any-words
+rule: What `cargo xtask stress` would refuse is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "stress" => crate::stress::check_arguments(arguments).map_err(refused),
+replace: "stress" => Ok(()),
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+[break] try-lets-perf-take-any-words
+rule: What `cargo xtask perf` would refuse is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "perf" => crate::perf::check_arguments(arguments).map_err(refused),
+replace: "perf" => Ok(()),
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+[break] try-lets-startup-take-any-words
+rule: What `cargo xtask startup` would refuse is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "startup" => check_startup(arguments).map_err(refused),
+replace: "startup" => Ok(()),
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+[break] try-takes-a-second-profile-for-startup
+rule: The profile of a startup run is the input's.
+file: xtask/src/try_run.rs
+in: check_startup
+find: "--profile" if !seen_profile => {
+replace: "--profile" => {
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+# ------------------------------------------------------- try: a dry run
+
+[break] try-dry-run-says-nothing-of-testkit
+rule: A dry run says that testkit=profile is not set for an `against` run.
+file: xtask/src/try_run.rs
+in: plan
+find: inputs.testkit.as_deref() == Some("profile") && inputs.against.is_some()
+replace: inputs.testkit.as_deref() == Some("profile") && inputs.against.is_none()
+caught-by:
+    try_run::tests::a_dry_run_and_the_workflows_other_inputs_are_read
+
+[break] try-dry-run-says-nothing-of-the-partial-landlock-runner
+rule: A dry run says that partial-landlock runs on os=linux-22.04.
+file: xtask/src/try_run.rs
+in: plan
+find: && inputs.os.as_deref() != Some("linux-22.04")
+replace: && inputs.os.as_deref() == Some("linux-22.04")
+caught-by:
+    try_run::tests::a_dry_run_and_the_workflows_other_inputs_are_read
+
+[break] try-takes-an-os-the-workflow-has-not
+rule: The workflow's os input is one of its list.
+file: xtask/src/try_run.rs
+in: Inputs::parse
+find: if !OSES.contains(&os) {
+replace: if false {
+caught-by:
+    try_run::tests::a_dry_run_and_the_workflows_other_inputs_are_read
