@@ -7,6 +7,7 @@ use std::time::Duration;
 use cortex_base::SharedClock;
 use cortex_config::schema::VerifyMode;
 use cortex_knowledge::Project;
+use cortex_protocol::TurnId;
 use cortex_protocol::event::CheckSource;
 use cortex_protocol::ids::{ArtifactId, EntryId};
 use cortex_protocol::item::ArtifactRef;
@@ -22,6 +23,7 @@ fn settings(commands: &[&str]) -> Settings {
         commands: commands.iter().map(|line| (*line).to_owned()).collect(),
         round_time: Duration::from_secs(120),
         turn_time: Duration::from_secs(240),
+        max_timeout: Duration::from_secs(30 * 60),
     }
 }
 
@@ -211,11 +213,15 @@ fn a_result_is_read_by_what_the_shell_says_of_it() {
         read(json!({"exit_code": null, "signal": "SIGSEGV"})),
         Ended::Failed
     );
-    // The sandbox kept it from something: not a failure of the changes.
+    // The sandbox's guess from what it printed: still a failure, with the
+    // guess beside it.
     assert_eq!(
-        read(
-            json!({"exit_code": 101, "sandbox": "[The sandbox kept the command off the network.]"})
-        ),
+        read(json!({"exit_code": 101, "sandbox": "[The sandbox keeps commands off the network.]"})),
+        Ended::Failed
+    );
+    // The launcher refused to start it: it never ran.
+    assert_eq!(
+        read(json!({"exit_code": 125, "sandbox": "[The sandbox launcher stopped: no Landlock.]"})),
         Ended::Blocked
     );
     // It passed, and the sandbox said something of it: it passed.
@@ -285,6 +291,7 @@ fn failed_with(output: &str) -> Ran {
             label: "full output of shell".to_owned(),
             bytes: Some(90_000),
         }),
+        stopped_at_limit: false,
     }
 }
 
@@ -404,6 +411,15 @@ fn a_check_has_the_least_of_what_the_round_the_turn_and_the_limits_leave() {
     // Nothing left of any.
     assert_eq!(left(0, Some(10), 25), 0);
     assert_eq!(left(0, None, 500), 0);
+    // And never more than the shell gives a command.
+    let short = Settings {
+        max_timeout: Duration::from_secs(60),
+        ..settings.clone()
+    };
+    assert_eq!(
+        time_left(&short, Duration::ZERO, None, Duration::ZERO).as_secs(),
+        60
+    );
 }
 
 #[test]
@@ -424,4 +440,202 @@ fn a_check_is_not_started_when_it_usually_takes_longer_than_it_has() {
     assert!(too_long(None, round, Duration::from_secs(10)).is_none());
     assert!(too_long(Some(minutes(1)), round, round).is_none());
     assert!(too_long(Some(minutes(1)), round, Duration::ZERO).is_some());
+}
+
+/// What the sandbox's own `explain` says of a command that printed
+/// `output` and ended with `code`, with the network off.
+fn explained(code: i32, output: &str) -> Option<String> {
+    let policy = cortex_sandbox::policy::Policy {
+        read: cortex_sandbox::policy::Reach::All,
+        write: vec![std::path::PathBuf::from("/work/app")],
+        network: cortex_sandbox::policy::Network::Off,
+        temp: None,
+        landlock: 3,
+    };
+    cortex_sandbox::explain::explain(&policy, Some(code), output)
+}
+
+#[test]
+fn only_the_launchers_refusal_is_blocked_and_a_compiler_error_is_a_failure() {
+    let two_minutes = Duration::from_secs(120);
+    // A compiler's message that reads like a name that could not be looked
+    // up: the sandbox's guess is said, and the check failed.
+    let compiler = "error[E0433]: failed to resolve: use of undeclared crate or module `parser`";
+    let guess = explained(101, compiler).expect("the sandbox guesses the network");
+    let result =
+        ToolResult::error(compiler).with_payload(json!({"exit_code": 101, "sandbox": guess}));
+    let ran = classify(&result, two_minutes, None);
+    assert_eq!(ran.ended, Ended::Failed);
+    let note = ran.note.expect("the guess is said");
+    assert!(
+        note.contains("off the network") && note.contains("sandbox.network"),
+        "{note}"
+    );
+    // The launcher refused to start it: it never ran.
+    let refusal = format!("{} landlock is missing", cortex_sandbox::launch::MARK);
+    let line = explained(cortex_sandbox::launch::FAILED, &refusal).expect("the launcher's line");
+    let result = ToolResult::error(refusal.clone()).with_payload(json!({
+        "exit_code": cortex_sandbox::launch::FAILED, "sandbox": line,
+    }));
+    assert_eq!(classify(&result, two_minutes, None).ended, Ended::Blocked);
+}
+
+#[test]
+fn a_process_left_outside_the_checks_tree_is_said() {
+    let result = ToolResult::success("ok").with_payload(json!({"exit_code": 0, "outlived": true}));
+    let ran = classify(&result, Duration::from_secs(120), None);
+    assert_eq!(ran.ended, Ended::Passed);
+    assert!(
+        ran.note
+            .is_some_and(|note| note.contains("still running outside its process tree")),
+    );
+}
+
+#[test]
+fn the_report_is_bounded_after_escaping_too() {
+    // Each printed line is short, and three times as long escaped.
+    let unseen: String = (0..4_000)
+        .map(|n| format!("{n} {}\n", "\u{200b}".repeat(40)))
+        .collect::<String>()
+        + "error: it broke\n";
+    let results = vec![(check("cargo test"), failed_with(&unseen))];
+    let text = report(1, 2, &results, &[]);
+    assert!(text.len() < REPORT_BYTES + 2 * 1024, "{} bytes", text.len());
+    assert!(text.contains("more lines are not shown"), "{text}");
+}
+
+fn ran(ended: Ended) -> Ran {
+    Ran {
+        ended,
+        ..failed_with("")
+    }
+}
+
+#[test]
+fn a_failure_stands_until_its_check_passes_and_is_forgotten_with_its_turn() {
+    let mut memory = Memory::default();
+    let (one, two) = (TurnId::new("t_1"), TurnId::new("t_2"));
+    let a = check("cargo test");
+    let b = check("cargo clippy");
+    let judge = |memory: &mut Memory, turn: &TurnId, results: Vec<(Check, Ran)>| {
+        let chosen = results.len();
+        memory.judge(turn, chosen, &results)
+    };
+    let (verdict, failing) = judge(
+        &mut memory,
+        &one,
+        vec![
+            (a.clone(), ran(Ended::Failed)),
+            (b.clone(), ran(Ended::Passed)),
+        ],
+    );
+    assert_eq!(verdict, Verdict::Failed);
+    assert_eq!(failing, std::slice::from_ref(&a));
+    // The next round could not run it: it still fails, and the model has
+    // been told already.
+    let (verdict, _) = judge(&mut memory, &one, vec![(a.clone(), ran(Ended::Skipped))]);
+    assert_eq!(verdict, Verdict::StillFailing);
+    assert!(memory.unresolved(&one));
+    // It passes: nothing fails.
+    let (verdict, failing) = judge(&mut memory, &one, vec![(a.clone(), ran(Ended::Passed))]);
+    assert_eq!((verdict, failing), (Verdict::Passed, vec![]));
+    // A failure is the turn's: the next turn starts with none.
+    judge(&mut memory, &one, vec![(a.clone(), ran(Ended::Failed))]);
+    let (verdict, _) = judge(&mut memory, &two, vec![(a.clone(), ran(Ended::Skipped))]);
+    assert_eq!(verdict, Verdict::Skipped);
+    assert!(!memory.unresolved(&two));
+}
+
+#[test]
+fn a_rounds_verdict_says_what_ran_to_a_result() {
+    let mut memory = Memory::default();
+    let turn = TurnId::new("t_1");
+    let a = check("cargo test");
+    let b = check("cargo clippy");
+    let judge = |memory: &mut Memory, chosen: usize, results: Vec<(Check, Ran)>| {
+        memory.judge(&turn, chosen, &results).0
+    };
+    assert_eq!(
+        judge(
+            &mut memory,
+            2,
+            vec![
+                (a.clone(), ran(Ended::Passed)),
+                (b.clone(), ran(Ended::Flaky))
+            ]
+        ),
+        Verdict::Passed
+    );
+    assert_eq!(
+        judge(
+            &mut memory,
+            2,
+            vec![
+                (a.clone(), ran(Ended::Passed)),
+                (b.clone(), ran(Ended::Blocked))
+            ]
+        ),
+        Verdict::Incomplete
+    );
+    assert_eq!(
+        judge(
+            &mut memory,
+            2,
+            vec![
+                (a.clone(), ran(Ended::NotRun)),
+                (b.clone(), ran(Ended::Skipped))
+            ]
+        ),
+        Verdict::Skipped
+    );
+    // A round cut short by a stop: what ran before it still counts.
+    let (verdict, failing) = memory.judge(
+        &turn,
+        2,
+        &[
+            (a.clone(), ran(Ended::Failed)),
+            (b.clone(), ran(Ended::Stopped("a hook changed".to_owned()))),
+        ],
+    );
+    assert_eq!(verdict, Verdict::Stopped("a hook changed".to_owned()));
+    assert_eq!(failing, [a]);
+}
+
+#[test]
+fn a_flaky_test_is_run_again_only_after_a_failure_that_was_not_a_hang() {
+    assert!(retries(&ran(Ended::Failed), true));
+    assert!(!retries(&ran(Ended::Failed), false));
+    assert!(!retries(&ran(Ended::Blocked), true));
+    let hung = Ran {
+        stopped_at_limit: true,
+        ..ran(Ended::Failed)
+    };
+    assert!(!retries(&hung, true), "a test that hangs is not run again");
+}
+
+#[test]
+fn a_retry_that_did_not_run_to_a_result_leaves_the_first_failure() {
+    let first = failed_with("assertion failed");
+    assert_eq!(
+        after_retry(first.clone(), ran(Ended::Passed)).ended,
+        Ended::Flaky
+    );
+    assert_eq!(
+        after_retry(first.clone(), ran(Ended::Failed)).ended,
+        Ended::Failed
+    );
+    let skipped = Ran::not(
+        Ended::Skipped,
+        "Not enough of the round's time was left: 4s.",
+    );
+    let kept = after_retry(first.clone(), skipped);
+    assert_eq!(kept.ended, Ended::Failed);
+    assert_eq!(
+        kept.output, first.output,
+        "the first failure is what is reported"
+    );
+    assert!(
+        kept.note
+            .is_some_and(|note| note.contains("did not") && note.contains("4s")),
+    );
 }

@@ -14,6 +14,7 @@
 [break] a-commands-declared-write-is-a-change
 rule: A command declares a write of the whole workspace; only what its look found is a change, or every successful command would send its turn to the checks.
 file: crates/cortex-tools/src/touched.rs
+packages: cortex-tools, cortex-agent
 in: changed_by
 find: if command {
 replace: if false {
@@ -24,6 +25,7 @@ caught-by:
 [break] a-write-that-found-its-content-there-is-a-change
 rule: A `write` or `edit` whose payload says `unchanged` changed nothing, and does not send its turn to the checks.
 file: crates/cortex-tools/src/touched.rs
+packages: cortex-tools, cortex-agent
 in: changed_by
 find: == Some("unchanged");
 replace: == Some("never written");
@@ -34,6 +36,7 @@ caught-by:
 [break] a-command-that-failed-changed-nothing
 rule: A command that ran and failed has still changed what its look found: `sed -i … && make` that fails has edited.
 file: crates/cortex-tools/src/touched.rs
+packages: cortex-tools, cortex-agent
 in: changed_by
 find: ToolOutcome::Denied => Vec::new()
 replace: ToolOutcome::Denied | ToolOutcome::Error => Vec::new()
@@ -44,6 +47,7 @@ caught-by:
 [break] a-look-that-did-not-finish-is-no-change
 rule: A look for what a command changed that did not finish means a change may have been made: the workspace stands for it.
 file: crates/cortex-tools/src/touched.rs
+packages: cortex-tools, cortex-agent
 in: by_command
 find: if !finished {
 replace: if false {
@@ -292,8 +296,8 @@ caught-by:
 rule: A known flaky test that fails runs once more before it is reported.
 file: crates/cortex-core/src/verify.rs
 in: CoreVerifier::check
-find: || !flaky.contains(&check.key())
-replace: || true
+find: flaky.contains(&check.key())
+replace: false
 caught-by:
     cortex-core::it verify::sys_a_known_flaky_test_that_fails_runs_once_more_and_passing_is_said_to_be_flaky
 
@@ -301,10 +305,11 @@ caught-by:
 rule: A check the sandbox blocked is not a failure of the model's work, and is not fed back.
 file: crates/cortex-core/src/verify.rs
 in: classify
-find: } else if let (Some(line), false) = (blocked, ran.exit_code == Some(0)) {
-replace: } else if let (Some(line), true) = (blocked, false) {
+find: } else if refused && ran.exit_code != Some(0) {
+replace: } else if false {
 caught-by:
     cortex-core verify::tests::a_result_is_read_by_what_the_shell_says_of_it
+    cortex-core verify::tests::only_the_launchers_refusal_is_blocked_and_a_compiler_error_is_a_failure
 
 # --------------------------------------------- what the model is told
 
@@ -312,8 +317,8 @@ caught-by:
 rule: Every line of what a check printed is marked as the command's, so none can begin a line of the report.
 file: crates/cortex-core/src/verify.rs
 in: report
-find: text.push_str(MARK);
-replace: text.push_str("");
+find: format!("{MARK}{}", visible_keeping(line, &['\t']))
+replace: format!("{}", visible_keeping(line, &['\t']))
 caught-by:
     cortex-core verify::tests::what_a_check_printed_cannot_pass_for_the_harness_or_the_user
     cortex-core::it verify::sys_a_failed_check_goes_back_to_the_model_marked_as_its_output_and_passes_when_fixed
@@ -322,8 +327,8 @@ caught-by:
 rule: Every line of what a check printed passes `visible`: nothing unseen reaches the model.
 file: crates/cortex-core/src/verify.rs
 in: report
-find: text.push_str(&visible_keeping(line, &['\t']));
-replace: text.push_str(line);
+find: format!("{MARK}{}", visible_keeping(line, &['\t']))
+replace: format!("{MARK}{}", line)
 caught-by:
     cortex-core verify::tests::what_a_check_printed_cannot_pass_for_the_harness_or_the_user
 
@@ -351,3 +356,115 @@ find: turn.verification.get_or_insert(Verification::Skipped);
 replace: turn.verification = Some(Verification::Skipped);
 caught-by:
     cortex-agent::it verifying::a_later_round_that_ran_nothing_does_not_hide_an_earlier_failure
+
+# ------------------------------------------- after the review of the first pull request
+
+[break] a-check-runs-after-the-level-was-lowered-to-read-only
+rule: The level is looked at again before each check: one lowered to read-only while a round runs stops the checks after it.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::run_once
+find: *self.parts.policy.engine().level() == Level::ReadOnly
+replace: *self.parts.policy.engine().level() == Level::Unrestricted
+caught-by:
+    cortex-core::it verify::sys_a_check_after_the_level_was_lowered_mid_round_does_not_run
+
+[break] a-guess-of-the-sandbox-hides-a-failure
+rule: Only the launcher's own refusal makes a check blocked; the sandbox's other lines are guesses from what the command printed, and leave a failure a failure.
+file: crates/cortex-core/src/verify.rs
+in: classify
+find: let refused = sandbox.is_some_and(|line| line.starts_with(LAUNCHER_STOPPED));
+replace: let refused = sandbox.is_some();
+caught-by:
+    cortex-core verify::tests::only_the_launchers_refusal_is_blocked_and_a_compiler_error_is_a_failure
+    cortex-core verify::tests::a_result_is_read_by_what_the_shell_says_of_it
+
+[break] a-process-left-outside-the-tree-is-not-said
+rule: A process a check started that outlived its tree is said with the check.
+file: crates/cortex-core/src/verify.rs
+in: classify
+find: if flag("outlived") {
+replace: if false {
+caught-by:
+    cortex-core verify::tests::a_process_left_outside_the_checks_tree_is_said
+
+[break] the-report-grows-past-its-share-when-escaped
+rule: A check's share of the report binds what is sent, after escaping.
+file: crates/cortex-core/src/verify.rs
+in: report
+find: if block.len() + marked.len() + 1 > share && !block.is_empty() {
+replace: if false {
+caught-by:
+    cortex-core verify::tests::the_report_is_bounded_after_escaping_too
+
+[break] a-check-has-more-than-the-shell-gives
+rule: A check runs, and is said to have had, no more time than the shell gives a command.
+file: crates/cortex-core/src/verify.rs
+in: time_left
+find: left.min(settings.max_timeout)
+replace: left
+caught-by:
+    cortex-core verify::tests::a_check_has_the_least_of_what_the_round_the_turn_and_the_limits_leave
+
+[break] a-failure-is-forgotten-when-its-check-did-not-run-again
+rule: A check that failed stays failed in its turn until it passes: a round in which it did not run to a result is still failed.
+file: crates/cortex-core/src/verify.rs
+in: Memory::judge
+find: } else if !self.failing.is_empty() {
+replace: } else if false {
+caught-by:
+    cortex-core verify::tests::a_failure_stands_until_its_check_passes_and_is_forgotten_with_its_turn
+
+[break] a-failure-outlives-its-turn
+rule: What failed is the turn's: the next turn starts with nothing failing.
+file: crates/cortex-core/src/verify.rs
+in: Memory::judge
+find: if self.turn.as_ref() != Some(turn) {
+replace: if self.turn.is_none() {
+caught-by:
+    cortex-core verify::tests::a_failure_stands_until_its_check_passes_and_is_forgotten_with_its_turn
+
+[break] a-check-that-passed-stays-failing
+rule: A check that passes is no longer failing.
+file: crates/cortex-core/src/verify.rs
+in: Memory::judge
+find: self.failing.retain(|held| held.key() != check.key());
+replace: let _ = &self.failing;
+caught-by:
+    cortex-core verify::tests::a_failure_stands_until_its_check_passes_and_is_forgotten_with_its_turn
+
+[break] a-test-that-hangs-is-run-again
+rule: A known flaky test that was stopped at its time limit is not run again.
+file: crates/cortex-core/src/verify.rs
+in: retries
+find: && !first.stopped_at_limit
+replace: && true
+caught-by:
+    cortex-core verify::tests::a_flaky_test_is_run_again_only_after_a_failure_that_was_not_a_hang
+
+[break] a-retry-that-did-not-run-replaces-the-failure
+rule: A flaky test's retry that did not run to a result leaves the first failure as the check's result.
+file: crates/cortex-core/src/verify.rs
+in: after_retry
+find: Ended::Failed => second
+replace: Ended::Failed | Ended::Skipped | Ended::NotRun | Ended::TimedOut | Ended::Blocked => second
+caught-by:
+    cortex-core verify::tests::a_retry_that_did_not_run_to_a_result_leaves_the_first_failure
+
+[break] a-round-with-the-turns-time-spent-runs-anyway
+rule: Once a turn's time for checks is spent, no check starts, and what still fails stays failed with nothing more told to the model.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::round
+find: if settings.turn_time.saturating_sub(cx.used).is_zero()
+replace: if false
+caught-by:
+    cortex-core::it verify::sys_once_the_turns_time_for_checks_is_spent_a_failure_stands_and_nothing_runs
+
+[break] still-failing-is-fed-back
+rule: A round with nothing new to tell ends the turn with its verdict, failed, and sends the model no request.
+file: crates/cortex-agent/src/turn.rs
+in: Session::verify
+find: VerifyOutcome::StillFailing => {
+replace: VerifyOutcome::StillFailing => { return match self.record_notice(turn, NoticeSource::Verification, String::from("still failing")).await { Ok(()) => Phase::Preparing(Prep::default()), Err(error) => Phase::Finishing(End::store(&error)) };
+caught-by:
+    cortex-agent::it verifying::a_round_with_nothing_new_ends_the_turn_failed_and_tells_the_model_nothing
+

@@ -490,7 +490,13 @@ fn sys_an_interrupt_during_a_check_stops_it_and_the_next_prompt_is_answered() {
         "verify_interrupt",
         [writes("c1", "a.txt"), says("Done."), says("Still here.")],
     );
-    let check = program(&world, "slow", "echo started > started\nsleep 600", "");
+    // The shell, and a process it starts, each write their number down.
+    let check = program(
+        &world,
+        "slow",
+        "echo $$ > shell.pid\nsleep 600 &\necho $! > child.pid\necho started > started\nwait",
+        "",
+    );
     user_checks(&world, &[&check], "");
     let core = world.core_with(|options| options.trust_project = true);
     world.run(async {
@@ -525,6 +531,12 @@ fn sys_an_interrupt_during_a_check_stops_it_and_the_next_prompt_is_answered() {
         let ended = front.ends().pop().expect("the turn ended");
         assert_eq!(ended.outcome, TurnOutcome::Interrupted);
         assert_eq!(ended.verification, None);
+        // Nothing of the check's tree is left running.
+        #[cfg(target_os = "linux")]
+        for file in ["shell.pid", "child.pid"] {
+            let pid = world.read(file).expect("the number was written");
+            assert!(!running(pid.trim()), "{file}: {pid} is still running");
+        }
         // The history is whole: the next prompt is answered.
         let next = front.turn("are you there?").await;
         assert_eq!(next.outcome, TurnOutcome::Completed);
@@ -652,6 +664,16 @@ fn sys_an_entry_turned_off_while_its_round_runs_does_not_run() {
                 ]
             )
         );
+        // Not run because it was turned off: the engine, which dropped its
+        // rule, would refuse it too, but this is the look that says why.
+        let finished = told(&front).pop().expect("a finished round");
+        assert!(
+            finished.checks[1]
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("no longer in use")),
+            "{finished:?}"
+        );
         assert_eq!(ended.verification, Some(Verification::Incomplete));
         front.close().await;
     });
@@ -731,6 +753,121 @@ fn sys_what_a_failed_check_printed_keeps_the_lines_that_report_a_problem() {
         assert!(
             report.contains("| error: the parser broke at line 7"),
             "{report}"
+        );
+        front.close().await;
+    });
+}
+
+/// Whether the process `pid` is still running: there, and not a zombie.
+#[cfg(target_os = "linux")]
+fn running(pid: &str) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    // The state comes after the program's name, which is in brackets.
+    let state = stat
+        .rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().next());
+    !matches!(state, Some("Z" | "X"))
+}
+
+#[cfg(unix)]
+#[test]
+fn sys_a_check_after_the_level_was_lowered_mid_round_does_not_run() {
+    let world = World::new("verify_lowered", [writes("c1", "a.txt"), says("Done.")]);
+    // The first check waits, while it runs, for the test to say go.
+    let first = program(
+        &world,
+        "first",
+        "echo started > started\nwhile [ ! -f go ]; do sleep 0.01; done",
+        "",
+    );
+    user_checks(&world, &[&first, "./missing-second"], "");
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("change it").await;
+        while !world.workspace.join("started").exists() {
+            tokio::task::yield_now().await;
+        }
+        front
+            .op(Op::SessionSet(SessionSetParams {
+                session_id: front.session.clone(),
+                settings: SessionSettings {
+                    level: Some(Level::ReadOnly),
+                    ..SessionSettings::default()
+                },
+            }))
+            .await
+            .expect("the level is lowered");
+        world.put("go", "");
+        front.turns(1).await;
+        let finished = told(&front).pop().expect("a finished round");
+        assert_eq!(finished.checks[0].outcome, Some(CheckOutcome::Passed));
+        assert_eq!(finished.checks[1].outcome, Some(CheckOutcome::NotRun));
+        assert!(
+            finished.checks[1]
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("read-only level")),
+            "{finished:?}"
+        );
+        front.close().await;
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn sys_once_the_turns_time_for_checks_is_spent_a_failure_stands_and_nothing_runs() {
+    let world = World::new(
+        "verify_time_spent",
+        [
+            writes("c1", "a.txt"),
+            says("Done."),
+            writes("c2", "b.txt"),
+            says("Again."),
+            says("Never."),
+        ],
+    );
+    // It fails, after the test has moved the clock past the turn's time
+    // for checks while it ran.
+    let check = program(
+        &world,
+        "check",
+        "echo started > started\nwhile [ ! -f go ]; do sleep 0.01; done\nexit 1",
+        "",
+    );
+    user_checks(&world, &[&check], "");
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("change it").await;
+        while !world.workspace.join("started").exists() {
+            tokio::task::yield_now().await;
+        }
+        world.clock.advance(std::time::Duration::from_secs(5 * 60));
+        world.put("go", "");
+        front.turns(1).await;
+        let ended = front.ends().pop().expect("the turn ended");
+        assert_eq!(ended.verification, Some(Verification::Failed));
+        // One round ran, and was told; the second started nothing and told
+        // the model nothing.
+        let phases: Vec<VerificationPhase> = told(&front)
+            .into_iter()
+            .map(|notice| notice.phase)
+            .collect();
+        assert_eq!(
+            phases,
+            [VerificationPhase::Started, VerificationPhase::Finished]
+        );
+        assert_eq!(world.provider.requests().len(), 4);
+        assert!(
+            front
+                .notices()
+                .iter()
+                .any(|notice| notice.contains("this turn's time for them (4m) is spent")),
+            "{:?}",
+            front.notices()
         );
         front.close().await;
     });

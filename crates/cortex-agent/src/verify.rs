@@ -91,12 +91,19 @@ pub enum VerifyOutcome {
         /// command's.
         report: String,
     },
+    /// No check failed in this round, and one that failed earlier in the
+    /// turn has not run to a result since: the turn's verdict is `failed`,
+    /// and there is nothing new to tell the model.
+    StillFailing,
     /// A check made the turn stop: it changed a protected path, or left a
     /// process that could not be cleared, or a change from outside was
     /// found before it. The turn ends with the outcome `denied`.
     Stopped {
         /// Why, for the model and for whoever reads how the turn ended.
         reason: String,
+        /// Whether a check of the turn has failed and not passed since: the
+        /// verdict is then `failed`.
+        failing: bool,
     },
 }
 

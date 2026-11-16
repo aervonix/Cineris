@@ -1660,10 +1660,18 @@ impl Session {
                     Err(error) => Phase::Finishing(End::store(&error)),
                 }
             }
-            VerifyOutcome::Stopped { reason } => {
-                if turn.verification != Some(Verification::Failed) {
-                    turn.verification = Some(Verification::Incomplete);
-                }
+            VerifyOutcome::StillFailing => {
+                // Nothing new for the model: the turn completes with what
+                // still fails.
+                turn.verification = Some(Verification::Failed);
+                Phase::Finishing(End::completed())
+            }
+            VerifyOutcome::Stopped { reason, failing } => {
+                turn.verification = Some(if failing {
+                    Verification::Failed
+                } else {
+                    Verification::Incomplete
+                });
                 // The model is told why, as a stopped tool round tells it
                 // in the call's result.
                 let note =

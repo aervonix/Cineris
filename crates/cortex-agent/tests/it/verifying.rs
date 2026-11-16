@@ -78,6 +78,53 @@ fn a_later_round_that_ran_nothing_does_not_hide_an_earlier_failure() {
 }
 
 #[test]
+fn a_round_with_nothing_new_ends_the_turn_failed_and_tells_the_model_nothing() {
+    let (world, rig) = Rig::one(
+        "verify_still_failing",
+        [
+            writes("a"),
+            says("Done."),
+            writes("b"),
+            says("Again."),
+            says("Never."),
+        ],
+    );
+    lock(&rig.verifier.outcomes).extend([
+        VerifyOutcome::Failed {
+            report: "a test failed".to_owned(),
+        },
+        VerifyOutcome::StillFailing,
+    ]);
+    turn(&world, &rig);
+    assert_eq!(
+        rig.events.ends()[0].verification,
+        Some(Verification::Failed)
+    );
+    // One notice, for the round that had something to say.
+    let told = rig
+        .store
+        .items()
+        .into_iter()
+        .filter(|item| matches!(item, Item::Notice(_)))
+        .count();
+    assert_eq!(told, 1);
+    assert_eq!(world.provider.requests().len(), 4, "nothing more is asked");
+}
+
+#[test]
+fn a_stop_after_a_failure_in_its_round_ends_the_turn_failed() {
+    let (world, rig) = Rig::one("verify_stop_failing", [writes("a"), says("Done.")]);
+    lock(&rig.verifier.outcomes).push_back(VerifyOutcome::Stopped {
+        reason: "a hook changed".to_owned(),
+        failing: true,
+    });
+    turn(&world, &rig);
+    let end = &rig.events.ends()[0];
+    assert_eq!(end.outcome, TurnOutcome::Denied);
+    assert_eq!(end.verification, Some(Verification::Failed));
+}
+
+#[test]
 fn a_write_that_found_its_content_there_does_not_send_the_turn_to_the_checks() {
     let (world, rig) = Rig::one(
         "verify_unchanged_write",
@@ -152,6 +199,7 @@ fn a_check_that_stops_the_turn_ends_it_denied_and_the_model_is_told_why() {
     );
     lock(&rig.verifier.outcomes).push_back(VerifyOutcome::Stopped {
         reason: "`cargo test` changed `.git/hooks/pre-commit`, a protected path.".to_owned(),
+        failing: false,
     });
     turn(&world, &rig);
     let end = &rig.events.ends()[0];
