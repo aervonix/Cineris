@@ -37,6 +37,13 @@ pub(crate) struct ReviewPanel {
 }
 
 impl ReviewPanel {
+    /// The whole output the core kept of the check at row `focused` (the
+    /// rows are the files, then the checks).
+    fn check_output(&self, focused: usize) -> Option<&cortex_protocol::item::ArtifactRef> {
+        let at = focused.checked_sub(self.turn.files.len())?;
+        self.turn.checks.as_ref()?.checks.get(at)?.artifact.as_ref()
+    }
+
     fn reset(&mut self) {
         self.turn = Review::default();
         self.rounds.clear();
@@ -170,9 +177,9 @@ impl Panel for ReviewPanel {
     fn hint(&self, focused: usize, keymap: &KeyMap) -> Vec<String> {
         let key = |action: Action| keymap.keys_of(action).into_iter().next().map(name);
         let mut keys = Vec::new();
-        // PR 3: `Enter` on a check opens its output (`CheckReport.artifact`)
-        // in the viewer.
-        if focused < self.turn.files.len()
+        // A file opens at its box; a check whose output was kept, at its
+        // whole output.
+        if (focused < self.turn.files.len() || self.check_output(focused).is_some())
             && let Some(open) = key(Action::FocusActivate)
         {
             keys.push(format!("{open} opens it in the viewer"));
@@ -196,8 +203,14 @@ impl Panel for ReviewPanel {
     fn activate(&mut self, focused: usize) -> Act {
         match self.rounds.get(focused) {
             Some(round) => Act::View(round.and_then(|round| usize::try_from(round).ok())),
-            // PR 3: a check's output in the viewer.
-            None => Act::Taken,
+            // A check's whole output, which the core kept as an artifact.
+            None => match self.check_output(focused) {
+                Some(artifact) => Act::Artifact {
+                    id: artifact.id.clone(),
+                    label: artifact.label.clone(),
+                },
+                None => Act::Taken,
+            },
         }
     }
 }

@@ -361,22 +361,22 @@ caught-by:
     app::tests::panels::each_plan_key_sends_its_edit_to_the_session
 
 [break] space-skips-a-done-item
-rule: `space` on a done or skipped item does nothing (restoring waits for `PlanEdit::Restore`), and is not typed either.
+rule: `space` on a done item does nothing, and is not typed either.
 file: crates/cortex-tui/src/app/panels/plan.rs
 in: PlanPanel::act
-find: PlanStatus::Done | PlanStatus::Skipped => Act::Taken
-replace: PlanStatus::Skipped => Act::Taken
+find: PlanStatus::Done => Act::Taken
+replace: PlanStatus::Done => Self::update(session, PlanEdit::Skip(PlanItemRef { id }))
 caught-by:
-    app::tests::panels::space_on_a_done_or_skipped_item_does_nothing_and_is_not_offered
+    app::tests::panels::space_on_a_done_item_does_nothing_and_is_not_offered
 
 [break] the-hint-offers-space-on-a-done-item
 rule: The hint row offers only what the keys do on the focused item: no `space skips` on a done one.
 file: crates/cortex-tui/src/app/panels/plan.rs
 in: PlanPanel::hint
-find: if skips && let Some(skip) = key(Action::FocusSkip) {
-replace: if let Some(skip) = key(Action::FocusSkip) {
+find: Some(PlanStatus::Done) | None => {}
+replace: None => {}
 caught-by:
-    app::tests::panels::space_on_a_done_or_skipped_item_does_nothing_and_is_not_offered
+    app::tests::panels::space_on_a_done_item_does_nothing_and_is_not_offered
 
 [break] move-up-moves-down
 rule: `alt+up` moves the focused item up one.

@@ -48,6 +48,9 @@ pub(super) struct Viewer {
     /// It shows this request whole (`Ctrl+O` in its dialog), not the
     /// transcript, while its dialog is the one open.
     whole: Option<RequestId>,
+    /// It shows this text (a check's whole output, step 24), not the
+    /// transcript: its label, then its lines.
+    text: Option<(String, Vec<String>)>,
 }
 
 /// The rows of the transcript in the viewer, and where each box's rows are.
@@ -99,6 +102,32 @@ impl App {
         }
         self.viewer = Some(Viewer {
             whole: self.dialogs.front().map(|dialog| dialog.id.clone()),
+            ..Viewer::default()
+        });
+    }
+
+    /// Opens the viewer on a stored artifact's text, under its label: `Esc`
+    /// returns to the inline screen. What was cut to the core's limit is
+    /// said at its end.
+    pub(super) fn open_text(
+        &mut self,
+        label: &str,
+        artifact: &cortex_protocol::methods::SessionArtifactResult,
+    ) {
+        if self.zone.is_none() {
+            self.zone = Some(Zone::system());
+        }
+        let mut lines: Vec<String> = artifact.text.lines().map(str::to_owned).collect();
+        if artifact.cut {
+            lines.push(String::new());
+            lines.push(format!(
+                "(cut: {} of its {} bytes are shown)",
+                artifact.text.len(),
+                artifact.bytes
+            ));
+        }
+        self.viewer = Some(Viewer {
+            text: Some((label.to_owned(), lines)),
             ..Viewer::default()
         });
     }
@@ -217,6 +246,27 @@ impl App {
         if let Some(id) = &state.whole {
             if let Some(dialog) = self.dialogs.front().filter(|dialog| &dialog.id == id) {
                 rows = dialog.whole(width, &self.look);
+            }
+            return Drawn { rows, boxes };
+        }
+        if let Some((label, lines)) = &state.text {
+            // What acts unseen is shown as its escape, and each line wraps
+            // to the width: the output of a command the repository holds.
+            rows.extend(crate::layout::wrap(
+                &[cortex_term::Span::new(
+                    cortex_term::sanitize(label).into_owned(),
+                    self.look.theme.style(crate::theme::Token::Muted),
+                )],
+                width,
+            ));
+            rows.push(Line::new());
+            for line in lines {
+                rows.extend(crate::layout::wrap(
+                    &[cortex_term::Span::plain(
+                        cortex_term::sanitize(line).into_owned(),
+                    )],
+                    width,
+                ));
             }
             return Drawn { rows, boxes };
         }

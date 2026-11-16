@@ -459,6 +459,21 @@ impl App {
                 }
             }
             Act::View(box_) => self.open_viewer(box_),
+            Act::Artifact { id, label } => {
+                let Some(session) = self.session.as_ref().map(|s| s.session_id.clone()) else {
+                    return;
+                };
+                let ticket = self
+                    .link
+                    .send(cortex_protocol::methods::Op::SessionArtifact(
+                        cortex_protocol::methods::SessionArtifactParams {
+                            session_id: session.clone(),
+                            artifact: id,
+                        },
+                    ));
+                self.pending
+                    .insert(ticket, Pending::Artifact { session, label });
+            }
             Act::Say(sentence) => self.say(&sentence),
         }
     }
