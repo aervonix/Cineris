@@ -2,6 +2,7 @@
 
 - Area: cortex-index
 - Owner: `cortex-index`'s next change, or a tooling step
+- Flaky: `cortex-index::it outlines::outlining_a_name_of_a_megabyte_takes_little_memory`
 
 | Item | Who | When |
 |---|---|---|

@@ -2,6 +2,7 @@ A session's base capture can come out incomplete when the turn's own git runs be
 
 - Area: cortex-core
 - Owner: the next step that changes the base capture, or step 32
+- Flaky: `cortex-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw`
 
 | Item | Who | When |
 |---|---|---|

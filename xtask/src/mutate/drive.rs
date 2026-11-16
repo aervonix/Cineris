@@ -17,7 +17,9 @@ use serde_json::{Value, json};
 use super::list::{self, Break, Expect};
 use super::{apply, jobs, read_source};
 use crate::Result;
+use crate::flaky::{self, Listed};
 use crate::junit::{self, TestCase};
+use crate::stall::rerun::{self, Test, Verdict as Second};
 use crate::workspace;
 
 /// How a run ended.
@@ -31,7 +33,7 @@ pub(crate) enum Finished {
 }
 
 /// What a run was asked to do differently.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Options {
     /// Forget the chosen breaks' results first.
     pub(crate) again: bool,
@@ -40,6 +42,9 @@ pub(crate) struct Options {
     /// What waits while the copy's lock is held by another: the thread's
     /// sleep when none is given. A test gives one that waits for nothing.
     pub(crate) pause: Option<fn(Duration)>,
+    /// The known flaky tests (`crate::flaky`): one that fails with nothing
+    /// broken, beside no other failure, is run again once.
+    pub(crate) flaky: Vec<Listed>,
 }
 
 /// What a test run of the copy came to.
@@ -72,6 +77,105 @@ pub(crate) trait Runner: Send {
 
     /// Runs the packages' tests in `tree`.
     fn test(&mut self, tree: &Path, packages: &[String]) -> Result<Tested>;
+
+    /// Runs the tests of the packages that the filterset `filter` chooses,
+    /// in `tree`: a known flake, run again. A runner that cannot leaves
+    /// the flake failed.
+    fn test_only(&mut self, tree: &Path, packages: &[String], filter: &str) -> Result<Tested> {
+        let _ = (tree, packages, filter);
+        Ok(Tested::Broken(
+            "this runner cannot run some tests alone".to_owned(),
+        ))
+    }
+}
+
+/// What the run of a set's tests with nothing broken came to, with any
+/// known flake that failed run again once.
+pub(crate) struct Baseline {
+    tested: Tested,
+    /// What happened to the known flakes, to be said.
+    notes: Vec<String>,
+}
+
+/// After the tests of `packages` ran with nothing broken: when every test
+/// that failed is a known flake, those are run again once, and each case of
+/// one that passed is replaced by the second run's. A test that is not
+/// listed is never run again, and nothing is run again beside one.
+fn known_flakes_again(
+    runner: &mut dyn Runner,
+    tree: &Path,
+    packages: &[String],
+    tested: Tested,
+    listed: &[Listed],
+) -> Result<Baseline> {
+    let unchanged = |tested| Baseline {
+        tested,
+        notes: Vec::new(),
+    };
+    let Tested::Ran(cases) = &tested else {
+        return Ok(unchanged(tested));
+    };
+    let failing: Vec<&TestCase> = cases.iter().filter(|case| case.failed).collect();
+    let flakes: Vec<&Listed> = failing
+        .iter()
+        .filter_map(|case| flaky::find(listed, &case.binary, &case.name))
+        .collect();
+    if flakes.is_empty() {
+        return Ok(unchanged(tested));
+    }
+    let mut notes: Vec<String> = flakes.iter().map(|flake| flaky::named(flake)).collect();
+    if flakes.len() < failing.len() {
+        notes.push(format!(
+            "Not run again: {} other test(s) failed beside the known flake(s).",
+            failing.len() - flakes.len()
+        ));
+        return Ok(Baseline { tested, notes });
+    }
+    let tests: Vec<Test> = flakes.iter().map(|flake| flake.test.clone()).collect();
+    notes.push(format!(
+        "Running the {} known flake(s) again, once.",
+        tests.len()
+    ));
+    let second = runner.test_only(tree, packages, &rerun::filter(&tests))?;
+    let again: Vec<TestCase> = match second {
+        Tested::Ran(again) => again,
+        Tested::Stalled(note) | Tested::Broken(note) | Tested::DoesNotCompile(note) => {
+            notes.push(format!(
+                "Their second run ended with no verdict, so they count as failed: {}",
+                note.lines().next().unwrap_or_default()
+            ));
+            return Ok(Baseline { tested, notes });
+        }
+    };
+    let mut merged = cases.clone();
+    for test in &tests {
+        let second = again
+            .iter()
+            .find(|case| case.binary == test.binary && case.name == test.name);
+        let verdict = match second {
+            None => Second::Missing,
+            Some(case) if case.failed => Second::Failed,
+            Some(_) => Second::Passed,
+        };
+        notes.push(format!(
+            "  {} {} {}",
+            test.binary,
+            test.name,
+            flaky::says(verdict)
+        ));
+        if let Some(second) = second.filter(|_| verdict == Second::Passed) {
+            for case in merged
+                .iter_mut()
+                .filter(|case| case.binary == test.binary && case.name == test.name)
+            {
+                *case = second.clone();
+            }
+        }
+    }
+    Ok(Baseline {
+        tested: Tested::Ran(merged),
+        notes,
+    })
 }
 
 // ------------------------------------------------------------------ cargo
@@ -286,6 +390,18 @@ impl Runner for CargoRunner {
     }
 
     fn test(&mut self, tree: &Path, packages: &[String]) -> Result<Tested> {
+        self.run_tests(tree, packages, &[])
+    }
+
+    fn test_only(&mut self, tree: &Path, packages: &[String], filter: &str) -> Result<Tested> {
+        self.run_tests(tree, packages, &["-E".to_owned(), filter.to_owned()])
+    }
+}
+
+impl CargoRunner {
+    /// Runs the packages' tests in `tree`, with `extra` arguments for
+    /// nextest.
+    fn run_tests(&mut self, tree: &Path, packages: &[String], extra: &[String]) -> Result<Tested> {
         let report = workspace::nextest_report(tree, "mutate");
         // A report left by the run before must not be read as this run's.
         workspace::forget_report(&report)?;
@@ -294,6 +410,7 @@ impl Runner for CargoRunner {
             .map(str::to_owned)
             .to_vec();
         arguments.extend(Self::package_arguments(packages));
+        arguments.extend(extra.iter().cloned());
         let (status, output) = self.cargo(tree, &arguments)?;
         let read = (status == Some(0) || status == Some(NEXTEST_TESTS_FAILED))
             .then(|| junit::read(&report));
@@ -978,8 +1095,10 @@ pub(crate) fn drive_jobs(
     }
     // A set whose run stalled is run again with one job, once the others
     // are done: a stall is a machine with more on it than it can take.
-    let test_set =
-        |runner: &mut dyn Runner, copy: &Path, set: &(&[String], &str)| runner.test(copy, set.0);
+    let test_set = |runner: &mut dyn Runner, copy: &Path, set: &(&[String], &str)| {
+        let tested = runner.test(copy, set.0)?;
+        known_flakes_again(runner, copy, set.0, tested, &options.flaky)
+    };
     let mut stalled = Vec::new();
     let finished = jobs::for_each(
         runners,
@@ -1141,12 +1260,20 @@ pub(crate) fn drive_jobs(
 fn take_baseline(
     results: &mut Results,
     (packages, baseline_key): &(&[String], &str),
-    tested: Tested,
+    baseline: Baseline,
     say: &mut dyn FnMut(&str),
 ) -> Result<bool> {
     let package = packages.join(", ");
     say(&format!("The tests of {package} with nothing broken ..."));
-    let cases = match tested {
+    for note in &baseline.notes {
+        say(note);
+    }
+    let again = baseline
+        .notes
+        .iter()
+        .filter(|note| note.ends_with(flaky::says(Second::Passed)))
+        .count();
+    let cases = match baseline.tested {
         Tested::Ran(cases) => cases,
         Tested::Stalled(note) => {
             say(note.trim_end());
@@ -1178,7 +1305,14 @@ fn take_baseline(
         ));
     }
     let tests: Vec<String> = cases.iter().map(TestCase::id).collect();
-    say(&format!("  {} tests pass.", tests.len()));
+    if again > 0 {
+        say(&format!(
+            "  {} tests pass, {again} of them a known flake on its second run.",
+            tests.len()
+        ));
+    } else {
+        say(&format!("  {} tests pass.", tests.len()));
+    }
     results.put(baseline_key, json!({ "tests": tests }))?;
     Ok(true)
 }
@@ -1376,6 +1510,10 @@ replace: \"inside\"
         asked: Vec<String>,
         /// A test that fails whatever the code is.
         always_failing: Option<&'static str>,
+        /// A test that fails in a run of every test and passes run alone,
+        /// unless `flaky_fails_alone`: a flake.
+        flaky: Option<&'static str>,
+        flaky_fails_alone: bool,
         /// How many test runs of a broken tree fail without a verdict, as
         /// a run does when the machine gets in its way.
         runs_to_lose: usize,
@@ -1449,7 +1587,7 @@ replace: \"inside\"
                 binary: "demo".to_owned(),
                 name: name.to_owned(),
                 seconds: 0.01,
-                failed: failed || self.always_failing == Some(name),
+                failed: failed || self.always_failing == Some(name) || self.flaky == Some(name),
                 retried: false,
                 repeat: None,
             };
@@ -1466,6 +1604,150 @@ replace: \"inside\"
                 case("tests::unrelated", false),
             ]))
         }
+
+        fn test_only(&mut self, _tree: &Path, packages: &[String], filter: &str) -> Result<Tested> {
+            self.asked
+                .push(format!("test only {} {filter}", packages.join(",")));
+            Ok(Tested::Ran(
+                self.flaky
+                    .iter()
+                    .map(|name| TestCase {
+                        binary: "demo".to_owned(),
+                        name: (*name).to_owned(),
+                        seconds: 0.01,
+                        failed: self.flaky_fails_alone,
+                        retried: false,
+                        repeat: None,
+                    })
+                    .collect(),
+            ))
+        }
+    }
+
+    /// The options of a run whose known flake is `name` of `demo`.
+    fn with_flake(name: &str) -> Options {
+        Options {
+            pause: Some(|_| {}),
+            flaky: vec![crate::flaky::Listed {
+                test: crate::stall::rerun::Test {
+                    binary: "demo".to_owned(),
+                    name: name.to_owned(),
+                },
+                item: "a-flaky-demo".to_owned(),
+            }],
+            ..Options::default()
+        }
+    }
+
+    /// Runs `list` with nothing but `runner`, under `options`: what it came
+    /// to and what it said.
+    fn run_with(
+        run: &Run,
+        list: &[Break],
+        options: &Options,
+        runner: &mut Pretend,
+    ) -> (Result<Finished>, String) {
+        let mut said = String::new();
+        let finished = drive(
+            &run.root,
+            &run.scratch,
+            list,
+            options,
+            runner,
+            &mut || false,
+            &mut |line| {
+                said.push_str(line);
+                said.push('\n');
+            },
+        );
+        (finished, said)
+    }
+
+    #[test]
+    fn a_known_flake_that_fails_with_nothing_broken_is_run_again_once_and_the_run_goes_on() {
+        let run = Run::new("flake-passes");
+        let list = breaks("demo", LIST);
+        let mut runner = Pretend {
+            flaky: Some("tests::unrelated"),
+            ..Pretend::default()
+        };
+        let (finished, said) = run_with(&run, &list, &with_flake("tests::unrelated"), &mut runner);
+        assert!(finished.is_ok(), "{said}");
+        assert!(
+            said.contains(
+                "demo tests::unrelated failed, and is a known flake: \
+                 docs/outstanding/a-flaky-demo.md"
+            ),
+            "{said}"
+        );
+        assert!(
+            said.contains("demo tests::unrelated passed when run again"),
+            "{said}"
+        );
+        assert!(
+            said.contains("4 tests pass, 1 of them a known flake on its second run"),
+            "{said}"
+        );
+        assert_eq!(
+            runner
+                .asked
+                .iter()
+                .filter(|asked| asked.starts_with("test only"))
+                .collect::<Vec<_>>(),
+            ["test only demo (binary_id(=demo) and test(=tests::unrelated))"]
+        );
+    }
+
+    #[test]
+    fn a_known_flake_that_fails_again_or_beside_another_failure_stops_the_run() {
+        let list = breaks("demo", LIST);
+        // It fails when run again.
+        let run = Run::new("flake-again");
+        let mut runner = Pretend {
+            flaky: Some("tests::unrelated"),
+            flaky_fails_alone: true,
+            ..Pretend::default()
+        };
+        let (finished, said) = run_with(&run, &list, &with_flake("tests::unrelated"), &mut runner);
+        let error = finished.unwrap_err();
+        assert!(error.contains("fail with nothing broken"), "{error}");
+        assert!(said.contains("FAILED AGAIN"), "{said}");
+
+        // Another test failed beside it: nothing is run again.
+        let run = Run::new("flake-beside");
+        let mut runner = Pretend {
+            flaky: Some("tests::unrelated"),
+            always_failing: Some("tests::far_over_is_over"),
+            ..Pretend::default()
+        };
+        let (finished, said) = run_with(&run, &list, &with_flake("tests::unrelated"), &mut runner);
+        assert!(finished.is_err());
+        assert!(
+            said.contains("Not run again: 1 other test(s) failed"),
+            "{said}"
+        );
+        assert!(
+            !runner
+                .asked
+                .iter()
+                .any(|asked| asked.starts_with("test only"))
+        );
+
+        // Not listed: never run again.
+        let run = Run::new("flake-unlisted");
+        let mut runner = Pretend {
+            flaky: Some("tests::unrelated"),
+            ..Pretend::default()
+        };
+        let (finished, said) = run_with(&run, &list, &with_flake("tests::other"), &mut runner);
+        assert!(finished.is_err());
+        assert!(!said.contains("known flake"), "{said}");
+        assert!(
+            !runner
+                .asked
+                .iter()
+                .any(|asked| asked.starts_with("test only"))
+        );
     }
 
     struct Run {
@@ -1516,6 +1798,7 @@ replace: \"inside\"
                 again: false,
                 compile_check: true,
                 pause: Some(|_| {}),
+                flaky: Vec::new(),
             };
             drive(
                 &self.root,
@@ -1664,6 +1947,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
                 again: false,
                 compile_check: true,
                 pause: Some(|_| {}),
+                flaky: Vec::new(),
             },
             &mut runners,
             &mut || {
@@ -1732,6 +2016,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
                 again: false,
                 compile_check: true,
                 pause: Some(|_| {}),
+                flaky: Vec::new(),
             },
             &mut again,
             &mut || false,
@@ -2028,6 +2313,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             again: true,
             compile_check: true,
             pause: Some(|_| {}),
+            flaky: Vec::new(),
         };
 
         drive(
@@ -2097,6 +2383,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             again: false,
             compile_check: false,
             pause: Some(|_| {}),
+            flaky: Vec::new(),
         };
 
         let finished = drive(
@@ -2323,6 +2610,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
                 again: false,
                 compile_check: false,
                 pause: Some(|_| {}),
+                flaky: Vec::new(),
             },
             &mut runners,
             &mut || false,
@@ -2626,6 +2914,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             again: false,
             compile_check: false,
             pause: Some(|_| {}),
+            flaky: Vec::new(),
         };
         let mut runner = Together(Pretend::default());
 
@@ -2840,6 +3129,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             again: false,
             compile_check: true,
             pause: Some(|_| {}),
+            flaky: Vec::new(),
         };
         let mut said = String::new();
 
@@ -2911,6 +3201,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             again: true,
             compile_check: false,
             pause: Some(|_| {}),
+            flaky: Vec::new(),
         };
         let mut said = String::new();
         let met_in_its_run = drive(

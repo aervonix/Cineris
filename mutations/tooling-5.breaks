@@ -22,8 +22,8 @@ caught-by:
 rule: A run in which a test failed on some repeat is a failure, whatever nextest's status says.
 file: xtask/src/stress.rs
 in: conclude
-find: if summary.failing > 0 {
-replace: if summary.failing > usize::MAX - 1 {
+find: if failing > 0 {
+replace: if failing > usize::MAX - 1 {
 caught-by:
     stress::tests::a_run_found_nothing_only_if_nextest_agrees_and_every_repeat_is_there
 

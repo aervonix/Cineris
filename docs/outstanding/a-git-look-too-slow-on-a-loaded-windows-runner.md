@@ -2,6 +2,7 @@ The shell's look at changes gave up as too slow on a loaded Windows runner, fail
 
 - Area: cortex-tools
 - Owner: the next step that changes the look, or step 32
+- Flaky: `cortex-tools::it changes::sys_every_git_the_look_starts_goes_through_its_confinement`
 
 | Item | Who | When |
 |---|---|---|

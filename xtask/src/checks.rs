@@ -391,7 +391,28 @@ fn run_with_rerun(run: &[String], root: &Path, tiers: u8) -> Result<()> {
     if let Some(summary) = &outcome.summary {
         steps::append_job_summary(&format!("{summary}\n"));
     }
-    outcome.result
+    let Err(error) = outcome.result else {
+        return Ok(());
+    };
+    // A known flake among what still failed is named, and, away from CI,
+    // run again once (`crate::flaky`).
+    let (listed, warning) = crate::flaky::listed(root);
+    if let Some(warning) = warning {
+        println!("warning: {warning}");
+    }
+    let flakes = crate::flaky::after_failure(
+        run,
+        &workspace::nextest_report(root, "ci"),
+        error,
+        &listed,
+        !crate::flaky::in_ci(),
+        &mut exec,
+        &mut |line| println!("{line}"),
+    );
+    if let Some(summary) = &flakes.summary {
+        steps::append_job_summary(&format!("{summary}\n"));
+    }
+    flakes.result
 }
 
 /// After a run that failed: says so when its timeouts ended together, the
