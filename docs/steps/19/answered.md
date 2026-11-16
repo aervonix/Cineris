@@ -256,11 +256,15 @@ Headless's report, `verify/run`, the measurements on the hosted runners and the 
 
 ## Measured
 
-On the desktop, a release build, medians. The rows are in [performance-budgets.md](../../performance-budgets.md), "Latency the harness adds".
+A release build, medians: on the desktop, and on the hosted runners by `try`'s `perf` (`perf_the_verification_stage_when_no_check_runs` on the branch, run 43910965367; the core's two on `main` after the first pull request, runs 43904710553 and 43904705426). The rows are in [performance-budgets.md](../../performance-budgets.md), "Latency the harness adds".
 
-| What | Proposed budget | Measured |
-|---|---|---|
-| The stage when no check runs, from `Deciding` to `Finishing` | ≤ 50 µs | About 30 µs: the loop's share 0.49 µs, the hop to the blocking pool for the look at the project's files 23 µs, the look and choosing 6.4 µs |
-| Choosing a round's checks: the profile's look (nothing changed) and choosing, 40 entries | ≤ 1 ms | 6.4 µs |
-| A turn that changed no file | Nothing measurable | One comparison: the stage is not entered |
-| What the harness adds to each check | Stated, not budgeted | A command's own: its start (≤ 5 ms on Linux, as step 11 measured), the look for what it changed, and the looks at protected paths (step 26's, marked over what is wanted) |
+| What | Proposed budget | Desktop | Hosted Linux | Hosted Windows |
+|---|---|---|---|---|
+| The stage when no check runs, from `Deciding` to `Finishing` | ≤ 50 µs | About 30 µs | About 25 µs | About 37 µs |
+| … the loop's share | | 0.49 µs | 0.73 µs | 1.1 µs |
+| … the hop to the blocking pool for the look at the project's files | | 23 µs | 13.9 µs | 1 µs |
+| Choosing a round's checks: the profile's look (nothing changed) and choosing, 40 entries | ≤ 1 ms | 6.4 µs | 9.9 µs | 34.6 µs |
+| A turn that changed no file | Nothing measurable | One comparison: the stage is not entered | | |
+| What the harness adds to each check | Stated, not budgeted | A command's own: its start (≤ 5 ms on Linux, as step 11 measured), the look for what it changed, and the looks at protected paths (step 26's, marked over what is wanted) | | |
+
+**The second pull request's tiers on Windows** (`try` 43910959613, the branch against `main` on one runner, the median of 5 runs each, 9 ms a process start): tier 1 18.0 s against 19.0 s, tier 2 40.1 s against 40.2 s, tier 3 69.9 s against 70.9 s. Nothing moved beyond the runner's noise; tier 2 is at its budget on both sides on a runner this slow. One test failed once on `main`'s side only (`trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw`, round 1), and was left out of both.
