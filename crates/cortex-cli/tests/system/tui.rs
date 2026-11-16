@@ -596,10 +596,13 @@ enum Ending {
 impl Ending {
     /// What the platform can send.
     fn all() -> Vec<Self> {
-        let mut all = vec![Self::TwoInterrupts];
-        #[cfg(target_os = "linux")]
-        all.extend([Self::Signal("TERM"), Self::Signal("HUP")]);
-        all
+        vec![
+            Self::TwoInterrupts,
+            #[cfg(target_os = "linux")]
+            Self::Signal("TERM"),
+            #[cfg(target_os = "linux")]
+            Self::Signal("HUP"),
+        ]
     }
 
     /// The exit code the binary ends with.
