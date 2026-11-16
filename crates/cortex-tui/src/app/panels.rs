@@ -154,7 +154,7 @@ pub(crate) enum Act {
 /// closes on its conditions. The layout, the focus, the readiness, the
 /// typing rule, the item edit and the routing of results are the
 /// mechanism's: a kind only says what it shows and what its keys do.
-pub(crate) trait Panel: std::fmt::Debug {
+pub(crate) trait Panel: std::fmt::Debug + Send {
     /// Its name, by which a command finds it (`plan`, `review`).
     fn name(&self) -> &'static str;
 
