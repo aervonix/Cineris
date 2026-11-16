@@ -233,36 +233,35 @@ impl Session {
     }
 
     /// Takes what waited for the next context epoch, as a compaction begins
-    /// (step 24). The context's settings apply at once, before the
-    /// compaction chooses what to keep: a summary prepared in the
-    /// background with another `keep_recent_tokens` covers other turns, and
-    /// is not used. The models wait for the new epoch's prompt
-    /// ([`Self::take_epoch_models`]), so that the summary is written by the
-    /// model of the epoch it summarises, from its cache.
+    /// (step 24), and keeps it until the compaction's new epoch builds its
+    /// prompt ([`Self::take_epoch_models`]): a compaction that ends with no
+    /// new epoch (nothing to compact, interrupted, a summary that failed)
+    /// leaves the epoch as it was, and what waited waits for the next one.
+    /// The summary is written by the model of the epoch it summarises, from
+    /// its cache, and chooses what to keep by the settings in force.
     pub(super) fn take_next_epoch(&mut self) {
-        let Some(mut change) = self.shared.lock().next_epoch.take() else {
+        let Some(change) = self.shared.lock().next_epoch.take() else {
             return;
         };
-        if let Some(context) = change.context.take() {
+        self.epoch_waiting = Some(change);
+    }
+
+    /// What waited for this epoch, put in force as its prompt is built: the
+    /// context's settings and the roles' models, and whoever set them told.
+    /// They are in force from here: a compaction that fails after this
+    /// leaves them so (its next request then begins an epoch for a change of
+    /// model).
+    fn take_epoch_models(&mut self) {
+        let Some(change) = self.epoch_waiting.take() else {
+            return;
+        };
+        if let Some(context) = change.context {
             let settings = &mut self.context.parts.settings;
             settings.keep_recent_tokens = context.keep_recent_tokens;
             settings.instruction_names = context.instruction_names;
             settings.instructions_cap = context.instructions_cap;
             self.told_keep = false;
         }
-        // A change taken by a compaction that did not finish waits for the
-        // next one, unless a newer one came.
-        self.epoch_waiting = Some(change);
-    }
-
-    /// The models that waited for this epoch, put in force as its prompt is
-    /// built, and whoever set them told: they are in force from here, and
-    /// a compaction that fails after this leaves them so (its next request
-    /// then begins an epoch for the change of model).
-    fn take_epoch_models(&mut self) {
-        let Some(change) = self.epoch_waiting.take() else {
-            return;
-        };
         if !change.models.is_empty() {
             let mut inbox = self.shared.lock();
             let mut models = inbox.models.clone();
