@@ -144,8 +144,8 @@ caught-by:
 rule: No job starts a piece of work once the time is up.
 file: xtask/src/mutate/jobs.rs
 in: for_each
-find: if failure.is_none() && !halt.load(Ordering::SeqCst) && out_of_time() {
-replace: if failure.is_none() && !halt.load(Ordering::SeqCst) && out_of_time() && false {
+find: if out_of_time() { halt.store(true, Ordering::SeqCst); }
+replace: if out_of_time() && false { halt.store(true, Ordering::SeqCst); }
 caught-by:
     mutate::jobs::tests::no_job_starts_a_piece_once_the_time_is_up
 

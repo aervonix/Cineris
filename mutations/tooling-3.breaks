@@ -154,8 +154,8 @@ caught-by:
 rule: A find that ends in a comma rustfmt moves is refused.
 file: xtask/src/mutate/mod.rs
 in: preflight
-find: if ends_in_a_layout_comma(&one.find) {
-replace: if false && ends_in_a_layout_comma(&one.find) {
+find: if !one.in_string && ends_in_a_layout_comma(&one.find) {
+replace: if false && !one.in_string && ends_in_a_layout_comma(&one.find) {
 caught-by:
     mutate::tests::the_preflight_names_each_kind_of_break_that_will_go_wrong
 
