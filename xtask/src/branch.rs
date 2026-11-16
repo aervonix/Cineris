@@ -32,13 +32,16 @@ usage: cargo xtask branch commit-records --branch BRANCH --message MESSAGE FILE.
        cargo xtask branch to-end COMMIT [--base REF]
 
 commit-records  Commits the FILEs, as the working tree has them, to BRANCH,
-                which must not be checked out in any worktree: one commit on
-                top of BRANCH, with the repository's identity, made in an
-                index of its own. The working tree, the index and the branch
-                checked out are not touched. A FILE is a path from the top of
-                the repository, and must be a record: docs/**/*.md or
-                mutations/*.breaks. It prints the commit and the command
-                that pushes it, and pushes nothing.
+                which no worktree may be using (checked out, being rebased or
+                bisected): one commit on top of BRANCH, with the repository's
+                identity, made in an index of its own. The working tree, the
+                index and the branch checked out are not touched. A FILE is a
+                path from the top of the repository, must be a record
+                (docs/steps/**/*.md, docs/outstanding/*.md or
+                mutations/*.breaks) and a regular file, and BRANCH's copy of
+                it must be the one HEAD has: the file is written over BRANCH's
+                version, which it must have started from. It prints the commit
+                and the command that pushes it, and pushes nothing.
 
 fold            Folds the staged changes (or, with --last, the branch's last
                 commit) into COMMIT, an earlier commit of the current branch,
@@ -51,7 +54,10 @@ there is published. They refuse a merge commit in the range, and changes not
 committed (fold takes the staged ones, and refuses any others). A commit that
 does not apply where it goes is named, and nothing is changed. Before the
 branch is moved, its old tip is kept as refs/xtask-backup/BRANCH/UNIX-TIME,
-which is printed; `git reset --keep <that ref>` takes the branch back.
+which is printed with the command that takes the branch back to it: `git reset
+--soft <that ref>` after a fold of the staged changes (they are staged again),
+`git reset --keep <that ref>` after the others. A branch another worktree is
+using is refused.
 Needs git 2.40 or later (`git merge-tree --merge-base`).";
 
 /// git in one repository, as these commands run it.
@@ -227,11 +233,6 @@ impl Git {
             })
             .collect()
     }
-
-    /// A path git names (`rev-parse --git-path`), from this directory.
-    fn git_path(&self, name: &str) -> Result<PathBuf> {
-        Ok(self.dir.join(self.run(&["rev-parse", "--git-path", name])?))
-    }
 }
 
 /// What `git cat-file --batch-check` printed, a line for each name asked:
@@ -348,9 +349,10 @@ impl RecordsRequest {
 }
 
 /// `file` as a path from the top of the repository, when it is a record: a
-/// page of the docs (`docs/**/*.md`) or a list of breaks
-/// (`mutations/*.breaks`). Anything else is refused: this commits records
-/// alone, past the checks a branch's own commit would have.
+/// step's page (`docs/steps/**/*.md`), an item left open
+/// (`docs/outstanding/*.md`) or a list of breaks (`mutations/*.breaks`).
+/// Anything else is refused: this commits records alone, past the checks a
+/// branch's own commit would have.
 pub(crate) fn record_path(file: &str) -> Result<String> {
     let path = file.replace('\\', "/");
     let path = path.strip_prefix("./").unwrap_or(&path);
@@ -365,8 +367,9 @@ pub(crate) fn record_path(file: &str) -> Result<String> {
             "`{file}` is not a path inside the repository, from its top (docs/steps/NN/ci.md)"
         ));
     }
+    let page = |name: &str| name.len() > ".md".len() && name.ends_with(".md");
     let record = match parts.as_slice() {
-        ["docs", .., page] => page.len() > ".md".len() && page.ends_with(".md"),
+        ["docs", "steps", _, .., name] | ["docs", "outstanding", name] => page(name),
         ["mutations", list] => list.len() > ".breaks".len() && list.ends_with(".breaks"),
         _ => false,
     };
@@ -374,25 +377,171 @@ pub(crate) fn record_path(file: &str) -> Result<String> {
         Ok(path.to_owned())
     } else {
         Err(format!(
-            "`{file}` is not a record: commit-records takes only docs/**/*.md and \
-             mutations/*.breaks. Commit anything else on its own branch, where its checks run"
+            "`{file}` is not a record: commit-records takes only docs/steps/**/*.md, \
+             docs/outstanding/*.md and mutations/*.breaks. Commit anything else on its own \
+             branch, where its checks run"
         ))
     }
 }
 
-/// The worktrees `git worktree list --porcelain` lists, each with the branch
-/// checked out in it: `(worktree, refs/heads/…)`.
-pub(crate) fn checked_out(porcelain: &str) -> Vec<(String, String)> {
-    let mut found = Vec::new();
-    let mut worktree = String::new();
-    for line in porcelain.lines() {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            path.clone_into(&mut worktree);
-        } else if let Some(branch) = line.strip_prefix("branch ") {
-            found.push((worktree.clone(), branch.to_owned()));
+/// What one worktree's git directory says of the branches it holds, as
+/// `git branch -f` reads it: `HEAD` (`ref: refs/heads/…`), a rebase's
+/// `rebase-merge/head-name` or `rebase-apply/head-name`, and a bisection's
+/// `BISECT_START` (the branch's short name). A worktree in the middle of a
+/// rebase or a bisection has a detached `HEAD`, and `git worktree list`
+/// shows no branch for it.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct Holds {
+    pub(crate) head: Option<String>,
+    pub(crate) rebase_merge: Option<String>,
+    pub(crate) rebase_apply: Option<String>,
+    pub(crate) bisect: Option<String>,
+}
+
+impl Holds {
+    /// What the git directory `dir` holds; a file that is not there is
+    /// nothing.
+    pub(crate) fn read(dir: &Path) -> Self {
+        let read = |path: PathBuf| {
+            std::fs::read_to_string(path)
+                .ok()
+                .map(|text| text.trim().to_owned())
+        };
+        Self {
+            head: read(dir.join("HEAD")),
+            rebase_merge: read(dir.join("rebase-merge").join("head-name")),
+            rebase_apply: read(dir.join("rebase-apply").join("head-name")),
+            bisect: read(dir.join("BISECT_START")),
         }
     }
+
+    /// How this worktree uses `reference` (`refs/heads/…`), if it does.
+    pub(crate) fn uses(&self, reference: &str) -> Option<&'static str> {
+        let is = |text: &Option<String>| text.as_deref() == Some(reference);
+        if self
+            .head
+            .as_deref()
+            .and_then(|head| head.strip_prefix("ref: "))
+            == Some(reference)
+        {
+            Some("checked out")
+        } else if is(&self.rebase_merge) || is(&self.rebase_apply) {
+            Some("being rebased")
+        } else if self
+            .bisect
+            .as_deref()
+            .is_some_and(|name| format!("refs/heads/{name}") == reference)
+        {
+            Some("being bisected")
+        } else {
+            None
+        }
+    }
+}
+
+/// Every worktree of the repository whose common git directory is
+/// `common`: its git directory and where it is. The main one first (the
+/// common directory, beside its files), then each linked one (under
+/// `worktrees/`, whose `gitdir` file names the worktree's `.git`).
+pub(crate) fn worktrees(common: &Path) -> Vec<(PathBuf, PathBuf)> {
+    let main = if common.file_name().is_some_and(|name| name == ".git") {
+        common.parent().unwrap_or(common).to_path_buf()
+    } else {
+        common.to_path_buf()
+    };
+    let mut found = vec![(common.to_path_buf(), main)];
+    let mut linked: Vec<PathBuf> = std::fs::read_dir(common.join("worktrees"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    linked.sort();
+    for dir in linked {
+        let at = std::fs::read_to_string(dir.join("gitdir"))
+            .ok()
+            .map(|text| PathBuf::from(text.trim()))
+            .and_then(|dot_git| dot_git.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| dir.clone());
+        found.push((dir, at));
+    }
     found
+}
+
+/// The refusal for `branch` (`refs/heads/…` is `reference`) when a worktree
+/// other than the one whose git directory is `except` uses it: as `git
+/// branch -f` refuses a branch "used by worktree at …".
+pub(crate) fn used_elsewhere(
+    common: &Path,
+    reference: &str,
+    except: Option<&Path>,
+) -> Option<String> {
+    let same = |a: &Path, b: &Path| match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    worktrees(common).into_iter().find_map(|(dir, at)| {
+        if except.is_some_and(|except| same(except, &dir)) {
+            return None;
+        }
+        Holds::read(&dir).uses(reference).map(|how| {
+            format!(
+                "`{}` is used by worktree at {} ({how} there): it is not moved under it",
+                reference.trim_start_matches("refs/heads/"),
+                at.display()
+            )
+        })
+    })
+}
+
+/// Whether `path` (`file` under the top of the repository `root`) is a
+/// regular file inside the repository: not a link, and not reached through
+/// one that leads out of it. A link's target is what `hash-object` would
+/// commit, and it may be anywhere.
+fn regular_inside(root: &Path, file: &str) -> Result<()> {
+    let path = root.join(file);
+    let kind = std::fs::symlink_metadata(&path)
+        .map_err(|_| format!("`{file}` is not in the working tree"))?
+        .file_type();
+    if !kind.is_file() {
+        return Err(format!(
+            "`{file}` is not a regular file (a link, or a directory): commit-records commits a \
+             record's own text, never what a link points at"
+        ));
+    }
+    match (std::fs::canonicalize(&path), std::fs::canonicalize(root)) {
+        (Ok(real), Ok(top)) if real.starts_with(&top) => Ok(()),
+        _ => Err(format!(
+            "`{file}` is reached through a link that leads out of the repository: it is not \
+             committed"
+        )),
+    }
+}
+
+/// The refusal for a record whose copy on the branch (`theirs`, its blob)
+/// is not the one `HEAD` has (`ours`): the working file was written over
+/// `HEAD`'s version, and committing it would replace the branch's whole file
+/// with it. `None` when they are the same, or neither has one.
+pub(crate) fn not_from_the_branch(
+    file: &str,
+    branch: &str,
+    theirs: Option<&str>,
+    ours: Option<&str>,
+) -> Option<String> {
+    if theirs == ours {
+        return None;
+    }
+    let name =
+        |blob: Option<&str>| blob.map_or_else(|| "none".to_owned(), |blob| short(blob).to_owned());
+    Some(format!(
+        "`{file}` on {branch} ({}) is not the copy HEAD has ({}): the file here was not written \
+         over {branch}'s version, and committing it would replace {branch}'s whole file. Take \
+         {branch}'s copy first (`git show {branch}:{file} > {file}`), make the record on it, and \
+         run this again",
+        name(theirs),
+        name(ours)
+    ))
 }
 
 /// A commit `commit-records` made.
@@ -407,33 +556,54 @@ pub(crate) struct Committed {
 /// branch, which no worktree has checked out: in an index of its own, with
 /// the branch moved only from the commit read at the start.
 pub(crate) fn commit_records(git: &Git, request: &RecordsRequest) -> Result<Committed> {
-    let branch = &request.branch;
+    let branch = git
+        .run(&["check-ref-format", "--branch", &request.branch])
+        .map_err(|_| format!("`{}` is not a branch's name", request.branch))?;
+    let branch = &branch;
     let reference = format!("refs/heads/{branch}");
-    let found = git.resolve(&[
-        format!("{reference}^{{commit}}"),
-        format!("{reference}^{{tree}}"),
+    for file in &request.files {
+        regular_inside(&git.dir, file)?;
+    }
+    // The repository's common directory, and the index of this command's
+    // own, in one git.
+    let located = git.run(&[
+        "rev-parse",
+        "--git-common-dir",
+        "--git-path",
+        &format!("xtask-records-{}.index", std::process::id()),
     ])?;
-    let [Some(old), Some(old_tree)] = <[Option<String>; 2]>::try_from(found).unwrap_or_default()
-    else {
-        return Err(format!("there is no branch `{branch}` in this repository"));
+    let mut located = located.lines().map(|line| git.dir.join(line));
+    let (Some(common), Some(index)) = (located.next(), located.next()) else {
+        return Err("git named no git directory".to_owned());
     };
-    let listed = git.run(&["worktree", "list", "--porcelain"])?;
-    if let Some((worktree, _)) = checked_out(&listed)
-        .into_iter()
-        .find(|(_, checked)| *checked == reference)
-    {
+    if let Some(refusal) = used_elsewhere(&common, &reference, None) {
         return Err(format!(
-            "`{branch}` is checked out in {worktree}: commit there, with `git commit`. \
-             commit-records is for a branch no worktree has"
+            "{refusal}. commit-records is for a branch no worktree is using: commit there, with \
+             `git commit`"
         ));
     }
+    // The branch, its tree, and each file's copy on it and on HEAD.
+    let mut names = vec![
+        format!("{reference}^{{commit}}"),
+        format!("{reference}^{{tree}}"),
+    ];
     for file in &request.files {
-        if !git.dir.join(file).is_file() {
-            return Err(format!("`{file}` is not in the working tree"));
+        names.push(format!("{reference}:{file}"));
+        names.push(format!("HEAD:{file}"));
+    }
+    let found = git.resolve(&names)?;
+    let [Some(old), Some(old_tree)] = [found[0].clone(), found[1].clone()] else {
+        return Err(format!("there is no branch `{branch}` in this repository"));
+    };
+    for (file, copies) in request.files.iter().zip(found[2..].chunks(2)) {
+        if let Some(refusal) =
+            not_from_the_branch(file, branch, copies[0].as_deref(), copies[1].as_deref())
+        {
+            return Err(refusal);
         }
     }
 
-    let index = Removed(git.git_path(&format!("xtask-records-{}.index", std::process::id()))?);
+    let index = Removed(index);
     let _ = std::fs::remove_file(&index.0);
     let in_index = Call {
         index: Some(&index.0),
@@ -626,6 +796,43 @@ pub(crate) fn backup_name(branch: &str, now: u64, attempt: usize) -> String {
     }
 }
 
+/// What `git update-ref --stdin` is given to keep the old tip as `backup`
+/// and move `branch` (`refs/heads/…`) from `old` to `new`: one transaction,
+/// in which the backup must not be there yet and the branch must still be at
+/// `old`, or neither happens.
+pub(crate) fn move_transaction(backup: &str, old: &str, branch: &str, new: &str) -> String {
+    format!("create {backup} {old}\nupdate {branch} {new} {old}\n")
+}
+
+/// The refusal when the history made again does not end at the tree it
+/// must (`made`, `expected`): the branch's last tree changes, which neither
+/// command may do.
+pub(crate) fn tree_refusal(kind: Kind, made: &str, expected: &str) -> String {
+    let must = match kind {
+        Kind::Fold { last: false } => "the staged tree, what the branch would be with the fix",
+        Kind::Fold { last: true } | Kind::ToEnd => "the branch's tree as it is",
+    };
+    format!(
+        "the history made again would end at tree {}, and it must end at {} ({must}): a commit \
+         after the one rewritten puts back, or takes out, part of what moved, so the branch's \
+         last tree would change. Nothing was moved. Make the change a commit of its own at the \
+         end, or fold it into the later commit that it meets",
+        short(made),
+        short(expected)
+    )
+}
+
+/// What takes the branch back to `backup` after a rewrite of `kind`. After
+/// a fold of the staged changes `--soft`: the index and the working tree have
+/// the fix, and stay as they are, so it is staged again. After the others
+/// `--keep`: the branch's tree is the same before and after.
+pub(crate) fn undo(kind: Kind, backup: &str) -> String {
+    match kind {
+        Kind::Fold { last: false } => format!("git reset --soft {backup}"),
+        Kind::Fold { last: true } | Kind::ToEnd => format!("git reset --keep {backup}"),
+    }
+}
+
 /// A rewrite that was made.
 #[derive(Debug, PartialEq)]
 pub(crate) struct Rewritten {
@@ -802,15 +1009,27 @@ pub(crate) fn rewrite(git: &Git, request: &RewriteRequest, now: u64) -> Result<R
             "HEAD",
             "--git-path",
             "index",
+            "--git-common-dir",
+            "--absolute-git-dir",
         ])
         .map_err(|_| "HEAD names no commit: the branch has none yet".to_owned())?;
-    let mut located = located.lines();
-    let head_ref = located.next().unwrap_or_default().to_owned();
-    let index = git.dir.join(located.next().ok_or("git named no index")?);
+    let located: Vec<&str> = located.lines().collect();
+    let [head_ref, index, common, own] = located.as_slice() else {
+        return Err(format!(
+            "git said where HEAD is in a way not understood: {located:?}"
+        ));
+    };
+    let head_ref = (*head_ref).to_owned();
+    let index = git.dir.join(index);
     let branch = head_ref
         .strip_prefix("refs/heads/")
         .ok_or("HEAD is not on a branch: switch to the branch to rewrite")?
         .to_owned();
+    // Checked out in another worktree too (`worktree add --force`), or
+    // being rebased or bisected there: its history is not changed under it.
+    if let Some(refusal) = used_elsewhere(&git.dir.join(common), &head_ref, Some(Path::new(own))) {
+        return Err(refusal);
+    }
     let named = &request.commit;
     let found = git.resolve(&[
         "HEAD^{commit}".to_owned(),
@@ -958,12 +1177,7 @@ pub(crate) fn rewrite(git: &Git, request: &RewriteRequest, now: u64) -> Result<R
         }
     };
     if builder.tree != expected {
-        return Err(format!(
-            "the new history ends at a tree ({}) that is not the one it must ({}): nothing was \
-             moved",
-            short(&builder.tree),
-            short(&expected)
-        ));
+        return Err(tree_refusal(request.kind, &builder.tree, &expected));
     }
 
     // The backup and the move, in one transaction: both or neither. A backup
@@ -975,7 +1189,7 @@ pub(crate) fn rewrite(git: &Git, request: &RewriteRequest, now: u64) -> Result<R
     let mut attempt = 0;
     let backup = loop {
         let name = backup_name(&branch, now, attempt);
-        let transaction = format!("create {name} {old}\nupdate {head_ref} {new} {old}\n");
+        let transaction = move_transaction(&name, &old, &head_ref, &new);
         let moved = git.run_with(
             &[
                 "update-ref",
@@ -1045,8 +1259,10 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
                 println!("  {} (was {})  {subject}", short(is), short(was));
             }
             println!(
-                "The old tip is kept as {}: `git reset --keep {}` takes {} back to it.",
-                made.backup, made.backup, made.branch
+                "The old tip is kept as {}: `{}` takes {} back to it.",
+                made.backup,
+                undo(request.kind, &made.backup),
+                made.branch
             );
             Ok(())
         }

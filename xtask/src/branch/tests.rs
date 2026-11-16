@@ -4,8 +4,9 @@ use cortex_testkit::Scratch;
 use cortex_testkit::scratch::git;
 
 use super::{
-    CommitInfo, Git, Kind, RecordsRequest, RewriteRequest, backup_name, batch_check, batch_objects,
-    chain_after, checked_out, commit_records, merge_tree_result, record_path, rewrite,
+    CommitInfo, Git, Holds, Kind, RecordsRequest, RewriteRequest, backup_name, batch_check,
+    batch_objects, chain_after, commit_records, merge_tree_result, move_transaction,
+    not_from_the_branch, record_path, rewrite, tree_refusal, undo, used_elsewhere,
 };
 
 fn strings(words: &[&str]) -> Vec<String> {
@@ -16,7 +17,10 @@ fn strings(words: &[&str]) -> Vec<String> {
 fn only_a_record_is_committed_and_its_path_is_read_from_the_top() {
     for (file, path) in [
         ("docs/steps/24/ci.md", "docs/steps/24/ci.md"),
-        ("./docs/README.md", "docs/README.md"),
+        (
+            "./docs/outstanding/a-thing.md",
+            "docs/outstanding/a-thing.md",
+        ),
         (
             "docs\\steps\\tooling-10\\answered.md",
             "docs/steps/tooling-10/answered.md",
@@ -30,6 +34,11 @@ fn only_a_record_is_committed_and_its_path_is_read_from_the_top() {
     }
     for file in [
         "xtask/src/main.rs",
+        "docs/README.md",
+        "docs/testing-and-ci.md",
+        "docs/steps/README.md",
+        "docs/outstanding/sub/a.md",
+        "docs/steps/24/ci.txt",
         "docs/diagram.svg",
         "docs/.md",
         "mutations/sub/x.breaks",
@@ -69,10 +78,10 @@ fn a_request_is_read_and_what_it_lacks_is_said() {
         })
     );
     for (words, said) in [
-        (&["-m", "x", "docs/a.md"][..], "--branch BRANCH"),
-        (&["--branch", "b", "docs/a.md"], "--message MESSAGE"),
+        (&["-m", "x", "docs/steps/1/a.md"][..], "--branch BRANCH"),
+        (&["--branch", "b", "docs/steps/1/a.md"], "--message MESSAGE"),
         (
-            &["--branch", "b", "-m", " ", "docs/a.md"],
+            &["--branch", "b", "-m", " ", "docs/steps/1/a.md"],
             "--message MESSAGE",
         ),
         (&["--branch", "b", "-m", "x"], "name the records"),
@@ -121,17 +130,153 @@ fn the_commits_after_the_target_are_a_straight_line_or_refused() {
 }
 
 #[test]
-fn the_worktrees_branches_and_a_commits_parts_are_read() {
-    let listed = "worktree /work/main\nHEAD 1111\nbranch refs/heads/main\n\n\
-                  worktree /work/detached\nHEAD 2222\ndetached\n\n\
-                  worktree /work/other\nHEAD 3333\nbranch refs/heads/step-24\n";
+fn a_branch_a_worktree_has_checked_out_rebases_or_bisects_is_in_use() {
+    let holds = |head: &str| Holds {
+        head: Some(head.to_owned()),
+        ..Holds::default()
+    };
     assert_eq!(
-        checked_out(listed),
-        [
-            ("/work/main".to_owned(), "refs/heads/main".to_owned()),
-            ("/work/other".to_owned(), "refs/heads/step-24".to_owned()),
-        ]
+        holds("ref: refs/heads/a").uses("refs/heads/a"),
+        Some("checked out")
     );
+    assert_eq!(holds("ref: refs/heads/a").uses("refs/heads/ab"), None);
+    // Mid-rebase or mid-bisection, HEAD is detached: what names the branch
+    // is elsewhere.
+    let detached = "0123456789abcdef0123456789abcdef01234567";
+    for (holds, how) in [
+        (
+            Holds {
+                rebase_merge: Some("refs/heads/a".to_owned()),
+                ..holds(detached)
+            },
+            "being rebased",
+        ),
+        (
+            Holds {
+                rebase_apply: Some("refs/heads/a".to_owned()),
+                ..holds(detached)
+            },
+            "being rebased",
+        ),
+        (
+            Holds {
+                bisect: Some("a".to_owned()),
+                ..holds(detached)
+            },
+            "being bisected",
+        ),
+    ] {
+        assert_eq!(holds.uses("refs/heads/a"), Some(how), "{holds:?}");
+        assert_eq!(holds.uses("refs/heads/b"), None, "{holds:?}");
+    }
+
+    // A repository's git directories, as files: the main worktree on
+    // `main`, a linked one mid-rebase of `reb`, one checking out `work`.
+    let scratch = Scratch::outside("xtask-branch", "holds");
+    let common = scratch.join("repo/.git");
+    let write = |path: &str, text: &str| {
+        let path = common.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write("HEAD", "ref: refs/heads/main\n");
+    write("worktrees/reb/HEAD", &format!("{detached}\n"));
+    write("worktrees/reb/rebase-merge/head-name", "refs/heads/reb\n");
+    write(
+        "worktrees/reb/gitdir",
+        &format!("{}\n", scratch.join("reb/.git").display()),
+    );
+    write("worktrees/work/HEAD", "ref: refs/heads/work\n");
+    write(
+        "worktrees/work/gitdir",
+        &format!("{}\n", scratch.join("work/.git").display()),
+    );
+    let refused = used_elsewhere(&common, "refs/heads/reb", None).unwrap();
+    assert!(
+        refused.starts_with(&format!(
+            "`reb` is used by worktree at {} (being rebased there)",
+            scratch.join("reb").display()
+        )),
+        "{refused}"
+    );
+    let refused = used_elsewhere(&common, "refs/heads/main", None).unwrap();
+    assert!(
+        refused.contains(&format!(
+            "at {} (checked out",
+            scratch.join("repo").display()
+        )),
+        "{refused}"
+    );
+    // A worktree's own branch is not in use elsewhere, and a free one in
+    // none.
+    assert_eq!(
+        used_elsewhere(
+            &common,
+            "refs/heads/work",
+            Some(&common.join("worktrees/work"))
+        ),
+        None
+    );
+    assert!(used_elsewhere(&common, "refs/heads/work", Some(&common)).is_some());
+    assert_eq!(used_elsewhere(&common, "refs/heads/free", None), None);
+}
+
+#[test]
+fn what_each_command_prints_and_gives_git_is_what_it_must_be() {
+    // The undo: after a fold of the staged changes, --soft keeps the fix in
+    // the index and the files; after the others the tree is the same.
+    let backup = "refs/xtask-backup/w/1700000000";
+    assert_eq!(
+        undo(Kind::Fold { last: false }, backup),
+        "git reset --soft refs/xtask-backup/w/1700000000"
+    );
+    for kind in [Kind::Fold { last: true }, Kind::ToEnd] {
+        assert_eq!(
+            undo(kind, backup),
+            "git reset --keep refs/xtask-backup/w/1700000000",
+            "{kind:?}"
+        );
+    }
+    // The move: the backup must not be there yet, and the branch must still
+    // be at the old tip.
+    assert_eq!(
+        move_transaction(backup, "old", "refs/heads/w", "new"),
+        "create refs/xtask-backup/w/1700000000 old\nupdate refs/heads/w new old\n"
+    );
+    let said = tree_refusal(Kind::Fold { last: false }, "1111", "2222");
+    assert!(
+        said.contains("end at tree 1111, and it must end at 2222 (the staged tree")
+            && said.contains("Nothing was moved"),
+        "{said}"
+    );
+    assert!(tree_refusal(Kind::ToEnd, "1", "2").contains("the branch's tree as it is"));
+    // A record whose copy on the branch is not the one HEAD has.
+    assert_eq!(
+        not_from_the_branch("d.md", "b", Some("aa"), Some("aa")),
+        None
+    );
+    assert_eq!(not_from_the_branch("d.md", "b", None, None), None);
+    let said = not_from_the_branch(
+        "d.md",
+        "b",
+        Some("1111111111111111"),
+        Some("2222222222222222"),
+    )
+    .unwrap();
+    assert!(
+        said.contains("`d.md` on b (111111111111) is not the copy HEAD has (222222222222)")
+            && said.contains("git show b:d.md > d.md"),
+        "{said}"
+    );
+    assert!(
+        not_from_the_branch("d.md", "b", None, Some("2222"))
+            .unwrap()
+            .contains("(none)")
+    );
+}
+
+#[test]
+fn the_worktrees_branches_and_a_commits_parts_are_read() {
     let raw = "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n\
                parent 1111111111111111111111111111111111111111\n\
                author A. Writer <a@example.invalid> 1700000000 +0100\n\
@@ -389,9 +534,16 @@ fn sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_lef
     std::fs::create_dir_all(repo.join("docs/steps/24")).unwrap();
     std::fs::write(repo.join("docs/steps/24/ci.md"), "old\n").unwrap();
     std::fs::write(repo.join("main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(repo.join("docs/steps/24/kept.md"), "kept\n").unwrap();
     git(&repo, &["add", "--all"]);
     git(&repo, &["commit", "--quiet", "-m", "base"]);
     git(&repo, &["branch", "step-24"]);
+    git(&repo, &["branch", "reb"]);
+    // `diverged`: a branch whose ci.md is not the one main has.
+    std::fs::write(repo.join("docs/steps/24/ci.md"), "theirs\n").unwrap();
+    git(&repo, &["commit", "--quiet", "-am", "theirs"]);
+    git(&repo, &["branch", "diverged"]);
+    git(&repo, &["reset", "--quiet", "--hard", "HEAD~1"]);
     git(
         &repo,
         &[
@@ -403,6 +555,22 @@ fn sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_lef
             "../held-worktree",
         ],
     );
+    // A worktree in the middle of a rebase of `reb`: HEAD detached, and the
+    // branch named where git keeps it then.
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "--detach",
+            "../reb-worktree",
+            "reb",
+        ],
+    );
+    let rebasing = repo.join(".git/worktrees/reb-worktree/rebase-merge");
+    std::fs::create_dir_all(&rebasing).unwrap();
+    std::fs::write(rebasing.join("head-name"), "refs/heads/reb\n").unwrap();
     // The records as `ci-times --write` leaves them, while the worktree is on
     // `main`: one changed, one new, and a change that is not a record.
     std::fs::write(repo.join("docs/steps/24/ci.md"), "the times\n").unwrap();
@@ -462,10 +630,42 @@ fn sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_lef
         let error = commit_records(&git_here, &request(branch, files)).unwrap_err();
         assert!(error.contains(said), "{branch} {files:?}: {error}");
     };
-    refused("step-24", &records, "nothing changed");
-    refused("main", &records, "is checked out in");
+    // Run again: the branch now has the times, and HEAD the old copy.
+    refused("step-24", &records, "is not the copy HEAD has");
+    refused("main", &["docs/steps/24/kept.md"], "(checked out there)");
+    refused("step-24", &["docs/steps/24/kept.md"], "nothing changed");
+    refused("main", &records, "(checked out there)");
     refused("held", &records, "held-worktree");
+    refused("reb", &records, "reb-worktree (being rebased there)");
     refused("no-such", &records, "no branch `no-such`");
+    refused("step-24~1", &records, "`step-24~1` is not a branch's name");
+    refused(
+        "diverged",
+        &records[..1],
+        "`docs/steps/24/ci.md` on diverged (",
+    );
+    // A link: to a file outside, and through a folder that leads out.
+    let outside = scratch.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("secret.md"), "a secret\n").unwrap();
+    std::os::unix::fs::symlink(
+        outside.join("secret.md"),
+        repo.join("docs/steps/24/link.md"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&outside, repo.join("docs/steps/25")).unwrap();
+    refused(
+        "step-24",
+        &["docs/steps/24/link.md"],
+        "is not a regular file",
+    );
+    refused(
+        "step-24",
+        &["docs/steps/25/secret.md"],
+        "through a link that leads out",
+    );
+    std::fs::remove_file(repo.join("docs/steps/24/link.md")).unwrap();
+    std::fs::remove_file(repo.join("docs/steps/25")).unwrap();
     refused(
         "step-24",
         &["docs/steps/24/gone.md"],
@@ -598,6 +798,37 @@ fn sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_
     let read: Vec<&str> = read.lines().collect();
     assert_eq!(read[0], staged, "the tip is the staged tree");
     assert_eq!(read[1], read[2], "C has the file as it was staged");
+
+    // The tree check: the deletion of the file C adds, staged and folded
+    // into A, would leave C to add it back, and the branch's tree would not
+    // be the staged one.
+    git(&repo, &["rm", "--quiet", "c.txt"]);
+    let before = state(&repo);
+    let error = rewrite(
+        &git_here,
+        &request(Kind::Fold { last: false }, "work~2"),
+        1_700_000_002,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("and it must end at") && error.contains("Nothing was moved"),
+        "{error}"
+    );
+    assert_eq!(state(&repo), before);
+    git(&repo, &["checkout", "HEAD", "--", "c.txt"]);
+
+    // The branch checked out in a second worktree too (`worktree add
+    // --force`): its history is not changed under it.
+    git(
+        &repo,
+        &["worktree", "add", "--quiet", "--force", "../twice", "work"],
+    );
+    let error = rewrite(&git_here, &request(Kind::ToEnd, "work~1"), 1_700_000_002).unwrap_err();
+    assert!(
+        error.contains("`work` is used by worktree at") && error.contains("twice"),
+        "{error}"
+    );
+    git(&repo, &["worktree", "remove", "--force", "../twice"]);
 
     // What is refused, with nothing moved.
     let before = state(&repo);
