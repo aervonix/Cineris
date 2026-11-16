@@ -376,6 +376,8 @@ fn sys_a_project_is_trusted_from_its_dialog_and_its_model_is_used() {
     let shown = everything(&session);
     assert!(shown.contains("model.main"), "{shown}");
     assert!(shown.contains("claude-opus-5-5"), "{shown}");
+    // The folder as a person reads it, never the canonical form.
+    assert!(!shown.contains(r"\\?\"), "{shown}");
     session.send(b"y");
     // The header's box names the model the session runs on (the dialog
     // named it too, outside any box).
@@ -420,14 +422,17 @@ fn sys_a_projects_first_limit_is_listed_and_in_force_once_trusted() {
 }
 
 /// The first frame, for a project that is asked about: its header comes
-/// only once the question is answered.
+/// only once the question is answered. The question may be the first frame
+/// seen: a pseudo-console draws the screen as it is when it next looks,
+/// and the dialog takes the input box's place a moment after the first
+/// frame ([`docs/conpty.md`](../../../../docs/conpty.md)).
 fn first_frame_before_trust(session: &mut Session, phases: &Phases) {
     phases.mark("the binary starts");
     let starting = session.wait_for(LIMIT, "the shell to start the binary", |t| {
         t.shows(STARTING)
     });
     let drawn = session.wait_for(LIMIT, "the first frame", |t| {
-        READY.iter().any(|ready| t.shows(ready))
+        READY.iter().any(|ready| t.shows(ready)) || t.shows("Trust this project?")
     });
     let took = drawn - starting;
     assert!(
