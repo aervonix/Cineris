@@ -84,6 +84,9 @@ pub(crate) struct SessionConfig {
     root: AbsPath,
     state: Option<cortex_config::StateDir>,
     clock: SharedClock,
+    /// The error last said, so that a broken file is said once, and again
+    /// only when asked (`/reload`) or once it has changed.
+    reported: Option<String>,
 }
 
 impl std::fmt::Debug for SessionConfig {
@@ -138,6 +141,7 @@ impl SessionConfig {
             root,
             state,
             clock,
+            reported: None,
         }
     }
 
@@ -197,6 +201,8 @@ pub(crate) struct CoreConfig {
     in_force: Arc<Loaded>,
     live: Option<LiveConfig>,
     clock: SharedClock,
+    /// The error last said, so that a broken file is said once.
+    reported: Option<String>,
 }
 
 impl CoreConfig {
@@ -206,6 +212,7 @@ impl CoreConfig {
             in_force: Arc::new(in_force),
             live: None,
             clock,
+            reported: None,
         }
     }
 
@@ -229,6 +236,8 @@ pub(crate) struct Asked {
 /// What a reload did, over the sessions it reloaded.
 #[derive(Debug, Default)]
 pub(crate) struct Done {
+    /// Something was new: applied, waiting since, or wrong.
+    news: bool,
     applied: BTreeSet<String>,
     pending: BTreeSet<String>,
     errors: Vec<String>,
@@ -236,7 +245,8 @@ pub(crate) struct Done {
 }
 
 impl Done {
-    fn add(&mut self, changed: &ConfigChanged) {
+    fn add(&mut self, changed: &ConfigChanged, news: bool) {
+        self.news |= news;
         self.applied.extend(changed.applied.iter().cloned());
         self.pending.extend(changed.pending.iter().cloned());
         for error in &changed.errors {
@@ -299,18 +309,16 @@ pub(crate) async fn reload(
         }
     }
     if params.session_id.is_none() {
-        done.add(&reload_core(core, &asked).await);
+        let changed = reload_core(core, &asked).await;
+        let news = !(changed.applied.is_empty() && changed.errors.is_empty());
+        done.add(&changed, news);
     }
     for live in sessions {
-        let changed = reload_session(core, &live, &asked).await?;
-        done.add(&changed);
+        let (changed, news) = reload_session(core, &live, &asked).await?;
+        done.add(&changed, news);
     }
-    if asked.explicit
-        && done.applied.is_empty()
-        && done.pending.is_empty()
-        && done.errors.is_empty()
-    {
-        done.notes.push("Nothing changed.".to_owned());
+    if asked.explicit && !done.news {
+        done.notes.insert(0, "Nothing changed.".to_owned());
     }
     Ok(done.result())
 }
@@ -322,7 +330,7 @@ pub(crate) async fn at_turn_start(core: &Core, live: &Arc<Live>) {
         changed_only: true,
         ..Asked::default()
     };
-    if let Err(failure) = reload_session(core, live, &asked).await {
+    if let Err(failure) = reload_session(core, live, &asked).await.map(|_| ()) {
         tracing::warn!(error = %failure.message, "the configuration could not be looked at");
     }
 }
@@ -363,11 +371,19 @@ async fn reload_core(core: &Core, asked: &Asked) -> ConfigChanged {
         return ConfigChanged::default();
     };
     if let Reload::Rejected(failure) = &reload {
+        let text = failure.render(&core.inner.options.env);
+        let mut config = lock(&core.inner.user_config);
+        let said = config.reported.as_deref() == Some(text.as_str());
+        config.reported = Some(text.clone());
+        if said && !asked.explicit {
+            return ConfigChanged::default();
+        }
         return ConfigChanged {
-            errors: vec![failure.render(&core.inner.options.env)],
+            errors: vec![text],
             ..ConfigChanged::default()
         };
     }
+    lock(&core.inner.user_config).reported = None;
     let Some(latest) = latest else {
         return ConfigChanged::default();
     };
@@ -422,19 +438,31 @@ async fn reload_session(
     core: &Core,
     live: &Arc<Live>,
     asked: &Asked,
-) -> Result<ConfigChanged, OpError> {
+) -> Result<(ConfigChanged, bool), OpError> {
     let inner = Arc::clone(&core.inner);
     let held = Arc::clone(live);
     let asked_now = asked.clone();
     let looked = Core::blocking(move || Ok(look(&inner, &held, &asked_now))).await?;
     let Some(looked) = looked else {
-        return Ok(ConfigChanged::default());
+        return Ok((ConfigChanged::default(), false));
+    };
+    let (waited, trusted) = {
+        let config = lock(&live.config);
+        let waited: BTreeSet<String> = config.waiting.keys().map(ToString::to_string).collect();
+        (waited, config.trusted)
     };
     let changed = apply(core, live, looked).await;
-    if !(changed.applied.is_empty() && changed.pending.is_empty() && changed.errors.is_empty()) {
+    let waits: BTreeSet<String> = changed.pending.iter().cloned().collect();
+    // Only what is new is told: what still waits was said when it began
+    // to.
+    let news = !changed.applied.is_empty()
+        || !changed.errors.is_empty()
+        || waits != waited
+        || lock(&live.config).trusted != trusted;
+    if news {
         live.hooks.emit(Event::ConfigChanged(changed.clone()));
     }
-    Ok(changed)
+    Ok((changed, news))
 }
 
 /// Looks at the session's files and the trust store, judges trust, and
@@ -478,18 +506,28 @@ fn look(inner: &Inner, live: &Live, asked: &Asked) -> Option<Looked> {
     let (latest, errors, trusted) = match reload {
         Reload::Rejected(failure) => {
             // Nothing loaded: what is in force stays, its trust with it.
-            (None, vec![failure.render(env)], config.trusted)
+            // The same error is said once, unless the person asks again.
+            let text = failure.render(env);
+            let said = config.reported.as_deref() == Some(text.as_str());
+            config.reported = Some(text.clone());
+            if said && !asked.explicit {
+                return None;
+            }
+            (None, vec![text], config.trusted)
         }
         Reload::TrustLowered { failure, .. } => (
             config.live.as_ref().map(LiveConfig::current),
             vec![failure.render(env)],
             trusted,
         ),
-        Reload::Unchanged | Reload::Applied { .. } => (
-            config.live.as_ref().map(LiveConfig::current),
-            Vec::new(),
-            trusted,
-        ),
+        Reload::Unchanged | Reload::Applied { .. } => {
+            config.reported = None;
+            (
+                config.live.as_ref().map(LiveConfig::current),
+                Vec::new(),
+                trusted,
+            )
+        }
     };
     let mut dropped = Vec::new();
     if latest.is_some() {
@@ -734,9 +772,14 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> ConfigChanged {
         mut errors,
         dropped,
     } = looked;
-    let (in_force, was) = {
+    let (in_force, was, chosen) = {
         let config = lock(&live.config);
-        (config.in_force(), config.trusted)
+        let chosen: BTreeSet<String> = config
+            .choices
+            .iter()
+            .map(|choice| choice.key.clone())
+            .collect();
+        (config.in_force(), config.trusted, chosen)
     };
     let Some(latest) = latest else {
         return ConfigChanged {
@@ -771,6 +814,14 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> ConfigChanged {
             waiting.insert(change.key.clone(), change.effect);
         }
     }
+    // A key the person chose in the session is in force already, as
+    // `session/set` put it: taken into the configuration, and neither
+    // applied again nor said.
+    let applying: Vec<KeyPath> = now
+        .iter()
+        .filter(|key| !chosen.contains(&key.to_string()))
+        .cloned()
+        .collect();
     let mix = match in_force.taking(&latest, &now) {
         Ok(mix) => Arc::new(mix),
         Err(failure) => {
@@ -781,8 +832,8 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> ConfigChanged {
             };
         }
     };
-    if !now.is_empty() || trusted != was {
-        let prepared = match prepare(core, live, &mix, &now, trusted, was).await {
+    if !applying.is_empty() || trusted != was {
+        let prepared = match prepare(core, live, &mix, &applying, trusted, was).await {
             Ok(prepared) => prepared,
             Err(reason) => {
                 errors.push(format!(
@@ -839,7 +890,7 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> ConfigChanged {
     set_next_epoch(core, live, &mix, &latest, &epoch_keys).await;
     notes.extend(waiting_notes(&waiting, &mix, &latest));
     ConfigChanged {
-        applied: now.iter().map(ToString::to_string).collect(),
+        applied: applying.iter().map(ToString::to_string).collect(),
         pending: waiting.keys().map(ToString::to_string).collect(),
         errors,
         notes,

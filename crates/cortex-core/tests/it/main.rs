@@ -39,6 +39,7 @@ mod lifecycle;
 mod plan;
 mod provider;
 mod redecide;
+mod reload;
 mod sandbox;
 mod secrets;
 mod settings;

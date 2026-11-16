@@ -1095,6 +1095,21 @@ pub(crate) async fn update(
         .changes
         .iter()
         .any(|change| change.action == EntryAction::Promote);
+    // A promote writes the repository's shared profile, a protected path,
+    // which a confined command's looks before and after it would read as a
+    // change from outside: none while a session of the project in this
+    // core runs a turn (step 24; `docs/outstanding/
+    // a-promote-while-a-confined-command-runs.md`, all but another
+    // process's promote).
+    if promoted && core.a_turn_runs_in(&key) {
+        return Err(error(
+            ErrorKind::Usage,
+            cortex_protocol::error::code::TURN_RUNNING,
+            "An entry is promoted when no turn of this project runs: the repository's profile is \
+             a protected file, and a command running now would take the write for a change made \
+             from outside. Promote it once the turn has ended.",
+        ));
+    }
     let updated = Core::blocking(move || {
         apply(
             &project,
