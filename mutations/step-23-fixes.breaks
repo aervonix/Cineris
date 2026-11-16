@@ -607,10 +607,10 @@ caught-by:
 rule: A project's shell.env_remove waits for trust: "*" would take PATH from every command.
 file: crates/cortex-config/src/schema/sections.rs
 find:
-    [StopsCommands, NextEpoch, joined]
+    [StopsCommands, NextSession, joined]
     pub env_remove
 replace:
-    [Preference, NextEpoch, joined]
+    [Preference, NextSession, joined]
     pub env_remove
 caught-by:
     cortex-config::it trust::a_projects_removed_variables_wait_for_trust

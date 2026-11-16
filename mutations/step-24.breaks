@@ -1,0 +1,239 @@
+# Step 24: panels and live views. Its first pull request's rules, the
+# reload of a running session's configuration through the core and the
+# reads the panels make, broken one at a time, with the tests that must
+# fail. Written with the code (docs/steps/24/answered.md, "The design,
+# before building", point 1).
+
+[break] taking-copies-nothing
+rule: A session's configuration in force takes the keys named from the newer configuration.
+file: crates/cortex-config/src/load.rs
+in: taking
+find: Some(value) => merge::insert(&mut values, key, value.clone()),
+replace: Some(_) => {}
+caught-by:
+    cortex-config::it reloading::taking_some_keys_keeps_the_rest_as_they_were
+
+[break] taking-takes-everything
+rule: The keys not named keep the values in force: what waits does not come in with what applies at once.
+file: crates/cortex-config/src/load.rs
+in: taking
+find: let mut values = self.values.clone();
+replace: let mut values = newer.values.clone();
+caught-by:
+    cortex-config::it reloading::taking_some_keys_keeps_the_rest_as_they_were
+    cortex-core::it reload::a_reload_applies_what_takes_effect_at_once_and_lists_what_waits
+
+[break] the-trust-store-is-not-watched
+rule: The trust store's file is looked at with the configuration's, so trust taken away outside is seen by the next look.
+file: crates/cortex-core/src/reload.rs
+in: look
+find: .is_some_and(|watch| !watch.check().is_empty());
+replace: .is_some_and(|watch| watch.check().is_empty() && false);
+caught-by:
+    cortex-core::it reload::trust_taken_away_from_outside_is_seen_by_the_next_look
+
+[break] trust-is-not-judged-again
+rule: A reload judges the project's trust again and loads with what it judged.
+file: crates/cortex-core/src/reload.rs
+in: look
+find: let rules = judged.rules.unwrap_or(config.trusted.rules);
+replace: let rules = config.trusted.rules;
+caught-by:
+    cortex-core::it reload::trust_taken_away_from_outside_is_seen_by_the_next_look
+    cortex-core::it reload::an_allow_rule_added_while_trusted_is_not_in_force
+
+[break] a-changed-rule-is-trusted
+rule: A trusted project whose rules changed since has its rules set aside, as at a start.
+file: crates/cortex-core/src/assemble.rs
+in: judge
+find: Ok(pins) if stored.project_rules_approved(&pins) => Judged {
+replace: Ok(_) => Judged {
+caught-by:
+    cortex-core::it reload::an_allow_rule_added_while_trusted_is_not_in_force
+
+[break] the-turn-start-takes-no-look
+rule: The start of a turn is one of the moments the files are looked at.
+file: crates/cortex-core/src/core.rs
+in: handle
+find: crate::reload::at_turn_start(self, &live).await;
+replace: let _ = &live;
+caught-by:
+    cortex-core::it reload::a_turn_starts_with_the_files_looked_at
+
+[break] a-broken-file-is-said-every-time
+rule: A broken file is said once by the looks, and again only when the person asks.
+file: crates/cortex-core/src/reload.rs
+in: look
+find: if said && !asked.explicit {
+replace: if said && asked.explicit && false {
+caught-by:
+    cortex-core::it reload::a_broken_file_keeps_the_configuration_and_is_said_once
+
+[break] a-broken-file-is-not-said-when-asked
+rule: The person who asks (`/reload`) is told a standing error again.
+file: crates/cortex-core/src/reload.rs
+in: look
+find: if said && !asked.explicit {
+replace: if said {
+caught-by:
+    cortex-core::it reload::a_broken_file_keeps_the_configuration_and_is_said_once
+
+[break] a-choice-is-not-kept
+rule: What the person chose in the session outranks the files: it is kept as the session's own.
+file: crates/cortex-core/src/reload.rs
+in: choose
+find: self.choices.push(choice);
+replace: let _ = choice;
+caught-by:
+    cortex-core::it reload::a_choice_made_in_the_session_outranks_the_files
+
+[break] a-profile-from-anyone
+rule: Only a `user` client chooses a session's profile, which can raise its level.
+file: crates/cortex-core/src/reload.rs
+in: reload
+find: if role != Some(ClientRole::User) {
+replace: if role == Some(ClientRole::Observer) {
+caught-by:
+    cortex-core::it reload::a_profile_is_chosen_for_one_session_by_a_person
+
+[break] nothing-waits-for-an-epoch
+rule: A key that takes effect at the next epoch waits for it, and is taken when a compaction begins one.
+file: crates/cortex-core/src/reload.rs
+in: set_next_epoch
+find:
+    live.handle.at_next_epoch(Some(EpochChange {
+        models,
+        context,
+        taken: Some(taken),
+    }));
+replace:
+    drop((models, context, taken));
+caught-by:
+    cortex-core::it reload::what_waits_for_the_next_epoch_comes_in_with_a_compaction
+
+[break] old-news-is-told-again
+rule: Only what is new is told to a session's clients; a reload that changed nothing says so to the person who asked.
+file: crates/cortex-core/src/reload.rs
+in: reload_session
+find: || waits != waited
+replace: || !waits.is_empty()
+caught-by:
+    cortex-core::it reload::a_reload_applies_what_takes_effect_at_once_and_lists_what_waits
+
+[break] the-slot-is-taken-at-a-turns-start
+rule: What waits for the next epoch is not taken at a turn's start.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: refresh_main
+find: let inbox = self.shared.lock();
+replace: if let Some(change) = self.shared.lock().next_epoch.take() { self.epoch_waiting = Some(change); } self.take_epoch_models(); let inbox = self.shared.lock();
+caught-by:
+    cortex-agent::it reconfigure::what_waits_for_the_next_epoch_is_taken_by_a_compaction_and_not_before
+
+[break] the-slot-is-never-taken
+rule: A compaction takes what waited for the next epoch.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: compacting
+find: self.take_next_epoch();
+replace: let _ = self.manual;
+caught-by:
+    cortex-agent::it reconfigure::what_waits_for_the_next_epoch_is_taken_by_a_compaction_and_not_before
+    cortex-core::it reload::what_waits_for_the_next_epoch_comes_in_with_a_compaction
+
+[break] reconfigure-is-not-taken
+rule: What a reload changed that applies at once is taken as the next request is prepared.
+file: crates/cortex-agent/src/turn.rs
+find: self.take_reconfigured();
+replace: let _ = &self.manual;
+caught-by:
+    cortex-agent::it reconfigure::a_reload_turns_automatic_compaction_off_from_the_next_request
+    cortex-agent::it reconfigure::a_reload_changes_the_limits_and_keeps_what_was_spent
+
+[break] a-new-budget-forgets-what-was-spent
+rule: An account given another budget keeps what was spent.
+file: crates/cortex-agent/src/ledger.rs
+in: with_budget
+find: spent: Arc::clone(&inner.spent)
+replace: spent: Arc::new(Mutex::new(Spent::default()))
+caught-by:
+    cortex-agent::it reconfigure::a_reload_changes_the_limits_and_keeps_what_was_spent
+
+[break] an-epoch-without-variants-follows-the-model
+rule: An epoch read without variants is fixed to those in force when it was read.
+file: crates/cortex-agent/src/context/mod.rs
+in: fix_variants
+find: epoch.variants = Some(variants.clone());
+replace: let _ = variants;
+caught-by:
+    cortex-agent::it context::an_epoch_read_without_variants_keeps_those_in_force_when_it_was_resumed
+
+[break] a-skipped-item-is-not-restored
+rule: A skipped plan item can be restored, and the model is told as it is told of a skip.
+file: crates/cortex-tools/src/plan.rs
+in: apply_one
+find: item.status = PlanStatus::Pending;
+replace: item.status = PlanStatus::Skipped;
+caught-by:
+    cortex-tools::it plan::the_user_can_restore_a_skipped_item_and_the_model_is_told
+
+[break] a-promote-during-a-turn
+rule: A promote is refused while a session of the project runs a turn.
+file: crates/cortex-core/src/knowledge.rs
+in: update
+find: if promoted && core.a_turn_runs_in(&key) {
+replace: if promoted && core.a_turn_runs_in(&key) && false {
+caught-by:
+    cortex-core::it knowledge::a_promote_waits_for_the_turn_to_end
+
+[break] warm-reads-outside-the-workspace
+rule: Only a file inside the workspace that the agent could read unasked is read ahead.
+file: crates/cortex-core/src/reads.rs
+in: warm_files
+find: if !resolved.is_inside_workspace() || !gate.may_read(resolved.abs()) {
+replace: if !gate.may_read(resolved.abs()) {
+caught-by:
+    cortex-core reads::tests::only_a_file_inside_the_workspace_the_gate_lets_through_is_read_ahead
+
+[break] warm-ignores-the-gate
+rule: A file the gate refuses is not read ahead.
+file: crates/cortex-core/src/reads.rs
+in: warm_files
+find: if !resolved.is_inside_workspace() || !gate.may_read(resolved.abs()) {
+replace: if !resolved.is_inside_workspace() {
+caught-by:
+    cortex-core reads::tests::only_a_file_inside_the_workspace_the_gate_lets_through_is_read_ahead
+
+[break] an-artifact-is-said-whole-when-cut
+rule: An artifact past the limit says it was cut, and a character the cut split is left out.
+file: crates/cortex-core/src/reads.rs
+in: text_of
+find: Err(failure) if failure.error_len().is_none() => &bytes[..failure.valid_up_to()],
+replace: Err(failure) if failure.error_len().is_some() => &bytes[..failure.valid_up_to()],
+caught-by:
+    cortex-core reads::tests::a_cut_text_leaves_out_the_character_it_split
+
+[break] origins-are-not-said
+rule: `config/get` says where each value came from.
+file: crates/cortex-core/src/core.rs
+in: handle
+find: origins.insert(key.clone(), origin);
+replace: let _ = origin;
+caught-by:
+    cortex-core::it reload::config_get_says_where_each_value_came_from
+
+[break] a-refresh-waits-in-the-lane
+rule: A refresh of the usage limits never waits in the lane, where it would hold a prompt behind it.
+file: crates/cortex-rpc/src/lane.rs
+in: route
+find: if matches!(op, Op::UsageRefresh(_) | Op::WorkspaceWarm(_)) {
+replace: if matches!(op, Op::WorkspaceWarm(_)) {
+caught-by:
+    cortex-rpc lane::tests::the_panels_reads_run_beside_the_lane_and_a_refresh_never_waits_in_it
+
+[break] the-project-list-waits-in-the-lane
+rule: The project's entries are a read: beside the lane when no write is under way.
+file: crates/cortex-rpc/src/lane.rs
+in: reads
+find: | Op::ProjectList(_)
+replace: | Op::ModelsList(_)
+caught-by:
+    cortex-rpc lane::tests::the_panels_reads_run_beside_the_lane_and_a_refresh_never_waits_in_it

@@ -149,7 +149,7 @@ caught-by:
 rule: No check runs in a project the user has not trusted: it would run the repository's own code at the end of every turn, and nobody is asked.
 file: crates/cortex-core/src/verify.rs
 in: CoreVerifier::ready
-find: if !self.parts.trusted {
+find: if !live.trusted {
 replace: if false {
 caught-by:
     cortex-core::it verify::in_a_project_the_user_has_not_trusted_no_check_runs

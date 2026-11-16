@@ -1584,7 +1584,7 @@ fn a_resumed_session_goes_on_in_its_epoch_when_the_prompt_is_the_same() {
 /// fixed, as the session is resumed, to the variants in force then: a
 /// model rebuilt in the middle of a turn with other variants (a reload)
 /// does not change what the epoch's requests carry
-/// (`docs/outstanding/an-epoch-read-without-its-variants.md`, closed in
+/// (the open item `an-epoch-read-without-its-variants`, closed in
 /// step 24).
 #[test]
 fn an_epoch_read_without_variants_keeps_those_in_force_when_it_was_resumed() {

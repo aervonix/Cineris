@@ -95,16 +95,16 @@ caught-by:
 [break] shell-timeout-of-nothing
 rule: shell.timeout is at least a second: below it every command that asks for no limit would fail.
 file: crates/cortex-config/src/schema/sections.rs
-find: [TightenOnly, NextEpoch, 1s..=30m]
-replace: [TightenOnly, NextEpoch, 0s..=30m]
+find: [TightenOnly, NextSession, 1s..=30m]
+replace: [TightenOnly, NextSession, 0s..=30m]
 caught-by:
     cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
 
 [break] shell-max-timeout-of-a-millisecond
 rule: shell.max_timeout is at least ten seconds: below it no build or test run could finish.
 file: crates/cortex-config/src/schema/sections.rs
-find: [TightenOnly, NextEpoch, 10s..=1d]
-replace: [TightenOnly, NextEpoch, 1ms..=1d]
+find: [TightenOnly, NextSession, 10s..=1d]
+replace: [TightenOnly, NextSession, 1ms..=1d]
 caught-by:
     cortex-config validate::tests::each_wait_and_time_limit_is_held_to_its_range
 
@@ -171,8 +171,8 @@ caught-by:
 [break] shell-timeout-a-preference
 rule: A project's file may shorten shell.timeout and may not lengthen it.
 file: crates/cortex-config/src/schema/sections.rs
-find: [TightenOnly, NextEpoch, 1s..=30m]
-replace: [Preference, NextEpoch, 1s..=30m]
+find: [TightenOnly, NextSession, 1s..=30m]
+replace: [Preference, NextSession, 1s..=30m]
 caught-by:
     cortex-config::it trust::the_documented_classes_hold
     cortex-config::it waits::no_project_may_lengthen_a_wait_or_a_time_limit_trusted_or_not
