@@ -270,6 +270,8 @@ impl Events {
 #[derive(Default)]
 pub struct Seen {
     edges: Mutex<Vec<(TurnState, TurnState)>>,
+    /// When each state was entered, for a measurement.
+    stamps: Mutex<Vec<(TurnState, std::time::Instant)>>,
     /// The state to interrupt at, how many entries of it to let pass
     /// first, and the session to interrupt.
     interrupt_at: Mutex<Option<(TurnState, usize, SessionHandle)>>,
@@ -278,6 +280,7 @@ pub struct Seen {
 impl Observer for Seen {
     fn transition(&self, _session: &SessionId, from: TurnState, to: TurnState) {
         lock(&self.edges).push((from, to));
+        lock(&self.stamps).push((to, std::time::Instant::now()));
         let fire = {
             let mut armed = lock(&self.interrupt_at);
             match armed.as_mut() {
@@ -296,6 +299,11 @@ impl Observer for Seen {
 }
 
 impl Seen {
+    /// When each state was entered, in order.
+    pub fn stamps(&self) -> Vec<(TurnState, std::time::Instant)> {
+        lock(&self.stamps).clone()
+    }
+
     /// The changes of state, in order.
     pub fn edges(&self) -> Vec<(TurnState, TurnState)> {
         lock(&self.edges).clone()
