@@ -32,6 +32,7 @@ use super::*;
 use crate::highlight::Highlighter;
 use crate::history::MemoryHistory;
 use crate::keys::{KeyMap, parse};
+use crate::testing::{app_frame, assert_app_frame};
 
 /// What the scripted link has seen, and what it will give.
 #[derive(Debug, Default)]
@@ -495,25 +496,14 @@ fn a_dialog_takes_keys_and_shows_its_answers_only_after_its_grace() {
     link.give(Inbound::Request(RequestId::Number(8), approval("c_1")));
     drain(&mut app, now);
     assert_eq!(app.deadline(), None, "no grace before it is drawn");
-    let rows = text(&app.frame(now).1);
-    assert!(
-        rows.iter().any(|row| row.contains("Run cargo build?")),
-        "{rows:#?}"
-    );
-    assert!(
-        !rows.iter().any(|row| row.contains("Allow once")),
-        "{rows:#?}"
-    );
+    // The question, and no answers yet.
+    assert_app_frame("app-approval-in-its-grace", &mut app, now, 100, 40);
     app.drawn(now);
     assert_eq!(app.deadline(), Some(now + dialog::GRACE));
     key(&mut app, "y", now + dialog::GRACE / 2);
     assert!(answers(&link).is_empty(), "a key in the grace answered");
     let end = now + dialog::GRACE;
-    let rows = text(&app.frame(end).1);
-    assert!(
-        rows.iter().any(|row| row.contains("y Allow once")),
-        "{rows:#?}"
-    );
+    assert_app_frame("app-approval-answers-drawn", &mut app, end, 100, 40);
     assert_eq!(app.deadline(), None, "nothing more to wake for");
     // After a pause since the key before, a key answers.
     key(&mut app, "y", end + dialog::GRACE);
@@ -551,22 +541,13 @@ fn leaving_a_confined_sessions_sandbox_offers_only_once_and_deny() {
     opened_with(&mut app, &link, now, confined);
     ask(&mut app, &link, 10, outside("c_1"), now);
     let at = now + dialog::GRACE;
-    let rows = text(&app.frame(at).1);
-    assert!(
-        rows.iter()
-            .any(|row| row.contains("Run outside the sandbox?")),
-        "{rows:#?}"
-    );
-    assert!(
-        rows.iter()
-            .any(|row| row.contains("y Run once outside the sandbox")),
-        "{rows:#?}"
-    );
-    assert!(
-        !rows
-            .iter()
-            .any(|row| row.contains("Allow this session") || row.contains("Deny with a note")),
-        "{rows:#?}"
+    // Once and deny are offered, and nothing that would allow it for longer.
+    assert_app_frame(
+        "app-approval-outside-a-confined-sandbox",
+        &mut app,
+        at,
+        100,
+        40,
     );
     key(&mut app, "s", at);
     key(&mut app, "a", at + dialog::GRACE);
@@ -585,15 +566,7 @@ fn a_command_in_a_session_with_the_sandbox_off_may_be_allowed_for_longer() {
     opened(&mut app, &link, now);
     ask(&mut app, &link, 11, outside("c_1"), now);
     let at = now + dialog::GRACE;
-    let rows = text(&app.frame(at).1);
-    assert!(
-        rows.iter().any(|row| row.contains("Run cargo build?")),
-        "{rows:#?}"
-    );
-    assert!(
-        rows.iter().any(|row| row.contains("s Allow this session")),
-        "{rows:#?}"
-    );
+    assert_app_frame("app-approval-sandbox-off", &mut app, at, 100, 40);
     key(&mut app, "s", at);
     assert_eq!(answers(&link), [ApprovalChoice::AllowSession]);
 }
@@ -3278,4 +3251,52 @@ fn status_says_a_project_is_marked_never_and_how_to_change_it() {
     let all = notices(&mut app, now);
     assert!(all.contains("trust      never"), "{all}");
     assert!(all.contains("cortex permissions trust"), "{all}");
+}
+
+/// The width of the widest line of a frame's text from [`app_frame`], its
+/// style markers and the closing `|` taken off.
+fn widest_line(frame: &str) -> usize {
+    frame
+        .lines()
+        .filter(|line| !line.starts_with("==") && !line.starts_with("--"))
+        .filter(|line| !line.starts_with("cursor at"))
+        .map(|line| {
+            let mut inside = false;
+            line.trim_end_matches('|')
+                .chars()
+                .filter(|c| match c {
+                    '{' => {
+                        inside = true;
+                        false
+                    }
+                    '}' => {
+                        inside = false;
+                        false
+                    }
+                    _ => !inside,
+                })
+                .count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// The snapshot helper draws the application's real frame at the size it is
+/// given, and says the size and where the cursor goes.
+#[test]
+fn an_app_frame_snapshot_is_drawn_at_the_size_it_is_asked_for() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let narrow = app_frame(&mut app, now, 60, 12);
+    let wide = app_frame(&mut app, now, 120, 12);
+    assert!(narrow.starts_with("== 60 columns, 12 rows\n"), "{narrow}");
+    assert!(wide.starts_with("== 120 columns, 12 rows\n"), "{wide}");
+    // The views get one column less than the window.
+    assert!(widest_line(&narrow) <= 59, "{narrow}");
+    assert!(widest_line(&wide) > 100, "{wide}");
+    assert!(narrow.contains("\ncursor at row "), "{narrow}");
+    // The first frame commits the header; the next has nothing left to.
+    assert!(narrow.contains("-- committed: 6 lines\n"), "{narrow}");
+    assert!(wide.contains("-- committed: 0 lines\n"), "{wide}");
 }
