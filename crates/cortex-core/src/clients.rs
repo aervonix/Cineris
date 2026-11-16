@@ -284,10 +284,21 @@ impl Clients {
             },
         );
         let clients = lock(&self.clients);
+        let mut reached = false;
         for client in asked {
             if let Some(entry) = clients.get(client) {
                 entry.queue.push_request(id.clone(), request.clone());
+                reached = true;
             }
+        }
+        // One that ends with its askers, put when none of them is connected
+        // any more (one left while it was being made): dropped at once, so
+        // that whoever waits is told no answer will come, as a disconnect
+        // tells it (the review of step 23's second pull request). The
+        // locks are taken in `disconnect`'s order: the clients, then the
+        // open requests.
+        if ends_with_askers && !reached {
+            lock(&self.open).remove(&id);
         }
         (id, receiver)
     }
@@ -300,11 +311,18 @@ impl Clients {
         let Some(queue) = self.queue(client) else {
             return;
         };
+        // What the client may answer, before the open requests are locked:
+        // the clients' lock is never taken under theirs, which `put` and
+        // `disconnect` take in the other order.
+        let may = |kind: Kind| !self.askable(&[client.0], kind).is_empty();
+        let answers = [
+            (Kind::Approval, may(Kind::Approval)),
+            (Kind::Question, may(Kind::Question)),
+            (Kind::Trust, may(Kind::Trust)),
+        ];
         for (id, open) in lock(&self.open).iter_mut() {
-            if self
-                .askable(&[client.0], Kind::of(&open.request))
-                .is_empty()
-            {
+            let kind = Kind::of(&open.request);
+            if !answers.iter().any(|(each, may)| *each == kind && *may) {
                 continue;
             }
             if open.session == *session && !open.asked.contains(&client.0) {
@@ -402,6 +420,33 @@ mod tests {
             ServerResponse::Question(question) => question.answer,
             _ => None,
         }
+    }
+
+    /// A request that ends with its askers, put when none of them is
+    /// connected any more, is dropped at once: whoever waits is told no
+    /// answer will come. One that waits for a client to join is kept.
+    #[test]
+    fn a_request_put_to_askers_already_gone_ends_at_once() {
+        let clients = Clients::default();
+        let session = SessionId::new("s_1");
+        let (gone, _) = clients.connect(ClientInfo::user());
+        clients.disconnect(gone);
+        let (_, mut answer) = clients.ask_once(&session, &[gone.0], |_| request(&session));
+        assert!(
+            matches!(
+                answer.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+            ),
+            "the waiter was not told"
+        );
+        let (_, mut waiting) = clients.ask(&session, &[gone.0], |_| request(&session));
+        assert!(
+            matches!(
+                waiting.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "a request that waits for a client to join was dropped"
+        );
     }
 
     /// Each of the two checks on an answer holds by itself: the client's
