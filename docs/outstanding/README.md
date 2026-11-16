@@ -160,7 +160,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [tests-the-seventh-tooling-step-left-thin](tests-the-seventh-tooling-step-left-thin.md): Behaviours of the seventh tooling step's tools no blocking test holds (`ab`'s glue, `try`'s commit check, `api-diff`'s report and its Windows runs, the corpus on Windows). Owner: a later tooling step.
 - [timeout-report-for-tests-without-the-test-kit](timeout-report-for-tests-without-the-test-kit.md): A test using none of the test kit's waits gets no timeout report, since nextest lacks pre-timeout scripts. Owner: a later tooling step.
 - [typed-values-in-composite-actions](typed-values-in-composite-actions.md): The repo rule against event values in scripts reads `.github/workflows/` only, not composite actions under `.github/actions/`. Owner: a later tooling step.
-- [the-pr-size-jobs-rough-edges](the-pr-size-jobs-rough-edges.md): `ci-wait` counts `pr-size` with the blocking jobs; its difference is from `main`'s newest record, not the base. Owner: a tooling step.
+- [the-pr-size-jobs-rough-edges](the-pr-size-jobs-rough-edges.md): `ci-wait` counts `pr-size` with the blocking jobs. Owner: a tooling step.
 
 ### Windows
 

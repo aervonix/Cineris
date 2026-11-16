@@ -231,4 +231,5 @@ jobs:
         if: steps.changes.outputs.binary == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: cargo run --locked --quiet --package xtask -- size --check --target ${{ matrix.target }} --against-main
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: cargo run --locked --quiet --package xtask -- size --check --target ${{ matrix.target }} --against-main --base "$BASE"
