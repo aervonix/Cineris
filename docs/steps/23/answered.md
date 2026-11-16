@@ -402,3 +402,14 @@ Left as the reviewer found them, by reading: when a signal comes while the core 
 | Five rules had no break | Each has one, with a test where it had none (`a_paste_after_a_cut_note_holds_the_enter_too`) |
 
 Left, by reading: a win32 key-up that never arrives (focus lost while the key is down) makes the next press of that key one repeat; any other key, or its up, ends it.
+
+**The review of what changed after it.** A third reader read the screens and the fixes above. What it found, and what each changed:
+
+| Finding | Changed |
+|---|---|
+| The pause of 300 ms since the key before still dropped a key the row offered, after a global key (`Ctrl+T`, `Ctrl+L`), or after `e` then `Esc` back out of a note | The pause is gone: keys read together are input no dialog took (`App::burst` holds the dialog a quiet second), and the quiet covers what the pause did (`a_key_the_row_offers_soon_after_a_global_key_is_taken`) |
+| Reading the request whole (`Ctrl+O`), then `Esc` and `y`: the viewer's keys held the dialog a second, and `y` was typed into the editor | Keys in the viewer while a dialog is up are not typing at it, a search typed there excepted; back from the viewer the dialog starts its grace again (`ctrl_o_then_esc_then_one_key_answers`) |
+| Approving one dialog after another quickly typed stray answer keys into the hidden editor | An answer key right after a key a dialog took does nothing while the next is not ready, and holds it (`an_answer_key_before_the_next_dialogs_row_is_not_typed`) |
+| The same-key rule for unmarked repeats could no longer change anything, since every key not taken holds the dialog a second (as long as the repeat window) | It is gone, and a compile-time check holds the quiet at least the repeat window; a marked repeat goes where its press went (the editor for typing, nowhere for a key a dialog took) |
+| Breaks that no longer bit, or no longer applied | Each was rewritten to the code as it is, or marked `expect: survives` with the second guard named |
+| Under load, the tests of a signal read a reply's failed write as a failure, and two compared screens before the last output was read | The children look at the hand-over before an error, the editor waits for the application to take the signal (Linux's `/proc` status), and the screens are compared once the result is shown |

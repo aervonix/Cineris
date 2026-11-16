@@ -691,6 +691,7 @@ fn ctrl_o_shows_the_request_whole_and_esc_returns_to_its_dialog() {
     assert!(!app.viewing());
     assert!(answers(&link).is_empty(), "returning answered nothing");
     let rows = text(&app.frame(at + dialog::GRACE * 2).1);
+    app.drawn(at + dialog::GRACE * 2);
     assert!(rows.iter().any(|row| row.contains("? Run cargo build?")));
 
     // Shown whole again, then settled elsewhere: the viewer closes with it.
@@ -782,7 +783,7 @@ fn a_viewer_opened_over_a_dialog_in_its_grace_leaves_nothing_due() {
     let _ = link;
 }
 
-/// A key in the viewer is the key before the next: `Ctrl+O` on an
+/// Back from the viewer the dialog starts its grace again: `Ctrl+O` on an
 /// approval, `Esc` back, and `y` typed at once does not answer it.
 #[test]
 fn a_key_straight_after_the_viewer_closes_does_not_answer() {
@@ -800,6 +801,8 @@ fn a_key_straight_after_the_viewer_closes_does_not_answer() {
         answers(&link).is_empty(),
         "a key straight after the viewer answered"
     );
+    let _ = app.frame(closed + dialog::GRACE / 6);
+    app.drawn(closed + dialog::GRACE / 6);
     // It reached the editor: a second later the answers are drawn again,
     // and a key answers.
     let ready = closed + dialog::GRACE / 6 + dialog::QUIET;

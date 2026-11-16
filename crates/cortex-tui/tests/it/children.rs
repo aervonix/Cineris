@@ -58,6 +58,30 @@ pub(crate) fn enter() {
     }
 }
 
+/// Whether process `pid` has taken signal `signal` (no longer pending), by
+/// its `/proc` status, waiting for it at most 30 s. Linux only.
+#[cfg(target_os = "linux")]
+fn signal_taken(pid: &str, signal: u32) -> bool {
+    let bit = 1u64 << (signal - 1);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap_or_default();
+        let pending = status
+            .lines()
+            .filter_map(|line| {
+                line.strip_prefix("SigPnd:")
+                    .or_else(|| line.strip_prefix("ShdPnd:"))
+            })
+            .filter_map(|mask| u64::from_str_radix(mask.trim(), 16).ok())
+            .any(|mask| mask & bit != 0);
+        if !pending {
+            return true;
+        }
+        std::thread::yield_now();
+    }
+    false
+}
+
 /// Appends `name: value` to the report in the test's scratch directory.
 fn report(name: &str, value: &str) {
     let scratch = std::env::var_os(SCRATCH).expect("the scratch directory");
@@ -259,7 +283,7 @@ fn editor(scenario: &str, file: &Path) -> ! {
         }
         // The application is sent SIGTERM while this editor has the
         // terminal; the editor then ends, its change saved.
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         "signal" => {
             let parent = std::os::unix::process::parent_id().to_string();
             let sent = std::process::Command::new("kill")
@@ -267,6 +291,11 @@ fn editor(scenario: &str, file: &Path) -> ! {
                 .status()
                 .expect("kill");
             report("signal sent", yes(sent.success()));
+            // The application takes the signal on whichever of its threads
+            // the kernel gives it to: the editor ends only once it has, as
+            // it would for a person, who does not quit an editor within
+            // microseconds of the signal.
+            report("signal taken", yes(signal_taken(&parent, 15)));
             std::fs::write(file, had.replace("hello", "hello edited")).expect("write");
             0
         }

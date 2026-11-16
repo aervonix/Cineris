@@ -74,11 +74,11 @@ caught-by:
     app::tests::a_window_too_small_for_the_question_and_its_answers_takes_none
 
 [break] typing-carries-on-into-a-dialog
-rule: After its grace a dialog takes a key only after a pause since the key before it: typing that carries on through the dialog's arrival never answers it.
+rule: Typing that carries on through a dialog's arrival never answers it: since the review of step 23 each key it does not take holds it a quiet second (the pause since the key before it was folded into that).
 file: crates/cortex-tui/src/app/dialog.rs
-in: Dialog::takes_keys_at
-find: previous.is_none_or(|previous| at.saturating_duration_since(previous) >= GRACE)
-replace: true
+in: Dialog::ready_at
+find: Some(self.typed.map_or(ready, |typed| ready.max(typed + QUIET)))
+replace: Some(ready)
 caught-by:
     app::tests::typing_that_goes_on_past_the_grace_never_answers_a_dialog
 
@@ -363,7 +363,7 @@ caught-by:
 rule: In a dialog's grace its own keys that type nothing (Esc) do nothing: a key meant to deny never stops the turn instead.
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::key
-find: typed(key).is_none() && action.is_some_and(dialogs)
+find: action.is_some_and(dialogs) && (typed(key).is_none() || after_taken)
 replace: false
 caught-by:
     app::tests::esc_in_a_dialogs_grace_neither_denies_nor_stops_the_turn
@@ -870,14 +870,13 @@ caught-by:
     app::tests::at_the_cap_a_keys_frame_never_waits_for_the_file_match
 
 [break] a-dialog-shown-under-the-viewer
-rule: A dialog is shown by the inline screen's frame alone: under the viewer its grace has not begun.
+rule: A dialog is shown by the inline screen's frame alone: under the viewer its grace has not begun. Since the review of step 23 the viewer's closing also starts the dialog's grace again, a second guard that leaves nothing this break can show.
+expect: survives
 file: crates/cortex-tui/src/app/state.rs
 in: App::drawn
 find: if self.viewing() {
 replace: if self.viewing() && at < self.began {
 packages: cortex-tui
-caught-by:
-    app::tests::a_dialog_that_comes_under_the_viewer_waits_for_the_inline_screen
 
 [break] a-read-overtakes-a-write
 rule: A read sent while a write is under way runs after it, in the lane: it sees every write sent before it.
@@ -976,11 +975,16 @@ caught-by:
     app::tests::a_viewer_opened_over_a_dialog_in_its_grace_leaves_nothing_due
 
 [break] a-viewer-key-not-the-last-key
-rule: A key in the viewer is the key before the next, so that typing that goes on as it closes answers no dialog.
+rule: Back from the viewer a dialog starts its grace again, so that a key typed as it closes answers nothing (since the review of step 23; a key in the viewer was the key before the next).
 file: crates/cortex-tui/src/app/state.rs
 in: App::terminal
-find: return self.viewer_key(*key, at);
-replace: { self.last_key = None; return self.viewer_key(*key, at); }
+find:
+    dialog.hide();
+    }
+    return taken;
+replace:
+    }
+    return taken;
 packages: cortex-tui
 caught-by:
     app::tests::a_key_straight_after_the_viewer_closes_does_not_answer

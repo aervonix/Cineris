@@ -170,24 +170,6 @@ replace: if false {
 caught-by:
     app::tests::dialogs::a_repeat_the_terminal_marks_never_answers
 
-[break] the-same-key-held-answers
-rule: Where the terminal does not mark repeats, the same key as the one before it, which was typing, within the repeat window is a key held down, and answers nothing.
-file: crates/cortex-tui/src/app/state.rs
-in: App::terminal
-find: && before.key == Some(*key)
-replace: && false
-caught-by:
-    app::tests::dialogs::a_key_held_from_before_the_dialog_never_answers_and_a_press_after_does
-
-[break] a-held-key-forgets-it-was-typing
-rule: A key held down stays what its first press was: typing, so its later repeats are dropped too.
-file: crates/cortex-tui/src/app/state.rs
-in: App::terminal
-find: _ if repeat => before.is_none_or(|before| before.typing),
-replace: _ if repeat => false,
-caught-by:
-    app::tests::dialogs::a_key_held_from_before_the_dialog_never_answers_and_a_press_after_does
-
 [break] a-win32-repeat-is-a-press
 rule: Win32 input: a key that goes down again with no record of it going up is a repeat.
 file: crates/cortex-term/src/input.rs
@@ -385,20 +367,25 @@ caught-by:
     app::tests::dialogs::esc_after_closing_the_viewer_denies_when_the_row_offers_it
 
 [break] answers-stay-shown-over-typing
-rule: Input that reaches the editor after the answers were drawn hides them again.
+rule: Input that reaches the editor after the answers were drawn hides them again. The frame's cache is keyed on whether the dialog is ready, which such input changes, a second guard that leaves nothing this break can show.
+expect: survives
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::typed
 find: self.hide_answers();
 replace: let _ = ();
-caught-by:
-    app::tests::dialogs::answers_shown_are_hidden_again_by_input_that_reaches_the_editor
 
 [break] fg-keeps-the-grace
 rule: Continued after a stop, the dialog shown starts its grace again.
 file: crates/cortex-tui/src/app/state.rs
 in: App::terminal
-find: dialog.hide();
-replace: let _ = &dialog;
+find:
+    TermEvent::Resumed => {
+        if let Some(dialog) = self.dialogs.front_mut() {
+            dialog.hide();
+replace:
+    TermEvent::Resumed => {
+        if let Some(dialog) = self.dialogs.front_mut() {
+            let _ = &dialog;
 caught-by:
     app::tests::dialogs::after_fg_the_dialog_starts_its_grace_again
 
@@ -515,3 +502,31 @@ find: let over = fitted.lines.len().saturating_sub(rows);
 replace: let over = fitted.lines.len().saturating_sub(rows.saturating_sub(1));
 caught-by:
     cortex-tui::it screens::the_views_draw_the_reference_screens
+
+[break] a-held-answer-key-is-typed
+rule: A repeat of a key a dialog took (an answer key held a little long) goes nowhere: it is not typed into the editor the next dialog hides.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::key
+find: action.is_some_and(dialogs) && (typed(key).is_none() || after_taken)
+replace: action.is_some_and(dialogs) && typed(key).is_none()
+caught-by:
+    app::tests::dialogs::an_answer_key_before_the_next_dialogs_row_is_not_typed
+
+[break] reading-the-request-whole-holds-the-dialog
+rule: Keys in the viewer while a dialog is up (reading its request whole) are not typing at the dialog; only a search typed there is.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: if !dialog_up || searching {
+replace: if true {
+caught-by:
+    app::tests::dialogs::ctrl_o_then_esc_then_one_key_answers
+
+[break] a-burst-is-not-input
+rule: Keys read together are input no dialog takes: they hold the dialog a quiet second, and none of them answers.
+file: crates/cortex-tui/src/app/state.rs
+in: App::burst
+find: self.not_taken(at);
+replace: let _ = at;
+caught-by:
+    app::tests::keys_read_together_never_answer_a_dialog
+    app::tests::dialogs::answers_shown_are_hidden_again_by_input_that_reaches_the_editor
