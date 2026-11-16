@@ -415,22 +415,23 @@ fn an_item_defined_in_a_public_module_is_there_and_a_reexport_is_a_use_of_it() {
 #[test]
 fn an_item_in_a_private_module_is_at_the_shortest_of_the_paths_that_reexport_it() {
     // `hid` is not among any module's items: it is private. `Y` is brought
-    // out at the root and again, renamed, in the module `m`; `Display` is
+    // out at the root as `zed` and again, renamed `a` (which sorts first),
+    // in the module `m`; `Display` is
     // another crate's.
     let json = document(
         &[3, 4, 5],
         &[
             unit_struct(2, "Y"),
-            use_of(3, "Y", json!(2), "hid::Y"),
+            use_of(3, "zed", json!(2), "hid::Y"),
             module(4, "m", "public", &[6]),
-            use_of(6, "Z", json!(2), "super::hid::Y"),
+            use_of(6, "a", json!(2), "super::hid::Y"),
             use_of(5, "Display", Value::Null, "std::fmt::Display"),
             module(7, "hid", "default", &[2]),
         ],
     );
     let api = read(&json).unwrap();
-    assert_eq!(entry_at(&api, "demo::Y").kind, "struct");
-    assert_eq!(entry_at(&api, "demo::m::Z").shown, "pub use demo::Y");
+    assert_eq!(entry_at(&api, "demo::zed").kind, "struct");
+    assert_eq!(entry_at(&api, "demo::m::a").shown, "pub use demo::zed");
     assert_eq!(
         entry_at(&api, "demo::Display").shown,
         "pub use std::fmt::Display"
