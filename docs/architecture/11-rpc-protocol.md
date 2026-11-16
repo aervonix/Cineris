@@ -314,6 +314,11 @@ The server's first part: `cortex serve --stdio` (`cortex-rpc`; `docs/steps/27/an
   - The check, on a thread of its own: the token's user is the server's, its integrity at least the server's, and it is neither restricted nor an AppContainer's; only then is the client handed on, with its first data first.
   - A client that writes nothing holds up no other; past 16 of them, the one that has waited longest is closed.
   - The server says where it serves on standard error.
+- **A core that keeps sessions** (`CoreOptions::keep_sessions`, off by default; what `serve --socket` needs for a session to survive its client).
+  - A disconnect ends no session: the client leaves the session's events, and the session goes on, its turn with it, until a client that may drive it closes it with nobody else on it, or the server ends.
+  - An approval asked in a session with no client at all is put to nobody and waits for a `user` client to open the session, which is then put it (as one whose askers have all gone is), until the approval time limit. A session whose clients are there and answer no approvals gets the default at once, as before.
+  - A session put together for a client that left meanwhile is still ended (the 13a bullet above).
+  - Headless mode, the terminal UI and `serve --stdio` leave it off: their sessions end with their client.
 - **The conformance test** runs one list of scenarios (`cortex_testkit::conformance`) in process, over the connection's in-memory ends, and through the real binary's `serve --stdio`, and compares what the client was sent.
 
 ## Network listening

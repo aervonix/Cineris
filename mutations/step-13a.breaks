@@ -275,11 +275,11 @@ caught-by:
 rule: A call that needs an answer runs only when somebody allows it: with nobody to ask it is refused.
 file: crates/cortex-core/src/policy.rs
 find:
-    if asked.is_empty() {
+    if asked.is_empty() && !waits {
         return self.nobody(&call, &question);
     }
 replace:
-    if asked.is_empty() {
+    if asked.is_empty() && !waits {
         return Verdict::Allow;
     }
 caught-by:

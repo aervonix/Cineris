@@ -262,6 +262,17 @@ pub struct CoreOptions {
     /// no call with side effects that the model wrote after an asked call
     /// starts while the question is open.
     pub answers_may_stop: bool,
+    /// Keep a session running when its last client goes away: what
+    /// `cortex serve --socket` does, so that a client can come back to it
+    /// (`docs/architecture/11-rpc-protocol.md`, "Persistent sessions"). A
+    /// disconnect then ends no session, and an approval asked in a session
+    /// with no client at all waits for a `user` client to open it, for the
+    /// approval's time limit, where it would be refused at once as one
+    /// nobody can be asked. A session whose clients are there and answer no
+    /// approvals still gets the default at once. Off by default: headless
+    /// mode, the terminal UI and `serve --stdio` end a session with its
+    /// client.
+    pub keep_sessions: bool,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -273,6 +284,7 @@ impl std::fmt::Debug for CoreOptions {
             .field("trust_project", &self.trust_project)
             .field("fail_on_denial", &self.fail_on_denial)
             .field("approval_timeout", &self.approval_timeout)
+            .field("keep_sessions", &self.keep_sessions)
             .finish_non_exhaustive()
     }
 }
@@ -320,6 +332,7 @@ impl CoreOptions {
             loaded: None,
             log: None,
             answers_may_stop: false,
+            keep_sessions: false,
         }
     }
 }
@@ -572,7 +585,8 @@ impl Core {
     }
 
     /// Disconnects a front end: it has no session open any more, and its
-    /// queue takes nothing more. Sessions it alone had open are closed.
+    /// queue takes nothing more. Sessions it alone had open are closed,
+    /// unless the core keeps sessions ([`CoreOptions::keep_sessions`]).
     ///
     /// The client is taken out first, and the sessions looked at after: a
     /// session that is put together for it meanwhile either is in the table
@@ -580,9 +594,10 @@ impl Core {
     /// put in the table, and closes itself.
     pub async fn disconnect(&self, client: ClientId) {
         self.inner.clients.disconnect(client);
+        let keep = self.inner.options.keep_sessions;
         let sessions: Vec<Arc<Live>> = lock(&self.inner.sessions).values().cloned().collect();
         for live in sessions {
-            if live.sink.unsubscribe(client.0) && live.sink.subscribers().is_empty() {
+            if live.sink.unsubscribe(client.0) && !keep && live.sink.subscribers().is_empty() {
                 self.end(live.handle.id()).await;
             }
         }
@@ -708,15 +723,23 @@ impl Core {
     /// [`shutdown`](Self::shutdown) look in the other way round: a client
     /// that left, or a shutdown that began, before this look is seen here,
     /// and one after it sees the session. A session nobody else has open is
-    /// then ended, so it never runs with no client.
-    async fn still_wanted(&self, client: ClientId, live: &Arc<Live>) -> Result<(), OpError> {
+    /// then ended, so it never runs with no client: one `put_together` for
+    /// the client always, and one it joined while it ran unless the core
+    /// keeps sessions, where it ran with no client before and goes on so.
+    async fn still_wanted(
+        &self,
+        client: ClientId,
+        live: &Arc<Live>,
+        put_together: bool,
+    ) -> Result<(), OpError> {
         let gone = self.inner.clients.queue(client).is_none();
         let stopping = self.inner.shutting_down.load(Ordering::SeqCst);
         if !gone && !stopping {
             return Ok(());
         }
         live.sink.unsubscribe(client.0);
-        if stopping || live.sink.subscribers().is_empty() {
+        let kept = self.inner.options.keep_sessions && !put_together;
+        if stopping || (!kept && live.sink.subscribers().is_empty()) {
             self.end(live.handle.id()).await;
         }
         Err(if stopping {
@@ -810,7 +833,7 @@ impl Core {
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
         // The client may have left, or a shutdown begun, while the session
         // was put together off this thread.
-        self.still_wanted(client, &live).await?;
+        self.still_wanted(client, &live, true).await?;
         Ok(live)
     }
 
@@ -1206,7 +1229,7 @@ impl Core {
                     };
                     live.sink.subscribe(client.0, queue);
                     // A client that left in the meantime is not left on it.
-                    self.still_wanted(client, &live).await?;
+                    self.still_wanted(client, &live, false).await?;
                     // A question that is waiting is put to a client that
                     // may answer it.
                     self.inner.clients.join(&params.session_id, client);
