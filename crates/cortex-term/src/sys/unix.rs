@@ -52,6 +52,9 @@ static WOKEN: AtomicBool = AtomicBool::new(false);
 /// Set when the program is putting the terminal back for good: a
 /// suspension that ends after it does not turn raw mode on again.
 static LEAVING: AtomicBool = AtomicBool::new(false);
+/// How long a program a signal was handed to has to end itself.
+const WATCHDOG_SECONDS: libc::c_uint = 3;
+
 /// The handlers that were in place before ours, put back on leaving.
 static PREVIOUS: Mutex<Vec<(libc::c_int, libc::sigaction)>> = Mutex::new(Vec::new());
 
@@ -225,6 +228,16 @@ extern "C" fn on_ending(signal: libc::c_int) {
         return;
     }
     emergency();
+    // Handed to the program, which ends itself; the watchdog, whose default
+    // action ends the process, does so if it has not within 3 s. A second
+    // signal finds the first taken, and ends the process now.
+    if super::hand_over(128 + u8::try_from(signal).unwrap_or(0)) {
+        // SAFETY: `alarm` and the waker's atomics and pipe write are
+        // async-signal-safe.
+        unsafe { libc::alarm(WATCHDOG_SECONDS) };
+        wake();
+        return;
+    }
     // SAFETY: putting the default action back and raising the signal again
     // ends the process as the signal would have.
     unsafe {

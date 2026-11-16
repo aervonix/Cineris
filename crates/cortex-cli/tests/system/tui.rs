@@ -627,25 +627,80 @@ fn perf_start_to_first_frame_under_both_names() {
 
 /// The resident memory of the process that the role shell started for
 /// `session`, in KiB: Linux only, read from `/proc`.
+/// A field of a process's `/proc` status: Linux only.
 #[cfg(target_os = "linux")]
-fn resident_kib(session: &Session) -> Option<u64> {
+fn status_field(status: &str, name: &str) -> Option<String> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix(name))
+        .map(|value| value.trim().trim_end_matches("kB").trim().to_owned())
+}
+
+/// The status of the process the role shell started for `session`, the
+/// binary: the process whose parent is the shell. Linux only.
+#[cfg(target_os = "linux")]
+fn child_status(session: &Session) -> Option<String> {
     let shell = session.pid().to_string();
-    let field = |status: &str, name: &str| -> Option<String> {
-        status
-            .lines()
-            .find_map(|line| line.strip_prefix(name))
-            .map(|value| value.trim().trim_end_matches("kB").trim().to_owned())
-    };
-    // The process whose parent is the shell: the binary.
     std::fs::read_dir("/proc")
         .ok()?
         .flatten()
         .find_map(|entry| {
             let status = std::fs::read_to_string(entry.path().join("status")).ok()?;
-            (field(&status, "PPid:")? == shell)
-                .then(|| field(&status, "VmRSS:")?.parse().ok())
-                .flatten()
+            (status_field(&status, "PPid:")? == shell).then_some(status)
         })
+}
+
+/// The resident memory of the binary, in KiB. Linux only.
+#[cfg(target_os = "linux")]
+fn resident_kib(session: &Session) -> Option<u64> {
+    status_field(&child_status(session)?, "VmRSS:")?
+        .parse()
+        .ok()
+}
+
+/// Each of SIGTERM, SIGHUP, SIGINT and SIGQUIT ends the application
+/// gracefully (`docs/steps/23/answered.md`, "Signals, a failed write and a
+/// panic"): the terminal is put back at once, the running turn is stopped,
+/// the core ends, and the process exits with the code the signal's own end
+/// would have given.
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_signal_ends_the_application_gracefully_with_its_code() {
+    for (signal, code) in [("TERM", 143), ("HUP", 129), ("INT", 130), ("QUIT", 131)] {
+        let machine = Machine::new(&format!("tui_signal_{signal}"));
+        // A turn that runs until its request is dropped.
+        let closed = Gate::new();
+        machine.server.push(
+            ServerReply::sse()
+                .send(super::sse(&[
+                    super::message_start(),
+                    json!({"type": "content_block_start", "index": 0,
+                        "content_block": {"type": "text", "text": ""}}),
+                    json!({"type": "content_block_delta", "index": 0,
+                        "delta": {"type": "text_delta", "text": "Working on it\n"}}),
+                ]))
+                .hang_until_closed(&closed),
+        );
+        let mut session = machine.tui(&["work"]);
+        wait_shows(&mut session, "Working on it");
+        let pid = child_status(&session)
+            .and_then(|status| status_field(&status, "Pid:"))
+            .expect("the binary's process");
+        let sent = Command::new("kill")
+            .args([format!("-{signal}"), pid])
+            .status()
+            .expect("kill");
+        assert!(sent.success(), "SIG{signal} was not sent");
+        session.wait_for(LIMIT, "the shell's verdict", |t| {
+            t.shows(RESTORED) || t.shows(NOT_RESTORED)
+        });
+        let shown = everything(&session);
+        assert!(
+            shown.contains(&format!("{RESTORED} (exit status: {code})")),
+            "SIG{signal}: {shown}"
+        );
+        assert!(closed.wait(LIMIT), "SIG{signal}: the turn was not stopped");
+    }
 }
 
 #[expect(clippy::print_stdout, reason = "a measurement prints what it measured")]

@@ -131,7 +131,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [external-editor-test-gaps](external-editor-test-gaps.md): Parts of the external editor (umask, ConPTY modes, failed hand-over, `.cmd` editors, interrupt guard) are untested. Owner: step 32.
 - [file-completion-on-a-large-workspace](file-completion-on-a-large-workspace.md): Filtering an `@` menu over about 100,000 paths on the key's path can miss the idle key budget. Owner: step 23.
 - [highlighted-code-drawn-again](highlighted-code-drawn-again.md): `Markdown::render` draws code plain when a finished answer is redrawn at another width. Owner: step 25.
-- [signals-and-a-graceful-shutdown](signals-and-a-graceful-shutdown.md): Terminal signal handlers end the process without flushing the session log, and writes after an emergency restore fail. Owner: step 23.
 - [the-bincode-advisory-ignored-for-syntect](the-bincode-advisory-ignored-for-syntect.md): `deny.toml` ignores RUSTSEC-2025-0141, `bincode` unmaintained, reached only through `syntect`'s loading of its packed grammars; drop it when `syntect` moves off `bincode` or a flaw is named. Owner: the next step that touches highlighting, otherwise step 25.
 - [the-default-editor-on-windows-11](the-default-editor-on-windows-11.md): Windows 11's tabbed Notepad may exit at once, so `Ctrl+G` removes the prompt's folder while it is open. Owner: the owner, by hand, after step 23.
 
