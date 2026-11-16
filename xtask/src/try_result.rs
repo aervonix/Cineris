@@ -234,16 +234,15 @@ pub(crate) fn first_seed_of(log: &str) -> u64 {
 /// How many lines a block of skipped tests is read for at most.
 const SKIPPED_LINES: usize = 40;
 
-/// The tests an A/B run skipped, as its log lists them: a run compares
-/// the tests that passed on one side at least, and names the ones it
-/// leaves out. What it writes is not fixed here, so this reads a block: a
-/// line that says `skipped` and names both sides, and the indented lines
-/// after it. Nothing when the log has no such line, and a log that has one
-/// shows it whatever it is called.
+/// The tests an A/B run left out because they failed on both sides, as
+/// `ab` lists them ([`crate::ab::skipped_text`]): the line that says how
+/// many `TEST(S) FAILED ON BOTH SIDES`, and the indented lines after it.
+/// Nothing when the log has no such line. `ab` prints the block before its
+/// table and again after it; the first is taken.
 pub(crate) fn skipped_block(lines: &[String]) -> Option<String> {
     let at = lines.iter().position(|line| {
         let lower = line.to_lowercase();
-        lower.contains("skipped") && lower.contains("both sides")
+        lower.contains("test(s) failed on both sides")
     })?;
     let mut block = vec![lines[at].trim_end().to_owned()];
     for line in lines[at + 1..].iter().take(SKIPPED_LINES) {
@@ -756,19 +755,28 @@ mod tests {
 
     #[test]
     fn skipped_tests_are_read_wherever_the_log_names_them_and_nowhere_else() {
-        let lines = strings(&[
-            "Summary [  1.2s] 100 tests run: 98 passed, 2 skipped",
-            "Tests skipped, failed on both sides:",
-            "  cortex-base text::a",
-            "  cortex-llm::it replay::b",
-            "",
-            "round 1 ended",
+        // The block as `ab` writes it.
+        let said = crate::ab::skipped_text(&[
+            crate::ab::Skipped {
+                id: "cortex-base text::a".to_owned(),
+                rounds: vec![1, 3],
+                base: "boom".to_owned(),
+                head: "boom".to_owned(),
+            },
+            crate::ab::Skipped {
+                id: "cortex-llm::it replay::b".to_owned(),
+                rounds: vec![2],
+                base: "left".to_owned(),
+                head: "right".to_owned(),
+            },
         ]);
+        let mut lines = strings(&["Summary [  1.2s] 100 tests run: 98 passed, 2 skipped"]);
+        lines.extend(said.lines().map(str::to_owned));
+        lines.extend(strings(&["", "round 1 ended"]));
         assert_eq!(
             skipped_block(&lines).as_deref(),
-            Some(
-                "Tests skipped, failed on both sides:\n  cortex-base text::a\n  cortex-llm::it replay::b"
-            )
+            Some(said.trim_end()),
+            "the whole of ab's block, and nothing after it"
         );
         // A nextest summary's `skipped` is not the list.
         assert_eq!(skipped_block(&lines[..1]), None);
@@ -800,7 +808,7 @@ mod tests {
         keep(
             &dir,
             "tmp/try-output.log",
-            "== building the base (origin/main) ==\nTests skipped, failed on both sides:\n  cortex-base text::a\n\nnext\n",
+            "== building the base (origin/main) ==\n1 TEST(S) FAILED ON BOTH SIDES, and are left out:\n  cortex-base text::a (round 1)\n\nnext\n",
         );
 
         let result = job_result(
@@ -827,7 +835,9 @@ mod tests {
         );
         assert!(text.contains("cortex-llm::it  replay::every_cut"), "{text}");
         assert!(
-            text.contains("Tests skipped, failed on both sides:\n  cortex-base text::a"),
+            text.contains(
+                "1 TEST(S) FAILED ON BOTH SIDES, and are left out:\n  cortex-base text::a (round 1)"
+            ),
             "{text}"
         );
         assert!(

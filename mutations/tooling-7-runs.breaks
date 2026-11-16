@@ -372,10 +372,10 @@ caught-by:
     try_result::tests::the_log_says_what_an_ab_compared_with_and_a_stress_run_began_at
 
 [break] try-result-takes-nextests-skipped-for-the-list
-rule: The tests an A/B skipped are the block whose line says `skipped` of both sides, not nextest's own count of skipped tests.
+rule: The tests an A/B skipped are the block `ab` writes, which says how many failed on both sides, not nextest's own count of skipped tests.
 file: xtask/src/try_result.rs
 in: skipped_block
-find: lower.contains("skipped") && lower.contains("both sides")
+find: lower.contains("test(s) failed on both sides")
 replace: lower.contains("skipped") || lower.contains("both sides")
 caught-by:
     try_result::tests::skipped_tests_are_read_wherever_the_log_names_them_and_nowhere_else
