@@ -1,0 +1,138 @@
+# Step 27, the named pipe of `serve --socket` on Windows: who may open it,
+# and the check of each connection's own token, broken one at a time
+# (docs/steps/27/answered.md, "The design, before building", point 1,
+# "Windows"). Windows builds this code alone: run the breaks on a runner,
+# `gh workflow run try --ref <branch> -f os=windows -f
+# command="mutate step-27-pipe --jobs 2"`.
+
+# ------------------------------------------------------- the pipe's security
+
+[break] pipe-label-keeps-out-reading-not-writing
+rule: The pipe is labelled at the server's integrity with no write up: a process below it cannot open the pipe to write.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: description
+in-string: ML;;NW;;;S-1-16
+replace: ML;;NR;;;S-1-16
+os: windows
+caught-by:
+    cortex-rpc::it pipe::a_client_below_the_servers_integrity_is_kept_out
+    cortex-rpc::it pipe::the_pipe_admits_the_user_alone_at_the_servers_integrity
+
+[break] pipe-access-list-admits-everyone
+rule: The pipe's access list allows the user alone: another user cannot open it.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: description
+in-string: D:P(A;;GA;;;{user})S:
+replace: D:P(A;;GA;;;{user})(A;;GRGW;;;WD)S:
+os: windows
+caught-by:
+    cortex-rpc::it pipe::the_pipe_admits_the_user_alone_at_the_servers_integrity
+    cortex-rpc::it pipe::sys_another_user_cannot_open_the_pipe
+
+[break] pipe-access-list-not-protected
+rule: The pipe's access list is protected from inheritance: it holds the entry it was made with and nothing else.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: description
+in-string: D:P(A;;GA;;;{user})S:
+replace: D:(A;;GA;;;{user})S:
+os: windows
+caught-by:
+    cortex-rpc::it pipe::the_pipe_admits_the_user_alone_at_the_servers_integrity
+
+[break] pipe-widened-without-asking
+rule: Everyone is let at the pipe only by a test's own listener that asks for it; every other pipe is the user's alone.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: Listener::bind
+find: description(server, widened(options))
+replace: description(server, true)
+os: windows
+caught-by:
+    cortex-rpc::it pipe::the_pipe_admits_the_user_alone_at_the_servers_integrity
+    cortex-rpc::it pipe::sys_another_user_cannot_open_the_pipe
+
+[break] pipe-first-instance-joins-a-name-in-use
+rule: The first instance is made only where no instance of the name exists: a second server, or a pipe another process holds at the name, refuses the start.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: instance
+find: let first = if first {
+replace: let first = if false {
+os: windows
+caught-by:
+    cortex-rpc::it pipe::a_name_in_use_is_refused
+
+[break] pipe-name-lapses-between-instances
+rule: The next instance is made before a connected one is handed on, so the name never lapses: a client opens it while the last connection is still being served and before the server accepts again.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: Listener::accept
+find:
+    let Some(waiting) = &mut self.waiting else {
+        return Err(io::Error::other("the listener is gone"));
+    };
+    waiting.connect().await?;
+    let next = registered(instance(&self.name, &self.description, false)?)?;
+    let connected = std::mem::replace(waiting, next);
+replace:
+    if self.waiting.is_none() {
+        self.waiting = Some(registered(instance(&self.name, &self.description, false)?)?);
+    }
+    let Some(waiting) = &mut self.waiting else {
+        return Err(io::Error::other("the listener is gone"));
+    };
+    waiting.connect().await?;
+    let Some(connected) = self.waiting.take() else {
+        return Err(io::Error::other("the listener is gone"));
+    };
+os: windows
+caught-by:
+    cortex-rpc::it pipe::a_silent_client_is_admitted_and_the_name_never_lapses
+
+[break] pipe-default-is-one-name-for-every-user
+rule: The default pipe is named for the user's security identifier, so that two users' servers do not meet at one name.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: default_place
+in-string: cortex-harness-{user}
+replace: cortex-harness
+os: windows
+caught-by:
+    cortex-rpc socket::sys::tests::the_default_pipe_is_named_for_the_user
+
+# -------------------------------------------- the check of a client's token
+
+[break] pipe-another-users-token-admitted
+rule: A connection whose token is another user's is refused by the check of its token, even where the pipe let it open.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: check
+find: if user != server.user {
+replace: if user != server.user && false {
+os: windows
+caught-by:
+    cortex-rpc::it pipe::sys_another_user_cannot_open_the_pipe
+
+[break] pipe-lower-integrity-admitted
+rule: A connection whose token is below the server's integrity is refused.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: check
+find: if level < server.level {
+replace: if level < server.level && false {
+os: windows
+caught-by:
+    cortex-rpc::it pipe::a_client_below_the_servers_integrity_is_kept_out
+
+[break] pipe-restricted-token-admitted
+rule: A connection whose token is restricted is refused.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: check
+find: if is_restricted(token).map_err(unread)? {
+replace: if is_restricted(token).map_err(unread)? && false {
+os: windows
+caught-by:
+    cortex-rpc::it pipe::a_restricted_client_is_refused
+
+[break] pipe-app-container-admitted
+rule: A connection whose token is an AppContainer's is refused. No test sees this break alone: an AppContainer's token is at low integrity, which the integrity check refuses first, and making one in a test needs a container profile and a process started in it.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: check
+find: if is_app_container(token).map_err(unread)? {
+replace: if is_app_container(token).map_err(unread)? && false {
+os: windows
+expect: survives
