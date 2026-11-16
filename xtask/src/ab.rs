@@ -1276,6 +1276,11 @@ mod tests {
                 base: tried(&[("t", Some("x")), ("u", Some("y"))], true),
                 head: tried(&[("t", Some("x")), ("u", None)], true),
             },
+            // Two failed on the head, one of them on the base.
+            Round {
+                base: tried(&[("t", Some("x")), ("u", None)], true),
+                head: tried(&[("t", Some("x")), ("u", Some("y"))], true),
+            },
         ];
         for (index, round) in rounds.iter().enumerate() {
             let (compared, skipped) = comparable(std::slice::from_ref(round));
@@ -1291,7 +1296,7 @@ mod tests {
         assert_eq!(compared, Compared::default());
         assert!(skipped.is_empty());
         let error = conclusion(rounds.len(), compared.numbers.len()).unwrap_err();
-        assert!(error.contains("5 of 5 rounds"), "{error}");
+        assert!(error.contains("6 of 6 rounds"), "{error}");
     }
 
     #[test]
