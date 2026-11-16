@@ -34,6 +34,7 @@ mod events;
 mod gates;
 mod harness_git;
 mod index;
+mod knowledge;
 mod lifecycle;
 mod plan;
 mod provider;

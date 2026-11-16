@@ -101,6 +101,8 @@ pub(crate) struct Parts {
     pub(crate) rounds: Option<Arc<crate::checkpoints::Rounds>>,
     /// The repository's shared file, as a path of the workspace.
     pub(crate) shared_file: Option<cortex_base::AbsPath>,
+    /// A test's probe: called each time the project's files are looked at.
+    pub(crate) on_read: Option<crate::repo_map::Probe>,
 }
 
 /// One session's view of its project's knowledge.
@@ -117,6 +119,7 @@ pub(crate) struct Knowledge {
     learn: bool,
     rounds: Option<Arc<crate::checkpoints::Rounds>>,
     shared_file: Option<cortex_base::AbsPath>,
+    on_read: Option<crate::repo_map::Probe>,
     /// What this session's commands have shown so far.
     watch: Mutex<Watch>,
     /// The learned rules the engine was last given: the one place they are
@@ -158,6 +161,7 @@ impl Knowledge {
             learn: parts.learn,
             rounds: parts.rounds,
             shared_file: parts.shared_file,
+            on_read: parts.on_read,
             watch: Mutex::new(Watch::new()),
             learned: Mutex::new(Vec::new()),
             told: Mutex::new(BTreeSet::new()),
@@ -187,6 +191,9 @@ impl Knowledge {
     /// changed since the last read, with every entry past its expiry
     /// marked. Blocks.
     fn refresh(&self) -> Snapshot {
+        if let Some(probe) = &self.on_read {
+            probe();
+        }
         let held = self.peek();
         let mut snapshot = match held {
             Some(held) if self.project.is_current(&held) => held,
@@ -294,6 +301,9 @@ impl Knowledge {
         let mut learned = lock(&self.learned);
         if learned.is_empty() {
             return;
+        }
+        if let Some(probe) = &self.on_read {
+            probe();
         }
         let current = self
             .peek()

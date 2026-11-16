@@ -210,6 +210,11 @@ pub struct CoreOptions {
     /// starts: a test's, which marks the end of the path that opens the
     /// session (`cortex_testkit::Untouched::open`).
     pub session_running: Option<crate::repo_map::Probe>,
+    /// Called each time a session looks at or reads the files of its
+    /// project's knowledge, on the thread that does: a test's, which
+    /// watches that none is touched before the session's loop runs
+    /// (`cortex_testkit::Untouched::note`).
+    pub knowledge_read: Option<crate::repo_map::Probe>,
     /// Cancelled when the process is to stop: every session's token is a
     /// child of it.
     pub cancel: CancelToken,
@@ -280,6 +285,7 @@ impl CoreOptions {
             index_gate: None,
             index_started: None,
             session_running: None,
+            knowledge_read: None,
             cancel: CancelToken::new(),
             zone: None,
             loaded: None,
