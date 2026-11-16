@@ -214,24 +214,22 @@ fn compact(path: &Path) -> io::Result<()> {
     .map_err(|failure| io::Error::other(failure.to_string()))
 }
 
-/// Appends each prompt handed over, one line each, until the queue closes.
+/// Appends each prompt handed over, one line each, until the queue closes:
+/// under the store's lock, the file opened for each line, so that a
+/// compaction by another process, which writes a new file in the old one's
+/// place under the same lock, keeps every line before it and has every line
+/// after it (the review of step 23's second pull request).
 fn append(path: &Path, project: &str, queue: &Receiver<String>) {
-    let mut file = None;
     for text in queue {
-        if file.is_none() {
-            file = open(path).ok();
-        }
-        let Some(open) = file.as_mut() else {
-            continue;
-        };
         let entry = Entry {
             project: project.to_owned(),
             text,
         };
-        // One write of a whole line: another process's lines are not cut
-        // into.
-        if open.write_all(entry.line().as_bytes()).is_err() {
-            file = None;
+        let _lock = cortex_base::private::hold_lock(path).ok().flatten();
+        if let Ok(mut file) = open(path) {
+            // One write of a whole line: another process's lines are not
+            // cut into.
+            let _ = file.write_all(entry.line().as_bytes());
         }
     }
 }
@@ -326,6 +324,27 @@ mod tests {
         wait_read(&history);
         assert_eq!(history.len(), 1);
         assert_eq!(history.get(0), Some("kept"));
+    }
+
+    /// A prompt sent after another process wrote the file again (its
+    /// compaction) is in the file it wrote, not lost in the one it
+    /// replaced.
+    #[test]
+    fn a_prompt_after_another_process_compacts_the_file_is_kept() {
+        let scratch = Scratch::new("after_compact");
+        let path = scratch.join("history");
+        let mut history = FileHistory::open(path.clone(), "p".to_owned());
+        wait_read(&history);
+        history.push("before");
+        // (The writer is a thread of its own, which this waits for.)
+        while !std::fs::read_to_string(&path).is_ok_and(|text| text.contains("before")) {
+            std::thread::yield_now();
+        }
+        compact(&path).expect("the compaction");
+        history.push("after");
+        drop(history);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("before") && text.contains("after"), "{text}");
     }
 
     /// A file past its size is written again with each project's newest.
