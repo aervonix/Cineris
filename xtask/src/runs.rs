@@ -354,6 +354,14 @@ pub(crate) fn ends_with_names(path: &Path, names: &[&str]) -> bool {
 
 /// The side and round of an A/B round's report: `base-round-3.xml` is
 /// `("base", 3)`.
+pub(crate) fn ab_broke_name(file: &str) -> Option<(&str, usize)> {
+    ab_report_name(&format!("{}.xml", file.strip_suffix("-broke.xml")?))
+        .map(|(side, round)| (if side == "base" { "base" } else { "head" }, round))
+}
+
+/// The side and the round of a round's report kept by `ab`,
+/// `<side>-round-<n>.xml`; `None` for any other name, a broken run's
+/// `<side>-round-<n>-broke.xml` included ([`ab_broke_name`]).
 pub(crate) fn ab_report_name(file: &str) -> Option<(&str, usize)> {
     let (side, round) = file.strip_suffix(".xml")?.split_once("-round-")?;
     let round = round.parse().ok()?;

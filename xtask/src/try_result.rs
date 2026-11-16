@@ -424,6 +424,10 @@ pub(crate) fn job_result(
         reported = true;
         let sides = records::sides_of(run, name, &files)?;
         let left_out = sides.left_out.clone();
+        // Tests that failed on both sides of a round, and nothing else did:
+        // `ab` compared the round without them, and they are named in its
+        // block below, not as failures of the run.
+        let skipped = sides.skipped.clone();
         match records::complete_rounds(sides) {
             Some(sides) => {
                 let one = records::compare(os, &sides);
@@ -463,13 +467,16 @@ pub(crate) fn job_result(
                 by_report.insert((round, side.to_owned()), path);
             }
         }
+        let mut in_rounds: Vec<Failed> = Vec::new();
         for ((round, side), path) in by_report {
             failures_in(
                 &read_text(path)?,
                 &format!("{side} round {round}"),
-                &mut failed,
+                &mut in_rounds,
             );
         }
+        in_rounds.retain(|one| !skipped.contains(&one.id));
+        failed.extend(in_rounds);
     }
     if let Some(path) = &kept.ci {
         reported = true;
@@ -851,6 +858,60 @@ mod tests {
                 "`try-windows` ended as failure",
                 "`try-windows`: 1 test(s) failed (cortex-llm::it replay::quick)"
             ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_test_that_failed_on_both_sides_of_a_job_that_succeeded_is_no_failure_of_the_run() {
+        let dir = scratch("ab-both");
+        // `replay::quick` fails on both sides, in both rounds.
+        let failing = |xml: &str, time: &str| {
+            let failed = xml.replace(
+                &format!(
+                    "<testcase name=\"replay::quick\" classname=\"cortex-llm::it\" time=\"{time}\"/>"
+                ),
+                &format!(
+                    "<testcase name=\"replay::quick\" classname=\"cortex-llm::it\" time=\"{time}\"><failure message=\"boom\" type=\"test failure with exit code 101\">assertion failed</failure></testcase>"
+                ),
+            );
+            assert_ne!(failed, xml, "the fixture changed under the test");
+            failed
+        };
+        let (base, head) = (failing(MAIN, "0.510"), failing(BRANCH, "0.520"));
+        for round in [1, 2] {
+            keep(
+                &dir,
+                &format!("work/repo/target/ab/base-round-{round}.xml"),
+                &base,
+            );
+            keep(
+                &dir,
+                &format!("work/repo/target/ab/head-round-{round}.xml"),
+                &head,
+            );
+        }
+        let result = job_result(
+            5,
+            &job("try-windows", "success"),
+            Os::Windows,
+            Some(&dir),
+            &|| Err("the job log is not asked for".to_owned()),
+            &request(),
+        )
+        .unwrap();
+        // The rounds are compared, as `ab` compared them, and the run, which
+        // succeeded, is not called failed for a test `ab` left out.
+        assert_eq!(result.problems, Vec::<String>::new(), "{}", result.text);
+        assert!(
+            result.text.contains("the median of 2 runs each"),
+            "{}",
+            result.text
+        );
+        assert!(
+            !result.text.contains("FAILED cortex-llm::it replay::quick"),
+            "{}",
+            result.text
         );
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -206,10 +206,15 @@ pub(crate) struct Sides {
     /// The number of each round kept (counted from 1), in the order of
     /// `base` and `head`. Empty: they are rounds 1, 2, 3, ….
     pub(crate) numbers: Vec<usize>,
-    /// The rounds left out of `base` and `head`, one line each: a side
-    /// failed in them, or kept no report. `ab` leaves a round out of its
+    /// The rounds left out of `base` and `head`, one line each: a side's run
+    /// broke, a test failed on one side only (or not the same tests on
+    /// both), or a side kept no report. `ab` leaves a round out of its
     /// comparison for the same reasons.
     pub(crate) left_out: Vec<String>,
+    /// The tests that failed on both sides of a round, and nothing else
+    /// did: as `ab` does, the round is compared, and they are left out of
+    /// every round's medians on both sides.
+    pub(crate) skipped: Vec<String>,
 }
 
 /// What an A/B of one OS came to: each tier's time above the start, and
@@ -230,6 +235,8 @@ pub(crate) struct Compared {
     pub(crate) base: Vec<TestCase>,
     pub(crate) head: Vec<TestCase>,
     pub(crate) left_out: Vec<String>,
+    /// The tests left out of every round: they failed on both sides.
+    pub(crate) skipped: Vec<String>,
 }
 
 /// The rounds both sides finished, or none when there is no such round. A
@@ -284,6 +291,7 @@ pub(crate) fn compare(os: Os, sides: &Sides) -> Compared {
         base,
         head,
         left_out: sides.left_out.clone(),
+        skipped: sides.skipped.clone(),
     }
 }
 
@@ -662,15 +670,24 @@ fn write_sections(file: &Path, sections: &[Section]) -> Result<()> {
 }
 
 /// What an A/B run's artifact for one OS held: its reports by side and
-/// round. A round is kept when both sides' reports are there and no test
-/// failed in either; otherwise it is left out, and `left_out` says why, as
-/// `ab` leaves a round out of its own comparison.
+/// round, read as `ab` reads them. A round is kept when both sides' reports
+/// are there and either no test failed or the same tests failed on both
+/// sides (those are then left out of every round, and named in `skipped`).
+/// It is left out, and `left_out` says why, when a side's run broke (its
+/// report kept as `<side>-round-<n>-broke.xml`), when a test failed on one
+/// side only, or when a side kept no report or one that lists nothing.
 pub(crate) fn sides_of(run: u64, artifact: &str, files: &[PathBuf]) -> Result<Sides> {
     let mut rounds: BTreeMap<usize, (Option<&PathBuf>, Option<&PathBuf>)> = BTreeMap::new();
+    let mut broke: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
     for path in files {
         let Some(file) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
+        if let Some((side, round)) = runs::ab_broke_name(file) {
+            broke.entry(round).or_default().push(side);
+            rounds.entry(round).or_default();
+            continue;
+        }
         if let Some((side, round)) = runs::ab_report_name(file) {
             let entry = rounds.entry(round).or_default();
             if side == "base" {
@@ -692,7 +709,16 @@ pub(crate) fn sides_of(run: u64, artifact: &str, files: &[PathBuf]) -> Result<Si
         Ok(junit::parse(&xml))
     };
     let mut sides = Sides::default();
+    let mut skipped: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (round, (base, head)) in rounds {
+        if let Some(which) = broke.get(&round) {
+            sides.left_out.push(format!(
+                "round {round}: the {} run broke (not by a test failing), so its report may be \
+                 of part of the job",
+                which.join(" and the ")
+            ));
+            continue;
+        }
         let (Some(base), Some(head)) = (base, head) else {
             let missing = match (base, head) {
                 (None, None) => "both sides",
@@ -705,18 +731,33 @@ pub(crate) fn sides_of(run: u64, artifact: &str, files: &[PathBuf]) -> Result<Si
             continue;
         };
         let (base, head) = (read(base)?, read(head)?);
-        let failed = |name: &str, cases: &[TestCase]| -> Option<String> {
-            let names: Vec<String> = cases
+        let failed_ids = |cases: &[TestCase]| -> std::collections::BTreeSet<String> {
+            cases
                 .iter()
                 .filter(|case| case.failed)
                 .map(TestCase::id)
-                .collect();
-            (!names.is_empty()).then(|| format!("{name} failed: {}", names.join(", ")))
+                .collect()
         };
-        let reasons: Vec<String> = [failed("base", &base), failed("head", &head)]
-            .into_iter()
-            .flatten()
-            .collect();
+        let (base_failed, head_failed) = (failed_ids(&base), failed_ids(&head));
+        // The same tests failed on both sides, and nothing else went wrong
+        // (a run that broke is named above): compared, without them.
+        let both_sided = !base_failed.is_empty() && base_failed == head_failed;
+        let failed = |name: &str, ids: &std::collections::BTreeSet<String>| -> Option<String> {
+            (!ids.is_empty()).then(|| {
+                format!(
+                    "{name} failed: {}",
+                    ids.iter().cloned().collect::<Vec<_>>().join(", ")
+                )
+            })
+        };
+        let reasons: Vec<String> = if both_sided {
+            Vec::new()
+        } else {
+            [failed("base", &base_failed), failed("head", &head_failed)]
+                .into_iter()
+                .flatten()
+                .collect()
+        };
         if !reasons.is_empty() {
             sides
                 .left_out
@@ -726,11 +767,18 @@ pub(crate) fn sides_of(run: u64, artifact: &str, files: &[PathBuf]) -> Result<Si
                 .left_out
                 .push(format!("round {round}: a report lists no tests"));
         } else {
+            skipped.extend(base_failed);
             sides.base.push(base);
             sides.head.push(head);
             sides.numbers.push(round);
         }
     }
+    // A test that failed on both sides is left out of every round, as `ab`
+    // leaves it out of its medians.
+    for cases in sides.base.iter_mut().chain(sides.head.iter_mut()) {
+        cases.retain(|case| !skipped.contains(&case.id()));
+    }
+    sides.skipped = skipped.into_iter().collect();
     Ok(sides)
 }
 
@@ -760,6 +808,16 @@ pub(crate) fn ab_detail_text(one: &Compared, against: &str, top: usize) -> Strin
         );
         for line in &one.left_out {
             let _ = writeln!(text, "  {line}");
+        }
+        text.push('\n');
+    }
+    if !one.skipped.is_empty() {
+        let _ = writeln!(
+            text,
+            "Tests left out of every round, on both sides: they failed on both sides of a round."
+        );
+        for id in &one.skipped {
+            let _ = writeln!(text, "  {id}");
         }
         text.push('\n');
     }
@@ -1320,6 +1378,7 @@ mod tests {
             head: (0..rounds).map(|_| cases(1.504, 1.004, 3.004)).collect(),
             numbers: (1..=rounds).collect(),
             left_out: vec!["round 9: head failed: a b".to_owned()],
+            skipped: Vec::new(),
         };
         compare(os, &sides)
     }
@@ -1457,6 +1516,88 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A report of `t::a` (failed or not) and `t::b`, which passed.
+    fn report_of_two(a_failed: bool) -> String {
+        let failed = if a_failed {
+            "<failure message=\"boom\" type=\"test failure with exit code 101\">no</failure>"
+        } else {
+            ""
+        };
+        format!(
+            "<testsuites><testsuite name=\"cortex-base\"><testcase name=\"t::a\" classname=\"cortex-base\" time=\"0.010\">{failed}</testcase><testcase name=\"t::b\" classname=\"cortex-base\" time=\"0.020\"/></testsuite></testsuites>"
+        )
+    }
+
+    #[test]
+    fn a_test_that_failed_on_both_sides_is_left_out_of_every_round_and_the_rounds_compared() {
+        let dir = scratch("both-sides");
+        let mut files = Vec::new();
+        let keep = |files: &mut Vec<PathBuf>, name: &str, text: String| {
+            let path = dir.join("target").join("ab").join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            files.push(path);
+        };
+        // `t::a` fails on both sides in rounds 1 and 2, and passes in 3.
+        for round in 1..=3 {
+            keep(
+                &mut files,
+                &format!("base-round-{round}.xml"),
+                report_of_two(round < 3),
+            );
+            keep(
+                &mut files,
+                &format!("head-round-{round}.xml"),
+                report_of_two(round < 3),
+            );
+        }
+        let sides = sides_of(7, "try-windows", &files).unwrap();
+        assert_eq!(sides.numbers, [1, 2, 3], "every round is compared");
+        assert_eq!(sides.left_out, Vec::<String>::new());
+        assert_eq!(sides.skipped, ["cortex-base t::a"]);
+        for cases in sides.base.iter().chain(&sides.head) {
+            let ids: Vec<String> = cases.iter().map(TestCase::id).collect();
+            assert_eq!(ids, ["cortex-base t::b"], "t::a is out of every round");
+        }
+
+        // Failed on one side only in another round: that round is left out,
+        // and t::a is still out of the others.
+        keep(&mut files, "base-round-4.xml", report_of_two(true));
+        keep(&mut files, "head-round-4.xml", report_of_two(false));
+        let sides = sides_of(7, "try-windows", &files).unwrap();
+        assert_eq!(sides.numbers, [1, 2, 3]);
+        assert_eq!(sides.left_out, ["round 4: base failed: cortex-base t::a"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_round_whose_run_broke_is_left_out_whatever_its_report_holds() {
+        let dir = scratch("broke");
+        let mut files = Vec::new();
+        let mut keep = |name: &str| {
+            let path = dir.join("target").join("ab").join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            // A report with no failed test: the run broke after tiers 1
+            // and 2 (its system tests never ran).
+            std::fs::write(&path, report_with(false)).unwrap();
+            files.push(path);
+        };
+        for round in 1..=2 {
+            keep(&format!("base-round-{round}.xml"));
+        }
+        keep("head-round-1.xml");
+        keep(&crate::ab::kept_report_name(false, 2, true));
+        let sides = sides_of(7, "try-windows", &files).unwrap();
+        assert_eq!(sides.numbers, [1]);
+        assert_eq!(sides.left_out.len(), 1, "{:?}", sides.left_out);
+        assert!(
+            sides.left_out[0].starts_with("round 2: the head run broke"),
+            "{:?}",
+            sides.left_out
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn the_rounds_that_were_compared_keep_their_numbers_in_the_rounds_table() {
         let sides = Sides {
@@ -1464,6 +1605,7 @@ mod tests {
             head: vec![cases(1.504, 2.004, 3.004), cases(1.504, 2.004, 3.004)],
             numbers: vec![1, 4],
             left_out: vec![],
+            skipped: Vec::new(),
         };
         let one = compare(Os::Linux, &sides);
         assert_eq!(one.numbers, [1, 4]);
