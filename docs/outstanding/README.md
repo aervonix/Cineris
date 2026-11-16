@@ -53,8 +53,8 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [settings-a-later-step-declares](settings-a-later-step-declares.md): Reserved configuration sections, including `[models]` and `[http]`, still need their keys declared and their project rules set. Owner: steps 5, 13, 15, 16 and others, each for its own section.
 
 ### cortex-core
-- [the-core-thread-waits-on-a-revokes-write](the-core-thread-waits-on-a-revokes-write.md): A change of level waits on the core thread for a revoke's or a record's write of the project's approvals, under the lock that keeps them from losing each other. Owner: the next change to the core's policy, or step 32.
 
+- [the-core-thread-waits-on-a-revokes-write](the-core-thread-waits-on-a-revokes-write.md): A change of level waits on the core thread for a revoke's or a record's write of the project's approvals, under the lock that keeps them from losing each other. Owner: the next change to the core's policy, or step 32.
 - [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it; one CI flake. Owner: the next step that changes the base capture, or step 32.
 - [a-closed-view-can-still-answer](a-closed-view-can-still-answer.md): After `session/close` a client stays among those an approval request went to, so its answer is still taken. Owner: the owner; before step 27.
 - [a-days-time-limit](a-days-time-limit.md): `limits.day.time` is accepted and not enforced, and a session open across midnight draws on the day it began in. Owner: step 37 (task leases' budgets), or a step the owner names.
@@ -133,6 +133,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-tools
 
+- [a-time-limit-test-under-load](a-time-limit-test-under-load.md): `process::sys_a_time_limit_stops_the_whole_tree` failed once in 50 runs of a loaded stress (seed 17): the limit was not yet among the timer's waits when the test looked. Owner: a tooling or fix session.
 - [names-that-escape-to-the-same-text](names-that-escape-to-the-same-text.md): Two names that are one text once escaped are counted twice and shown once by `list`, and share their matches in `search`. Owner: a later `cortex-tools` step, or step 32.
 - [a-git-look-too-slow-on-a-loaded-windows-runner](a-git-look-too-slow-on-a-loaded-windows-runner.md): The shell's look at changes gave up as too slow on a loaded Windows runner, failing one system test once. Owner: the next step that changes the look, or step 32.
 - [cmd-searches-the-current-directory](cmd-searches-the-current-directory.md): `cmd.exe` finds a program in the working directory before `PATH`, so a workspace `git.bat` runs as `git`. Owner: the owner.
