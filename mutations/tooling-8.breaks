@@ -617,7 +617,7 @@ in: extract
 find: .args(["-x", "-m", "-f", "-", "-C"])
 replace: .args(["-x", "-f", "-", "-C"])
 caught-by:
-    nonblocking::tests::a_commits_tree_is_extracted_with_files_dated_now
+    nonblocking::tests::sys_a_commits_tree_is_extracted_with_files_dated_now
 
 # --- the test kit's line --------------------------------------------------------
 
@@ -734,16 +734,7 @@ in: placed
 find: .map_or(entry, |(_, name)| name.trim());
 replace: .map_or(entry, |(_, _)| entry);
 caught-by:
-    mutate::changed::tests::a_name_that_ends_in_a_star_is_a_beginning
-
-[break] changed-reads-a-star-as-the-whole-word
-rule: An entry that ends in `*` is a beginning of a name.
-file: xtask/src/mutate/changed.rs
-in: touched_by
-find: if prefix {
-replace: if false {
-caught-by:
-    mutate::changed::tests::a_name_that_ends_in_a_star_is_a_beginning
+    mutate::changed::tests::a_name_that_ends_in_a_star_is_placed_nowhere_and_chosen_by_any_file_of_its_crates
 
 [break] changed-skips-a-name-no-file-has
 rule: A name that no file has cannot be placed, and chooses the break when a file of its crates was touched.
@@ -1055,8 +1046,8 @@ caught-by:
 rule: A `caught-by` that ends in `*` is placed nowhere, since a pattern can end inside a module's name, and any file of the break's crates chooses it.
 file: xtask/src/mutate/changed.rs
 in: placed
-find: Some(_) => return Placed::Nowhere,
-replace: Some(name) => (name, true),
+find: if name.ends_with('*') {
+replace: if false {
 caught-by:
     mutate::changed::tests::a_name_that_ends_in_a_star_is_placed_nowhere_and_chosen_by_any_file_of_its_crates
 
@@ -1486,14 +1477,13 @@ caught-by:
     pty::close::tests::sys_a_program_that_does_not_trap_the_hang_up_ends_by_the_signal
 
 [break] closing-the-console-of-an-ended-program-is-an-error
-rule: Hanging up on a program that has already ended is not an error.
+rule: Hanging up on a program that has already ended is not an error. Two guards hold it since the step's review: a program that was waited for is not signalled at all (its id may be another's), and a group that has gone (ESRCH) is nothing to hang up. This breaks the second; the test's program was waited for, so the first stops it.
 file: crates/cortex-term/src/sys/unix.rs
 in: hang_up
 find: Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {}
 replace: Err(error) if error.raw_os_error() == Some(libc::EPERM) => {}
 packages: cortex-testkit
-caught-by:
-    pty::close::tests::sys_closing_the_console_of_a_program_that_has_ended_is_not_an_error
+expect: survives
 
 [break] closing-the-console-does-nothing
 rule: `Session::close_console` closes the terminal under the program.

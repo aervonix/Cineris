@@ -320,19 +320,11 @@ impl<'a> Crates<'a> {
         for entry in &one.caught_by {
             match placed(entry) {
                 Placed::Nowhere => return Some(Reason::Unplaced(entry.clone())),
-                Placed::Word { word, prefix } => {
+                Placed::Word(word) => {
                     let mut found = false;
                     for directory in &directories {
                         let words = self.words_of(directory);
-                        let files: Vec<&String> = if prefix {
-                            words
-                                .iter()
-                                .filter(|(known, _)| known.starts_with(&word))
-                                .flat_map(|(_, files)| files)
-                                .collect()
-                        } else {
-                            words.get(&word).into_iter().flatten().collect()
-                        };
+                        let files: Vec<&String> = words.get(&word).into_iter().flatten().collect();
                         found |= !files.is_empty();
                         if files.iter().any(|file| touched.contains(*file)) {
                             return Some(Reason::Test(entry.clone()));
@@ -400,11 +392,10 @@ fn directory_of(package: &str) -> String {
 /// What a `caught-by` entry says about where its test is.
 #[derive(Debug, PartialEq, Eq)]
 enum Placed {
-    /// A word of the test's name: its last segment, or its beginning when
-    /// the entry ends in `*`.
-    Word { word: String, prefix: bool },
-    /// Nothing to look for: the entry ends in `::*` or is only `*`, any test
-    /// of a module.
+    /// A word of the test's name: its last segment.
+    Word(String),
+    /// Nothing to look for: the entry ends in `*`, a pattern that can end
+    /// inside a module's name.
     Nowhere,
 }
 
@@ -418,18 +409,14 @@ fn placed(entry: &str) -> Placed {
     // A pattern can end inside a module's name (`open*` is every test of
     // `openai_chat`), whose tests no word of their own names: placed
     // nowhere, so any file of the crates chooses the break.
-    let (name, prefix) = match name.strip_suffix('*') {
-        Some(_) => return Placed::Nowhere,
-        None => (name, false),
-    };
+    if name.ends_with('*') {
+        return Placed::Nowhere;
+    }
     let last = name.rsplit("::").next().unwrap_or(name);
     if last.is_empty() {
         Placed::Nowhere
     } else {
-        Placed::Word {
-            word: last.to_owned(),
-            prefix,
-        }
+        Placed::Word(last.to_owned())
     }
 }
 
@@ -812,17 +799,11 @@ mod tests {
         // The binary of an entry is not part of the name.
         assert_eq!(
             placed("cortex-core::it sys_x"),
-            Placed::Word {
-                word: "sys_x".to_owned(),
-                prefix: false
-            }
+            Placed::Word("sys_x".to_owned())
         );
         assert_eq!(
             placed("cortex-llm::it openai_chat::endpoints::an_url"),
-            Placed::Word {
-                word: "an_url".to_owned(),
-                prefix: false
-            }
+            Placed::Word("an_url".to_owned())
         );
         assert_eq!(placed("cortex-config dirs::tests::*"), Placed::Nowhere);
         let list = A.replace("tests::first_test", "tests::first_*");
