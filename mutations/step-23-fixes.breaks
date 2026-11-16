@@ -8,20 +8,17 @@ file: crates/cortex-term/src/sys/unix.rs
 in: gone
 find: if super::hang_up() {
 replace: if false {
-packages: cortex-tui
 caught-by:
-    cortex-tui::it signals::sys_closing_the_terminal_ends_as_sighup
-    cortex-tui::it signals::sys_closing_the_terminal_of_a_leader_ends_as_sighup
+    cortex-term::it handoff::sys_a_terminal_that_goes_away_under_a_read_is_sighups_end
 
 [break] the-sighup-after-a-hang-up-ends-the-process
-rule: The SIGHUP that follows a hang-up already taken as SIGHUP's end is that same end, not a second signal that ends the process part-way.
+rule: A SIGHUP after a SIGHUP handed over, or after the terminal went away under a read, is that same end, not a second signal that ends the process part-way.
 file: crates/cortex-term/src/sys/unix.rs
 in: on_ending
 find: if signal == libc::SIGHUP && super::hung_up_already(129) {
 replace: if false {
-packages: cortex-tui
 caught-by:
-    cortex-tui::it signals::sys_closing_the_terminal_ends_as_sighup
+    cortex-term::it handoff::sys_a_second_sighup_is_the_same_end
 
 [break] leaving-puts-back-the-default-handlers
 rule: While signals are handed to the program, leaving the terminal keeps the handlers of the signals that end it until signal_ended: one that comes while the program ends is handed over, not the default action's.
@@ -31,7 +28,7 @@ find: if keep && ENDING.contains(&signal) && !(guarding && is_interrupt(signal))
 replace: if false && keep && ENDING.contains(&signal) && !(guarding && is_interrupt(signal)) {
 packages: cortex-tui
 caught-by:
-    cortex-tui::it signals::sys_closing_the_terminal_ends_as_sighup
+    cortex-tui::it external::sys_a_signal_while_the_editor_runs_leaves_the_terminal_to_the_shell
 
 [break] no-watchdog
 rule: A signal handed to the program sets the watchdog, which ends the process if the program has not ended itself within 3 s.
@@ -239,7 +236,6 @@ in: App::answer
 find: let Some(dialog) = self.dialogs.pop_front() else
 replace: let Some(dialog) = self.dialogs.pop_back() else
 caught-by:
-    app::tests::dialogs::with_two_dialogs_a_key_answers_the_one_shown_and_another_ones_end_leaves_it
     app::tests::dialogs::the_next_dialog_answers_with_its_own_key_after_its_own_grace
 
 [break] a-resolution-closes-the-dialog-shown
@@ -305,3 +301,42 @@ find: state.top = state.top.saturating_add(page)
 replace: state.top += page
 caught-by:
     app::tests::dialogs::end_then_page_down_in_the_viewer_stays_at_the_end
+
+# What the independent review of these fixes found untested.
+
+[break] entering-again-installs-nothing
+rule: Entering the terminal again after leaving it with the hand-off's handlers kept installs the handlers that are missing: resizes and stops reach the program after the external editor.
+file: crates/cortex-term/src/sys/unix.rs
+in: install_handlers
+find: if !installed.contains(&signal) {
+replace: if installed.is_empty() {
+packages: cortex-tui
+caught-by:
+    cortex-tui::it external::sys_an_edit_comes_back_and_the_terminal_is_handed_over_and_back
+
+[break] a-restore-mid-write-moves-up
+rule: A restore that comes while a frame is being written moves up nothing: the cursor is anywhere in the frame, and the write sends the restore again once the frame has landed.
+file: crates/cortex-term/src/sys/mod.rs
+in: rows_to_move_up
+find: if IN_FLIGHT.load(Ordering::SeqCst) {
+replace: if false {
+caught-by:
+    sys::tests::a_restore_during_a_write_moves_up_nothing
+
+[break] a-resume-leaves-the-viewer-on-the-main-screen
+rule: Continued after a stop, the terminal enters the alternate screen again if the program has it on.
+file: crates/cortex-term/src/terminal.rs
+in: Terminal::resume
+find: again.extend_from_slice(ALTERNATE_ON);
+replace: let _ = ALTERNATE_ON;
+caught-by:
+    terminal::tests::a_resume_enters_the_alternate_screen_again_if_it_was_on
+
+[break] the-log-is-flushed-again-at-its-drop
+rule: Finishing the log within a limit leaves no flush after it that waits for a stuck writer.
+file: crates/cortex-base/src/log/mod.rs
+in: LogHandle::finish_within
+find: std::mem::forget(self);
+replace: drop(self);
+caught-by:
+    log::tests::finishing_the_log_within_a_limit_never_waits_for_a_stuck_writer

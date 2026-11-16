@@ -61,10 +61,12 @@ pub trait Sink {
     /// When the terminal cannot be written to.
     fn write_frame(&mut self, bytes: &[u8]) -> io::Result<()>;
 
-    /// The frame just written left the cursor with `rows_above` rows of the
-    /// live region above it: what a restore after a signal or a panic moves
-    /// up, so that it erases the whole region (since the review of step
-    /// 23). Nothing, unless the sink is the program's terminal.
+    /// The frame about to be written will leave the cursor with
+    /// `rows_above` rows of the live region above it: what a restore after a
+    /// signal or a panic moves up, so that it erases the whole region (since
+    /// the review of step 23). Said before the write, so that a restore
+    /// during or just after it knows. Nothing, unless the sink is the
+    /// program's terminal.
     fn region(&mut self, rows_above: usize) {
         let _ = rows_above;
     }
@@ -309,6 +311,9 @@ impl Inline {
             out.extend_from_slice(SYNC_END);
         }
 
+        // Said before the frame is written: a restore that comes while it
+        // is under way, or just after, moves up the rows it leaves.
+        sink.region(at);
         let written = sink.write_frame(&out);
         let length = out.len();
         self.buffer = out;
@@ -319,7 +324,6 @@ impl Inline {
         }
         self.scratch = std::mem::replace(&mut self.live, rows);
         self.cursor_row = at;
-        sink.region(at);
         self.cursor = cursor;
         self.target = Some(target);
         self.stale = false;
@@ -346,10 +350,10 @@ impl Inline {
         if caps.sync {
             out.extend_from_slice(SYNC_END);
         }
+        sink.region(0);
         let written = sink.write_frame(&out);
         self.buffer = out;
         self.restart();
-        sink.region(0);
         written
     }
 

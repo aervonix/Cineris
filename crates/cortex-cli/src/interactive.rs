@@ -75,7 +75,7 @@ const SIGNAL_END: Duration = Duration::from_millis(1500);
 /// How long the end waits for the log to reach its file: what is left of
 /// the watchdog's 3 s after the history and the core (the review of step
 /// 23: a log writer stuck on its disk held a quit for ever).
-const LOG_END: Duration = Duration::from_millis(400);
+const LOG_END: Duration = Duration::from_millis(300);
 
 /// How often the core's end looks for a signal that came meanwhile.
 const END_LOOK: Duration = Duration::from_millis(50);
@@ -181,8 +181,8 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     // that comes while the core ends cuts its wait short alike.
     let signalled = matches!(&ended, Ok(Ok(Exit::Signal(_))));
     core.end(if signalled { SIGNAL_END } else { CORE_END });
-    if let Some(log) = &log {
-        log.flush_within(LOG_END);
+    if let Some(log) = log {
+        log.finish_within(LOG_END);
     }
     // A signal that came after the interface's loop ended is the code the
     // program ends with: the end it asked for is the one just done.

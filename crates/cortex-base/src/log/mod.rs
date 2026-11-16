@@ -376,6 +376,18 @@ impl LogHandle {
         written
     }
 
+    /// Ends the log at the end of a process whose time is bounded:
+    /// [`flush_within`](Self::flush_within) `limit`, and the handle is never
+    /// dropped, so that its drop's flush, which waits as long as the writer
+    /// takes, does not run after it (the review of step 23). Says whether
+    /// everything reached the file.
+    pub fn finish_within(self: std::sync::Arc<Self>, limit: std::time::Duration) -> bool {
+        let written = self.flush_within(limit);
+        // The process exits next: a handle left undropped costs nothing.
+        std::mem::forget(self);
+        written
+    }
+
     /// How many lines were dropped because the writer could not keep up
     /// and have not been reported in the file yet.
     #[must_use]

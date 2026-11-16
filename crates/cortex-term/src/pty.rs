@@ -36,6 +36,24 @@ impl Pty {
         sys::pty::Pty::spawn(program, arguments, env, cols, rows).map(Self)
     }
 
+    /// As [`spawn`](Self::spawn), with the pseudo-terminal not the program's
+    /// controlling terminal: when it closes, the program is sent no signal,
+    /// and only its reads say the terminal has gone. Unix only.
+    ///
+    /// # Errors
+    ///
+    /// When the pseudo-terminal cannot be made or the program not started.
+    #[cfg(unix)]
+    pub fn spawn_without_control(
+        program: &str,
+        arguments: &[String],
+        env: &[(String, String)],
+        cols: u16,
+        rows: u16,
+    ) -> io::Result<Self> {
+        sys::pty::Pty::spawn_as(program, arguments, env, (cols, rows), false).map(Self)
+    }
+
     /// What the program writes to its terminal. A read that ends with an
     /// error for which [`is_end`] holds means the program and everything it
     /// started have closed the terminal.
@@ -255,6 +273,17 @@ pub fn interrupt_pending_here() -> io::Result<PendingInterrupt> {
         previous: sys::pty::interrupt_pending_here()?,
         _this_thread: std::marker::PhantomData,
     })
+}
+
+/// Raises SIGHUP on the calling thread: its handler has run when this
+/// returns. Unix only.
+///
+/// # Errors
+///
+/// When the system refuses.
+#[cfg(unix)]
+pub fn raise_hangup() -> io::Result<()> {
+    sys::pty::raise_hangup()
 }
 
 /// Raises an interrupt (SIGINT) on the calling thread: its handler has run
