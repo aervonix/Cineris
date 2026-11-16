@@ -974,37 +974,40 @@ mod tests {
 
     #[test]
     fn only_the_crates_perf_tests_fetch_the_corpus_of_real_code() {
-        let command = |text: &str| {
-            Inputs::parse(&["--command".to_owned(), text.to_owned()])
-                .unwrap()
-                .command()
-                .unwrap()
+        let command = |text: &str, profile: &str| {
+            Inputs::parse(&[
+                "--command".to_owned(),
+                text.to_owned(),
+                "--profile".to_owned(),
+                profile.to_owned(),
+            ])
+            .unwrap()
+            .command()
+            .unwrap()
         };
-        assert!(super::reads_the_corpus(&command("perf -p cortex-index")));
-        assert!(super::reads_the_corpus(&command(
-            "perf -p cortex-index warm"
-        )));
-        for other in [
-            "test",
-            "test -p cortex-index",
-            "stress -p cortex-index",
-            "perf --only editor",
-            "startup",
+        for profile in ["ci", "release", "dist"] {
+            for fetches in ["perf -p cortex-index", "perf -p cortex-index warm"] {
+                assert!(
+                    super::reads_the_corpus(&command(fetches, profile)),
+                    "{fetches} in {profile}"
+                );
+            }
+        }
+        // A `test` of a release build is `test --cargo-profile release
+        // --profile ci`: it names a profile and is not a perf run.
+        for (other, profile) in [
+            ("test", "ci"),
+            ("test", "release"),
+            ("test -p cortex-index", "release"),
+            ("test -p cortex-index", "ci"),
+            ("stress -p cortex-index", "ci"),
+            ("perf --only editor", "ci"),
+            ("startup", "release"),
         ] {
-            let words = if other == "startup" {
-                Inputs::parse(&[
-                    "--command".to_owned(),
-                    other.to_owned(),
-                    "--profile".to_owned(),
-                    "release".to_owned(),
-                ])
-                .unwrap()
-                .command()
-                .unwrap()
-            } else {
-                command(other)
-            };
-            assert!(!super::reads_the_corpus(&words), "{other}");
+            assert!(
+                !super::reads_the_corpus(&command(other, profile)),
+                "{other} in {profile}"
+            );
         }
     }
 
