@@ -88,7 +88,7 @@ pub(crate) struct Places {
 
 /// `git` in `directory`, with the output. An identity of its own: the
 /// commits a combination makes never leave the clone.
-fn git(directory: &Path, arguments: &[&str]) -> Result<String> {
+pub(crate) fn git(directory: &Path, arguments: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .args([
             "-c",

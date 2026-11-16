@@ -19,6 +19,7 @@ use std::process::ExitCode;
 
 mod ab;
 mod alias;
+mod api_diff;
 mod checks;
 mod ci_log;
 mod combine;
@@ -156,11 +157,21 @@ On the runners, without a pull request (the `try` workflow runs this)
                     failing test and carries on.
 
 Reviews
-  scratch-test CRATE FILE [-- NEXTEST ARGS]
+  scratch-test CRATE FILE [--cargo-profile P] [--ignored|--include-ignored]
+               [--no-capture] [-- NEXTEST ARGS]
                     Run the tests of one throwaway file as a module of CRATE's
                     integration tests, in a copy of the tree under
                     target/scratch-test/: nothing to register, nothing left
-                    in the worktree.
+                    in the worktree. --cargo-profile release builds it
+                    optimised; --ignored runs its ignored tests (a
+                    measurement) alone, one at a time, with their output.
+  api-diff [--against REF] [-p CRATE]... [--format text|markdown]
+                    The public items added, removed and changed between REF
+                    (main when not given) and the working tree, by crate, each
+                    with its signature before and after: read from rustdoc's
+                    JSON, in build directories of their own under
+                    target/api-diff/. For a fix session's list of changed
+                    signatures.
 
 Before a push
   combine PR...     Put this branch on top of the open pull requests named, in
@@ -324,6 +335,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "stress" => stress::run(rest),
         "try-result" => try_result::run(rest),
         "ab" => ab::run(rest),
+        "api-diff" => api_diff::run(rest),
         "combine" => combine::run(rest),
         "scratch-test" => scratch_test::run(rest),
         "owner-guard" => owner_guard::run(rest),
