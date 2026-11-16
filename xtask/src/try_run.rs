@@ -915,7 +915,7 @@ impl Inputs {
         .map(str::to_owned)
         .to_vec();
         if let Some(count) = self.count {
-            command.extend(["--count".to_owned(), count.max(2).to_string()]);
+            command.extend(["--count".to_owned(), count.max(3).to_string()]);
         }
         for package in packages {
             command.extend(["-p".to_owned(), package]);
@@ -2123,8 +2123,8 @@ mod tests {
                     .to_owned()
             )
         );
-        // Several crates, a test's name, dist, and a count of rounds (two at
-        // least: one round has no order).
+        // Several crates, a test's name, dist, and a count of rounds (three
+        // at least: with two, ranges of one tree often do not overlap).
         assert_eq!(
             try_command(&[
                 "--command",
@@ -2137,7 +2137,7 @@ mod tests {
                 "1"
             ]),
             Ok(
-                "perf-ab --base ../ab-base --label origin/main --cargo-profile dist --count 2 \
+                "perf-ab --base ../ab-base --label origin/main --cargo-profile dist --count 3 \
                 -p cortex-index -p cortex-tools warm"
                     .to_owned()
             )
@@ -2182,7 +2182,7 @@ mod tests {
                     "--count",
                     "21",
                 ],
-                "from 2 to 20",
+                "from 3 to 20",
             ),
             (
                 &["--command", "perf -p x --against y", "--against", "main"],

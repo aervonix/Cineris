@@ -780,6 +780,11 @@ pub(crate) mod pty {
         /// to the terminal afterwards still succeeds, where after a real
         /// hang-up it fails.
         pub(crate) fn hang_up(&mut self) -> io::Result<()> {
+            // A program that has ended and been waited for has no group to
+            // hang up, and its id may be another's now.
+            if self.child.try_wait()?.is_some() {
+                return Ok(());
+            }
             let group = libc::pid_t::try_from(self.child.id()).map_err(io::Error::other)?;
             for signal in [libc::SIGHUP, libc::SIGCONT] {
                 // SAFETY: `kill` reads nothing but its arguments; a negative

@@ -497,8 +497,10 @@ fn git_in(directory: &Path, arguments: &[&str]) -> Result<String> {
 /// old for unchanged: cargo's fingerprints compare modification times
 /// (`tar -m` leaves them as the extraction makes them).
 fn extract(repository: &Path, hash: &str, into: &Path) -> Result<()> {
+    // The commit's bytes, whatever the machine's git says of line endings
+    // (Git for Windows turns `core.autocrlf` on for every repository).
     let mut archive = Command::new("git")
-        .args(["archive", "--format=tar", hash])
+        .args(["-c", "core.autocrlf=false", "archive", "--format=tar", hash])
         .current_dir(repository)
         .stdout(Stdio::piped())
         .spawn()
@@ -1314,7 +1316,7 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
     /// commit: a build directory with artifacts newer than the commit would
     /// take a file dated as the commit for unchanged.
     #[test]
-    fn a_commits_tree_is_extracted_with_files_dated_now() {
+    fn sys_a_commits_tree_is_extracted_with_files_dated_now() {
         let directory = std::env::temp_dir().join(format!("xtask-size-at-{}", std::process::id()));
         let _ = fs::remove_dir_all(&directory);
         let (repository, into) = (directory.join("repo"), directory.join("tree"));

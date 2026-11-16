@@ -232,4 +232,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           BASE: ${{ github.event.pull_request.base.sha }}
+        # bash on both systems: in PowerShell, Windows' default, `$BASE` is
+        # a variable of its own, empty, not the environment's.
+        shell: bash
         run: cargo run --locked --quiet --package xtask -- size --check --target ${{ matrix.target }} --against-main --base "$BASE"

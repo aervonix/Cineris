@@ -226,6 +226,10 @@ pub(crate) fn build_with(options: &Options) -> Result<()> {
         .args(&arguments)
         .envs(environment_of(&root, &target_dir))
         .envs(options.variables.iter().copied())
+        // A token for `gh` (a `try` run of `size` has one) is no build
+        // script's or procedural macro's business.
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
         .current_dir(&root);
     if options.target_dir.is_some() {
         // Whatever the caller's environment says: a build of its own never
