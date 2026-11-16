@@ -433,3 +433,12 @@ replace:
                     applied = safe;
 caught-by:
     cortex-core::it reload::trust_taken_away_with_a_part_that_fails_still_gives_the_epoch_its_keys
+
+[break] the-look-asks-the-loops-state
+rule: The look before a turn is made only when no turn holds the session, asked as a prompt decides: a turn a prompt started and the loop has not picked up yet holds it.
+file: crates/cortex-core/src/core.rs
+in: handle
+find: if !live.handle.turn_running() {
+replace: if live.handle.turn_state() == cortex_agent::TurnState::Idle {
+caught-by:
+    cortex-core::it reload::a_prompt_queued_behind_a_turn_not_yet_begun_does_not_look

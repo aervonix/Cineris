@@ -713,6 +713,14 @@ impl SessionHandle {
         self.shared.lock().state
     }
 
+    /// Whether a turn holds the session: one running, or one a prompt has
+    /// started that the loop has not picked up yet, whose state is still
+    /// idle. What a prompt now decides by: it would steer or queue behind
+    /// such a turn.
+    pub fn turn_running(&self) -> bool {
+        self.shared.lock().running.is_some()
+    }
+
     /// Begins a change to the session's items under the loop (a rewind, a
     /// change of branch), which its owner makes in the store while the
     /// returned [`HistoryChange`] lives. Meanwhile no turn starts
