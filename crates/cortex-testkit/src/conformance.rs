@@ -584,12 +584,13 @@ pub fn normalise(entries: &[Value], known: &[(&str, &str)]) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     for entry in entries {
         let entry = rename(entry, &mut names, known, None);
-        // A delta that follows a delta of the same item and kind is added
-        // to it.
+        // A delta that follows a delta of the same item and kind, and of
+        // the same call, is added to it, as the core's queue merges them.
         if let (Some(last), Some(delta)) = (out.last_mut(), delta_of(&entry))
             && let Some(before) = delta_of(last)
             && before.0 == delta.0
             && before.1 == delta.1
+            && continues(last, &entry)
         {
             join(last, &entry);
             continue;
@@ -610,7 +611,28 @@ fn delta_of(entry: &Value) -> Option<(String, String)> {
     ))
 }
 
-/// Adds the text of `next`'s delta to `last`'s, field by field.
+/// The fields of a delta that carry its content, which a merged delta
+/// holds joined: every other field (its kind, a call's id) is the same in
+/// both, or the two are not one run.
+const CONTENT: [&str; 2] = ["text", "json"];
+
+/// Whether `next`'s delta continues `last`'s: every field but the content
+/// is the same.
+fn continues(last: &Value, next: &Value) -> bool {
+    let (Some(Value::Object(before)), Some(Value::Object(after))) =
+        (last.pointer("/event/delta"), next.pointer("/event/delta"))
+    else {
+        return false;
+    };
+    let same = |one: &Map<String, Value>, other: &Map<String, Value>| {
+        one.iter()
+            .filter(|(key, _)| !CONTENT.contains(&key.as_str()))
+            .all(|(key, value)| other.get(key) == Some(value))
+    };
+    same(before, after) && same(after, before)
+}
+
+/// Adds the content of `next`'s delta to `last`'s.
 fn join(last: &mut Value, next: &Value) {
     let (Some(Value::Object(into)), Some(Value::Object(from))) = (
         last.pointer_mut("/event/delta"),
@@ -618,11 +640,10 @@ fn join(last: &mut Value, next: &Value) {
     ) else {
         return;
     };
-    for (key, value) in from {
-        if key == "kind" {
-            continue;
-        }
-        if let (Some(Value::String(into)), Value::String(more)) = (into.get_mut(key), value) {
+    for key in CONTENT {
+        if let (Some(Value::String(into)), Some(Value::String(more))) =
+            (into.get_mut(key), from.get(key))
+        {
             into.push_str(more);
         }
     }
