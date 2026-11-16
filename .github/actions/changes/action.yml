@@ -11,9 +11,11 @@
 # pull request whose every file is documentation (as above, the generated
 # files included: they are written from the code, not read by it), a list
 # of breaks (`mutations/**`), the developer commands (`xtask/**`) or a
-# workflow (`.github/workflows/**`) cannot. One file decides how the
-# shipped binary is built, and counts: `xtask/src/shipped.rs`. Anything else
-# can.
+# workflow (`.github/workflows/**`) cannot. The files of `xtask` that build
+# the shipped binary and judge it count: `shipped.rs` (how it is built),
+# `nonblocking.rs` (`size`, the budgets and the verdict), `steps.rs` (how
+# cargo is run), `workspace.rs` (the workspace and target folders) and
+# `rules/home_paths.rs` (the home-path check). Anything else can.
 #
 # The job that uses this must check out with `fetch-depth: 2`, so that the
 # pull request's merge commit has its parents.
@@ -57,7 +59,9 @@ runs:
                 # are generated from the settings in cortex-config.
                 docs/configuration/*) code=true ;;
                 docs/* | *.md) ;;
-                xtask/src/shipped.rs) code=true; binary=true ;;
+                # The files the shipped build and its verdict go through.
+                xtask/src/shipped.rs | xtask/src/nonblocking.rs | xtask/src/steps.rs | \
+                xtask/src/workspace.rs | xtask/src/rules/home_paths.rs) code=true; binary=true ;;
                 mutations/* | xtask/* | .github/workflows/*) code=true ;;
                 *) code=true; binary=true ;;
               esac

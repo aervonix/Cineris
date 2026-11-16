@@ -81,10 +81,12 @@ fn find_in(bytes: &[u8], packed: bool) -> Vec<(usize, String)> {
         };
 
         // A real path names a user next. "/home/<name>/" and "/home/$USER/"
-        // are descriptions, not paths.
+        // are descriptions, not paths. In a binary a name may have letters
+        // outside ASCII (`/home/émile`): every byte of their UTF-8 is 0x80
+        // or above.
         let name_len = rest[root_len..]
             .iter()
-            .take_while(|&&byte| is_name_byte(byte))
+            .take_while(|&&byte| is_name_byte(byte) || (packed && byte >= 0x80))
             .count();
         if name_len == 0 {
             continue;

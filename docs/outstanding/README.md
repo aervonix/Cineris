@@ -74,6 +74,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [account-in-the-replay-rule](account-in-the-replay-rule.md): Whether a request carries its account, so a provider tying reasoning to an account never gets another's. Owner: the first step that adds such a provider, or step 53.
 - [fuzz-targets-for-later-decoders](fuzz-targets-for-later-decoders.md): Each later provider protocol's decoder needs a fuzz target in `fuzz/` and a line in `xtask/src/outside.rs`. Owner: steps 31, 35 and 36.
 - [the-prefix-check-and-image-references](the-prefix-check-and-image-references.md): The debug prefix check skips requests holding a stored image reference; a protocol should write a placeholder. Owner: step 33, or the step that next touches images.
+- [the-message-for-a-host-outside-ascii](the-message-for-a-host-outside-ascii.md): A refused host outside ASCII is told the `xn--` form by an example, not its own; a percent-encoded one gets the URL library's message. Owner: a later step on providers, or step 33.
 
 ### cortex-policy
 
@@ -152,6 +153,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [tests-the-seventh-tooling-step-left-thin](tests-the-seventh-tooling-step-left-thin.md): Behaviours of the seventh tooling step's tools no blocking test holds (a hold's wait for another, `ab`'s glue, `api-diff`'s report, `os:` breaks' names). Owner: a later tooling step.
 - [timeout-report-for-tests-without-the-test-kit](timeout-report-for-tests-without-the-test-kit.md): A test using none of the test kit's waits gets no timeout report, since nextest lacks pre-timeout scripts. Owner: a later tooling step.
 - [typed-values-in-composite-actions](typed-values-in-composite-actions.md): The repo rule against event values in scripts reads `.github/workflows/` only, not composite actions under `.github/actions/`. Owner: a later tooling step.
+- [the-pr-size-jobs-rough-edges](the-pr-size-jobs-rough-edges.md): `ci-wait` and `ci-times` count `pr-size` with the blocking jobs; its difference is from `main`'s newest record, not the base; a change to the job is not run on its own pull request. Owner: a tooling step.
 
 ### Windows
 
