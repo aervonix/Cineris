@@ -269,6 +269,31 @@ Each connection has a bounded outbound queue.
 
 A slow or stuck client therefore never stalls a model stream or grows memory without bound.
 
+## As built in step 27
+
+The server's first part: `cortex serve --stdio` (`cortex-rpc`; `docs/steps/27/answered.md`, "The design, before building").
+
+- **The server adds transport and order, and no behaviour of its own.**
+  - Each request is read with `Op::from_wire` and carried out by `Core::handle`; each event is a `session/event` line written straight from the event; each request the core puts to a client is a JSON-RPC request under the core's id; each answer goes to `Core::respond`.
+  - Nothing but `initialize` is taken before it (`not_initialized`), and it is taken once (`already_initialized`).
+  - The client's `ClientInfo` is made from `initialize`'s role and capabilities, and the core then answers it; a refused `initialize` disconnects that client and leaves the connection open for another.
+  - A JSON-RPC error in answer to a server request declines it: the request stays open for the others asked and for its time limit.
+- **Operations run in the order every front end's do** (`cortex_rpc::lane`): what changes a session in one lane, in the order sent; reads beside it, unless a write sent before them is under way. The terminal UI's in-process link uses the same lane.
+- **A result is written after the events queued when it was ready, and no others** (`cortex_rpc::order`), so a `session/read`'s result never overtakes the events at or below its `seq`. The in-process link uses the same rule.
+- **The writer takes the next thing to send only once the line before it has gone,** so a slow client's backlog stays in the core's queue, where deltas merge and drop.
+- **The rule that closes a connection:** while a line waits to be written, the writer looks at the client's queue at most once a second, and closes the connection when whole events wait past its capacity and the client has taken no line for `rpc.stalled_client` (30 s), or at once past four times its capacity. The session and its turn go on.
+- **Inbound is bounded and reading never stops for it.**
+  - A request counts from when it is read until its result is written: at most 256, and 64 MiB of their lines.
+  - A request past either is refused at once (`overloaded`, of kind `limit`), and not run.
+  - Refusals count too, and a client with more unread than that is closed: it sends and does not read.
+  - A line of more than 1 MiB is read on the blocking pool.
+- **`serve --stdio` ends** when standard input ends, at `shutdown`, at a signal, or when its client is gone, stalled or flooding.
+  - In order: the client is disconnected (its questions withdrawn, its sessions ended), its lane's operation waited for at most 1 s, the core shut down, the requests under way waited for at most 2 s, a `shutdown` answered `{}`, and what is queued written for at most 2 s.
+  - The whole end has 5 s; a second signal ends the process at once; the exit code is 0, or 130 or 143 for a signal.
+  - Standard input and output are served by threads that are not joined, and standard output carries nothing but messages.
+- **The approval time limit** is `rpc.approval_timeout`, 10 minutes by default; `"0s"` is none. The terminal UI sets none.
+- **The conformance test** runs one list of scenarios (`cortex_testkit::conformance`) in process, over the connection's in-memory ends, and through the real binary's `serve --stdio`, and compares what the client was sent.
+
 ## Network listening
 
 Off by default, and not in the first release. When added:

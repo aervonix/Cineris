@@ -249,7 +249,7 @@ The schema, in outline. The full list, generated from the declarations, is the [
 | `[tui]` | Presenter (inline or full screen), theme, density, markdown and diff options. | **Declared in step 23:** `prose_width`, `tool_detail`, `tool_output`, `reasoning`, `density`, `turn_summary`, `reduced_motion`, `glyphs` and `theme` (`auto`, `dark`, `light`; a name not known is said, and `auto` used), each user-only and in force at once. The presenter is step 25's. |
 | `[keys]` | Key bindings ([09-tui.md](09-tui.md), "The editor as built"): a table for each context of the key map (`editor`, `menu`, `picker`, `toggle`, `search`, `focus`, `dialog`, `global`), from an action's name to the keys bound to it. | **Declared in step 23,** user-only. The interface checks the names and the keys, and says each entry it cannot use. |
 | `[terminal]` | Capability overrides, each defaulting to automatic detection. All terminal quirks live here. | **Declared in step 23:** `sync`, `keyboard`, `color` (`none`, `16`, `256`, `truecolor`), `hyperlinks` and `unicode`, each user-only and read at start. |
-| `[rpc]` | Socket path, token, client timeouts. | Reserved. |
+| `[rpc]` | The RPC server's waits: `approval_timeout`, `stalled_client` (since step 27). The user's alone: read once, when `cortex serve` starts. | Declared. |
 | `[hooks.<name>]`, `[extensions.<name>]`, `[skills]` | [12-extensions.md](12-extensions.md) | Reserved. |
 | `[mcp.servers.<name>]`, `[mcp]` | [13-mcp.md](13-mcp.md) | Reserved. |
 

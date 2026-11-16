@@ -906,10 +906,35 @@
       "type": "object"
     },
     "rpc": {
-      "description": "The RPC server: socket path, token, client timeouts.",
-      "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "additionalProperties": true,
+      "description": "The RPC server (`cortex serve`): how long it waits for its clients.",
+      "properties": {
+        "approval_timeout": {
+          "default": "10m",
+          "description": "How long an approval waits for a client's answer before it is a denial (`\"0s\"`: for as long as it takes). The terminal UI is not a server and sets none.",
+          "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+          "type": "string",
+          "x-cortex-effect": "restart",
+          "x-cortex-milliseconds": {
+            "maximum": 86400000,
+            "minimum": 0
+          },
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+        },
+        "stalled_client": {
+          "default": "30s",
+          "description": "How long a client may take nothing the server sends while whole events wait for it past its queue, before its connection is closed. The session goes on.",
+          "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+          "type": "string",
+          "x-cortex-effect": "restart",
+          "x-cortex-milliseconds": {
+            "maximum": 3600000,
+            "minimum": 1000
+          },
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+        }
+      },
+      "type": "object"
     },
     "runs": {
       "description": "The run engine: concurrency, workspaces, budgets.",

@@ -721,8 +721,8 @@ caught-by:
 rule: The operations that change a session run on a task of their own, so that the end of the interface is never behind the one in progress.
 file: crates/cortex-cli/src/interactive.rs
 in: CoreThread::start
-find: if writes.send((ticket, op, write)).is_err() {
-replace: if { let running = routes.running(write); push(&thread_done, Inbound::Done(ticket, core.handle(client.id, op).await.map_err(|e| *e))); drop(running); thread_slot.wake(); false } {
+find: dispatcher.send(ticket, op);
+replace: { let result = core.handle(client.id, op).await.map_err(|e| *e); push(&thread_done, Inbound::Done(ticket, result)); thread_slot.wake(); }
 packages: cortex-cli
 caught-by:
     cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
@@ -880,13 +880,13 @@ packages: cortex-tui
 
 [break] a-read-overtakes-a-write
 rule: A read sent while a write is under way runs after it, in the lane: it sees every write sent before it.
-file: crates/cortex-cli/src/interactive.rs
+file: crates/cortex-rpc/src/lane.rs
 in: Routes::route
 find: if self.in_flight.load(Ordering::SeqCst) > 0 {
 replace: if self.in_flight.load(Ordering::SeqCst) > usize::MAX - 1 {
-packages: cortex-cli
+packages: cortex-rpc
 caught-by:
-    interactive::tests::a_read_after_a_write_waits_for_it_and_one_alone_runs_beside
+    cortex-rpc lane::tests::a_read_after_a_write_waits_for_it_and_one_alone_runs_beside
 
 [break] the-workspace-walk-unbounded
 rule: The walk for `workspace/files` stops once it has met its bound of files, and says there were more.
@@ -991,13 +991,13 @@ caught-by:
 
 [break] files-wait-in-the-lane
 rule: The workspace's files never wait in the core thread's lane.
-file: crates/cortex-cli/src/interactive.rs
+file: crates/cortex-rpc/src/lane.rs
 in: Routes::route
 find: if matches!(op, Op::WorkspaceFiles(_)) {
 replace: if matches!(op, Op::WorkspaceFiles(_)) && self.in_flight.load(Ordering::SeqCst) == 0 {
-packages: cortex-cli
+packages: cortex-rpc
 caught-by:
-    interactive::tests::a_read_after_a_write_waits_for_it_and_one_alone_runs_beside
+    cortex-rpc lane::tests::a_read_after_a_write_waits_for_it_and_one_alone_runs_beside
 
 [break] a-withdrawn-question-called-answered
 rule: A question is resolved as answered only when an answer came; one withdrawn because its askers left is cancelled.

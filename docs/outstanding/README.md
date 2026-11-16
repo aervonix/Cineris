@@ -50,7 +50,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cortex-config
 
 - [a-setting-that-restricts-reads](a-setting-that-restricts-reads.md): No setting fills the launcher's read-restricting policy (`Reach::Only`), so every sandboxed session can read everything. Owner: the owner, then step 32 unless sooner.
-- [approval-time-limit-setting](approval-time-limit-setting.md): A setting for how long an approval may wait, in the reserved `[rpc]` section, feeding `CoreOptions::approval_timeout`. Owner: step 27.
 - [secret-service-backend](secret-service-backend.md): The Linux Secret Service credential backend needs a non-blocking CI job against a real keyring daemon. Owner: a step the owner places.
 - [a-projects-shortest-cooldown](a-projects-shortest-cooldown.md): A project's `model.speed_cooldown_min = "0s"` can make a fast tier the user chose change speed every half minute, each change a possible rewrite of the prompt cache. Owner: the owner.
 - [settings-a-later-step-declares](settings-a-later-step-declares.md): Reserved configuration sections, including `[models]` and `[http]`, still need their keys declared and their project rules set. Owner: steps 5, 13, 15, 16 and others, each for its own section.
@@ -70,7 +69,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [log-level-from-configuration-in-headless-mode](log-level-from-configuration-in-headless-mode.md): A headless run starts the log before configuration is read, so `log.level` is ignored there (the interactive half is done). Owner: step 32.
 - [secret-filter-on-what-clients-are-sent](secret-filter-on-what-clients-are-sent.md): Events, approval requests and in-progress items sent to clients skip the secret filter applied to disk writes. Owner: the owner; before step 27.
 - [session-list-paging-by-index](session-list-paging-by-index.md): `session/list`'s cursor is a position, so a session used between two pages can be skipped or listed twice. Owner: step 27.
-- [shutdown-and-a-session-being-put-together](shutdown-and-a-session-being-put-together.md): `Core::shutdown` returns before a session still being put together has ended itself. Owner: step 27.
 - [trust-question-corners](trust-question-corners.md): "Never" on a rules-changed question takes all the project's trust away, git's included; git can be trusted unshown for a folder trusted before `git init`. Owner: the owner, then step 27 or a trust step.
 - [the-top-of-a-tree-past-the-listing-cap](the-top-of-a-tree-past-the-listing-cap.md): A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree. Owner: a later index step, or step 33.
 - [a-file-held-open-on-ntfs-and-its-stamp](a-file-held-open-on-ntfs-and-its-stamp.md): NTFS updates a directory entry's stamp lazily while a writer holds a file open, so the index may read it every pass or keep an old outline. Owner: a later index step, or step 33.

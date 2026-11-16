@@ -2,6 +2,29 @@
 
 Step 27 builds the RPC server in `cortex-rpc`: `cortex serve --stdio` and `--socket`, the handshake with roles, every first-release method and event, server-to-client requests with supervisor routing, several clients per session, backpressure, socket permissions and peer checks, and `cortex attach`. The owner's answers come through the coordinator.
 
+| Question | The answer, 2026-11-16 | Recorded in |
+|---|---|---|
+| **The changes to `cortex-core`** the step's "Done when" needs, against its "Must not change": supervisor routing, `keep_sessions`, the queue bounded by bytes, the two paging fixes. | **Accepted by the coordinator as the least the "Done when" needs,** each inert or off by default where it can be, on a commit of its own, and listed together in the step's report for the owner. | This record, "The design, before building" |
+| **Supervisor routing now, inert without a grant** (step 13's record had it in step 37). | **Yes.** The reading of "a user's answer always wins" (the first answer taken settles a request; a supervisor settles one only within its grant; the person decides the rest) **goes to the owner**, since it decides who approves what; 11-rpc-protocol, 06 and the step 13 bullet are amended on the routing's own commit. | Point 2 |
+| **`keep_sessions`** for `--socket`, with an item for sessions kept with no client. | **Yes.** | Point 4 |
+| **The queue bounded by bytes of deltas.** | **Yes, measured before it is set.** | Point 3 |
+| **An observer's close; a closed view's answer** (`an-observer-that-ends-a-session`, `a-closed-view-can-still-answer`). | **To the owner;** built as recommended meanwhile. | The items |
+| **`session/list`'s cursor and `session/read`'s paging.** | **Yes.** | The items |
+| **`unrestricted` only with `--permission-mode unrestricted`,** and trust corrected in the docs. | **Yes.** | Point 2 |
+| **Refusing the server's own commands** (Job Object on Windows, ancestry on Linux). | **Yes,** with security.md's residual risks saying it. | Point 1 |
+| **`rpc.approval_timeout` 10 minutes, `rpc.stalled_client` 30 s, the user's alone.** | **Yes;** in the owner's summary. | "The `[rpc]` settings" |
+| **A prompt refused `turn_running` at a turn's edge.** | **Sent again once, with `queue`.** | Point 5 |
+| **Events unfiltered by the secret filter.** | **To the owner,** as a security trade-off; the item says what a client of the same user sees that the TUI's user also sees. | [outstanding/secret-filter-on-what-clients-are-sent.md](../../outstanding/secret-filter-on-what-clients-are-sent.md) |
+| **The TypeScript client.** | **Not in the blocking jobs** (rule 2): in a job that is not required, run when `cortex-protocol`, `cortex-rpc`, `docs/protocol/` or its workflow changes, as `pr-size` is, and in the nightly; its failure is read as a failure in the step's reports. | Point 7 |
+| **The crate rules' edges** for `cortex-rpc` (`cortex-base`; its tests' `cortex-config` and `cortex-tools`). | **Yes,** with 01-workspace changed to match. | [architecture/01-workspace.md](../../architecture/01-workspace.md) |
+
+## Open items settled
+
+| Item | Settled | Recorded in |
+|---|---|---|
+| `approval-time-limit-setting` | **Closed:** `rpc.approval_timeout`, 10 minutes by default, `"0s"` none, the user's alone; `serve` sets `CoreOptions::approval_timeout` from it, and the TUI sets none | [architecture/11-rpc-protocol.md](../../architecture/11-rpc-protocol.md), "As built in step 27"; [configuration/reference.md](../../configuration/reference.md) |
+| `shutdown-and-a-session-being-put-together` | **Closed:** the server shuts the core down and then waits, bounded, for its requests under way, so an open being put together ends itself in the core before the exit; `cortex-rpc`'s `wire::a_shutdown_waits_for_the_requests_under_way_before_it_answers` | [architecture/11-rpc-protocol.md](../../architecture/11-rpc-protocol.md), "As built in step 27" |
+
 ## The design, before building
 
 The seven points the step's prompt asked to settle, and the open items that name step 27, written against `main` at `0458c35` and revised after an independent review (its findings are at the end, with what each changed). Every choice is **reversible** unless it says otherwise; a choice that hangs on a number says **to confirm by measurement**, and the number is measured before the pull request that ships it.
@@ -117,8 +140,8 @@ The link's I/O runs on a thread of its own with a current-thread runtime (a name
 
 Three pull requests, each at most about 4,000 lines, each on its own branch from the start (`worktree-step-27`, then `worktree-step-27-socket` and `worktree-step-27-attach`, each rebased on the one before until it merges):
 
-1. **The server, framing, handshake, `--stdio` and the conformance test:** `cortex-rpc`'s wire mapping, connection (the reader with its bounds, the lane, the writer with its order and the stall rule), the standard-I/O transport; the lane and the result order moved from `cortex-cli` into `cortex-rpc` and used by `interactive.rs`; `serve --stdio` in `args.rs`, the help and the signals; the `[rpc]` keys; the conformance scenarios on the three carriers; the standard-output guard. Its one core change is the queue's bound by bytes, if approved.
-2. **`--socket` with permissions and peer checks, several clients, roles and backpressure:** both transports, the stale lock, the two-user tests, the refusal of the server's own commands, `keep_sessions`, the supervisor routing (if chosen), the session-list cursor and the close rules (if chosen), the slow-client tests.
+1. **The server, framing, handshake, `--stdio` and the conformance test:** `cortex-rpc`'s wire mapping, connection (the reader with its bounds, the lane, the writer with its order and the stall rule), the standard-I/O transport; the lane and the result order moved from `cortex-cli` into `cortex-rpc` and used by `interactive.rs`; `serve --stdio` in `args.rs`, the help and the signals; the `[rpc]` keys; the conformance scenarios on the three carriers; the standard-output guard. No change to `cortex-core`.
+2. **`--socket` with permissions and peer checks, several clients, roles and backpressure:** both transports, the stale lock, the two-user tests, the refusal of the server's own commands, `keep_sessions`, the supervisor routing, the queue bounded by bytes (measured first), the session-list cursor and the close rules, the slow-client tests.
 3. **`cortex attach`, the TypeScript client, the fuzz run, the measurements and the records:** the RPC link, the prompt-delivery fixes, the history read's paging (if chosen), a TypeScript client that uses only the generated declarations to run a turn against `serve --stdio`, the server's decoder in the nightly fuzz job for a fixed length, the budgets, 11-rpc-protocol's "As built", and the build plan's "What later steps inherit" for steps 28, 37, 40 and 41.
    - **The TypeScript client** is run by a system test that needs Node 22.18 or later on `PATH` (it runs a `.ts` file with no build step). Where `CI` is set it must run; elsewhere it says it was not run. The blocking `test` jobs gain `actions/setup-node` for that version, a change to `ci.yml` (about 5 s a job, to confirm on a runner); if that is not wanted, the test moves to the nightly workflow, and this "Done when" item is then shown only there.
 

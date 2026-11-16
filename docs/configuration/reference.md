@@ -238,6 +238,13 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | `terminal.hyperlinks` | `true` or `false` | not set | user only | restart | Links in text. |
 | `terminal.unicode` | `true` or `false` | not set | user only | restart | Unicode, or ASCII only. |
 
+## `[rpc]`
+
+| Key | Type | Default | From a project | Takes effect | What it is |
+|---|---|---|---|---|---|
+| `rpc.approval_timeout` | length of time, 0s to 1d | `"10m"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | restart | How long an approval waits for a client's answer before it is a denial (`"0s"`: for as long as it takes). The terminal UI is not a server and sets none. |
+| `rpc.stalled_client` | length of time, 1s to 1h | `"30s"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | restart | How long a client may take nothing the server sends while whole events wait for it past its queue, before its connection is closed. The session goes on. |
+
 ## Reserved sections
 
 These sections belong to parts of the harness that are not built yet. A file may already hold them: what is in them is kept and not checked. The build step that owns a section declares its keys, and they then move into the tables above. Until then a project's file cannot set anything in a section marked *user only*, and a section marked *runs code* waits for trust.
@@ -249,7 +256,6 @@ These sections belong to parts of the harness that are not built yet. A file may
 | `[http]` | user only | The HTTP client: the connect timeout, a proxy, and extra certificate authorities. |
 | `[tools]` | user only | Enabled tools, output limits and per-tool settings. |
 | `[runs]` | user only | The run engine: concurrency, workspaces, budgets. |
-| `[rpc]` | user only | The RPC server: socket path, token, client timeouts. |
 | `[hooks]` | runs code | Hooks by name. |
 | `[extensions]` | runs code | Extensions by name. |
 | `[skills]` | user only | Where skills are looked for. |

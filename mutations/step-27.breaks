@@ -1,0 +1,183 @@
+# Step 27: the RPC server. The rules of `cortex-rpc` and of `cortex serve`,
+# broken one at a time, with the tests that must fail. Written with the
+# code (docs/steps/27/answered.md).
+
+[break] a-request-before-initialize-is-run
+rule: Nothing but `initialize` is taken before it: any other request is refused `not_initialized`.
+file: crates/cortex-rpc/src/connection.rs
+in: request
+find: if self.dispatcher.is_none() {
+replace: if self.dispatcher.is_none() && method == "initialize" {
+caught-by:
+    cortex-rpc::it wire::nothing_is_taken_before_initialize_and_initialize_is_taken_once
+
+[break] initialize-is-taken-twice
+rule: A second `initialize` on a connection is refused `already_initialized`.
+file: crates/cortex-rpc/src/connection.rs
+in: request
+find:
+            Op::Initialize(_) => self.refused(self.shared.refuse_with(
+                id,
+                ErrorKind::Usage,
+                code::ALREADY_INITIALIZED,
+                "This connection has said `initialize` already.",
+            )),
+replace:
+            Op::Initialize(params) => self.initialize(id, Some(serde_json::to_value(params).unwrap_or_default())).await,
+caught-by:
+    cortex-rpc::it wire::nothing_is_taken_before_initialize_and_initialize_is_taken_once
+
+[break] a-refused-initialize-leaves-its-client-connected
+rule: A refused `initialize` disconnects the client it made, and the connection may say `initialize` again.
+file: crates/cortex-rpc/src/connection.rs
+in: initialize
+find:
+            Err(error) => {
+                core.disconnect(client.id).await;
+replace:
+            Err(error) => {
+                *lock(&self.shared.client) = Some(client.clone());
+                self.dispatcher = Some(Dispatcher::start(Arc::new(|_| Box::pin(async { Err(Box::new(ErrorData::new(ErrorKind::Usage, "x", "x"))) })), Arc::new(|_, _| {})));
+caught-by:
+    cortex-rpc::it wire::nothing_is_taken_before_initialize_and_initialize_is_taken_once
+
+[break] an-answer-to-a-request-is-not-recorded
+rule: A request put to the client is remembered with its method, so the client's answer is read against it and reaches the core.
+file: crates/cortex-rpc/src/connection.rs
+in: write
+find: lock(&shared.asked).insert(id.clone(), request.method());
+replace: let _ = request.method();
+caught-by:
+    cortex-rpc::it conformance::every_scenario_is_the_same_in_process_and_over_the_wire
+
+[break] an-event-is-written-as-another-method
+rule: An event is a `session/event` notification.
+file: crates/cortex-rpc/src/wire.rs
+in: event
+find: method: SESSION_EVENT
+replace: method: "session/events"
+caught-by:
+    cortex-rpc wire::tests::an_event_is_one_line_that_reads_back_as_the_same_notification
+    cortex-rpc::it conformance::every_scenario_is_the_same_in_process_and_over_the_wire
+
+[break] a-bad-line-is-answered-with-no-id
+rule: JSON that is not a message is answered under its own id when it has one.
+file: crates/cortex-rpc/src/wire.rs
+in: read
+find: .and_then(|id| serde_json::from_value::<RequestId>(id).ok());
+replace: .and_then(|_| None::<RequestId>);
+caught-by:
+    cortex-rpc wire::tests::json_that_is_not_a_message_is_answered_under_its_id
+    cortex-rpc::it wire::each_bad_line_is_answered_and_reading_goes_on
+
+[break] a-request-past-the-budget-is-run
+rule: A request past the connection's budget is refused `overloaded` and not run, so what a client may hold is bounded.
+file: crates/cortex-rpc/src/connection.rs
+in: request
+find: let fits = budget.requests < self.shared.options.max_requests
+replace: let fits = budget.requests < usize::MAX
+caught-by:
+    cortex-rpc::it wire::a_client_that_floods_and_reads_nothing_is_closed
+
+[break] refusals-are-held-without-end
+rule: A client with more refusals unread than requests may run is closed: it sends and does not read.
+file: crates/cortex-rpc/src/connection.rs
+in: refuse
+find: if budget.refusals >= self.options.max_requests.max(1) {
+replace: if budget.refusals >= usize::MAX {
+caught-by:
+    cortex-rpc::it wire::a_client_that_floods_and_reads_nothing_is_closed
+
+[break] a-client-that-takes-nothing-is-never-closed
+rule: A client that takes no line while whole events wait past its queue's capacity is closed after `stalled_client`.
+file: crates/cortex-rpc/src/connection.rs
+in: send
+find: || (past && waited >= options.stalled_client)
+replace: || (past && waited >= Duration::MAX)
+caught-by:
+    cortex-rpc::it wire::a_client_that_takes_nothing_is_closed_and_the_session_goes_on
+
+[break] the-lane-is-waited-for-before-the-client-is-disconnected
+rule: A connection's end disconnects its client first, which withdraws what it was asked, and only then waits for the lane: an open waiting on a question it never answered does not hold the end.
+file: crates/cortex-rpc/src/connection.rs
+in: run
+find:
+        if let Some(client) = self.client() {
+            self.shared.core.disconnect(client.id).await;
+        }
+        if let Some(lane) = self.dispatcher.as_mut().and_then(Dispatcher::close)
+            && within(&self.shared.options.timer, self.shared.options.lane_end, lane)
+                .await
+                .is_none()
+        {
+            tracing::warn!("the connection's last operation did not end in time");
+        }
+replace:
+        if let Some(lane) = self.dispatcher.as_mut().and_then(Dispatcher::close)
+            && within(&self.shared.options.timer, self.shared.options.lane_end, lane)
+                .await
+                .is_none()
+        {
+            tracing::warn!("the connection's last operation did not end in time");
+        }
+        if let Some(client) = self.client() {
+            self.shared.core.disconnect(client.id).await;
+        }
+caught-by:
+    cortex-rpc::it wire::a_client_that_leaves_while_its_open_waits_on_a_question_ends_at_once
+
+[break] shutdown-answers-before-the-requests-under-way
+rule: `shutdown` is answered once the requests under way have ended, so an open being put together ends itself before the server does.
+file: crates/cortex-rpc/src/connection.rs
+in: finish
+find:
+        if within(&shared.options.timer, shared.options.requests_end, running)
+            .await
+            .is_none()
+        {
+            tracing::warn!("requests were still running at the server's end");
+        }
+        if let Some(id) = self.shutdown.take() {
+            // Its place was taken when it was read.
+            shared.answered(id, Ok(OpResult::Shutdown(Empty {})), Frees::Refusal);
+        }
+replace:
+        if let Some(id) = self.shutdown.take() {
+            // Its place was taken when it was read.
+            shared.answered(id, Ok(OpResult::Shutdown(Empty {})), Frees::Refusal);
+        }
+        if within(&shared.options.timer, shared.options.requests_end, running)
+            .await
+            .is_none()
+        {
+            tracing::warn!("requests were still running at the server's end");
+        }
+caught-by:
+    cortex-rpc::it wire::a_shutdown_waits_for_the_requests_under_way_before_it_answers
+
+[break] the-end-of-input-leaves-the-core-running
+rule: `serve --stdio` shuts the core down when its one client's input ends: its sessions end.
+file: crates/cortex-rpc/src/server.rs
+in: serve_one
+find: if ended != Ended::Shutdown {
+replace: if ended == Ended::Stopped {
+caught-by:
+    cortex-rpc::it wire::the_end_of_the_input_ends_the_clients_sessions_and_the_server
+
+[break] serve-takes-a-runs-own-flags
+rule: `serve` refuses a run's own flags by name: a server has no prompt, no one session and no one turn.
+file: crates/cortex-cli/src/args.rs
+in: run_only
+find: } else if run.fail_on_denial {
+replace: } else if run.fail_on_denial && false {
+caught-by:
+    cortex-cli::bin/cortex args::tests::serve_takes_the_cores_flags_and_refuses_a_runs_own
+
+[break] a-signal-does-not-stop-the-server
+rule: The first signal stops the server, which ends as that signal.
+file: crates/cortex-cli/src/serve.rs
+in: watch
+find: stop.cancel();
+replace: let _ = stop;
+caught-by:
+    cortex-cli::system serve::sys_a_signal_ends_the_server_with_its_code
