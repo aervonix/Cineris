@@ -323,7 +323,11 @@ pub struct WorkspaceFilesResult {
     pub truncated: bool,
 }
 
-/// `session/compact`
+/// `session/compact`: an idle session compacts in a turn of its own that
+/// sends nothing else; a running one at its next safe boundary. A turn
+/// whose last request is under way has none left: when it ends, the turn
+/// that follows takes the compaction at its first boundary, and when none
+/// follows, a turn that only compacts runs. An interrupt drops it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SessionCompactParams {
