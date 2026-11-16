@@ -607,3 +607,58 @@ fn the_requests_after_a_shutdown_are_answered() {
         ]
     );
 }
+
+/// A session at `unrestricted` is refused unless the server's own command
+/// line allowed it: as a level, as a nested or dotted override, through
+/// `session/set`.
+#[test]
+fn unrestricted_is_the_servers_command_lines_to_allow() {
+    let world = World::new("unrestricted");
+    let core = world.core();
+    let mut wire = Wire::connect(&core, world.serve_options());
+    let workspace = world.workspace.to_str().unwrap().to_owned();
+    for params in [
+        json!({"workspace": workspace, "settings": {"level": "unrestricted"}}),
+        json!({"workspace": workspace, "config": {"permissions": {"mode": "unrestricted"}}}),
+        json!({"workspace": workspace, "config": {"permissions.mode": "unrestricted"}}),
+        json!({"workspace": workspace,
+            "config": {"profiles": {"loose": {"permissions": {"mode": "unrestricted"}}}}}),
+    ] {
+        let refused = wire
+            .lines
+            .call(Op::from_wire("session/new", Some(params.clone())).unwrap())
+            .unwrap_err();
+        assert_eq!(refused.code, "unrestricted_not_allowed", "{params}");
+    }
+    let opened = wire
+        .lines
+        .call(new_session(&world))
+        .expect("a session opens");
+    let cortex_protocol::methods::OpResult::SessionNew(opened) = opened else {
+        panic!("not a session");
+    };
+    let raise = Op::from_wire(
+        "session/set",
+        Some(json!({"session_id": opened.session.session_id,
+            "settings": {"level": "unrestricted"}})),
+    )
+    .unwrap();
+    let refused = wire.lines.call(raise.clone()).unwrap_err();
+    assert_eq!(refused.code, "unrestricted_not_allowed");
+
+    // Allowed by the server's command line, the request reaches the core,
+    // which judges it as it always has.
+    let mut options = world.serve_options();
+    options.allow_unrestricted = true;
+    let mut allowed = Wire::connect(&core, options);
+    let reached = allowed.lines.call(
+        Op::from_wire(
+            "session/new",
+            Some(json!({"workspace": workspace, "settings": {"level": "unrestricted"}})),
+        )
+        .unwrap(),
+    );
+    if let Err(error) = reached {
+        assert_ne!(error.code, "unrestricted_not_allowed");
+    }
+}

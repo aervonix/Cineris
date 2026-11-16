@@ -102,6 +102,11 @@ pub struct ServeOptions {
     pub requests_end: Duration,
     /// How long the end waits to write what is already queued.
     pub drain: Duration,
+    /// Whether a client may ask for a session at `unrestricted`: only when
+    /// the server's own command line or configuration says so
+    /// (`docs/security.md`, section 5: a client is never more than the
+    /// user at the terminal).
+    pub allow_unrestricted: bool,
     /// How long a connection may go without `initialize` before it is
     /// closed: for a socket, which anyone of the user's may open and leave
     /// open. `None` for standard I/O, whose one client started the server.
@@ -125,6 +130,7 @@ impl ServeOptions {
             requests_end: Duration::from_secs(2),
             drain: Duration::from_secs(2),
             initialize_within: None,
+            allow_unrestricted: false,
         }
     }
 }
@@ -718,6 +724,14 @@ impl Connection {
                 "This connection has said `initialize` already.",
             )),
             Op::Shutdown(params) => self.shutdown(id, params, ending).await,
+            op if !self.shared.options.allow_unrestricted && asks_for_unrestricted(&op) => self
+                .refused(self.shared.refuse_with(
+                    id,
+                    ErrorKind::Permission,
+                    "unrestricted_not_allowed",
+                    "A session at `unrestricted` is the server's command line's to allow: start \
+                     the server with --permission-mode unrestricted.",
+                )),
             op => {
                 let taken = lock(&self.shared.budget).take_request(
                     bytes,
@@ -844,6 +858,42 @@ impl Connection {
             }
         }
         Served::On
+    }
+}
+
+/// Whether an operation asks for a session at `unrestricted`: as its level
+/// (`session/new`, `session/set`) or as a configuration override of
+/// `permissions.mode`, written dotted or nested, in a profile too.
+fn asks_for_unrestricted(op: &Op) -> bool {
+    use cortex_protocol::lease::Level;
+    let level = |settings: &cortex_protocol::session::SessionSettings| {
+        matches!(settings.level, Some(Level::Unrestricted))
+    };
+    match op {
+        Op::SessionNew(params) => {
+            level(&params.settings)
+                || params
+                    .config
+                    .iter()
+                    .any(|(key, value)| sets_unrestricted(key, value))
+        }
+        Op::SessionSet(params) => level(&params.settings),
+        _ => false,
+    }
+}
+
+/// Whether the override at `key` sets a `permissions.mode` of
+/// `unrestricted` anywhere inside it.
+fn sets_unrestricted(key: &str, value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(inner) => inner
+            .iter()
+            .any(|(more, value)| sets_unrestricted(&format!("{key}.{more}"), value)),
+        serde_json::Value::String(mode) => {
+            mode == "unrestricted"
+                && (key == "permissions.mode" || key.ends_with(".permissions.mode"))
+        }
+        _ => false,
     }
 }
 

@@ -389,3 +389,105 @@ fn sys_shutdown_is_answered_before_the_server_exits() {
     );
     assert_eq!(served.child.wait().unwrap().code(), Some(0));
 }
+
+/// What a client of the socket at `path`, run as `user` (or as the test's
+/// own user with `None`), was sent after it said `initialize`: `refused:`
+/// and the error when it could not connect, `b''` when the server closed
+/// the connection unanswered, and the answer otherwise.
+#[cfg(unix)]
+fn connect_as(user: Option<&str>, path: &std::path::Path) -> String {
+    let initialize = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": conformance::initialize()});
+    let script = "import socket, sys\n\
+        s = socket.socket(socket.AF_UNIX)\n\
+        try:\n    s.connect(sys.argv[1])\n\
+        except OSError as error:\n    sys.stdout.write('refused: ' + str(error.errno))\n    sys.exit(0)\n\
+        try:\n    s.sendall(sys.argv[2].encode() + b'\\n')\n    data = s.recv(65536)\n\
+        except OSError:\n    data = b''\n\
+        sys.stdout.write(repr(data))\n";
+    let mut command = match user {
+        Some(user) => {
+            let mut command = std::process::Command::new("sudo");
+            command.args(["-n", "-u", user, "python3"]);
+            command
+        }
+        None => std::process::Command::new("python3"),
+    };
+    let output = command
+        .args([
+            "-c",
+            script,
+            path.to_str().unwrap(),
+            &initialize.to_string(),
+        ])
+        .output()
+        .expect("python3 starts");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Another user cannot use the server: the socket's mode keeps them from
+/// connecting at all, and, with the mode opened by the test, the check of
+/// the peer's credentials closes their connection unanswered. It needs a
+/// second user and `sudo` with no password, which a hosted Linux runner
+/// has: where `CI` is set it must run; elsewhere it says it was not run.
+#[cfg(unix)]
+#[test]
+fn sys_another_user_is_refused_at_the_socket() {
+    use std::os::unix::fs::PermissionsExt;
+    const OTHER: &str = "nobody";
+    let can = std::process::Command::new("sudo")
+        .args(["-n", "-u", OTHER, "true"])
+        .status()
+        .is_ok_and(|status| status.success());
+    if !can {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "this runner cannot run a command as `{OTHER}` with `sudo -n`"
+        );
+        eprintln!("not run: no second user to run as here (`sudo -n -u {OTHER}` is refused)");
+        return;
+    }
+    let machine = Machine::new("serve-two-users");
+    // A folder another user can reach: under `/tmp`, not the test's own,
+    // whose parents may not be reachable.
+    let folder = std::path::PathBuf::from(format!("/tmp/cortex-two-users-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    struct Gone(std::path::PathBuf);
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _gone = Gone(folder.clone());
+    let path = folder.join("rpc.sock");
+    let mut command = machine.command(&["serve", "--socket", path.to_str().unwrap()]);
+    command.stdin(Stdio::piped());
+    let mut server = command.spawn().expect("the binary starts");
+    let mut said = String::new();
+    BufReader::new(server.stderr.take().unwrap())
+        .read_line(&mut said)
+        .unwrap();
+    assert!(said.contains("serving at"), "{said}");
+
+    // The controls: the other user reaches the folder, and the test's own
+    // user is served.
+    let reaches = std::process::Command::new("sudo")
+        .args(["-n", "-u", OTHER, "test", "-x", folder.to_str().unwrap()])
+        .status()
+        .unwrap();
+    assert!(reaches.success(), "the other user cannot reach the folder");
+    assert!(
+        connect_as(None, &path).contains("\"result\""),
+        "the test's own user was not served"
+    );
+    // The socket's mode.
+    let refused = connect_as(Some(OTHER), &path);
+    assert!(refused.starts_with("refused: 13"), "{refused}");
+    // The peer check by itself.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o777)).unwrap();
+    assert_eq!(connect_as(Some(OTHER), &path), "b''");
+    drop(server.stdin.take());
+    let _ = server.kill();
+    let _ = server.wait();
+}
