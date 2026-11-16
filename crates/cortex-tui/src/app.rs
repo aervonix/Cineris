@@ -32,6 +32,7 @@
 //! | `wording` | What an error says, and what to do next |
 
 mod dialog;
+mod files;
 mod items;
 pub mod link;
 mod state;
@@ -291,6 +292,7 @@ pub fn interactive(
         usize::from(rows),
         Instant::now(),
     );
+    app.set_waker(waker.clone());
     let mut presenter = Inline::new(cols, rows);
     let ran = loop {
         let Some(entered) = terminal.as_mut() else {

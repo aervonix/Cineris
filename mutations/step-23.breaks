@@ -848,3 +848,24 @@ replace: .is_none_or(|_| true)
 packages: cortex-tui
 caught-by:
     app::tests::ctrl_o_shows_the_request_whole_and_esc_returns_to_its_dialog
+
+[break] an-older-file-answer-shown
+rule: Rows for any `@` query but the latest are dropped: an older answer never replaces a newer one.
+file: crates/cortex-tui/src/input.rs
+in: Input::file_rows
+find: if generation != elsewhere.generation {
+replace: if generation == u64::MAX {
+packages: cortex-tui
+caught-by:
+    cortex-tui::it input::rows_for_an_older_file_query_are_never_shown_over_a_newer_one
+
+[break] the-file-match-on-the-keys-path
+rule: The workspace's paths are matched on a thread of their own, so that a key's frame never waits for the match.
+file: crates/cortex-tui/src/app/state.rs
+in: App::done
+find: match super::files::FileSearch::start(files.paths.clone(), self.waker.clone()) {
+replace: match None::<super::files::FileSearch> {
+packages: cortex-tui
+caught-by:
+    app::tests::at_completes_from_the_workspace_files_the_core_lists
+    app::tests::at_the_cap_a_keys_frame_never_waits_for_the_file_match

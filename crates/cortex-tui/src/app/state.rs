@@ -167,6 +167,13 @@ pub struct App {
     reading: bool,
     /// The viewer, while it is open.
     viewer: Option<viewer::Viewer>,
+    /// The worker that filters `@` completion off the key's path, once the
+    /// workspace's paths have come.
+    file_search: Option<super::files::FileSearch>,
+    /// The terminal's waker, which the worker wakes the loop with.
+    waker: Option<cortex_term::Waker>,
+    /// The generation of the last `@` query handed to the worker.
+    files_asked: u64,
     /// The person asked for the external editor (`Ctrl+G`).
     editor_wanted: bool,
     /// The settings `/new` opens a session with, and whether it is kept in
@@ -272,6 +279,9 @@ impl App {
             zone: None,
             turns: None,
             viewer: None,
+            file_search: None,
+            waker: None,
+            files_asked: 0,
             editor_wanted: false,
             reading: false,
             forked_from: None,
@@ -408,6 +418,54 @@ impl App {
     #[must_use]
     pub fn theme(&self) -> super::ThemeChoice {
         self.settings.theme
+    }
+
+    /// The terminal's waker: the `@` worker wakes the loop with it.
+    pub fn set_waker(&mut self, waker: cortex_term::Waker) {
+        self.waker = Some(waker);
+    }
+
+    /// Hands the `@` query the text asks to the worker.
+    fn ask_files(&mut self) {
+        if let Some(search) = &self.file_search
+            && let Some(query) = self.input.take_file_query()
+        {
+            self.files_asked = query.generation;
+            search.ask(query);
+        }
+    }
+
+    /// Takes the rows the worker sent: the input keeps those of its latest
+    /// query only. Whether there were any.
+    fn take_file_rows(&mut self) -> bool {
+        let Some(search) = &self.file_search else {
+            return false;
+        };
+        let answers = search.answers();
+        let any = !answers.is_empty();
+        for (generation, rows) in answers {
+            self.input.file_rows(generation, rows);
+        }
+        any
+    }
+
+    /// Waits at most `limit` for the worker's rows for the last query asked,
+    /// taking each answer before them as the loop would: for tests, which
+    /// have no loop to wake.
+    #[cfg(test)]
+    pub(crate) fn wait_for_files(&mut self, limit: Duration) -> bool {
+        self.ask_files();
+        while let Some((generation, rows)) = self
+            .file_search
+            .as_ref()
+            .and_then(|search| search.wait(limit))
+        {
+            self.input.file_rows(generation, rows);
+            if generation == self.files_asked {
+                return true;
+            }
+        }
+        false
     }
 
     /// When the application must draw again whatever else happens: the end
@@ -696,6 +754,9 @@ impl App {
     /// anything changed, and whether more is waiting.
     pub fn drain(&mut self, now: Instant, most: usize) -> Drained {
         let mut drained = Drained::default();
+        if self.take_file_rows() {
+            drained.changed = true;
+        }
         let mut taken = 0;
         while taken < most {
             let Some(inbound) = self.link.next() else {
@@ -838,7 +899,17 @@ impl App {
             }
             (Pending::History, Ok(OpResult::SessionRead(page))) => self.history_read(page, now),
             (Pending::Files, Ok(OpResult::WorkspaceFiles(files))) => {
-                self.input.set_files(files.paths);
+                // Matched on a thread of their own: at the core's cap a
+                // match takes longer than a key's budget. With no thread,
+                // on the key's path.
+                match super::files::FileSearch::start(files.paths.clone(), self.waker.clone()) {
+                    Some(search) => {
+                        self.file_search = Some(search);
+                        self.input.filter_files_elsewhere();
+                        self.ask_files();
+                    }
+                    None => self.input.set_files(files.paths),
+                }
             }
             (Pending::History, Err(error)) => {
                 self.reading = false;
@@ -1178,6 +1249,9 @@ impl App {
     /// The frame for `now`: the lines that became final, the live region,
     /// and where the cursor goes in it.
     pub fn frame(&mut self, now: Instant) -> (Vec<Line>, Vec<Line>, Cursor) {
+        // What the text asks of `@` goes to the worker before the frame:
+        // the frame shows the rows it has, and the worker's come after.
+        self.ask_files();
         let width = self.width.max(1);
         // The spinner's frame follows the clock, one every `SPIN`.
         let since = now.saturating_duration_since(self.began).as_millis();
