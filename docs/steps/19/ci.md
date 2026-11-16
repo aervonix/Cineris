@@ -25,3 +25,26 @@ The PR's run is 43902655704, at `7e7b218`.
 | Tier 3, system (60 s on Linux, 90 s on Windows) | 23.3 s | 26.0 s | 74.7 s | 53.1 s |
 
 <!-- end of what cargo xtask ci-times wrote, section "first-pull-request" -->
+
+## second-pull-request
+
+<!-- written by cargo xtask ci-times, section "second-pull-request": it replaces this up to the end mark -->
+Pull request 79, on `main` at `40a6658`. "Main" is main's own run at `40a6658` (run 43914134969).
+The PR's run is 43914726509, at `d6d77ca`.
+
+| Job | Main, `40a6658` | The PR at `d6d77ca` |
+|---|---|---|
+| `lint-linux` | 59 s | 69 s |
+| `test-linux` | 107 s | 105 s |
+| `lint-windows` | 86 s | 82 s |
+| `test-windows` | 202 s | 262 s |
+| `pr-size-linux` (blocks nothing) | — | 193 s |
+| `pr-size-windows` (blocks nothing) | — | 276 s |
+
+| Time above process start, against the budget | Linux, main (3 ms) | Linux, `d6d77ca` (3 ms) | Windows, main (6 ms) | Windows, `d6d77ca` (9 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 9.4 s | 9.5 s | 14.3 s | 25.5 s |
+| Tier 2, integration (40 s) | 16.1 s | 15.5 s | 29.4 s | 47.6 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 22.7 s | 22.4 s | 61.1 s | 83.3 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "second-pull-request" -->
