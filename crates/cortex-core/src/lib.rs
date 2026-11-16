@@ -34,6 +34,7 @@ pub mod core;
 mod day;
 pub mod events;
 mod instructions;
+mod knowledge;
 mod manage;
 mod policy;
 mod provider;

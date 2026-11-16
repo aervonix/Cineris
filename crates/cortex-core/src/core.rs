@@ -303,6 +303,19 @@ pub(crate) struct Live {
     loaded: Arc<Loaded>,
     images: Arc<dyn ImageSource>,
     lease_count: AtomicU64,
+    /// The project's knowledge as this session has it.
+    pub(crate) knowledge: Option<Arc<crate::knowledge::Knowledge>>,
+}
+
+impl Inner {
+    /// What the sessions of a project share of its knowledge, made the
+    /// first time one of them is put together. Touches no file.
+    pub(crate) fn knowledge_of(
+        &self,
+        project: &cortex_protocol::ids::ProjectKey,
+    ) -> Arc<crate::knowledge::Shared> {
+        Arc::clone(lock(&self.knowledge).entry(project.clone()).or_default())
+    }
 }
 
 impl std::fmt::Debug for Live {
@@ -323,6 +336,9 @@ pub(crate) struct Inner {
     pub(crate) user: Arc<Loaded>,
     ids: IdGenerator,
     sessions: Mutex<BTreeMap<SessionId, Arc<Live>>>,
+    /// What the sessions of each project share of its knowledge: the two
+    /// files as they were last read (`crate::knowledge`).
+    knowledge: Mutex<BTreeMap<cortex_protocol::ids::ProjectKey, Arc<crate::knowledge::Shared>>>,
     /// The shells found so far, by the program and arguments configured:
     /// a shell is asked its version once in the life of a core.
     pub(crate) shells: Mutex<BTreeMap<ShellKey, cortex_tools::Shell>>,
@@ -450,6 +466,7 @@ impl Core {
                 user: Arc::new(user),
                 ids,
                 sessions: Mutex::new(BTreeMap::new()),
+                knowledge: Mutex::new(BTreeMap::new()),
                 shells: Mutex::new(BTreeMap::new()),
                 probes: Mutex::new(Vec::new()),
                 shutting_down: AtomicBool::new(false),
@@ -650,6 +667,7 @@ impl Core {
             notices,
             lease_count,
             repo,
+            knowledge,
         } = assembled;
         // The client is listening before the session can say anything.
         sink.subscribe(client.0, queue);
@@ -686,6 +704,7 @@ impl Core {
             loaded,
             images,
             lease_count: AtomicU64::new(lease_count),
+            knowledge,
         });
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
         // The client may have left, or a shutdown begun, while the session
@@ -1352,9 +1371,12 @@ impl Core {
                     crate::usage::refresh(self, &params).await,
                 ))
             }
-            Op::ProjectList(_) | Op::ProjectUpdate(_) => {
-                not_built("The project profile", "the project profile (step 17)")
-            }
+            Op::ProjectList(params) => Ok(OpResult::ProjectList(
+                crate::knowledge::list(self, client, &params).await?,
+            )),
+            Op::ProjectUpdate(params) => Ok(OpResult::ProjectUpdate(
+                crate::knowledge::update(self, client, params).await?,
+            )),
             Op::VerifyRun(_) => not_built("Verification", "verification (step 19)"),
             Op::ModelsList(_) => Ok(OpResult::ModelsList(ModelsListResult {
                 models: self
@@ -1860,6 +1882,11 @@ impl Core {
         .await?;
         lock(&live.template).parts = parts;
         live.policy.replace(engine);
+        // The new engine is given the project's learned rules from the one
+        // place that holds them.
+        if let Some(knowledge) = &live.knowledge {
+            knowledge.reapply();
+        }
         // Nothing is confined at `unrestricted`, and everything is again
         // below it.
         live.sandbox.set_level(&level);
@@ -1955,6 +1982,19 @@ impl Core {
                     format!("There is no stored session `{session}`."),
                 )
             })
+    }
+
+    /// The open sessions of the project with this key.
+    pub(crate) fn sessions_of(&self, project: &cortex_protocol::ids::ProjectKey) -> Vec<Arc<Live>> {
+        lock(&self.inner.sessions)
+            .values()
+            .filter(|live| {
+                live.knowledge
+                    .as_ref()
+                    .is_some_and(|knowledge| knowledge.key == *project)
+            })
+            .cloned()
+            .collect()
     }
 
     /// Where the state directory is: the trust store, stored approvals and

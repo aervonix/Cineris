@@ -67,6 +67,9 @@ pub(crate) struct Rounds {
     /// spans rounds — an `edit` in one turn and a confined command in the
     /// next — and is cleared when the next after-look is taken.
     touched: Mutex<std::collections::BTreeSet<String>>,
+    /// Called when one of the harness's tools changes a file: the command
+    /// observer counts it (`crate::knowledge`).
+    on_change: std::sync::OnceLock<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl std::fmt::Debug for Rounds {
@@ -85,6 +88,7 @@ impl Rounds {
         Self {
             round: Mutex::new(RoundCheckpoint::with_limit(root.clone(), limit)),
             touched: Mutex::new(std::collections::BTreeSet::new()),
+            on_change: std::sync::OnceLock::new(),
             store,
             root,
             limit,
@@ -104,6 +108,20 @@ impl Rounds {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(file.key().to_owned());
+        if let Some(changed) = self.on_change.get() {
+            changed();
+        }
+    }
+
+    /// Notes a change the harness made to `file` outside a tool: the
+    /// project's shared profile, written by a `promote`.
+    pub(crate) fn touch(&self, file: &AbsPath) {
+        self.note_touched(file);
+    }
+
+    /// Sets what is called when a tool changes a file. Once.
+    pub(crate) fn on_change(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        let _ = self.on_change.set(hook);
     }
 
     /// The paths the harness's tools have changed since the last after-look.
@@ -392,6 +410,9 @@ pub(crate) struct RecordingShell {
     rounds: Option<Arc<Rounds>>,
     sandbox: Arc<SessionSandbox>,
     policy: Arc<EnginePolicy>,
+    /// The project's knowledge, whose observer is told how each command
+    /// ended. `None` for a session with no state directory.
+    knowledge: Option<Arc<crate::knowledge::Knowledge>>,
 }
 
 impl RecordingShell {
@@ -400,13 +421,75 @@ impl RecordingShell {
         rounds: Option<Arc<Rounds>>,
         sandbox: Arc<SessionSandbox>,
         policy: Arc<EnginePolicy>,
+        knowledge: Option<Arc<crate::knowledge::Knowledge>>,
     ) -> Self {
         Self {
             tool,
             rounds,
             sandbox,
             policy,
+            knowledge,
         }
+    }
+}
+
+/// What the command observer is told of a finished command: how it ended,
+/// by the payload of its result, and whether it changed a file or could
+/// not say.
+fn observed_run(
+    command: String,
+    cwd: Option<String>,
+    payload: Option<&Json>,
+    changes: Option<&Json>,
+    confined: bool,
+    read_only: bool,
+) -> cortex_knowledge::Run {
+    let flag = |key: &str| {
+        payload
+            .and_then(|payload| payload.get(key))
+            .and_then(Json::as_bool)
+            .unwrap_or(false)
+    };
+    let exit = payload
+        .and_then(|payload| payload.get("exit_code"))
+        .and_then(Json::as_i64);
+    // A command that was stopped, or left something running, says nothing
+    // about itself.
+    let cut_short = ["timed_out", "interrupted", "escaped", "background_stopped"]
+        .iter()
+        .any(|key| flag(key));
+    let ending = match exit {
+        _ if cut_short => cortex_knowledge::Ending::Other,
+        Some(0) => cortex_knowledge::Ending::Succeeded,
+        Some(_) => cortex_knowledge::Ending::Failed,
+        None => cortex_knowledge::Ending::Other,
+    };
+    // No account of its changes is an account that it may have changed
+    // something: detection off, a call planned as read-only, a look that
+    // did not finish.
+    let changed = changes.is_none_or(|changes| {
+        !changes
+            .get("complete")
+            .and_then(Json::as_bool)
+            .unwrap_or(false)
+            || ["modified", "created", "deleted"].iter().any(|key| {
+                changes
+                    .get(key)
+                    .and_then(Json::as_array)
+                    .is_some_and(|paths| !paths.is_empty())
+            })
+    });
+    cortex_knowledge::Run {
+        command,
+        cwd,
+        ending,
+        duration_ms: payload
+            .and_then(|payload| payload.get("duration_ms"))
+            .and_then(Json::as_u64)
+            .unwrap_or(0),
+        changed,
+        confined,
+        read_only,
     }
 }
 
@@ -438,6 +521,22 @@ impl Tool for RecordingShell {
             // too: the program it runs may do otherwise. One the user let
             // leave the sandbox is not looked at.
             let unconfined = plan.effects.contains(&Effect::Unconfined);
+            // What the command observer is told afterwards: the line, and
+            // the directory it runs in when that is inside the workspace
+            // (a run outside it is not observed).
+            let observed = self.knowledge.as_ref().and_then(|_| {
+                plan.effects.iter().find_map(|effect| match effect {
+                    Effect::Exec { command, cwd } => cwd.relative().map(|relative| {
+                        let names: Vec<&str> = relative.names().collect();
+                        (
+                            command.clone(),
+                            (!names.is_empty()).then(|| names.join("/")),
+                        )
+                    }),
+                    _ => None,
+                })
+            });
+            let read_only = matches!(plan.concurrency, cortex_tools::Concurrency::ReadOnly);
             let watch = self.sandbox.watch().filter(|_| !unconfined).cloned();
             let before = match &watch {
                 Some(watch) => {
@@ -498,6 +597,16 @@ impl Tool for RecordingShell {
                 .cloned();
             if let Some(changes) = &changes {
                 note_changed(changes, cx);
+            }
+            if let (Some(knowledge), Some((command, cwd))) = (&self.knowledge, observed) {
+                knowledge.observed(&observed_run(
+                    command,
+                    cwd,
+                    result.payload(),
+                    changes.as_ref(),
+                    !unconfined && self.sandbox.confines(),
+                    read_only,
+                ));
             }
             let mut by_hand = found
                 .as_ref()

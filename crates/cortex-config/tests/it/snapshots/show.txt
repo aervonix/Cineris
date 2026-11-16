@@ -36,6 +36,8 @@ permissions.rules = [
     { action = "deny", effect = "write", match = "**/.env*" },
 ]
 profile = "review"
+project.learn = true
+project.profile_tokens = 1500
 providers.local.base_url = "http://localhost:11434"
 providers.local.first_event_timeout = "5m"
 providers.local.headers = { Authorization = { env = "LOCAL_TOKEN" }, X-Team = "[redacted]" }

@@ -86,6 +86,10 @@ pub(crate) struct EnginePolicy {
     /// changed protected paths in it.
     stopped: Mutex<Option<(u64, String)>>,
     denials: Mutex<Vec<PermissionDenial>>,
+    /// Called before a command is decided: the project's knowledge looks
+    /// at whether its files changed, and takes its learned rules back when
+    /// they did (`crate::knowledge`).
+    before_command: std::sync::OnceLock<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl std::fmt::Debug for EnginePolicy {
@@ -124,7 +128,13 @@ impl EnginePolicy {
             sandboxed: std::sync::atomic::AtomicBool::new(parts.sandboxed),
             stopped: Mutex::new(None),
             denials: Mutex::new(Vec::new()),
+            before_command: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Sets what is called before each command is decided. Once.
+    pub(crate) fn on_command(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        let _ = self.before_command.set(hook);
     }
 
     /// The engine in force.
@@ -221,6 +231,13 @@ impl EnginePolicy {
                 ),
             };
         };
+        if accesses
+            .iter()
+            .any(|access| matches!(access, Access::Exec { .. }))
+            && let Some(hook) = self.before_command.get()
+        {
+            hook();
+        }
         self.engine().decide(&Request {
             tool: &call.spec.name,
             default: call.spec.permission,
