@@ -27,6 +27,7 @@ use cortex_policy::{Definition, TrustStore};
 use cortex_protocol::Item;
 use cortex_protocol::lease::{Effect, Rule, RuleAction};
 use cortex_protocol::methods::ApprovalDetail;
+use cortex_protocol::event::TurnOutcome;
 use cortex_protocol::model::ModelRole;
 use serde_json::{Value, json};
 
@@ -364,4 +365,44 @@ fn a_trusted_project_whose_rules_changed_starts_with_what_only_trust_admits_set_
         );
         front.close().await;
     });
+}
+
+/// A project's first limit where there was none waits for trust (the
+/// owner's decision of 2026-11-16): an untrusted repository's limit of one
+/// request would stop every turn at once. Untrusted, the turn runs without
+/// it and a notice names it; trusted, it is in force.
+#[test]
+fn a_projects_first_limit_waits_for_trust() {
+    for trusted in [false, true] {
+        let world = World::new(
+            if trusted {
+                "first_limit_trusted"
+            } else {
+                "first_limit_untrusted"
+            },
+            [
+                calls(&[("c1", "read", json!({"path": "a.txt"}))]),
+                says("Done."),
+            ],
+        );
+        world.project_config("[limits.turn]\nrequests = 1\n");
+        world.put("a.txt", "one\n");
+        let core = world.core_with(|options| options.trust_project = trusted);
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            let end = front.turn("go").await;
+            let notices = front.notices();
+            front.close().await;
+            if trusted {
+                assert_eq!(end.outcome, TurnOutcome::Limit, "{:?}", end.error);
+            } else {
+                assert_eq!(end.outcome, TurnOutcome::Completed, "{:?}", end.error);
+                assert!(
+                    notices.iter().any(|notice| notice.contains("not trusted")
+                        && notice.contains("limits.turn.requests")),
+                    "{notices:?}"
+                );
+            }
+        });
+    }
 }

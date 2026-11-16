@@ -119,8 +119,9 @@ fn a_line_written_before_the_days_purse_began_counts_once() {
             std::thread::yield_now();
         }
     });
-    // A project's day's limit of two: one is spent already.
-    world.project_config("[limits.day]\nrequests = 2\n");
+    // A day's limit of two: one is spent already. (The user's: a
+    // project's first limit waits for trust, 2026-11-16.)
+    world.user_config("[limits.day]\nrequests = 2\n");
     world.run(async {
         let second = Front::start(&world, &core).await;
         let two = second.turn("two").await;
@@ -133,10 +134,12 @@ fn a_line_written_before_the_days_purse_began_counts_once() {
 }
 
 /// With statistics off there is nothing to count another process's
-/// spending from: a session with a day's limit, the user's or a project's,
-/// is refused at open, and nothing is read, pruned or written (the
-/// independent review of step 16 found the old monthly file deleted and
-/// the aggregates written).
+/// spending from: a session with a day's limit, the user's or a trusted
+/// project's, is refused at open, and nothing is read, pruned or written
+/// (the independent review of step 16 found the old monthly file deleted
+/// and the aggregates written). An untrusted project's day's limit is a
+/// first limit, which waits for trust (2026-11-16): that session opens
+/// without it.
 #[test]
 fn a_days_limit_with_statistics_off_is_refused_at_open() {
     let world = World::new("day_stats_off", []);
@@ -156,7 +159,23 @@ fn a_days_limit_with_statistics_off_is_refused_at_open() {
     ] {
         world.user_config(user);
         world.project_config(project);
-        let core = utc(&world);
+        if !project.is_empty() {
+            let untrusted = utc(&world);
+            let opened = world.run(Front::start_as(
+                &world,
+                &untrusted,
+                ClientInfo::user(),
+                SessionSettings::default(),
+            ));
+            let Ok(front) = opened else {
+                panic!("an untrusted project's first limit was applied");
+            };
+            world.run(front.close());
+        }
+        let core = world.core_with(|options| {
+            options.zone = Some(cortex_base::Zone::utc());
+            options.trust_project = true;
+        });
         let refused = world.run(Front::start_as(
             &world,
             &core,

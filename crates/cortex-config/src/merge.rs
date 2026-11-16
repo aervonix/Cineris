@@ -259,12 +259,18 @@ impl Merger {
                 });
                 false
             }
-            TrustClass::RunsCode | TrustClass::WidensAccess | TrustClass::RaisesCost
+            TrustClass::FirstLimit
+            | TrustClass::RunsCode
+            | TrustClass::WidensAccess
+            | TrustClass::RaisesCost
                 if self.trusted =>
             {
                 true
             }
-            TrustClass::RunsCode | TrustClass::WidensAccess | TrustClass::RaisesCost => {
+            TrustClass::FirstLimit
+            | TrustClass::RunsCode
+            | TrustClass::WidensAccess
+            | TrustClass::RaisesCost => {
                 self.withheld.push(Withheld {
                     key: key.clone(),
                     class,

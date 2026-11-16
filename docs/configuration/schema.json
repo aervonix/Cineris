@@ -202,7 +202,7 @@
           "minimum": 0,
           "type": "integer",
           "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "map_wait": {
           "description": "How long the first request of an epoch waits for the map when it is not ready yet; past it, the map follows as a notice at the next boundary where it is. Unset, 150 ms in the interactive app and none in a headless run, whose start it would otherwise slow. At most one second. The user's alone: the wait is paid by every epoch's first request, and a repository's file must not make the sessions in it wait (found by the independent review of step 18).",
@@ -222,7 +222,7 @@
           "minimum": 1,
           "type": "integer",
           "x-cortex-effect": "restart",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "max_files": {
           "default": 20000,
@@ -231,7 +231,7 @@
           "minimum": 1,
           "type": "integer",
           "x-cortex-effect": "restart",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "pass_time": {
           "default": "2s",
@@ -239,7 +239,7 @@
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
           "x-cortex-effect": "restart",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         }
       },
       "type": "object"
@@ -361,7 +361,7 @@
               "minimum": 0,
               "type": "number",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "requests": {
               "description": "Requests to a model.",
@@ -369,14 +369,14 @@
               "minimum": 1,
               "type": "integer",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "time": {
               "description": "Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`).",
               "pattern": "^([0-9]+(ms|s|m|h|d))+$",
               "type": "string",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "tokens": {
               "description": "Tokens, input and output together.",
@@ -384,7 +384,7 @@
               "minimum": 1,
               "type": "integer",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             }
           },
           "type": "object"
@@ -399,7 +399,7 @@
               "minimum": 0,
               "type": "number",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "requests": {
               "description": "Requests to a model.",
@@ -407,14 +407,14 @@
               "minimum": 1,
               "type": "integer",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "time": {
               "description": "Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`).",
               "pattern": "^([0-9]+(ms|s|m|h|d))+$",
               "type": "string",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "tokens": {
               "description": "Tokens, input and output together.",
@@ -422,7 +422,7 @@
               "minimum": 1,
               "type": "integer",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             }
           },
           "type": "object"
@@ -437,7 +437,7 @@
               "minimum": 0,
               "type": "number",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "requests": {
               "description": "Requests to a model.",
@@ -445,14 +445,14 @@
               "minimum": 1,
               "type": "integer",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "time": {
               "description": "Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`).",
               "pattern": "^([0-9]+(ms|s|m|h|d))+$",
               "type": "string",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "tokens": {
               "description": "Tokens, input and output together.",
@@ -460,7 +460,7 @@
               "minimum": 1,
               "type": "integer",
               "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             }
           },
           "type": "object"
@@ -626,7 +626,7 @@
             "maximum": 120000,
             "minimum": 0
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         }
       },
       "type": "object"
@@ -820,7 +820,7 @@
             "maximum": 60000,
             "minimum": 100
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "backoff_cap": {
           "default": "30s",
@@ -832,7 +832,7 @@
             "maximum": 300000,
             "minimum": 1000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "backoff_factor": {
           "default": 2.0,
@@ -841,7 +841,7 @@
           "minimum": 1,
           "type": "number",
           "x-cortex-effect": "at once",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "first_event_timeout": {
           "default": "1m",
@@ -853,7 +853,7 @@
             "maximum": 3600000,
             "minimum": 30000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "idle_timeout": {
           "default": "1m30s",
@@ -865,7 +865,7 @@
             "maximum": 3600000,
             "minimum": 30000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "max_wait": {
           "default": "2m",
@@ -877,7 +877,7 @@
             "maximum": 3600000,
             "minimum": 60000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         }
       },
       "type": "object"
@@ -998,7 +998,7 @@
             "maximum": 86400000,
             "minimum": 10000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "program": {
           "description": "The shell: a program's name on `PATH`, or its path. How it is spoken to follows its name: `bash`, `pwsh`, `powershell` and `cmd` each by their own rules, and any other as a POSIX shell. Unset, it is bash and then sh on Linux, and on Windows PowerShell 7, then Windows PowerShell, then cmd.exe. A project's file may not choose the program that runs every command.",
@@ -1016,7 +1016,7 @@
             "maximum": 1800000,
             "minimum": 1000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a higher one user only"
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         }
       },
       "type": "object"
