@@ -35,8 +35,11 @@ pub struct Stalled {
 }
 
 /// Makes a FIFO at `path`, whose directory must exist and where nothing
-/// is. Whoever opens it, for reading or for writing, waits until the test
-/// calls [`Stalled::release`] or drops the value.
+/// is. Whoever opens it waits; a writer that waits goes on when the test
+/// calls [`Stalled::release`] or drops the value. It stands in for a disk
+/// that holds a *writer*: the release opens the other end for reading,
+/// which a reader that waits is not let go by (two readers of a FIFO both
+/// wait for a writer).
 ///
 /// # Panics
 ///

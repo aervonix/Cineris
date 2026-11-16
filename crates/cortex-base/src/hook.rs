@@ -54,7 +54,8 @@
 //!   first `n` arrivals pass and the next ones stop.
 //! - **Letting go.** [`release`](Hold::release) lets every thread stopped
 //!   go, and every later arrival pass. [`let_one_go`](Hold::let_one_go)
-//!   lets one go (the first to stop, or the next to arrive) and keeps
+//!   lets one go (one of those stopped, in no order, or the next to
+//!   arrive) and keeps
 //!   holding the others. Dropping the hold releases it, so a test that
 //!   fails never leaves a thread stopped.
 //! - **Two tests in one process.** `cargo test` runs tests as threads of
@@ -374,8 +375,8 @@ mod enabled {
             self.shared.changed.notify_all();
         }
 
-        /// Lets one thread go on: the one that has been stopped longest,
-        /// or the next to arrive. The others stay.
+        /// Lets one thread go on: one of those stopped now, whichever wakes
+        /// first (in no order), or the next to arrive. The others stay.
         pub fn let_one_go(&self) {
             lock(&self.shared.state).permits += 1;
             self.shared.changed.notify_all();
