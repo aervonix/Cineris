@@ -257,6 +257,12 @@ impl SessionSandbox {
         (!changed.is_empty()).then_some(changed)
     }
 
+    /// Whether the session's sandbox enforces at all: its launcher was
+    /// made, whatever the level.
+    pub(crate) fn enforces(&self) -> bool {
+        self.made_with.is_some()
+    }
+
     /// Whether a command that runs now is confined.
     pub(crate) fn confines(&self) -> bool {
         self.confine.load(Ordering::Acquire)

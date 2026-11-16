@@ -47,8 +47,9 @@ impl std::fmt::Debug for RepoIndex {
 
 struct Shared {
     index: Index,
-    /// The map's budget, in tokens.
-    tokens: usize,
+    /// The map's budget, in tokens: a reload changes it as the session's
+    /// next epoch begins (step 24).
+    tokens: std::sync::atomic::AtomicUsize,
     recent: Arc<dyn RecentFiles>,
     /// The session's token: a pass stops when it fires.
     cancel: CancelToken,
@@ -91,7 +92,7 @@ impl RepoIndex {
         Self {
             shared: Arc::new(Shared {
                 index,
-                tokens,
+                tokens: std::sync::atomic::AtomicUsize::new(tokens),
                 recent,
                 cancel,
                 turn: AtomicBool::new(false),
@@ -99,6 +100,12 @@ impl RepoIndex {
                 started: None,
             }),
         }
+    }
+
+    /// The map's budget from now on: a reload's `index.map_tokens`, as the
+    /// session's next epoch begins (step 24).
+    pub(crate) fn set_tokens(&self, tokens: usize) {
+        self.shared.tokens.store(tokens, Ordering::Relaxed);
     }
 
     /// The same index, calling `probe` as each pass starts, on the thread
@@ -197,7 +204,7 @@ impl Shared {
                     let request = MapRequest {
                         touched,
                         recent: recent.clone(),
-                        tokens: self.tokens,
+                        tokens: self.tokens.load(Ordering::Relaxed),
                     };
                     let map = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         self.index.map_from(&snapshot, &request)

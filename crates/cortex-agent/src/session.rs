@@ -182,6 +182,9 @@ pub(crate) struct Inbox {
     pub(crate) reconfigured: Option<crate::reconfigure::Reconfigure>,
     /// What waits for the next context epoch, taken as a compaction begins.
     pub(crate) next_epoch: Option<crate::reconfigure::EpochChange>,
+    /// The project's standing since a reload judged its trust again, in
+    /// place of the one the session opened with.
+    pub(crate) trust: Option<cortex_protocol::session::TrustStanding>,
 }
 
 pub(crate) struct Shared {
@@ -229,7 +232,7 @@ impl Shared {
             running_turn: inbox.running.as_ref().map(|running| running.id.clone()),
             queue_length: u32::try_from(inbox.queue.len() + inbox.held.len()).unwrap_or(u32::MAX),
             write_roots: self.info.write_roots.clone(),
-            trust: self.info.trust.clone(),
+            trust: inbox.trust.clone().or_else(|| self.info.trust.clone()),
         }
     }
 
@@ -614,6 +617,16 @@ impl SessionHandle {
     /// and so does not take it.
     pub fn at_next_epoch(&self, change: Option<crate::reconfigure::EpochChange>) {
         self.shared.lock().next_epoch = change;
+    }
+
+    /// Records the project's standing after a reload judged its trust
+    /// again: what the session's state reports.
+    pub fn set_trust(&self, standing: cortex_protocol::session::TrustStanding) {
+        let mut inbox = self.shared.lock();
+        if inbox.trust.as_ref() != Some(&standing) {
+            inbox.trust = Some(standing);
+            self.shared.emit_updated(&inbox);
+        }
     }
 
     /// The model a role runs on now. `None` for a role with no model.

@@ -227,6 +227,10 @@ pub struct CoreOptions {
     /// place of loading it again. The interactive application reads its
     /// own settings from it before the terminal is entered (step 23).
     pub loaded: Option<cortex_config::Loaded>,
+    /// The process's log, whose level a reload of `log.level` changes when
+    /// neither `--log-level` nor `CORTEX_LOG` set it (step 24). `None`: a
+    /// reload leaves the log as it is.
+    pub log: Option<cortex_base::log::LogHandle>,
     /// Whether an answer to a question the core puts may stop the turn:
     /// the interactive application's, whose interrupt key stops it from a
     /// dialog (`docs/architecture/03-agent-loop.md`, "Approve"). With it,
@@ -289,6 +293,7 @@ impl CoreOptions {
             cancel: CancelToken::new(),
             zone: None,
             loaded: None,
+            log: None,
             answers_may_stop: false,
         }
     }
@@ -304,20 +309,36 @@ pub(crate) struct Live {
     pub(crate) policy: Arc<EnginePolicy>,
     pub(crate) board: Arc<PlanBoard>,
     /// The session's sandbox: its launcher and its temporary directory.
-    sandbox: Arc<crate::sandbox::SessionSandbox>,
-    template: Mutex<EngineTemplate>,
-    loaded: Arc<Loaded>,
-    images: Arc<dyn ImageSource>,
+    pub(crate) sandbox: Arc<crate::sandbox::SessionSandbox>,
+    pub(crate) template: Mutex<EngineTemplate>,
+    pub(crate) images: Arc<dyn ImageSource>,
+    /// The session's configuration: what is in force, and what a reload
+    /// works from (step 24).
+    pub(crate) config: Mutex<crate::reload::SessionConfig>,
+    /// The accounts the ledger draws on, the lease's first.
+    pub(crate) accounts: Mutex<Vec<cortex_agent::Account>>,
+    /// The session's verifier, for `verify/run`, whose settings a reload
+    /// changes.
+    pub(crate) verifier: Arc<crate::verify::CoreVerifier>,
+    /// What of the shell a reload changes.
+    pub(crate) shell_live: Arc<cortex_tools::ShellLive>,
+    /// Whether git may read the repository's own configuration.
+    pub(crate) repository: Arc<AtomicBool>,
+    /// The repository index, whose map's budget a reload changes.
+    pub(crate) repo: Option<crate::repo_map::RepoIndex>,
     /// The session's store of versions and artifacts.
     pub(crate) content: Arc<dyn cortex_tools::ContentStore>,
     lease_count: AtomicU64,
     /// The project's knowledge as this session has it.
     pub(crate) knowledge: Option<Arc<crate::knowledge::Knowledge>>,
-    /// The session's verifier, for `verify/run`.
-    verifier: Arc<crate::verify::CoreVerifier>,
 }
 
 impl Inner {
+    /// The configuration with no project's layers, as it is in force.
+    pub(crate) fn user(&self) -> Arc<Loaded> {
+        lock(&self.user_config).in_force()
+    }
+
     /// What the sessions of a project share of its knowledge, made the
     /// first time one of them is put together. Touches no file.
     pub(crate) fn knowledge_of(
@@ -336,6 +357,13 @@ impl Inner {
     }
 }
 
+impl Live {
+    /// The configuration in force.
+    pub(crate) fn loaded(&self) -> Arc<Loaded> {
+        lock(&self.config).in_force()
+    }
+}
+
 impl std::fmt::Debug for Live {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Live")
@@ -350,8 +378,10 @@ pub(crate) struct Inner {
     pub(crate) clients: Arc<Clients>,
     pub(crate) providers: Providers,
     /// The configuration with no project's layers: what `config/get`
-    /// answers with when it is asked about no session.
-    pub(crate) user: Arc<Loaded>,
+    /// answers with when it is asked about no session, and what the usage
+    /// reports and the statistics read. A reload changes its `Now` keys
+    /// (step 24).
+    pub(crate) user_config: Mutex<crate::reload::CoreConfig>,
     ids: IdGenerator,
     sessions: Mutex<BTreeMap<SessionId, Arc<Live>>>,
     /// What the sessions of each project share of its knowledge: the two
@@ -423,23 +453,21 @@ impl Core {
     /// model catalog cannot be read: the error names the file, the entry
     /// and what is wrong with it, and nothing is started.
     pub fn start(mut options: CoreOptions) -> Result<Self, OpError> {
+        let mut load = LoadOptions::new(options.env.clone());
+        if let Some(dirs) = &options.dirs {
+            load.dirs = dirs.clone();
+        }
+        load.profile.clone_from(&options.profile);
+        load.overrides.clone_from(&options.overrides);
         let user = match options.loaded.take() {
             Some(loaded) => loaded,
-            None => {
-                let mut load = LoadOptions::new(options.env.clone());
-                if let Some(dirs) = &options.dirs {
-                    load.dirs = dirs.clone();
-                }
-                load.profile.clone_from(&options.profile);
-                load.overrides.clone_from(&options.overrides);
-                cortex_config::load(&load).map_err(|failure| {
-                    error(
-                        ErrorKind::Config,
-                        "invalid_configuration",
-                        failure.render(&options.env),
-                    )
-                })?
-            }
+            None => cortex_config::load(&load).map_err(|failure| {
+                error(
+                    ErrorKind::Config,
+                    "invalid_configuration",
+                    failure.render(&options.env),
+                )
+            })?,
         };
         let catalog = provider::catalog(&user, &options.env)?;
         let store = cortex_config::open_store(
@@ -478,12 +506,13 @@ impl Core {
                 .unwrap_or_else(cortex_sandbox::support::detect),
             options.launcher.clone(),
         );
+        let clock = Arc::clone(&options.clock);
         Ok(Self {
             inner: Arc::new(Inner {
                 options,
                 clients: Arc::new(Clients::default()),
                 providers,
-                user: Arc::new(user),
+                user_config: Mutex::new(crate::reload::CoreConfig::new(load, user, clock)),
                 ids,
                 sessions: Mutex::new(BTreeMap::new()),
                 knowledge: Mutex::new(BTreeMap::new()),
@@ -689,7 +718,11 @@ impl Core {
             lease_count,
             repo,
             knowledge,
+            config,
             verifier,
+            accounts,
+            shell_live,
+            repository,
         } = assembled;
         // The client is listening before the session can say anything.
         sink.subscribe(client.0, queue);
@@ -723,12 +756,16 @@ impl Core {
             board,
             sandbox,
             template: Mutex::new(template),
-            loaded,
             images,
+            config: Mutex::new(config),
+            accounts: Mutex::new(accounts),
+            verifier,
+            shell_live,
+            repository,
+            repo: repo.clone(),
             content,
             lease_count: AtomicU64::new(lease_count),
             knowledge,
-            verifier,
         });
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
         // The client may have left, or a shutdown begun, while the session
@@ -1043,13 +1080,6 @@ impl Core {
         reason = "one arm an operation, each a few lines; splitting it would hide the table"
     )]
     pub async fn handle(&self, client: ClientId, op: Op) -> Result<OpResult, OpError> {
-        let not_built = |what: &str, step: &str| -> Result<OpResult, OpError> {
-            Err(error(
-                ErrorKind::Usage,
-                "not_available",
-                format!("{what} is not in this build yet: it arrives with {step}."),
-            ))
-        };
         match op {
             Op::Initialize(params) => {
                 let Some(version) = negotiate_version(&params, SUPPORTED_PROTOCOL_VERSIONS) else {
@@ -1344,6 +1374,12 @@ impl Core {
             Op::TurnStart(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
+                // The start of a turn is one of the moments the files are
+                // looked at (08-configuration, "How changes are noticed"):
+                // a prompt that steers a running turn starts none.
+                if live.handle.turn_state() == cortex_agent::TurnState::Idle {
+                    crate::reload::at_turn_start(self, &live).await;
+                }
                 // Refused with `history_changing` while a rewind is under
                 // way, under the session's own lock.
                 let result = live.handle.prompt(params.input, params.delivery)?;
@@ -1368,7 +1404,10 @@ impl Core {
             Op::SessionSet(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
+                let choices = assemble::settings_overrides(&params.settings);
                 self.set(client, &live, params.settings).await?;
+                // What the person chose outranks the files from now on.
+                crate::reload::chosen(self, &live, choices).await;
                 Ok(OpResult::SessionSet(SessionResult {
                     session: live.handle.state(),
                 }))
@@ -1455,8 +1494,8 @@ impl Core {
             })),
             Op::ConfigGet(params) => {
                 let loaded = match &params.session_id {
-                    Some(session) => Arc::clone(&self.open_for(client, session)?.loaded),
-                    None => Arc::clone(&self.inner.user),
+                    Some(session) => self.open_for(client, session)?.loaded(),
+                    None => self.inner.user(),
                 };
                 let mut config = serde_json::Map::new();
                 for (key, value) in loaded.effective() {
@@ -1478,10 +1517,9 @@ impl Core {
                     origins: std::collections::BTreeMap::new(),
                 }))
             }
-            Op::ConfigReload(_) => not_built(
-                "Reloading configuration",
-                "the interactive application (step 23)",
-            ),
+            Op::ConfigReload(params) => Ok(OpResult::ConfigReload(
+                crate::reload::reload(self, client, params).await?,
+            )),
             Op::PermissionsList(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 Ok(OpResult::PermissionsList(PermissionsListResult {
@@ -1820,7 +1858,8 @@ impl Core {
                 continue;
             }
             let current = live.handle.role_model(&role);
-            let model_settings = &live.loaded.settings.model;
+            let in_force = live.loaded();
+            let model_settings = &in_force.settings.model;
             // What is not named stays: the model, and the level as it was
             // set (not as it was mapped, which belongs to the old model).
             let entry = match (&change.model, &current) {
@@ -1853,7 +1892,7 @@ impl Core {
             let max_output = current
                 .as_ref()
                 .map_or(model_settings.max_output, |model| model.max_output);
-            let settings = live.loaded.settings.clone();
+            let settings = live.loaded().settings.clone();
             let env = inner.options.env.clone();
             let images = Arc::clone(&live.images);
             let core = Arc::clone(inner);
@@ -1951,11 +1990,33 @@ impl Core {
     /// Puts the session at another level: a new engine with the same
     /// rules, and a new standing lease in the log.
     async fn set_level(&self, live: &Arc<Live>, level: Level) -> Result<(), OpError> {
+        let mut parts = lock(&live.template).parts.clone();
+        parts.level = level;
+        self.put_engine(live, parts).await
+    }
+
+    /// The sessions `client` has open.
+    pub(crate) fn open_sessions_of(&self, client: ClientId) -> Vec<Arc<Live>> {
+        lock(&self.inner.sessions)
+            .values()
+            .filter(|live| live.sink.subscribers().contains(&client.0))
+            .cloned()
+            .collect()
+    }
+
+    /// Puts a new engine made from `parts` in force: a change of level, or a
+    /// reload of the configuration (step 24). What was approved so far
+    /// stays approved, the lease is recorded again in the log, and the
+    /// sandbox follows the level.
+    pub(crate) async fn put_engine(
+        &self,
+        live: &Arc<Live>,
+        mut parts: cortex_policy::Parts,
+    ) -> Result<(), OpError> {
+        let level = parts.level.clone();
         let old = live.policy.engine();
         let number = live.lease_count.fetch_add(1, Ordering::Relaxed) + 1;
         let lease_id = LeaseId::new(format!("l_{number}"));
-        let mut parts = lock(&live.template).parts.clone();
-        parts.level = level.clone();
         parts.lease_id = lease_id.clone();
         // What was approved so far stays approved, each as what it is:
         // what is stored for the project is read as stored, and what was
@@ -2014,7 +2075,7 @@ impl Core {
 
     /// Where the sessions of every project are kept.
     fn sessions_root(&self) -> Result<SessionsRoot, OpError> {
-        let data = self.inner.user.data_dir().ok_or_else(|| {
+        let data = self.inner.user().data_dir().ok_or_else(|| {
             error(
                 ErrorKind::Config,
                 "no_data_dir",
@@ -2104,7 +2165,7 @@ impl Core {
     /// log files. `None` when no home directory could be worked out.
     #[must_use]
     pub fn state_dir(&self) -> Option<StateDir> {
-        StateDir::from_dirs(&self.inner.user.dirs)
+        StateDir::from_dirs(&self.inner.user().dirs)
     }
 }
 

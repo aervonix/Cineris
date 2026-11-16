@@ -206,6 +206,18 @@ impl LiveConfig {
         }
     }
 
+    /// Whether a file it loaded, or one it looked for, changed since it was
+    /// last stamped, or the project's files are now somewhere else, without
+    /// loading anything: the look a reload takes before it judges the
+    /// project's trust and loads with it (step 24). What it saw is taken:
+    /// the next look does not see the same change again.
+    pub fn has_changed(&mut self) -> bool {
+        self.last_check = Some(self.clock.monotonic());
+        let moved = self.places.as_ref().is_some_and(ProjectPlaces::moved);
+        let changed = !self.watch.check().is_empty();
+        moved || changed
+    }
+
     /// [`check`](Self::check), unless a check ran less than `interval` ago,
     /// in which case nothing is looked at. For the check on a key press,
     /// which runs at most once a second.

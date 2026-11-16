@@ -40,6 +40,7 @@ mod policy;
 mod provider;
 mod reads;
 mod redact;
+mod reload;
 mod repo_map;
 mod rules;
 mod sandbox;

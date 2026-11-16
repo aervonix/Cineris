@@ -573,7 +573,7 @@ settings! {
         /// Whether each context epoch is given the repository map: the
         /// workspace's directories and its most relevant files with their
         /// main definitions. The `outline` tool works either way.
-        [Preference, NextEpoch]
+        [Preference, NextSession]
         pub map: bool = true,
         /// The map's budget, in tokens. A project's file may lower it and
         /// may not raise it: the map is sent with every request of an

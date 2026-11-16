@@ -200,8 +200,8 @@ pub(crate) fn day_account(
     if limits.requests.is_none() && limits.tokens.is_none() && limits.cost.is_none() {
         return Ok(None);
     }
-    let (Some(recorder), Some(dir)) = (&inner.stats, crate::usage::stats_dir(&inner.user)) else {
-        let why = if inner.user.settings.stats.enabled {
+    let (Some(recorder), Some(dir)) = (&inner.stats, crate::usage::stats_dir(&inner.user())) else {
+        let why = if inner.user().settings.stats.enabled {
             "there is no state directory to keep them in"
         } else {
             "they are off (`stats.enabled = false`)"
