@@ -342,6 +342,14 @@ The second pull request's last round: a reviewer read the fixes above alone.
 
 **The tests' cost on Windows.** The new system tests started about 34 shell commands, and a shell's start on a hosted Windows runner is a third of a second: the A/B (`try` 43863357445, the median of five runs on one runner) put tier 3 at 58.2 s against `main`'s 46.5 s, and on a slower runner that is the tier's budget. So a command that only has to ask is refused where it was allowed (no process starts), and the call that waits for an answer while a test acts is refused too: about 18 commands are left.
 
+## The third pull request: the commands, the budgets and the records
+
+- **`cortex project`** is in [14-adaptation.md](../../architecture/14-adaptation.md), "As built in step 17". It names a project by the working directory, as `cortex permissions` does, and makes its changes through the core with the operation's own function, so the checks are the operation's.
+- **`cortex project` with nothing after it lists.** The other subcommands print their help when given nothing; this one's listing is what one most often wants, and it changes nothing.
+- **`--json` prints one line,** as `cortex usage --json` does: `project/list`'s result as the protocol writes it.
+- **The budget rows** are in [performance-budgets.md](../../performance-budgets.md): the load, the look for a change, section 5's rendering, what the observer adds to a `shell` call, a change to the store, and what a project's knowledge holds in memory (by design, not measured). The load at the caps is written as the recommendation that is with the owner, and marked pending.
+- **Start-up is untouched:** `knowledge::the_knowledge_is_not_touched_until_the_session_is_open`, with `cortex_testkit::Untouched`.
+
 ## Measured
 
 On the desktop, a release build, `perf_` tests of `cortex-knowledge` (`crates/cortex-knowledge/tests/it/measure.rs`), medians of 200 runs or more. The hosted runners' figures are in [ci.md](ci.md).

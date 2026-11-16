@@ -79,3 +79,47 @@ On the desktop, built as CI builds (`cargo xtask ci`, 2026-11-16, with other ses
 | 3, system | 58.2 s (165 tests) | 46.5 s (152) | +11.7 s | 90 s |
 
 <!-- end of what cargo xtask ci-times wrote, section "wiring-ab" -->
+
+## The second pull request as it was opened
+
+<!-- written by cargo xtask ci-times, section "wiring-trimmed": it replaces this up to the end mark -->
+### Windows, both trees on one runner
+
+`try` with `-f against=main` (run 43869925378), the median of 5 runs each, on one runner at 5.0 ms a process start:
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 8.9 s (2,254 tests) | 9.0 s (2,241) | +0.0 s | 20 s |
+| 2, integration | 19.7 s (1,335 tests) | 19.0 s (1,312) | +0.7 s | 40 s |
+| 3, system | 47.5 s (164 tests) | 42.0 s (152) | +5.5 s | 90 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "wiring-trimmed" -->
+
+## The second pull request, on the hosted runners
+
+<!-- written by cargo xtask ci-times, section "wiring-pr": it replaces this up to the end mark -->
+Pull request 71, on `main` at `3c5ee17`. "Main" is main's own run at `3c5ee17` (run 43871129198).
+The PR's run is 43871451116, at `c64ddb3`.
+
+| Job | Main, `3c5ee17` | The PR at `c64ddb3` |
+|---|---|---|
+| `lint-linux` | 65 s | 67 s |
+| `test-linux` | 123 s | 121 s |
+| `lint-windows` | 90 s | 66 s |
+| `test-windows` | 242 s | 245 s |
+| `pr-size-${{ matrix.name }}` (blocks nothing) | 0 s | — |
+| `pr-size-linux` (blocks nothing) | — | 209 s |
+| `pr-size-windows` (blocks nothing) | — | 350 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `c64ddb3` (5 ms) | Windows, main (9 ms) | Windows, `c64ddb3` (9 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 20.5 s | 15.4 s | 19.9 s | 18.1 s |
+| Tier 2, integration (40 s) | 46.0 s | 27.5 s | 37.5 s | 38.3 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 44.0 s | 23.3 s | 82.0 s | 83.0 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "wiring-pr" -->
+
+`pr-size` on the second pull request: Linux 12,309,928 bytes (11.74 MB of 16), 417,856 more than `main`; Windows 14,391,296 bytes (13.72 MB of 18), 542,720 more. It is the first of the three that links `cortex-knowledge` into the binary.
+
+Two things these tables show that are not this step's: `main`'s own Linux run at `3c5ee17` was on a slow runner (tier 2 at 46 s of 40), and Windows' tier 3 is at 82 s of 90 on `main` itself on a 9 ms runner. The second pull request adds 5.5 s to it in the A/B above.
+

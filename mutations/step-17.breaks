@@ -881,7 +881,7 @@ caught-by:
 [break] a-credential-in-evidence-is-promoted
 rule: Everything of an entry that the repository's file would hold is looked at for a credential before a promote.
 file: crates/cortex-core/src/knowledge.rs
-in: update
+in: apply
 find: && entry_holds(entry, &finds)
 replace: && finds(&entry.text)
 caught-by:
@@ -1021,4 +1021,69 @@ find: match (*rest.first()?, *rest.get(1)?) {
 replace: match ("-m", *rest.get(rest.iter().position(|word| *word == "-m")? + 1)?) {
 caught-by:
     cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+
+# ---------------------------------------------------- the command line
+
+[break] an-id-that-begins-others-is-not-itself
+rule: An id is named whole, or by a start that only one entry has: the whole id wins over the ids it begins.
+file: crates/cortex-cli/src/project_view.rs
+in: resolve
+find: if let Some(entry) = entries.iter().find(|entry| entry.id.as_str() == given) { return Ok(entry.id.clone()); }
+replace:
+caught-by:
+    cortex-cli::bin/cortex project_view::tests::an_id_is_named_whole_or_by_a_start_that_only_one_has
+
+[break] a-start-several-ids-share-names-the-first
+rule: A start that several ids share names none of them.
+file: crates/cortex-cli/src/project_view.rs
+in: resolve
+find: [entry] => Ok(entry.id.clone())
+replace: [entry, ..] => Ok(entry.id.clone())
+caught-by:
+    cortex-cli::bin/cortex project_view::tests::an_id_is_named_whole_or_by_a_start_that_only_one_has
+
+[break] a-command-that-only-became-active-is-listed-as-accepted
+rule: The listing says of a command whether it asks: one that became active by itself is not accepted.
+file: crates/cortex-cli/src/project_view.rs
+in: standing
+find: EntryStatus::Active if accepted(entry) =>
+replace: EntryStatus::Active if true =>
+caught-by:
+    cortex-cli::bin/cortex project_view::tests::the_listing_says_what_each_entry_is_and_where_it_came_from
+
+[break] a-shared-entry-is-accepted-because-someone-wrote-it
+rule: An entry of the repository's file is this user's only once accepted, whoever wrote it.
+file: crates/cortex-cli/src/project_view.rs
+in: accepted
+find: entry.scope == EntryScope::Private && entry.source.kind == EntrySourceKind::User
+replace: entry.source.kind == EntrySourceKind::User
+caught-by:
+    cortex-cli::bin/cortex project_view::tests::a_command_the_user_wrote_is_accepted
+
+[break] accept-shared-accepts-the-models-proposals-too
+rule: `accept --shared` accepts the repository's entries that wait, and not a proposal of the user's own store or an entry the user turned off.
+file: crates/cortex-cli/src/project_view.rs
+in: waiting_shared
+find: entry.scope == EntryScope::Shared && entry.status == EntryStatus::Proposed
+replace: entry.status != EntryStatus::Active
+caught-by:
+    cortex-cli::bin/cortex project_view::tests::accepting_the_shared_entries_takes_the_repositorys_proposals_and_nothing_else
+
+[break] the-command-line-skips-the-operations-check
+rule: The command line makes its changes with the operation's own function: a text that holds what looks like a credential is refused there too.
+file: crates/cortex-core/src/knowledge.rs
+in: apply
+find: if change.text.as_deref().is_some_and(finds) { return Err(credential("An entry's new text")); }
+replace:
+caught-by:
+    cortex-core::it knowledge::the_command_line_lists_and_changes_a_projects_entries
+
+[break] the-command-line-lists-an-expired-entry-as-in-use
+rule: The command line's listing marks an entry past its expiry first.
+file: crates/cortex-core/src/knowledge.rs
+in: listing
+find: snapshot = lapsed.snapshot;
+replace: let _ = lapsed;
+caught-by:
+    cortex-core::it knowledge::the_command_line_lists_and_changes_a_projects_entries
 
