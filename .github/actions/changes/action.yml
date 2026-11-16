@@ -1,19 +1,32 @@
-# Decides whether a run has to build and test Rust.
+# Decides what a run has to build.
 #
-# A pull request that touches only documentation (`docs/**` and `*.md`, and
-# nothing else) does not. Every other run does: any other pull request, every
-# push to the main branch, every scheduled or manual run. The generated
-# protocol files under `docs/protocol/` count as code, not as documentation.
+# `code`: whether it has to build and test Rust. A pull request that
+# touches only documentation (`docs/**` and `*.md`, and nothing else) does
+# not. Every other run does: any other pull request, every push to the main
+# branch, every scheduled or manual run. The generated protocol files under
+# `docs/protocol/` count as code, not as documentation.
+#
+# `binary`: whether it can change the shipped binary, for the pull-request
+# size job (docs/testing-and-ci.md, "Each pull request's binary size"). A
+# pull request whose every file is documentation (as above, the generated
+# files included: they are written from the code, not read by it), a list
+# of breaks (`mutations/**`), the developer commands (`xtask/**`) or a
+# workflow (`.github/workflows/**`) cannot. One file decides how the
+# shipped binary is built, and counts: `xtask/src/shipped.rs`. Anything else
+# can.
 #
 # The job that uses this must check out with `fetch-depth: 2`, so that the
 # pull request's merge commit has its parents.
 name: Changes
-description: Says whether this run touches anything other than documentation.
+description: Says whether this run touches anything other than documentation, and whether it can change the shipped binary.
 
 outputs:
   code:
     description: "'true' when Rust has to be built and tested, 'false' for a docs-only pull request."
     value: ${{ steps.detect.outputs.code }}
+  binary:
+    description: "'true' when the pull request can change the shipped binary; 'true' for every run that is not a pull request."
+    value: ${{ steps.detect.outputs.binary }}
 
 runs:
   using: composite
@@ -24,6 +37,7 @@ runs:
         EVENT: ${{ github.event_name }}
       run: |
         code=true
+        binary=true
         if [ "$EVENT" = "pull_request" ]; then
           # On a pull request the checkout is a merge commit: its first parent
           # is the base branch, so this is exactly what the pull request changes.
@@ -32,6 +46,7 @@ runs:
           # documentation change.
           if files=$(git diff --name-only --no-renames HEAD^1 HEAD); then
             code=false
+            binary=false
             while IFS= read -r file; do
               case "$file" in
                 "") ;;
@@ -42,7 +57,9 @@ runs:
                 # are generated from the settings in cortex-config.
                 docs/configuration/*) code=true ;;
                 docs/* | *.md) ;;
-                *) code=true ;;
+                xtask/src/shipped.rs) code=true; binary=true ;;
+                mutations/* | xtask/* | .github/workflows/*) code=true ;;
+                *) code=true; binary=true ;;
               esac
             done <<< "$files"
             echo "Changed files:"
@@ -52,8 +69,14 @@ runs:
           fi
         fi
         echo "code=$code" >> "$GITHUB_OUTPUT"
+        echo "binary=$binary" >> "$GITHUB_OUTPUT"
         if [ "$code" = true ]; then
           echo "This run builds and tests Rust."
         else
           echo "Documentation only: the Rust build and tests are skipped."
+        fi
+        if [ "$binary" = true ]; then
+          echo "This run can change the shipped binary."
+        else
+          echo "Nothing here can change the shipped binary: the pull request's size job is skipped."
         fi

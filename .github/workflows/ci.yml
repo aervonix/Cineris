@@ -1,5 +1,7 @@
 # The blocking checks. They run on every pull request, on Linux and Windows,
-# and each job must finish in under 5 minutes.
+# and each job must finish in under 5 minutes. After them, on a pull request,
+# one job that blocks nothing: the shipped binary's size (`pr-size`, at the
+# end).
 #
 # What a job runs is defined in the xtask crate, so `cargo xtask ci` runs the
 # same thing at a desk. The layout, the reasons and the measured times are in
@@ -168,3 +170,65 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 14
+
+  # Not a required check, and not one of the blocking jobs: the shipped
+  # binary's size on each system, against its budget and against the size
+  # the `main` workflow last recorded, in the job's summary, so that a pull
+  # request shows its size before it merges (docs/testing-and-ci.md, "Each
+  # pull request's binary size"). Over the budget, it fails with a line that
+  # says by how much.
+  #
+  # It starts only after the four required jobs have passed (`needs`), so it
+  # never takes a runner they are waiting for, and a new push cancels it
+  # with the rest of the run. A pull request that cannot change the binary
+  # skips its build (.github/actions/changes, `binary`). No build cache, as
+  # in the `main` workflow's size jobs: the caches here are the test jobs'.
+  pr-size:
+    name: pr-size-${{ matrix.name }}
+    needs: [lint, test]
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    # Reading another run's artifacts (`main`'s size records) takes
+    # `actions: read`.
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - name: windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - id: changes
+        uses: ./.github/actions/changes
+      - name: Keep cargo's and rustup's files off the system disk (Windows)
+        if: runner.os == 'Windows' && steps.changes.outputs.binary == 'true'
+        run: |
+          "CARGO_HOME=$env:RUNNER_TEMP\cargo" >> $env:GITHUB_ENV
+          "RUSTUP_HOME=$env:RUNNER_TEMP\rustup" >> $env:GITHUB_ENV
+      - name: Install the toolchain from rust-toolchain.toml, and the target
+        if: steps.changes.outputs.binary == 'true'
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+      # As in the `main` workflow: ring's C code, built for the static
+      # target, needs the musl C compiler.
+      - name: Install the C compiler for the static target (Linux)
+        if: steps.changes.outputs.binary == 'true' && contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends musl-tools
+      - name: Release build, binary size against the budget and main
+        if: steps.changes.outputs.binary == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: cargo run --locked --quiet --package xtask -- size --check --target ${{ matrix.target }} --against-main
