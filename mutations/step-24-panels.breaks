@@ -31,8 +31,8 @@ caught-by:
 rule: A key held down never acts on a panel: the same key again within the repeat window of one the panel took goes where its press went, nowhere.
 file: crates/cortex-tui/src/app/state/panel.rs
 in: App::panel_holds
-find: !(repeat || at.saturating_duration_since(last) < REPEAT)
-replace: !repeat
+find: repeat || at.saturating_duration_since(last) < REPEAT
+replace: repeat
 caught-by:
     app::tests::panels::a_held_key_keys_read_together_and_a_paste_never_act
     app::tests::panels::a_held_x_that_closed_the_review_types_nothing
@@ -168,7 +168,7 @@ caught-by:
 [break] panels-take-every-live-row
 rule: Panels never take the transcript's last four live rows: what streams never vanishes under them.
 file: crates/cortex-tui/src/app/state/panel.rs
-in: App::panel_block
+in: App::panel_rows
 find: live.min(LIVE_KEPT)
 replace: live.min(0)
 caught-by:
@@ -554,11 +554,11 @@ caught-by:
     app::tests::panels::slash_plan_in_a_window_with_no_room_for_it_says_so
 
 [break] slash-plan-with-no-room-says-nothing
-rule: A panel a command asked for that the window cannot draw focused says so, rather than take the focus for nothing (finding 3).
+rule: A panel a command asked for that the window cannot draw focused says so, in the command's own frame, rather than take the focus for nothing (finding 3; the second review, finding 1).
 file: crates/cortex-tui/src/app/state/panel.rs
-in: App::panel_block
-find: && !reachable.contains(&id)
-replace: && false
+in: App::summon_panel
+find: if self.panels.rows_to_focus(id, &draw) > self.panel_room {
+replace: if false {
 caught-by:
     app::tests::panels::slash_plan_in_a_window_with_no_room_for_it_says_so
 
@@ -578,20 +578,20 @@ caught-by:
 rule: While a change of a panel's is on its way, a key's change computed from what the panel shows, which the first will change, is not sent (finding 6).
 file: crates/cortex-tui/src/app/state/panel.rs
 in: App::panel_key
-find: Act::Send(_) if self.panels.waiting(id) => Act::Taken
-replace: Act::Send(_) if false => Act::Taken
+find: if matches!(act, Act::Send(_) | Act::SendAndSay(..)) && self.panel_waiting(id) {
+replace: if false {
 caught-by:
     app::tests::panels::an_edit_on_its_way_holds_the_next_until_it_is_answered
+    app::tests::panels::a_key_held_back_for_a_change_on_its_way_is_said_and_acts_when_pressed_again
 
-[break] an-answer-does-not-end-the-wait
-rule: A panel's operation answered, or failed, is no longer on its way: the next key's change is sent.
-file: crates/cortex-tui/src/app/state.rs
-in: App::done
-find: self.panels.answered(*panel);
-replace:
+[break] a-session-lefts-edit-holds-the-next-sessions-keys
+rule: What a panel waits for is what the session open waits for: an edit left on its way in a session left holds nothing in the next (the second review, finding 4).
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_waiting
+find: if *panel == id && self.is_open(session)
+replace: if *panel == id
 caught-by:
-    app::tests::panels::an_edit_on_its_way_holds_the_next_until_it_is_answered
-    app::tests::panels::each_plan_key_sends_its_edit_to_the_session
+    app::tests::panels::a_late_answer_of_a_session_left_neither_holds_nor_frees_the_next_sessions_keys
 
 [break] the-panels-block-is-not-drawn
 rule: The panels are drawn in the frame, their rows with what came from outside made visible: the frame's hostile-text test finds the rows, not only nothing wrong (finding 7).
@@ -611,3 +611,55 @@ find: Target::Input | Target::ToolBox(_) => self.item_edit.as_ref().map(|(id, _)
 replace: Target::Input | Target::ToolBox(_) => None
 caught-by:
     app::tests::panels::the_plan_stays_drawn_whole_while_its_item_is_edited
+
+# ------------------------------------ the second review's findings
+
+[break] an-item-edits-first-letter-is-taken-for-the-key-held
+rule: After a key that began an item edit, what is typed is the item's: only a repeat the terminal marks is taken for that key held, and the same letter typed into the box is kept (the second review, finding 2).
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_key
+find: let marked_only = matches!(act, Act::Edit { .. });
+replace: let marked_only = false;
+caught-by:
+    app::tests::panels::the_first_letter_typed_into_an_item_edit_is_kept
+
+[break] a-held-back-key-is-taken-for-a-key-held
+rule: A key whose change was not sent while an earlier one was on its way is no key held: pressed again once the answer has come, it acts (the second review, finding 3).
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_key
+find:
+    self.panel_dropped = Some(id);
+    return true;
+replace:
+    self.panel_dropped = Some(id);
+    self.panel_held = Some((key, at, false));
+    return true;
+caught-by:
+    app::tests::panels::a_key_held_back_for_a_change_on_its_way_is_said_and_acts_when_pressed_again
+
+[break] a-held-back-key-is-not-said
+rule: A key whose change was not sent while an earlier one was on its way is said, in the hint row, while that change is still being made (the second review, finding 3).
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_hint
+find: keys.insert(0, "the last change is still being made".to_owned());
+replace:
+caught-by:
+    app::tests::panels::a_key_held_back_for_a_change_on_its_way_is_said_and_acts_when_pressed_again
+
+[break] an-item-longer-than-the-plan-holds-is-sent-whole
+rule: An item's text longer than the plan holds is cut to what it holds, so that the core does not refuse it and the text typed is not lost (the second review, finding 5).
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::edited
+find: let text: String = text.chars().take(ITEM_TEXT).collect();
+replace: let text: String = text.chars().collect();
+caught-by:
+    app::tests::panels::an_item_longer_than_the_plan_holds_is_cut_and_said
+
+[break] an-items-cut-is-not-said
+rule: An item's text cut to what the plan holds is said (the second review, finding 5).
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::edited
+find: Act::Send(op) if cut => Act::SendAndSay(
+replace: Act::Send(op) if false => Act::SendAndSay(
+caught-by:
+    app::tests::panels::an_item_longer_than_the_plan_holds_is_cut_and_said

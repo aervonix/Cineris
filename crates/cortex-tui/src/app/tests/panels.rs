@@ -1221,8 +1221,9 @@ fn slash_plan_in_a_window_with_no_room_for_it_says_so() {
     let live = live_text(&mut app, now);
     assert!(live.iter().any(|row| row == "+1 panel"), "{live:#?}");
     run_command(&mut app, "/plan", now);
+    // Said in the command's own frame: the one the loop draws after the
+    // key, before it goes idle.
     let mut scrollback = Vec::new();
-    let _ = screen(&mut app, now, &mut scrollback);
     let _ = screen(&mut app, now, &mut scrollback);
     assert!(app.input().focus().on_input(), "it cannot hold the focus");
     assert!(
@@ -1231,13 +1232,200 @@ fn slash_plan_in_a_window_with_no_room_for_it_says_so() {
             .any(|row| row.contains("There is no room for the plan panel in this window")),
         "{scrollback:#?}"
     );
-    // Taller, `/plan` focuses it and says nothing.
+    // Taller (the resize draws its frame), `/plan` focuses it and says
+    // nothing.
     app.resize(98, 40);
+    let _ = live_text(&mut app, now);
     run_command(&mut app, "/plan", now);
     let mut scrollback = Vec::new();
     let _ = screen(&mut app, now, &mut scrollback);
     assert_eq!(app.input().focus().focused(), Target::Panel(plan_id(&app)));
     assert!(!scrollback.iter().any(|row| row.contains("no room")));
+}
+
+// ------------------------------------- the second review's findings
+
+/// After a key that began an item edit, what is typed is the item's: the
+/// same letter typed into the box is kept, and only a repeat the terminal
+/// marks is taken for the key held.
+#[test]
+fn the_first_letter_typed_into_an_item_edit_is_kept() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let a = cortex_term::Key::plain(cortex_term::KeyCode::Char('a'));
+    let (mut app, link) = with_plan(now);
+    let ready = plan_focused(&mut app, now);
+    press(&mut app, "a", ready);
+    app.terminal(&TermEvent::Repeat(a), ms(ready, 300));
+    assert_eq!(
+        app.input().editor().expanded(),
+        "",
+        "a marked repeat is held"
+    );
+    feed(
+        &mut app,
+        &Cadence::starting(ms(ready, 300))
+            .typing("add a test", Duration::from_millis(100))
+            .strokes(),
+    );
+    assert_eq!(app.input().editor().expanded(), "add a test");
+    press(&mut app, "enter", ms(ready, 1_500));
+    assert_eq!(
+        edits(&link),
+        [PlanEdit::Add(cortex_protocol::project::PlanAdd {
+            text: "add a test".to_owned(),
+            after: Some(PlanItemId::from("p2")),
+        })]
+    );
+}
+
+/// A key whose change is not sent while an earlier one is on its way is
+/// said in the hint row, and is no key held: pressed again once the answer
+/// has come, it acts.
+#[test]
+fn a_key_held_back_for_a_change_on_its_way_is_said_and_acts_when_pressed_again() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_plan(now);
+    let ready = plan_focused(&mut app, now);
+    press(&mut app, "alt+up", ready);
+    let sent = link.take_sent();
+    let (first, _) = sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::PlanUpdate(_)))
+        .expect("the reorder");
+    press(&mut app, "d", ms(ready, 150));
+    assert!(edits(&link).is_empty(), "not sent while the first is out");
+    let live = live_text(&mut app, ms(ready, 150));
+    assert!(
+        live.last()
+            .unwrap()
+            .contains("the last change is still being made"),
+        "{live:#?}"
+    );
+    let mut moved = screen_plan(2);
+    moved.items.swap(0, 1);
+    link.give(Inbound::Done(
+        *first,
+        Ok(OpResult::PlanUpdate(PlanResult { plan: moved })),
+    ));
+    drain(&mut app, ms(ready, 400));
+    let live = live_text(&mut app, ms(ready, 400));
+    assert!(
+        !live.last().unwrap().contains("still being made"),
+        "{live:#?}"
+    );
+    press(&mut app, "d", ms(ready, 800));
+    assert_eq!(
+        edits(&link),
+        [PlanEdit::Remove(cortex_protocol::project::PlanItemRef {
+            id: PlanItemId::from("p2")
+        })]
+    );
+}
+
+/// What a panel waits for is what the session open waits for: an edit left
+/// on its way in a session left holds nothing in the next, and its late
+/// answer frees nothing there.
+#[test]
+fn a_late_answer_of_a_session_left_neither_holds_nor_frees_the_next_sessions_keys() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let of_new = |event: Event| {
+        Inbound::Event(SessionEvent {
+            session_id: SessionId::from("s_new"),
+            seq: 0,
+            turn_id: None,
+            event,
+        })
+    };
+    let (mut app, link) = with_plan(now);
+    let ready = plan_focused(&mut app, now);
+    press(&mut app, "space", ready);
+    let (old, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::PlanUpdate(_)))
+        .expect("the old session's skip");
+    // Another session, with a plan of its own.
+    app.focus_panel(None);
+    run_command(&mut app, "/new", ms(ready, 100));
+    let (open, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::SessionNew(_)))
+        .expect("the new session");
+    link.give(Inbound::Done(
+        open,
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().id("s_new").build(),
+        })),
+    ));
+    link.give(of_new(Event::PlanUpdated(PlanUpdated {
+        plan: screen_plan(1),
+        by: Actor::Agent,
+    })));
+    drain(&mut app, ms(ready, 100));
+    let again = plan_focused(&mut app, ms(ready, 5_000));
+    let sent_in_new = |link: &Scripted| -> usize {
+        link.take_sent()
+            .iter()
+            .filter(|(_, op)| {
+                matches!(op, Op::PlanUpdate(params) if params.session_id.as_str() == "s_new")
+            })
+            .count()
+    };
+    // The old edit, still out, holds nothing here.
+    press(&mut app, "space", again);
+    let new_sent = link.take_sent();
+    let (new, _) = new_sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::PlanUpdate(_)))
+        .expect("the new session's skip is sent");
+    // The old answer comes: dropped, and it frees nothing of the new.
+    link.give(Inbound::Done(
+        old,
+        Ok(OpResult::PlanUpdate(PlanResult {
+            plan: screen_plan(9),
+        })),
+    ));
+    drain(&mut app, ms(again, 100));
+    press(&mut app, "alt+down", ms(again, 200));
+    assert_eq!(sent_in_new(&link), 0, "held: the new session's edit is out");
+    // Its own answer frees it.
+    link.give(Inbound::Done(
+        *new,
+        Ok(OpResult::PlanUpdate(PlanResult {
+            plan: screen_plan(2),
+        })),
+    ));
+    drain(&mut app, ms(again, 300));
+    let _ = live_text(&mut app, ms(again, 300));
+    press(&mut app, "alt+down", ms(again, 1_500));
+    assert_eq!(sent_in_new(&link), 1);
+}
+
+/// An item longer than the plan holds, as a paste can make it, is cut to
+/// what it holds and said, rather than refused by the core with the text
+/// lost.
+#[test]
+fn an_item_longer_than_the_plan_holds_is_cut_and_said() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_plan(now);
+    let ready = plan_focused(&mut app, now);
+    press(&mut app, "a", ready);
+    app.terminal(&TermEvent::Paste("y".repeat(500)), ms(ready, 10));
+    key(&mut app, "enter", ms(ready, 20));
+    let edits = edits(&link);
+    let [PlanEdit::Add(add)] = edits.as_slice() else {
+        panic!("one add: {edits:?}");
+    };
+    assert_eq!(add.text, "y".repeat(400));
+    let mut scrollback = Vec::new();
+    let _ = screen(&mut app, ms(ready, 20), &mut scrollback);
+    assert!(
+        scrollback
+            .iter()
+            .any(|row| row.contains("cut to its first 400 characters")),
+        "{scrollback:#?}"
+    );
 }
 
 /// The notices of a session that never opened are said, and open no panel:

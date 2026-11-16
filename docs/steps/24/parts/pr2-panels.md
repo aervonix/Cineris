@@ -35,10 +35,12 @@ The second of step 24's three pull requests: the panel mechanism, and the plan a
 6. **An empty item, or a reword to the same text, sends nothing.**
 7. **The turn's verdict rides in the turn summary's cost text** (`$0.42 · checks passed`), muted, a skipped verdict saying nothing: the summary's view takes no verdict, and colouring it would change step 22's view.
 8. **While an item is added, the empty input box shows the prompt's placeholder,** and `view::input`'s comment that typing would not reach a focused panel is now out of date: both are step 21's and 22's view code, left as they are; the hint row says `enter saves the item · esc cancels`.
-9. **A panel's key again within a second of one the panel took is that key held,** and goes nowhere: two deliberate presses of one key so close are taken for one.
+9. **A panel's key again within a second of one the panel took is that key held,** and goes nowhere: two deliberate presses of one key so close are taken for one. After a key that began an item edit only a repeat the terminal marks is held, so that the letter typed next is the item's (since the second review); an unmarked repeat of it types into the item.
 10. **`plan/get` is asked only of a stored session** (resumed, switched to, forked): a new one has no plan.
 11. **`Enter` acts at once,** as moving does: on a review's file it opens the viewer, which changes nothing.
-12. **While a change of a panel's is on its way, a key's change is not sent** (since the review): the key is taken and does nothing, rather than computed from what the answer will change. With the core in process the answer comes before the next key; over a link with a delay a quick second edit is lost, and is pressed again.
+12. **While a change of a panel's is on its way, a key's change is not sent** (since the review): it is not computed from what the answer will change. What is on its way is what the application waits for in the session open. The hint row says the last change is still being made, and the key, pressed again once the answer has come, acts. With the core in process the answer comes before the next key.
+13. **`/plan` measures the panel against the rows the last frame gave the panels,** as if no menu were open (the command is typed with its menu open): a window that grew or shrank since that frame is measured as it was. A panel it cannot draw focused is said in the command's own frame. Under a dialog it opens the panel without the focus.
+14. **An item is cut to the 400 characters the plan holds** (the core's `MAX_PLAN_TEXT`, which `cortex-tui` may not name), and the cut is said.
 
 ## The independent review, and what each finding changed
 
@@ -56,6 +58,18 @@ The whole branch was reviewed before its first push. The reviewer found sound: t
 | 8. This part had no record | This page; 09-tui points to it | | |
 | 9. Small points | The review view's example drew `exit 0` on a passed check, which it never draws: corrected. A sort of `reachable` that did nothing: gone. As-built said the keys arrive as `Outcome::Panel` while the application looked them up itself: it now takes them from the input's `Outcome::Panel`. The plan collapsed during its own item edit: it stays drawn whole, the item shown. | `the_plan_stays_drawn_whole_while_its_item_is_edited` | `the-plan-collapses-while-its-item-is-edited` |
 
+## The second review, and what each finding changed
+
+A review of the first review's fixes (545aaee8) found these. It found sound the other fixes, the move to the input's `Outcome::Panel`, that the hold for a change on its way never gets stuck, and the breaks.
+
+| Finding | What changed | Test | Break |
+|---|---|---|---|
+| 1. `/plan` with no room said so a frame late: the notice was said while the frame was laid out, after the transcript's lines were taken, and on an idle screen nothing came until the next key | It is decided as the command is done, from the rows the last frame gave the panels (as if no menu were open), and said then: the command's own frame shows it. No state is left to say it later, and under a dialog the panel opens without the focus | `slash_plan_in_a_window_with_no_room_for_it_says_so` (one frame after the command) | `slash-plan-with-no-room-says-nothing`, moved to `App::summon_panel` |
+| 2. The held-key rule took the first letter typed into an item edit for the key held: `a`, then "add a test", saved "dd a test" | After a key that began an item edit only a marked repeat is held | `the_first_letter_typed_into_an_item_edit_is_kept` | `an-item-edits-first-letter-is-taken-for-the-key-held` |
+| 3. A key held back for a change on its way was lost silently, and set the hold, so that the same key again within a second was lost too | It sets no hold, and the hint row says the last change is still being made | `a_key_held_back_for_a_change_on_its_way_is_said_and_acts_when_pressed_again` | `a-held-back-key-is-taken-for-a-key-held`, `a-held-back-key-is-not-said` |
+| 4. What was on its way was counted apart from what the application waits for: `plan/get` was answered and never counted, and a session left's late answer lowered the next session's count | A panel waits while the application waits for an operation of its in the session open; the count and its reset are gone | `a_late_answer_of_a_session_left_neither_holds_nor_frees_the_next_sessions_keys` | `a-session-lefts-edit-holds-the-next-sessions-keys` |
+| 5. An item longer than the 400 characters the plan holds (a paste) was refused by the core, its text lost | Cut to 400, and said | `an_item_longer_than_the_plan_holds_is_cut_and_said` | `an-item-longer-than-the-plan-holds-is-sent-whole`, `an-items-cut-is-not-said` |
+
 ## Tests
 
 All tier-1 unit tests of `cortex-tui`, with no real waiting (the application's tests give every event its time):
@@ -67,10 +81,11 @@ All tier-1 unit tests of `cortex-tui`, with no real waiting (the application's t
 
 ## Breaking the code on purpose
 
-`mutations/step-24-panels.breaks` holds 59 breaks, run with `cargo xtask mutate step-24-panels --jobs 2` on the desk's side slot: **58 caught, and 1 survives as its list expects** (`the-viewer-keeps-the-panels-readiness`: every key that closes the viewer is input no panel took, which holds the panel a quiet second, longer than the grace this break would leave).
+`mutations/step-24-panels.breaks` holds 64 breaks, run with `cargo xtask mutate step-24-panels --jobs 2` on the desk's side slot: **63 caught, and 1 survives as its list expects** (`the-viewer-keeps-the-panels-readiness`: every key that closes the viewer is input no panel took, which holds the panel a quiet second, longer than the grace this break would leave).
 
 - The first run flagged 5. Three were caught by other tests than their lists named, and the names were put right. Two showed rules untested: a key read after a dialog came and before its first frame (`a_key_between_a_dialog_and_its_frame_is_typed_not_lost`), and the box's typing rule, whose test began with a panel's own letter (`a_letter_with_a_box_or_a_panel_focused_reaches_the_editor` now begins with one that is not).
 - After the review's fixes one was flagged: `a-held-panel-key-acts-again` was caught only by the new held-`x` test, because the hold for a change on its way dropped the held key's repeats first. Its own test now answers the press before the repeats come, and catches it again.
+- The second review's fixes added five breaks and replaced one (`an-answer-does-not-end-the-wait`, whose count is gone); four were moved to the code as it is now. Every one does what its list says.
 - Taking the dialog's rule into `app/ready.rs` moved code out from under 11 of step 23's breaks (`step-23.breaks`, `step-23-fixes.breaks`). Each was moved to the code as it is now, and each is still caught. Two of this part's own would have made the same changes as two of those, and were dropped: step 23's carry those rules.
 
 ## Stress

@@ -251,15 +251,21 @@ pub struct App {
     /// runs on past `/plan`'s `Enter` never acts on it. Moving the focus
     /// (`Ctrl+P`) is not such input.
     panel_untaken: Option<Instant>,
-    /// The last key a panel took, and when it or a repeat of it was last
-    /// read: the same key again within [`REPEAT`] is that key held down, and
-    /// goes where its press went (nowhere).
-    panel_held: Option<(Key, Instant)>,
+    /// The last key a panel took, when it or a repeat of it was last read,
+    /// and whether only a repeat the terminal marks is taken for it held:
+    /// the same key again within [`REPEAT`] is that key held down, and goes
+    /// where its press went (nowhere); after a key that began an item edit,
+    /// what is typed is the item's, and only a marked repeat is held.
+    panel_held: Option<(Key, Instant, bool)>,
     /// The panel an item edit in the editor is for, and what it is for.
     item_edit: Option<(u64, ItemEditFor)>,
-    /// The panel a command asked for, until a frame has laid it out: one
-    /// that cannot be drawn focused there says so.
-    summoned: Option<u64>,
+    /// The rows the panels themselves had in the last inline frame, as if
+    /// no menu were open: what `/plan` measures a panel against.
+    panel_room: usize,
+    /// The panel a key's change was not sent for, while an earlier one of
+    /// its was on its way: the hint row says the last change is still
+    /// being made.
+    panel_dropped: Option<u64>,
     /// The last turn's cost and the session's, shown until the next prompt.
     last_cost: Option<(String, String)>,
     /// Whether this session has had a turn, here or before.
@@ -370,7 +376,8 @@ impl App {
             panel_untaken: None,
             panel_held: None,
             item_edit: None,
-            summoned: None,
+            panel_room: 0,
+            panel_dropped: None,
             last_cost: None,
             had_turn: false,
             effects: Vec::new(),
@@ -1112,9 +1119,6 @@ impl App {
         let Some(pending) = self.pending.remove(&ticket) else {
             return;
         };
-        if let Pending::Panel { panel, .. } = &pending {
-            self.panels.answered(*panel);
-        }
         match (pending, result) {
             (Pending::Open, Ok(OpResult::SessionNew(result))) => {
                 self.opened(result.session, false, now);
@@ -1741,6 +1745,10 @@ impl App {
             // the panels that can be drawn focused.
             let height = drawn.lines.len() + menu.as_ref().map_or(1, Vec::len);
             let room = half.max(height) - height;
+            // What the panels would have with the hint row, not a menu:
+            // what `/plan`, typed with its menu open, is measured against.
+            let plain = drawn.lines.len() + 1;
+            self.panel_room = self.panel_rows(half.max(plain) - plain, live.len());
             block = self.panel_block(room, live.len(), menu.is_some(), width, &boxes);
             if self.input.focus().on_input() != on_input {
                 drawn = view::input::input(&self.input, &self.look, width);
