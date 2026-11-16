@@ -4,6 +4,21 @@ Step 19 builds verification: when the model ends a turn that changed files, the 
 
 The specification is the build plan's step 19 and the "What later steps inherit" lines that name it (under steps 7, 10, 11, 13, 16 and 17), [architecture/15-efficiency.md](../../architecture/15-efficiency.md), "Automatic verification", and the `Verifying` row of [architecture/03-agent-loop.md](../../architecture/03-agent-loop.md). The owner settled the round limit of 2, a time limit a round (120 s) and a turn, `verify.mode` (`auto`, `ask`, `off`), "off until a check is known", one retry of a known flaky test, and end of turn only (conflict C7, 2026-11-12). Step 17 settled that only commands the user accepted, or wrote, run as checks ([steps/17/answered.md](../17/answered.md), Q2).
 
+## The questions, and the answers
+
+The note went to the coordinator with seven questions, each built as recommended meanwhile. The coordinator answered on 2026-11-16; what it sends on to the owner is marked.
+
+| # | Question | The answer, 2026-11-16 |
+|---|---|---|
+| Q1 | **`verify.commands` the user's alone,** a repository proposing its checks in its shared profile (accepted by hash), in place of a project's list held for trust and pinned. A departure from 08-configuration's row and from the coordinator's first recommendation. | **Accepted as built, reversible** (the coordinator): it narrows, and the profile's per-user acceptance by hash is the pin 08 asked for. 08's row is changed. **To the owner, as a departure.** |
+| Q2 | **The user's own check runs unconfined where nothing confines commands,** in a project the user trusts, where the engine would ask. | **Built as recommended** (the coordinator), **to the owner as a security trade-off**: said plainly in [security.md](../../security.md), section 1, and the user is told once a session when the checks run outside any sandbox. |
+| Q3 | **A round is one run:** `rounds = 2` is run, feed back, run again. | **Agreed.** |
+| Q4 | **`verify.turn_time` of 240 s,** two rounds' worth. | **Agreed;** in the owner's summary as a default the coordinator set. |
+| Q5 | **The last round's failure is not recorded for the model,** as 15-efficiency says. | **Agreed.** |
+| Q6 | **`incomplete`,** a new value of `turn.completed`'s `verification`. | **Agreed.** |
+| Q7 | **`Preparing → Verifying`** for a turn that only verifies (`verify/run`), which changes a state the step's "Must not change" names. | **Not yet: the owner's to allow.** The second pull request writes up the alternative, `verify/run` calling the verifier from the core outside a turn (its own cancel, its result as a `verification` notice), with the cost of each, and builds that alternative unless the owner allows the transition; if it turns out unsound, the coordinator is told before either is built. |
+| | **The "lower only" class of `verify.mode`.** | **Fine** (the coordinator): lowering runs fewer commands, and the user is told. |
+
 ## The design, before building
 
 Written before the code, read by an independent reviewer (its findings are under "After the independent read", and are taken up here), and sent to the coordinator. **Reversible** marks a choice built as a recommendation that one change undoes. **To confirm by measurement** marks one that hangs on a number; what was measured is under "Measured", below.
@@ -147,3 +162,22 @@ A reviewer that had not seen the reasoning read the first draft of this note aga
 | B7 | `verify/run`'s answer is `{}` in the v1 golden transcript; a notice needs its `message`. | `{}` kept; `message` added. |
 | B8 | "At once" was not true of settings read when a session is put together. | The reload seam, and the reload item. |
 | Notes | The last failure recorded beyond the spec; three changes outside `Verifying` to name; a stop the model is not told of; `verify/run`'s mode and clients; a project's `off` said nowhere; hooks and step 43's policy; which test flipped; a trusted project's network; each check's looks. | Each in its point above. |
+
+## As built: the first pull request
+
+The stage, the settings, choosing and running, on `worktree-step-19-stage`. Where the build departed from the note, and what it settled:
+
+| Point | As built |
+|---|---|
+| **`turn.completed` with no round** | **`skipped`, as before,** for a turn that completed with no round: the note said "absent", but a completed turn has said `skipped` since step 7, and the v1 golden transcript holds it. The verdict is carried whenever a round ran, however the turn then ended (the note's rule); absent only for an interrupted turn, or another end with no round. |
+| **What a call changed** | `cortex_tools::changed_by`, in `cortex-tools`, which owns the payloads it reads; the loop's round calls it. A command that was interrupted counts what its look found too: it ran. |
+| **The time rules** | Two functions of their own, `time_left` and `too_long`, so that each limit is tested alone. The deadline the loop passes is `Ledger::time_left`: the least of what the accounts' wall-clock limits leave, the turn's own included. |
+| **The verdict across rounds** | The verifier keeps, for the turn, the checks that failed and have not passed since: a round in which a check that failed earlier did not run to a result (skipped for its time, say) is still `failed`, and its report says so. |
+| **A refusal** | The engine's answer is turned into one refusal or none, in one place: an `ask` lets the user's own line through; anything else that is not an allow, an answer this build does not know included, refuses. |
+| **The harness's run** | `RecordingShell::run_by` takes who ran the command (`By::Model`, `By::Harness`), and the verifier hands `cortex_tools::execute` an `AsCheck` of the shell, so a check's result passes the same output policy as a call's. `Knowledge::observed_check` confirms an entry of the private store that is in use (`confirms`) and makes none. The breaks of steps 17 and 26 that named `RecordingShell::run` and `Knowledge::observed` follow the bodies to `run_by` and `observe`. |
+| **The lines that matter** | The shell is given a `CommandProfile` (`ChecksProfile`) that says yes to the user's own check lines as well as to what the profile knows, so what the model is told of a long failure is cut from what the shell kept of the lines that report a problem. |
+| **The settings** | Read when a session is put together. `Trust::ByVerifyMode` is the "lower only" rule. A line of `verify.commands` that is empty, longer than 400 characters or holds a control character is not run, and said once a session: the configuration's lists take any text, so the verifier checks it. |
+| **`TrustClass::StopsCommands`** (added by the step 23 fixes while this was built, for settings held until trust) | **Not used:** no `[verify]` key waits for trust. `mode` may only go down, the limits only tighten, and `commands` is the user's; and a check runs only in a project the user trusts, so a project's lowered limits reach only a project the user has already trusted. |
+
+**Windows.** The core's system tests that start a shell there are three: a failure fed back and fixed (two runs), a time limit, and a flaky test's retry (two runs). The rest, the same code on both systems, run on Linux; the loop's rules run on both, with a verifier a test writes and no process.
+

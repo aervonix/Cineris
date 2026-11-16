@@ -1635,7 +1635,9 @@ impl Session {
                 Phase::Finishing(End::completed())
             }
             VerifyOutcome::Skipped => {
-                turn.verification = Some(Verification::Skipped);
+                // A round that ran nothing to a result says nothing new: a
+                // failure an earlier round found still stands.
+                turn.verification.get_or_insert(Verification::Skipped);
                 Phase::Finishing(End::completed())
             }
             VerifyOutcome::Incomplete => {
