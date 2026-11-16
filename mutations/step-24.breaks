@@ -414,11 +414,11 @@ caught-by:
     cortex-core::it reload::a_choice_is_in_the_configuration_config_get_answers_with
 
 [break] a-chosen-key-still-waits-for-the-epoch
-rule: A key chosen in the session is taken out of what waits for the next epoch.
+rule: A key chosen in the session is taken out of what waits for the next epoch, and its role out of the change the loop holds (both read the chosen keys here).
 file: crates/cortex-core/src/reload.rs
 in: chosen
-find: .retain(|key, _| !chosen.contains(&key.to_string()));
-replace: .retain(|_, _| true);
+find: let chosen = config.chosen_keys();
+replace: let chosen = BTreeSet::<String>::new();
 caught-by:
     cortex-core::it reload::a_choice_takes_its_key_out_of_what_waits_for_the_next_epoch
 
