@@ -580,6 +580,165 @@ fn sys_undo_asks_about_a_file_edited_since_and_puts_it_back() {
     quit(&mut session, &phases);
 }
 
+/// How a test ends the application while a question holds the core's lane.
+/// `/quit` is not among them: a dialog that takes keys types nothing into
+/// the editor, so it cannot be given while one is open.
+#[derive(Debug, Clone, Copy)]
+enum Ending {
+    /// `Ctrl+C`, which arms the quit, then `Ctrl+C` again.
+    TwoInterrupts,
+    /// A signal by its name, to the binary alone (Linux): SIGTERM, and
+    /// SIGHUP, which a terminal that closes sends.
+    #[cfg(target_os = "linux")]
+    Signal(&'static str),
+}
+
+impl Ending {
+    /// What the platform can send.
+    fn all() -> Vec<Self> {
+        let mut all = vec![Self::TwoInterrupts];
+        #[cfg(target_os = "linux")]
+        all.extend([Self::Signal("TERM"), Self::Signal("HUP")]);
+        all
+    }
+
+    /// The exit code the binary ends with.
+    fn code(self) -> i32 {
+        match self {
+            Self::TwoInterrupts => 0,
+            #[cfg(target_os = "linux")]
+            Self::Signal("TERM") => 143,
+            #[cfg(target_os = "linux")]
+            Self::Signal(_) => 129,
+        }
+    }
+}
+
+/// How long ending may take with a question open in the lane: well inside
+/// the bound of the core's own shutdown (2 s), and under the 1 s the end
+/// gives the lane's last operation, so that an end that waited for it
+/// fails. It takes a few milliseconds at the desk. Before step 23 moved the
+/// end out of the lane, a question nobody would answer held the core's
+/// thread until the binary gave up on it (5 s, or 2 s after a signal).
+const ENDING: Duration = Duration::from_secs(1);
+
+/// Ends the application in `session` by `ending`, while a question waits
+/// in the core's lane, and checks that it ends within [`ENDING`] with the
+/// terminal put back and the code it should have.
+fn ends_while_the_lane_waits(session: &mut Session, ending: Ending, waiting: &str) {
+    let started = Instant::now();
+    match ending {
+        Ending::TwoInterrupts => {
+            session.send(b"\x03");
+            session.send(b"\x03");
+        }
+        #[cfg(target_os = "linux")]
+        Ending::Signal(name) => {
+            let pid = child_status(session)
+                .and_then(|status| status_field(&status, "Pid:"))
+                .expect("the binary's process");
+            let sent = Command::new("kill")
+                .args([format!("-{name}"), pid])
+                .status()
+                .expect("kill");
+            assert!(sent.success(), "SIG{name} was not sent");
+        }
+    }
+    session.wait_for(LIMIT, "the whole verdict", |t| {
+        (t.shows(RESTORED) && t.shows(")")) || t.shows("after:")
+    });
+    let took = started.elapsed();
+    let shown = everything(session);
+    assert!(
+        took < ENDING,
+        "{ending:?} while {waiting}: the application took {took:?} to end"
+    );
+    assert!(
+        shown.contains(&format!("{RESTORED} (exit status: {})", ending.code())),
+        "{ending:?} while {waiting}: {shown}"
+    );
+    let modes = session.screen().modes();
+    assert!(
+        modes.cursor_visible,
+        "{ending:?} while {waiting}: the cursor is hidden"
+    );
+    assert!(
+        !modes.bracketed_paste,
+        "{ending:?} while {waiting}: bracketed paste was left on"
+    );
+}
+
+/// The trust question holds the session's open in the core's lane when
+/// the application starts: each way out ends it at once all the same.
+#[test]
+fn sys_the_application_ends_at_once_while_the_trust_question_waits() {
+    let machine = Machine::new("tui_lane_trust");
+    machine.project_config("[model]\nmain = \"claude-opus-5-5\"\n");
+    for ending in Ending::all() {
+        let mut session = machine.tui(&[]);
+        trust_asked(&mut session);
+        ends_while_the_lane_waits(
+            &mut session,
+            ending,
+            "the trust question waits at the start",
+        );
+    }
+}
+
+/// The trust question holds a stored session's open (`--continue`), which
+/// goes through `session/open` rather than `session/new`.
+#[test]
+fn sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits() {
+    let phases = Phases::new(
+        "sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits",
+    );
+    let machine = Machine::new("tui_lane_resume");
+    machine.project_config("[model]\nmain = \"claude-opus-5-5\"\n");
+    machine.reply_text("Stored.");
+    // A session of the untrusted project, stored: not now, then a turn.
+    let mut session = machine.tui(&["remember this"]);
+    trust_asked(&mut session);
+    session.send(b"n");
+    wait_shows(&mut session, "Stored.");
+    quit(&mut session, &phases);
+    for ending in Ending::all() {
+        let mut session = machine.tui(&["--continue"]);
+        trust_asked(&mut session);
+        ends_while_the_lane_waits(
+            &mut session,
+            ending,
+            "the trust question waits on a resumed session",
+        );
+    }
+}
+
+/// The undo's question about a file edited since the turn holds
+/// `session/undo` in the core's lane.
+#[test]
+fn sys_the_application_ends_at_once_while_the_undos_question_waits() {
+    for ending in Ending::all() {
+        let machine = Machine::new(&format!("tui_lane_undo_{}", ending.code()));
+        let notes = machine.workspace.join("notes.txt");
+        machine.reply_tool(
+            "toolu_1",
+            "write",
+            &json!({"path": "notes.txt", "content": "after\n"}),
+        );
+        machine.reply_text("Written.");
+        let mut session = machine.tui(&["--allow", "write notes.txt", "change the notes"]);
+        wait_shows(&mut session, "Written.");
+        std::fs::write(&notes, "after, and mine\n").unwrap();
+        command(&mut session, "/undo");
+        wait_shows(&mut session, "1 Put them back");
+        ends_while_the_lane_waits(&mut session, ending, "the undo's question waits");
+        assert_eq!(
+            std::fs::read_to_string(&notes).unwrap(),
+            "after, and mine\n",
+            "{ending:?}: a question left unanswered undid the turn"
+        );
+    }
+}
+
 /// Start to first frame of the real application, under both its names,
 /// `CORTEX_PERF_RUNS` runs of each (30 unless given): from the moment the
 /// shell starts the binary to the moment the first frame is on the
@@ -625,8 +784,6 @@ fn perf_start_to_first_frame_under_both_names() {
     }
 }
 
-/// The resident memory of the process that the role shell started for
-/// `session`, in KiB: Linux only, read from `/proc`.
 /// Whether the prompt's box shows `text` typed: after `◆`, or after `>`
 /// where the console gets the ASCII glyphs (Windows).
 fn typed(screen: &cortex_testkit::VTerm, text: &str) -> bool {

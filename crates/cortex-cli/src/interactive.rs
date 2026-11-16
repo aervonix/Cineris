@@ -61,6 +61,11 @@ use crate::exit;
 /// the core's own shutdown waits at most 2 s for the statistics' writer.
 const CORE_END: Duration = Duration::from_secs(5);
 
+/// How long the end waits for the operation the lane was running once the
+/// interface is gone and what it was asked is withdrawn: one stuck on its
+/// disk does not hold the rest of the end.
+const LANE_END: Duration = Duration::from_secs(1);
+
 /// How long the core's end waits after a signal: the watchdog ends the
 /// process 3 s after the signal came.
 const SIGNAL_END: Duration = Duration::from_secs(2);
@@ -631,23 +636,45 @@ impl CoreThread {
                     };
                     let client = core.connect(ClientInfo::user());
                     let _ = started.send(Ok((core.clone(), client.id, Arc::clone(&client.queue))));
+                    // The lane: what changes a session runs on a task of
+                    // its own, one at a time in the order sent, so that the
+                    // end below is never behind it.
+                    let (writes, mut written) =
+                        tokio::sync::mpsc::unbounded_channel::<(Ticket, Op)>();
+                    let lane_task = {
+                        let core = core.clone();
+                        let (done, wake) = (Arc::clone(&thread_done), thread_slot.clone());
+                        tokio::spawn(async move {
+                            while let Some((ticket, op)) = written.recv().await {
+                                let result = core.handle(client.id, op).await.map_err(|e| *e);
+                                push(&done, Inbound::Done(ticket, result));
+                                wake.wake();
+                            }
+                        })
+                    };
                     while let Some((ticket, op)) = lane.recv().await {
-                        let wake = thread_slot.clone();
-                        let done = Arc::clone(&thread_done);
                         if reads(&op) {
                             let core = core.clone();
+                            let (done, wake) = (Arc::clone(&thread_done), thread_slot.clone());
                             tokio::spawn(async move {
                                 let result = core.handle(client.id, op).await.map_err(|e| *e);
                                 push(&done, Inbound::Done(ticket, result));
                                 wake.wake();
                             });
                         } else {
-                            let result = core.handle(client.id, op).await.map_err(|e| *e);
-                            push(&done, Inbound::Done(ticket, result));
-                            wake.wake();
+                            let _ = writes.send((ticket, op));
                         }
                     }
-                    // The interface is gone: everything is ended in order.
+                    // The interface is gone, outside the lane: what it was
+                    // asked and never answered is withdrawn, which ends an
+                    // operation waiting on the answer (the trust question of
+                    // an open, the undo's question), and the sessions it
+                    // had open are closed.
+                    drop(writes);
+                    core.disconnect(client.id).await;
+                    // Then the lane's last operation, for so long, and
+                    // everything else in order.
+                    let _ = tokio::time::timeout(LANE_END, lane_task).await;
                     core.shutdown().await;
                     normal.store(true, Ordering::SeqCst);
                 });
