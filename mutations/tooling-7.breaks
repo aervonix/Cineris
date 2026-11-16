@@ -2448,3 +2448,23 @@ find: in_rounds.retain(|one| !skipped.contains(&one.id));
 replace:
 caught-by:
     try_result::tests::a_test_that_failed_on_both_sides_of_a_job_that_succeeded_is_no_failure_of_the_run
+
+# The review's fixes: `--merge` takes the parts it is given by name.
+
+[break] merge-takes-every-list-named-like-a-part
+rule: `--merge` merges only the parts named: a list of its own named like a part (`step-9-fixes`) is left alone.
+file: xtask/src/mutate/merge.rs
+in: plan
+find: parts.retain(|part| named.contains(&part.name));
+replace:
+caught-by:
+    mutate::merge::tests::only_the_parts_named_are_merged_and_a_list_of_its_own_is_left_alone
+
+[break] merge-with-no-part-named-takes-them-all
+rule: `--merge STEP` with no part named merges nothing and names the candidates.
+file: xtask/src/mutate/merge.rs
+in: plan
+find: if named.is_empty() {
+replace: if false {
+caught-by:
+    mutate::merge::tests::only_the_parts_named_are_merged_and_a_list_of_its_own_is_left_alone
