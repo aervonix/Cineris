@@ -86,6 +86,10 @@ impl Launcher {
     /// What to start in place of `program` with `arguments`.
     #[must_use]
     pub fn wrap(&self, program: &OsStr, arguments: &[OsString]) -> Wrapped {
+        // The launcher's start is this program's: the launcher becomes it,
+        // and its own process is given no environment of the test's to say
+        // so itself.
+        cortex_base::hook::launched(self.program.as_os_str(), program);
         let mut all = self.prefix.clone();
         all.push(OsString::from("--"));
         all.push(program.to_owned());

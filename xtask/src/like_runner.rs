@@ -26,8 +26,11 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 
+use crate::Result;
 use crate::junit::TestCase;
+use crate::starts::{Counts, Kind, Starts};
 use crate::tiers::{self, Os, Tier};
 
 /// The test threads of a hosted runner: both OSes report 4 cores.
@@ -193,6 +196,454 @@ pub(crate) fn estimate(cases: &[TestCase]) -> String {
     text
 }
 
+/// What one start of each kind costs, in seconds: at a Linux desk, and on
+/// the measured Windows runner. A desk's start is charged on Windows as the
+/// kind it stands for there ([`on_windows`]).
+///
+/// The Windows figures are fitted to `try` run 43892837490 (a 9 ms runner;
+/// the ninth tooling step's tree, its system tests in two lanes and every
+/// test's starts written down): each system test's time above the start of
+/// its process, against its starts of each kind and its crate, by least
+/// squares over its 176 tests. On `main` before that step, with two system
+/// tests at a time anywhere, a PowerShell 7 start fitted at 0.44 s and
+/// Windows PowerShell at 0.31 s (`try` 43883759862). The desk's are fitted
+/// the same way to the desk's run of the same tree (`rx --exclusive`).
+const START_COSTS: [(Kind, f64, f64); 8] = [
+    (Kind::Pwsh, 0.050, 0.331),
+    (Kind::WindowsPowerShell, 0.050, 0.276),
+    (Kind::Posix, 0.002, 0.276),
+    (Kind::Cmd, 0.002, 0.026),
+    (Kind::Git, 0.002, 0.037),
+    (Kind::Binary, 0.004, 0.010),
+    (Kind::Other, 0.004, 0.151),
+    // The harness asks bash its version at a Linux desk, and asks the
+    // tests' shell on Windows, Windows PowerShell, nothing.
+    (Kind::Probe, 0.002, 0.0),
+];
+
+/// The kind a start at the desk stands for on Windows: a POSIX shell is the
+/// tests' shell there, Windows PowerShell (the shell of every test that is
+/// not about which shell runs its command). The others are themselves.
+fn on_windows(kind: Kind) -> Kind {
+    match kind {
+        Kind::Posix => Kind::WindowsPowerShell,
+        other => other,
+    }
+}
+
+fn cost(kind: Kind, os: Os) -> f64 {
+    START_COSTS
+        .iter()
+        .find(|(of, ..)| *of == kind)
+        .map_or(0.0, |(_, desk, windows)| match os {
+            Os::Linux => *desk,
+            Os::Windows => *windows,
+        })
+}
+
+/// What `counts`' starts cost at a desk.
+fn at_desk(counts: &Counts) -> f64 {
+    Kind::ALL
+        .iter()
+        .map(|kind| counts.of(*kind) as f64 * cost(*kind, Os::Linux))
+        .sum()
+}
+
+/// What `counts`' starts, made at a desk, would cost on the Windows runner.
+fn on_the_runner(counts: &Counts) -> f64 {
+    Kind::ALL
+        .iter()
+        .map(|kind| counts.of(*kind) as f64 * cost(on_windows(*kind), Os::Windows))
+        .sum()
+}
+
+/// Each crate's factor for the work of its tests that is not starting a
+/// process, on Windows: the runner's time above the start of a test's
+/// process, less what its starts cost there, over the desk's, less what
+/// they cost at the desk. A test that runs only on the runner (a
+/// PowerShell test) is counted whole on the runner's side, so that its
+/// crate's factor carries it. Measured with `--factors-from` and
+/// `--starts-from`, as [`FACTORS`] is; a crate the table does not know
+/// takes [`FACTORS`]' factor.
+///
+/// Measured in the ninth tooling step for the system tier only, where the
+/// starts are: the desk's run of the step's tree (`rx --exclusive`; its
+/// integration tier stalled on the desk's disk, and is not read) against a
+/// 9 ms runner's run of the same tree with its starts written down (`try`
+/// 43892837490). Tiers 1 and 2 start no process, and their factors are
+/// [`FACTORS`]'. `cortex-tools`' and `xtask`'s are large because
+/// Windows-only tests (each shell's own) and the starts no mark covers (the
+/// owner guard's tests' own git) run only on the runner.
+const WORK_FACTORS: &[(&str, Tier, f64)] = &[
+    ("cortex-cli", Tier::System, 0.53),
+    ("cortex-core", Tier::System, 0.00),
+    ("cortex-llm", Tier::System, 0.53),
+    ("cortex-policy", Tier::System, 6.46),
+    ("cortex-sandbox", Tier::System, 0.00),
+    ("cortex-term", Tier::System, 0.00),
+    ("cortex-tools", Tier::System, 17.37),
+    ("xtask", Tier::System, 13.09),
+];
+
+fn work_factor(krate: &str, tier: Tier) -> f64 {
+    WORK_FACTORS
+        .iter()
+        .find(|(name, of, _)| *name == krate && *of == tier)
+        .map_or_else(|| factor(krate, tier, Os::Windows), |(.., value)| *value)
+}
+
+/// One test's time on the Windows runner, estimated from its time at the
+/// desk above `start` and the processes it started: its work, scaled by its
+/// crate's factor, and each start at what the runner charges for it. A test
+/// that started nothing is its time times the crate's factor, as before
+/// starts were counted.
+pub(crate) fn windows_seconds(case: &TestCase, start: f64, counts: &Counts) -> f64 {
+    let krate = tiers::crate_of(&case.binary);
+    let tier = Tier::of(&case.binary, &case.name);
+    let above = (case.seconds - start).max(0.0);
+    let work = (above - at_desk(counts)).max(0.0);
+    work * work_factor(krate, tier) + on_the_runner(counts)
+}
+
+/// Each tier's estimate on the Windows runner, from a desk's run and the
+/// starts its tests wrote down; and each test's, for a comparison.
+pub(crate) struct WindowsEstimate {
+    pub(crate) tiers: [f64; 3],
+    /// What the tier's starts make of it.
+    pub(crate) starts: [f64; 3],
+    /// The tier's starts, by kind.
+    pub(crate) counts: [Counts; 3],
+    pub(crate) tests: BTreeMap<(String, String), f64>,
+}
+
+pub(crate) fn windows_estimate(cases: &[TestCase], starts: &Starts) -> WindowsEstimate {
+    let (start, _) = tiers::start_of(cases);
+    let mut estimate = WindowsEstimate {
+        tiers: [0.0; 3],
+        starts: [0.0; 3],
+        counts: Default::default(),
+        tests: BTreeMap::new(),
+    };
+    for case in cases {
+        let counts = starts.of(&case.binary, &case.name);
+        let seconds = windows_seconds(case, start, &counts);
+        let index = Tier::of(&case.binary, &case.name).index();
+        estimate.tiers[index] += seconds;
+        estimate.starts[index] += on_the_runner(&counts);
+        estimate.counts[index].add(&counts);
+        estimate
+            .tests
+            .insert((case.binary.clone(), case.name.clone()), seconds);
+    }
+    estimate
+}
+
+/// The starts a desk's run made, by tier, and what they would cost on the
+/// Windows runner: printed after [`estimate`] when the run wrote them down.
+pub(crate) fn starts_text(cases: &[TestCase], starts: &Starts) -> String {
+    let estimate = windows_estimate(cases, starts);
+    let mut text = String::from(
+        "\n  Processes the tests started, and what the Windows runner would charge for them \
+         (a POSIX shell at the desk is Windows PowerShell there):\n",
+    );
+    for tier in Tier::ALL {
+        let index = tier.index();
+        let counts = &estimate.counts[index];
+        let _ = writeln!(
+            text,
+            "  {:<16} {:>4} starts {:>6.1} s   on Windows {:>6.1} s   {}",
+            tier.name(),
+            counts.total(),
+            estimate.starts[index],
+            estimate.tiers[index],
+            counts.brief()
+        );
+    }
+    text
+}
+
+/// How many seconds of a tier's estimated Windows time a change may add
+/// before the comparison warns: under the noise of two runs of `main` on
+/// one runner (2 to 3 s of tier 3 between rounds), and well under what
+/// step 17 found too late (11.7 s).
+pub(crate) const WARN_SECONDS: f64 = 3.0;
+
+/// This tree's estimate against a base's, both run at the desk with their
+/// starts written down: each tier's estimate on the Windows runner on each
+/// side, the change and the share of its budget; the tests that moved most;
+/// and a warning for each tier that grew by more than [`WARN_SECONDS`].
+/// Returns the text and whether it warned.
+pub(crate) fn compare(
+    head: (&[TestCase], &Starts),
+    base: (&[TestCase], &Starts),
+    label: &str,
+    top: usize,
+) -> (String, bool) {
+    // A test that failed on either side is no measurement on either: a
+    // timeout reads as its limit's length, a panic as however far it got.
+    // It is left out of both, and named.
+    let failed: std::collections::BTreeSet<(String, String)> = head
+        .0
+        .iter()
+        .chain(base.0)
+        .filter(|case| case.failed)
+        .map(|case| (case.binary.clone(), case.name.clone()))
+        .collect();
+    let kept = |cases: &[TestCase]| -> Vec<TestCase> {
+        cases
+            .iter()
+            .filter(|case| !failed.contains(&(case.binary.clone(), case.name.clone())))
+            .cloned()
+            .collect()
+    };
+    let new = windows_estimate(&kept(head.0), head.1);
+    let old = windows_estimate(&kept(base.0), base.1);
+    let mut text = format!(
+        "\nThe Windows runner's tiers, estimated for this tree and for {label}, both run at this \
+         desk:\n\n  tier              {label:>12}   this tree   change   budget   starts, then and now\n"
+    );
+    let mut warned = false;
+    for tier in Tier::ALL {
+        let index = tier.index();
+        let change = new.tiers[index] - old.tiers[index];
+        let budget = tier.budget(Os::Windows);
+        let warn = change > WARN_SECONDS;
+        warned |= warn;
+        let _ = writeln!(
+            text,
+            "  {:<16} {:>10.1} s {:>9.1} s {:>+7.1} s   {budget:>4.0} s   {} -> {}{}",
+            tier.name(),
+            old.tiers[index],
+            new.tiers[index],
+            change,
+            old.counts[index].total(),
+            new.counts[index].total(),
+            if warn {
+                format!(
+                    "\n      warning: {change:.1} s more of Windows' {} tier, estimated ({:.0}% of its \
+                     budget): measure it with `try -f os=windows -f command=test -f against=main` \
+                     before the pull request",
+                    tier.name(),
+                    change / budget * 100.0
+                )
+            } else {
+                String::new()
+            }
+        );
+    }
+    let mut moved: Vec<(&(String, String), f64)> = new
+        .tests
+        .iter()
+        .map(|(key, seconds)| (key, seconds - old.tests.get(key).copied().unwrap_or(0.0)))
+        .chain(
+            old.tests
+                .iter()
+                .filter(|(key, _)| !new.tests.contains_key(*key))
+                .map(|(key, seconds)| (key, -seconds)),
+        )
+        .collect();
+    moved.sort_by(|a, b| b.1.abs().total_cmp(&a.1.abs()));
+    let moved: Vec<_> = moved
+        .into_iter()
+        .filter(|(_, change)| change.abs() >= 0.05)
+        .take(top)
+        .collect();
+    if !moved.is_empty() {
+        text.push_str("\n  The tests whose estimate moved most, with their starts here:\n");
+        for ((binary, name), change) in moved {
+            let counts = head.1.of(binary, name);
+            let _ = writeln!(
+                text,
+                "  {change:>+7.2} s  {binary}  {name}{}",
+                if counts.total() > 0 {
+                    format!("  [{}]", counts.brief())
+                } else {
+                    String::new()
+                }
+            );
+        }
+    }
+    if !failed.is_empty() {
+        let _ = writeln!(
+            text,
+            "\n  {} test(s) failed on one side or both, and are left out of both estimates:",
+            failed.len()
+        );
+        for (binary, name) in &failed {
+            let _ = writeln!(text, "    {binary}  {name}");
+        }
+    }
+    if !head.1.is_empty() && base.1.is_empty() {
+        text.push_str(
+            "\n  The base wrote down no starts: its tree is from before they were counted, so \
+             every start here reads as new. Compare with a base that counts them.\n",
+        );
+    }
+    (text, warned)
+}
+
+/// The directory a tree's run writes its starts to: in its own build
+/// directory, emptied before each run.
+pub(crate) fn starts_dir(tree: &Path) -> PathBuf {
+    tree.join("target").join("like-runner").join("starts")
+}
+
+/// The base given with `--base`, checked as `ab` checks its own: a checkout
+/// of the workspace, outside this one (inside it, this tree's
+/// `.cargo/config.toml` would apply to its build too).
+pub(crate) fn base_tree(base: &Path) -> Result<PathBuf> {
+    let base = crate::ab::normalised(
+        &std::path::absolute(base).map_err(|error| format!("{}: {error}", base.display()))?,
+    );
+    if !base.join("Cargo.toml").is_file() {
+        return Err(format!(
+            "{} is not a checkout of the workspace",
+            base.display()
+        ));
+    }
+    crate::ab::refuse_base(&crate::workspace::root(), &base)?;
+    Ok(base)
+}
+
+/// The base's tests, built and run as the blocking job runs them, in its
+/// own build directory, with their starts written down. A failing test is
+/// said and the base's estimate is still made: what is compared is the
+/// time the tests took.
+pub(crate) fn run_base(base: &Path, packages: &[String], rest: &[String]) -> Result<()> {
+    let starts = starts_dir(base);
+    crate::workspace::forget_dir(&starts)?;
+    crate::checks::forget_reports(base)?;
+    let mut build = crate::checks::ci_run(packages);
+    build.push("--no-run".to_owned());
+    let status = |mut command: std::process::Command, what: &str| {
+        command
+            .status()
+            .map_err(|error| format!("could not run cargo in {}: {error}", base.display()))
+            .map(|status| {
+                if !status.success() {
+                    println!("{what} in {} ended {status}", base.display());
+                }
+                status.success()
+            })
+    };
+    if !status(crate::ab::nextest(base, &build), "the build")? {
+        return Err(format!(
+            "the base's tests did not build in {}",
+            base.display()
+        ));
+    }
+    let runs = crate::checks::ci_runs(packages, rest, crate::checks::splits(base));
+    let last = runs.len() - 1;
+    for (index, run) in runs.iter().enumerate() {
+        let mut command = crate::ab::nextest(base, run);
+        command.env(crate::starts::VARIABLE, &starts);
+        status(command, "a run of the base's tests")?;
+        if index == last {
+            crate::checks::bring_together(base)?;
+        } else {
+            crate::checks::set_aside(base)?;
+        }
+    }
+    Ok(())
+}
+
+/// A table to paste in place of [`WORK_FACTORS`], measured so that the
+/// estimate of the desk's run gives the runner's figure for each crate and
+/// tier: the runner's time above the start of a test's process, less what
+/// the desk's tests' starts would be charged there, over the desk's time
+/// less what its starts cost at the desk. What the runner ran and the desk
+/// did not (each Windows shell's own tests), and what the desk ran and the
+/// runner did not (bash's and sh's), are carried by the factor, so the
+/// table is of the two systems' tests as they are; a crate whose desk
+/// starts would cost more than all its runner time is given 0.
+pub(crate) fn measure_work(
+    desk: &[TestCase],
+    desk_starts: &Starts,
+    windows: &[TestCase],
+) -> String {
+    let (desk_start, _) = tiers::start_of(desk);
+    let (runner_start, _) = tiers::start_of(windows);
+    let key = |case: &TestCase| {
+        (
+            tiers::crate_of(&case.binary).to_owned(),
+            Tier::of(&case.binary, &case.name),
+        )
+    };
+    // Each crate and tier: the desk's work, and what its starts would be
+    // charged on the runner.
+    let mut at_desk_work: BTreeMap<(String, Tier), f64> = BTreeMap::new();
+    let mut charged: BTreeMap<(String, Tier), f64> = BTreeMap::new();
+    for case in desk {
+        let counts = desk_starts.of(&case.binary, &case.name);
+        let above = (case.seconds - desk_start).max(0.0);
+        *at_desk_work.entry(key(case)).or_default() += (above - at_desk(&counts)).max(0.0);
+        *charged.entry(key(case)).or_default() += on_the_runner(&counts);
+    }
+    let mut on_runner: BTreeMap<(String, Tier), f64> = BTreeMap::new();
+    for case in windows {
+        *on_runner.entry(key(case)).or_default() += (case.seconds - runner_start).max(0.0);
+    }
+    let mut text = String::from("const WORK_FACTORS: &[(&str, Tier, f64)] = &[\n");
+    for ((krate, tier), seconds) in &at_desk_work {
+        if *seconds < 0.05 {
+            continue;
+        }
+        let k = (krate.clone(), *tier);
+        let runner = on_runner.get(&k).copied().unwrap_or(0.0);
+        let starts = charged.get(&k).copied().unwrap_or(0.0);
+        let _ = writeln!(
+            text,
+            "    (\"{krate}\", Tier::{:?}, {:.2}),",
+            tier,
+            (runner - starts).max(0.0) / seconds
+        );
+    }
+    text.push_str("];\n");
+    text
+}
+
+/// A `try` run's Windows report: a plain run's (`-f command=test`), or an
+/// A/B's head, the median of its rounds. What [`measure_work`] reads of a
+/// runner.
+pub(crate) fn runner_report(run: u64) -> Result<Vec<TestCase>> {
+    let name = crate::runs::try_artifact_name(Os::Windows);
+    let directory = crate::runs::artifact_dir(run, name)?
+        .ok_or_else(|| format!("run {run} kept no `{name}`"))?;
+    let files = crate::runs::files_under(&directory)?;
+    match files
+        .iter()
+        .find(|path| path.ends_with("nextest/ci/junit.xml"))
+    {
+        Some(report) => crate::junit::read(report),
+        None => {
+            let sides = crate::records::ab_reports(run, Os::Windows)?
+                .ok_or_else(|| format!("run {run} kept no `{name}`"))?;
+            Ok(crate::ab::medians(&sides.head))
+        }
+    }
+}
+
+/// [`compare`] of this tree's run with the base's, as [`run_base`] left it.
+pub(crate) fn compare_with_base(
+    cases: &[TestCase],
+    starts: &Starts,
+    base: &Path,
+    top: usize,
+) -> Result<(String, bool)> {
+    let base_cases = crate::junit::read(&crate::workspace::nextest_report(base, "ci"))?;
+    let base_starts = Starts::read(&starts_dir(base))?;
+    let label = base.file_name().map_or_else(
+        || "the base".to_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    Ok(compare(
+        (cases, starts),
+        (&base_cases, &base_starts),
+        &label,
+        top,
+    ))
+}
+
 /// A table of factors to paste in place of [`FACTORS`] and
 /// [`TIER_FACTORS`]: the runners' medians over the desk's, by crate and
 /// tier, from `desk` and each OS's rounds.
@@ -294,6 +745,181 @@ mod tests {
         // runner, and 96 s on a slow one.
         assert!(text.contains("78.9 s"), "{text}");
         assert!(text.contains("90 s  over on a slow runner"), "{text}");
+    }
+
+    fn starts(lines: &[(&str, &str, &str, usize)]) -> Starts {
+        let mut text = String::new();
+        for (binary, name, program, count) in lines {
+            for _ in 0..*count {
+                text.push_str(&format!("{binary}\t{name}\t{program}\n"));
+            }
+        }
+        Starts::parse(&text)
+    }
+
+    #[test]
+    fn a_tests_starts_are_charged_at_the_runners_price_and_its_work_by_its_crate() {
+        // 0.104 s at the desk above a 2 ms start: 0.1 s of it the work, and
+        // two bash starts at 2 ms each.
+        let case = case("cortex-core::it", "trust::sys_a", 0.106);
+        let counts = starts(&[("cortex-core::it", "trust::sys_a", "bash", 2)])
+            .of("cortex-core::it", "trust::sys_a");
+        let seconds = windows_seconds(&case, 0.002, &counts);
+        let work = 0.1 * work_factor("cortex-core", Tier::System);
+        let shells = 2.0 * cost(Kind::WindowsPowerShell, Os::Windows);
+        assert!((seconds - (work + shells)).abs() < 1e-9, "{seconds}");
+        // A test that started nothing is all work.
+        let quiet = windows_seconds(&case, 0.002, &Counts::default());
+        assert!(
+            (quiet - 0.104 * work_factor("cortex-core", Tier::System)).abs() < 1e-9,
+            "{quiet}"
+        );
+        // A version probe at the desk costs nothing on Windows, where the
+        // tests' shell is asked nothing.
+        let probed = starts(&[("cortex-core::it", "trust::sys_a", "probe>bash", 3)])
+            .of("cortex-core::it", "trust::sys_a");
+        let seconds = windows_seconds(&case, 0.002, &probed);
+        assert!(
+            (seconds
+                - (0.104 - 3.0 * cost(Kind::Probe, Os::Linux))
+                    * work_factor("cortex-core", Tier::System))
+            .abs()
+                < 1e-9,
+            "{seconds}"
+        );
+        // Starts that cost more at the desk than the test took leave no
+        // work, and no negative time.
+        let short = TestCase {
+            seconds: 0.003,
+            ..case.clone()
+        };
+        let many = starts(&[("cortex-core::it", "trust::sys_a", "git", 50)])
+            .of("cortex-core::it", "trust::sys_a");
+        let seconds = windows_seconds(&short, 0.002, &many);
+        assert!(
+            (seconds - 50.0 * cost(Kind::Git, Os::Windows)).abs() < 1e-9,
+            "{seconds}"
+        );
+    }
+
+    /// A desk's report of a tree: the start cost, and one system test that
+    /// started `shells` shells.
+    fn tree(shells: usize) -> (Vec<TestCase>, Starts) {
+        let mut cases = desk();
+        // Its work is 10 ms whatever it starts, each bash 2 ms more.
+        cases.push(case(
+            "cortex-core::it",
+            "knowledge::sys_x",
+            0.012 + shells as f64 * 0.002,
+        ));
+        let starts = starts(&[("cortex-core::it", "knowledge::sys_x", "bash", shells)]);
+        (cases, starts)
+    }
+
+    #[test]
+    fn a_change_that_adds_shell_starts_is_warned_of_with_the_test_that_made_them() {
+        let (base, base_starts) = tree(2);
+        let (head, head_starts) = tree(14);
+        let (text, warned) = compare((&head, &head_starts), (&base, &base_starts), "main", 5);
+        // Twelve more shells at Windows PowerShell's price.
+        let more = 12.0 * cost(Kind::WindowsPowerShell, Os::Windows);
+        assert!(more > WARN_SECONDS);
+        assert!(warned, "{text}");
+        assert!(
+            text.contains(&format!(
+                "warning: {more:.1} s more of Windows' 3, system tier"
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "{more:+.2} s  cortex-core::it  knowledge::sys_x  [posix shell 14]"
+            )),
+            "{text}"
+        );
+        // The same tree against itself warns of nothing.
+        let (text, warned) = compare((&head, &head_starts), (&head, &head_starts), "main", 5);
+        assert!(!warned, "{text}");
+        assert!(!text.contains("warning"), "{text}");
+    }
+
+    #[test]
+    fn a_change_under_the_warning_is_shown_and_not_warned_of() {
+        let (base, base_starts) = tree(2);
+        let (head, head_starts) = tree(10);
+        let (text, warned) = compare((&head, &head_starts), (&base, &base_starts), "main", 5);
+        // Eight more shells: under the warning's 3 s.
+        let more = 8.0 * cost(Kind::WindowsPowerShell, Os::Windows);
+        assert!(more < WARN_SECONDS);
+        assert!(!warned, "{text}");
+        assert!(text.contains(&format!("{more:+.2} s")), "{text}");
+    }
+
+    #[test]
+    fn a_test_that_failed_on_either_side_is_left_out_of_both_estimates() {
+        let (base, base_starts) = tree(2);
+        let (mut head, head_starts) = tree(14);
+        // The head's test timed out: it reads as its limit, and its shells
+        // as twelve more. Left out of both, nothing grew.
+        for case in &mut head {
+            if case.name == "knowledge::sys_x" {
+                case.failed = true;
+                case.seconds = 60.0;
+            }
+        }
+        let (text, warned) = compare((&head, &head_starts), (&base, &base_starts), "main", 5);
+        assert!(!warned, "{text}");
+        assert!(
+            text.contains("1 test(s) failed on one side or both"),
+            "{text}"
+        );
+        assert!(text.contains("cortex-core::it  knowledge::sys_x"), "{text}");
+    }
+
+    #[test]
+    fn a_base_that_counted_no_starts_is_said_to_be_one() {
+        let (base, _) = tree(2);
+        let (head, head_starts) = tree(2);
+        let (text, _) = compare(
+            (&head, &head_starts),
+            (&base, &Starts::default()),
+            "main",
+            5,
+        );
+        assert!(text.contains("The base wrote down no starts"), "{text}");
+    }
+
+    #[test]
+    fn the_work_factors_give_the_runners_figure_for_the_desks_run() {
+        // At the desk: 0.1 s of work and two bash starts at 2 ms.
+        let mut desk = desk();
+        desk.push(case("cortex-core::it", "knowledge::sys_x", 0.106));
+        let desk_starts = starts(&[("cortex-core::it", "knowledge::sys_x", "bash", 2)]);
+        // On the runner the same test took 2 s, and a test only the runner
+        // has 0.5 s.
+        let mut windows = desk.clone();
+        for case in &mut windows {
+            if case.name == "knowledge::sys_x" {
+                case.seconds = 0.002 + 2.0;
+            }
+        }
+        windows.push(case(
+            "cortex-core::it",
+            "knowledge::sys_windows_only",
+            0.502,
+        ));
+        let table = measure_work(&desk, &desk_starts, &windows);
+        let factor = (2.5 - 2.0 * cost(Kind::WindowsPowerShell, Os::Windows)) / 0.1;
+        assert!(
+            table.contains(&format!(
+                "    (\"cortex-core\", Tier::System, {factor:.2}),"
+            )),
+            "{table}"
+        );
+        // By construction, the desk's run is estimated at the runner's time.
+        let counts = desk_starts.of("cortex-core::it", "knowledge::sys_x");
+        let estimated = 0.1 * factor + on_the_runner(&counts);
+        assert!((estimated - 2.5).abs() < 1e-9, "{estimated}");
     }
 
     #[test]

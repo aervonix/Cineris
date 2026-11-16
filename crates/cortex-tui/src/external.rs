@@ -714,6 +714,7 @@ fn run(editor: &Program, file: &Path, folder: &Path) -> io::Result<std::process:
     if cfg!(windows) {
         command.env("NoDefaultCurrentDirectoryInExePath", "1");
     }
+    cortex_base::hook::started(command.get_program());
     command.spawn().and_then(|mut child| child.wait())
 }
 

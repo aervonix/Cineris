@@ -180,8 +180,9 @@ impl Rerun {
     /// in it: the panic has what it printed.
     #[must_use]
     pub fn run(&self) -> Ran {
-        let output = self
-            .command()
+        let mut command = self.command();
+        cortex_base::hook::started(command.get_program());
+        let output = command
             .output()
             .unwrap_or_else(|error| panic!("could not rerun {}: {error}", self.test));
         let ran = Ran {

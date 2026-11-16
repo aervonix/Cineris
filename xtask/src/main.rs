@@ -50,6 +50,7 @@ mod scratch_test;
 mod screens;
 mod shipped;
 mod stall;
+mod starts;
 mod startup;
 mod steps;
 mod stress;

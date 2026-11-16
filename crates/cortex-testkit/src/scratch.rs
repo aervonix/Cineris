@@ -266,6 +266,7 @@ fn is_one_name(name: &str) -> bool {
 /// variables that point git at a repository other than the one in
 /// `directory`, which are set when the tests are started from a git hook.
 pub fn git(directory: &Path, arguments: &[&str]) -> String {
+    cortex_base::hook::started(std::ffi::OsStr::new("git"));
     let output = git_command(directory, arguments)
         .output()
         .expect("git is installed where these tests run");

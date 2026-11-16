@@ -90,8 +90,131 @@
 #[inline(always)]
 pub const fn point(_name: &'static str) {}
 
+/// Marks the start of a process: called by every place in the workspace
+/// that starts one, with the program it starts, just before it does
+/// (`docs/testing-and-ci.md`, "What a runner would say, from a desk").
+/// Without the `test-hooks` feature this is nothing at all.
+///
+/// A start is what a hosted Windows runner charges most for (a PowerShell
+/// start is a third of a second there), and what a desk's run cannot see:
+/// with [`STARTS`] naming a directory, under nextest, each start is written
+/// down for the test that made it, and `cargo xtask ci --tiers
+/// --like-runner` counts them.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+pub const fn started(_program: &std::ffi::OsStr) {}
+
+/// Marks the sandbox's `launcher` being made to become `program` (an
+/// `exec` in the launcher, not a new process): the launcher's own start,
+/// marked as `launcher`'s when it is started, is counted as `program`'s.
+/// Marked by the harness when it wraps the command, since the launcher's
+/// process is given no environment of the test's. Without the `test-hooks`
+/// feature this is nothing at all.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+pub const fn launched(_launcher: &std::ffi::OsStr, _program: &std::ffi::OsStr) {}
+
+/// What a line of [`launched`] starts with, before the program's name.
+pub const LAUNCHED: &str = "launcher>";
+
+/// Marks a start of `program` to ask it its version (`--version`), apart
+/// from the starts that run a command: on Linux the harness asks bash its
+/// version on the side, where on Windows the tests' shell is asked nothing,
+/// so a desk's estimate must not charge one for it. Without the
+/// `test-hooks` feature this is nothing at all.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+pub const fn probed(_program: &std::ffi::OsStr) {}
+
+/// What a line of [`probed`] starts with, before the program's name.
+pub const PROBED: &str = "probe>";
+
+/// The variable that names the directory [`started`] writes to. Unset or
+/// empty: nothing is written.
+pub const STARTS: &str = "CORTEX_TESTKIT_STARTS";
+
 #[cfg(feature = "test-hooks")]
 pub use enabled::{Hold, Stopped, point, seen, stopped};
+#[cfg(feature = "test-hooks")]
+pub use starts::{launched, probed, program_name, started};
+
+/// Process starts, written down for the test that made them.
+#[cfg(feature = "test-hooks")]
+mod starts {
+    use std::ffi::OsStr;
+    use std::io::Write as _;
+    use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
+
+    use crate::sync::lock;
+
+    /// Where this process writes, and the test it writes for: read once.
+    struct Record {
+        file: Mutex<std::fs::File>,
+        /// `binary-id\ttest-name\t`, the start of every line.
+        test: String,
+    }
+
+    static RECORD: OnceLock<Option<Record>> = OnceLock::new();
+
+    /// Writes one line, `<binary id>\t<test name>\t<program>`, to a file of
+    /// this process's own in the directory [`super::STARTS`] names, when it
+    /// names one and the process runs under nextest (which says which test
+    /// it is, in `NEXTEST_BINARY_ID` and `NEXTEST_TEST_NAME`, and gives the
+    /// variables to every process the test starts). Nothing is written,
+    /// and nothing fails, otherwise: a start is never refused for this.
+    pub fn started(program: &OsStr) {
+        write("", program);
+    }
+
+    /// As [`started`], for `launcher` made to become `program`: the line's
+    /// program is `launcher>LAUNCHER>PROGRAM`.
+    pub fn launched(launcher: &OsStr, program: &OsStr) {
+        let prefix = format!("{}{}>", super::LAUNCHED, program_name(launcher));
+        write(&prefix, program);
+    }
+
+    /// As [`started`], for a start that asks `program` its version: the
+    /// line's program is `probe>NAME`.
+    pub fn probed(program: &OsStr) {
+        write(super::PROBED, program);
+    }
+
+    fn write(prefix: &str, program: &OsStr) {
+        let Some(record) = RECORD.get_or_init(open) else {
+            return;
+        };
+        let line = format!("{}{prefix}{}\n", record.test, program_name(program));
+        let _ = lock(&record.file).write_all(line.as_bytes());
+    }
+
+    /// The name a start is counted by: the program's file name without its
+    /// extension, in lower case (`C:\…\pwsh.exe` is `pwsh`), with no tab or
+    /// line break.
+    #[must_use]
+    pub fn program_name(program: &OsStr) -> String {
+        let path = Path::new(program);
+        let stem = path.file_stem().unwrap_or(program).to_string_lossy();
+        stem.to_lowercase().replace(['\t', '\n', '\r'], " ")
+    }
+
+    fn open() -> Option<Record> {
+        let directory = std::env::var_os(super::STARTS).filter(|value| !value.is_empty())?;
+        let binary = std::env::var("NEXTEST_BINARY_ID").ok()?;
+        let test = std::env::var("NEXTEST_TEST_NAME").ok()?;
+        std::fs::create_dir_all(&directory).ok()?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(Path::new(&directory).join(format!("{}.starts", std::process::id())))
+            .ok()?;
+        let clean = |text: &str| text.replace(['\t', '\n', '\r'], " ");
+        Some(Record {
+            file: Mutex::new(file),
+            test: format!("{}\t{}\t", clean(&binary), clean(&test)),
+        })
+    }
+}
 
 #[cfg(feature = "test-hooks")]
 mod enabled {

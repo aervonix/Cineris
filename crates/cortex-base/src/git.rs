@@ -197,6 +197,7 @@ pub fn start(
         } else {
             Stdio::null()
         });
+    crate::hook::started(started.program.as_os_str());
     let mut child = command.spawn()?;
     if let (Some(bytes), Some(mut input)) = (started.stdin, child.stdin.take()) {
         // A launcher reads its policy to the end before anything else, and

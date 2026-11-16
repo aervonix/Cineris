@@ -33,6 +33,7 @@ impl Pty {
         cols: u16,
         rows: u16,
     ) -> io::Result<Self> {
+        cortex_base::hook::started(std::ffi::OsStr::new(program));
         sys::pty::Pty::spawn(program, arguments, env, cols, rows).map(Self)
     }
 
@@ -51,6 +52,7 @@ impl Pty {
         cols: u16,
         rows: u16,
     ) -> io::Result<Self> {
+        cortex_base::hook::started(std::ffi::OsStr::new(program));
         sys::pty::Pty::spawn_as(program, arguments, env, (cols, rows), false).map(Self)
     }
 

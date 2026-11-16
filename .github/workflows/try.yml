@@ -16,6 +16,7 @@
 #   gh workflow run try --ref <branch> -f os=linux-22.04 -f command=partial-landlock
 #   gh workflow run try --ref <branch> -f os=linux -f command=ci
 #   gh workflow run try --ref <branch> -f os=windows -f command=test -f testkit=profile
+#   gh workflow run try --ref <branch> -f os=windows -f command=test -f testkit=starts
 #   gh workflow run try --ref <branch> -f os=windows -f command="test --dependents -p cortex-config"
 #   gh workflow run try --ref <branch> -f os=windows -f command="mutate tooling-7 --jobs 2"
 #   gh workflow run try --ref <branch> -f commit=<40-digit commit hash> -f command="test -p cortex-base"
@@ -85,9 +86,9 @@ on:
         options: ["yes", "no"]
         default: "yes"
       testkit:
-        description: "A test-kit switch for the tests: profile (CORTEX_TESTKIT_PROFILE, each test's report kept as a file; not with against). none: nothing set."
+        description: "A test-kit switch for the tests: profile (CORTEX_TESTKIT_PROFILE, each test's report kept as a file), starts (CORTEX_TESTKIT_STARTS, each process a test starts written down); neither with against. none: nothing set."
         type: choice
-        options: [none, profile]
+        options: [none, profile, starts]
         default: none
 
 permissions:
@@ -242,6 +243,7 @@ jobs:
           # The test kit's switches, from a list: each is set or left empty.
           CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
           CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}/target/testkit-profile', github.workspace) || '' }}
+          CORTEX_TESTKIT_STARTS: ${{ inputs.testkit == 'starts' && inputs.against == '' && format('{0}/target/testkit-starts', github.workspace) || '' }}
         run: |
           set -o pipefail
           # The inputs added since a commit was made are passed only when
@@ -272,6 +274,7 @@ jobs:
           GH_TOKEN: ${{ startsWith(inputs.command, 'size') && github.token || '' }}
           CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
           CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}\target\testkit-profile', github.workspace) || '' }}
+          CORTEX_TESTKIT_STARTS: ${{ inputs.testkit == 'starts' && inputs.against == '' && format('{0}\target\testkit-starts', github.workspace) || '' }}
         run: |
           # A line cargo writes to its standard error is not an error here.
           $ErrorActionPreference = 'Continue'
@@ -314,6 +317,7 @@ jobs:
             target/perf-ab/results.json
             target/size/*.json
             target/testkit-profile/
+            target/testkit-starts/
             target/mutate/results.jsonl
             target/mutate/logs/
           if-no-files-found: ignore
