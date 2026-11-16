@@ -71,3 +71,27 @@ The PR's run is 43807561590, at `e3a76d6`.
 | 3, system | 16.2 s (206 tests) | 10.3 s (196) | +5.9 s | 60 s |
 
 <!-- end of what cargo xtask ci-times wrote, section "The second pull request, both trees on one runner" -->
+
+## after-the-review-pr1
+
+<!-- written by cargo xtask ci-times, section "after-the-review-pr1": it replaces this up to the end mark -->
+Pull request 69, on `main` at `1870799`. "Main" is main's own run at `1870799` (run 43860492699).
+The PR's run is 43865327897, at `d3d6a72`.
+
+| Job | Main, `1870799` | The PR at `d3d6a72` |
+|---|---|---|
+| `lint-linux` | 57 s | 49 s |
+| `test-linux` | 123 s | 110 s |
+| `lint-windows` | 79 s | 84 s |
+| `test-windows` | 211 s | 167 s |
+| `pr-size-${{ matrix.name }}` (blocks nothing) | — | — |
+| `pr-size-linux` (blocks nothing) | — | 139 s |
+| `pr-size-windows` (blocks nothing) | — | 361 s |
+
+| Time above process start, against the budget | Linux, main (6 ms) | Linux, `d3d6a72` (3 ms) | Windows, main (7 ms) | Windows, `d3d6a72` (6 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 13.2 s | 8.8 s | 14.1 s | 9.2 s |
+| Tier 2, integration (40 s) | 24.5 s | 14.4 s | 28.4 s | 22.0 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 21.1 s | 21.1 s | 70.0 s | 51.8 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "after-the-review-pr1" -->
