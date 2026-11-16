@@ -317,3 +317,208 @@ fn perf_starting_a_command() {
         with_changes - floor
     );
 }
+
+/// A workspace over the pinned corpus of real code (`cargo xtask corpus
+/// fetch`; `try`'s `perf -p` does it first). Its own directory is a scratch
+/// one, which is all that is removed with it: the corpus is only read.
+fn over_real_code(test: &str) -> Workspace {
+    let corpus = cortex_testkit::corpus::real_code();
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("cortex-tools-it")
+        .join(test);
+    if dir.exists() {
+        crate::remove_all(&dir);
+    }
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    Workspace {
+        dir,
+        paths: std::sync::Arc::new(
+            cortex_base::PathResolver::new(&corpus, cortex_base::PathOptions::new())
+                .expect("open the corpus"),
+        ),
+        store: cortex_tools::MemoryStore::new(),
+        files: std::sync::Arc::new(cortex_tools::FileTable::new()),
+        checkpoints: cortex_tools::MemoryCheckpoints::new(),
+        clock: cortex_testkit::FakeClock::default(),
+    }
+}
+
+fn median_of(mut values: Vec<f64>) -> f64 {
+    values.sort_by(f64::total_cmp);
+    values[values.len() / 2]
+}
+
+/// **Search over real code**, the product's search tool on the pinned corpus
+/// of 20,162 Rust files of 670 crates (324 MB): a literal that is rare, a
+/// literal on a line in nearly every file, a regular expression with no
+/// literal, and a miss. Seven runs of each, the median reported (the first
+/// run alone, which reads files the machine may not have cached, is printed
+/// beside it). The numbers are printed as `perf:` lines for `cargo xtask
+/// perf-ab`.
+///
+/// ```text
+/// gh workflow run try --ref <branch> -f os=windows -f command="perf -p cortex-tools search_real"
+/// ```
+#[test]
+#[ignore = "a measurement, run by hand in a release build: see the module documentation"]
+fn perf_search_real_code() {
+    let ws = over_real_code("perf_search_real_code");
+    let tool = SearchTool::new();
+    for (name, arguments) in [
+        (
+            "search.literal_rare_real_code",
+            json!({"pattern": "unreachable_unchecked", "mode": "count", "max_results": 2000}),
+        ),
+        (
+            "search.literal_common_real_code",
+            json!({"pattern": "pub fn", "mode": "count", "max_results": 2000}),
+        ),
+        (
+            "search.regex_real_code",
+            json!({"pattern": r"unsafe\s+impl\b.*Send", "mode": "files", "max_results": 2000}),
+        ),
+        (
+            "search.no_match_real_code",
+            json!({"pattern": "no_such_text_anywhere_zq9", "mode": "count"}),
+        ),
+    ] {
+        let mut runs = Vec::new();
+        let mut header = String::new();
+        for _ in 0..7 {
+            let (elapsed, first) = timed(&ws, &tool, arguments.clone());
+            runs.push(elapsed);
+            header = first;
+        }
+        let median = median_of(runs.clone());
+        println!(
+            "{name}: median {median:.0} ms (first {:.0} ms, least {:.0}); {header}",
+            runs[0],
+            runs.iter().copied().fold(f64::INFINITY, f64::min)
+        );
+        cortex_testkit::numbers::report(name, median, "ms");
+    }
+}
+
+/// **A diff on a re-read of real code**: the tool that tells the model what
+/// changed in a file it has already seen, which is where the product
+/// diffs. Some two hundred files of real Rust (20 to 300 KB, spread over the
+/// corpus) are read, changed in a handful of places (a line in each hundred
+/// changed, a few lines added) and read again: the second read is the file's
+/// change, its hash and its diff. The same read of the unchanged files is
+/// the part that is not the diff. Per file, in microseconds.
+#[test]
+#[ignore = "a measurement, run by hand in a release build: see the module documentation"]
+fn perf_diffing_a_reread_of_real_code() {
+    let corpus = cortex_testkit::corpus::real_code();
+    let mut found = Vec::new();
+    rust_files_between(&corpus, 20_000, 300_000, &mut found);
+    assert!(
+        found.len() > 400,
+        "only {} files of the right size",
+        found.len()
+    );
+    let stride = found.len() / 200;
+    let chosen: Vec<_> = found.iter().step_by(stride.max(1)).take(200).collect();
+    let ws = Workspace::new("perf_diffing_a_reread_of_real_code");
+    let tool = cortex_tools::ReadTool::new();
+    let (mut changed, mut unchanged, mut lines, mut changed_lines, mut diffs) =
+        (Vec::new(), Vec::new(), 0usize, 0usize, 0usize);
+    for (n, path) in chosen.iter().enumerate() {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        // Generated files of a few very long lines have no line to change.
+        if text.lines().count() < 200 {
+            continue;
+        }
+        let name = format!("f{n}.rs");
+        ws.file(&name, &text);
+        ok(&ws.call_with(&ws.cx().with_turn(2), &tool, json!({"path": name})));
+        // The unchanged read, which is not a diff.
+        let started = Instant::now();
+        let again = ok(&ws.call_with(&ws.cx().with_turn(3), &tool, json!({"path": name})));
+        unchanged.push(started.elapsed().as_secs_f64() * 1e6);
+        assert!(again.contains("unchanged since you read"), "{again}");
+        // A line in each hundred changed, and three lines added at the end.
+        let mut edited = String::with_capacity(text.len() + 100);
+        for (index, line) in text.lines().enumerate() {
+            if index % 100 == 50 {
+                edited.push_str(&format!("{line} // changed {index}\n"));
+                changed_lines += 1;
+            } else {
+                edited.push_str(line);
+                edited.push('\n');
+            }
+        }
+        edited.push_str("// a\n// b\n// c\n");
+        lines += text.lines().count();
+        ws.file(&name, &edited);
+        let started = Instant::now();
+        let result = ws.call_with(&ws.cx().with_turn(4), &tool, json!({"path": name}));
+        changed.push(started.elapsed().as_secs_f64() * 1e6);
+        // The answer is the diff when it is shorter than the content the
+        // call would return, and the content when it is not: what is
+        // timed is the same either way, the change found and diffed.
+        if result
+            .payload()
+            .is_some_and(|payload| payload["kind"] == "diff")
+        {
+            diffs += 1;
+        }
+        assert!(!result.is_error(), "{}", result.text());
+    }
+    assert!(changed.len() > 100, "{} files read", changed.len());
+    let (changed_median, unchanged_median) =
+        (median_of(changed.clone()), median_of(unchanged.clone()));
+    let total: f64 = changed.iter().sum();
+    changed.sort_by(f64::total_cmp);
+    let ninety_fifth = changed[changed.len() * 95 / 100];
+    println!(
+        "{} files ({diffs} answered with a diff), {lines} lines, {changed_lines} changed lines: re-read median \
+         {changed_median:.0} us (95th {ninety_fifth:.0} us, slowest {:.0} us), unchanged median \
+         {unchanged_median:.0} us, all {:.1} ms",
+        changed.len(),
+        changed[changed.len() - 1],
+        total / 1000.0
+    );
+    cortex_testkit::numbers::report("diff.reread_changed_median_real_code", changed_median, "us");
+    cortex_testkit::numbers::report(
+        "diff.reread_unchanged_median_real_code",
+        unchanged_median,
+        "us",
+    );
+    cortex_testkit::numbers::report("diff.reread_changed_95th_real_code", ninety_fifth, "us");
+}
+
+/// The `.rs` files under `dir` whose size is between `least` and `most`
+/// bytes, in name order.
+fn rust_files_between(
+    dir: &std::path::Path,
+    least: u64,
+    most: u64,
+    out: &mut Vec<std::path::PathBuf>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            rust_files_between(&entry.path(), least, most, out);
+        } else if kind.is_file()
+            && entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "rs")
+            && entry
+                .metadata()
+                .is_ok_and(|meta| (least..=most).contains(&meta.len()))
+        {
+            out.push(entry.path());
+        }
+    }
+}

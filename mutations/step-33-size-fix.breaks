@@ -95,8 +95,8 @@ caught-by:
 rule: A binary over its budget fails `size --check` with a line saying by how much.
 file: xtask/src/nonblocking.rs
 in: report
-find: let over = (bytes > limit).then(|| {
-replace: let over = (bytes > limit + limit).then(|| {
+find: let over = (shipped && bytes > limit).then(|| {
+replace: let over = (shipped && bytes > limit + limit).then(|| {
 caught-by:
     nonblocking::tests::a_binary_over_its_budget_fails_with_a_line_that_says_by_how_much
 

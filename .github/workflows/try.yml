@@ -10,6 +10,9 @@
 #   gh workflow run try --ref <branch> -f os=windows -f command=test -f against=main -f count=5
 #   gh workflow run try --ref <branch> -f os=linux-22.04 -f command="test -p cortex-sandbox"
 #   gh workflow run try --ref <branch> -f os=windows -f command="perf -p cortex-index"
+#   gh workflow run try --ref <branch> -f os=windows -f command="perf -p cortex-index" -f against=main
+#   gh workflow run try --ref <branch> -f command="size --check --against-main"
+#   gh workflow run try --ref <branch> -f os=linux -f command="size --breakdown --top 40"
 #   gh workflow run try --ref <branch> -f os=linux-22.04 -f command=partial-landlock
 #   gh workflow run try --ref <branch> -f os=linux -f command=ci
 #   gh workflow run try --ref <branch> -f os=windows -f command=test -f testkit=profile
@@ -44,11 +47,11 @@ on:
         options: [both, linux, windows, linux-22.04]
         default: both
       command:
-        description: "test [-p CRATE] [--dependents] [FILTER], stress -p CRATE [ARGS], startup, perf [ARGS], perf -p CRATE (its ignored perf_ tests, in release), ci [ARGS], mutate BREAK... [--jobs N], or a nightly job: partial-landlock, advisories, unused."
+        description: "test [-p CRATE] [--dependents] [FILTER], stress -p CRATE [ARGS], startup, size [--check] [--against-main] [--breakdown] [--target T], perf [ARGS], perf -p CRATE (its ignored perf_ tests, in release), ci [ARGS], mutate BREAK... [--jobs N], or a nightly job: partial-landlock, advisories, unused."
         required: true
         default: "test"
       profile:
-        description: "The cargo profile: ci (the blocking jobs' build), release or dist. startup needs release or dist."
+        description: "The cargo profile: ci (the blocking jobs' build), release or dist. startup needs release or dist; for size, ci is its own (dist)."
         type: choice
         options: [ci, release, dist]
         default: ci
@@ -69,7 +72,7 @@ on:
         required: false
         default: ""
       against:
-        description: "A ref to compare the branch with, both run in turn on one runner (count rounds). Empty: no comparison."
+        description: "A ref to compare the branch with, both run in turn on one runner (count rounds), for test or perf -p CRATE. Empty: no comparison."
         required: false
         default: ""
       commit:
@@ -107,8 +110,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     # Not a blocking check: a dist build from scratch takes most of this on
     # Windows. A mutate run builds copies of the tree from cold and runs to
-    # its end.
-    timeout-minutes: ${{ startsWith(inputs.command, 'mutate') && 90 || 40 }}
+    # its end. A comparison of two trees' performance tests builds both in
+    # release from scratch.
+    timeout-minutes: ${{ startsWith(inputs.command, 'mutate') && 90 || (startsWith(inputs.command, 'perf') && inputs.against != '' && 60 || 40) }}
+    # `size --against-main` reads the main workflow's size record, which is
+    # another run's artifact: `actions: read`, and the token below, which is
+    # given to a `size` command only.
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -146,6 +156,15 @@ jobs:
           "TMP=$env:RUNNER_TEMP\tmp" >> $env:GITHUB_ENV
       - name: Install the toolchain from rust-toolchain.toml
         run: rustup toolchain install
+      # `size` on Linux builds the static target the budgets are of, as the
+      # main workflow does: the target, and the musl C compiler that ring's C
+      # code is built with. Fixed commands: nothing typed reaches them.
+      - name: Install the static target and its C compiler (size, Linux)
+        if: runner.os == 'Linux' && startsWith(inputs.command, 'size')
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends musl-tools
       # Not on 22.04: the cache's key names the OS and not its version, and
       # build scripts built on the newer image do not run on the older one.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -218,6 +237,8 @@ jobs:
           TRY_AGAINST: ${{ inputs.against }}
           TRY_COMMIT: ${{ inputs.commit }}
           TRY_CAPTURE: ${{ inputs.capture }}
+          # Only a `size` command is given the token, to read `main`'s record.
+          GH_TOKEN: ${{ startsWith(inputs.command, 'size') && github.token || '' }}
           # The test kit's switches, from a list: each is set or left empty.
           CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
           CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}/target/testkit-profile', github.workspace) || '' }}
@@ -248,6 +269,7 @@ jobs:
           TRY_AGAINST: ${{ inputs.against }}
           TRY_COMMIT: ${{ inputs.commit }}
           TRY_CAPTURE: ${{ inputs.capture }}
+          GH_TOKEN: ${{ startsWith(inputs.command, 'size') && github.token || '' }}
           CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
           CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}\target\testkit-profile', github.workspace) || '' }}
         run: |
@@ -289,6 +311,8 @@ jobs:
             target/nextest/stress/junit.xml
             target/nextest/perf/junit.xml
             target/ab/*.xml
+            target/perf-ab/results.json
+            target/size/*.json
             target/testkit-profile/
             target/mutate/results.jsonl
             target/mutate/logs/

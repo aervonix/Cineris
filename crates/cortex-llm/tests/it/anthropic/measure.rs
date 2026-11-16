@@ -94,6 +94,16 @@ fn decoding_a_recorded_response() {
 /// bytes, sent in pieces of 200 bytes, as a model writing a large file
 /// sends them, then the recorded end.
 fn long_stream(pieces: usize, argument_bytes: usize) -> Vec<u8> {
+    let mut content = String::new();
+    while content.len() < argument_bytes {
+        content.push_str("fn f() { let s = \"x\"; }\n");
+    }
+    stream_writing(pieces, &content)
+}
+
+/// [`long_stream`] with the file the call writes given: the text of the
+/// call's `content` argument.
+fn stream_writing(pieces: usize, content: &str) -> Vec<u8> {
     let recorded = String::from_utf8(load("text").response).expect("the fixture is text");
     let events: Vec<&str> = recorded
         .split("\n\n")
@@ -126,14 +136,14 @@ fn long_stream(pieces: usize, argument_bytes: usize) -> Vec<u8> {
     );
     // `{"path": "big.rs", "content": "…"}`: the content escaped once as
     // JSON, and once more inside the string `partial_json` is.
-    let mut content = String::new();
-    while content.len() < argument_bytes {
-        content.push_str("fn f() { let s = \"x\"; }\n");
-    }
     let arguments = serde_json::json!({"path": "big.rs", "content": content}).to_string();
     let mut start = 0;
     while start < arguments.len() {
-        let end = (start + 200).min(arguments.len());
+        let mut end = (start + 200).min(arguments.len());
+        // Real code is not all ASCII: a piece ends between characters.
+        while !arguments.is_char_boundary(end) {
+            end += 1;
+        }
         let piece = serde_json::to_string(&arguments[start..end]).expect("text");
         push(&format!(
             "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":1,\
@@ -192,4 +202,87 @@ fn perf_decoding_a_long_answer_and_a_large_tool_call() {
         stream.len(),
         stream.len() as f64 / millis / 1e3
     );
+    cortex_testkit::numbers::report("llm.decode_long_answer_and_large_call", millis, "ms");
+}
+
+/// The first `bytes` of real Rust from the pinned corpus (`cargo xtask corpus
+/// fetch`): whole files of 4 to 60 KB, in name order, one in a hundred, so
+/// that they come from many crates, joined as a file that a model writes.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a measurement reads the corpus it measures on"
+)]
+fn real_rust(bytes: usize) -> String {
+    fn walk(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|extension| extension == "rs")
+                && entry
+                    .metadata()
+                    .is_ok_and(|meta| (4_000..=60_000).contains(&meta.len()))
+            {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(&cortex_testkit::corpus::real_code(), &mut found);
+    let mut text = String::new();
+    for path in found.iter().step_by(100) {
+        if let Ok(file) = std::fs::read_to_string(path) {
+            text.push_str(&file);
+        }
+        if text.len() >= bytes {
+            break;
+        }
+    }
+    assert!(
+        text.len() >= bytes,
+        "only {} bytes of real code",
+        text.len()
+    );
+    text
+}
+
+/// Decoding a large tool call whose argument is real code, which is not the
+/// repeated line of the test above: real code has quotes, backslashes,
+/// non-ASCII text and long runs of white space, each of which JSON escapes
+/// and the decoder reads back twice (once for the event's JSON, once for the
+/// argument inside it). 1 MB of arguments in 200-byte pieces, and 2,000
+/// text deltas; the median of 30 decodes. A measurement:
+///
+/// ```text
+/// gh workflow run try --ref <branch> -f os=windows -f command="perf -p cortex-llm real_code"
+/// ```
+#[test]
+#[ignore = "a measurement; run it in a release build"]
+fn perf_decoding_a_large_tool_call_of_real_code() {
+    let content = real_rust(1 << 20);
+    let stream = stream_writing(2_000, &content);
+    let request = scenario::text();
+    let events = decode_whole(&request, &stream).len();
+    let times: Vec<f64> = (0..30)
+        .map(|_| {
+            let started = Instant::now();
+            let decoded = decode_whole(&request, &stream);
+            let took = started.elapsed().as_secs_f64() * 1e3;
+            assert_eq!(decoded.len(), events);
+            took
+        })
+        .collect();
+    let millis = median(times);
+    println!(
+        "decode: a large call of real code, {} bytes, {events} events: {millis:.2} ms, \
+         {:.0} MB/s (median of 30)",
+        stream.len(),
+        stream.len() as f64 / millis / 1e3
+    );
+    cortex_testkit::numbers::report("llm.decode_large_call_real_code", millis, "ms");
 }

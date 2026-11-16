@@ -567,7 +567,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Numbers, Request, Results, Series, collect, drive, from_json, nextest_arguments,
+        Numbers, Request, Results, Series, collect, drive, from_json, median, nextest_arguments,
         numbers_in, render, to_json, verdict,
     };
     use crate::ab::Which;
@@ -665,6 +665,8 @@ perf: index.bytes 1000 bytes
 perf: broken
 perf: index.warm 1 ms extra
 perf: index.warm x ms
+perf: index.nan NaN ms
+perf: index.inf inf ms
 perf: index.rate 50.5 MB/s
 ";
         let numbers = numbers_in(output);
@@ -678,6 +680,13 @@ perf: index.rate 50.5 MB/s
             2.5,
             "the line `cortex_testkit::numbers::line(\"a.b\", 2.5, \"us\")` makes"
         );
+    }
+
+    #[test]
+    fn the_median_of_an_even_count_is_between_the_middle_two() {
+        assert_eq!(median(vec![10.0, 1.0, 2.0, 3.0]), 2.5);
+        assert_eq!(median(vec![3.0, 1.0, 2.0]), 2.0);
+        assert_eq!(median(vec![7.0]), 7.0);
     }
 
     fn numbers(values: &[(&str, f64)]) -> Numbers {

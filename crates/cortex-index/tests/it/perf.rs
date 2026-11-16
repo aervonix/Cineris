@@ -529,6 +529,7 @@ fn perf_a_tree_of_real_code() {
         }
     }
     let cold_ms = ms(start.elapsed());
+    cortex_testkit::numbers::report("index.cold_index_real_code", cold_ms, "ms");
     let cache = std::fs::metadata(index.cache_path()).map_or(0, |m| m.len());
     println!(
         "cold: {cold_ms:.0} ms in {} passes (ms, read, partial: {cold:?}); cache {:.1} MB, {:.2} KiB a file",
@@ -575,6 +576,12 @@ fn perf_a_tree_of_real_code() {
         ),
     ] {
         let rounds: Vec<_> = changes.into_iter().map(&mut round).collect();
+        let key = label.replace(' ', "_");
+        cortex_testkit::numbers::report(
+            &format!("index.warm_pass_and_map_real_code.{key}"),
+            median(rounds.iter().map(|r| r.2).collect()),
+            "ms",
+        );
         table.push(format!(
             "warm, {label}: pass {:.1} ms, map {:.1} ms, together {:.1} ms (medians of {}); slowest together {:.1} ms",
             median(rounds.iter().map(|r| r.0).collect()),

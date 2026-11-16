@@ -60,8 +60,12 @@ pub fn line(name: &str, value: f64, unit: &str) -> Result<String, String> {
     if !word(unit) {
         return Err(format!("`{unit}` is not a unit: one word, such as `ms`"));
     }
+    // Six decimals, and no zeros after them: a time in microseconds, taken
+    // as seconds, has no more than that, and `18.429197000000002` is noise.
+    let shown = format!("{value:.6}");
+    let shown = shown.trim_end_matches('0').trim_end_matches('.');
     let mut text = String::from(PREFIX);
-    let _ = write!(text, "{name} {value} {unit}");
+    let _ = write!(text, "{name} {shown} {unit}");
     Ok(text)
 }
 
@@ -117,6 +121,12 @@ mod tests {
             line("llm.decode", 112.0, "MB/s").unwrap(),
             "perf: llm.decode 112 MB/s"
         );
+        // No figures that are only the float's.
+        assert_eq!(
+            line("a", 18.429_197_000_000_002, "ms").unwrap(),
+            "perf: a 18.429197 ms"
+        );
+        assert_eq!(line("a", 0.0, "ms").unwrap(), "perf: a 0 ms");
     }
 
     #[test]
