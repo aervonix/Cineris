@@ -1,6 +1,6 @@
-//! `cortex serve --stdio`: the real binary as an RPC server
-//! (`docs/architecture/11-rpc-protocol.md`; `docs/steps/27/answered.md`,
-//! points 4 and 6).
+//! `cortex serve`: the real binary as an RPC server, over standard I/O and
+//! a local socket (`docs/architecture/11-rpc-protocol.md`;
+//! `docs/steps/27/answered.md`, points 1, 4 and 6).
 //!
 //! The conformance scenarios of `cortex_testkit::conformance` run through
 //! the binary and through the same core in this process, against the same
@@ -490,4 +490,68 @@ fn sys_another_user_is_refused_at_the_socket() {
     drop(server.stdin.take());
     let _ = server.kill();
     let _ = server.wait();
+}
+
+/// A client of the Unix socket at `path`, speaking lines.
+#[cfg(unix)]
+fn socket_client(path: &std::path::Path) -> Lines {
+    let stream = std::os::unix::net::UnixStream::connect(path).expect("the socket takes a client");
+    let mut writing = stream.try_clone().unwrap();
+    let (lines_read, read) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stream);
+        loop {
+            let mut line = Vec::new();
+            match reader.read_until(b'\n', &mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {
+                    if lines_read.send(line).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    Lines::new(
+        move |bytes| {
+            let _ = writing.write_all(&bytes);
+        },
+        move || read.recv().ok(),
+    )
+}
+
+/// `serve --socket` with no path serves in the runtime directory, in a
+/// folder of its own that it makes owner-only, says where on standard
+/// error, serves a client there, ends at its `shutdown`, and removes the
+/// socket.
+#[cfg(unix)]
+#[test]
+fn sys_serve_socket_serves_at_the_default_place_and_removes_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let machine = Machine::new("serve-socket");
+    let runtime = machine.home.join("run");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut command = machine.command(&["serve", "--socket"]);
+    command.env("XDG_RUNTIME_DIR", &runtime);
+    let mut server = command.spawn().expect("the binary starts");
+    let mut errors = BufReader::new(server.stderr.take().unwrap());
+    let mut said = String::new();
+    errors.read_line(&mut said).unwrap();
+    let folder = runtime.join("cortex-harness");
+    let path = folder.join("rpc.sock");
+    assert!(said.contains(&path.display().to_string()), "{said}");
+    let mode = std::fs::metadata(&folder).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "the server's own folder");
+
+    let mut lines = socket_client(&path);
+    lines
+        .initialize(conformance::initialize())
+        .expect("initialize");
+    lines
+        .call(Op::Shutdown(cortex_protocol::methods::Empty {}))
+        .expect("shutdown is answered");
+    assert_eq!(server.wait().unwrap().code(), Some(0));
+    assert!(!path.exists(), "the socket outlived the server");
+    drop(errors);
 }

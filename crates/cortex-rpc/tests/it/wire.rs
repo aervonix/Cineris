@@ -334,6 +334,109 @@ fn a_client_that_takes_nothing_is_closed_and_the_session_goes_on() {
     );
 }
 
+/// A client that reads slowly holds the core's queue, not the server's: its
+/// deltas merge, and once its queue is full an item's deltas give way to one
+/// `item.resync`; what it is sent stays bounded however long the answer,
+/// the turn completes for another client while it reads nothing, and the
+/// completed item it is sent at last is whole.
+#[test]
+fn a_slow_client_is_sent_merged_deltas_and_a_resync() {
+    let world = World::new("slow");
+    let pieces: Vec<String> = (0..200).map(|piece| format!("piece {piece} ")).collect();
+    let pieces: Vec<&str> = pieces.iter().map(String::as_str).collect();
+    world
+        .server
+        .push(anthropic::thinking_then_text("A thought.", &pieces));
+    let core = world.core();
+    let mut options = world.serve_options();
+    options.queue = 3;
+    let Wire {
+        mut lines, ended, ..
+    } = Wire::connection(&core, options, 1);
+    lines
+        .initialize(conformance::initialize())
+        .expect("initialize");
+    let opened = lines.call(new_session(&world)).expect("a session opens");
+    let cortex_protocol::methods::OpResult::SessionNew(opened) = opened else {
+        panic!("not a session");
+    };
+    let session: SessionId = opened.session.session_id;
+    let watcher = core.core.connect(ClientInfo::observer());
+    let watching = {
+        let core = core.core.clone();
+        let session = session.clone();
+        async move {
+            core.handle(
+                watcher.id,
+                Op::SessionOpen(SessionRef {
+                    session_id: session,
+                }),
+            )
+            .await
+        }
+    };
+    core.on(watching)
+        .expect("the observer opens the running session");
+
+    lines.write(&Message::Request(
+        Op::TurnStart(TurnStartParams {
+            session_id: session.clone(),
+            input: vec![Part::text("go")],
+            delivery: None,
+        })
+        .to_request(RequestId::Number(50))
+        .unwrap(),
+    ));
+    // The model's stream runs to its end while the slow client reads
+    // nothing, with no time passing.
+    loop {
+        match cortex_testkit::block_on(watcher.queue.next()) {
+            Some(Outgoing::Event(event)) if matches!(event.event, Event::SessionIdle(_)) => break,
+            Some(_) => {}
+            None => panic!("the watcher's queue closed"),
+        }
+    }
+    assert!(ended.try_recv().is_err(), "the slow client was closed");
+
+    let (mut events, mut deltas, mut resyncs) = (0, 0, 0);
+    let mut completed = Vec::new();
+    loop {
+        // The turn's own result is among them, and passed over.
+        let Message::Notification(notification) = lines.read().expect("the connection is open")
+        else {
+            continue;
+        };
+        let Ok(cortex_protocol::ServerNotification::Event(event)) =
+            cortex_protocol::ServerNotification::from_wire(notification)
+        else {
+            continue;
+        };
+        events += 1;
+        match &event.event {
+            Event::ItemDelta(_) => deltas += 1,
+            Event::ItemResync(_) => resyncs += 1,
+            Event::ItemCompleted(_) => completed.push(serde_json::to_string(&event).unwrap()),
+            Event::SessionIdle(_) => break,
+            _ => {}
+        }
+    }
+    assert_eq!(resyncs, 1, "one resync, for the item whose deltas dropped");
+    assert!(
+        deltas <= 2,
+        "{deltas} deltas reached a client that read nothing"
+    );
+    assert!(
+        events <= 16,
+        "{events} events were held for a client that read nothing, of 200 deltas"
+    );
+    let whole: String = pieces.concat();
+    assert!(
+        completed.iter().any(|item| item.contains(whole.trim_end())),
+        "the completed item is not whole: {completed:?}"
+    );
+    assert!(ended.try_recv().is_err(), "the slow client was closed");
+}
+
 /// A project whose configuration allows a command: the session that opens
 /// it asks the client whether to trust it first.
 fn untrusted_project(world: &World) {
