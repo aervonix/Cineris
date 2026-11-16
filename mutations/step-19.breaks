@@ -148,7 +148,7 @@ caught-by:
 [break] a-check-runs-in-a-project-not-trusted
 rule: No check runs in a project the user has not trusted: it would run the repository's own code at the end of every turn, and nobody is asked.
 file: crates/cortex-core/src/verify.rs
-in: CoreVerifier::round
+in: CoreVerifier::ready
 find: if !self.parts.trusted {
 replace: if false {
 caught-by:
@@ -157,7 +157,7 @@ caught-by:
 [break] a-check-runs-at-read-only
 rule: No check runs at the read-only level, where a command writes nothing.
 file: crates/cortex-core/src/verify.rs
-in: CoreVerifier::round
+in: CoreVerifier::ready
 find: *self.parts.policy.engine().level() == Level::ReadOnly
 replace: *self.parts.policy.engine().level() == Level::Unrestricted
 caught-by:
@@ -531,7 +531,7 @@ caught-by:
 rule: With `verify.mode = "ask"` the checks are offered, and do not run by themselves.
 file: crates/cortex-core/src/verify.rs
 in: CoreVerifier::round
-find: if settings.mode == VerifyMode::Ask {
+find: if settings.mode == VerifyMode::Ask && !cx.asked {
 replace: if false {
 caught-by:
     cortex-core::it verify::in_ask_mode_the_checks_are_offered_and_in_off_mode_nothing_is_said
@@ -540,7 +540,118 @@ caught-by:
 rule: With `verify.mode = "off"` nothing runs and nothing is said.
 file: crates/cortex-core/src/verify.rs
 in: CoreVerifier::round
-find: if settings.mode == VerifyMode::Off {
+find: if !cx.asked && settings.mode == VerifyMode::Off {
 replace: if false {
 caught-by:
     cortex-core::it verify::in_ask_mode_the_checks_are_offered_and_in_off_mode_nothing_is_said
+
+# A turn that only verifies (`verify/run`): the last commit of the second
+# pull request, dropped with it if the owner has not allowed the transition.
+
+[break] a-turn-that-only-verifies-feeds-its-failure-back
+rule: A turn that only verifies has one round: its failure ends the turn and goes to no model.
+file: crates/cortex-agent/src/turn.rs
+in: Session::verify
+find: if turn.verify_rounds >= rounds {
+replace: if turn.verify_rounds >= self.config.verify_rounds {
+caught-by:
+    cortex-agent::it verifying::a_turn_that_only_verifies_runs_one_round_and_sends_and_records_nothing
+
+[break] a-turn-that-only-verifies-records-a-prompt
+rule: A turn that only verifies records nothing in the history.
+file: crates/cortex-agent/src/turn.rs
+in: Session::turn
+find: Ok(()) if turn.only_verify => Ok(()),
+replace:
+caught-by:
+    cortex-agent::it verifying::a_turn_that_only_verifies_runs_one_round_and_sends_and_records_nothing
+
+[break] a-stopped-turn-that-only-verifies-tells-the-model
+rule: A check that stops a turn that only verifies is told to the user, and nothing is recorded for the model.
+file: crates/cortex-agent/src/turn.rs
+in: Session::verify
+find: if !turn.only_verify {
+replace: if true {
+caught-by:
+    cortex-agent::it verifying::a_check_that_stops_a_turn_that_only_verifies_tells_the_user_and_not_the_model
+
+[break] verify-is-taken-while-a-turn-runs
+rule: `verify` while a turn runs is refused with `turn_running`, to be sent again once it has ended.
+file: crates/cortex-agent/src/session.rs
+in: SessionHandle::verify
+find: if inbox.running.is_some() {
+replace: if false {
+caught-by:
+    cortex-agent::it verifying::verify_is_refused_while_a_turn_runs
+
+[break] verify-run-reads-the-mode
+rule: The checks the user asked for run whatever `verify.mode` says.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::round
+find: if !cx.asked && settings.mode == VerifyMode::Off {
+replace: if settings.mode == VerifyMode::Off {
+caught-by:
+    cortex-core::it verify::sys_verify_run_runs_the_checks_in_a_turn_of_their_own_and_sends_the_model_nothing
+
+[break] verify-run-starts-a-turn-that-can-run-nothing
+rule: `verify/run` answers `no_checks`, saying why, and starts no turn, when no check could run.
+file: crates/cortex-core/src/core.rs
+in: Core::handle
+find: if let Some(why) = live.verifier.why_none().await {
+replace: if let Some(why) = None::<crate::verify::Unready> {
+caught-by:
+    cortex-core::it verify::verify_run_says_why_no_check_could_run_and_starts_no_turn
+
+[break] a-turn-that-only-verifies-runs-past-its-time
+rule: A time limit that is spent ends a turn that only verifies before any check starts.
+file: crates/cortex-agent/src/turn.rs
+in: Session::turn
+find: Ok(()) if turn.only_verify => match self.ledger.out_of_time() {
+replace: Ok(()) if turn.only_verify => match None::<LimitReached> {
+caught-by:
+    cortex-agent::it verifying::a_turn_that_only_verifies_with_its_time_spent_ends_at_the_limit_and_runs_nothing
+
+[break] a-turn-that-only-verifies-records-its-limit
+rule: A turn that only verifies records nothing, the notice of a limit that ended it included.
+file: crates/cortex-agent/src/turn.rs
+in: Session::limit_reached
+find: if !turn.only_verify && let Err(error) = self
+replace: if let Err(error) = self
+caught-by:
+    cortex-agent::it verifying::a_turn_that_only_verifies_with_its_time_spent_ends_at_the_limit_and_runs_nothing
+
+[break] a-turn-that-only-verifies-counts-as-the-models
+rule: A turn that only verifies is not recorded as the model's turn in the statistics.
+file: crates/cortex-agent/src/turn.rs
+in: Session::conclude
+find: if !turn.only_verify {
+replace: if true {
+caught-by:
+    cortex-agent::it verifying::a_turn_that_only_verifies_is_not_counted_as_the_models_turn
+
+[break] verify-run-in-ask-mode-only-offers
+rule: The checks the user asked for run in `ask` mode, which otherwise only offers them.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::round
+find: if settings.mode == VerifyMode::Ask && !cx.asked {
+replace: if settings.mode == VerifyMode::Ask {
+caught-by:
+    cortex-core::it verify::sys_verify_run_runs_the_checks_in_a_turn_of_their_own_and_sends_the_model_nothing
+
+[break] the-sessions-time-limit-does-not-stop-a-turn-that-only-verifies
+rule: The session's (a lease's) time limit, spent by earlier turns, ends a turn that only verifies before any check starts.
+file: crates/cortex-agent/src/ledger.rs
+in: Ledger::out_of_time
+find: self.turn.iter().chain(&self.accounts).find_map(
+replace: self.turn.iter().find_map(
+caught-by:
+    cortex-agent::it verifying::a_turn_that_only_verifies_with_its_time_spent_ends_at_the_limit_and_runs_nothing
+
+[break] verify-run-hides-a-projects-lowered-mode
+rule: A project's file that lowered `verify.mode` is told when the user asks for the checks too, once a session.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::round
+find: if self.parts.lowered_by_project && settings.mode != VerifyMode::Auto {
+replace: if !cx.asked && self.parts.lowered_by_project && settings.mode != VerifyMode::Auto {
+caught-by:
+    cortex-core::it verify::sys_verify_run_runs_the_checks_in_a_turn_of_their_own_and_sends_the_model_nothing

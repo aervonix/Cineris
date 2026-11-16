@@ -77,7 +77,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [the-shell-version-after-a-shell-update](the-shell-version-after-a-shell-update.md): The first session after a shell is installed or updated has no shell version in its prompt, so the next resume is a `resume` epoch. Owner: step 33.
 - [the-top-of-a-tree-past-the-listing-cap](the-top-of-a-tree-past-the-listing-cap.md): A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree. Owner: a later index step, or step 33.
 - [trust-question-corners](trust-question-corners.md): "Never" on a rules-changed question takes all the project's trust away, git's included; git can be trusted unshown for a folder trusted before `git init`. Owner: the owner, then step 27 or a trust step.
-- [verify-run-a-turn-that-only-verifies](verify-run-a-turn-that-only-verifies.md): `verify/run` answers `not_available`; running the checks on request needs a turn that only verifies (`Preparing → Verifying`), the owner's to allow. Recommendation: that turn. Owner: the owner, then step 24.
 - [what-start-up-opens-traced](what-start-up-opens-traced.md): The blocking check that start-up opens no file outside an allow-list does not exist; the index's part is checked with a held gate. Owner: the next start-up step, or step 33.
 
 ### cortex-index

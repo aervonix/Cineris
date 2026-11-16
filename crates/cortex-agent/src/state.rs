@@ -100,6 +100,8 @@ pub const TRANSITIONS: &[(TurnState, TurnState)] = &[
     (Preparing, Requesting),
     // The context is over its budget.
     (Preparing, Compacting),
+    // A turn that only verifies: `verify/run` on an idle session.
+    (Preparing, Verifying),
     // A limit was reached, or the log could not be written.
     (Preparing, Finishing),
     (Preparing, Interrupted),

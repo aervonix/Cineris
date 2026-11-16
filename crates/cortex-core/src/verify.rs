@@ -36,7 +36,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use cortex_agent::{Decision, PlannedCall, Policy, Verifier, VerifyCx, VerifyOutcome};
-use cortex_base::{PathResolver, SharedClock, visible, visible_keeping};
+use cortex_base::{CancelToken, PathResolver, SharedClock, visible, visible_keeping};
 use cortex_config::schema::{VerifyMode, VerifySettings};
 use cortex_knowledge::{Kind, Purpose, Snapshot, normal_line};
 use cortex_protocol::event::{
@@ -854,6 +854,37 @@ pub(crate) struct Parts {
     pub(crate) clock: SharedClock,
 }
 
+/// Why a round would run no check, before its time is looked at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unready {
+    /// No line of the user's and no accepted entry of the profile.
+    NoneKnown,
+    /// The user has not trusted the project.
+    Untrusted,
+    /// The session is at `read-only`.
+    ReadOnly,
+    /// No shell was found.
+    NoShell,
+}
+
+impl Unready {
+    /// What the user is told.
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::NoneKnown => {
+                "No check could be chosen for this project: `verify.commands` has no line that \
+                 can run, and the project's profile holds no test or check command you accepted."
+            }
+            Self::Untrusted => {
+                "The project's checks do not run: they run the repository's own code, and you \
+                 have not trusted this project. `cortex permissions trust` trusts it."
+            }
+            Self::ReadOnly => "The project's checks do not run at the read-only level.",
+            Self::NoShell => "The project's checks do not run: no shell was found.",
+        }
+    }
+}
+
 /// A session's verifier: the project's checks, chosen and run.
 pub(crate) struct CoreVerifier {
     parts: Parts,
@@ -902,11 +933,46 @@ impl CoreVerifier {
 
     /// The project's knowledge as it is now. `None` with no store, or when
     /// the read could not be made.
-    async fn current(&self, cx: &VerifyCx<'_>) -> Option<(Arc<Snapshot>, cortex_base::UtcTime)> {
+    async fn current(&self, cancel: &CancelToken) -> Option<(Arc<Snapshot>, cortex_base::UtcTime)> {
         let knowledge = Arc::clone(self.parts.knowledge.as_ref()?);
-        run_blocking(cx.cancel, move |_| knowledge.current())
+        run_blocking(cancel, move |_| knowledge.current())
             .await
             .ok()
+    }
+
+    /// The checks a round would run and the shell to run them in, or why
+    /// it would run none. A line of the user's that cannot run is told,
+    /// once a session.
+    async fn ready(&self, cancel: &CancelToken) -> Result<(Chosen, Arc<RecordingShell>), Unready> {
+        let current = self.current(cancel).await;
+        let chosen = choose(
+            &self.parts.settings,
+            current
+                .as_ref()
+                .map(|(snapshot, now)| (snapshot.as_ref(), *now)),
+        );
+        for refused in &chosen.refused {
+            self.tell_once(refused.clone());
+        }
+        if chosen.checks.is_empty() {
+            return Err(Unready::NoneKnown);
+        }
+        if !self.parts.trusted {
+            return Err(Unready::Untrusted);
+        }
+        if *self.parts.policy.engine().level() == Level::ReadOnly {
+            return Err(Unready::ReadOnly);
+        }
+        let Some(shell) = &self.parts.shell else {
+            return Err(Unready::NoShell);
+        };
+        Ok((chosen, Arc::clone(shell)))
+    }
+
+    /// Why `verify/run` would run no check now: `None` when it would run
+    /// one. Each check is still decided as it runs.
+    pub(crate) async fn why_none(&self) -> Option<Unready> {
+        self.ready(&CancelToken::new()).await.err()
     }
 
     async fn round(&self, cx: VerifyCx<'_>) -> VerifyOutcome {
@@ -918,52 +984,50 @@ impl CoreVerifier {
                 settings.mode.as_str()
             ));
         }
-        if settings.mode == VerifyMode::Off {
+        // The user asked (`verify/run`): the mode is not read.
+        if !cx.asked && settings.mode == VerifyMode::Off {
             return VerifyOutcome::Skipped;
         }
-        let current = self.current(&cx).await;
+        let ready = self.ready(cx.cancel).await;
         if cx.cancel.is_cancelled() {
             return VerifyOutcome::Skipped;
         }
-        let chosen = choose(
-            settings,
-            current
-                .as_ref()
-                .map(|(snapshot, now)| (snapshot.as_ref(), *now)),
-        );
-        for refused in &chosen.refused {
-            self.tell_once(refused.clone());
-        }
-        // Off until a check is known: nothing is said.
-        if chosen.checks.is_empty() {
-            return VerifyOutcome::Skipped;
-        }
-        if !self.parts.trusted {
-            self.tell_once(
-                "The project's checks do not run: they would run the repository's own code at \
-                 the end of every turn, and you have not trusted this project. `cortex \
-                 permissions trust` trusts it."
-                    .to_owned(),
-            );
-            return VerifyOutcome::Skipped;
-        }
-        if *self.parts.policy.engine().level() == Level::ReadOnly {
-            self.tell_once("The project's checks do not run at the read-only level.".to_owned());
-            return VerifyOutcome::Skipped;
-        }
-        let Some(shell) = &self.parts.shell else {
-            self.tell_once("The project's checks do not run: no shell was found.".to_owned());
-            return VerifyOutcome::Skipped;
+        let (chosen, shell) = match ready {
+            Ok(ready) => ready,
+            // Off until a check is known: nothing is said, unless the user
+            // asked.
+            Err(Unready::NoneKnown) if !cx.asked => return VerifyOutcome::Skipped,
+            Err(why) => {
+                // The user who asked is told every time; `verify/run` said
+                // it before the turn started, so only what changed since
+                // reaches here.
+                if cx.asked {
+                    self.parts.hooks.tell(why.message().to_owned());
+                } else {
+                    self.tell_once(why.message().to_owned());
+                }
+                return VerifyOutcome::Skipped;
+            }
         };
+        let shell = &shell;
         // The turn's time for checks, or its own time limit, is spent:
         // nothing is started, and what still fails stays failed.
-        if settings.turn_time.saturating_sub(cx.used).is_zero()
-            || cx.deadline.is_some_and(|deadline| deadline.is_zero())
-        {
-            self.tell_once(format!(
+        let spent = if cx.deadline.is_some_and(|deadline| deadline.is_zero()) {
+            Some(
+                "The project's checks did not run: the turn's or the session's time limit is \
+                 reached."
+                    .to_owned(),
+            )
+        } else if settings.turn_time.saturating_sub(cx.used).is_zero() {
+            Some(format!(
                 "The project's checks did not run again: this turn's time for them ({}) is spent.",
                 shown_time(settings.turn_time)
-            ));
+            ))
+        } else {
+            None
+        };
+        if let Some(message) = spent {
+            self.tell_once(message);
             return if lock(&self.memory).unresolved(cx.turn) {
                 VerifyOutcome::StillFailing
             } else {
@@ -975,7 +1039,7 @@ impl CoreVerifier {
             .iter()
             .map(|check| check_report(check, None))
             .collect();
-        if settings.mode == VerifyMode::Ask {
+        if settings.mode == VerifyMode::Ask && !cx.asked {
             (cx.notify)(VerificationNotice {
                 message: format!(
                     "The project's checks were not run (verify.mode is ask): {}.",
@@ -1078,7 +1142,7 @@ impl CoreVerifier {
         // An entry of the profile must still be one that runs unasked: it
         // may have been turned off, or have lapsed, since the round began.
         if let Some(entry) = &check.entry {
-            let current = self.current(cx).await;
+            let current = self.current(cx.cancel).await;
             let still = current.as_ref().is_some_and(|(snapshot, now)| {
                 snapshot.runs_unasked(*now).any(|held| &held.id == entry)
             });

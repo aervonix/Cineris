@@ -103,7 +103,8 @@ pub mod code {
     /// The session is not open on this connection.
     pub const SESSION_NOT_OPEN: &str = "session_not_open";
     /// A prompt arrived while a turn was running and did not say whether to
-    /// steer or to queue.
+    /// steer or to queue; or `session/rewind`, `session/undo` or
+    /// `verify/run` arrived while one was running.
     pub const TURN_RUNNING: &str = "turn_running";
     /// A prompt, or a second change of history, arrived while the session's
     /// history was being changed (`session/rewind`). It is sent again when
@@ -111,6 +112,10 @@ pub mod code {
     pub const HISTORY_CHANGING: &str = "history_changing";
     /// The server is shutting down and starts no session.
     pub const SHUTTING_DOWN: &str = "shutting_down";
+    /// `verify/run` found no check it could run, and says why: none known,
+    /// a project the user has not trusted, the `read-only` level, no shell
+    /// (since step 19).
+    pub const NO_CHECKS: &str = "no_checks";
     /// The session already has a supervisor.
     pub const SUPERVISOR_PRESENT: &str = "supervisor_present";
     /// A value named something this build does not know: a model, a level, a

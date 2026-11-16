@@ -413,6 +413,20 @@ impl Ledger {
             .min()
     }
 
+    /// The first account whose time limit is spent: what ends a turn that
+    /// sends no request (`verify/run`) before it starts a check, as
+    /// [`take_request`](Self::take_request) ends one before its request.
+    pub(crate) fn out_of_time(&self) -> Option<LimitReached> {
+        self.turn.iter().chain(&self.accounts).find_map(|account| {
+            let limit = account.budget().wall_clock_ms?;
+            (account.elapsed() >= Duration::from_millis(limit)).then(|| LimitReached {
+                kind: LimitKind::Time,
+                account: account.inner.name.clone(),
+                limit,
+            })
+        })
+    }
+
     /// Charges one request to every account, before it is sent. When an
     /// account refuses, nothing is charged to any. The accounts are as up
     /// to date as the last [`catch_up`](Self::catch_up) left them.

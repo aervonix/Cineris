@@ -464,3 +464,212 @@ fn a_rounds_notices_reach_front_ends_with_its_turn() {
     assert_eq!(told[0].1.round, 1);
     assert_eq!(told[0].1.rounds, 2);
 }
+
+// ------------------------------------------------- a turn that only verifies
+
+/// The rounds the verifier was asked for: whether the user asked, and the
+/// most rounds the turn had.
+fn asked(rig: &Rig) -> Vec<(bool, u32)> {
+    lock(&rig.verifier.asked).clone()
+}
+
+#[test]
+fn a_turn_that_only_verifies_runs_one_round_and_sends_and_records_nothing() {
+    let (world, rig) = Rig::one("verify_only_failed", []);
+    lock(&rig.verifier.outcomes).push_back(VerifyOutcome::Failed {
+        report: "a test failed".to_owned(),
+    });
+    world.run(async {
+        rig.handle.verify().expect("a turn that only verifies");
+        rig.events.turns(1).await;
+    });
+    assert_eq!(rounds(&rig), [(1, 0)], "one round, with nothing written");
+    assert_eq!(asked(&rig), [(true, 1)], "asked for, and the only round");
+    assert!(
+        world.provider.requests().is_empty(),
+        "the model is sent nothing"
+    );
+    let end = &rig.events.ends()[0];
+    assert_eq!(end.outcome, TurnOutcome::Completed);
+    assert_eq!(end.verification, Some(Verification::Failed));
+    assert!(
+        rig.store.items().is_empty(),
+        "nothing is recorded: {:?}",
+        rig.store.items()
+    );
+    // The next prompt is answered as any other, with no report of the
+    // failure in it.
+    world.provider.push(says("Hello."));
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(2).await;
+    });
+    assert_eq!(world.provider.requests().len(), 1);
+    assert_eq!(rig.events.ends()[1].outcome, TurnOutcome::Completed);
+    assert!(
+        !rig.store
+            .items()
+            .iter()
+            .any(|item| matches!(item, Item::Notice(_)))
+    );
+    assert_eq!(
+        asked(&rig),
+        [(true, 1)],
+        "the prompt's turn changed nothing"
+    );
+}
+
+#[test]
+fn verify_is_refused_while_a_turn_runs() {
+    let (world, rig) = Rig::one("verify_only_refused_while_running", [says("Done.")]);
+    world.run(async {
+        // The prompt's turn is the running one from the moment it is sent.
+        rig.prompt("go");
+        let refused = rig.handle.verify().expect_err("a turn is running");
+        assert_eq!(refused.code, "turn_running");
+        rig.events.turns(1).await;
+    });
+    assert!(asked(&rig).is_empty(), "the turn changed nothing: no round");
+}
+
+#[test]
+fn an_interrupted_turn_that_only_verifies_says_nothing_of_the_checks() {
+    let (world, rig) = Rig::one("verify_only_interrupted", []);
+    *lock(&rig.verifier.gate) = Some(Gate::new());
+    rig.seen
+        .interrupt_at(cortex_agent::TurnState::Verifying, &rig.handle);
+    world.run(async {
+        rig.handle.verify().expect("a turn that only verifies");
+        rig.events.turns(1).await;
+    });
+    let end = &rig.events.ends()[0];
+    assert_eq!(end.outcome, TurnOutcome::Interrupted);
+    assert_eq!(end.verification, None);
+    assert!(rig.store.items().is_empty(), "{:?}", rig.store.items());
+}
+
+#[test]
+fn a_check_that_stops_a_turn_that_only_verifies_tells_the_user_and_not_the_model() {
+    let (world, rig) = Rig::one("verify_only_stopped", []);
+    lock(&rig.verifier.outcomes).push_back(VerifyOutcome::Stopped {
+        reason: "a check changed `.git/hooks`".to_owned(),
+        failing: false,
+    });
+    world.run(async {
+        rig.handle.verify().expect("a turn that only verifies");
+        rig.events.turns(1).await;
+    });
+    let end = &rig.events.ends()[0];
+    assert_eq!(end.outcome, TurnOutcome::Denied);
+    assert_eq!(end.verification, Some(Verification::Incomplete));
+    assert!(rig.store.items().is_empty(), "{:?}", rig.store.items());
+    assert!(
+        rig.events.all().iter().any(
+            |event| matches!(&event.event, cortex_protocol::event::Event::Notice(Notice::Info(info))
+                if info.message.contains(".git/hooks"))
+        ),
+        "the user is told"
+    );
+}
+
+#[test]
+fn what_waits_behind_a_turn_that_only_verifies_follows_it() {
+    let (world, rig) = Rig::one(
+        "verify_only_then_what_waits",
+        [says("Steered."), says("Queued.")],
+    );
+    lock(&rig.verifier.outcomes).push_back(VerifyOutcome::Passed);
+    world.run(async {
+        rig.handle.verify().expect("a turn that only verifies");
+        // Before its loop has started it: all of it waits behind the turn.
+        rig.handle.notice(NoticeSource::Plan, "The plan changed.");
+        assert_eq!(
+            rig.steer("look at b").disposition,
+            cortex_protocol::methods::Disposition::Steering
+        );
+        rig.queue("then c");
+        rig.events.turns(3).await;
+    });
+    let ends = rig.events.ends();
+    assert_eq!(ends[0].verification, Some(Verification::Passed));
+    assert!(ends.iter().all(|end| end.outcome == TurnOutcome::Completed));
+    let requests = world.provider.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "the steer's turn, then the queued prompt's"
+    );
+    let first = format!("{:?}", requests[0].messages);
+    assert!(
+        first.contains("The plan changed.") && first.contains("look at b"),
+        "{first}"
+    );
+    assert!(format!("{:?}", requests[1].messages).contains("then c"));
+}
+
+#[test]
+fn a_turn_that_only_verifies_with_its_time_spent_ends_at_the_limit_and_runs_nothing() {
+    // The turn's own limit, and the session's (its lease's), which an
+    // earlier turn may have spent.
+    for session in [false, true] {
+        out_of_time(session);
+    }
+}
+
+fn out_of_time(session: bool) {
+    let world = World::new("verify_only_out_of_time", []);
+    let mut setup = Setup::new(&world);
+    let budget = Budget {
+        wall_clock_ms: Some(1_000),
+        ..Budget::default()
+    };
+    let ledger = Ledger::new(world.shared_clock());
+    setup.ledger = Some(if session {
+        ledger.with_account(cortex_agent::Account::new(
+            "the session",
+            budget,
+            world.shared_clock(),
+        ))
+    } else {
+        ledger.with_turn_budget(Budget {
+            wall_clock_ms: Some(0),
+            ..budget
+        })
+    });
+    let rig = setup.start(&world);
+    world.clock.advance(Duration::from_secs(2));
+    world.run(async {
+        rig.handle.verify().expect("a turn that only verifies");
+        rig.events.turns(1).await;
+    });
+    assert!(rounds(&rig).is_empty(), "no check starts");
+    let end = &rig.events.ends()[0];
+    assert_eq!(end.outcome, TurnOutcome::Limit);
+    assert_eq!(end.verification, None);
+    assert!(rig.store.items().is_empty(), "{:?}", rig.store.items());
+    assert!(
+        rig.events.all().iter().any(|event| matches!(
+            &event.event,
+            cortex_protocol::event::Event::Notice(Notice::Limit(_))
+        )),
+        "the user is told"
+    );
+}
+
+#[test]
+fn a_turn_that_only_verifies_is_not_counted_as_the_models_turn() {
+    let (world, rig) = Rig::one("verify_only_no_stat", []);
+    lock(&rig.verifier.outcomes).push_back(VerifyOutcome::Passed);
+    world.run(async {
+        rig.handle.verify().expect("a turn that only verifies");
+        rig.events.turns(1).await;
+    });
+    assert!(
+        !rig.stats
+            .all()
+            .iter()
+            .any(|event| matches!(event, cortex_agent::StatEvent::Turn(_))),
+        "{:?}",
+        rig.stats.all()
+    );
+}

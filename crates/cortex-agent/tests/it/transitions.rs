@@ -207,6 +207,17 @@ fn interrupted_verifying(name: &str) -> Vec<TurnState> {
     interrupt_when(&world, &rig, Verifying)
 }
 
+/// `verify/run` on an idle session: a turn that only runs the checks.
+fn only_verifying(name: &str) -> Vec<TurnState> {
+    let (world, rig) = Rig::one(name, []);
+    lock(&rig.verifier.outcomes).push_back(VerifyOutcome::Passed);
+    world.run(async {
+        rig.handle.verify().expect("a turn that only verifies");
+        rig.events.turns(1).await;
+    });
+    rig.seen.states()
+}
+
 fn repetition_stops(name: &str) -> Vec<TurnState> {
     let again = || calls(&[("c1", "read", json!({"path": "a"}))]);
     let world = World::new(name, [again(), again()]);
@@ -294,6 +305,7 @@ const SCENARIOS: &[Scenario] = &[
         )
     }),
     ("interrupted_verifying", interrupted_verifying),
+    ("only_verifying", only_verifying),
     ("paused_response_continues", |name| {
         let paused = Response::new().text("Searching").end(StopReason::Paused);
         let (world, rig) = Rig::one(name, [paused, says("Found it.")]);
@@ -445,6 +457,14 @@ fn verification_runs_when_the_turn_wrote_files() {
         Deciding, Verifying, Finishing, Idle,
     ]);
     assert_eq!(run("verification_feeds_back", "walk"), feeds_back);
+}
+
+#[test]
+fn a_turn_that_only_verifies_goes_from_preparing_to_its_checks() {
+    assert_eq!(
+        run("only_verifying", "walk"),
+        [Idle, Preparing, Verifying, Finishing, Idle]
+    );
 }
 
 #[test]
