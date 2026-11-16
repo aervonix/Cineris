@@ -14,7 +14,9 @@
 //!
 //! `CORTEX_PERF_TREE` names a real tree to index as well (this repository,
 //! say), and `CORTEX_PERF_FILES` the size of the generated one (20,000
-//! unless given). The numbers it prints go into the page above.
+//! unless given). `perf_a_tree_of_real_code` reads the pinned corpus of
+//! real code, which `cargo xtask corpus fetch` makes (`try`'s `perf -p`
+//! does it first). The numbers it prints go into the page above.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
