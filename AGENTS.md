@@ -58,6 +58,7 @@ Each cost a session hours to find. The details are in [docs/steps/11/](docs/step
 | Check what a push would send for the owner's details | `cargo xtask owner-guard --unpushed` (the git hook runs it on every push) |
 | Check that every link in the docs leads somewhere, and that the step records are in their places | `cargo xtask links` |
 | Run exactly what CI runs | `cargo xtask ci` |
+| Know what `ci` does after a disk stall, and try it with a pressure of your own | `cargo xtask ci` runs a cluster of timeouts again, once, when every task waited on I/O for 10% or more of the run, and says so; a timeout that recurs fails. Away from CI the tier check then says `not judged: the machine stalled`. `CORTEX_PRESSURE_FILE=<file>` is read in place of `/proc/pressure/io` ([docs/testing-and-ci.md](docs/testing-and-ci.md), "Running the tests many times over") |
 | See each tier's time by crate and its slowest tests, built as CI builds | `cargo xtask ci --tiers` |
 | Compare a branch's tiers with `main`'s, by tier, crate and test | `cargo xtask ci --tiers --compare <run id or junit.xml> --against main`; `--os windows` or `--os both` for Windows' report and Linux's in turn (a `try` run of `test` is a source too) |
 | Tell a change's tier cost from the runner's speed: both refs on one runner, in turn | `gh workflow run try --ref <branch> -f os=windows -f command=test -f against=main`, or `cargo xtask ab --base <other checkout>` |
