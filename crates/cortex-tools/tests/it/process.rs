@@ -50,7 +50,12 @@ fn sys_a_time_limit_stops_the_whole_tree() {
             let family = roll.all(&["parent", "grandchild"], LIMIT);
             // Nothing stops a command before its time.
             assert!(family[0].is_alive() && family[1].is_alive());
-            assert!(director.timer.running().contains(&limit));
+            // The runner arms the call's limit beside starting the command,
+            // and under load the family can be up before the limit is: wait
+            // for the limit, as for the family, rather than assume it.
+            until(LIMIT, "the call's time limit to be armed", || {
+                director.timer.running().contains(&limit)
+            });
             assert_eq!(director.timer.end(limit), 1);
             // The grandchild sits out the polite stages, and each grace is
             // ended as it starts, until the kill has taken everything.
