@@ -666,9 +666,6 @@ impl App {
                     if matches!(keyed, Keyed::Answer(_) | Keyed::Changed | Keyed::ShowWhole) {
                         self.input.disarm_quit();
                     }
-                    let Some(dialog) = self.dialogs.front_mut() else {
-                        return true;
-                    };
                     match keyed {
                         // It goes on to the editor, where it was going: the
                         // dialog waits for a pause in the typing (above).

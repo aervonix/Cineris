@@ -861,7 +861,9 @@ fn resident_kib(session: &Session) -> Option<u64> {
 }
 
 /// Whether a turn's record is in the statistics on disk: the last thing
-/// the core's end writes, after the session's own end.
+/// the core's end writes, after the session's own end. Linux only, as the
+/// signal test that asks.
+#[cfg(target_os = "linux")]
 fn turn_recorded(machine: &Machine) -> bool {
     let Some(state) = machine.dirs().state else {
         return false;
