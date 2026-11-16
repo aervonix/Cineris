@@ -81,8 +81,12 @@ pub const REPLY_WAIT: Duration = Duration::from_millis(100);
 /// follows of it arrives as keys.
 pub(crate) const OPEN_WAIT: Duration = Duration::from_secs(2);
 /// Turns the enhanced keyboard protocol on, with the flag that tells apart
-/// keys that are otherwise the same bytes.
-const KEYBOARD_ON: &[u8] = b"\x1b[>1u";
+/// keys that are otherwise the same bytes (1), and the one that reports a
+/// key's repeats and releases (2): a repeat is [`Event::Repeat`], which a
+/// dialog never takes as its answer, and a release is dropped (since the
+/// review of step 23). A key that types text still comes as its text,
+/// repeats included.
+const KEYBOARD_ON: &[u8] = b"\x1b[>3u";
 const KEYBOARD_OFF: &[u8] = b"\x1b[<u";
 /// Turns Windows Terminal's win32 input mode on, and off.
 const WIN32_ON: &[u8] = b"\x1b[?9001h";
@@ -831,6 +835,20 @@ mod tests {
             base: Some(Instant::now()),
             ..Script::default()
         }
+    }
+
+    /// `CSI > flags u`: the enhanced keyboard protocol is asked to tell
+    /// apart keys that are otherwise the same bytes (1) and to report a
+    /// key's repeats (2), which a dialog never takes as its answer (the
+    /// review of step 23).
+    #[test]
+    fn the_keyboard_protocol_is_asked_for_its_event_types() {
+        let flags: u32 = std::str::from_utf8(&KEYBOARD_ON[3..KEYBOARD_ON.len() - 1])
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(flags & 0b11, 0b11, "{KEYBOARD_ON:?}");
+        assert!(KEYBOARD_ON.starts_with(b"\x1b[>") && KEYBOARD_ON.ends_with(b"u"));
     }
 
     #[test]

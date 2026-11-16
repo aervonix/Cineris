@@ -126,3 +126,182 @@ find: if self.terminal.is_some() || cortex_term::signalled().is_some() {
 replace: if self.terminal.is_some() {
 caught-by:
     cortex-tui::it external::sys_a_signal_while_the_editor_runs_leaves_the_terminal_to_the_shell
+
+# The dialogs' key rule (finding 1 of the review, the owner's rule), the
+# note cut off (finding 8), and the dialogs' rules the review found untested.
+
+[break] typing-through-a-dialog-answers-it
+rule: If anything reached the editor while a dialog was up, it takes no answer, and shows none, until a second with no input.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::ready_at
+find: Some(self.typed.map_or(ready, |typed| ready.max(typed + QUIET)))
+replace: Some(self.typed.map_or(ready, |_| ready))
+caught-by:
+    app::tests::dialogs::steady_typing_slower_than_the_pause_never_answers
+    app::tests::dialogs::steady_typing_with_an_e_never_becomes_a_deny_note
+    app::tests::dialogs::typing_through_the_trust_question_neither_trusts_nor_refuses
+    app::tests::dialogs::typing_through_a_question_does_not_pick_a_choice
+
+[break] a-paste-is-not-input
+rule: A paste that reaches the editor while a dialog is up is input: the dialog waits for a second with no input after it.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: dialog.typed(at);
+replace: let _ = dialog;
+caught-by:
+    app::tests::dialogs::a_key_soon_after_a_paste_does_not_answer
+    app::tests::dialogs::a_key_soon_after_a_paste_does_not_trust_the_project
+
+[break] a-paste-in-a-dialog-is-lost
+rule: A paste while a dialog is up and no note is being written goes to the editor; it is never lost.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::paste
+find: return false;
+replace: return true;
+caught-by:
+    app::tests::dialogs::a_paste_while_a_dialog_is_up_reaches_the_editor
+
+[break] a-marked-repeat-answers
+rule: A key repeat the terminal marks never answers a dialog.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::key
+find: if repeat && self.takes_keys(at) {
+replace: if false {
+caught-by:
+    app::tests::dialogs::a_repeat_the_terminal_marks_never_answers
+
+[break] the-same-key-held-answers
+rule: Where the terminal does not mark repeats, the same key as the one before it, which was typing, within the repeat window is a key held down, and answers nothing.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: && before.key == Some(*key)
+replace: && false
+caught-by:
+    app::tests::dialogs::a_key_held_from_before_the_dialog_never_answers_and_a_press_after_does
+
+[break] a-held-key-forgets-it-was-typing
+rule: A key held down stays what its first press was: typing, so its later repeats are dropped too.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: _ if repeat => before.is_none_or(|before| before.typing),
+replace: _ if repeat => false,
+caught-by:
+    app::tests::dialogs::a_key_held_from_before_the_dialog_never_answers_and_a_press_after_does
+
+[break] a-win32-repeat-is-a-press
+rule: Win32 input: a key that goes down again with no record of it going up is a repeat.
+file: crates/cortex-term/src/input.rs
+in: Decoder::record
+find: let repeat = self.held == Some(record.vk);
+replace: let repeat = false;
+caught-by:
+    input::tests::a_win32_key_down_again_before_it_went_up_is_a_repeat
+
+[break] a-kitty-repeat-is-a-press
+rule: The enhanced protocol's repeat (event type 2) is a repeat, not a press.
+file: crates/cortex-term/src/input.rs
+in: kitty
+find: 2 => Some(Event::Repeat(key)),
+replace: 2 => Some(Event::Key(key)),
+caught-by:
+    input::tests::a_repeat_is_told_apart_and_a_release_dropped
+
+[break] repeats-are-not-asked-for
+rule: The terminal is asked for the enhanced protocol's event types, so that it marks repeats.
+file: crates/cortex-term/src/terminal.rs
+find: const KEYBOARD_ON: &[u8] = b"\x1b[>3u";
+replace: const KEYBOARD_ON: &[u8] = b"\x1b[>1u";
+caught-by:
+    terminal::tests::the_keyboard_protocol_is_asked_for_its_event_types
+
+[break] the-grace-is-short
+rule: A dialog takes no key for 300 ms after its first frame.
+file: crates/cortex-tui/src/app/dialog.rs
+find: pub(crate) const GRACE: Duration = Duration::from_millis(300);
+replace: pub(crate) const GRACE: Duration = Duration::from_millis(120);
+caught-by:
+    app::tests::dialogs::a_key_inside_the_grace_goes_to_the_editor
+
+[break] the-grace-is-not-restarted
+rule: After the program is continued (fg) or the external editor gives the terminal back, a dialog starts its grace again.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::hide
+find: self.shown = None;
+replace: let _ = ();
+caught-by:
+    app::tests::dialogs::after_fg_the_dialog_starts_its_grace_again
+    app::tests::dialogs::after_the_external_editor_the_dialog_starts_its_grace_again
+
+[break] an-answer-goes-to-the-last-dialog
+rule: A key answers the dialog shown, the first of those queued.
+file: crates/cortex-tui/src/app/state.rs
+in: App::answer
+find: let Some(dialog) = self.dialogs.pop_front() else
+replace: let Some(dialog) = self.dialogs.pop_back() else
+caught-by:
+    app::tests::dialogs::with_two_dialogs_a_key_answers_the_one_shown_and_another_ones_end_leaves_it
+    app::tests::dialogs::the_next_dialog_answers_with_its_own_key_after_its_own_grace
+
+[break] a-resolution-closes-the-dialog-shown
+rule: A request settled elsewhere closes its own dialog, and no other.
+file: crates/cortex-tui/src/app/state.rs
+in: App::event
+find: .position(|dialog| dialog.id == resolved.request_id)
+replace: .position(|_| true)
+caught-by:
+    app::tests::dialogs::with_two_dialogs_a_key_answers_the_one_shown_and_another_ones_end_leaves_it
+
+[break] a-cut-note-is-lost
+rule: A note being written when its dialog is closed from outside goes into the editor as a draft.
+file: crates/cortex-tui/src/app/state.rs
+in: App::closed_from_outside
+find: self.give_back(&note);
+replace: let _ = &note;
+caught-by:
+    app::tests::dialogs::a_note_cut_off_by_its_turns_end_is_a_draft_and_not_sent
+    app::tests::dialogs::a_note_cut_off_by_another_clients_answer_is_a_draft
+
+[break] a-cut-note-is-sent-by-its-enter
+rule: The Enter that was to send a note cut off by its dialog's end does not send it as a prompt: none does before a pause.
+file: crates/cortex-tui/src/app/state.rs
+in: App::closed_from_outside
+find: self.note_cut = Some(now);
+replace: let _ = now;
+caught-by:
+    app::tests::dialogs::a_note_cut_off_by_its_turns_end_is_a_draft_and_not_sent
+    app::tests::dialogs::a_note_cut_off_by_another_clients_answer_is_a_draft
+
+[break] ctrl-c-clears-the-hidden-text
+rule: Ctrl+C over a dialog with no turn running leaves the text the dialog hides.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: self.input.interrupt_hidden()
+replace: self.input.act(action)
+caught-by:
+    app::tests::dialogs::ctrl_c_over_a_dialog_with_no_turn_keeps_the_hidden_text_and_says_so
+
+[break] the-armed-quit-is-not-said-over-a-dialog
+rule: A first Ctrl+C over a dialog says, in the hint row, that a second quits.
+file: crates/cortex-tui/src/app/state.rs
+in: App::frame
+find: let hint = if self.input.quit_armed() {
+replace: let hint = if false {
+caught-by:
+    app::tests::dialogs::ctrl_c_over_a_dialog_with_no_turn_keeps_the_hidden_text_and_says_so
+
+[break] a-paste-in-the-viewer-reaches-the-editor
+rule: A paste while the viewer is open is the viewer's search's, never the hidden editor's.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: TermEvent::Paste(text) => return self.viewer_paste(text),
+replace: TermEvent::Paste(_) => {}
+caught-by:
+    app::tests::dialogs::a_paste_in_the_viewer_goes_to_its_search_and_not_the_editor
+
+[break] the-viewer-overflows-after-end
+rule: End then PageDown in the viewer stays at the end, with no overflow.
+file: crates/cortex-tui/src/app/state/viewer.rs
+find: state.top = state.top.saturating_add(page)
+replace: state.top += page
+caught-by:
+    app::tests::dialogs::end_then_page_down_in_the_viewer_stays_at_the_end

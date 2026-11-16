@@ -34,6 +34,8 @@ use crate::history::MemoryHistory;
 use crate::keys::{KeyMap, parse};
 use crate::testing::{app_frame, assert_app_frame};
 
+mod dialogs;
+
 /// What the scripted link has seen, and what it will give.
 #[derive(Debug, Default)]
 pub(crate) struct Script {
@@ -466,12 +468,16 @@ fn a_dialog_that_appears_while_the_person_types_takes_keys_only_after_a_grace() 
         "typing answered the dialog"
     );
     assert_eq!(app.input().editor().expanded(), "yyes");
-    // The answers are drawn at the end of the grace; a paste never answers.
-    let _ = app.frame(now + dialog::GRACE * 2);
+    // Typing reached the editor while the dialog was up: its answers wait
+    // for a second with no input. A paste is input too, and never answers.
     app.terminal(&TermEvent::Paste("y".to_owned()), now + dialog::GRACE * 2);
     assert!(link.script().answers.is_empty());
-    // A key after the grace answers.
-    key(&mut app, "y", now + dialog::GRACE * 2);
+    let ready = app.deadline().expect("the answers are due");
+    assert_eq!(ready, now + dialog::GRACE * 2 + dialog::QUIET);
+    let _ = app.frame(ready);
+    app.drawn(ready);
+    // Once they are drawn, a key answers.
+    key(&mut app, "y", ready + dialog::GRACE);
     let answers = std::mem::take(&mut link.script().answers);
     assert_eq!(
         answers,
@@ -502,7 +508,15 @@ fn a_dialog_takes_keys_and_shows_its_answers_only_after_its_grace() {
     assert_eq!(app.deadline(), Some(now + dialog::GRACE));
     key(&mut app, "y", now + dialog::GRACE / 2);
     assert!(answers(&link).is_empty(), "a key in the grace answered");
-    let end = now + dialog::GRACE;
+    // The key reached the editor: the answers wait for a second with none,
+    // and are drawn only then.
+    let end = now + dialog::GRACE / 2 + dialog::QUIET;
+    assert_eq!(app.deadline(), Some(end));
+    let rows = text(&app.frame(end - Duration::from_millis(1)).1);
+    assert!(
+        !rows.iter().any(|row| row.contains("Allow once")),
+        "{rows:#?}"
+    );
     assert_app_frame("app-approval-answers-drawn", &mut app, end, 100, 40);
     assert_eq!(app.deadline(), None, "nothing more to wake for");
     // After a pause since the key before, a key answers.
@@ -526,7 +540,11 @@ fn typing_that_goes_on_past_the_grace_never_answers_a_dialog() {
     }
     assert!(answers(&link).is_empty());
     assert_eq!(app.input().editor().expanded(), "yyyyyyyyyy");
-    key(&mut app, "n", at + dialog::GRACE);
+    // A second with no input after the last key: the answers, and a key.
+    let ready = at + dialog::QUIET;
+    assert_eq!(app.deadline(), Some(ready));
+    let _ = app.frame(ready);
+    key(&mut app, "n", ready + dialog::GRACE);
     assert_eq!(answers(&link), [ApprovalChoice::Deny]);
 }
 
@@ -722,8 +740,8 @@ fn a_dialog_that_comes_under_the_viewer_waits_for_the_inline_screen() {
         answers(&link).is_empty(),
         "a key typed as the viewer closed answered"
     );
-    // After the grace, and a pause, a key answers.
-    let later = closed + dialog::GRACE * 3;
+    // A second after that typing, the answers, and a key answers.
+    let later = closed + dialog::GRACE / 3 + dialog::QUIET;
     let _ = app.frame(later);
     key(&mut app, "y", later + dialog::GRACE * 2);
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
@@ -777,7 +795,12 @@ fn a_key_straight_after_the_viewer_closes_does_not_answer() {
         answers(&link).is_empty(),
         "a key straight after the viewer answered"
     );
-    key(&mut app, "y", closed + dialog::GRACE * 3);
+    // It reached the editor: a second later the answers are drawn again,
+    // and a key answers.
+    let ready = closed + dialog::GRACE / 6 + dialog::QUIET;
+    assert_eq!(app.deadline(), Some(ready));
+    let _ = app.frame(ready);
+    key(&mut app, "y", ready + dialog::GRACE);
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
@@ -1444,9 +1467,13 @@ fn a_key_before_the_answers_are_drawn_never_answers() {
     assert_eq!(app.deadline(), Some(now + dialog::GRACE), "a frame is due");
     key(&mut app, "y", late);
     assert!(answers(&link).is_empty());
+    // It reached the editor: the answers wait a second more.
     let _ = app.frame(late);
+    let ready = late + dialog::QUIET;
+    assert_eq!(app.deadline(), Some(ready));
+    let _ = app.frame(ready);
     assert_eq!(app.deadline(), None);
-    key(&mut app, "y", late + dialog::GRACE);
+    key(&mut app, "y", ready + dialog::GRACE);
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
@@ -1852,7 +1879,8 @@ fn a_window_too_small_for_the_question_and_its_answers_takes_none() {
     key(&mut app, "y", at);
     assert!(answers(&link).is_empty());
     app.resize(60, 24);
-    let later = at + dialog::GRACE;
+    // The key went to the editor: the answers come a second after it.
+    let later = at + dialog::QUIET;
     let rows = rows_within(&mut app, later, 60);
     assert!(
         rows.iter().any(|row| row.contains("y Allow once")),

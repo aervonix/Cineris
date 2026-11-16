@@ -167,7 +167,7 @@ impl App {
             // body.
             if start < state.top || end - start > body {
                 state.top = start;
-            } else if end > state.top + body {
+            } else if end > state.top.saturating_add(body) {
                 state.top = end - body;
             }
             state.follow = false;
@@ -263,7 +263,12 @@ impl App {
         if let Some(action @ (Action::Interrupt | Action::Redraw)) =
             self.input.keymap().lookup(&[], key)
         {
-            let outcome = self.input.act(action);
+            // The editor is hidden: `Ctrl+C` leaves its text alone.
+            let outcome = if action == Action::Interrupt {
+                self.input.interrupt_hidden()
+            } else {
+                self.input.act(action)
+            };
             self.outcome(outcome, at);
             return true;
         }
@@ -306,7 +311,7 @@ impl App {
                     state.selected = Some((selected + 1).min(boxes.saturating_sub(1)));
                     state.follow = true;
                 }
-                None => state.top += 1,
+                None => state.top = state.top.saturating_add(1),
             },
             KeyCode::Enter => {
                 if let Some(selected) = state.selected {
@@ -317,7 +322,8 @@ impl App {
                 }
             }
             KeyCode::PageUp => state.top = state.top.saturating_sub(page),
-            KeyCode::PageDown => state.top += page,
+            // From `End` (the top at its most) on, the view clamps it.
+            KeyCode::PageDown => state.top = state.top.saturating_add(page),
             KeyCode::Home | KeyCode::Char('g') => state.top = 0,
             KeyCode::End | KeyCode::Char('G') => state.top = usize::MAX,
             KeyCode::Char('/') => {
@@ -326,6 +332,16 @@ impl App {
             }
             KeyCode::Char('n') if state.search.is_some() => state.find = Some(state.top),
             _ => {}
+        }
+        true
+    }
+
+    /// A paste while the viewer is open: its search's, while one is being
+    /// typed, on one line; otherwise nothing, and never the hidden editor's
+    /// (the review of step 23).
+    pub(super) fn viewer_paste(&mut self, text: &str) -> bool {
+        if let Some(query) = self.viewer.as_mut().and_then(|state| state.typing.as_mut()) {
+            query.extend(text.chars().map(|c| if c.is_control() { ' ' } else { c }));
         }
         true
     }

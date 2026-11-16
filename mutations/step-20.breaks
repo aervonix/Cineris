@@ -128,8 +128,8 @@ caught-by:
 rule: A key release is dropped.
 file: crates/cortex-term/src/input.rs
 in: kitty
-find: if kind == 3
-replace: if kind == 99
+find: 3 => None,
+replace: 99 => None,
 caught-by:
     input::tests::releases_and_unknown_sequences_are_dropped_whole
 

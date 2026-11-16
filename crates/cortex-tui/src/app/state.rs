@@ -20,14 +20,14 @@ use cortex_protocol::model::{ModelInfo, ModelRole};
 use cortex_protocol::session::{SandboxStatus, SessionSettings, SessionState};
 use cortex_protocol::usage::{CostBasis, SessionUsage, UsageTotals};
 use cortex_protocol::{ErrorData, SessionEvent, SessionId, Speed};
-use cortex_term::{Capabilities, Cursor, Event as TermEvent, Line};
+use cortex_term::{Capabilities, Cursor, Event as TermEvent, Key, Line};
 
 mod commands;
 mod viewer;
 
 use commands::{Picker, Shown};
 
-use super::dialog::{Dialog, Keyed};
+use super::dialog::{Dialog, Keyed, QUIET, REPEAT};
 use super::items::Mapper;
 use super::link::{Inbound, Link, Ticket};
 use super::{Exit, Open, Settings, Start};
@@ -90,6 +90,19 @@ enum Pending {
     History,
     /// The workspace's files, for `@` completion.
     Files,
+}
+
+/// The last key read, for the dialogs' rules (`super::dialog`).
+#[derive(Debug, Clone, Copy)]
+struct LastKey {
+    /// When it was read.
+    at: Instant,
+    /// Which key: `None` for a paste, or a burst whose key is not known.
+    key: Option<Key>,
+    /// It was typing (it went to the editor, or a dialog dropped it as a
+    /// key held down), not a key a dialog took: the same key again soon
+    /// after is that key held down.
+    typing: bool,
 }
 
 /// The most items of a stored session's history read at a time.
@@ -195,9 +208,15 @@ pub struct App {
     /// When the running turn began, from this app's point of view.
     running: Option<Instant>,
     last_interrupt: Option<Instant>,
-    /// When the last key was read: a dialog that appears while the person
-    /// is typing waits before it takes keys.
-    last_key: Option<Instant>,
+    /// The last key read: a dialog that appears while the person is typing
+    /// waits before it takes keys, and takes no key held down.
+    last_key: Option<LastKey>,
+    /// A dialog closed from outside while a note was being written in it
+    /// (its request ended, or another client answered it), and when the
+    /// last key since was read: the note is in the editor as a draft, and an
+    /// `Enter` before a pause of [`QUIET`] does not send it (the review of
+    /// step 23).
+    note_cut: Option<Instant>,
     /// The last turn's cost and the session's, shown until the next prompt.
     last_cost: Option<(String, String)>,
     /// Whether this session has had a turn, here or before.
@@ -296,6 +315,7 @@ impl App {
             running: None,
             last_interrupt: None,
             last_key: None,
+            note_cut: None,
             last_cost: None,
             had_turn: false,
             effects: Vec::new(),
@@ -404,6 +424,11 @@ impl App {
         &mut self,
         result: Result<crate::external::Edited, crate::external::EditorError>,
     ) {
+        // What was typed while the editor had the terminal was not typed at
+        // the dialog: it starts its grace again.
+        if let Some(dialog) = self.dialogs.front_mut() {
+            dialog.hide();
+        }
         match result {
             Ok(crate::external::Edited::Changed(fragment)) => {
                 self.input.external_result(Some(fragment));
@@ -536,31 +561,82 @@ impl App {
     /// typing, though a stall held them back: the next key is judged as
     /// following one read at `at`, so that it does not answer a dialog.
     pub fn burst(&mut self, at: Instant) {
-        self.last_key = Some(at);
+        self.last_key = Some(LastKey {
+            at,
+            key: None,
+            typing: true,
+        });
     }
 
     /// A terminal event, read at `at`. Says whether it was input (a key or a
     /// paste), whose frame is drawn at once.
     pub fn terminal(&mut self, event: &TermEvent, at: Instant) -> bool {
         self.drop_stale_viewer();
-        if self.viewer.is_some()
-            && let TermEvent::Key(key) = event
-        {
-            // A key in the viewer is the key before the next: typing that
-            // goes on as it closes is typing, and answers no dialog.
-            self.last_key = Some(at);
-            return self.viewer_key(*key, at);
+        if self.viewer.is_some() {
+            match event {
+                TermEvent::Key(key) | TermEvent::Repeat(key) => {
+                    // A key in the viewer is the key before the next: typing
+                    // that goes on as it closes is typing, and answers no
+                    // dialog.
+                    self.last_key = Some(LastKey {
+                        at,
+                        key: Some(*key),
+                        typing: true,
+                    });
+                    return self.viewer_key(*key, at);
+                }
+                // The viewer's, not the hidden editor's (the review of step
+                // 23): its search, while one is being typed.
+                TermEvent::Paste(text) => return self.viewer_paste(text),
+                _ => {}
+            }
         }
         match event {
-            TermEvent::Key(key) => {
-                // The key before this one: a dialog takes a key only after a
-                // pause, so that it never takes typing meant for the editor.
-                let previous = self.last_key.replace(at);
+            TermEvent::Key(key) | TermEvent::Repeat(key) => {
+                let before = self.last_key.take();
+                // A key held down: the terminal says so, or it is the same
+                // key as the one before, which was typing, soon after it.
+                let repeat = matches!(event, TermEvent::Repeat(_))
+                    || before.is_some_and(|before| {
+                        before.typing
+                            && before.key == Some(*key)
+                            && at.saturating_duration_since(before.at) < REPEAT
+                    });
+                let mut typing = true;
                 if let Some(dialog) = self.dialogs.front_mut() {
-                    match dialog.key(*key, at, previous, self.input.keymap()) {
-                        Keyed::Pass => {}
+                    let ready = dialog.takes_keys(at);
+                    let keyed = dialog.key(
+                        *key,
+                        at,
+                        before.map(|before| before.at),
+                        repeat,
+                        self.input.keymap(),
+                    );
+                    // A key the dialog took is not typing; one it passed on
+                    // is. A key held down stays what its first press was.
+                    typing = match &keyed {
+                        Keyed::Pass | Keyed::Global(_) => true,
+                        _ if repeat => before.is_none_or(|before| before.typing),
+                        _ => !ready,
+                    };
+                    self.last_key = Some(LastKey {
+                        at,
+                        key: Some(*key),
+                        typing,
+                    });
+                    match keyed {
+                        // It goes on to the editor, where it was going: the
+                        // dialog waits for a pause in the typing.
+                        Keyed::Pass => dialog.typed(at),
                         Keyed::Global(action) => {
-                            let outcome = self.input.act(action);
+                            // `Ctrl+C` with no turn running (the trust
+                            // question, the undo's) leaves the text the
+                            // dialog hides as it is.
+                            let outcome = if action == crate::keys::Action::Interrupt {
+                                self.input.interrupt_hidden()
+                            } else {
+                                self.input.act(action)
+                            };
                             self.outcome(outcome, at);
                             return true;
                         }
@@ -574,13 +650,22 @@ impl App {
                         }
                         Keyed::Changed | Keyed::Nothing => return true,
                     }
+                } else {
+                    self.last_key = Some(LastKey {
+                        at,
+                        key: Some(*key),
+                        typing,
+                    });
                 }
-                let outcome = self.input.handle(event);
+                if self.holds_submit(*key, at) {
+                    return true;
+                }
+                let outcome = self.input.handle(&TermEvent::Key(*key));
                 self.outcome(outcome, at);
                 true
             }
             // A paste never answers a dialog: it is a note being written, or
-            // it goes to the editor.
+            // it goes to the editor, as input the dialog waits a pause after.
             TermEvent::Paste(text)
                 if self
                     .dialogs
@@ -590,12 +675,68 @@ impl App {
                 true
             }
             TermEvent::Paste(_) => {
+                if let Some(dialog) = self.dialogs.front_mut() {
+                    dialog.typed(at);
+                }
+                self.last_key = Some(LastKey {
+                    at,
+                    key: None,
+                    typing: true,
+                });
+                if let Some(cut) = &mut self.note_cut {
+                    *cut = at;
+                }
                 let outcome = self.input.handle(event);
                 self.outcome(outcome, at);
                 true
             }
-            TermEvent::Resize { .. } | TermEvent::Resumed | TermEvent::Reply(_) => false,
+            // Continued after a stop (`fg`): what was typed meanwhile went to
+            // the shell, and the dialog starts its grace again.
+            TermEvent::Resumed => {
+                if let Some(dialog) = self.dialogs.front_mut() {
+                    dialog.hide();
+                }
+                false
+            }
+            TermEvent::Resize { .. } | TermEvent::Reply(_) => false,
             TermEvent::Focus(_) => false,
+        }
+    }
+
+    /// Whether `key`, read at `at` and going to the editor, is an `Enter`
+    /// that must not send: the editor holds a note cut off by its dialog's
+    /// end, and the typing has not paused for [`QUIET`] since. Any other key
+    /// carries the typing on.
+    fn holds_submit(&mut self, key: Key, at: Instant) -> bool {
+        let Some(since) = self.note_cut else {
+            return false;
+        };
+        if at.saturating_duration_since(since) >= QUIET {
+            self.note_cut = None;
+            return false;
+        }
+        self.note_cut = Some(at);
+        self.input
+            .keymap()
+            .lookup(&[crate::keys::Context::Editor], key)
+            == Some(crate::keys::Action::Submit)
+    }
+
+    /// Dialogs closed from outside: their request ended (the turn's end, a
+    /// time limit) or another client answered it. A note being written in
+    /// one goes into the editor as a draft, said, and the `Enter` that was
+    /// to send it does not send it as a prompt (the review of step 23).
+    fn closed_from_outside(&mut self, closed: Vec<Dialog>, now: Instant) {
+        for mut dialog in closed {
+            let Some(note) = dialog.take_note().filter(|note| !note.trim().is_empty()) else {
+                continue;
+            };
+            self.say(
+                "The request was settled before your note was sent: the note is in the input \
+                 box, and was not sent.",
+            );
+            self.give_back(&note);
+            self.note_cut = Some(now);
         }
     }
 
@@ -1216,7 +1357,8 @@ impl App {
                 if let Some(turn) = cost(&completed.usage) {
                     self.last_cost = Some((turn, session.unwrap_or_default()));
                 }
-                self.dialogs.clear();
+                let closed: Vec<Dialog> = self.dialogs.drain(..).collect();
+                self.closed_from_outside(closed, now);
                 self.stop_running();
                 self.last_interrupt = None;
             }
@@ -1239,9 +1381,11 @@ impl App {
                     .iter()
                     .position(|dialog| dialog.id == resolved.request_id)
                     && let Some(dialog) = self.dialogs.remove(at)
-                    && let Some(call) = dialog.call()
                 {
-                    self.mapper.answered(&mut self.transcript, call);
+                    if let Some(call) = dialog.call() {
+                        self.mapper.answered(&mut self.transcript, call);
+                    }
+                    self.closed_from_outside(vec![dialog], now);
                 }
             }
             _ => self.mapper.event(&mut self.transcript, &event.event, now),
@@ -1309,7 +1453,14 @@ impl App {
             bottom.extend(lines);
             if chrome {
                 bottom.push(Line::new());
-                bottom.push(self.hint_row(Hint::Keys(keys), now));
+                // A first `Ctrl+C` with no turn running says what a second
+                // does, over the dialog's keys.
+                let hint = if self.input.quit_armed() {
+                    Hint::QuitArmed
+                } else {
+                    Hint::Keys(keys)
+                };
+                bottom.push(self.hint_row(hint, now));
             }
             cursor_row = None;
         } else {
