@@ -251,7 +251,7 @@ mod starts {
 #[macro_export]
 macro_rules! __hook_await_point {
     ($name:expr) => {{
-        let _: &'static str = $name;
+        const _: &str = $name;
     }};
 }
 

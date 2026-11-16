@@ -34,7 +34,7 @@
 //! | `view::input`, `view::menu` | The input box and the menus | 21 |
 //! | [`app`] | The application: the loop, the state, the link to the core, the dialogs | 23 |
 //! | `view::dialog` | The dialogs in the input box's place | 23 |
-//! | [`testkit`] | The application driven by tests, with a scripted link in the core's place (the `test-kit` feature, dev-dependencies only) | tooling 9 |
+//! | `testkit` | The application driven by tests, with a scripted link in the core's place (the `test-kit` feature, dev-dependencies only) | tooling 9 |
 //!
 //! Each module's code is in its own files, so that the steps that build
 //! this crate side by side do not edit the same ones.
