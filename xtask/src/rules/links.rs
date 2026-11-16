@@ -72,6 +72,24 @@ pub(crate) fn check(texts: &BTreeMap<String, String>, files: &BTreeSet<String>) 
     violations
 }
 
+/// The places in the repository that the links of the Markdown page `file`
+/// lead to, as `judge` reads them: relative to the page, without a fragment
+/// or a query, escapes undone, a folder without a `/` at its end. Links in
+/// code, in comments, to other sites and out of the repository are left
+/// out.
+pub(super) fn targets(file: &str, text: &str) -> BTreeSet<String> {
+    links(text)
+        .into_iter()
+        .filter(|link| !has_scheme(&link.target))
+        .filter_map(|link| {
+            let path = link.target.split('#').next().unwrap_or_default();
+            let path = path.split('?').next().unwrap_or_default();
+            (!path.is_empty()).then(|| resolve(file, &percent_decoded(path)))?
+        })
+        .map(|path| path.trim_end_matches('/').to_owned())
+        .collect()
+}
+
 /// Test data may name pages that were never there.
 fn is_fixture(file: &str) -> bool {
     file.split('/').any(|part| part == "fixtures")

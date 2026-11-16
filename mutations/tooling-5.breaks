@@ -163,7 +163,6 @@ caught-by:
 # Since the tenth tooling step the index is written from the items by
 # `cargo xtask outstanding`, and compared whole: its breaks are in
 # mutations/tooling-10.breaks (`outstanding-*`).
-
 # -------------------------------------------------- the comma a find ends in
 
 [break] the-comma-before-a-bracket-is-not-explained

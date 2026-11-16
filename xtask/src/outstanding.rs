@@ -27,7 +27,8 @@
 //! - **`Flaky`**, any number of times, names a test the item is about that
 //!   fails now and then for a reason not yet fixed:
 //!   `` - Flaky: `cortex-core::it trust::sys_…` ``, the test's binary and its
-//!   name as nextest gives them. `stress`, `ci` and `mutate` read these.
+//!   name as nextest gives them: the list of known flakes is these (its
+//!   readers come with the tenth tooling step's second pull request).
 //!
 //! The index is sorted (the crates by name, then [`AREAS`] in their order;
 //! the items of an area by name), and `cargo xtask rules` fails when it is
@@ -78,11 +79,11 @@ What the owner or a later step still has to settle: one file per item. Together 
 
 **This page is written by `cargo xtask outstanding`** from the items' files (since the tenth tooling step): edit an item's file, never this page. `cargo xtask rules` fails when the page is not what the command writes.
 
-- **Leaving something open:** add a file, named for the item in lowercase words joined by hyphens, and run `cargo xtask outstanding`. The file is the item in a sentence on its first line, which is its line in the index below; a blank line; the fields, a list: `- Area:` the crate it is about (`cortex-tui`) or `tooling`, `windows` or `other`, `- Owner:` who settles it, in a few words, and `- Flaky:` for each test the item is about that fails now and then, its binary and name as nextest gives them (`` - Flaky: `cortex-core::it trust::sys_…` ``), which `stress`, `ci` and `mutate` read; a blank line; and a table of one row, under the header `| Item | Who | When |`: the item in full, who settles it, and when.
+- **Leaving something open:** add a file, named for the item in lowercase words joined by hyphens, and run `cargo xtask outstanding`. The file is the item in a sentence on its first line, which is its line in the index below; a blank line; the fields, a list: `- Area:` the crate it is about (`cortex-tui`) or `tooling`, `windows` or `other`, `- Owner:` who settles it, in a few words, and `- Flaky:` for each test the item is about that fails now and then, its binary and name as nextest gives them (`` - Flaky: `cortex-core::it trust::sys_…` ``); a blank line; and a table of one row, under the header `| Item | Who | When |`: the item in full, who settles it, and when.
 - **Settling an item:** delete its file, run `cargo xtask outstanding`, and record the answer in the settling step's `steps/<step>/answered.md`.
 - **Changing an item:** edit its file, and run the command if its first line or a field changed.
 - **An item several steps share** stays one file, and each step that does its part leaves the file alone and records that part in its own `steps/<step>/answered.md`. Only the step that finishes the item deletes its file, so parallel steps never edit it.
-- **After a rebase:** `cargo xtask outstanding`. Git merges this page line by line, keeping both sides' lines (`merge=union` in `.gitattributes`), so a rebase does not stop here; what that merge gets wrong (a line twice, the line of an item that is gone, a line lost, lines out of order) `rules` finds and the command puts right.
+- **After a rebase:** `cargo xtask outstanding`. Git merges this page line by line, keeping both sides' lines (`merge=union` in `.gitattributes`), so a rebase does not stop here; what that merge gets wrong (a line twice, the line of an item that is gone, a line lost, lines out of order) `rules` finds and the command puts right. **Before merging,** rebase onto the `main` of the moment and run the command, as for any merge: a pull request whose index was right on an older `main` may not be on this one, and a merge that GitHub makes without a rebase would only be found by the checks of `main` itself.
 
 One file per item, and not one per step, because a step settles items that other steps left open: two steps that settle different items then touch different files.
 
@@ -130,14 +131,11 @@ pub(crate) fn is_hyphenated(name: &str) -> bool {
         })
 }
 
-/// A test's name as a filter can name it exactly, and a report gives it.
+/// A test's name as a filter can name it exactly, and a report gives it: a
+/// Rust path, words of letters, digits and `_` joined by `::`.
 fn is_test_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
-        && !name.starts_with(':')
-        && !name.ends_with(':')
+    name.split("::")
+        .all(|word| !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
 }
 
 /// Whether `binary` is a test binary of the workspace as nextest names it:
@@ -246,10 +244,11 @@ pub(crate) fn parse(
                 if owner.is_some() {
                     return Err(problem(number, "`Owner` is given twice"));
                 }
+                let value = value.trim_end_matches('.').trim_end();
                 if value.is_empty() {
                     return Err(problem(number, "`Owner` is empty"));
                 }
-                owner = Some(value.trim_end_matches('.').to_owned());
+                owner = Some(value.to_owned());
             }
             "Flaky" => {
                 let test = value
@@ -442,14 +441,16 @@ pub(crate) fn difference(found: &str, expected: &str) -> String {
     }
     if !extra.is_empty() {
         message.push_str(&format!(
-            "\n    It has, and should not (an item whose file is gone, or one git does not \
-             track yet: `git add` it):{}",
+            "\n    It has, and should not (the line of an item whose file is gone or that git \
+             does not track yet, which `git add` puts right; or text of an older page):{}",
             shown(&extra)
         ));
     }
+    // Every line of the page but blank ones is there once: an item's, a
+    // heading's, the preamble's.
     let twice: BTreeSet<&str> = have
         .iter()
-        .filter(|l| l.starts_with("- [") && have.iter().filter(|o| o == l).count() > 1)
+        .filter(|l| !l.trim().is_empty() && have.iter().filter(|o| o == l).count() > 1)
         .copied()
         .collect();
     if !twice.is_empty() {
@@ -490,8 +491,14 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             other => return Err(format!("unknown argument `{other}`\n\n{USAGE}")),
         }
     }
-    let root = workspace::root();
-    let (expected, problems) = expected_index(&root)?;
+    println!("{}", write(&workspace::root(), check)?);
+    Ok(())
+}
+
+/// Writes the index of the tree at `root` when it is not what its items
+/// give, or with `check` fails when it is not; what was done, in words.
+pub(crate) fn write(root: &Path, check: bool) -> Result<String> {
+    let (expected, problems) = expected_index(root)?;
     if !problems.is_empty() {
         let mut message = String::from("these items cannot be read, so the index was not written:");
         for (file, (line, what)) in &problems {
@@ -502,8 +509,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let path = root.join(INDEX);
     let found = fs::read_to_string(&path).unwrap_or_default();
     if found == expected {
-        println!("{INDEX} is up to date.");
-        return Ok(());
+        return Ok(format!("{INDEX} is up to date."));
     }
     if check {
         return Err(format!(
@@ -512,13 +518,24 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         ));
     }
     fs::write(&path, &expected).map_err(|error| format!("could not write {INDEX}: {error}"))?;
-    println!("wrote {INDEX}:{}", difference(&found, &expected));
-    Ok(())
+    Ok(format!("wrote {INDEX}:{}", difference(&found, &expected)))
 }
 
-/// The index the items on disk give (every `.md` of the folder, whether
-/// git tracks it or not), and the problems of the items that cannot be
-/// read.
+/// The crates of the tree at `root`: the folders of `crates/` that hold a
+/// manifest.
+pub(crate) fn crates_in(root: &Path) -> BTreeSet<String> {
+    fs::read_dir(root.join("crates"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// The index the items on disk give (every `.md` file of the folder,
+/// whether git tracks it or not), and the problems of the items that
+/// cannot be read.
 fn expected_index(root: &Path) -> Result<(String, Vec<(String, Problem)>)> {
     let folder = root.join(FOLDER);
     let mut texts = Vec::new();
@@ -527,24 +544,22 @@ fn expected_index(root: &Path) -> Result<(String, Vec<(String, Problem)>)> {
     for entry in entries {
         let entry = entry.map_err(|error| format!("could not read {FOLDER}: {error}"))?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !entry.path().is_file() {
+        // An editor's swap file, an image: not an item, and not read.
+        if !name.ends_with(".md") || !entry.path().is_file() {
             continue;
         }
         let text = fs::read_to_string(entry.path())
             .map_err(|error| format!("could not read {FOLDER}{name}: {error}"))?;
         texts.push((format!("{FOLDER}{name}"), text));
     }
-    let files = workspace::repository_files(root)?;
-    let crates = crates_of(&files);
     let (items, problems) = read(
         texts
             .iter()
             .map(|(file, text)| (file.as_str(), text.as_str())),
-        &crates,
+        &crates_in(root),
     );
     Ok((index(&items), problems))
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -627,6 +642,7 @@ mod tests {
                 "twice",
             ),
             (item("x", "- Area: cortex-tui\n- Owner:\n"), 4, "empty"),
+            (item("x", "- Area: cortex-tui\n- Owner: .\n"), 4, "empty"),
             (
                 item("x", "- Area: cortex-tui\n- Owner: x\n- Who: y\n"),
                 5,
@@ -654,6 +670,26 @@ mod tests {
             ),
             (
                 item("x", &format!("{fields}- Flaky: cortex-core::it a(b)\n")),
+                5,
+                "exactly",
+            ),
+            (
+                item("x", &format!("{fields}- Flaky: cortex-core::it a:b\n")),
+                5,
+                "exactly",
+            ),
+            (
+                item("x", &format!("{fields}- Flaky: cortex-core::it a:::b\n")),
+                5,
+                "exactly",
+            ),
+            (
+                item("x", &format!("{fields}- Flaky: cortex-core::it ::a\n")),
+                5,
+                "exactly",
+            ),
+            (
+                item("x", &format!("{fields}- Flaky: cortex-core::it a::\n")),
                 5,
                 "exactly",
             ),
@@ -781,6 +817,147 @@ mod tests {
                 .lines()
                 .any(|line| line.trim() == format!("{} merge=union", super::INDEX)),
             "{attributes}"
+        );
+    }
+
+    /// A tree with the items given, in a folder of its own.
+    struct Tree(std::path::PathBuf);
+
+    impl Tree {
+        fn new(label: &str, items: &[(&str, &str)]) -> Self {
+            let root = std::env::temp_dir()
+                .join(format!("xtask-outstanding-{label}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(root.join("docs/outstanding")).unwrap();
+            std::fs::create_dir_all(root.join("crates/cortex-tui")).unwrap();
+            std::fs::write(root.join("crates/cortex-tui/Cargo.toml"), "").unwrap();
+            for (name, text) in items {
+                std::fs::write(root.join("docs/outstanding").join(name), text).unwrap();
+            }
+            Self(root)
+        }
+
+        fn index_text(&self) -> String {
+            std::fs::read_to_string(self.0.join(super::INDEX)).unwrap_or_default()
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn the_command_writes_the_index_and_check_only_compares() {
+        let one = item("One.", "- Area: cortex-tui\n- Owner: step 25\n");
+        let tree = Tree::new(
+            "write",
+            &[
+                ("one.md", one.as_str()),
+                // Not items: never read, whatever they hold.
+                (".one.md.swp", "\u{0}\u{fffd}"),
+                ("logo.png", "not text"),
+            ],
+        );
+        std::fs::write(tree.0.join("docs/outstanding/logo.png"), [0xff, 0xfe, 0x00]).unwrap();
+
+        // --check on a stale index fails and writes nothing.
+        let error = super::write(&tree.0, true).unwrap_err();
+        assert!(error.contains("It lacks") && error.contains("Run `cargo xtask outstanding`"));
+        assert_eq!(tree.index_text(), "");
+
+        // Without it, the index is written, and is what `index` gives.
+        let said = super::write(&tree.0, false).unwrap();
+        assert!(
+            said.starts_with("wrote docs/outstanding/README.md"),
+            "{said}"
+        );
+        assert!(
+            tree.index_text()
+                .ends_with("### cortex-tui\n\n- [one](one.md): One. Owner: step 25.\n"),
+            "{}",
+            tree.index_text()
+        );
+        assert_eq!(
+            super::write(&tree.0, true).unwrap(),
+            "docs/outstanding/README.md is up to date."
+        );
+
+        // An item that cannot be read: nothing is written, and it is named.
+        std::fs::write(tree.0.join("docs/outstanding/broken.md"), "| Item |\n").unwrap();
+        let before = tree.index_text();
+        let error = super::write(&tree.0, false).unwrap_err();
+        assert!(error.contains("docs/outstanding/broken.md:1:"), "{error}");
+        assert_eq!(tree.index_text(), before);
+    }
+
+    #[test]
+    fn a_line_or_a_heading_twice_is_named_twice() {
+        let want = "a\n\n### cortex-tui\n\n- [x](x.md): x.\n";
+        let doubled = difference(
+            "a\n\n### cortex-tui\n\n### cortex-tui\n\n- [x](x.md): x.\n",
+            want,
+        );
+        assert!(
+            doubled.contains("It has twice:\n      ### cortex-tui"),
+            "{doubled}"
+        );
+    }
+
+    /// What git does with the index when two branches each add an item
+    /// beside the same line, and one settles another: the merge keeps both
+    /// sides' lines, and the index is then what the command writes, or the
+    /// rule says it is not.
+    #[test]
+    fn sys_a_merge_line_by_line_of_two_sides_is_what_the_command_writes_or_is_found() {
+        let tree = Tree::new("union", &[]);
+        let entry = |name: &str| {
+            (
+                format!("{name}.md"),
+                item(&format!("{name}."), "- Area: cortex-tui\n- Owner: x\n"),
+            )
+        };
+        let index_of = |names: &[&str]| {
+            let texts: Vec<(String, String)> = names
+                .iter()
+                .map(|name| {
+                    let (file, text) = entry(name);
+                    (format!("docs/outstanding/{file}"), text)
+                })
+                .collect();
+            let (items, _) = read(
+                texts.iter().map(|(f, t)| (f.as_str(), t.as_str())),
+                &crates(),
+            );
+            index(&items)
+        };
+        let base = index_of(&["b-item", "d-item"]);
+        let ours = index_of(&["b-item", "c-ours", "d-item"]);
+        let theirs = index_of(&["a-theirs", "b-item"]);
+        for (name, text) in [("base", &base), ("ours", &ours), ("theirs", &theirs)] {
+            std::fs::write(tree.0.join(name), text).unwrap();
+        }
+        let output = std::process::Command::new("git")
+            .args(["merge-file", "-p", "--union", "ours", "base", "theirs"])
+            .current_dir(&tree.0)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let merged = String::from_utf8(output.stdout).unwrap();
+        // The merge went through, with both sides' items; and where one
+        // side settled an item beside a line the other added, git keeps the
+        // settled item's line too: a merge line by line is not the index.
+        // The rule finds it, and the command writes the right one.
+        assert_eq!(
+            merged,
+            index_of(&["a-theirs", "b-item", "c-ours", "d-item"])
+        );
+        let right = index_of(&["a-theirs", "b-item", "c-ours"]);
+        let found = difference(&merged, &right);
+        assert!(
+            found.contains("should not") && found.contains("- [d-item](d-item.md)"),
+            "{found}"
         );
     }
 }
