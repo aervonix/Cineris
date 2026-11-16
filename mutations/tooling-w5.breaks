@@ -157,7 +157,7 @@ caught-by:
 rule: A second run on a copy is refused while the first holds it.
 file: xtask/src/mutate/drive.rs
 in: drive_jobs
-find: let _lock = lock(scratch)?;
+find: let _lock = lock(scratch, &mut |time| pause(time))?;
 replace:
 caught-by:
     mutate::drive::tests::a_second_run_on_the_same_copy_is_refused_while_the_first_holds_it
