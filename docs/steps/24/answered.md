@@ -1,6 +1,6 @@
 # Answered in step 24, on 2026-11-16
 
-Step 24 builds the panels and live views: the panel mechanism and the first-release panels (plan, with editing; review; usage; project), `/context`'s breakdown, hot-reload of themes, key bindings and settings wired end to end through `config/reload`, and the `/usage`, `/plan`, `/project`, `/profile`, `/verify` and `/reload` commands. The coordinator's answers, and the owner's, are added here as they come.
+Step 24 builds the panels and live views: the panel mechanism and the first-release panels (plan, with editing; review; usage; project), `/context`'s breakdown, hot-reload of themes, key bindings and settings wired end to end through `config/reload`, and the `/usage`, `/plan`, `/project`, `/profile`, `/verify` and `/reload` commands. The coordinator's answers, and the owner's, are added here as they come. What each of the step's three pull requests built, measured and left is in [parts/](parts/).
 
 | Question | The coordinator's answer, 2026-11-16 | Recorded in |
 |---|---|---|
