@@ -34,6 +34,7 @@
 //! | [`vterm`] | [`VTerm`]: a virtual terminal, and a [`Report`](vterm::Report) of what each frame did to it. For tests of the presenter, and to parse a program's output. |
 //! | [`pty`] | [`pty::Session`]: a program run in a pseudo-terminal (ConPTY on Windows), its output recorded and parsed, keys typed into it, and its console closed under it ([`pty::Session::close_console`]). |
 //! | [`exit`] | [`Exit`](exit::Exit) and [`Verdict`](exit::Verdict): how a process ended, read from either system's wording (`exit status: 1`, `exit code: 1`, `signal: 6`, `exit code: 0xc000013a`), so that a test spells none. |
+//! | [`cadence`] | [`Cadence`](cadence::Cadence): keys typed at a pace, read together, pasted, or held down with a terminal's auto-repeat ([`AutoRepeat`](cadence::AutoRepeat)), as events with the times they were read, for a test of an interface that tells them apart by time. No real waiting: the times are the test's. |
 //! | [`glyphs`] | [`GlyphSets`](glyphs::GlyphSets): match a screen against text spelled once, as a function of the glyph set, when the interface may have drawn the Unicode set or its ASCII stand-ins. |
 //!
 //! # No real waiting
@@ -51,6 +52,7 @@
 
 pub mod brief;
 pub mod built;
+pub mod cadence;
 pub mod canary;
 pub mod cases;
 pub mod children;
