@@ -89,7 +89,7 @@ fn asks_about_protected(request: &ApprovalRequest, leads_to: &str) -> bool {
 
 /// A result by its call's tool and position among that tool's results:
 /// results are listed as they completed.
-fn outcome_of(front: &Front, tool: &str, nth: usize) -> String {
+fn outcome_of(front: &Front, tool: &str, nth: usize) -> crate::Outcome {
     front
         .results()
         .into_iter()

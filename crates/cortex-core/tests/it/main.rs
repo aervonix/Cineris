@@ -721,6 +721,18 @@ impl Front {
             .await
     }
 
+    /// Sends a prompt and waits for its turn to end, refusing every call
+    /// that is asked about. Returns the tools that were asked about, in
+    /// order.
+    ///
+    /// A test that only needs to know that a command asks refuses it: a
+    /// command that runs costs a shell's start, which on Windows is a third
+    /// of a second.
+    pub async fn turn_denying(&self, text: &str) -> Vec<String> {
+        let _turn = cortex_testkit::profile::phase("a turn, refusing what is asked");
+        self.turn_answering(text, |_| ApprovalChoice::Deny).await
+    }
+
     /// Sends a prompt and waits for its turn to end, answering every call
     /// that is asked about with what `choose` says of it. Returns the tools
     /// that were asked about, in order.
@@ -764,21 +776,64 @@ impl Front {
     }
 
     /// Waits for the next approval request that has not been answered.
+    ///
+    /// Fails at once when the session goes idle while it waits, with
+    /// nothing asked: no turn is running, queued or held, so the question
+    /// will not come (a `write` that does not ask at `supervised`, a command
+    /// an earlier answer allowed), and the test used to wait for it until
+    /// nextest stopped it a minute later. The session says it is idle
+    /// itself (`session.idle`), after a turn's end, only when nothing else
+    /// is running or waiting to: a turn queued behind the one that ended is
+    /// waited for. A question asked outside a turn (an undo's) is waited
+    /// for as before.
     pub async fn approval(&self) -> (RequestId, ApprovalRequest) {
         let _waiting = cortex_testkit::profile::phase("wait for an approval request");
         let answered = self.answered.borrow().clone();
-        self.until(|seen| {
+        let open = |seen: &[Outgoing]| {
             requests_in(seen)
-                .iter()
-                .any(|(id, _)| !answered.contains(id))
-        })
-        .await;
-        let found = requests_in(&self.seen.borrow())
-            .into_iter()
-            .find(|(id, _)| !answered.contains(id))
-            .unwrap();
-        self.answered.borrow_mut().push(found.0.clone());
-        found
+                .into_iter()
+                .find(|(id, _)| !answered.contains(id))
+        };
+        // What was sent before the wait is read first, so that only an
+        // idle after it counts.
+        self.drain();
+        let idle_before = idles_in(&self.seen.borrow());
+        self.until(|seen| open(seen).is_some() || idles_in(seen) > idle_before)
+            .await;
+        if let Some(found) = open(&self.seen.borrow()) {
+            self.answered.borrow_mut().push(found.0.clone());
+            return found;
+        }
+        let ends = self.ends();
+        panic!(
+            "the test waits for an approval request, but the session went idle with nothing \
+             asked (its last turn ended {:?}): the question will not come. Look at what the \
+             turn did (`front.results()`), and whether the call asks at all at this level.",
+            ends.last().map(|end| &end.outcome)
+        );
+    }
+
+    /// Waits until the session has told the client a notice that contains
+    /// `text`, and returns it: the first such notice that an earlier `told`
+    /// did not return, so that a notice told twice is waited for twice. A
+    /// notice told from work done beside a turn (the blocking pool) can
+    /// arrive after the turn has ended: this is the wait for it. A notice
+    /// that never comes is named in the test kit's report of a test that
+    /// ran out of time.
+    pub async fn told(&self, text: &str) -> String {
+        let _waiting = cortex_testkit::watch::doing(format!("a notice that says {text:?}"));
+        let key = (self.client.id, self.session.clone());
+        let taken = TOLD.with(|told| told.borrow().get(&key).cloned().unwrap_or_default());
+        let found = |seen: &[Outgoing]| {
+            notices_in(seen)
+                .into_iter()
+                .enumerate()
+                .find(|(index, notice)| !taken.contains(index) && notice.contains(text))
+        };
+        self.until(|seen| found(seen).is_some()).await;
+        let (index, notice) = found(&self.seen.borrow()).expect("the notice was seen");
+        TOLD.with(|told| told.borrow_mut().entry(key).or_default().push(index));
+        notice
     }
 
     pub fn answer(&self, id: &RequestId, choice: ApprovalChoice) -> Result<(), OpError> {
@@ -825,14 +880,7 @@ impl Front {
 
     /// The text of every `info` and `sandbox` notice, in order.
     pub fn notices(&self) -> Vec<String> {
-        self.events()
-            .into_iter()
-            .filter_map(|event| match event.event {
-                Event::Notice(Notice::Info(info)) => Some(info.message),
-                Event::Notice(Notice::Sandbox(sandbox)) => Some(sandbox.message),
-                _ => None,
-            })
-            .collect()
+        notices_in(&self.seen.borrow())
     }
 
     /// The text of the last assistant message.
@@ -858,13 +906,13 @@ impl Front {
 
     /// The tool results, in order: the tool, how the call ended, and what
     /// the model was shown.
-    pub fn results(&self) -> Vec<(String, String, String)> {
+    pub fn results(&self) -> Vec<(String, Outcome, String)> {
         self.items()
             .into_iter()
             .filter_map(|item| match item {
                 Item::ToolResult(result) => Some((
                     result.tool.clone(),
-                    result.outcome.as_str().to_owned(),
+                    Outcome(result.outcome.as_str().to_owned()),
                     result
                         .content
                         .iter()
@@ -878,6 +926,90 @@ impl Front {
             })
             .collect()
     }
+}
+
+/// How a tool call ended, as [`Front::results`] gives it: the outcome's
+/// name. Compared with a text, it fails the test at once when the text is
+/// no outcome's name (`"ok"`): such an assertion would hold, or fail, for
+/// the wrong reason, and assert nothing (step 17 found three comparing with
+/// `"ok"`). The names are the protocol's own, `ToolOutcome::KNOWN`.
+/// It gives no `&str` of itself: one compared as text would skip the check.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Outcome(String);
+
+impl Outcome {
+    fn known(text: &str) -> &str {
+        assert!(
+            cortex_protocol::item::ToolOutcome::KNOWN.contains(&text),
+            "a tool's outcome is compared with {text:?}, which no outcome is: one of {:?}",
+            cortex_protocol::item::ToolOutcome::KNOWN
+        );
+        text
+    }
+}
+
+impl PartialEq<str> for Outcome {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == Self::known(other)
+    }
+}
+
+impl PartialEq<&str> for Outcome {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == Self::known(other)
+    }
+}
+
+impl std::fmt::Debug for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.0)
+    }
+}
+
+impl std::fmt::Display for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The notices among what a client was sent, in order.
+fn notices_in(seen: &[Outgoing]) -> Vec<String> {
+    seen.iter()
+        .filter_map(|outgoing| match outgoing {
+            Outgoing::Event(SessionEvent {
+                event: Event::Notice(Notice::Info(info)),
+                ..
+            }) => Some(info.message.clone()),
+            Outgoing::Event(SessionEvent {
+                event: Event::Notice(Notice::Sandbox(sandbox)),
+                ..
+            }) => Some(sandbox.message.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+thread_local! {
+    /// The notices [`Front::told`] gave back already, by their place among
+    /// a front's notices, for each client and session: kept beside the
+    /// front, which tests also build by hand.
+    static TOLD: std::cell::RefCell<std::collections::HashMap<(cortex_core::ClientId, SessionId), Vec<usize>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// How many times the session said it was idle, of what a client was sent.
+fn idles_in(seen: &[Outgoing]) -> usize {
+    seen.iter()
+        .filter(|outgoing| {
+            matches!(
+                outgoing,
+                Outgoing::Event(SessionEvent {
+                    event: Event::SessionIdle(_),
+                    ..
+                })
+            )
+        })
+        .count()
 }
 
 fn ends_in(seen: &[Outgoing]) -> Vec<TurnCompleted> {

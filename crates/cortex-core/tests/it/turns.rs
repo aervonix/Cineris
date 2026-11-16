@@ -68,10 +68,8 @@ fn a_turn_runs_the_models_tool_calls_and_records_everything() {
         assert_eq!(world.read("notes/todo.md").as_deref(), Some("- ship it\n"));
         let results = front.results();
         assert_eq!(results.len(), 2);
-        assert_eq!(
-            (results[0].0.as_str(), results[0].1.as_str()),
-            ("write", "success")
-        );
+        assert_eq!(results[0].0, "write");
+        assert_eq!(results[0].1, "success");
         assert_eq!(results[1].0, "read");
         assert!(results[1].2.contains("- ship it"), "{}", results[1].2);
         assert_eq!(front.last_text(), "Written and read back.");

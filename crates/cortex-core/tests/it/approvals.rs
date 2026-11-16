@@ -931,3 +931,141 @@ fn a_request_another_client_answered_is_not_unexpected() {
         second.close().await;
     });
 }
+
+/// The rig's wait for a question fails at once when the turn ends without
+/// one: a `write` does not ask at `supervised`, and a test that waited for
+/// its question used to wait until nextest stopped it a minute later.
+#[test]
+#[should_panic(expected = "the question will not come")]
+fn a_wait_for_a_question_the_turn_never_asks_fails_at_once() {
+    let world = World::new(
+        "rig_no_question",
+        [
+            calls(&[("c1", "write", json!({"path": "a.txt", "content": "a\n"}))]),
+            says("Written."),
+        ],
+    );
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("write it").await;
+        let _ = front.approval().await;
+    });
+}
+
+/// A question that is asked is still found, whether the wait began before
+/// it was sent or after, and a turn that ends after it was answered is not
+/// taken for one that asked nothing.
+#[test]
+fn a_wait_for_a_question_finds_one_asked_before_or_after_it_began() {
+    let world = World::new(
+        "rig_question",
+        [protected_write("c1"), protected_write("c2"), says("Done.")],
+    );
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("write it twice").await;
+        let (first, request) = front.approval().await;
+        assert_eq!(request.call_id.as_str(), "c1");
+        front.answer(&first, ApprovalChoice::Deny).unwrap();
+        // The second question may already be on its way.
+        settle().await;
+        let (second, request) = front.approval().await;
+        assert_eq!(request.call_id.as_str(), "c2");
+        front.answer(&second, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        front.close().await;
+    });
+}
+
+/// A turn that ends with nothing asked, while another is queued behind it,
+/// is not the end of the wait: the queued turn's question is the one
+/// waited for.
+#[test]
+fn a_wait_for_a_question_goes_on_while_a_turn_is_queued() {
+    let world = World::new(
+        "rig_queued",
+        [
+            says("Nothing to ask."),
+            protected_write("c1"),
+            says("Refused."),
+        ],
+    );
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("first").await;
+        front
+            .op(cortex_protocol::methods::Op::TurnStart(
+                cortex_protocol::methods::TurnStartParams {
+                    session_id: front.session.clone(),
+                    input: vec![cortex_protocol::message::Part::text("second")],
+                    delivery: Some(cortex_protocol::item::Delivery::Queue),
+                },
+            ))
+            .await
+            .expect("the second prompt is queued");
+        let (id, request) = front.approval().await;
+        assert_eq!(request.call_id.as_str(), "c1");
+        front.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(2).await;
+        assert_eq!(front.ends().len(), 2, "the question was the second turn's");
+        front.close().await;
+    });
+}
+
+/// `told` waits for a notice and gives back the one that says what it was
+/// given, not another told before it; `turn_denying` refuses what is asked
+/// and says which tools asked.
+#[test]
+fn a_notice_is_waited_for_and_a_refused_turn_names_what_asked() {
+    let world = World::new("rig_told", [protected_write("c1"), says("Refused.")]);
+    world.project_config(&format!("[model]\nmain = \"{}\"\n", crate::OTHER_MODEL));
+    // A trust store that cannot be read: a notice of its own, beside the
+    // one of what is held back for want of trust.
+    let state = world.dirs().state.unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("trust.toml"), "this is { not toml").unwrap();
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let store = front.told("trust store could not be read").await;
+        assert!(!store.contains("model.main"), "{store}");
+        let notice = front.told("not trusted").await;
+        assert!(notice.contains("model.main"), "{notice}");
+        assert_ne!(store, notice);
+        assert_eq!(front.turn_denying("write it").await, ["write"]);
+        assert_eq!(
+            world.read(PROTECTED),
+            None,
+            "the refused write was not made"
+        );
+        front.close().await;
+    });
+}
+
+/// A tool's outcome compared with a name no outcome has (`"ok"`) fails the
+/// test at once, where it would have asserted nothing; one of the
+/// protocol's names compares as text does.
+#[test]
+#[should_panic(expected = "which no outcome is")]
+fn a_tool_outcome_compared_with_a_name_no_outcome_has_fails_the_test() {
+    let world = World::new(
+        "rig_outcome",
+        [
+            calls(&[("c1", "read", json!({"path": "a.txt"}))]),
+            says("Read."),
+        ],
+    );
+    world.put("a.txt", "a\n");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("read it").await;
+        let results = front.results();
+        assert_eq!(results[0].1, "success");
+        assert_ne!(results[0].1, "denied");
+        let _ = results[0].1 == "ok";
+    });
+}
