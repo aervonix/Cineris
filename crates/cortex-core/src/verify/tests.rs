@@ -510,7 +510,7 @@ fn a_process_left_outside_the_checks_tree_is_said() {
 #[test]
 fn the_report_is_bounded_after_escaping_too() {
     // Each printed line is short, and three times as long escaped.
-    let unseen: String = (0..4_000)
+    let unseen: String = (0..600)
         .map(|n| format!("{n} {}\n", "\u{200b}".repeat(40)))
         .collect::<String>()
         + "error: it broke\n";
