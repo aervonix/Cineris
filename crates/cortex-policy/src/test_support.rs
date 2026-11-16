@@ -45,6 +45,10 @@ pub struct TestParts {
     /// The resolver a test gave; without one, paths are read as text with
     /// the home directory of the parts, whenever it was set.
     locate: Option<Arc<dyn Locate>>,
+    /// The resolver the parts start with, which `parts` replaces by the
+    /// text one when nothing else took its place: one set with `with` is
+    /// kept.
+    placeholder: Arc<dyn Locate>,
 }
 
 impl std::fmt::Debug for TestParts {
@@ -76,6 +80,7 @@ impl TestParts {
     /// | `clock` | a fake clock at [`START`] |
     pub fn at(workspace: AbsPath) -> Self {
         let clock: SharedClock = Arc::new(FakeClock::starting_at(START).unwrap_or_default());
+        let placeholder: Arc<dyn Locate> = Arc::new(Lexical::default());
         Self {
             parts: Parts {
                 lease_id: LeaseId::new("l_1"),
@@ -93,11 +98,12 @@ impl TestParts {
                 repository_trusted: true,
                 protected: Protected::none(),
                 shell: ShellSyntax::Posix,
-                locate: Arc::new(Lexical::default()),
+                locate: Arc::clone(&placeholder),
                 store: None,
                 clock,
             },
             locate: None,
+            placeholder,
         }
     }
 
@@ -189,12 +195,18 @@ impl TestParts {
 
     /// The parts.
     pub fn parts(self) -> Parts {
-        let Self { mut parts, locate } = self;
-        parts.locate = locate.unwrap_or_else(|| {
-            Arc::new(Lexical {
+        let Self {
+            mut parts,
+            locate,
+            placeholder,
+        } = self;
+        if let Some(locate) = locate {
+            parts.locate = locate;
+        } else if Arc::ptr_eq(&parts.locate, &placeholder) {
+            parts.locate = Arc::new(Lexical {
                 home: parts.home.clone(),
-            })
-        });
+            });
+        }
         parts
     }
 
@@ -275,6 +287,16 @@ mod tests {
             given.locate.locate(&path("/work/app"), "~/notes"),
             None,
             "a resolver the test gave is the one used"
+        );
+        // One set through `with` is kept too.
+        let through_with = TestParts::at(path("/work/app"))
+            .with(|parts| parts.locate = Arc::new(Lexical::default()))
+            .home(path("/users/dev"))
+            .parts();
+        assert_eq!(
+            through_with.locate.locate(&path("/work/app"), "~/notes"),
+            None,
+            "a resolver set through `with` is the one used"
         );
     }
 

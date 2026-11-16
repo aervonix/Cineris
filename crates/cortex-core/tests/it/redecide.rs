@@ -99,6 +99,64 @@ fn outcome_of(front: &Front, tool: &str, nth: usize) -> crate::Outcome {
         .unwrap_or_default()
 }
 
+/// Holds a round's calls as their tools are about to run until `call` has
+/// been asked about once, so that `call` is decided while the earlier
+/// call that changes the file system has not run. A round decides a call
+/// when it plans it, and under load a later call's planning could start
+/// after the earlier call had run, which left nothing to decide again
+/// (1 in 50 under `--cores 2 --load 6`, in the copy's test and the moved
+/// directory's).
+struct DecidedFirst {
+    hold: std::rc::Rc<cortex_testkit::Hold>,
+    /// How many calls were held when `call` was first asked about.
+    held: std::rc::Rc<std::cell::Cell<Option<usize>>>,
+    call: &'static str,
+}
+
+impl DecidedFirst {
+    fn new(call: &'static str) -> Self {
+        Self {
+            hold: std::rc::Rc::new(cortex_testkit::Hold::new(cortex_agent::BEFORE_A_CALL_RUNS)),
+            held: std::rc::Rc::new(std::cell::Cell::new(None)),
+            call,
+        }
+    }
+
+    /// What the front's answering does first with each request: at the
+    /// first question about `call`, notes how many calls wait and lets
+    /// them go.
+    fn on_ask(&self) -> impl Fn(&ApprovalRequest) + 'static {
+        let (hold, held, call) = (
+            std::rc::Rc::clone(&self.hold),
+            std::rc::Rc::clone(&self.held),
+            self.call,
+        );
+        move |request| {
+            if request.call_id.as_str() == call && held.get().is_none() {
+                held.set(Some(hold.stopped()));
+                hold.release();
+            }
+        }
+    }
+
+    /// The earlier call was held, not yet run, when `call` was first asked
+    /// about, and nothing was let go by the hold's bound.
+    fn check(&self) {
+        assert_eq!(
+            self.held.get(),
+            Some(1),
+            "the earlier call was held, not yet run, when {} was first asked about",
+            self.call
+        );
+        assert_eq!(
+            self.hold.timed_out(),
+            0,
+            "the earlier call waited for the question"
+        );
+        assert_eq!(self.hold.stopped(), 0);
+    }
+}
+
 /// The case the item names: a link to the workspace's root, then a copy to
 /// `d/.bashrc`, a protected path once `d` leads to the root. The copy was
 /// asked about as a command that is on no safe list, and allowed; decided
@@ -115,22 +173,13 @@ fn sys_a_copy_through_a_link_an_earlier_command_made_is_asked_about_again() {
     world.provider.push(says("Done."));
     world.put("evil", "echo evil\n");
     let core = world.core();
-    // The link is held as it is about to run until the copy has been
-    // asked about once: a round decides a call when it plans it, and under
-    // load the copy's planning could start after the link had run, which
-    // left nothing to decide again (1 in 50 under load).
-    let link_runs = std::rc::Rc::new(cortex_testkit::Hold::new(cortex_agent::BEFORE_A_CALL_RUNS));
+    // The link waits to run until the copy has been asked about once.
+    let order = DecidedFirst::new("c2");
     world.run(async {
         let front = Front::start(&world, &core).await;
-        let held = std::rc::Rc::clone(&link_runs);
-        let waiting_at_the_copys_question = std::rc::Rc::new(std::cell::Cell::new(None));
-        let seen = std::rc::Rc::clone(&waiting_at_the_copys_question);
+        let on_ask = order.on_ask();
         front.answering(Answering::with(move |request| {
-            if request.call_id.as_str() == "c2" && seen.get().is_none() {
-                // The copy is decided while the link waits to run.
-                seen.set(Some(held.stopped()));
-                held.release();
-            }
+            on_ask(request);
             if asks_about_protected(request, "app/.bashrc") {
                 ApprovalChoice::Deny
             } else {
@@ -138,17 +187,7 @@ fn sys_a_copy_through_a_link_an_earlier_command_made_is_asked_about_again() {
             }
         }));
         let end = front.turn("go").await;
-        assert_eq!(
-            waiting_at_the_copys_question.get(),
-            Some(1),
-            "the link was held, not yet run, when the copy was first asked about"
-        );
-        assert_eq!(
-            link_runs.timed_out(),
-            0,
-            "the link waited for the copy's question"
-        );
-        assert_eq!(link_runs.stopped(), 0);
+        order.check();
         assert_eq!(end.outcome, TurnOutcome::Completed);
         let approvals = front.approvals();
         assert_eq!(approvals.len(), 3, "{approvals:#?}");
@@ -468,13 +507,18 @@ fn sys_a_command_whose_directory_moved_is_asked_about_again() {
     world.put("other/README", "other\n");
     std::fs::create_dir_all(world.workspace.join("sub")).unwrap();
     let core = world.core();
+    // The move waits to run until the command in `sub` has been asked
+    // about once.
+    let order = DecidedFirst::new("c2");
     world.run(async {
         let front = Front::start(&world, &core).await;
         let in_other = |request: &ApprovalRequest| match &request.detail {
             ApprovalDetail::Command(command) => command.cwd.replace('\\', "/").ends_with("/other"),
             _ => false,
         };
+        let on_ask = order.on_ask();
         front.answering(Answering::with(move |request| {
+            on_ask(request);
             if in_other(request) {
                 ApprovalChoice::Deny
             } else {
@@ -483,6 +527,7 @@ fn sys_a_command_whose_directory_moved_is_asked_about_again() {
         }));
         let end = front.turn("go").await;
         assert_eq!(end.outcome, TurnOutcome::Completed);
+        order.check();
         let approvals = front.approvals();
         assert_eq!(approvals.len(), 3, "{approvals:#?}");
         assert_eq!(approvals[1].call_id.as_str(), "c2");

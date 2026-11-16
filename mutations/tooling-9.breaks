@@ -437,11 +437,20 @@ caught-by:
 rule: A resolver a test gives is the one its engine uses, in place of reading paths as text.
 file: crates/cortex-policy/src/test_support.rs
 in: TestParts::parts
-find: locate.unwrap_or_else(
-replace: locate.filter(|_| false).unwrap_or_else(
+find: if let Some(locate) = locate {
+replace: if let Some(locate) = locate.filter(|_| false) {
 caught-by:
     test_support::tests::the_home_directory_is_the_one_the_default_resolver_reads_tilde_as
     cortex-policy::it real_paths::*
+
+[break] test-parts-drop-a-resolver-set-through-with
+rule: A resolver set through `with` is kept: only the placeholder the parts start with is replaced by the text one.
+file: crates/cortex-policy/src/test_support.rs
+in: TestParts::parts
+find: } else if Arc::ptr_eq(&parts.locate, &placeholder) {
+replace: } else {
+caught-by:
+    test_support::tests::the_home_directory_is_the_one_the_default_resolver_reads_tilde_as
 
 [break] test-parts-level-is-not-set
 rule: A test's parts are at the level the test sets.
@@ -469,8 +478,10 @@ file: crates/cortex-agent/src/round.rs
 in: Round::start
 find: cortex_base::hook::await_point!(BEFORE_A_CALL_RUNS);
 replace:
+packages: cortex-core
 caught-by:
     cortex-core::it redecide::sys_a_copy_through_a_link_an_earlier_command_made_is_asked_about_again
+    cortex-core::it redecide::sys_a_command_whose_directory_moved_is_asked_about_again
 
 # From mutations/tooling-9-tui.breaks (part `tui`).
 # The ninth tooling step's TUI part: `cortex-tui`'s application test kit
