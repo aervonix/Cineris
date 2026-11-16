@@ -67,8 +67,10 @@ const CORE_END: Duration = Duration::from_secs(5);
 const LANE_END: Duration = Duration::from_secs(1);
 
 /// How long the core's end waits after a signal: the watchdog ends the
-/// process 3 s after the signal came.
-const SIGNAL_END: Duration = Duration::from_secs(2);
+/// process 3 s after the signal came, and before this the history's end has
+/// waited at most 1 s for its last prompts, so the core has 1.5 s and the
+/// rest is left for the log (the review of step 23's second pull request).
+const SIGNAL_END: Duration = Duration::from_millis(1500);
 
 /// Runs the interactive application. Returns the exit code.
 pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
@@ -159,7 +161,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
             (Box::new(link) as Box<dyn Link>, start)
         })
     }));
-    // After a signal the watchdog gives 3 s in all: the core has 2.
+    // After a signal the watchdog gives 3 s in all (`SIGNAL_END`).
     let signalled = matches!(&ended, Ok(Ok(Exit::Signal(_))));
     core.end(if signalled { SIGNAL_END } else { CORE_END });
     if let Some(log) = &log {
