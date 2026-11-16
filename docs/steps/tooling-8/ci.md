@@ -138,3 +138,29 @@ The PR's run is 43855401812, at `e14cd85`.
 | 3, system | 19.2 s (213 tests) | 19.0 s (207) | +0.2 s | 60 s |
 
 <!-- end of what cargo xtask ci-times wrote, section "ab-measure" -->
+
+## perf-ab, size, the test kit (the last pull request)
+
+<!-- written by cargo xtask ci-times, section "pr-68": it replaces this up to the end mark -->
+Pull request 68, on `main` at `fd8c1a3`. "Main" is main's own run at `fd8c1a3` (run 43856060523).
+The PR's run is 43857661310, at `fac5ae3`.
+
+| Job | Main, `fd8c1a3` | The PR at `fac5ae3` |
+|---|---|---|
+| `lint-linux` | 48 s | 49 s |
+| `test-linux` | 99 s | 84 s |
+| `lint-windows` | 94 s | 93 s |
+| `test-windows` | 210 s | 258 s |
+| `pr-size-${{ matrix.name }}` (blocks nothing) | 0 s | — |
+| `pr-size-linux` (blocks nothing) | — | 192 s |
+| `pr-size-windows` (blocks nothing) | — | 259 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `fac5ae3` (4 ms) | Windows, main (7 ms) | Windows, `fac5ae3` (10 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 14.1 s | 7.0 s | 13.0 s | 17.7 s |
+| Tier 2, integration (40 s) | 26.3 s | 17.6 s | 28.2 s | 38.2 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 23.0 s | 18.6 s | 85.4 s | 77.0 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "pr-68" -->
+
+**Reading the last pull request's Windows times.** Its `test-windows` took 258 s where `main`'s took 210 s, and its tiers 1 and 2 read higher, on a runner whose test process starts in 10 ms against `main`'s 7 ms: a slower runner. On one runner (the A/B above, `try` 43855504863) tiers 1 and 2 moved by −0.4 and −0.5 s, and tier 3 by +2.4 s, which is the five new process tests of the console's close (two of the application, three of the driver). Every job stays under 5 minutes.
