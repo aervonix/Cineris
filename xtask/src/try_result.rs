@@ -1143,7 +1143,7 @@ mod tests {
             .unwrap_or_else(|| panic!("{}", result.text));
         assert!(row.contains("28.50 (28.00 to 29.00)"), "{row}");
         assert!(row.contains("31.50 (31.00 to 32.50)"), "{row}");
-        assert!(row.contains("+3.000 (+10.5%)"), "{row}");
+        assert!(row.contains("+3.00 (+10.5%)"), "{row}");
         assert!(result.text.contains("against main"), "{}", result.text);
         assert!(
             !result.text.contains("Performance tests ("),

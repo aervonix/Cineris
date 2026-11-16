@@ -390,3 +390,12 @@ find: let shown = format!("{value:.6}");
 replace: let shown = format!("{value}");
 caught-by:
     numbers::tests::a_measurement_is_a_line_that_reads_back
+
+[break] a-release-build-is-measured-with-its-symbols
+rule: A release build is stripped as the shipped one is, or its size is mostly its symbol table's.
+file: xtask/src/nonblocking.rs
+in: stripped_as_shipped
+find: if profile == PROFILE {
+replace: if true {
+caught-by:
+    nonblocking::tests::a_release_build_is_stripped_as_the_shipped_one_is_and_dist_is_left_alone
