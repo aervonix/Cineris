@@ -265,20 +265,22 @@ caught-by:
     cortex-cli::bin/cortex serve::tests::the_approval_time_limit_is_the_settings_and_nothing_is_none
 
 [break] unrestricted-reaches-the-core-from-any-client
-rule: A client may ask for a session at `unrestricted` only when the server's own command line or configuration allows it.
-file: crates/cortex-rpc/src/connection.rs
-in: Connection::request
-find: op if !self.shared.options.allow_unrestricted && asks_for_unrestricted(&op) =>
-replace: op if false && asks_for_unrestricted(&op) =>
+rule: A client may have a session at `unrestricted` only when the server's own command line or configuration allows it: the core refuses one that would start there.
+file: crates/cortex-core/src/assemble.rs
+in: assemble
+find: if !options.allow_unrestricted
+replace: if options.allow_unrestricted
+packages: cortex-core, cortex-rpc
 caught-by:
     cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
 
 [break] an-override-of-the-mode-passes-the-gate
-rule: A configuration override of `permissions.mode` to `unrestricted`, nested, dotted or in a profile, is refused as the level is.
-file: crates/cortex-rpc/src/connection.rs
-in: sets_unrestricted
-find: && (key == "permissions.mode" || key.ends_with(".permissions.mode"))
-replace: && key == "level"
+rule: A configuration override of `permissions.mode` to `unrestricted`, however it is spelled, is refused as the level is: the core judges what the configuration comes to.
+file: crates/cortex-core/src/assemble.rs
+in: assemble
+find: && loaded.settings.permissions.mode == cortex_protocol::lease::Level::Unrestricted
+replace: && wanted.settings.level == Some(cortex_protocol::lease::Level::Unrestricted)
+packages: cortex-core, cortex-rpc
 caught-by:
     cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
 

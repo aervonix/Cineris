@@ -321,3 +321,17 @@ replace: if false && !asked.contains(&client) {
 caught-by:
     cortex-core::it approvals::a_client_that_opens_the_session_while_an_approval_is_being_put_is_put_it
 
+
+# ------------------------------------------------- the review of the second pull request
+
+
+[break] a-raise-to-unrestricted-is-taken
+rule: Where the core may not give `unrestricted`, `session/set` raising a session to it is refused.
+file: crates/cortex-core/src/core.rs
+in: set
+find: if level == Level::Unrestricted && !inner.options.allow_unrestricted {
+replace: if level == Level::Unrestricted && inner.options.allow_unrestricted {
+packages: cortex-core, cortex-rpc
+caught-by:
+    cortex-core::it settings::unrestricted_is_refused_where_the_core_may_not_give_it
+    cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow

@@ -98,8 +98,9 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
     // server on standard I/O has one client, whose end is the server's.
     options.keep_sessions = serve.socket.is_some();
     // Only the server's own command line or configuration may let a client
-    // ask for `unrestricted`.
-    let allow_unrestricted = matches!(
+    // have a session at `unrestricted`: the core refuses one otherwise, on
+    // what its configuration comes to.
+    options.allow_unrestricted = matches!(
         loaded.settings.permissions.mode,
         cortex_protocol::lease::Level::Unrestricted
     );
@@ -126,7 +127,7 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
         .spawn(move || {
             let code = core_thread(
                 options,
-                (stalled_client, allow_unrestricted, over),
+                (stalled_client, over),
                 (&core_stop, &core_ending),
                 &ready,
                 name,
@@ -252,7 +253,7 @@ async fn poll_either(first: impl Future<Output = ()>, second: impl Future<Output
 /// exit code.
 fn core_thread(
     options: cortex_core::CoreOptions,
-    (stalled_client, allow_unrestricted, over): (Duration, bool, Over),
+    (stalled_client, over): (Duration, Over),
     (stop, ending): (&CancelToken, &CancelToken),
     ready: &std::sync::mpsc::Receiver<()>,
     name: &str,
@@ -285,7 +286,6 @@ fn core_thread(
         let timer: SharedTimer = Arc::new(TokioTimer);
         let mut serving = ServeOptions::new(timer);
         serving.stalled_client = stalled_client;
-        serving.allow_unrestricted = allow_unrestricted;
         let Over::Socket {
             named,
             runtime,
