@@ -1,0 +1,8 @@
+◇ Done. 1_000 lexes as one integer, 1_ is an error with its own message, and the
+  new test covers both.
+? This file was changed after the turn that changed it: `crates/parser/src/lex.rs`. Put it back as
+  it was before that turn, losing those changes?
+
+  1 Put them back   2 Keep them as they are
+
+  esc leaves it unanswered                                                   opus-5.5 high · fast

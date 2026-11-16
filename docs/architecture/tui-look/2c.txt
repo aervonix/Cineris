@@ -1,0 +1,13 @@
+? Trust this project?
+  ~/src/parser
+  Trusting it turns on what its files ask for:
+    git      Git may read this repository's own configuration, which can name programs for git to
+             run: it is how the harness sees what a command changed, and reads the repository's
+             state.
+    rule     allow write .github/**
+    rule     allow exec make deploy (profile ci)
+    setting  model.main = "claude-haiku-5-5" (it can raise what you spend)
+
+  y Trust it   n Not now   x Never for this project
+
+  esc is not now · ctrl+o shows it whole

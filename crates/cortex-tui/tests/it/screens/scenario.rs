@@ -3,15 +3,30 @@
 //! lexer, runs the tests, sees one fail, and streams the fix while the user
 //! types a steering message. Each screen is composed from the real views as
 //! the interactive application will compose them: step 22's views, step
-//! 21's input box and menus, and step 23's dialogs, placeholder and viewer
-//! frame. The rows other steps draw (the panels) are marked as not built
-//! yet, with the step that builds them.
+//! 21's input box and menus, and step 23's placeholder and viewer frame.
+//! A dialog is the application's own: [`App`] is given the request through
+//! a scripted core, in a window of the screen's size, and its live region
+//! is taken from the frame it draws once the dialog takes keys (the review
+//! of step 23). The rows other steps draw (the panels) are marked as not
+//! built yet, with the step that builds them.
 
-use std::time::Duration;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
-use cortex_protocol::methods::{ApprovalDetail, ApprovalRequest, CommandDetail, DiffDetail};
-use cortex_protocol::{CallId, SessionId, TurnId};
+use cortex_protocol::jsonrpc::RequestId;
+use cortex_protocol::lease::Effect;
+use cortex_protocol::methods::{
+    AddedRule, ApprovalChoice, ApprovalDetail, ApprovalRequest, CommandDetail, DiffDetail,
+    QuestionRequest, SessionResult, TrustRequest, TrustResource, TrustResourceKind,
+};
+use cortex_protocol::session::{RoleState, SandboxStatus, SessionSettings, SessionState};
+use cortex_protocol::{
+    CallId, Level, ModelId, ModelRole, Op, OpResult, ProviderId, ServerRequest, ServerResponse,
+    SessionId, Speed as Pace, Timestamp, TurnId,
+};
 use cortex_term::{ColorDepth, Event, Key, KeyCode, Line};
+use cortex_tui::app::{App, GlyphSet, Inbound, Link, Open, Settings, Start, Ticket};
 use cortex_tui::complete::{Menu, Row as Choice, Toggle};
 use cortex_tui::glyphs::Glyphs;
 use cortex_tui::highlight::Highlighter;
@@ -21,7 +36,6 @@ use cortex_tui::keys::KeyMap;
 use cortex_tui::markdown::Markdown;
 use cortex_tui::theme::{Rgb, Theme};
 use cortex_tui::transcript::{Block, Reasoning, Transcript};
-use cortex_tui::view::dialog::{Answer, ApprovalView};
 use cortex_tui::view::viewer::{ViewerKeys, ViewerTitle};
 use cortex_tui::view::{
     self, Call, CallState, Change, Detail, DiffLine, Header, Hint, HintRow, Look, Measure,
@@ -54,7 +68,7 @@ pub(crate) struct Spec {
 }
 
 /// Every reference screen.
-pub(crate) const SPECS: [Spec; 17] = [
+pub(crate) const SPECS: [Spec; 19] = [
     spec("0"),
     spec("1"),
     spec("1b"),
@@ -62,6 +76,8 @@ pub(crate) const SPECS: [Spec; 17] = [
     spec("1d"),
     spec("2a"),
     spec("2b"),
+    spec("2c"),
+    spec("2d"),
     spec("3a"),
     spec("3b"),
     spec("4"),
@@ -393,32 +409,25 @@ impl Compose<'_> {
         self.input(&input);
     }
 
-    /// An approval dialog for `request`, every answer on offer, as the
-    /// application draws it: the dialog, then a blank row above the hint.
-    fn approval(&mut self, request: &ApprovalRequest, diff: &[DiffLine], answers: &[(&str, &str)]) {
-        let leaving = view::dialog::outside_sandbox(request);
-        let drawn = view::dialog::approval(
-            request,
-            &ApprovalView {
-                answers: answers
-                    .iter()
-                    .map(|(key, label)| Answer {
-                        key: (*key).to_owned(),
-                        label: (*label).to_owned(),
-                    })
-                    .collect(),
-                answers_hidden: false,
-                diff,
-                detail_rows: usize::MAX,
-                note: None,
-                leaving,
-                withheld: false,
-            },
-            self.width,
-            self.look,
+    /// The application's live region for `request`, asked in `session` (or
+    /// while the session is being opened), in a window `height` rows high:
+    /// the dialog, its blank row and its hint row, as the frame shows them
+    /// once the dialog takes keys. The screen is that height in all.
+    fn dialog(
+        &mut self,
+        spec: Spec,
+        background: Rgb,
+        height: usize,
+        session: Option<SessionState>,
+        request: ServerRequest,
+    ) {
+        self.lines(app_dialog(spec, background, height, session, request));
+        assert_eq!(
+            self.rows.len(),
+            height,
+            "screen {} is as high as the window the application drew it in",
+            spec.id
         );
-        self.lines(drawn.lines);
-        self.rows.push(Row::Built(Line::new()));
     }
 
     /// Step 21's menu, open in `input`, in the hint row's place.
@@ -487,66 +496,35 @@ fn effort_picker() -> Menu {
     )
 }
 
-/// The request of screen 2a: an edit of a protected file, with its reason.
+/// The request of screen 2a: an edit of a protected file, with its reason,
+/// which may be allowed for longer.
 fn ci_edit() -> ApprovalRequest {
     request(
         "edit",
         "Edit .github/workflows/ci.yml",
         ApprovalDetail::Diff(DiffDetail {
             path: ".github/workflows/ci.yml".to_owned(),
-            diff: String::new(),
+            diff: [
+                "@@ -29,3 +29,4 @@",
+                "       - uses: dtolnay/rust-toolchain@stable",
+                "-        with: { components: rustfmt }",
+                "+        with: { components: rustfmt, clippy }",
+                "       - run: cargo test --workspace",
+                "+      - run: cargo clippy --workspace -- -D warnings",
+                "",
+            ]
+            .join("\n"),
             omitted: None,
         }),
         vec!["CI configuration is protected, so a change to it always asks.".to_owned()],
     )
 }
 
-/// Its diff, as the application reads it from the request's.
-fn ci_diff() -> Vec<DiffLine> {
-    let line = |number, change, text: &str, emphasis: Vec<std::ops::Range<usize>>| DiffLine {
-        number,
-        change,
-        text: text.to_owned(),
-        emphasis,
-    };
-    vec![
-        line(
-            29,
-            Change::Same,
-            "      - uses: dtolnay/rust-toolchain@stable",
-            Vec::new(),
-        ),
-        line(
-            30,
-            Change::Removed,
-            "        with: { components: rustfmt }",
-            Vec::new(),
-        ),
-        line(
-            30,
-            Change::Added,
-            "        with: { components: rustfmt, clippy }",
-            std::iter::once(37..43).collect(),
-        ),
-        line(
-            31,
-            Change::Same,
-            "      - run: cargo test --workspace",
-            Vec::new(),
-        ),
-        line(
-            32,
-            Change::Added,
-            "      - run: cargo clippy --workspace -- -D warnings",
-            Vec::new(),
-        ),
-    ]
-}
-
 /// The request of screen 2b: a command that needs the network, to run
-/// outside the sandbox.
+/// outside the sandbox. It is asked with every answer the core offers a
+/// command; leaving the sandbox offers none that lasts.
 fn publish_outside() -> ApprovalRequest {
-    request(
+    let mut request = request(
         "shell",
         "Run cargo publish --dry-run -p parser",
         ApprovalDetail::Command(CommandDetail {
@@ -555,7 +533,12 @@ fn publish_outside() -> ApprovalRequest {
             outside_sandbox: true,
         }),
         Vec::new(),
-    )
+    );
+    request.adds = vec![AddedRule {
+        effect: Effect::Exec,
+        pattern: "cargo publish *".to_owned(),
+    }];
+    request
 }
 
 fn request(
@@ -565,16 +548,243 @@ fn request(
     reasons: Vec<String>,
 ) -> ApprovalRequest {
     ApprovalRequest {
-        session_id: SessionId::from("s_screens"),
+        session_id: SessionId::from(SESSION),
         turn_id: TurnId::from("t_3"),
         call_id: CallId::from("c_1"),
         tool: tool.to_owned(),
         summary: summary.to_owned(),
         detail,
-        choices: Vec::new(),
+        choices: vec![
+            ApprovalChoice::AllowOnce,
+            ApprovalChoice::AllowSession,
+            ApprovalChoice::AllowProject,
+            ApprovalChoice::Deny,
+        ],
         reasons,
         adds: Vec::new(),
     }
+}
+
+/// The trust question of screen 2c, as the core asks it when a session of
+/// this workspace opens: its repository, a rule of its own, one of a
+/// profile it defines, and a setting held back until it is trusted.
+fn trust_question() -> TrustRequest {
+    let resource = |kind, name: &str, detail: &str| TrustResource {
+        kind,
+        name: name.to_owned(),
+        detail: detail.to_owned(),
+        changed: false,
+    };
+    TrustRequest {
+        session_id: SessionId::from(SESSION),
+        workspace: "~/src/parser".to_owned(),
+        resources: vec![
+            resource(
+                TrustResourceKind::Repository,
+                "git",
+                "Git may read this repository's own configuration, which can name programs for \
+                 git to run: it is how the harness sees what a command changed, and reads the \
+                 repository's state.",
+            ),
+            resource(
+                TrustResourceKind::Rules,
+                "permissions.rules",
+                "allow write .github/**",
+            ),
+            resource(
+                TrustResourceKind::Rules,
+                "profiles.ci.permissions.rules",
+                "allow exec make deploy",
+            ),
+            resource(
+                TrustResourceKind::Settings,
+                "model.main",
+                "model.main = \"claude-haiku-5-5\" (it can raise what you spend)",
+            ),
+        ],
+    }
+}
+
+/// The question of screen 2d: the undo's, as the core asks it when a file
+/// the turn changed was changed again since.
+fn undo_question() -> QuestionRequest {
+    QuestionRequest {
+        session_id: SessionId::from(SESSION),
+        turn_id: None,
+        question: "This file was changed after the turn that changed it: \
+                   `crates/parser/src/lex.rs`. Put it back as it was before that turn, losing \
+                   those changes?"
+            .to_owned(),
+        choices: vec![
+            "Put them back".to_owned(),
+            "Keep them as they are".to_owned(),
+        ],
+        extension: None,
+    }
+}
+
+const SESSION: &str = "s_screens";
+
+/// The height of screen 2c's window: its dialog, the blank row and the
+/// hint row, with no room to spare.
+const TRUST_HEIGHT: usize = 13;
+
+/// The height of screen 2d's window.
+const UNDO_HEIGHT: usize = 8;
+
+/// The session the screens show, as the core gives it to the application:
+/// `claude-opus-5-5` at high effort and fast, its commands confined.
+fn session() -> SessionState {
+    let mut roles = BTreeMap::new();
+    roles.insert(
+        ModelRole::Main,
+        RoleState {
+            provider: ProviderId::from("anthropic"),
+            model: ModelId::from("claude-opus-5-5"),
+            effort: Some("high".to_owned()),
+            effort_in_effect: Some("high".to_owned()),
+            speed: Pace::Fast,
+            speed_in_effect: Pace::Fast,
+            speed_cooldown_until: None,
+        },
+    );
+    SessionState {
+        session_id: SessionId::from(SESSION),
+        workspace: "/work/parser".to_owned(),
+        title: None,
+        created_at: Timestamp::from("2026-11-14T14:02:00Z"),
+        parent: None,
+        level: Level::Supervised,
+        lease_id: None,
+        sandbox: SandboxStatus::Enforcing,
+        speed: Pace::Fast,
+        roles,
+        seq: 0,
+        running_turn: None,
+        queue_length: 0,
+        write_roots: vec!["/work/parser".to_owned()],
+        trust: None,
+    }
+}
+
+/// What the scripted core has been sent, and what it gives next.
+#[derive(Debug, Default)]
+struct Script {
+    next: u64,
+    sent: Vec<(Ticket, Op)>,
+    inbound: VecDeque<Inbound>,
+}
+
+/// The core, scripted: the application's link to it records what is sent
+/// and gives what the screen queued.
+#[derive(Debug, Clone, Default)]
+struct Core(Arc<Mutex<Script>>);
+
+impl Core {
+    fn script(&self) -> std::sync::MutexGuard<'_, Script> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Link for Core {
+    fn send(&mut self, op: Op) -> Ticket {
+        let mut script = self.script();
+        script.next += 1;
+        let ticket = Ticket(script.next);
+        script.sent.push((ticket, op));
+        ticket
+    }
+
+    fn respond(&mut self, _: RequestId, _: ServerResponse) {}
+
+    fn next(&mut self) -> Option<Inbound> {
+        self.script().inbound.pop_front()
+    }
+}
+
+/// The live region [`App`] draws for `request` in a window of `spec`'s
+/// width and `height` rows, on a terminal of `spec`'s depth and glyphs
+/// whose background is `background`: the session is opened as `session`
+/// (or, with `None`, is still being opened, as when the trust question is
+/// asked), the request comes, and the frame is the one the loop draws when
+/// the dialog is ready for keys, its answers shown.
+fn app_dialog(
+    spec: Spec,
+    background: Rgb,
+    height: usize,
+    session: Option<SessionState>,
+    request: ServerRequest,
+) -> Vec<Line> {
+    let core = Core::default();
+    let start = Start {
+        version: "0.1.0".to_owned(),
+        folder: "~/src/parser".to_owned(),
+        workspace: "/work/parser".to_owned(),
+        open: Open::New {
+            workspace: "/work/parser".to_owned(),
+            settings: SessionSettings::default(),
+            ephemeral: false,
+        },
+        prompt: None,
+        settings: Settings {
+            glyphs: if spec.ascii {
+                GlyphSet::Ascii
+            } else {
+                GlyphSet::Unicode
+            },
+            ..Settings::default()
+        },
+        keymap: KeyMap::defaults(),
+        notices: Vec::new(),
+        history: Box::new(MemoryHistory::new()),
+        highlighter: Highlighter::off(),
+    };
+    let mut caps = super::capabilities(spec);
+    caps.background = Some(background);
+    let began = Instant::now();
+    let mut app = App::new(
+        Box::new(core.clone()),
+        start,
+        &caps,
+        spec.columns - 1,
+        height,
+        began,
+    );
+    let drain = |app: &mut App| while app.drain(began, 64).more {};
+    // The first frame opens the session.
+    let _ = app.frame(began);
+    app.drawn(began);
+    if let Some(session) = session {
+        let opened = core
+            .script()
+            .sent
+            .iter()
+            .find(|(_, op)| matches!(op, Op::SessionNew(_)))
+            .map(|(ticket, _)| *ticket)
+            .expect("the session is opened after the first frame");
+        core.script().inbound.push_back(Inbound::Done(
+            opened,
+            Ok(OpResult::SessionNew(SessionResult { session })),
+        ));
+        drain(&mut app);
+    }
+    core.script()
+        .inbound
+        .push_back(Inbound::Request(RequestId::from(1), request));
+    drain(&mut app);
+    // The dialog's first frame, its answers not shown yet; then the frame
+    // the loop draws when it is ready for keys.
+    let _ = app.frame(began);
+    app.drawn(began);
+    let ready = app.deadline().expect("the dialog's answers are due");
+    let (_, live, _) = app.frame(ready);
+    app.drawn(ready);
+    assert_eq!(
+        app.deadline(),
+        None,
+        "the frame showed the dialog's answers"
+    );
+    live
 }
 
 /// The viewer's title in screens 8a and 8b.
@@ -673,32 +883,40 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
                 "The dry run has to reach crates.io, and the sandbox has no network. I'll ask to run it outside the sandbox."
             }));
             screen.transcript(&mut transcript, 0);
-            if spec.id == "2a" {
-                screen.approval(
-                    &ci_edit(),
-                    &ci_diff(),
-                    &[
-                        ("y", "Allow once"),
-                        ("s", "Allow this session"),
-                        ("a", "Always allow here"),
-                        ("n", "Deny"),
-                        ("e", "Deny with a note"),
-                    ],
-                );
+            let (height, request) = if spec.id == "2a" {
+                (18, ci_edit())
             } else {
-                screen.approval(
-                    &publish_outside(),
-                    &[],
-                    &[("y", "Run once outside the sandbox"), ("n", "Deny")],
-                );
-            }
-            screen.hint(&hint(
-                Hint::Keys(vec![
-                    "esc denies".to_owned(),
-                    "ctrl+o shows it whole".to_owned(),
-                ]),
-                true,
-            ));
+                (19, publish_outside())
+            };
+            screen.dialog(
+                spec,
+                background,
+                height,
+                Some(session()),
+                ServerRequest::Approval(request),
+            );
+        }
+        // The trust question, asked as the session opens, before anything
+        // of it is shown: the window is as high as the dialog and its
+        // chrome, so that the dialog fits it exactly.
+        "2c" => screen.dialog(
+            spec,
+            background,
+            TRUST_HEIGHT,
+            None,
+            ServerRequest::Trust(trust_question()),
+        ),
+        // The undo's question, after the turn's answer.
+        "2d" => {
+            transcript.push(answer(DONE));
+            screen.transcript(&mut transcript, 0);
+            screen.dialog(
+                spec,
+                background,
+                UNDO_HEIGHT,
+                Some(session()),
+                ServerRequest::Question(undo_question()),
+            );
         }
         "3a" | "3b" => {
             transcript.push(answer(DONE));
