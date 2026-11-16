@@ -32,7 +32,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [the-export-command-has-no-step](the-export-command-has-no-step.md): `/export`, in 09-tui's commands, is built by no step. Owner: the owner.
 - [the-maps-share-of-the-context-record](the-maps-share-of-the-context-record.md): The repository map is counted among the notices in the context record, so the profiler cannot say what it costs. Owner: step 44, or step 16.
 - [the-token-counting-endpoint-near-the-limit](the-token-counting-endpoint-near-the-limit.md): The provider's token-counting endpoint is never asked near the limit; needs a `Protocol` method and loop call. Owner: a later step that touches the budget, or step 33.
-- [a-call-decided-before-its-rule-was-taken-back](a-call-decided-before-its-rule-was-taken-back.md): Of two calls in one response, the second runs on the decision it was given though its allow (a learned command, an approval, the level) was taken back while the first waited. Owner: the queued "re-decide" step (`worktree-step-12-redecide`).
 
 ### cortex-base
 

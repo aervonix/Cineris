@@ -60,6 +60,7 @@ caught-by:
     redecide::a_call_decided_before_a_rule_was_taken_back_is_decided_again
     cortex-core::it redecide::a_call_allowed_by_an_approval_revoked_while_it_waits_is_asked_about
     cortex-core::it redecide::a_call_decided_before_the_level_was_lowered_is_decided_again_and_refused
+    cortex-core::it knowledge::sys_a_learned_command_turned_off_while_an_earlier_call_waits_is_asked_about
 
 [break] no-wait-for-a-later-running-call
 rule: A call decided again waits for a call it now conflicts with that is running, a later one too.
@@ -116,8 +117,20 @@ file: crates/cortex-policy/src/engine.rs
 in: Engine::set_learned
 find: if before.iter().any(|rule| !kept.contains(&rule)) {
 replace: if false {
+packages: cortex-policy, cortex-core
 caught-by:
     cortex-policy::it narrowed::taking_a_learned_command_off_narrows_and_adding_one_does_not
+    cortex-core::it knowledge::sys_a_learned_command_turned_off_while_an_earlier_call_waits_is_asked_about
+
+[break] a-new-engine-without-the-learned-commands
+rule: An engine put in force for a change of level is given the session's learned commands with the swap.
+file: crates/cortex-core/src/policy.rs
+in: EngineInForce::replace_with
+find: let given = engine.set_learned(learned);
+replace: let given = { let _ = learned; Ok(()) };
+caught-by:
+    cortex-core policy::tests::a_new_engine_is_put_in_force_with_the_learned_commands_given
+    cortex-core::it knowledge::sys_a_change_of_level_keeps_what_was_accepted_and_nothing_that_was_turned_off
 
 [break] a-learned-list-refused-whole-does-not-narrow
 rule: A learned list refused whole takes away the learned rules in force, which counts as a narrowing.
@@ -131,7 +144,7 @@ caught-by:
 [break] a-new-engine-is-no-narrowing
 rule: Another engine in force for a change of level counts as a narrowing, and carries the count of the one it replaces.
 file: crates/cortex-core/src/policy.rs
-in: EngineInForce::replace
+in: EngineInForce::replace_with
 find: in_force.narrowed() + 1
 replace: 0
 caught-by:
@@ -185,7 +198,7 @@ caught-by:
 [break] a-new-engine-keeps-the-approvals-it-was-made-with
 rule: Another engine put in force takes over the approvals of the one in force at that moment: a revoke made meanwhile is not lost.
 file: crates/cortex-core/src/policy.rs
-in: EngineInForce::replace
+in: EngineInForce::replace_with
 find: engine.keep_approvals_of(&in_force);
 replace:
 caught-by:
@@ -203,7 +216,7 @@ caught-by:
 [break] a-replacement-takes-no-lock
 rule: Another engine is put in force under the lock a revoke and a record hold, so neither is lost to it.
 file: crates/cortex-core/src/policy.rs
-in: EngineInForce::replace
+in: EngineInForce::replace_with
 find: let _changing = self.changing.lock().unwrap_or_else(PoisonError::into_inner);
 replace:
 caught-by:

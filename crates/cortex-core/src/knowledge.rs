@@ -46,7 +46,8 @@
 //!
 //! [`Knowledge`] keeps the rules it last gave the engine, with the
 //! snapshot they were made from. A change of level makes a new engine,
-//! which is given them again from here ([`Knowledge::reapply`]); nothing
+//! which is given them from here as it is put in force
+//! ([`Knowledge::put_in_force`], under this lock and then the policy's); nothing
 //! else holds them, so a command the user turned off cannot come back
 //! with a new engine. They are changed, and handed to an engine, only
 //! under their own lock: two changes at once leave the engine with the
@@ -427,8 +428,7 @@ impl Knowledge {
         if given.rules == rules {
             return;
         }
-        let engine = self.policy.engine();
-        match engine.set_learned(rules.clone()) {
+        match self.policy.set_learned(rules.clone()) {
             Ok(()) => given.rules = rules,
             Err(errors) => {
                 // No learned rule is in force then.
@@ -447,7 +447,9 @@ impl Knowledge {
             }
         }
         drop(given);
-        let waiting = engine
+        let waiting = self
+            .policy
+            .engine()
             .withheld()
             .iter()
             .filter(|rule| rule.source == cortex_policy::RuleSource::Learned)
@@ -460,11 +462,15 @@ impl Knowledge {
         }
     }
 
-    /// Gives the engine in force the learned rules again: after a change
-    /// of level made a new one.
-    pub(crate) fn reapply(&self) {
+    /// Puts `engine` in force for a change of level, with the learned
+    /// rules: read under this module's lock, and handed to the engine with
+    /// the swap under the policy's (the re-decide step of step 12). The
+    /// order is this lock, then the policy's, everywhere. So the new engine
+    /// never runs without them, and a command turned off while the level
+    /// changed is off in it.
+    pub(crate) fn put_in_force(&self, engine: cortex_policy::Engine) {
         let given = regive(&self.learned, |rules| {
-            self.policy.engine().set_learned(rules)
+            self.policy.replace_with(engine, rules)
         });
         if let Err(errors) = given {
             tracing::warn!(

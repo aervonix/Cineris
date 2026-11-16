@@ -64,8 +64,9 @@ pub struct PermissionDenial {
     pub reason: String,
 }
 
-/// The point inside a change of the approvals, with the engine in force
-/// taken and nothing changed yet: a test holds a revoke or a record there.
+/// The point inside a change of the approvals or the learned commands, with
+/// the engine in force taken and nothing changed yet: a test holds a
+/// revoke, a record or a hand-over of learned commands there.
 pub(crate) const CHANGING_APPROVALS: &str = "core.policy.changing-approvals";
 
 /// The point where another engine is about to be put in force, with the
@@ -74,10 +75,10 @@ pub(crate) const REPLACING: &str = "core.policy.replacing";
 
 /// The engine in force, and what changes it beside the calls it decides:
 /// another engine put in force for a change of level, approvals recorded
-/// and taken back, and a turn stopped. A learned command turned on or off
-/// at run time (step 17's wiring) is one more such change: it takes the
-/// lock too, and a change of level reads the session's learned commands
-/// under it, so that neither loses the other.
+/// and taken back, learned commands handed over, and a turn stopped. The
+/// learned commands are kept by `knowledge` under a lock of its own, taken
+/// before this one: a change of level reads them under it and hands them
+/// to the new engine here, with the swap ([`EngineInForce::replace_with`]).
 ///
 /// A change of level makes its engine, writes the new lease to the log,
 /// and only then puts the engine in force. An approval recorded or taken
@@ -135,13 +136,45 @@ impl EngineInForce {
     /// decided before it is decided again by the new engine, at a cost of
     /// microseconds.
     pub(crate) fn replace(&self, engine: Engine) {
+        // A session with no learned commands: the new engine has none, as
+        // its template has none.
+        let _ = self.replace_with(engine, Vec::new());
+    }
+
+    /// [`replace`](Self::replace), with the session's learned commands
+    /// given to `engine` under the same lock, before it is in force: so the
+    /// new engine never runs without them, and a command turned off while
+    /// the level changed is off in it (step 17 keeps the list, under a lock
+    /// of its own taken before this one). A list that cannot be used leaves
+    /// no learned command in force, as [`Engine::set_learned`] does; the
+    /// engine is put in force all the same.
+    pub(crate) fn replace_with(
+        &self,
+        engine: Engine,
+        learned: Vec<cortex_protocol::lease::Rule>,
+    ) -> Result<(), Vec<cortex_policy::RuleError>> {
         let _changing = self.changing.lock().unwrap_or_else(PoisonError::into_inner);
         cortex_base::hook::point(REPLACING);
         let mut in_force = self.engine.write().unwrap_or_else(PoisonError::into_inner);
         engine.keep_approvals_of(&in_force);
+        let given = engine.set_learned(learned);
         self.beside
             .fetch_add(in_force.narrowed() + 1, std::sync::atomic::Ordering::AcqRel);
         *in_force = Arc::new(engine);
+        given
+    }
+
+    /// Gives the engine in force the session's learned commands, in place
+    /// of the ones it had ([`Engine::set_learned`]), never one a change of
+    /// level is replacing.
+    pub(crate) fn set_learned(
+        &self,
+        rules: Vec<cortex_protocol::lease::Rule>,
+    ) -> Result<(), Vec<cortex_policy::RuleError>> {
+        let _changing = self.changing.lock().unwrap_or_else(PoisonError::into_inner);
+        let engine = self.get();
+        cortex_base::hook::point(CHANGING_APPROVALS);
+        engine.set_learned(rules)
     }
 
     /// Takes approvals back from the engine in force, by id. Writing the
@@ -306,6 +339,25 @@ impl EnginePolicy {
     /// ([`EngineInForce::replace`]).
     pub(crate) fn replace(&self, engine: Engine) {
         self.in_force.replace(engine);
+    }
+
+    /// Puts another engine in force with the session's learned commands
+    /// ([`EngineInForce::replace_with`]).
+    pub(crate) fn replace_with(
+        &self,
+        engine: Engine,
+        learned: Vec<cortex_protocol::lease::Rule>,
+    ) -> Result<(), Vec<cortex_policy::RuleError>> {
+        self.in_force.replace_with(engine, learned)
+    }
+
+    /// Gives the engine in force the session's learned commands
+    /// ([`EngineInForce::set_learned`]).
+    pub(crate) fn set_learned(
+        &self,
+        rules: Vec<cortex_protocol::lease::Rule>,
+    ) -> Result<(), Vec<cortex_policy::RuleError>> {
+        self.in_force.set_learned(rules)
     }
 
     /// Takes approvals back from the engine in force, by id: never from one
@@ -936,7 +988,11 @@ mod tests {
         let asked = question(&first);
         let in_force = Arc::new(EngineInForce::new(first));
         type Change = Box<dyn FnOnce(&EngineInForce) + Send>;
-        let changes: [(&str, &str, Change); 3] = [
+        let rule = || {
+            cortex_policy::exact_command_rule("cargo test", cortex_policy::ShellSyntax::Posix)
+                .expect("a rule")
+        };
+        let changes: [(&str, &str, Change); 5] = [
             (
                 "a record",
                 CHANGING_APPROVALS,
@@ -960,6 +1016,22 @@ mod tests {
                 REPLACING,
                 Box::new(|in_force: &EngineInForce| in_force.replace(engine())),
             ),
+            (
+                "a hand-over of learned commands",
+                CHANGING_APPROVALS,
+                Box::new(move |in_force: &EngineInForce| {
+                    in_force.set_learned(vec![rule()]).expect("learned");
+                }),
+            ),
+            (
+                "a replacement with learned commands",
+                REPLACING,
+                Box::new(move |in_force: &EngineInForce| {
+                    in_force
+                        .replace_with(engine(), vec![rule()])
+                        .expect("learned");
+                }),
+            ),
         ];
         for (what, point, change) in changes {
             let held = cortex_testkit::Hold::new(point);
@@ -975,6 +1047,35 @@ mod tests {
             held.release();
             working.join().expect("no panic");
         }
+    }
+
+    /// A change of level hands the session's learned commands to the new
+    /// engine with the swap, under the lock: the engine in force has them
+    /// from the moment it is in force. A list that cannot be used leaves
+    /// none in force, and the engine is put in force all the same.
+    #[test]
+    fn a_new_engine_is_put_in_force_with_the_learned_commands_given() {
+        let rule =
+            cortex_policy::exact_command_rule("cargo test", cortex_policy::ShellSyntax::Posix)
+                .expect("a rule");
+        let in_force = EngineInForce::new(engine());
+        in_force
+            .replace_with(engine(), vec![rule.clone()])
+            .expect("learned");
+        assert_eq!(in_force.get().learned(), vec![rule.clone()]);
+        // Turned off: the next engine is given none.
+        in_force.set_learned(Vec::new()).expect("turned off");
+        in_force.replace_with(engine(), Vec::new()).expect("none");
+        assert_eq!(in_force.get().learned(), Vec::new());
+        let wrong = cortex_protocol::lease::Rule {
+            effect: cortex_protocol::lease::Effect::Write,
+            pattern: "x".to_owned(),
+            action: cortex_protocol::lease::RuleAction::Allow,
+        };
+        let before = in_force.narrowed();
+        assert!(in_force.replace_with(engine(), vec![rule, wrong]).is_err());
+        assert_eq!(in_force.get().learned(), Vec::new());
+        assert!(in_force.narrowed() > before, "the new engine is in force");
     }
 
     /// The count of narrowings moves for a stop of the turn and for a new
