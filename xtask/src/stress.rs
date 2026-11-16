@@ -246,6 +246,21 @@ fn conclude(summary: &Summary, nextest_passed: bool, count: u32) -> Result<()> {
     Ok(())
 }
 
+/// What a stress run's kept report says, as the run printed it, and the
+/// number of tests that failed on some repeat. `try-result` prints it for a
+/// `try` run: the repeats are those the report holds, and `first_seed` is
+/// the log's.
+pub(crate) fn report_summary(xml: &str, shown: &str, first_seed: u64) -> (String, usize) {
+    let cases = junit::parse(xml);
+    let repeats = cases
+        .iter()
+        .map(|case| case.repeat.unwrap_or(0) + 1)
+        .max()
+        .unwrap_or(1);
+    let summary = summarise(&cases, &junit::failures(xml), shown, repeats, first_seed);
+    (summary.text, summary.failing)
+}
+
 /// What a stress run came to.
 struct Summary {
     text: String,
@@ -262,7 +277,7 @@ const SEEDS_SHOWN: usize = 12;
 const WATCH_REPORT: &str = "== cortex-testkit: this test has run";
 
 /// How many lines of a failure's text are shown.
-const LINES_SHOWN: usize = 6;
+pub(crate) const LINES_SHOWN: usize = 6;
 
 /// How many characters of one line are shown.
 const LINE_WIDTH: usize = 160;
@@ -275,7 +290,7 @@ const OTHERS_SHOWN: usize = 2;
 /// is), each line cut to [`LINE_WIDTH`]; a timeout says so and shows what
 /// the test wrote to standard error, where the test kit's timeout report
 /// is. The count is of every line there was.
-fn failure_lines(failure: &junit::Failure) -> (Vec<String>, usize) {
+pub(crate) fn failure_lines(failure: &junit::Failure) -> (Vec<String>, usize) {
     let mut lines: Vec<String> = Vec::new();
     let timed_out = failure.kind.contains("timeout");
     let source = if timed_out {

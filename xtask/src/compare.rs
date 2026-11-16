@@ -128,17 +128,7 @@ pub(crate) fn compare_with(new: &Side, old: &Side, os: Os, top: usize, start: St
             tier.name()
         );
         for change in moved.iter().take(top) {
-            let what = match (change.old, change.new) {
-                (Some(old), Some(new)) => format!("{old:.3} -> {new:.3} s"),
-                (None, Some(_)) => "new test".to_owned(),
-                (Some(_), None) => "gone".to_owned(),
-                (None, None) => String::new(),
-            };
-            let _ = writeln!(
-                text,
-                "    {:>+8.3} s  {}  {}  ({what})",
-                change.delta, change.binary, change.name
-            );
+            text.push_str(&moved_line(change));
         }
     }
     text
@@ -183,6 +173,108 @@ fn crates(new: &Side, old: &Side, new_start: f64, old_start: f64) -> String {
             "    and {} more crates, each changed less",
             rows.len() - CRATES_SHOWN
         );
+    }
+    text
+}
+
+/// A crate that moved less than this in a tier, in seconds, is not listed:
+/// its change is below the tenth of a second the tables round to.
+const CRATE_MOVED: f64 = 0.05;
+
+/// How many crates of a tier the detail lists by name.
+const CRATES_MOVED_SHOWN: usize = 10;
+
+/// A test's line in a list of those that moved: its change, its binary and
+/// name, and what it was on each side.
+fn moved_line(change: &Moved) -> String {
+    let what = match (change.old, change.new) {
+        (Some(old), Some(new)) => format!("{old:.3} -> {new:.3} s"),
+        (None, Some(_)) => "new test".to_owned(),
+        (Some(_), None) => "gone".to_owned(),
+        (None, None) => String::new(),
+    };
+    format!(
+        "    {:>+8.3} s  {}  {}  ({what})\n",
+        change.delta, change.binary, change.name
+    )
+}
+
+/// What moved between two sides measured on one machine (so with one
+/// `start` cost for both), tier by tier: the crates that moved, each with
+/// its time on both sides above the start and the change, and the `top`
+/// tests that moved most with theirs. `names` are what the sides are called,
+/// new first. A tier in which nothing moved is left out.
+pub(crate) fn detail(
+    new: &Side,
+    old: &Side,
+    start: f64,
+    top: usize,
+    names: (&str, &str),
+) -> String {
+    let crates_of = |side: &Side| -> BTreeMap<String, [f64; 3]> {
+        tiers::by_crate(&side.cases, start).into_iter().collect()
+    };
+    let (now, before) = (crates_of(new), crates_of(old));
+    let mut text = String::new();
+    for tier in Tier::ALL {
+        let mut crates: Vec<(&String, f64, f64)> = now
+            .keys()
+            .chain(before.keys())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .map(|name| {
+                let at = |all: &BTreeMap<String, [f64; 3]>| {
+                    all.get(name).map_or(0.0, |times| times[tier.index()])
+                };
+                (name, at(&before), at(&now))
+            })
+            .filter(|(_, old, new)| (new - old).abs() >= CRATE_MOVED)
+            .collect();
+        crates.sort_by(|a, b| {
+            (b.2 - b.1)
+                .abs()
+                .total_cmp(&(a.2 - a.1).abs())
+                .then_with(|| a.0.cmp(b.0))
+        });
+        let tests = moved(new, old, start, start, tier);
+        if crates.is_empty() && (tests.is_empty() || top == 0) {
+            continue;
+        }
+        let _ = writeln!(text, "\n  tier {} (time above start)", tier.name());
+        if !crates.is_empty() {
+            let _ = writeln!(
+                text,
+                "    crates that moved, in seconds ({} -> {}, and the change)",
+                names.1, names.0
+            );
+            for (name, old, new) in crates.iter().take(CRATES_MOVED_SHOWN) {
+                let _ = writeln!(
+                    text,
+                    "    {name:<28}{old:>7.2} s -> {new:>7.2} s  {:>+7.2} s",
+                    new - old
+                );
+            }
+            if crates.len() > CRATES_MOVED_SHOWN {
+                let _ = writeln!(
+                    text,
+                    "    and {} more crates, each moved less",
+                    crates.len() - CRATES_MOVED_SHOWN
+                );
+            }
+        }
+        if !tests.is_empty() && top > 0 {
+            let _ = writeln!(
+                text,
+                "    tests that moved most, in seconds ({} -> {})",
+                names.1, names.0
+            );
+            for change in tests.iter().take(top) {
+                text.push_str(&moved_line(change));
+            }
+        }
+    }
+    if text.is_empty() {
+        text.push_str("\n  nothing moved by a tenth of a second in any tier or crate\n");
     }
     text
 }
@@ -288,7 +380,7 @@ mod shared_start_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{Moved, Side, compare, moved};
+    use super::{Moved, Side, compare, detail, moved};
     use crate::junit;
     use crate::tiers::{Os, Tier};
 
@@ -341,6 +433,91 @@ start, and its time above the start too low.
       +2.000 s  cortex-llm::it  replay::every_cut  (1.000 -> 3.000 s)
 "
         );
+    }
+
+    #[test]
+    fn the_detail_of_two_fixed_reports_is_exactly_this() {
+        let (branch, main) = sides();
+        assert_eq!(
+            detail(&branch, &main, 0.010, 5, ("PR", "main")),
+            "
+  tier 1, unit (time above start)
+    crates that moved, in seconds (main -> PR, and the change)
+    cortex-base                    1.00 s ->    1.25 s    +0.25 s
+    tests that moved most, in seconds (main -> PR)
+      +0.610 s  cortex-base  text::tests::new_one  (new test)
+      -0.400 s  cortex-base  text::tests::old_one  (gone)
+      +0.010 s  cortex-base  text::tests::b  (0.200 -> 0.210 s)
+      +0.010 s  cortex-base  text::tests::c  (0.400 -> 0.410 s)
+      +0.010 s  cortex-base  text::tests::a  (0.000 -> 0.010 s)
+
+  tier 2, integration (time above start)
+    crates that moved, in seconds (main -> PR, and the change)
+    cortex-llm                     1.50 s ->    3.52 s    +2.02 s
+    tests that moved most, in seconds (main -> PR)
+      +2.010 s  cortex-llm::it  replay::every_cut  (1.000 -> 3.010 s)
+      +0.010 s  cortex-llm::it  replay::quick  (0.500 -> 0.510 s)
+
+  tier 3, system (time above start)
+    tests that moved most, in seconds (main -> PR)
+      +0.010 s  cortex-cli::system  sys_version  (2.000 -> 2.010 s)
+"
+        );
+        // Only the largest tests are listed, and none at all with 0.
+        let one = detail(&branch, &main, 0.010, 1, ("PR", "main"));
+        assert!(one.contains("new_one") && !one.contains("old_one"), "{one}");
+        let none = detail(&branch, &main, 0.010, 0, ("PR", "main"));
+        assert!(
+            none.contains("crates that moved") && !none.contains("tests that moved"),
+            "{none}"
+        );
+        // A tree compared with itself has moved nowhere.
+        let same = detail(&main, &main, 0.010, 5, ("PR", "main"));
+        assert!(
+            same.contains("nothing moved by a tenth of a second"),
+            "{same}"
+        );
+    }
+
+    #[test]
+    fn the_crates_that_moved_come_largest_first_and_the_rest_are_counted() {
+        use crate::junit::TestCase;
+        // Twelve crates, each with one unit test: crate `n` took `n` tenths
+        // of a second more on the new side. The first moved too little to
+        // count.
+        let side = |label: &str, extra: &dyn Fn(usize) -> f64| Side {
+            label: label.to_owned(),
+            cases: (0..12)
+                .map(|n| TestCase {
+                    binary: format!("crate-{n:02}"),
+                    name: "t".to_owned(),
+                    seconds: 0.010 + 1.0 + extra(n),
+                    failed: false,
+                    retried: false,
+                    repeat: None,
+                })
+                .collect(),
+        };
+        let old = side("old", &|_| 0.0);
+        let new = side("new", &|n| n as f64 * 0.1 + 0.01);
+        let text = detail(&new, &old, 0.010, 0, ("PR", "main"));
+        let listed: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("crate-"))
+            .map(|line| &line[..2])
+            .collect();
+        // Largest change first; crate-00 (+0.01 s) did not move enough,
+        // and crate-01 is past the ten that are named.
+        assert_eq!(
+            listed,
+            ["11", "10", "09", "08", "07", "06", "05", "04", "03", "02"],
+            "{text}"
+        );
+        assert!(
+            text.contains("and 1 more crates, each moved less"),
+            "{text}"
+        );
+        assert!(!text.contains("crate-00"), "{text}");
     }
 
     #[test]
