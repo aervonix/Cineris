@@ -146,6 +146,15 @@ pub(crate) enum Act {
     /// Taken: the viewer opens, at box `n` opened when there is one (as
     /// `/view n` does), or at the latest.
     View(Option<usize>),
+    /// Taken: the viewer opens on this stored artifact of the session (a
+    /// check's whole output), read with `session/artifact`; the label is
+    /// its title.
+    Artifact {
+        /// The artifact.
+        id: cortex_protocol::ArtifactId,
+        /// What it holds, in a few words.
+        label: String,
+    },
     /// Taken: say this, as a notice.
     Say(String),
 }

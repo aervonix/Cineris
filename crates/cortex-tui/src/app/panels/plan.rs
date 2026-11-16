@@ -180,15 +180,15 @@ impl Panel for PlanPanel {
     fn hint(&self, focused: usize, keymap: &KeyMap) -> Vec<String> {
         let key = |action: Action| keymap.keys_of(action).into_iter().next().map(name);
         let mut keys = Vec::new();
-        // PR 3: `space` restores a skipped item once the protocol has
-        // `PlanEdit::Restore`; until then it is not offered on one.
-        let skips = self
-            .plan
-            .items
-            .get(focused)
-            .is_some_and(|item| !matches!(item.status, PlanStatus::Done | PlanStatus::Skipped));
-        if skips && let Some(skip) = key(Action::FocusSkip) {
-            keys.push(format!("{skip} skips"));
+        // `space` skips an item, and restores one that was skipped; a done
+        // item it leaves as it is.
+        let status = self.plan.items.get(focused).map(|item| &item.status);
+        if let Some(skip) = key(Action::FocusSkip) {
+            match status {
+                Some(PlanStatus::Skipped) => keys.push(format!("{skip} restores")),
+                Some(PlanStatus::Done) | None => {}
+                Some(_) => keys.push(format!("{skip} skips")),
+            }
         }
         if let Some(edit) = key(Action::FocusEdit) {
             keys.push(format!("{edit} edits"));
@@ -212,8 +212,10 @@ impl Panel for PlanPanel {
         let id = item.id.clone();
         match action {
             Action::FocusSkip => match item.status {
-                // PR 3: a skipped item is restored with `PlanEdit::Restore`.
-                PlanStatus::Done | PlanStatus::Skipped => Act::Taken,
+                PlanStatus::Done => Act::Taken,
+                // Restored to what it was before it was skipped; the model
+                // is told as it is of a skip.
+                PlanStatus::Skipped => Self::update(session, PlanEdit::Restore(PlanItemRef { id })),
                 _ => Self::update(session, PlanEdit::Skip(PlanItemRef { id })),
             },
             Action::FocusEdit => Act::Edit {

@@ -411,7 +411,7 @@ fn the_focus_stays_on_its_item_when_the_plan_changes_under_it() {
 }
 
 #[test]
-fn space_on_a_done_or_skipped_item_does_nothing_and_is_not_offered() {
+fn space_on_a_done_item_does_nothing_and_is_not_offered() {
     let now = Instant::now() + Duration::from_secs(20);
     let (mut app, link) = with_plan(now);
     let ready = plan_focused(&mut app, now);
@@ -1545,4 +1545,112 @@ fn the_plan_stays_drawn_whole_while_its_item_is_edited() {
             .starts_with("  enter saves the item · esc cancels"),
         "{live:#?}"
     );
+}
+
+/// `space` on a skipped item restores it (step 24's third pull request,
+/// with the protocol's `PlanEdit::Restore`), and the hint row offers that.
+#[test]
+fn space_on_a_skipped_item_restores_it_and_says_so() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_plan(now);
+    let mut plan = screen_plan(2);
+    plan.items[2].status = PlanStatus::Skipped;
+    link.give(plan_updated(plan));
+    drain(&mut app, now);
+    let ready = plan_focused(&mut app, ms(now, 10));
+    // From the active item to the skipped one.
+    press(&mut app, "down", ready);
+    let live = live_text(&mut app, ms(ready, 2_000));
+    let hint = live.last().unwrap();
+    assert!(hint.contains("space restores"), "{hint}");
+    press(&mut app, "space", ms(ready, 2_000));
+    assert_eq!(
+        answered(&mut app, &link, ms(ready, 2_000)),
+        [PlanEdit::Restore(cortex_protocol::project::PlanItemRef {
+            id: PlanItemId::from("p3")
+        })]
+    );
+}
+
+/// `Enter` on a check opens its whole output in the viewer: the artifact
+/// the core kept, read with `session/artifact`, under its label, what acts
+/// unseen shown as its escape; `Esc` returns. A check with no output kept
+/// opens nothing.
+#[test]
+fn enter_on_a_check_opens_its_whole_output_in_the_viewer() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = turn_with_changes(now);
+    let mut notice = checks(VerificationPhase::Finished, Some(Verification::Failed));
+    if let Inbound::Event(SessionEvent {
+        event: Event::Notice(Notice::Verification(verification)),
+        ..
+    }) = &mut notice
+    {
+        verification.checks[1].artifact = Some(cortex_protocol::item::ArtifactRef {
+            id: cortex_protocol::ArtifactId::from("a_clippy"),
+            label: "cargo clippy, its output".to_owned(),
+            bytes: Some(64),
+        });
+    }
+    link.give(notice);
+    link.give(turn_completed(Some(Verification::Failed)));
+    drain(&mut app, now);
+    let _ = app.frame(now);
+    press(&mut app, "ctrl+p", now);
+    // The two files, then the checks: the second check.
+    for step in 1..=3 {
+        press(&mut app, "down", ms(now, step * 10));
+    }
+    let live = live_text(&mut app, ms(now, 40));
+    assert!(
+        live.last()
+            .unwrap()
+            .contains("enter opens it in the viewer"),
+        "{live:#?}"
+    );
+    let _ = link.take_sent();
+    press(&mut app, "enter", ms(now, 50));
+    let (ticket, op) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::SessionArtifact(_)))
+        .expect("session/artifact");
+    let Op::SessionArtifact(params) = op else {
+        unreachable!()
+    };
+    assert_eq!(params.artifact.as_str(), "a_clippy");
+    link.give(Inbound::Done(
+        ticket,
+        Ok(OpResult::SessionArtifact(
+            cortex_protocol::methods::SessionArtifactResult {
+                text: "error: unused import\n\u{1b}[31mwarning\u{1b}[0m: 2 more\n".to_owned(),
+                bytes: 80_000,
+                cut: true,
+            },
+        )),
+    ));
+    drain(&mut app, ms(now, 60));
+    assert!(app.viewing(), "the viewer opened on the output");
+    let lines = text(&app.viewer_frame(40, 99, ms(now, 60))).join("\n");
+    assert!(lines.contains("cargo clippy, its output"), "{lines}");
+    assert!(lines.contains("error: unused import"), "{lines}");
+    assert!(
+        !lines.contains('\u{1b}'),
+        "an escape reached the screen: {lines}"
+    );
+    assert!(lines.contains("of its 80000 bytes are shown"), "{lines}");
+    key(&mut app, "esc", ms(now, 70));
+    assert!(!app.viewing());
+
+    // The first check kept no output: nothing is asked.
+    press(&mut app, "up", ms(now, 2_000));
+    let _ = link.take_sent();
+    press(&mut app, "enter", ms(now, 4_000));
+    assert!(
+        !link
+            .take_sent()
+            .iter()
+            .any(|(_, op)| matches!(op, Op::SessionArtifact(_)))
+    );
+    assert!(!app.viewing());
 }

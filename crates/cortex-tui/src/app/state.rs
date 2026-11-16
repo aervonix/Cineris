@@ -109,6 +109,9 @@ enum Pending {
     Reload { profile: Option<String> },
     /// `/profile` with no name: the profiles this session's files define.
     Profiles(SessionId),
+    /// A stored artifact of this session (a check's whole output), shown in
+    /// the viewer under its label while the session is the one open.
+    Artifact { session: SessionId, label: String },
     /// A look at the configuration's files, after a key or a focus-in:
     /// what it found is said by `config.changed`, and nothing of its own
     /// answer is.
@@ -1300,6 +1303,10 @@ impl App {
                 self.permissions_listed(list.approvals);
             }
             (Pending::Profiles(id), _) if !self.is_open(&id) => {}
+            (Pending::Artifact { session, .. }, _) if !self.is_open(&session) => {}
+            (Pending::Artifact { label, .. }, Ok(OpResult::SessionArtifact(artifact))) => {
+                self.open_text(&label, &artifact);
+            }
             (Pending::Config(shown, _), Ok(OpResult::ConfigGet(result))) => {
                 self.config_shown(shown, &result.config, &result.origins);
             }

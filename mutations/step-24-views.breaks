@@ -171,3 +171,30 @@ find: T::read(&Value::Table(table))
 replace: T::read(&Value::Table(toml::Table::new()))
 caught-by:
     cortex-config::it reloading::a_section_is_read_from_dotted_keys_and_json_values
+
+[break] a-skipped-item-is-skipped-again
+rule: `space` on a skipped item restores it.
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::act
+find: PlanStatus::Skipped => Self::update(session, PlanEdit::Restore(PlanItemRef { id }))
+replace: PlanStatus::Skipped => Act::Taken
+caught-by:
+    cortex-tui app::tests::panels::space_on_a_skipped_item_restores_it_and_says_so
+
+[break] a-checks-output-is-not-opened
+rule: `Enter` on a check whose output was kept opens it in the viewer.
+file: crates/cortex-tui/src/app/panels/review.rs
+in: ReviewPanel::activate
+find: Some(artifact) => Act::Artifact {
+replace: Some(_) if false => Act::Taken, Some(artifact) if false => Act::Artifact {
+caught-by:
+    cortex-tui app::tests::panels::enter_on_a_check_opens_its_whole_output_in_the_viewer
+
+[break] an-artifacts-escapes-reach-the-screen
+rule: A check's output in the viewer is shown with what acts unseen as its escape.
+file: crates/cortex-tui/src/app/state/viewer.rs
+in: viewer_rows
+find: cortex_term::sanitize(line).into_owned()
+replace: line.clone()
+caught-by:
+    cortex-tui app::tests::panels::enter_on_a_check_opens_its_whole_output_in_the_viewer
