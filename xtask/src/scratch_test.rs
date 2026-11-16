@@ -34,7 +34,7 @@
 //! also runs one test at a time) and nextest's `perf` profile gives it half an
 //! hour, where the default stops a test at 10 s.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -203,29 +203,12 @@ fn place(copy: &Path, package: &str, module: &str, source: &str) -> Result<Strin
     Ok(format!("test(/^{module}::/)"))
 }
 
-/// Takes the copy for this run. The lock is the system's, so a run that is
-/// killed lets go of it.
+/// Takes the copy for this run, waiting out a moment's hold by a child
+/// another thread forked ([`crate::workspace::lock_for_one_run`]).
 fn lock(scratch: &Path) -> Result<File> {
-    fs::create_dir_all(scratch)
-        .map_err(|error| format!("could not create {}: {error}", scratch.display()))?;
-    let path = scratch.join("lock");
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
-        .map_err(|error| format!("could not open {}: {error}", path.display()))?;
-    match file.try_lock() {
-        Ok(()) => Ok(file),
-        Err(fs::TryLockError::WouldBlock) => Err(
-            "another `cargo xtask scratch-test` is running on the copy: wait for it to end"
-                .to_owned(),
-        ),
-        Err(fs::TryLockError::Error(error)) => {
-            Err(format!("could not lock {}: {error}", path.display()))
-        }
-    }
+    crate::workspace::lock_for_one_run(scratch, &mut std::thread::sleep, || {
+        "another `cargo xtask scratch-test` is running on the copy: wait for it to end".to_owned()
+    })
 }
 
 /// Runs `request` in a copy of the tree at `root`, with `run` doing the

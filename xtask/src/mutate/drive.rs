@@ -796,64 +796,21 @@ fn some_of(tests: &[String]) -> String {
 
 // -------------------------------------------------------------------- run
 
-/// How many times, and how long apart, a lock that is held is tried again
-/// before the copy is called busy: 20 times, 10 ms apart, 200 ms in all.
-const LOCK_TRIES: u32 = 20;
-const LOCK_EVERY: Duration = Duration::from_millis(10);
-
 /// Takes the copy for this run, for as long as the file returned is held.
 ///
 /// Two runs on one copy would undo each other's breaks: the second brings
 /// the copy up to date while the first is running a break's tests, and the
-/// first then reports a break as survived that was no longer made. The lock
-/// is the operating system's, so a run that is killed lets go of it.
-///
-/// **A lock that is held is tried again for a short while** (`pause` waits
-/// between the tries). Where one process has threads that start processes
-/// (`cargo test`, which runs `xtask`'s tests as threads of one), a process
-/// forked by another thread holds the descriptor of the lock a moment, from
-/// its fork to its `exec`, after the run that took the lock has let go of
-/// it: the next run found it held. Descriptors are not inherited by what
-/// runs (the standard library opens every file close-on-exec, and on
-/// Windows a handle is not inheritable), so the moment is that of the fork
-/// alone, and a few tens of milliseconds are more than enough. Another run
-/// that really holds it is still told so, 200 ms later.
+/// first then reports a break as survived that was no longer made. A lock
+/// held by a child another thread forked is waited out for a moment
+/// ([`workspace::lock_for_one_run`]); `pause` waits between the tries.
 fn lock(scratch: &Path, pause: &mut dyn FnMut(Duration)) -> Result<File> {
-    let path = scratch.join("lock");
-    let file = OpenOptions::new()
-        // For reading and writing: Windows locks no file that is open only
-        // for appending.
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
-        .map_err(|error| format!("could not open {}: {error}", path.display()))?;
-    let mut tries = 0;
-    let taken = loop {
-        match file.try_lock() {
-            Err(fs::TryLockError::WouldBlock) if tries < LOCK_TRIES => {
-                tries += 1;
-                pause(LOCK_EVERY);
-            }
-            taken => break taken,
-        }
-    };
-    match taken {
-        Ok(()) => Ok(file),
-        Err(fs::TryLockError::WouldBlock) => Err(format!(
+    workspace::lock_for_one_run(scratch, pause, || {
+        format!(
             "another `cargo xtask mutate` is running on the copy in {}. Two runs on one copy \
              would undo each other's breaks. Wait for it to end and run this again.",
             scratch.display()
-        )),
-        // Not taken, and not because another run has it. Going on would be
-        // going on without knowing whether another run is there.
-        Err(fs::TryLockError::Error(error)) => Err(format!(
-            "could not lock {}: {error}. One run at a time may use a copy, and without the \
-             lock there is no telling whether another is using it.",
-            path.display()
-        )),
-    }
+        )
+    })
 }
 
 /// The keys of what is kept for one break.
@@ -2276,7 +2233,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
         });
 
         assert!(taken.is_ok(), "{:?}", taken.err());
-        assert_eq!(waited, [super::LOCK_EVERY; 3]);
+        assert_eq!(waited, [crate::workspace::LOCK_EVERY; 3]);
         assert!(held.is_none());
     }
 

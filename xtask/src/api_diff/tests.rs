@@ -123,14 +123,17 @@ fn the_crates_are_those_named_or_every_one_with_a_library_in_either_tree() {
 fn a_second_run_is_refused_while_the_first_holds_the_lock() {
     let dir = std::env::temp_dir().join(format!("xtask-api-diff-lock-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
-    let first = lock(&dir).unwrap();
-    let error = lock(&dir).unwrap_err();
+    let first = lock(&dir, &mut |_| {}).unwrap();
+    // The second is tried again for a while, on no clock: nothing waits.
+    let mut waits = 0;
+    let error = lock(&dir, &mut |_| waits += 1).unwrap_err();
+    assert!(waits > 0, "a held lock is tried again before it is refused");
     assert!(
         error.contains("another `cargo xtask api-diff` is running"),
         "{error}"
     );
     drop(first);
-    assert!(lock(&dir).is_ok());
+    assert!(lock(&dir, &mut |_| {}).is_ok());
     let _ = fs::remove_dir_all(&dir);
 }
 
