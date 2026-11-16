@@ -27,7 +27,7 @@ use std::process::{Command, Output, Stdio};
 use crate::Result;
 
 const USAGE: &str = "\
-usage: cargo xtask branch commit-records --branch BRANCH --message MESSAGE FILE...
+usage: cargo xtask branch commit-records --branch BRANCH --message MESSAGE [--replace] FILE...
        cargo xtask branch fold COMMIT [--last] [--base REF]
        cargo xtask branch to-end COMMIT [--base REF]
 
@@ -38,10 +38,13 @@ commit-records  Commits the FILEs, as the working tree has them, to BRANCH,
                 index and the branch checked out are not touched. A FILE is a
                 path from the top of the repository, must be a record
                 (docs/steps/**/*.md, docs/outstanding/*.md or
-                mutations/*.breaks) and a regular file, and BRANCH's copy of
-                it must be the one HEAD has: the file is written over BRANCH's
-                version, which it must have started from. It prints the commit
-                and the command that pushes it, and pushes nothing.
+                mutations/*.breaks), a regular file reached through no link,
+                and built on BRANCH's copy if BRANCH has one: BRANCH's lines
+                are all in it, in their order (or the copy is HEAD's).
+                --replace puts the file in place of BRANCH's copy all the
+                same. BRANCH is named as it is (`@{-1}` or `-` is refused).
+                It prints the commit and the command that pushes it, and
+                pushes nothing.
 
 fold            Folds the staged changes (or, with --last, the branch's last
                 commit) into COMMIT, an earlier commit of the current branch,
@@ -200,6 +203,31 @@ impl Git {
         Ok(found)
     }
 
+    /// The text of each blob of `hashes` (`cat-file --batch`, one git for
+    /// all of them).
+    fn blobs(&self, hashes: &[String]) -> Result<Vec<String>> {
+        let input: String = hashes.iter().map(|hash| format!("{hash}\n")).collect();
+        let output = self.output(
+            &["cat-file", "--batch"],
+            &Call {
+                input: Some(input.as_bytes()),
+                ..Call::default()
+            },
+        )?;
+        if !output.status.success() {
+            return Err(Self::failed(&["cat-file", "--batch"], &output));
+        }
+        let objects = batch_objects(&output.stdout)?;
+        if objects.len() != hashes.len() {
+            return Err(format!(
+                "git read {} file(s) of {}",
+                objects.len(),
+                hashes.len()
+            ));
+        }
+        Ok(objects.into_iter().map(|(_, text)| text).collect())
+    }
+
     /// The commits `hashes` name, each read whole (`cat-file --batch`, one
     /// git for all of them).
     fn commits(&self, hashes: &[String]) -> Result<Vec<CommitInfo>> {
@@ -309,11 +337,15 @@ pub(crate) struct RecordsRequest {
     pub(crate) message: String,
     /// Paths from the top of the repository, with `/` between their parts.
     pub(crate) files: Vec<String>,
+    /// Put each file in place of the branch's copy even when it was not
+    /// built on it.
+    pub(crate) replace: bool,
 }
 
 impl RecordsRequest {
     pub(crate) fn parse(arguments: &[String]) -> Result<Self> {
         let (mut branch, mut message, mut files) = (None, None, Vec::new());
+        let mut replace = false;
         let mut words = arguments.iter();
         while let Some(word) = words.next() {
             let mut value = |what: &str| {
@@ -324,6 +356,7 @@ impl RecordsRequest {
             match word.as_str() {
                 "--branch" => branch = Some(value("a branch")?.clone()),
                 "--message" | "-m" => message = Some(value("a message")?.clone()),
+                "--replace" => replace = true,
                 "--help" | "-h" => return Err(USAGE.to_owned()),
                 other if other.starts_with('-') => {
                     return Err(format!("unknown flag `{other}`\n\n{USAGE}"));
@@ -344,6 +377,7 @@ impl RecordsRequest {
             branch,
             message,
             files,
+            replace,
         })
     }
 }
@@ -500,48 +534,77 @@ pub(crate) fn used_elsewhere(
 /// one that leads out of it. A link's target is what `hash-object` would
 /// commit, and it may be anywhere.
 fn regular_inside(root: &Path, file: &str) -> Result<()> {
-    let path = root.join(file);
-    let kind = std::fs::symlink_metadata(&path)
-        .map_err(|_| format!("`{file}` is not in the working tree"))?
-        .file_type();
-    if !kind.is_file() {
-        return Err(format!(
-            "`{file}` is not a regular file (a link, or a directory): commit-records commits a \
-             record's own text, never what a link points at"
-        ));
+    // Each folder on the way, from the top down, as `git add` reads it: a
+    // link anywhere on the path is refused, wherever it leads.
+    let parts: Vec<&str> = file.split('/').collect();
+    let mut path = root.to_path_buf();
+    for (at, part) in parts.iter().enumerate() {
+        path.push(part);
+        let kind = std::fs::symlink_metadata(&path)
+            .map_err(|_| format!("`{file}` is not in the working tree"))?
+            .file_type();
+        let last = at + 1 == parts.len();
+        if kind.is_symlink() {
+            return Err(format!(
+                "`{file}` goes through a link (`{}`): commit-records commits a record's own \
+                 text, never what a link points at, as `git add` will not add a path beyond one",
+                parts[..=at].join("/")
+            ));
+        }
+        if last && !kind.is_file() {
+            return Err(format!("`{file}` is not a regular file"));
+        }
     }
-    match (std::fs::canonicalize(&path), std::fs::canonicalize(root)) {
-        (Ok(real), Ok(top)) if real.starts_with(&top) => Ok(()),
-        _ => Err(format!(
-            "`{file}` is reached through a link that leads out of the repository: it is not \
-             committed"
-        )),
-    }
+    Ok(())
 }
 
-/// The refusal for a record whose copy on the branch (`theirs`, its blob)
-/// is not the one `HEAD` has (`ours`): the working file was written over
-/// `HEAD`'s version, and committing it would replace the branch's whole file
-/// with it. `None` when they are the same, or neither has one.
+/// Whether `working` was built by adding to `theirs`: every line of
+/// `theirs` is in `working`, in its order, with lines added anywhere
+/// between them. Line ends are read alike (`\r\n` as `\n`).
+pub(crate) fn built_on(theirs: &str, working: &str) -> bool {
+    let lines = |text: &str| -> Vec<String> {
+        text.lines()
+            .map(|line| line.trim_end_matches('\r').to_owned())
+            .collect()
+    };
+    let working = lines(working);
+    let mut rest = working.iter();
+    lines(theirs)
+        .iter()
+        .all(|line| rest.any(|candidate| candidate == line))
+}
+
+/// What a record's copies say of committing it: `theirs` is the branch's
+/// blob and its text, `ours` HEAD's blob, `working` the file as it is. It
+/// may be committed when the branch has no copy, when the branch's copy is
+/// HEAD's (the file was made from it), or when the file was built on the
+/// branch's copy ([`built_on`]); with `replace`, always. Otherwise the
+/// refusal, saying which and how to go on.
 pub(crate) fn not_from_the_branch(
     file: &str,
     branch: &str,
-    theirs: Option<&str>,
+    theirs: Option<(&str, &str)>,
     ours: Option<&str>,
+    working: &str,
+    replace: bool,
 ) -> Option<String> {
-    if theirs == ours {
+    let (blob, text) = theirs?;
+    if replace || Some(blob) == ours || built_on(text, working) {
         return None;
     }
-    let name =
-        |blob: Option<&str>| blob.map_or_else(|| "none".to_owned(), |blob| short(blob).to_owned());
     Some(format!(
-        "`{file}` on {branch} ({}) is not the copy HEAD has ({}): the file here was not written \
-         over {branch}'s version, and committing it would replace {branch}'s whole file. Take \
-         {branch}'s copy first (`git show {branch}:{file} > {file}`), make the record on it, and \
-         run this again",
-        name(theirs),
-        name(ours)
+        "`{file}` on {branch} ({}) has lines the file here does not, in their order: the file \
+         was not made by adding to {branch}'s copy, and committing it would drop them. Take \
+         {branch}'s copy (`git show {branch}:{file} > {file}`), make the change on it, and run \
+         this again; or give --replace to put this file in place of {branch}'s, knowing it",
+        short(blob)
     ))
+}
+
+/// What `git update-ref --stdin` is given to move `branch` (`refs/heads/…`)
+/// to `new` only from `old`, the commit read at the start.
+pub(crate) fn records_transaction(branch: &str, new: &str, old: &str) -> String {
+    format!("update {branch} {new} {old}\n")
 }
 
 /// A commit `commit-records` made.
@@ -559,6 +622,14 @@ pub(crate) fn commit_records(git: &Git, request: &RecordsRequest) -> Result<Comm
     let branch = git
         .run(&["check-ref-format", "--branch", &request.branch])
         .map_err(|_| format!("`{}` is not a branch's name", request.branch))?;
+    // `@{-1}` and `-` are expanded to the branch checked out before: a
+    // branch the user did not name is not moved.
+    if branch != request.branch {
+        return Err(format!(
+            "`{}` stands for `{branch}`: name the branch itself",
+            request.branch
+        ));
+    }
     let branch = &branch;
     let reference = format!("refs/heads/{branch}");
     for file in &request.files {
@@ -595,10 +666,44 @@ pub(crate) fn commit_records(git: &Git, request: &RecordsRequest) -> Result<Comm
     let [Some(old), Some(old_tree)] = [found[0].clone(), found[1].clone()] else {
         return Err(format!("there is no branch `{branch}` in this repository"));
     };
-    for (file, copies) in request.files.iter().zip(found[2..].chunks(2)) {
-        if let Some(refusal) =
-            not_from_the_branch(file, branch, copies[0].as_deref(), copies[1].as_deref())
-        {
+    // The branch's copies that are not HEAD's, read in one git, to see that
+    // each file was built on its.
+    let copies: Vec<(Option<String>, Option<String>)> = found[2..]
+        .chunks(2)
+        .map(|pair| (pair[0].clone(), pair[1].clone()))
+        .collect();
+    let differ: Vec<String> = copies
+        .iter()
+        .filter_map(|(theirs, ours)| {
+            theirs
+                .clone()
+                .filter(|theirs| Some(theirs) != ours.as_ref())
+        })
+        .collect();
+    let texts = if differ.is_empty() || request.replace {
+        Vec::new()
+    } else {
+        git.blobs(&differ)?
+    };
+    for (file, (theirs, ours)) in request.files.iter().zip(&copies) {
+        let text = theirs
+            .as_ref()
+            .and_then(|blob| differ.iter().position(|one| one == blob))
+            .and_then(|at| texts.get(at))
+            .map_or("", String::as_str);
+        let working = String::from_utf8_lossy(
+            &std::fs::read(git.dir.join(file))
+                .map_err(|error| format!("could not read `{file}`: {error}"))?,
+        )
+        .into_owned();
+        if let Some(refusal) = not_from_the_branch(
+            file,
+            branch,
+            theirs.as_deref().map(|blob| (blob, text)),
+            ours.as_deref(),
+            &working,
+            request.replace,
+        ) {
             return Err(refusal);
         }
     }
@@ -641,14 +746,13 @@ pub(crate) fn commit_records(git: &Git, request: &RecordsRequest) -> Result<Comm
         ));
     }
     let new = git.run(&["commit-tree", &tree, "-p", &old, "-m", &request.message])?;
-    git.run(&[
-        "update-ref",
-        "-m",
-        "xtask branch commit-records",
-        &reference,
-        &new,
-        &old,
-    ])
+    git.run_with(
+        &["update-ref", "-m", "xtask branch commit-records", "--stdin"],
+        &Call {
+            input: Some(records_transaction(&reference, &new, &old).as_bytes()),
+            ..Call::default()
+        },
+    )
     .map_err(|error| format!("{branch} moved while the commit was made, and was left: {error}"))?;
     Ok(Committed {
         branch: branch.clone(),

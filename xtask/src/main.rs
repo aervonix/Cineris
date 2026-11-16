@@ -204,12 +204,13 @@ Before a push
                     order, in a scratch worktree under the build directory,
                     and run `cargo xtask ci` there. This worktree and branch
                     are not touched. `combine --help` has the rest.
-  branch commit-records --branch BRANCH --message MESSAGE FILE...
+  branch commit-records --branch BRANCH --message MESSAGE [--replace] FILE...
                     Commit records (docs/steps/**/*.md, docs/outstanding/*.md,
                     mutations/*.breaks), as the working tree has them, to a
-                    branch no worktree is using and whose copy of each is
-                    HEAD's, in an index of its own: the working tree and the
-                    branch checked out are not touched. Pushes nothing.
+                    branch no worktree is using, each built on the branch's
+                    copy (--replace to put it in place all the same), in an
+                    index of its own: the working tree and the branch checked
+                    out are not touched. Pushes nothing.
   branch fold COMMIT [--last] [--base REF]
   branch to-end COMMIT [--base REF]
                     Fold the staged changes (or the last commit) into an
