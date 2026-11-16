@@ -298,6 +298,14 @@ pub(crate) struct PolicyParts {
 /// decided yet (a point a test can stop at: [`cortex_base::hook`]).
 pub const AFTER_THE_LOOK: &str = "policy: the look before a command is over, and it is not decided";
 
+/// An approval's question was looked at for who may answer it, and its
+/// request is not open yet: a client that opens the session now finds no
+/// request to be put, and is put it once it is open (the review of step
+/// 27's core changes). An awaited point ([`cortex_base::hook::await_point!`]),
+/// on the turn's task.
+pub const BEFORE_THE_APPROVAL_IS_OPEN: &str =
+    "policy: who may answer an approval was looked at, and its request is not open";
+
 /// A change of level has made its engine, with the approvals of the engine
 /// in force as they were then, and written its lease, and has not put the
 /// engine in force: a revoke or an answer recorded now must not be lost to
@@ -758,6 +766,7 @@ impl Policy for EnginePolicy {
             if asked.is_empty() && !waits {
                 return self.nobody(&call, &question);
             }
+            cortex_base::hook::await_point!(BEFORE_THE_APPROVAL_IS_OPEN);
 
             let request = ApprovalRequest {
                 session_id: call.session.clone(),
