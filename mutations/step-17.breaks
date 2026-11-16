@@ -386,7 +386,7 @@ caught-by:
 [break] a-change-passes-the-size-cap
 rule: The cap on the store's size is held when it is written: a change that would pass it is refused, and the store stays one every load reads.
 file: crates/cortex-knowledge/src/store.rs
-in: Store::change
+in: writable
 find: text.len() as u64 > MAX_FILE_BYTES
 replace: false
 caught-by:
@@ -526,3 +526,51 @@ find: #[serde(deny_unknown_fields)] pub struct NewCommand
 replace: pub struct NewCommand
 caught-by:
     cortex-protocol tests::the_golden_values_round_trip_exactly
+
+# ---------------------------------------- after the second read of the store
+
+[break] a-promote-writes-the-shared-file-before-the-store-is-known-to-fit
+rule: A promote is all or nothing: a store that could not take the change refuses it before the repository's file is written.
+file: crates/cortex-knowledge/src/project.rs
+in: Project::update
+find: Err(Unwritable::Full(message)) => return Err(ChangeError::Full(message))
+replace: Err(Unwritable::Full(_)) => {}
+caught-by:
+    cortex-knowledge::it project::a_promote_the_store_cannot_take_writes_nothing_to_the_shared_file
+
+[break] a-change-is-written-without-being-read-back
+rule: Nothing is written that this build would not read back.
+file: crates/cortex-knowledge/src/store.rs
+in: writable
+find: parse_private(&text, STORE_NAME).map_err(Unwritable::Unreadable)?;
+replace:
+caught-by:
+    cortex-knowledge::it store::a_change_that_could_not_be_read_back_is_not_written
+
+[break] a-changes-stamp-is-taken-after-its-good-copy
+rule: A change's stamp is taken the moment the store is written, so a person's edit saved after it shows at the next look.
+file: crates/cortex-knowledge/src/store.rs
+in: Store::change
+find: Ok((answer, state, stamp))
+replace: Ok((answer, state, self.stamp()))
+caught-by:
+    cortex-knowledge::it store::an_edit_saved_while_a_change_is_written_is_seen
+
+[break] a-new-entry-takes-the-room-kept-for-narrowing
+rule: A new entry is refused within the reserve of the store's size, so that a full store can still be told to use less.
+file: crates/cortex-knowledge/src/project.rs
+in: room
+find: bytes + RESERVED_BYTES > MAX_FILE_BYTES
+replace: false
+caught-by:
+    cortex-knowledge::it store::a_store_near_its_cap_takes_no_new_entry_and_can_still_be_told_to_use_less
+
+[break] a-counter-past-the-bound-is-read
+rule: A store whose counter is past the bound once its ids are given is refused: no change to it could be written back.
+file: crates/cortex-knowledge/src/file.rs
+in: parse_private
+find: if next > MAX_NUMBER
+replace: if false
+caught-by:
+    cortex-knowledge file::tests::a_number_past_what_an_id_may_hold_refuses_the_file
+

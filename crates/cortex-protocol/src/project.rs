@@ -213,12 +213,14 @@ pub struct NewCommand {
 
 /// An entry the user writes: it is active at once. Added in step 17.
 ///
-/// **It is read strictly:** a field this build does not know refuses the
-/// request (`docs/decisions/0028-enforced-values-fail-closed.md`). An entry
-/// the user writes is accepted from the moment it is written, and a
-/// command among them becomes an allow rule once the project is trusted:
-/// a field that is not understood could be the one that narrows it, such
-/// as an expiry.
+/// **It is read strictly:** a field this build does not know, in the entry
+/// or in its command, refuses the request
+/// (`docs/decisions/0028-enforced-values-fail-closed.md`). An entry the
+/// user writes is accepted from the moment it is written, and a command
+/// among them becomes an allow rule once the project is trusted: a field
+/// that is not understood could be the one that narrows it, such as an
+/// expiry. Its `check` is read as every check is: it is stored and shown,
+/// and whatever runs checks puts each one to the permission engine.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]

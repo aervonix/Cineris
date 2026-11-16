@@ -217,3 +217,31 @@ pub(crate) fn link(target: &std::path::Path, link: &std::path::Path, directory: 
         }
     }
 }
+
+/// A private store, as a person would write it, of exactly `bytes` bytes:
+/// a short fact `k_1`, then facts of long text. Written back by the
+/// harness it is larger, by the lines the harness adds.
+pub(crate) fn store_of(bytes: usize) -> String {
+    let entry = |number: usize, text: usize| {
+        format!(
+            "[[entry]]\nid = \"k_{number}\"\nkind = \"fact\"\ntext = \"{}\"\nstatus = \"active\"\n",
+            "t".repeat(text)
+        )
+    };
+    let mut store = String::from("version = 1\n");
+    store.push_str(&entry(1, 6));
+    let mut number = 1;
+    while bytes - store.len() > 1_300 {
+        number += 1;
+        store.push_str(&entry(number, 600));
+    }
+    // What is left is shared between two entries, so that neither text is
+    // empty or too long.
+    let left = bytes - store.len();
+    let overhead = entry(number + 1, 0).len() + entry(number + 2, 0).len();
+    let first = (left - overhead) / 2;
+    store.push_str(&entry(number + 1, first));
+    store.push_str(&entry(number + 2, left - overhead - first));
+    assert_eq!(store.len(), bytes);
+    store
+}

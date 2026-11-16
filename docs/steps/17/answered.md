@@ -253,6 +253,21 @@ An independent reviewer read the whole diff of the first pull request (the store
 
 The breaks of these rules are in `mutations/step-17.breaks`, under "after the review of the store".
 
+### The second read
+
+The same pull request's second and last round: a reviewer read the fixes alone. No finding lost state or let an entry through; three were fixed, with the notes that had a cheap fix.
+
+| # | Finding | Fix | Held by |
+|---|---|---|---|
+| 1 | **A `promote` wrote the repository's file before the store's size was checked,** so a change refused as "nothing written" had already written it. | The store is asked whether it can take the change before the shared file is written (`store::writable`). | `project::a_promote_the_store_cannot_take_writes_nothing_to_the_shared_file` |
+| 2 | **The stamp a change returned was taken after its good copy was written,** so a person's edit saved in that moment (no lock holds a person's editor) was taken for the state returned. | The stamp is taken before the read, and again the moment the store is written. | `store::an_edit_saved_while_a_change_is_written_is_seen` |
+| 3 | **An id at exactly 2^53 was read, and then no change to that store could be written;** and nothing tested the new rule that a change is read back before it is written. | The counter is held to the bound once every id is given; the read-back has a test and a break. | `file::tests::a_number_past_what_an_id_may_hold_refuses_the_file`, `store::a_change_that_could_not_be_read_back_is_not_written` |
+| | **At its cap the store refused the changes that only narrow** (`disable` adds two bytes), and a lapse that could not be written was tried at every turn. | A new entry is refused within 32 KiB of the cap, which keeps room for those. | `store::a_store_near_its_cap_takes_no_new_entry_and_can_still_be_told_to_use_less` |
+| | **A load could still wait for the lock** where no lock file existed yet. | The lock file is made as a change makes it, then tried. | by reading; no test can hold another process in that instant |
+| | The shared file's size refusal had the code of an invalid file; `Store::change`'s errors and `NewEntry`'s strictness were described wrongly. | `shared_profile_full`; the comments corrected (a `check` in `add` is read as every check is). | `project::a_promote_that_would_pass_the_shared_files_size_is_refused` |
+
+**Left open,** as items: [a second write of the same size within a clock's tick on Windows](../../outstanding/a-same-size-rewrite-within-a-clock-tick-on-windows.md), which `FileStamp` cannot tell there. **Written down, not changed:** a spacing-only edit of an accepted shared entry's text keeps its acceptance (the hash is of the text with its blanks made one; a command line, a path and a pattern are hashed as they are).
+
 ## Measured
 
 On the desktop, a release build, `perf_` tests of `cortex-knowledge` (`crates/cortex-knowledge/tests/it/measure.rs`), medians of 200 runs or more. The hosted runners' figures are in [ci.md](ci.md).

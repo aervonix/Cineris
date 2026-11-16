@@ -3236,7 +3236,7 @@
     },
     "NewEntry": {
       "additionalProperties": false,
-      "description": "An entry the user writes: it is active at once. Added in step 17.\n\n**It is read strictly:** a field this build does not know refuses the\nrequest (`docs/decisions/0028-enforced-values-fail-closed.md`). An entry\nthe user writes is accepted from the moment it is written, and a\ncommand among them becomes an allow rule once the project is trusted:\na field that is not understood could be the one that narrows it, such\nas an expiry.",
+      "description": "An entry the user writes: it is active at once. Added in step 17.\n\n**It is read strictly:** a field this build does not know, in the entry\nor in its command, refuses the request\n(`docs/decisions/0028-enforced-values-fail-closed.md`). An entry the\nuser writes is accepted from the moment it is written, and a command\namong them becomes an allow rule once the project is trusted: a field\nthat is not understood could be the one that narrows it, such as an\nexpiry. Its `check` is read as every check is: it is stored and shown,\nand whatever runs checks puts each one to the permission engine.",
       "properties": {
         "check": {
           "anyOf": [
