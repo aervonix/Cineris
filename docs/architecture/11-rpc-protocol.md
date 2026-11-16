@@ -267,7 +267,7 @@ All events arrive as one notification method.
 Each connection has a bounded outbound queue.
 
 1. When it grows, deltas for the same item are merged, never across the `seq` the client's last `session/read` gave (since the review of step 23's fixes), so the events after a read hold only what came after it.
-2. If it is still full, deltas for that item are dropped and one `item.resync` is queued.
+2. If it is still full, deltas for that item are dropped and one `item.resync` is queued. Full is past its count of events, or past the bytes of the deltas it holds, merged ones counted whole (since step 27: 8 MiB at the usual count, [02-runtime.md](02-runtime.md)).
 3. Completed items, turn events and server requests are never dropped. If they cannot be queued within a time limit, the connection is closed with an error. The session and the turn carry on.
 
 A slow or stuck client therefore never stalls a model stream or grows memory without bound.
@@ -284,6 +284,7 @@ The server's first part: `cortex serve --stdio` (`cortex-rpc`; `docs/steps/27/an
 - **Operations run in the order every front end's do** (`cortex_rpc::lane`): what changes a session in one lane, in the order sent; reads beside it, unless a write sent before them is under way. The terminal UI's in-process link uses the same lane.
 - **A result is written after the events queued when it was ready, and no others** (`cortex_rpc::order`), so a `session/read`'s result never overtakes the events at or below its `seq`. The in-process link uses the same rule.
 - **The writer takes the next thing to send only once the line before it has gone,** so a slow client's backlog stays in the core's queue, where deltas merge and drop.
+- **The core's queue is full by bytes too:** past 8 KiB of deltas for each place of its capacity (8 MiB at 1,024), merged deltas counted whole, as past its count, so a client that stops reading during one long item holds a bounded part of it and one `item.resync` (`cortex_core::events::DELTA_BYTES_PER_PLACE`, measured: [02-runtime.md](02-runtime.md), "Event backpressure").
 - **The rule that closes a connection:** while a line waits to be written, the writer looks at the client's queue at most once a second, and closes the connection when whole events wait past its capacity and the client has taken no line for `rpc.stalled_client` (30 s), or at once past four times its capacity. The session and its turn go on.
 - **Inbound is bounded and reading never stops for it.**
   - A request counts from when it is read until its result is written: at most 256, and 64 MiB of their lines, or of their results once a result is larger than its request.

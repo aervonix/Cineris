@@ -46,7 +46,9 @@ pub struct ClientInfo {
     pub role: ClientRole,
     /// What it can handle. A capability that is not stated is not used.
     pub capabilities: ClientCapabilities,
-    /// How many events may wait for it before its deltas are dropped.
+    /// How many events may wait for it before its deltas are dropped; and,
+    /// at [`DELTA_BYTES_PER_PLACE`](crate::events::DELTA_BYTES_PER_PLACE)
+    /// each, how many bytes of deltas (8 MiB at the usual 1,024).
     pub queue: usize,
 }
 

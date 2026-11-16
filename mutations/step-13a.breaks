@@ -554,10 +554,10 @@ caught-by:
 rule: A delta that finds the queue full is dropped.
 file: crates/cortex-core/src/events.rs
 find:
-    if state.items.len() >= self.capacity {
+    if full_of_bytes || state.items.len() >= self.capacity {
         // The reader is far behind
 replace:
-    if false && state.items.len() >= self.capacity {
+    if full_of_bytes {
         // The reader is far behind
 caught-by:
     cortex-core events::tests::a_full_queue_drops_an_items_deltas_and_tells_it_once

@@ -269,3 +269,113 @@ fn a_client_that_falls_behind_gets_fewer_deltas_one_resync_and_every_whole_event
         slow.close().await;
     });
 }
+
+/// A client that stops reading during one long item: the item's deltas
+/// merge into one, which never fills the queue by count, so the queue is
+/// full by the bytes it holds. The client then holds a bounded number of
+/// bytes and one `item.resync`, `session/read` gives the whole item so far,
+/// and every whole event still reaches it.
+#[test]
+fn a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync() {
+    let gate = Gate::new();
+    let pieces: Vec<String> = (0..200)
+        .map(|n| format!("{n:04} {}\n", "x".repeat(1018)))
+        .collect();
+    let before: Vec<&str> = pieces[..100].iter().map(String::as_str).collect();
+    let after: Vec<&str> = pieces[100..].iter().map(String::as_str).collect();
+    let world = World::new(
+        "stopped_reader_bytes",
+        [Response::new()
+            .text_in(&before)
+            .wait(&gate)
+            .text_in(&after)
+            .end(StopReason::End)],
+    );
+    world.provider.set_output_limit(false);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        // A queue of 8 places: 64 KiB of deltas.
+        let stopped = front
+            .join(ClientInfo {
+                queue: 8,
+                ..ClientInfo::user()
+            })
+            .await;
+        let bound = 8 * cortex_core::events::DELTA_BYTES_PER_PLACE;
+        front.prompt("say a lot").await;
+        front
+            .until(|seen| {
+                seen.iter().any(|outgoing| {
+                    matches!(outgoing, Outgoing::Event(event)
+                        if matches!(&event.event, Event::ItemDelta(delta)
+                            if matches!(&delta.delta, Delta::Text(text) if text.text.contains("0099 "))))
+                })
+            })
+            .await;
+        settle().await;
+        // A hundred kibibytes arrived: it holds its bound and no more, in
+        // a handful of events.
+        let held = stopped.client.queue.delta_bytes();
+        assert!(held <= bound + 1024, "{held} bytes held, the bound is {bound}");
+        assert!(stopped.client.queue.len() <= 8, "{}", stopped.client.queue.len());
+        // What it reads, without taking anything from its queue, is the
+        // whole item so far.
+        let answer = front
+            .events()
+            .into_iter()
+            .find_map(|event| match event.event {
+                Event::ItemDelta(delta) => Some(delta.item_id),
+                _ => None,
+            })
+            .expect("the answer's id");
+        let partial = read(&stopped, Some(answer.clone()), None, None).await;
+        assert_eq!(text_of(&partial.items[0]), before.concat());
+        assert_eq!(partial.incomplete, std::slice::from_ref(&answer));
+
+        // The rest of the turn comes while it still reads nothing, its
+        // queue full of bytes: whole events go in all the same.
+        gate.open();
+        front.turns(1).await;
+        stopped.turns(1).await;
+        let resyncs: Vec<ItemId> = stopped
+            .events()
+            .into_iter()
+            .filter_map(|event| match event.event {
+                Event::ItemResync(resync) => Some(resync.item_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resyncs, [answer], "{:?}", stopped.events());
+        // What it was sent of the text is less than what came.
+        assert!(text_deltas(&stopped).concat().len() < before.concat().len());
+        // No delta of the item after its resync, and its completion whole.
+        assert!(
+            !text_deltas(&stopped)
+                .iter()
+                .any(|text| text.contains("0150 ")),
+            "deltas after the resync"
+        );
+        let whole = pieces.concat();
+        assert!(stopped.items().iter().any(|item| text_of(item) == whole));
+        // Every whole event the client that kept up was sent, it was sent.
+        let whole_events = |front: &Front| -> Vec<u64> {
+            front
+                .events()
+                .iter()
+                .filter(|event| {
+                    !matches!(event.event, Event::ItemDelta(_) | Event::ItemResync(_))
+                })
+                .map(|event| event.seq)
+                .collect()
+        };
+        let from = whole_events(&stopped).first().copied().unwrap_or(0);
+        let expected: Vec<u64> = whole_events(&front)
+            .into_iter()
+            .filter(|seq| *seq >= from)
+            .collect();
+        assert_eq!(whole_events(&stopped), expected);
+        front.close().await;
+        stopped.close().await;
+    });
+}

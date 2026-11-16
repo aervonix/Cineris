@@ -18,7 +18,12 @@
 //!    `item.resync` is queued in place of the first. From then until the
 //!    item completes, the reader gets none of its deltas: it reads what the
 //!    item has so far with `session/read`, and `item.completed` has all of
-//!    it.
+//!    it. **Full is by count or by bytes** (since step 27): past its
+//!    capacity of events, or once the deltas it holds come to 8 KiB for
+//!    each place of that capacity (8 MiB at [`QUEUE_CAPACITY`]), merged
+//!    deltas counted whole. A merged delta takes no place, so without the
+//!    bytes a reader that stops during one long item would hold all of it:
+//!    a command's output streams at about 3.7 MiB a second.
 //! 3. **Nothing else is ever dropped.** A completed item, a turn's events
 //!    and a request to the client are queued even when the queue is full:
 //!    they are few, and each is bounded. (A transport that cannot hold them
@@ -53,6 +58,21 @@ use tokio::sync::Notify;
 /// How many events may wait for one client before its deltas are dropped.
 pub const QUEUE_CAPACITY: usize = 1024;
 
+/// How many bytes of deltas a queue holds for each place of its capacity
+/// before its deltas are dropped: 8 MiB at [`QUEUE_CAPACITY`].
+///
+/// Measured in step 27 (`docs/architecture/02-runtime.md`, "Event
+/// backpressure"): a reader that reads nothing holds an answer as one
+/// merged delta, 1.7 MiB for the longest the built-in catalog allows
+/// (393,216 tokens), and a command's output at the runner's own rate, 3.7
+/// MiB a second. So every answer stays whole, and a stopped reader holds
+/// about two seconds of a command that writes as fast as it can.
+pub const DELTA_BYTES_PER_PLACE: usize = 8 * 1024;
+
+/// How many bytes of deltas may wait for a client with a queue of
+/// [`QUEUE_CAPACITY`] before its deltas are dropped: 8 MiB.
+pub const QUEUE_DELTA_BYTES: usize = QUEUE_CAPACITY * DELTA_BYTES_PER_PLACE;
+
 /// What the outcome of a tool result in progress is called: the call is
 /// still running.
 pub const RUNNING: &str = "running";
@@ -85,6 +105,8 @@ pub enum Outgoing {
 #[derive(Debug, Default)]
 struct QueueState {
     items: VecDeque<Outgoing>,
+    /// The bytes of the deltas in `items` ([`delta_size`]).
+    delta_bytes: usize,
     /// The items whose deltas are being dropped, each told so once.
     dropping: BTreeSet<ItemId>,
     /// For each session the client has read, the `seq` it read at: no
@@ -107,6 +129,8 @@ pub struct EventQueue {
     /// itself, so one call a burst is enough.
     hook: Mutex<Option<Wake>>,
     capacity: usize,
+    /// Past this many bytes of deltas held, the queue is full too.
+    delta_bytes: usize,
     deltas: bool,
 }
 
@@ -115,21 +139,25 @@ impl std::fmt::Debug for EventQueue {
         f.debug_struct("EventQueue")
             .field("state", &self.state)
             .field("capacity", &self.capacity)
+            .field("delta_bytes", &self.delta_bytes)
             .field("deltas", &self.deltas)
             .finish_non_exhaustive()
     }
 }
 
 impl EventQueue {
-    /// A queue that holds `capacity` events before it drops deltas, for a
-    /// client that does or does not want deltas at all.
+    /// A queue that holds `capacity` events, and deltas of at most
+    /// [`DELTA_BYTES_PER_PLACE`] for each of them, before it drops deltas,
+    /// for a client that does or does not want deltas at all.
     #[must_use]
     pub fn new(capacity: usize, deltas: bool) -> Self {
+        let capacity = capacity.max(1);
         Self {
             state: Mutex::new(QueueState::default()),
             wake: Notify::new(),
             hook: Mutex::new(None),
-            capacity: capacity.max(1),
+            capacity,
+            delta_bytes: capacity.saturating_mul(DELTA_BYTES_PER_PLACE),
             deltas,
         }
     }
@@ -173,16 +201,27 @@ impl EventQueue {
                 if !self.deltas || state.dropping.contains(&delta.item_id) {
                     return;
                 }
-                let QueueState { items, fences, .. } = &mut *state;
-                if let Some(Outgoing::Event(last)) = items.back_mut()
+                let size = delta_size(&delta.delta);
+                // Full of bytes: what it holds of deltas has reached the
+                // bound, merged ones counted whole. Nothing more is merged.
+                let full_of_bytes = state.delta_bytes >= self.delta_bytes;
+                let QueueState {
+                    items,
+                    fences,
+                    delta_bytes,
+                    ..
+                } = &mut *state;
+                if !full_of_bytes
+                    && let Some(Outgoing::Event(last)) = items.back_mut()
                     && fences
                         .get(&last.session_id)
                         .is_none_or(|fence| last.seq > *fence)
                     && merge(last, &event)
                 {
+                    *delta_bytes += size;
                     return;
                 }
-                if state.items.len() >= self.capacity {
+                if full_of_bytes || state.items.len() >= self.capacity {
                     // The reader is far behind: this item's deltas stop
                     // here, and it is told once, in this delta's place and
                     // under its number. One small event an item is queued
@@ -213,6 +252,9 @@ impl EventQueue {
                 state.dropping.remove(&reset.item_id);
             }
             _ => {}
+        }
+        if let Event::ItemDelta(delta) = &event.event {
+            state.delta_bytes += delta_size(&delta.delta);
         }
         let was_empty = state.items.is_empty();
         state.items.push_back(Outgoing::Event(event));
@@ -248,7 +290,14 @@ impl EventQueue {
 
     /// The next thing for the client, if there is one. Never waits.
     pub fn try_next(&self) -> Option<Outgoing> {
-        lock(&self.state).items.pop_front()
+        let mut state = lock(&self.state);
+        let next = state.items.pop_front();
+        if let Some(Outgoing::Event(event)) = &next
+            && let Event::ItemDelta(delta) = &event.event
+        {
+            state.delta_bytes = state.delta_bytes.saturating_sub(delta_size(&delta.delta));
+        }
+        next
     }
 
     /// The next thing for the client. `None` once the client is
@@ -280,6 +329,14 @@ impl EventQueue {
         self.len() == 0
     }
 
+    /// How many bytes the deltas waiting hold: their text, a merged delta's
+    /// whole. Past [`DELTA_BYTES_PER_PLACE`] for each place of the queue's
+    /// capacity, its deltas are dropped.
+    #[must_use]
+    pub fn delta_bytes(&self) -> usize {
+        lock(&self.state).delta_bytes
+    }
+
     /// The client is gone: what is queued can still be read, and nothing
     /// more is taken.
     pub(crate) fn close(&self) {
@@ -297,6 +354,18 @@ impl EventQueue {
     #[must_use]
     pub fn is_closed(&self) -> bool {
         lock(&self.state).closed
+    }
+}
+
+/// What a delta holds, in bytes, as a queue counts it: its text, or a tool
+/// call's name and id. The same for a delta merged from parts as for the
+/// parts added up.
+fn delta_size(delta: &Delta) -> usize {
+    match delta {
+        Delta::Text(text) | Delta::Reasoning(text) | Delta::ToolOutput(text) => text.text.len(),
+        Delta::ToolArgs(arguments) => arguments.json.len(),
+        Delta::ToolCall(call) => call.name.len() + call.call_id.as_str().len(),
+        Delta::Unknown(_) => 0,
     }
 }
 
@@ -878,6 +947,98 @@ mod tests {
                 "capacity {capacity}: {read:?}"
             );
         }
+    }
+
+    /// A reader that stops during one long item: its deltas merge into one,
+    /// which takes one place, so the count never fills; the bytes do. The
+    /// queue then drops the item's deltas with one resync, and holds no
+    /// more than its bound and one delta. Whole events still go in.
+    #[test]
+    fn a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item() {
+        let queue = EventQueue::new(4, true);
+        let bound = 4 * DELTA_BYTES_PER_PLACE;
+        let piece = "x".repeat(1024);
+        queue.push(event(1, Event::TurnStarted(TurnStarted {})));
+        for seq in 2..=200 {
+            queue.push(text(seq, "i_1", &piece));
+        }
+        assert!(queue.len() <= 3, "{}", queue.len());
+        assert!(
+            queue.delta_bytes() >= bound && queue.delta_bytes() <= bound + piece.len(),
+            "{} bytes held, the bound is {bound}",
+            queue.delta_bytes()
+        );
+        // A whole event past the bound is queued as ever, and so is the
+        // item's completion.
+        queue.push(event(201, Event::TurnStarted(TurnStarted {})));
+        queue.push(completed(202, "i_1"));
+        let taken = drain(&queue);
+        let kinds: Vec<String> = taken
+            .iter()
+            .map(|event| match &event.event {
+                Event::ItemDelta(_) => "text".to_owned(),
+                _ => label(event),
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "turn.started",
+                "text",
+                "resync:i_1",
+                "turn.started",
+                "completed:i_1"
+            ]
+        );
+        // The resync stands for the first delta dropped, under its number.
+        let held = u64::try_from(bound / piece.len()).expect("a small count");
+        assert_eq!(taken[2].seq, 2 + held);
+        assert_eq!(
+            queue.delta_bytes(),
+            0,
+            "a reader that took them all holds none"
+        );
+        // The next item's deltas go in and merge again.
+        queue.push(text(203, "i_2", "a"));
+        queue.push(text(204, "i_2", "b"));
+        assert_eq!(labels(&queue), ["text:i_2:ab"]);
+    }
+
+    /// The bytes held go down as the reader takes deltas, so a reader that
+    /// keeps up is never full of them, however much passes through.
+    #[test]
+    fn the_bytes_held_go_down_as_the_reader_takes_deltas() {
+        let queue = EventQueue::new(1, true);
+        let piece = "y".repeat(DELTA_BYTES_PER_PLACE / 2);
+        for seq in 1..=100 {
+            queue.push(text(seq, "i_1", &piece));
+            assert_eq!(queue.delta_bytes(), piece.len());
+            let Some(Outgoing::Event(event)) = queue.try_next() else {
+                panic!("the delta was dropped");
+            };
+            assert!(matches!(event.event, Event::ItemDelta(_)));
+            assert_eq!(queue.delta_bytes(), 0);
+        }
+        // Each kind is counted: a call's name and id, and its arguments.
+        queue.push(delta(
+            101,
+            "i_2",
+            Delta::ToolCall(ToolCallDelta {
+                call_id: CallId::new("c1"),
+                name: "read".to_owned(),
+            }),
+        ));
+        assert_eq!(queue.delta_bytes(), "read".len() + "c1".len());
+        let _ = queue.try_next();
+        queue.push(delta(
+            102,
+            "i_2",
+            Delta::ToolArgs(ToolArgsDelta {
+                call_id: CallId::new("c1"),
+                json: "{\"path\":1}".to_owned(),
+            }),
+        ));
+        assert_eq!(queue.delta_bytes(), "{\"path\":1}".len());
     }
 
     #[test]
