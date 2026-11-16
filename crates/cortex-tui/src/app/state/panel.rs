@@ -29,7 +29,9 @@ use cortex_protocol::item::Item;
 use cortex_protocol::methods::OpResult;
 use cortex_term::{Event as TermEvent, Key, Line};
 
-use super::super::panels::{Act, Draw, Panels, Seen, plan::PlanPanel, review::ReviewPanel};
+use super::super::panels::{
+    Act, Draw, Panels, Seen, plan::PlanPanel, project::ProjectPanel, review::ReviewPanel,
+};
 use super::super::ready::REPEAT;
 use super::{App, LastKey, Pending};
 use crate::focus::Target;
@@ -44,12 +46,13 @@ pub(crate) const LEAST_ROWS: usize = 8;
 /// vanishes under panels.
 pub(crate) const LIVE_KEPT: usize = 4;
 
-/// The panels of this build, each registered once: the plan's and the
-/// review's.
-pub(super) fn registered() -> Panels {
+/// The panels of this build, each registered once: the plan's, the
+/// review's and the project's, their times read from `clock`.
+pub(super) fn registered(clock: &cortex_base::SharedClock) -> Panels {
     let mut panels = Panels::new();
     panels.register(Box::new(PlanPanel::default()));
     panels.register(Box::new(ReviewPanel::default()));
+    panels.register(Box::new(ProjectPanel::new(clock.clone())));
     panels
 }
 
@@ -104,6 +107,14 @@ impl App {
             }
             None => self.input.focus_mut().to_input(),
         }
+    }
+
+    /// The time of day the panels read is `clock`'s: the panels are made
+    /// again, closed.
+    #[cfg(any(test, feature = "test-kit"))]
+    pub fn set_clock(&mut self, clock: cortex_base::SharedClock) {
+        self.panels = registered(&clock);
+        self.clock = clock;
     }
 
     /// The look, for tests that draw a panel as the application does.
@@ -295,9 +306,17 @@ impl App {
         let Some(id) = self.panels.find(name) else {
             return;
         };
-        if let Err(sentence) = self.panels.summon(id) {
-            self.say(&sentence);
-            return;
+        let session = self.session.as_ref().map(|state| state.session_id.clone());
+        match self.panels.summon(id, session.as_ref()) {
+            Ok(asks) => {
+                for op in asks {
+                    self.panel_send(id, op);
+                }
+            }
+            Err(sentence) => {
+                self.say(&sentence);
+                return;
+            }
         }
         // No panel takes the focus from a dialog: the panel is open, for
         // `Ctrl+P` once the dialog is answered.

@@ -36,6 +36,7 @@
 //! ([`Panel::result`]).
 
 pub(crate) mod plan;
+pub(crate) mod project;
 pub(crate) mod review;
 
 use std::time::Instant;
@@ -195,6 +196,23 @@ pub(crate) trait Panel: std::fmt::Debug + Send {
     /// the sentence in `Err` is said instead when it has nothing to show.
     fn summon(&mut self) -> Result<(), String> {
         Err("This panel opens by itself, when it has something to show.".to_owned())
+    }
+
+    /// What to ask the core for when a command opened it, in `session`,
+    /// the one open: the results come to [`Panel::result`].
+    fn summoned(&self, session: Option<&SessionId>) -> Vec<Op> {
+        let _ = session;
+        Vec::new()
+    }
+
+    /// It took the focus: what a key of its asked and was not answered
+    /// (a question in a row) is forgotten.
+    fn focus_taken(&mut self) {}
+
+    /// It was drawn focused on `focused`, whose rows were all drawn when
+    /// `whole`: a key that acts on what the person was shown asks this.
+    fn shown_whole(&mut self, focused: usize, whole: bool) {
+        let _ = (focused, whole);
     }
 
     /// Its collapsed rows, one or two: how it is drawn without the focus.
@@ -409,12 +427,18 @@ impl Panels {
             .collect()
     }
 
-    /// A command asked for `id`: opened, or the sentence that says why not.
-    pub(crate) fn summon(&mut self, id: u64) -> Result<(), String> {
+    /// A command asked for `id`, in `session`: opened, with what it asks of
+    /// the core, or the sentence that says why not.
+    pub(crate) fn summon(
+        &mut self,
+        id: u64,
+        session: Option<&SessionId>,
+    ) -> Result<Vec<Op>, String> {
         let slot = self.slot_mut(id).ok_or_else(String::new)?;
         slot.panel.summon()?;
+        let asks = slot.panel.summoned(session);
         self.apply(id, Show::Open);
-        Ok(())
+        Ok(asks)
     }
 
     /// `id` took the focus (`Ctrl+P`, a command): its focus starts on the
@@ -423,6 +447,7 @@ impl Panels {
         let Some(slot) = self.slot_mut(id) else {
             return;
         };
+        slot.panel.focus_taken();
         slot.focus = slot.panel.first_focus();
         slot.focus_id = slot.panel.item(slot.focus).map(|key| key.id);
         slot.seen = slot.panel.item(slot.focus);
@@ -518,13 +543,17 @@ impl Panels {
         }
     }
 
-    /// One of `id`'s keys, on its focused item.
+    /// One of `id`'s keys, on its focused item. A key that changed what
+    /// the focused item shows (a question asked in its row) starts the
+    /// readiness again, at once: the next key acts on what is shown next.
     pub(crate) fn act(&mut self, id: u64, action: Action, session: Option<&SessionId>) -> Act {
         let Some(slot) = self.slot_mut(id) else {
             return Act::Pass;
         };
         let focus = slot.focus;
-        slot.panel.act(action, focus, session)
+        let act = slot.panel.act(action, focus, session);
+        self.observe(id);
+        act
     }
 
     /// `Enter` on `id`'s focused item.
@@ -686,8 +715,10 @@ impl Panels {
             (Some(first), Some(last)) => first..last + 1,
             _ => 0..0,
         };
-        let (start, end, marked) = window(body.len(), n, wanted, slot.scroll);
+        let (start, end, marked) = window(body.len(), n, wanted.clone(), slot.scroll);
         slot.scroll = start;
+        let whole = !wanted.is_empty() && start <= wanted.start && wanted.end <= end;
+        slot.panel.shown_whole(focus, whole);
         if marked && start > 0 {
             lines.push(views::more(start, draw.width, draw.look));
         }
