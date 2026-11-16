@@ -2497,3 +2497,23 @@ find: .filter(|case| case.failed)
 replace: .filter(|case| case.failed && false)
 caught-by:
     runs::tests::a_report_with_a_failed_test_is_named_as_no_measurement
+
+# The review's fixes: words a run already gives nextest are refused before the build.
+
+[break] try-passes-locked-on-twice
+rule: `try` refuses `--locked`, `--workspace` and `--no-tests`, which its runs give nextest already and nextest refuses twice, before anything is built.
+file: xtask/src/try_run.rs
+find: "--locked"
+replace: "--locked-no-more"
+occurrence: 1
+caught-by:
+    try_run::tests::*
+
+[break] try-takes-a-joined-profile
+rule: `-Pfast`, a short option with its value joined to it, is refused as `-P` is.
+file: xtask/src/try_run.rs
+in: refuse_foreign_words
+find: let flag = if flag.starts_with("-P") && !flag.starts_with("--") {
+replace: let flag = if false {
+caught-by:
+    try_run::tests::*
