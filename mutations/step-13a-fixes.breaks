@@ -170,7 +170,7 @@ caught-by:
 rule: Once a session is in the table, the core looks again for its client and for a shutdown.
 file: crates/cortex-core/src/core.rs
 in: Core::open
-find: self.still_wanted(client, &live).await?;
+find: self.still_wanted(client, &live, true).await?;
 replace:
 caught-by:
     cortex-core::it lifecycle::a_session_started_for_a_client_that_left_meanwhile_does_not_run_on

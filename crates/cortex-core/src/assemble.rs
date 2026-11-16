@@ -2278,6 +2278,7 @@ pub(crate) fn assemble(
         timeout: options.approval_timeout,
         fail_on_denial: options.fail_on_denial,
         stops_from_questions: options.answers_may_stop,
+        waits_for_a_client: options.keep_sessions,
         sandboxed: sandbox.confines(),
     }));
 

@@ -19,7 +19,10 @@
 //! refusal is kept ([`PermissionDenial`]), because it is the usual reason a
 //! run without a person does less than was asked of it. With
 //! `fail_on_denial` the same call ends the turn, through the loop's `Stop`,
-//! with the outcome `denied`.
+//! with the outcome `denied`. A core that keeps sessions
+//! (`CoreOptions::keep_sessions`) asks later instead where the session has
+//! no client at all: the question is put to nobody, and waits for a `user`
+//! client to open the session, until its time limit.
 
 #![allow(
     clippy::disallowed_types,
@@ -222,6 +225,10 @@ pub(crate) struct EnginePolicy {
     /// The front end can stop the turn from a question: the interactive
     /// application's interrupt key (`CoreOptions::answers_may_stop`).
     stops_from_questions: bool,
+    /// A question in a session with no client at all waits for a `user`
+    /// client to open it, rather than being refused at once: the core
+    /// keeps sessions (`CoreOptions::keep_sessions`).
+    waits_for_a_client: bool,
     /// Whether commands run confined: what an approval's detail says. It
     /// follows the session's level, since nothing is confined at
     /// `unrestricted`.
@@ -268,6 +275,7 @@ pub(crate) struct PolicyParts {
     pub(crate) timeout: Option<Duration>,
     pub(crate) fail_on_denial: bool,
     pub(crate) stops_from_questions: bool,
+    pub(crate) waits_for_a_client: bool,
     pub(crate) sandboxed: bool,
 }
 
@@ -296,6 +304,7 @@ impl EnginePolicy {
             timeout: parts.timeout,
             fail_on_denial: parts.fail_on_denial,
             stops_from_questions: parts.stops_from_questions,
+            waits_for_a_client: parts.waits_for_a_client,
             sandboxed: std::sync::atomic::AtomicBool::new(parts.sandboxed),
             stopped: Mutex::new(None),
             denials: Mutex::new(Vec::new()),
@@ -638,8 +647,15 @@ impl Policy for EnginePolicy {
                 Outcome::Deny { reason } => return Verdict::Deny { note: Some(reason) },
                 Outcome::Ask(question) => question,
             };
-            let asked = self.clients.approvers(&self.sink.subscribers());
-            if asked.is_empty() {
+            let subscribers = self.sink.subscribers();
+            let asked = self.clients.approvers(&subscribers);
+            // A session kept with no client at all puts the question to
+            // nobody: a `user` client that opens the session is put it
+            // (`Clients::join`), until the time limit. One whose clients
+            // are there and answer no approvals is answered by the default
+            // at once, as always.
+            let waits = self.waits_for_a_client && subscribers.is_empty();
+            if asked.is_empty() && !waits {
                 return self.nobody(&call, &question);
             }
 

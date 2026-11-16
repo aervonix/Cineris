@@ -1,0 +1,43 @@
+# Step 27: the changes to `cortex-core` the RPC server needs, each on a
+# commit of its own (docs/steps/27/answered.md, "What changes outside
+# cortex-rpc and cortex-cli"). The rules broken one at a time, with the
+# tests that must fail.
+
+# ------------------------------------------------- sessions kept running
+
+[break] a-kept-session-ends-with-its-client
+rule: With `keep_sessions`, a disconnect ends no session: it goes on with no client.
+file: crates/cortex-core/src/core.rs
+in: disconnect
+find: if live.sink.unsubscribe(client.0) && !keep && live.sink.subscribers().is_empty() {
+replace: if live.sink.unsubscribe(client.0) && live.sink.subscribers().is_empty() {
+caught-by:
+    cortex-core::it lifecycle::with_keep_sessions_a_session_runs_on_when_its_client_goes
+
+[break] a-question-with-no-client-is-refused-at-once
+rule: With `keep_sessions`, an approval in a session with no client at all waits for a `user` client to open it.
+file: crates/cortex-core/src/policy.rs
+in: ask
+find: let waits = self.waits_for_a_client && subscribers.is_empty();
+replace: let waits = false;
+caught-by:
+    cortex-core::it lifecycle::with_keep_sessions_a_question_with_no_client_waits_for_a_user_to_open_the_session
+    cortex-core::it lifecycle::with_keep_sessions_a_question_with_no_client_is_denied_at_its_time_limit
+
+[break] a-client-that-answers-no-approvals-makes-a-question-wait
+rule: With `keep_sessions`, a session whose clients are there and answer no approvals still gets the default at once.
+file: crates/cortex-core/src/policy.rs
+in: ask
+find: let waits = self.waits_for_a_client && subscribers.is_empty();
+replace: let waits = self.waits_for_a_client;
+caught-by:
+    cortex-core::it lifecycle::with_keep_sessions_a_client_that_answers_no_approvals_still_gets_the_default
+
+[break] a-session-put-together-for-a-client-that-left-is-kept
+rule: With `keep_sessions`, a session put together for a client that left meanwhile is still ended.
+file: crates/cortex-core/src/core.rs
+in: still_wanted
+find: let kept = self.inner.options.keep_sessions && !put_together;
+replace: let kept = self.inner.options.keep_sessions;
+caught-by:
+    cortex-core::it lifecycle::with_keep_sessions_a_session_started_for_a_client_that_left_does_not_run_on
