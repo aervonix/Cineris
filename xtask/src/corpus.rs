@@ -60,15 +60,20 @@ fn source_folder() -> PathBuf {
 /// `cargo xtask corpus …`
 pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let words: Vec<&str> = arguments.iter().map(String::as_str).collect();
-    let pin = Pin::pinned();
     let root = shared::system_root()?;
+    // `pin` mends a corpus/PIN that is not a pin, so only the others read it.
+    let pinned = || pinned(shared::PIN_TEXT);
     match words.as_slice() {
+        ["pin"] => repin(&root, false),
+        ["pin", "--update"] => repin(&root, true),
         ["fetch"] => {
+            let pin = pinned()?;
             let (folder, measured) = fetch(&root, &pin)?;
             summary(&folder, &measured);
             Ok(())
         }
         ["check"] => {
+            let pin = pinned()?;
             let folder = shared::folder(&root, &pin);
             let timer = Instant::now();
             let measured = shared::verify(&folder, &pin).map_err(not_whole)?;
@@ -77,15 +82,25 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             Ok(())
         }
         ["path"] => {
+            let pin = pinned()?;
             let folder = shared::folder(&root, &pin);
             shared::verify(&folder, &pin).map_err(not_whole)?;
             println!("{}", folder.display());
             Ok(())
         }
-        ["pin"] => repin(&root, false),
-        ["pin", "--update"] => repin(&root, true),
         _ => Err(USAGE.to_owned()),
     }
+}
+
+/// The pin `text` (corpus/PIN, as this build of `xtask` read it), or why it
+/// is not one, and how to mend it.
+fn pinned(text: &str) -> Result<Pin> {
+    Pin::parse(text).map_err(|problem| {
+        format!(
+            "corpus/PIN is not a pin: {problem}. `cargo xtask corpus pin` writes it again from \
+             corpus/Cargo.lock"
+        )
+    })
 }
 
 fn not_whole(problem: String) -> String {
@@ -107,7 +122,7 @@ fn summary(folder: &Path, measured: &Measured) {
 /// What `try` runs before a measurement that reads the corpus: the same as
 /// `corpus fetch`.
 pub(crate) fn ensure_for_try() -> Result<()> {
-    let (folder, measured) = fetch(&shared::system_root()?, &Pin::pinned())?;
+    let (folder, measured) = fetch(&shared::system_root()?, &pinned(shared::PIN_TEXT)?)?;
     summary(&folder, &measured);
     Ok(())
 }
@@ -181,11 +196,10 @@ fn must_be_the_pin(measured: &Measured, pin: &Pin) -> Result<()> {
 fn repin(root: &Path, update: bool) -> Result<()> {
     let work = work_folder(root)?;
     let result = (|| {
-        if update {
-            // No lock to hold to: cargo chooses, from the list.
-            fs::remove_file(source_folder().join("Cargo.lock")).ok();
-        }
-        let (made, measured) = make(&work, false)?;
+        // With --update there is no lock to hold to: cargo chooses, from the
+        // list. corpus/Cargo.lock is replaced only once the new corpus is
+        // made, so a fetch that fails leaves it as it was.
+        let (made, measured) = make_with(&work, false, !update)?;
         fs::copy(work.join("Cargo.lock"), source_folder().join("Cargo.lock"))
             .map_err(|error| format!("cannot write corpus/Cargo.lock: {error}"))?;
         let pin = measured.as_pin();
@@ -243,13 +257,21 @@ fn install(made: &Path, folder: &Path, pin: &Pin) -> Result<()> {
 /// names (with `--locked` unless this is a pin), and copies each crate's
 /// `.rs` files out of the registry. Returns the folder and what is in it.
 fn make(work: &Path, locked: bool) -> Result<(PathBuf, Measured)> {
+    make_with(work, locked, true)
+}
+
+/// [`make`], with corpus/Cargo.lock given to cargo only when `with_lock`.
+fn make_with(work: &Path, locked: bool, with_lock: bool) -> Result<(PathBuf, Measured)> {
     let source = source_folder();
     let list = fs::read_to_string(source.join("dependencies.toml"))
         .map_err(|error| format!("cannot read corpus/dependencies.toml: {error}"))?;
     fs::write(work.join("Cargo.toml"), manifest(&list))
         .and_then(|()| fs::write(work.join("lib.rs"), ""))
         .map_err(|error| format!("cannot write the manifest: {error}"))?;
-    if let Ok(lock) = fs::read(source.join("Cargo.lock")) {
+    if let Some(lock) = with_lock
+        .then(|| fs::read(source.join("Cargo.lock")).ok())
+        .flatten()
+    {
         fs::write(work.join("Cargo.lock"), lock)
             .map_err(|error| format!("cannot write the lock: {error}"))?;
     } else if locked {
@@ -441,6 +463,17 @@ mod tests {
     use super::{
         FILE_DATE, copy_rust_files, ensure, install, manifest, registry_packages, shared, value_of,
     };
+
+    #[test]
+    fn a_pin_that_is_not_one_is_an_error_that_says_how_to_mend_it() {
+        let error = super::pinned("hash = not hexadecimal").unwrap_err();
+        assert!(error.starts_with("corpus/PIN is not a pin: "), "{error}");
+        assert!(error.contains("`cargo xtask corpus pin`"), "{error}");
+        assert_eq!(
+            super::pinned(shared::PIN_TEXT).unwrap(),
+            Pin::parse(shared::PIN_TEXT).unwrap()
+        );
+    }
 
     /// A small corpus, `scratch/source`, and its pin.
     fn small(scratch: &Scratch) -> (PathBuf, Pin) {

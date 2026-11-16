@@ -143,6 +143,20 @@ impl Request {
         {
             return Err(format!("`{profile}` is not the name of a cargo profile"));
         }
+        // What `scratch-test` gives nextest itself, from its own options,
+        // would reach it twice, which nextest refuses after the build.
+        let twice = |long: &str| {
+            format!(
+                "`{long}` is given twice: by scratch-test's own option and after `--`. Give it \
+                 once, before `--`"
+            )
+        };
+        if options.cargo_profile.is_some() && says(&rest, "--cargo-profile", None) {
+            return Err(twice("--cargo-profile"));
+        }
+        if options.ignored != Ignored::No && says(&rest, "--run-ignored", None) {
+            return Err(twice("--run-ignored"));
+        }
         match positional.as_slice() {
             [package, file] => Ok(Self {
                 package: package.clone(),
@@ -432,6 +446,38 @@ mod tests {
                 "(test(/^scratch_f::/)) and (test(/perf_/))",
             ])
         );
+    }
+
+    #[test]
+    fn a_cargo_profile_or_ignored_tests_asked_for_on_both_sides_of_the_separator_are_refused() {
+        let parse = |list: &[&str]| Request::parse(&words(list));
+        let error = parse(&[
+            "cortex-stats",
+            "f.rs",
+            "--cargo-profile",
+            "release",
+            "--",
+            "--cargo-profile",
+            "ci",
+        ])
+        .unwrap_err();
+        assert!(
+            error.contains("`--cargo-profile` is given twice"),
+            "{error}"
+        );
+        let error = parse(&[
+            "cortex-stats",
+            "f.rs",
+            "--ignored",
+            "--",
+            "--run-ignored=all",
+        ])
+        .unwrap_err();
+        assert!(error.contains("`--run-ignored` is given twice"), "{error}");
+        // Either alone, on either side, is taken.
+        parse(&["cortex-stats", "f.rs", "--", "--cargo-profile", "ci"]).unwrap();
+        parse(&["cortex-stats", "f.rs", "--", "--run-ignored", "only"]).unwrap();
+        parse(&["cortex-stats", "f.rs", "--cargo-profile", "ci", "--ignored"]).unwrap();
     }
 
     #[test]
