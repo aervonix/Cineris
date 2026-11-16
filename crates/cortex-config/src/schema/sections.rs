@@ -112,6 +112,10 @@ settings! {
         /// and the caps of the index it is made from.
         [nested]
         pub index: IndexSettings,
+        /// The project profile and memory: whether commands are learned,
+        /// and the budget of the profile's section of the prompt.
+        [nested]
+        pub project: ProjectSettings,
         /// The run engine: concurrency, workspaces, budgets.
         [reserved UserOnly]
         pub runs: Reserved,
@@ -499,6 +503,29 @@ settings! {
         /// project, after trust.
         [RaisesCost, NextEpoch, 0..=100_000_000]
         pub instructions_cap: u64 = 49_152,
+    }
+}
+
+settings! {
+    /// The project profile and memory
+    /// (`docs/architecture/14-adaptation.md`, "Project knowledge").
+    pub struct ProjectSettings {
+        /// Whether the harness learns from the commands a session runs: a
+        /// build, test or check command that succeeds twice becomes an
+        /// entry of the project profile, and a test command seen to fail
+        /// and then pass with nothing changed a flaky one. Off, nothing is
+        /// observed; what is already known is used as before, and
+        /// `remember` and the user's own entries work. The user's alone: a
+        /// repository's file does not decide what is kept about it.
+        [UserOnly, Restart]
+        pub learn: bool = true,
+        /// The budget of the project profile's section of the system
+        /// prompt, in tokens, counted at three bytes a token. Entries past
+        /// it are left out, commands last, and the section says how many.
+        /// A project's file may lower it and may not raise it: the section
+        /// is sent with every request.
+        [TightenOnly, NextEpoch, 0..=8_000]
+        pub profile_tokens: u64 = 1_500,
     }
 }
 

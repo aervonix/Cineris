@@ -36,6 +36,8 @@ permissions.rules = [
     { action = "deny", effect = "write", match = "**/.env*" },  # project: ~/work/app/.cortex/config.toml:4
 ]
 profile = "review"                          # user: ~/cortex/config.toml:2
+project.learn = true                        # default
+project.profile_tokens = 1500               # default
 providers.local.base_url = "http://localhost:11434"  # user: ~/cortex/config.toml:13
 providers.local.first_event_timeout = "5m"  # user: ~/cortex/config.toml:14
 providers.local.headers = { Authorization = { env = "LOCAL_TOKEN" }, X-Team = "[redacted]" }  # user: ~/cortex/config.toml:15

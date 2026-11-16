@@ -176,6 +176,13 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | `index.max_file_bytes` | whole number, 1 to 1073741824 | `1048576` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | restart | The largest file the index reads, in bytes. A larger one is listed and not outlined, unless the `outline` tool is asked for it. |
 | `index.pass_time` | length of time | `"2s"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | restart | The most time one pass of the index spends reading files, after its listing (which its cap on entries bounds). One that runs out carries on when the session is next idle. At least 250 ms is used, whatever is set: less would make an idle session pass over the workspace again for every few files. |
 
+## `[project]`
+
+| Key | Type | Default | From a project | Takes effect | What it is |
+|---|---|---|---|---|---|
+| `project.learn` | `true` or `false` | `true` | user only | restart | Whether the harness learns from the commands a session runs: a build, test or check command that succeeds twice becomes an entry of the project profile, and a test command seen to fail and then pass with nothing changed a flaky one. Off, nothing is observed; what is already known is used as before, and `remember` and the user's own entries work. The user's alone: a repository's file does not decide what is kept about it. |
+| `project.profile_tokens` | whole number, 0 to 8000 | `1500` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | next epoch | The budget of the project profile's section of the system prompt, in tokens, counted at three bytes a token. Entries past it are left out, commands last, and the section says how many. A project's file may lower it and may not raise it: the section is sent with every request. |
+
 ## `[usage]`
 
 | Key | Type | Default | From a project | Takes effect | What it is |

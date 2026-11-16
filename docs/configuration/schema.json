@@ -708,6 +708,29 @@
       "description": "Named sets of settings. A profile may hold any key of this file except `profile`, `profiles`, `managed` and `config_version`.",
       "type": "object"
     },
+    "project": {
+      "additionalProperties": true,
+      "description": "The project profile and memory: whether commands are learned, and the budget of the profile's section of the prompt.",
+      "properties": {
+        "learn": {
+          "default": true,
+          "description": "Whether the harness learns from the commands a session runs: a build, test or check command that succeeds twice becomes an entry of the project profile, and a test command seen to fail and then pass with nothing changed a flaky one. Off, nothing is observed; what is already known is used as before, and `remember` and the user's own entries work. The user's alone: a repository's file does not decide what is kept about it.",
+          "type": "boolean",
+          "x-cortex-effect": "restart",
+          "x-cortex-trust": "user only"
+        },
+        "profile_tokens": {
+          "default": 1500,
+          "description": "The budget of the project profile's section of the system prompt, in tokens, counted at three bytes a token. Entries past it are left out, commands last, and the section says how many. A project's file may lower it and may not raise it: the section is sent with every request.",
+          "maximum": 8000,
+          "minimum": 0,
+          "type": "integer",
+          "x-cortex-effect": "next epoch",
+          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+        }
+      },
+      "type": "object"
+    },
     "providers": {
       "additionalProperties": {
         "additionalProperties": true,

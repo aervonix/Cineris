@@ -86,6 +86,8 @@ index.map_wait                     user only
 index.max_files                    tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
 index.max_file_bytes               tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
 index.pass_time                    tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
+project.learn                      user only
+project.profile_tokens             tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
 runs.*                             user only
 usage.week_start                   user only
 usage.ranges                       user only

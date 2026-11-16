@@ -207,6 +207,17 @@ pub(crate) struct Assembled {
     pub(crate) lease_count: u64,
     /// The repository index, whose first pass starts once the loop runs.
     pub(crate) repo: Option<crate::repo_map::RepoIndex>,
+    /// The project's knowledge as this session has it. `None` with no
+    /// state directory to keep it in.
+    pub(crate) knowledge: Option<Arc<crate::knowledge::Knowledge>>,
+}
+
+/// The root of the workspace at `path`, as a session opened there would
+/// have it.
+pub(crate) fn workspace_root(path: &Path) -> Option<AbsPath> {
+    PathResolver::new(path, PathOptions::new())
+        .ok()
+        .map(|resolver| resolver.root().clone())
 }
 
 /// Where a directory really is: resolved through any link, whether or not
@@ -1234,6 +1245,11 @@ pub(crate) fn assemble(
     let project = root.project_key();
     // Where the repository index keeps its cache: the project's, by its key.
     let index_dir = state.as_ref().and_then(|state| state.index_dir(&project));
+    // Where the project's knowledge is kept: named here, read at the first
+    // turn.
+    let knowledge_file = state
+        .as_ref()
+        .and_then(|state| state.knowledge_file(&project));
     // The trust a look found (and an answer settled), or found now.
     let Trust {
         rules: rules_trusted,
@@ -1564,6 +1580,34 @@ pub(crate) fn assemble(
         sandboxed: sandbox.confines(),
     }));
 
+    // ------------------------------------------ the project's knowledge
+    // Made here and read nowhere yet: the first read of its files is at
+    // the start of the session's first turn.
+    let knowledge = knowledge_file.map(|file| {
+        Arc::new(crate::knowledge::Knowledge::new(crate::knowledge::Parts {
+            project: cortex_knowledge::Project::new(file, root.to_fs_path(), Arc::clone(&clock)),
+            key: project.clone(),
+            shared: inner.knowledge_of(&project),
+            session: id.clone(),
+            policy: Arc::clone(&policy),
+            hooks: Arc::clone(&hooks),
+            syntax,
+            filter: Arc::clone(&filter),
+            tokens: u32::try_from(settings.project.profile_tokens).unwrap_or(u32::MAX),
+            learn: settings.project.learn,
+            rounds: rounds.clone(),
+            shared_file: root.join(".cortex/profile.toml").ok(),
+        }))
+    });
+    if let Some(knowledge) = &knowledge {
+        let before = Arc::clone(knowledge);
+        policy.on_command(Arc::new(move || before.before_command()));
+        if let Some(rounds) = &rounds {
+            let changed = Arc::clone(knowledge);
+            rounds.on_change(Arc::new(move || changed.file_changed()));
+        }
+    }
+
     // ------------------------------------------------------------ the tools
     let files = Arc::new(FileTable::new());
     let registry = Arc::new(ToolRegistry::new());
@@ -1583,7 +1627,12 @@ pub(crate) fn assemble(
         .with(WriteTool::new(editing.clone()))
         .with(EditTool::new(editing))
         .with(PlanTool::new(Arc::clone(&board)))
-        .with(RememberTool::new(Arc::new(MemoryProposals::new())));
+        .with(RememberTool::new(match &knowledge {
+            Some(knowledge) => Arc::clone(knowledge) as Arc<dyn cortex_tools::Proposals>,
+            // With no state directory there is no project store: what is
+            // proposed is kept for the session and no longer.
+            None => Arc::new(MemoryProposals::new()),
+        }));
     if let Some(shell) = shell {
         let mut env_remove = provider::key_variables(settings);
         env_remove.extend(settings.shell.env_remove.iter().cloned());
@@ -1605,11 +1654,18 @@ pub(crate) fn assemble(
         if let Some(inherited) = &options.shell_env {
             tool = tool.with_inherited_env(inherited.iter().cloned());
         }
+        if let Some(knowledge) = &knowledge {
+            tool =
+                tool.with_profile(
+                    Arc::clone(knowledge) as Arc<dyn cortex_tools::shell::CommandProfile>
+                );
+        }
         toolbox = toolbox.with(RecordingShell::new(
             tool,
             rounds.clone(),
             Arc::clone(&sandbox),
             Arc::clone(&policy),
+            knowledge.clone(),
         ));
     }
 
@@ -1787,7 +1843,9 @@ pub(crate) fn assemble(
                 timer: Arc::clone(&options.timer),
                 wait: settings.index.map_wait.unwrap_or(options.map_wait),
             }),
-        profile: None,
+        profile: knowledge
+            .as_ref()
+            .map(|knowledge| Arc::clone(knowledge) as Arc<dyn cortex_agent::ProfileSource>),
     };
     let parts = SessionParts {
         info,
@@ -1851,6 +1909,7 @@ pub(crate) fn assemble(
         notices,
         lease_count: lease_count + 1,
         repo,
+        knowledge,
     })
 }
 
