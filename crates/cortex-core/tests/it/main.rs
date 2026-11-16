@@ -26,8 +26,8 @@
 
 #[cfg(target_os = "linux")]
 mod adversary;
-mod asking;
 mod approvals;
+mod asking;
 mod context;
 mod day;
 mod events;
@@ -43,6 +43,7 @@ mod settings;
 mod shell;
 mod start;
 mod trust;
+mod trusting;
 mod turns;
 mod usage;
 
@@ -60,7 +61,7 @@ use cortex_protocol::event::{Event, Notice, TurnCompleted};
 use cortex_protocol::jsonrpc::RequestId;
 use cortex_protocol::methods::{
     ApprovalChoice, ApprovalRequest, ApprovalResponse, Op, OpResult, ServerRequest, ServerResponse,
-    SessionNewParams, SessionRef, TurnInterruptParams, TurnStartParams,
+    SessionNewParams, SessionRef, TrustResponse, TurnInterruptParams, TurnStartParams,
 };
 use cortex_protocol::session::{SessionSettings, SessionState};
 use cortex_protocol::{Item, Part, SessionEvent, SessionId, StopReason};
@@ -410,6 +411,51 @@ impl Answering {
     }
 }
 
+/// Waits for `open`, a session's open by `client`, answering "not now" to
+/// a trust question meanwhile, and gives back what else the client was sent.
+///
+/// A project with something to trust asks a client that answers trust
+/// questions while its session is put together (since step 23). The rig
+/// answers "not now", so that a test's project is untrusted as it was
+/// before; the question's own tests are in `trusting`.
+pub async fn not_now(
+    core: &Core,
+    client: &Client,
+    open: impl Future<Output = Result<OpResult, OpError>>,
+) -> (Result<OpResult, OpError>, Vec<Outgoing>) {
+    let mut read = Vec::new();
+    let result = {
+        let answering = async {
+            loop {
+                match client.queue.next().await {
+                    Some(Outgoing::Request {
+                        id,
+                        request: ServerRequest::Trust(_),
+                    }) => {
+                        core.respond(
+                            client.id,
+                            &id,
+                            ServerResponse::Trust(TrustResponse::default()),
+                        )
+                        .expect("the trust question is open");
+                    }
+                    Some(other) => read.push(other),
+                    None => std::future::pending::<()>().await,
+                }
+            }
+        };
+        // The open ends the race; the answering never does.
+        let mut open = std::pin::pin!(open);
+        let mut answering = std::pin::pin!(answering);
+        std::future::poll_fn(|context| {
+            let _ = answering.as_mut().poll(context);
+            open.as_mut().poll(context)
+        })
+        .await
+    };
+    (result, read)
+}
+
 /// A front end: a client of a core, with a session open.
 pub struct Front {
     pub core: Core,
@@ -442,18 +488,18 @@ impl Front {
     ) -> Result<Self, OpError> {
         let _opening = cortex_testkit::profile::phase("connect and open a session");
         let client = core.connect(info);
-        let result = core
-            .handle(
-                client.id,
-                Op::SessionNew(SessionNewParams {
-                    workspace: world.workspace.to_str().unwrap().to_owned(),
-                    settings,
-                    title: None,
-                    config: serde_json::Map::new(),
-                    ephemeral: false,
-                }),
-            )
-            .await?;
+        let open = core.handle(
+            client.id,
+            Op::SessionNew(SessionNewParams {
+                workspace: world.workspace.to_str().unwrap().to_owned(),
+                settings,
+                title: None,
+                config: serde_json::Map::new(),
+                ephemeral: false,
+            }),
+        );
+        let (result, read) = not_now(core, &client, open).await;
+        let result = result?;
         let OpResult::SessionNew(result) = result else {
             panic!("not the result of session/new");
         };
@@ -462,7 +508,7 @@ impl Front {
             client,
             session: result.session.session_id.clone(),
             state: result.session,
-            seen: std::cell::RefCell::new(Vec::new()),
+            seen: std::cell::RefCell::new(read),
             answered: std::cell::RefCell::new(Vec::new()),
             answering: std::cell::RefCell::new(Answering::default()),
         })
@@ -471,17 +517,14 @@ impl Front {
     /// Another client on the same session.
     pub async fn join(&self, info: ClientInfo) -> Self {
         let client = self.core.connect(info);
-        let result = self
-            .core
-            .handle(
-                client.id,
-                Op::SessionOpen(SessionRef {
-                    session_id: self.session.clone(),
-                }),
-            )
-            .await
-            .expect("the session opens");
-        let OpResult::SessionOpen(result) = result else {
+        let open = self.core.handle(
+            client.id,
+            Op::SessionOpen(SessionRef {
+                session_id: self.session.clone(),
+            }),
+        );
+        let (result, read) = not_now(&self.core, &client, open).await;
+        let OpResult::SessionOpen(result) = result.expect("the session opens") else {
             panic!("not the result of session/open");
         };
         Self {
@@ -489,7 +532,7 @@ impl Front {
             client,
             session: self.session.clone(),
             state: result.session,
-            seen: std::cell::RefCell::new(Vec::new()),
+            seen: std::cell::RefCell::new(read),
             answered: std::cell::RefCell::new(Vec::new()),
             answering: std::cell::RefCell::new(Answering::default()),
         }

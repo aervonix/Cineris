@@ -547,7 +547,6 @@ impl<T: Send + Sync + 'static> cortex_index::Gate for InForce<T> {
     }
 }
 
-
 /// An approval's answer, from the table's answers of every kind: the table
 /// refuses an answer of another kind, so nothing else arrives here.
 fn approval_of(response: ServerResponse) -> Option<ApprovalResponse> {

@@ -50,7 +50,11 @@ fn questions(front: &Front) -> Vec<(cortex_protocol::jsonrpc::RequestId, String,
             Outgoing::Request {
                 id,
                 request: ServerRequest::Question(question),
-            } => Some((id.clone(), question.question.clone(), question.choices.clone())),
+            } => Some((
+                id.clone(),
+                question.question.clone(),
+                question.choices.clone(),
+            )),
             _ => None,
         })
         .collect()
@@ -155,7 +159,10 @@ fn with_nobody_to_ask_an_edited_file_is_kept() {
         assert!(questions(&front).is_empty());
         // Said, so the person knows the file stayed.
         assert!(
-            front.notices().iter().any(|notice| notice.contains("a.txt")),
+            front
+                .notices()
+                .iter()
+                .any(|notice| notice.contains("a.txt")),
             "{:?}",
             front.notices()
         );

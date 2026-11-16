@@ -68,4 +68,4 @@ pub use engine::{
 pub use lease::{LeaseExt, NarrowError, StandingTerms, default_sandbox, standing_lease};
 pub use level::{Decider, LevelError, Matter, NoSandbox, SandboxState, check_standing};
 pub use rules::{Protected, RuleContext, RuleError, RuleSet, RuleSource, SourcedRule};
-pub use trust::{Definition, ProjectTrust, Standing, TrustError, TrustStore};
+pub use trust::{Definition, ProjectRules, ProjectTrust, Standing, TrustError, TrustStore};

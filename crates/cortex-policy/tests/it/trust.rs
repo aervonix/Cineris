@@ -328,3 +328,68 @@ fn a_trust_store_that_is_not_understood_trusts_nothing() {
             .is_trusted()
     );
 }
+
+/// A project's rules as trust pins them (the owner's answer of
+/// 2026-11-15): outside any profile, and each profile's own. A project
+/// with no profile pins as it did before step 23; a rule moved into a
+/// profile, or changed in any profile, is a change to approve.
+#[test]
+fn a_projects_rules_are_pinned_with_every_profile_it_defines() {
+    let scratch = cortex_testkit::scratch!("trust_profiles");
+    let store = store(&scratch);
+    let key = ProjectKey::new("bbbb2222");
+    let test = rule(Effect::Exec, "make test", RuleAction::Allow);
+    let deploy = rule(Effect::Exec, "make deploy", RuleAction::Allow);
+    let base_only = cortex_policy::ProjectRules {
+        base: vec![test.clone()],
+        profiles: Vec::new(),
+    };
+    assert_eq!(
+        Definition::of_project_rules(&base_only),
+        Definition::of_rules(std::slice::from_ref(&test)),
+        "a project with no profile pins as before"
+    );
+    let shown = cortex_policy::ProjectRules {
+        base: vec![test.clone()],
+        profiles: vec![("ci".to_owned(), vec![deploy.clone()])],
+    };
+    store
+        .trust(&key, "~/work/app", &[Definition::of_project_rules(&shown)])
+        .unwrap();
+    let trust = store.project(&key).unwrap();
+    assert!(trust.project_rules_approved(&shown));
+    // The same rules in another order, or written twice, are the same.
+    let reordered = cortex_policy::ProjectRules {
+        base: vec![test.clone(), test.clone()],
+        profiles: vec![("ci".to_owned(), vec![deploy.clone()])],
+    };
+    assert!(trust.project_rules_approved(&reordered));
+    // A profile's rule moved outside it, a profile renamed, and a rule
+    // changed in a profile are each a change.
+    for changed in [
+        cortex_policy::ProjectRules {
+            base: vec![test.clone(), deploy.clone()],
+            profiles: Vec::new(),
+        },
+        cortex_policy::ProjectRules {
+            base: vec![test.clone()],
+            profiles: vec![("release".to_owned(), vec![deploy.clone()])],
+        },
+        cortex_policy::ProjectRules {
+            base: vec![test.clone()],
+            profiles: vec![(
+                "ci".to_owned(),
+                vec![rule(Effect::Exec, "make deploy *", RuleAction::Allow)],
+            )],
+        },
+    ] {
+        assert!(!trust.project_rules_approved(&changed), "{changed:?}");
+    }
+    // A project nobody trusted is not approved, even with no rule.
+    let untrusted = store.project(&ProjectKey::new("cccc3333")).unwrap();
+    assert!(!untrusted.project_rules_approved(&cortex_policy::ProjectRules::default()));
+    assert_eq!(
+        shown.each().map(|(profile, _)| profile).collect::<Vec<_>>(),
+        [None, Some("ci")]
+    );
+}

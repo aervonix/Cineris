@@ -44,8 +44,8 @@ use cortex_protocol::methods::{
     McpStatusResult, ModelsListResult, Op, OpResult, PROTOCOL_VERSION, PeerInfo,
     PermissionsListResult, PlanResult, QuestionRequest, QuestionResponse,
     SUPPORTED_PROTOCOL_VERSIONS, ServerCapabilities, ServerRequest, ServerResponse,
-    SessionListResult, SessionReadResult, SessionResult, UsageGetResult, WorkspaceFilesResult,
-    negotiate_version,
+    SessionListResult, SessionReadResult, SessionResult, TrustRequest, TrustResponse,
+    UsageGetResult, WorkspaceFilesResult, negotiate_version,
 };
 use cortex_protocol::model::ModelRole;
 use cortex_protocol::session::{SandboxStatus, SessionSettings, SessionSummary};
@@ -56,7 +56,7 @@ use cortex_tools::PlanBoard;
 use cortex_tools::process::Runner;
 use tokio::task::JoinHandle;
 
-use crate::assemble::{self, Assembled, EngineTemplate, Wanted, Which};
+use crate::assemble::{self, Assembled, EngineTemplate, TrustAnswer, Wanted, Which};
 use crate::clients::{ClientId, ClientInfo, Clients};
 use crate::events::{EventQueue, SessionSink};
 use crate::policy::{EnginePolicy, PermissionDenial};
@@ -343,6 +343,9 @@ pub(crate) struct Inner {
     /// first time a session with a day limit opens, from what the day's
     /// statistics already hold.
     pub(crate) day: crate::day::DaySlot,
+    /// The projects a person answered "not now" to: not asked about again
+    /// in this core's life, and nothing stored (since step 23).
+    pub(crate) not_now: Mutex<std::collections::HashSet<cortex_protocol::ProjectKey>>,
 }
 
 /// What a shell was looked for with: `shell.program` and `shell.args`.
@@ -453,6 +456,7 @@ impl Core {
                 sandbox,
                 stats,
                 day: Mutex::new(None),
+                not_now: Mutex::new(std::collections::HashSet::new()),
             }),
         })
     }
@@ -627,9 +631,11 @@ impl Core {
         let Some(queue) = self.inner.clients.queue(client) else {
             return Err(Self::not_connected());
         };
+        let looked = self.trust_for(client, &wanted).await?;
         let inner = Arc::clone(&self.inner);
         let cancel = self.inner.options.cancel.child();
-        let assembled = Self::blocking(move || assemble::assemble(&inner, wanted, cancel)).await?;
+        let assembled =
+            Self::blocking(move || assemble::assemble(&inner, wanted, cancel, looked)).await?;
         let Assembled {
             parts,
             sink,
@@ -686,6 +692,74 @@ impl Core {
         // was put together off this thread.
         self.still_wanted(client, &live).await?;
         Ok(live)
+    }
+
+    /// The trust a session is put together with, after asking the client
+    /// that opens it, when it answers trust questions and the project has
+    /// something to trust it with (`docs/steps/23/answered.md`, "The design,
+    /// before building", point 3, with the owner's three answers). `None`:
+    /// nobody is asked, and the assembly works trust out as it always has.
+    ///
+    /// The question waits for the person, and ends as no answer when the
+    /// client goes away or the core is ending: the client then gets no
+    /// session.
+    async fn trust_for(
+        &self,
+        client: ClientId,
+        wanted: &Wanted,
+    ) -> Result<Option<assemble::Trust>, OpError> {
+        if self.inner.options.trust_project
+            || self
+                .inner
+                .clients
+                .askable(&[client.0], crate::clients::Kind::Trust)
+                .is_empty()
+        {
+            return Ok(None);
+        }
+        let inner = Arc::clone(&self.inner);
+        let look = wanted.clone();
+        let (trust, question) = Self::blocking(move || assemble::look(&inner, &look)).await?;
+        let Some(question) = question else {
+            return Ok(Some(trust));
+        };
+        let session = match &wanted.which {
+            Which::New { id, .. } | Which::Resume { id } => id.clone(),
+        };
+        let request = TrustRequest {
+            session_id: session.clone(),
+            workspace: question.root.clone(),
+            resources: question.resources.clone(),
+        };
+        let (id, answer) = self.inner.clients.ask_once(&session, &[client.0], |_| {
+            ServerRequest::Trust(request.clone())
+        });
+        let answered = self.inner.options.cancel.race(answer).await;
+        self.inner.clients.close(&id);
+        let answer = match answered {
+            Some(Ok(ServerResponse::Trust(TrustResponse { trusted: true, .. }))) => {
+                Some(TrustAnswer::Yes)
+            }
+            Some(Ok(ServerResponse::Trust(TrustResponse { never: true, .. }))) => {
+                Some(TrustAnswer::Never)
+            }
+            Some(Ok(_)) => Some(TrustAnswer::NotNow),
+            // The client went away, or the core is ending.
+            Some(Err(_)) | None => None,
+        };
+        if self.inner.options.cancel.is_cancelled() {
+            return Err(Self::shutting_down());
+        }
+        let Some(answer) = answer else {
+            return Err(Self::not_connected());
+        };
+        let inner = Arc::clone(&self.inner);
+        let wanted = wanted.clone();
+        let trust = Self::blocking(move || {
+            assemble::answer_trust(&inner, &wanted, &question, answer, trust)
+        })
+        .await?;
+        Ok(Some(trust))
     }
 
     /// Asks a local server what context size it loaded the main role's
@@ -1157,9 +1231,9 @@ impl Core {
                 let live = self.open_for(client, &params.session_id)?;
                 let workspace = live.handle.state().workspace;
                 let gate = cortex_agent::Policy::read_gate(live.policy.as_ref());
-                let limit = params
-                    .limit
-                    .map_or(WORKSPACE_FILES, |limit| (limit as usize).min(WORKSPACE_FILES));
+                let limit = params.limit.map_or(WORKSPACE_FILES, |limit| {
+                    (limit as usize).min(WORKSPACE_FILES)
+                });
                 let (paths, truncated) = Self::blocking(move || {
                     let resolver = cortex_base::PathResolver::new(
                         Path::new(&workspace),
@@ -1179,7 +1253,10 @@ impl Core {
                     ))
                 })
                 .await?;
-                Ok(OpResult::WorkspaceFiles(WorkspaceFilesResult { paths, truncated }))
+                Ok(OpResult::WorkspaceFiles(WorkspaceFilesResult {
+                    paths,
+                    truncated,
+                }))
             }
             Op::SessionClose(params) => {
                 if let Ok(live) = self.live(&params.session_id) {
@@ -1382,7 +1459,12 @@ impl Core {
     /// are put to it in one `question/ask`, and only "put them back"
     /// overwrites them; no answer keeps them. No turn starts meanwhile: the
     /// history change is held from the plan to the rewind.
-    async fn rewind(&self, live: &Arc<Live>, back: Back, restore_files: bool) -> Result<(), OpError> {
+    async fn rewind(
+        &self,
+        live: &Arc<Live>,
+        back: Back,
+        restore_files: bool,
+    ) -> Result<(), OpError> {
         // History is not changed under a turn, and no turn starts while it
         // is being changed: both are decided under the session's own lock.
         let change = live.handle.change_history()?;
@@ -1522,22 +1604,29 @@ impl Core {
             question: format!(
                 "{} {} changed after the turn that changed {}: {}. Put {} back as {} before that \
                  turn, losing those changes?",
-                if edited.len() == 1 { "This file was" } else { "These files were" },
+                if edited.len() == 1 {
+                    "This file was"
+                } else {
+                    "These files were"
+                },
                 "",
                 if edited.len() == 1 { "it" } else { "them" },
                 names.join(", "),
                 if edited.len() == 1 { "it" } else { "them" },
-                if edited.len() == 1 { "it was" } else { "they were" },
+                if edited.len() == 1 {
+                    "it was"
+                } else {
+                    "they were"
+                },
             )
             .replace("  ", " "),
             choices: vec![PUT_BACK.to_owned(), KEEP.to_owned()],
             extension: None,
         };
         let session = live.handle.id().clone();
-        let (id, answer) =
-            self.inner
-                .clients
-                .ask_once(&session, &asked, |_| ServerRequest::Question(question.clone()));
+        let (id, answer) = self.inner.clients.ask_once(&session, &asked, |_| {
+            ServerRequest::Question(question.clone())
+        });
         let answered = self.inner.options.cancel.race(answer).await;
         let resolution = if self.inner.clients.close(&id) {
             Resolution::Cancelled

@@ -151,6 +151,68 @@ impl Definition {
             lines.iter().map(String::as_str),
         )
     }
+
+    /// The definition of a project's rules as trust pins them (since step
+    /// 23, the owner's answer of 2026-11-15): those its files hold outside
+    /// any profile, and each profile's own, with the profile's name, so
+    /// that the pin is the same whichever profile is selected and a change
+    /// to any of them is a change. A project whose files define no profile
+    /// has the definition [`of_rules`](Self::of_rules) gives its rules.
+    #[must_use]
+    pub fn of_project_rules(rules: &ProjectRules) -> Self {
+        let line = |rule: &Rule| {
+            format!(
+                "{}\u{0}{}\u{0}{}",
+                rule.action.as_str(),
+                rule.effect.as_str(),
+                rule.pattern
+            )
+        };
+        let mut lines: Vec<String> = rules.base.iter().map(line).collect();
+        for (profile, own) in &rules.profiles {
+            // A profile's line has a field more than the base's: neither
+            // can be read as the other.
+            lines.extend(
+                own.iter()
+                    .map(|rule| format!("{profile}\u{0}{}", line(rule))),
+            );
+        }
+        lines.sort();
+        lines.dedup();
+        Self::of(
+            TrustResourceKind::Rules,
+            "permissions.rules",
+            lines.iter().map(String::as_str),
+        )
+    }
+}
+
+/// A project's permission rules as trust takes them (since step 23): those
+/// its files hold outside any profile, and those each profile its files
+/// define adds, by the profile's name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectRules {
+    /// Outside any profile.
+    pub base: Vec<Rule>,
+    /// Each profile's own, by name, in order.
+    pub profiles: Vec<(String, Vec<Rule>)>,
+}
+
+impl ProjectRules {
+    /// Whether the project has no rule at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.base.is_empty() && self.profiles.iter().all(|(_, own)| own.is_empty())
+    }
+
+    /// Every rule with the profile it is in (`None`: outside any).
+    pub fn each(&self) -> impl Iterator<Item = (Option<&str>, &Rule)> {
+        self.base.iter().map(|rule| (None, rule)).chain(
+            self.profiles.iter().flat_map(|(profile, own)| {
+                own.iter().map(move |rule| (Some(profile.as_str()), rule))
+            }),
+        )
+    }
 }
 
 /// How a definition stands with the user.
@@ -297,6 +359,19 @@ impl ProjectTrust {
     #[must_use]
     pub fn rules_approved(&self, rules: &[Rule]) -> bool {
         match self.standing(&Definition::of_rules(rules)) {
+            Standing::Approved => true,
+            Standing::New => rules.is_empty(),
+            Standing::Changed | Standing::Untrusted => false,
+        }
+    }
+
+    /// Whether the project's rules, outside any profile and in each of its
+    /// profiles, are the ones the user approved
+    /// ([`Definition::of_project_rules`]), as
+    /// [`rules_approved`](Self::rules_approved) judges a project's rules.
+    #[must_use]
+    pub fn project_rules_approved(&self, rules: &ProjectRules) -> bool {
+        match self.standing(&Definition::of_project_rules(rules)) {
             Standing::Approved => true,
             Standing::New => rules.is_empty(),
             Standing::Changed | Standing::Untrusted => false,
@@ -612,14 +687,13 @@ mod tests {
 
     #[test]
     fn a_refused_project_is_known_as_such_until_trusted_or_forgotten() {
-        let dir = std::env::temp_dir().join(format!(
-            "cortex-policy-refused-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("cortex-policy-refused-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let clock: SharedClock =
-            std::sync::Arc::new(cortex_base::FakeClock::starting_at("2026-11-15T10:00:00Z").unwrap());
+        let clock: SharedClock = std::sync::Arc::new(
+            cortex_base::FakeClock::starting_at("2026-11-15T10:00:00Z").unwrap(),
+        );
         let store = TrustStore::new(dir.join("trust.toml"), clock);
         let key = ProjectKey::new("k");
         assert!(!store.project(&key).unwrap().is_refused());
@@ -630,7 +704,10 @@ mod tests {
         assert!(refused.is_refused() && !refused.is_trusted());
         assert_eq!(store.refused().unwrap().len(), 1);
         // It survives a new store over the same file: a restart.
-        let again = TrustStore::new(store.path().to_owned(), std::sync::Arc::new(cortex_base::SystemClock::new()));
+        let again = TrustStore::new(
+            store.path().to_owned(),
+            std::sync::Arc::new(cortex_base::SystemClock::new()),
+        );
         assert!(again.project(&key).unwrap().is_refused());
         // Trusting lifts it.
         again.trust(&key, "~/app", &[]).unwrap();

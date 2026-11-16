@@ -42,17 +42,18 @@ use cortex_agent::{
     NoVerifier, SessionInfo, SessionParts, SpeedSettings, Workspace,
 };
 use cortex_base::{AbsPath, CancelToken, PathOptions, PathResolver};
-use cortex_config::{LayerKind, LoadOptions, Loaded, Override, Settings, StateDir};
+use cortex_config::{LayerKind, LoadOptions, Loaded, Override, Settings, StateDir, TrustClass};
 use cortex_llm::{BoxFuture, ImageError, ImageSource};
 use cortex_policy::{
-    ApprovalStore, Engine, NoSandbox, Parts, Protected, RuleSource, SandboxState, ShellSyntax,
-    SourcedRule, StartError, TrustStore, default_sandbox,
+    ApprovalStore, Definition, Engine, NoSandbox, Parts, ProjectRules, Protected, RuleSource,
+    SandboxState, ShellSyntax, SourcedRule, StartError, TrustStore, default_sandbox,
 };
 use cortex_protocol::event::{Event, Notice, SandboxNotice};
 use cortex_protocol::lease::{Budget, HardLimits, Rule};
+use cortex_protocol::methods::{TrustResource, TrustResourceKind};
 use cortex_protocol::model::ModelRole;
 use cortex_protocol::session::SessionSettings;
-use cortex_protocol::{ArtifactId, ErrorData, ErrorKind, LeaseId, Plan, SessionId};
+use cortex_protocol::{ArtifactId, ErrorData, ErrorKind, LeaseId, Plan, ProjectKey, SessionId};
 use cortex_session::entry::{LeaseEvent, LeaseRecord, Meta};
 use cortex_session::{
     BaseCapture, BaseLimits, Body, Durability, Git, KEEP_LIMIT, SessionError, SessionOptions,
@@ -262,27 +263,8 @@ fn sourced_rules(loaded: &Loaded) -> Vec<SourcedRule> {
         .collect()
 }
 
-/// The project's own permission rules, every action of them, as a load
-/// that trusts the project holds them: the set the trust store pins
-/// (`cortex permissions trust`) and a start compares with the pin.
-pub(crate) fn project_rules(loaded: &Loaded) -> Vec<Rule> {
-    sourced_rules(loaded)
-        .into_iter()
-        .filter(|rule| rule.source == RuleSource::Project)
-        .map(|rule| rule.rule)
-        .collect()
-}
-
-/// Whether the project is trusted for the rules its files hold now.
-///
-/// The one place the trust store's answer about a project's rules is
-/// asked for: every consumer of trust is given what this returns.
-fn project_rules_approved(trust: &cortex_policy::ProjectTrust, project_rules: &[Rule]) -> bool {
-    trust.rules_approved(project_rules)
-}
-
 /// What was learned about the project's trust.
-struct Trust {
+pub(crate) struct Trust {
     /// Whether the project may loosen what is asked and raise what is
     /// spent: it is trusted, and its rules are the ones the user saw.
     rules: bool,
@@ -292,6 +274,297 @@ struct Trust {
     loaded: Loaded,
     /// What went wrong reading the trust store, for the user.
     problem: Option<String>,
+}
+
+/// The project's rules as trust pins them (the owner's answer of
+/// 2026-11-15): those its files hold outside any profile, and each profile
+/// its files define with the rules it adds, whichever profile is selected.
+/// `loaded` is a load that trusts the project; `with_profile` loads it so
+/// with another profile selected.
+pub(crate) fn pinned_rules(
+    loaded: &Loaded,
+    with_profile: &dyn Fn(&str) -> Result<Loaded, Box<ErrorData>>,
+) -> Result<ProjectRules, Box<ErrorData>> {
+    let project = |kind: LayerKind| matches!(kind, LayerKind::Project | LayerKind::ProjectLocal);
+    let own = |loaded: &Loaded, in_profile: bool| -> Vec<Rule> {
+        loaded
+            .rules()
+            .into_iter()
+            .filter(|placed| {
+                if in_profile {
+                    placed.origin.layer == LayerKind::Profile
+                        && placed.origin.defined_in.is_some_and(project)
+                } else {
+                    project(placed.origin.layer)
+                }
+            })
+            .map(|placed| placed.rule)
+            .collect()
+    };
+    let mut rules = ProjectRules {
+        base: own(loaded, false),
+        profiles: Vec::new(),
+    };
+    for name in &loaded.project_profiles {
+        let rules_of = if loaded.profile.as_deref() == Some(name.as_str()) {
+            own(loaded, true)
+        } else {
+            own(&with_profile(name)?, true)
+        };
+        rules.profiles.push((name.clone(), rules_of));
+    }
+    Ok(rules)
+}
+
+/// What the trust question asks of a project, and what a yes pins.
+#[derive(Debug, Clone)]
+pub(crate) struct TrustQuestion {
+    pub(crate) key: ProjectKey,
+    /// The workspace's root, as a person reads it.
+    pub(crate) root: String,
+    pub(crate) resources: Vec<TrustResource>,
+    /// The definition of the rules that were shown: a yes pins this, not
+    /// the files as they are when the answer comes.
+    pub(crate) pin: Definition,
+    /// The project is trusted and only its rules changed: a yes approves
+    /// them again.
+    pub(crate) rules_only: bool,
+}
+
+/// A person's answer to the trust question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TrustAnswer {
+    /// Trust it: pin what was shown.
+    Yes,
+    /// Not now: not asked again by this core, and nothing stored.
+    NotNow,
+    /// Never for this project: stored, and not asked at later starts.
+    Never,
+}
+
+/// What one setting held back for trust can do, said to the person asked.
+fn held_back(withheld: &cortex_config::Withheld) -> String {
+    let does = match withheld.class {
+        TrustClass::FirstLimit => "a first limit, where you have none: it could stop every turn",
+        TrustClass::RunsCode => "it can run code",
+        TrustClass::WidensAccess => "it widens what the session may do",
+        TrustClass::RaisesCost => "it can raise what you spend",
+        _ => "it waits for trust",
+    };
+    format!("{} = {} ({does})", withheld.key, withheld.value)
+}
+
+/// Where a session's workspace is and how its configuration is loaded:
+/// the same for the look at its trust and for its assembly.
+struct Place {
+    resolver: Arc<PathResolver>,
+    root: AbsPath,
+    load: LoadOptions,
+    state: Option<StateDir>,
+}
+
+fn place(inner: &Inner, wanted: &Wanted) -> Result<Place, Box<ErrorData>> {
+    let options = &inner.options;
+    let env = &options.env;
+    let home = env.home().as_deref().and_then(resolve_dir);
+    let mut path_options = PathOptions::new();
+    if let Some(home) = home {
+        path_options = path_options.home(home);
+    }
+    let resolver = PathResolver::new(&wanted.workspace, path_options).map_err(|failure| {
+        error(
+            ErrorKind::Usage,
+            "invalid_workspace",
+            format!(
+                "`{}` cannot be a workspace: {failure}",
+                wanted.workspace.display()
+            ),
+        )
+    })?;
+    let resolver = Arc::new(resolver);
+    let root = resolver.root().clone();
+    let mut load = LoadOptions::new(env.clone());
+    if let Some(dirs) = &options.dirs {
+        load.dirs = dirs.clone();
+    }
+    load.workspace = Some(root.to_fs_path());
+    load.profile.clone_from(&options.profile);
+    load.overrides.clone_from(&options.overrides);
+    load.overrides.extend(wanted.overrides.iter().cloned());
+    load.overrides.extend(settings_overrides(&wanted.settings));
+    let state = StateDir::from_dirs(&load.dirs);
+    Ok(Place {
+        resolver,
+        root,
+        load,
+        state,
+    })
+}
+
+/// The project's trust as a session would be put together with it, and
+/// the question to ask a person who can answer it, if there is one: a
+/// project not trusted, or trusted with its rules changed since, that the
+/// person has not said never to, nor not now to in this core's life, and
+/// that has something to trust (git, in a repository; a rule; a setting
+/// held back). Blocks.
+pub(crate) fn look(
+    inner: &Inner,
+    wanted: &Wanted,
+) -> Result<(Trust, Option<TrustQuestion>), Box<ErrorData>> {
+    let place = place(inner, wanted)?;
+    let trust = trust(inner, place.state.as_ref(), &place.root, &place.load)?;
+    if trust.rules || inner.options.trust_project {
+        return Ok((trust, None));
+    }
+    let key = place.root.project_key();
+    let Some(state) = place.state.as_ref() else {
+        return Ok((trust, None));
+    };
+    let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
+    let Ok(stored) = store.project(&key) else {
+        // A store that cannot be read is said, and nothing is asked: an
+        // answer could not be kept.
+        return Ok((trust, None));
+    };
+    if stored.is_refused()
+        || inner
+            .not_now
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&key)
+    {
+        return Ok((trust, None));
+    }
+    let rules_only = stored.is_trusted();
+    let trusted_load = |profile: Option<&str>| {
+        let mut options = place.load.clone();
+        options.trust = cortex_config::ProjectTrust::Trusted;
+        if let Some(profile) = profile {
+            options.profile = Some(profile.to_owned());
+        }
+        cortex_config::load(&options).map_err(|failure| {
+            Box::new(ErrorData::new(
+                ErrorKind::Config,
+                "invalid_configuration",
+                failure.render(&inner.options.env),
+            ))
+        })
+    };
+    let peek = trusted_load(None)?;
+    let rules = pinned_rules(&peek, &|profile| trusted_load(Some(profile)))?;
+    let mut resources = Vec::new();
+    if !rules_only && in_git(&place.root) {
+        resources.push(TrustResource {
+            kind: TrustResourceKind::Repository,
+            name: "git".to_owned(),
+            detail: "Git may read this repository's own configuration, which can name programs \
+                     for git to run: it is how the harness sees what a command changed, and \
+                     reads the repository's state."
+                .to_owned(),
+            changed: false,
+        });
+    }
+    for (profile, rule) in rules.each() {
+        resources.push(TrustResource {
+            kind: TrustResourceKind::Rules,
+            name: profile.map_or_else(
+                || "permissions.rules".to_owned(),
+                |profile| format!("profiles.{profile}.permissions.rules"),
+            ),
+            detail: format!(
+                "{} {} {}",
+                rule.action.as_str(),
+                rule.effect.as_str(),
+                rule.pattern
+            ),
+            changed: rules_only,
+        });
+    }
+    for withheld in &trust.loaded.withheld {
+        resources.push(TrustResource {
+            kind: TrustResourceKind::Settings,
+            name: withheld.key.to_string(),
+            detail: held_back(withheld),
+            changed: false,
+        });
+    }
+    if resources.is_empty() {
+        return Ok((trust, None));
+    }
+    let question = TrustQuestion {
+        root: shown_root(&place.root, inner.options.env.home().as_deref()),
+        key,
+        resources,
+        pin: Definition::of_project_rules(&rules),
+        rules_only,
+    };
+    Ok((trust, Some(question)))
+}
+
+/// Keeps a person's answer to the trust question, and gives the trust to
+/// put the session together with: after a yes, worked out again from the
+/// store, so that a change to the files while the question was open reads
+/// as rules changed. Not now is kept in this core only. Blocks.
+pub(crate) fn answer_trust(
+    inner: &Inner,
+    wanted: &Wanted,
+    question: &TrustQuestion,
+    answer: TrustAnswer,
+    trust: Trust,
+) -> Result<Trust, Box<ErrorData>> {
+    let failed = |failure: cortex_policy::TrustError| {
+        error(
+            ErrorKind::Internal,
+            "store_failed",
+            format!("The answer to the trust question could not be kept: {failure}"),
+        )
+    };
+    let place = place(inner, wanted)?;
+    let Some(state) = place.state.as_ref() else {
+        return Ok(trust);
+    };
+    let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
+    match answer {
+        TrustAnswer::Yes => {
+            let pin = [question.pin.clone()];
+            if question.rules_only {
+                store.approve(&question.key, &pin).map_err(failed)?;
+            } else {
+                store
+                    .trust(&question.key, &question.root, &pin)
+                    .map_err(failed)?;
+            }
+            self::trust(inner, place.state.as_ref(), &place.root, &place.load)
+        }
+        TrustAnswer::Never => {
+            store
+                .refuse(&question.key, &question.root)
+                .map_err(failed)?;
+            Ok(trust)
+        }
+        TrustAnswer::NotNow => {
+            inner
+                .not_now
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(question.key.clone());
+            Ok(trust)
+        }
+    }
+}
+
+/// A root as a person reads it: under the home directory with `~`.
+fn shown_root(root: &AbsPath, home: Option<&Path>) -> String {
+    let path = root.to_fs_path();
+    let home = home.and_then(resolve_dir).map(|home| home.to_fs_path());
+    match home
+        .as_deref()
+        .and_then(|home| cortex_base::strip_location_prefix(&path, home))
+    {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~/{}", rest.to_string_lossy().replace('\\', "/")),
+        None => path.to_string_lossy().into_owned(),
+    }
 }
 
 /// Works out whether the project is trusted, and loads its configuration
@@ -353,9 +626,22 @@ fn trust(
     }
     // Trusted when the user last looked. The rules the project's files hold
     // now are read as a trusted project's would be, so that none is held
-    // back before it is compared with what the user saw.
+    // back before it is compared with what the user saw, in every profile
+    // the project defines.
     let peek = load(true)?;
-    if project_rules_approved(&stored, &project_rules(&peek)) {
+    let with_profile = |profile: &str| {
+        let mut options = options.clone();
+        options.trust = cortex_config::ProjectTrust::Trusted;
+        options.profile = Some(profile.to_owned());
+        cortex_config::load(&options).map_err(|failure| {
+            Box::new(ErrorData::new(
+                ErrorKind::Config,
+                "invalid_configuration",
+                failure.render(&inner.options.env),
+            ))
+        })
+    };
+    if stored.project_rules_approved(&pinned_rules(&peek, &with_profile)?) {
         Ok(Trust {
             rules: true,
             repository: true,
@@ -905,51 +1191,33 @@ pub(crate) fn assemble(
     inner: &Arc<Inner>,
     wanted: Wanted,
     cancel: CancelToken,
+    looked: Option<Trust>,
 ) -> Result<Assembled, Box<ErrorData>> {
     let options = &inner.options;
     let env = &options.env;
     let clock = Arc::clone(&options.clock);
     let mut told: Vec<String> = Vec::new();
 
-    // ------------------------------------------------------ the workspace
-    let home = env.home().as_deref().and_then(resolve_dir);
-    let mut path_options = PathOptions::new();
-    if let Some(home) = home {
-        path_options = path_options.home(home);
-    }
-    let resolver = PathResolver::new(&wanted.workspace, path_options).map_err(|failure| {
-        error(
-            ErrorKind::Usage,
-            "invalid_workspace",
-            format!(
-                "`{}` cannot be a workspace: {failure}",
-                wanted.workspace.display()
-            ),
-        )
-    })?;
-    let resolver = Arc::new(resolver);
-    let root = resolver.root().clone();
+    // ---------------------------------- the workspace, configuration, trust
+    let Place {
+        resolver,
+        root,
+        load,
+        state,
+    } = place(inner, &wanted)?;
     let project = root.project_key();
-
-    // ------------------------------------------- configuration and trust
-    let mut load = LoadOptions::new(env.clone());
-    if let Some(dirs) = &options.dirs {
-        load.dirs = dirs.clone();
-    }
-    load.workspace = Some(root.to_fs_path());
-    load.profile.clone_from(&options.profile);
-    load.overrides.clone_from(&options.overrides);
-    load.overrides.extend(wanted.overrides.iter().cloned());
-    load.overrides.extend(settings_overrides(&wanted.settings));
-    let state = StateDir::from_dirs(&load.dirs);
     // Where the repository index keeps its cache: the project's, by its key.
     let index_dir = state.as_ref().and_then(|state| state.index_dir(&project));
+    // The trust a look found (and an answer settled), or found now.
     let Trust {
         rules: rules_trusted,
         repository: repository_trusted,
         loaded,
         problem,
-    } = trust(inner, state.as_ref(), &root, &load)?;
+    } = match looked {
+        Some(trust) => trust,
+        None => trust(inner, state.as_ref(), &root, &load)?,
+    };
     if wanted.no_raise {
         // The level the session would start at without what the client
         // asked for, under the same answer about trust.
