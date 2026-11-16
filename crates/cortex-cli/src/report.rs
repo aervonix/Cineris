@@ -411,4 +411,36 @@ mod tests {
             assert_eq!(value["schema"], 1);
         }
     }
+
+    /// Whether `text` is a string somewhere in `value`.
+    fn holds(value: &Value, text: &str) -> bool {
+        match value {
+            Value::String(found) => found == text,
+            Value::Array(items) => items.iter().any(|item| holds(item, text)),
+            Value::Object(fields) => fields.values().any(|field| holds(field, text)),
+            _ => false,
+        }
+    }
+
+    /// Headless mode's `json` and `jsonl` are JSON with nothing in them
+    /// that acts unseen at a terminal, whatever a workspace's name or a
+    /// model's text holds (the follow-ups of step 23, which found the
+    /// subcommands' `--json` printing the terminal's escape, and these
+    /// printing the characters themselves).
+    #[test]
+    fn every_line_shows_nothing_that_acts_unseen() {
+        for name in cortex_testkit::hostile::all() {
+            let text = format!("a{}b", name.text);
+            let start = start_line(SessionId::from("s_1"), ModelId::from("m"), text.clone());
+            let event = event_line(&event(
+                1,
+                Some("t_1"),
+                json!({"type": "notice", "kind": "verification", "message": text}),
+            ));
+            for line in [start, event] {
+                let back = crate::json::tests::parsed(&line);
+                assert!(holds(&back[0], &text), "{}: {line}", name.label);
+            }
+        }
+    }
 }

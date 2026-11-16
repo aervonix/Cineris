@@ -497,9 +497,9 @@ file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::answers
 find:
     answers.push(act(Action::Deny, "Not now"));
-    answers.push(act(Action::Never, "Never for this project"));
+    answers.push(act(Action::Never, dialog::third_trust_answer(request)));
 replace:
-    answers.push(act(Action::Never, "Never for this project"));
+    answers.push(act(Action::Never, dialog::third_trust_answer(request)));
     answers.push(act(Action::Deny, "Not now"));
 caught-by:
     cortex-tui::it screens::the_views_draw_the_reference_screens
@@ -620,8 +620,8 @@ caught-by:
 rule: A yes the trust store cannot keep still opens the session, trusted for that session.
 file: crates/cortex-core/src/assemble.rs
 in: answer_trust
-find: Err(failure) => trusted_unkept(inner, &place.load, question, &failure)
-replace: Err(failure) => Err(error(ErrorKind::Internal, "store_failed", failure.to_string()))
+find: trusted_unkept(inner, &place.load, question, &failure, trust.repository)
+replace: Err(error(ErrorKind::Internal, "store_failed", failure.to_string()))
 caught-by:
     cortex-core::it trusting::an_answer_the_store_cannot_keep_still_opens_the_session
 
@@ -629,29 +629,28 @@ caught-by:
 rule: A never the trust store cannot keep is taken as not now: the core does not ask again.
 file: crates/cortex-core/src/assemble.rs
 in: answer_trust
-find:
-    Err(failure) => {
-                not_now();
-replace:
-    Err(failure) => {
+find: not_now();
+replace: let _ = 0;
+occurrence: 2
 caught-by:
     cortex-core::it trusting::an_answer_the_store_cannot_keep_still_opens_the_session
 
 [break] an-answer-of-trust-and-never-is-taken
 rule: A trust answer that says both trusted and never is refused where it is given.
 file: crates/cortex-core/src/clients.rs
-in: Clients::answer
+in: trust_answer_problem
 find:
     trusted: true,
             never: true,
-        }) = &response
+            ..
+        } => Some(
 replace:
     trusted: true,
             never: true,
-        }) = &response
-        && false
+            ..
+        } if false => Some(
 caught-by:
-    cortex-core::it trusting::an_answer_of_both_trust_and_never_is_refused
+    cortex-core::it trusting::an_answer_that_cannot_be_read_is_refused
 
 [break] a-closed-sessions-question-is-not-withdrawn
 rule: A session's end withdraws its open trust and rewind questions.
@@ -734,9 +733,9 @@ caught-by:
 [break] the-history-is-read-whole-as-utf-8
 rule: The history file is read line by line: a line that is not UTF-8 costs only itself.
 file: crates/cortex-cli/src/history.rs
-in: read
-find: let entries = entries(&bytes);
-replace: let entries: Vec<Entry> = std::str::from_utf8(&bytes).map(|text| text.lines().filter_map(Entry::parse).collect()).unwrap_or_default();
+in: newest_first
+find: .filter_map(|line| std::str::from_utf8(line.strip_suffix(b"\r").unwrap_or(line)).ok())
+replace: .map_while(|line| std::str::from_utf8(line.strip_suffix(b"\r").unwrap_or(line)).ok())
 caught-by:
     cortex-cli::bin/cortex history::tests::a_line_that_is_not_utf_8_costs_only_itself
 
@@ -788,8 +787,8 @@ caught-by:
 rule: A yes to a rules-changed question whose project's trust was taken away meanwhile (revoked or refused) writes nothing and trusts nothing: a never said meanwhile stays.
 file: crates/cortex-core/src/assemble.rs
 in: answer_trust
-find: store.approve(&question.key, &pin)
-replace: store.approve(&question.key, &pin).or_else(|_| store.trust(&question.key, &question.root, &pin))
+find: store.approve(&question.key, &pin, question.git_shown)
+replace: store.approve(&question.key, &pin, question.git_shown).or_else(|_| store.trust(&question.key, &question.root, &pin, question.git_shown))
 caught-by:
     cortex-core::it trusting::a_yes_after_the_projects_trust_changed_meanwhile_is_not_used
 
@@ -797,8 +796,12 @@ caught-by:
 rule: A yes to a rules-changed question whose project's trust was taken away meanwhile is not taken as an answer the store could not keep: the session is not trusted for itself.
 file: crates/cortex-core/src/assemble.rs
 in: answer_trust
-find: .is_ok_and(|now| !now.is_trusted())
-replace: .is_ok_and(|_| false)
+find:
+    if question.trusted {
+                    !now.is_trusted()
+replace:
+    if question.trusted {
+                    false
 caught-by:
     cortex-core::it trusting::a_yes_after_the_projects_trust_changed_meanwhile_is_not_used
 

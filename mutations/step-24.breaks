@@ -381,8 +381,8 @@ caught-by:
 rule: A yes the store could not keep holds for the session to the rules the person saw, and the store is not asked.
 file: crates/cortex-core/src/assemble.rs
 in: judge_pins
-find: if let Some(pin) = for_the_run {
-replace: if let Some(pin) = for_the_run.filter(|_| false) {
+find: if let Some(given) = for_the_run {
+replace: if let Some(given) = for_the_run.filter(|_| false) {
 caught-by:
     cortex-core::it trusting::trust_for_this_session_only_holds_through_a_look
 

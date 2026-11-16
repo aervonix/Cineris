@@ -939,6 +939,7 @@ mod tests {
                 time: None,
                 tools: Vec::new(),
                 zone: Some(text.clone()),
+                notes: vec![text.clone()],
             };
             let back = parsed(&usage_json(&report));
             assert_eq!(back[0]["rows"][0]["model"], text.as_str(), "{label}");
@@ -948,6 +949,7 @@ mod tests {
                 "{label}"
             );
             assert_eq!(back[0]["zone"], text.as_str(), "{label}");
+            assert_eq!(back[0]["notes"][0], text.as_str(), "{label}");
         }
     }
 

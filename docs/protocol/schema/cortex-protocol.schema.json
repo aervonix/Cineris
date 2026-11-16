@@ -5804,6 +5804,13 @@
           "description": "Configuration overrides for this session, as the configuration file\nwould have them. They rank as command-line flags do.",
           "type": "object"
         },
+        "cwd": {
+          "description": "Where the session's commands start when they name no directory: an\nabsolute path inside `workspace` (the directory the person started\nthe harness in, below the root it found). Absent: the root. Kept in\nthe session's log, so that a resumed session starts there too (since\nthe follow-ups of step 23).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ephemeral": {
           "default": false,
           "description": "Whether to keep the session in memory only, with no log.",
@@ -7202,6 +7209,10 @@
           "$ref": "#/$defs/SessionId",
           "description": "The session."
         },
+        "trusted": {
+          "description": "The project is trusted already, and the question is about what is\nnew in it: its rules changed (each resource marked `changed`), or\ngit, now that it is a repository. `never` is not an answer to it;\n`keep` is (since the follow-ups of step 23).",
+          "type": "boolean"
+        },
         "workspace": {
           "description": "The project's workspace root.",
           "type": "string"
@@ -7283,6 +7294,10 @@
     "TrustResponse": {
       "description": "The answer to `trust/request`.",
       "properties": {
+        "keep": {
+          "description": "With `trusted` false, to a question about a project trusted already\n(the request's `trusted`): keep trusting it as it was, without what\nis new, and remember that, so that what is new is not asked about\nagain while it stays as it is (since the follow-ups of step 23). An\nanswer with `keep` and `trusted` or `never`, `keep` to a project not\ntrusted, or `never` to one trusted, is refused (`invalid_answer`).",
+          "type": "boolean"
+        },
         "never": {
           "description": "With `trusted` false: remember the refusal, so that the project is\nnot asked about at later starts either (since step 23). It is kept\nbeside the trusted projects, and `cortex permissions trust` lifts it.\nAn answer with both `trusted` and `never` is refused\n(`invalid_answer`), and the question stays open.",
           "type": "boolean"

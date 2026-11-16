@@ -219,16 +219,36 @@ fn read(path: &Path, project: &str) -> Vec<Fragment> {
     let Ok((bytes, size)) = read_end(path) else {
         return Vec::new();
     };
-    let entries = entries(&bytes);
-    let mine = newest(
-        entries.iter().filter(|entry| entry.project == project),
-        KEEP,
-        KEEP_BYTES,
-    )
-    .into_iter()
-    .map(|entry| entry.prompt.clone())
-    .collect();
-    if entries.len() > COMPACT || size > COMPACT_BYTES {
+    // Newest first, and only until the project's bounds are met: what is
+    // held is the project's newest, never every line of the file (the
+    // follow-ups of step 23). A line names its project as this harness
+    // writes it, a key in hexadecimal, which JSON writes as it is; a line
+    // that does not hold it is not parsed.
+    let marker = format!("\"project\":{}", json!(project));
+    let mut mine = Vec::new();
+    let mut held = 0;
+    for line in newest_first(&bytes) {
+        if mine.len() == KEEP {
+            break;
+        }
+        if !line.contains(&marker) {
+            continue;
+        }
+        let Some(entry) = Entry::parse(line).filter(|entry| entry.project == project) else {
+            continue;
+        };
+        held += entry.size;
+        if held > KEEP_BYTES {
+            break;
+        }
+        mine.push(entry.prompt);
+    }
+    mine.reverse();
+    let lines = bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .count();
+    if lines > COMPACT || size > COMPACT_BYTES {
         let _ = compact(path);
     }
     mine
@@ -257,35 +277,14 @@ fn read_end(path: &Path) -> io::Result<(Vec<u8>, u64)> {
     Ok((bytes, size))
 }
 
-/// The entries of the file's bytes, line by line: a line that is not UTF-8
-/// or not one of the store's is passed over, and the others are read (the
-/// review of step 23: one bad byte emptied every project's history).
-fn entries(bytes: &[u8]) -> Vec<Entry> {
+/// The file's lines, newest first: a line that is not UTF-8 is passed
+/// over, and the others are given (the review of step 23: one bad byte
+/// emptied every project's history).
+fn newest_first(bytes: &[u8]) -> impl Iterator<Item = &str> {
     bytes
         .split(|byte| *byte == b'\n')
-        .filter_map(|line| std::str::from_utf8(line.strip_suffix(b"\r").unwrap_or(line)).ok())
-        .filter_map(Entry::parse)
-        .collect()
-}
-
-/// The newest of `entries`, at most `count` of them and `bytes` of their
-/// lines, oldest first.
-fn newest<'a>(
-    entries: impl DoubleEndedIterator<Item = &'a Entry>,
-    count: usize,
-    bytes: usize,
-) -> Vec<&'a Entry> {
-    let mut total = 0;
-    let mut kept: Vec<&Entry> = entries
         .rev()
-        .take(count)
-        .take_while(|entry| {
-            total += entry.size;
-            total <= bytes
-        })
-        .collect();
-    kept.reverse();
-    kept
+        .filter_map(|line| std::str::from_utf8(line.strip_suffix(b"\r").unwrap_or(line)).ok())
 }
 
 /// Writes the file again with each project's newest within [`KEEP`] and
@@ -294,26 +293,28 @@ fn newest<'a>(
 /// appended meanwhile is kept.
 fn compact(path: &Path) -> io::Result<()> {
     let _lock = cortex_base::private::hold_lock(path)?;
-    let entries = entries(&read_end(path)?.0);
-    let mut counts: std::collections::HashMap<&str, (usize, usize)> =
+    let (bytes, _) = read_end(path)?;
+    // Newest first, one line parsed at a time: what is held is what is
+    // kept, never every line of the file.
+    let mut counts: std::collections::HashMap<String, (usize, usize)> =
         std::collections::HashMap::new();
     let mut total = 0;
-    let mut kept: Vec<&Entry> = Vec::new();
-    for entry in entries.iter().rev() {
+    let mut kept: Vec<Entry> = Vec::new();
+    for entry in newest_first(&bytes).filter_map(Entry::parse) {
         if total + entry.size > FILE_KEEP_BYTES {
             break;
         }
-        let (count, bytes) = counts.entry(entry.project.as_str()).or_insert((0, 0));
-        if *count < KEEP && *bytes + entry.size <= KEEP_BYTES {
+        let (count, held) = counts.entry(entry.project.clone()).or_insert((0, 0));
+        if *count < KEEP && *held + entry.size <= KEEP_BYTES {
             *count += 1;
-            *bytes += entry.size;
+            *held += entry.size;
             total += entry.size;
             kept.push(entry);
         }
     }
     kept.reverse();
     let mut out = String::with_capacity(total);
-    for entry in kept {
+    for entry in &kept {
         out.push_str(&Entry::line(&entry.project, &entry.prompt));
     }
     let options = cortex_base::AtomicWriteOptions {
@@ -664,5 +665,88 @@ mod tests {
             std::fs::read_to_string(&path).unwrap(),
             "{\"project\":\"p\",\"text\":\"newest\"}\n"
         );
+    }
+
+    /// A history of `bytes`, of twenty projects in turn, each prompt with a
+    /// paste kept to its 64 KiB chip one time in eight and a line of text
+    /// otherwise: written as this build writes them.
+    fn history_of(path: &Path, bytes: u64) -> u64 {
+        use std::fmt::Write as _;
+        let paste = "a log line of a build that failed, say\n".repeat(2_000);
+        let mut text = String::new();
+        let mut n = 0_usize;
+        while (text.len() as u64) < bytes {
+            let project = format!("{:032x}", n % 20);
+            let prompt = if n.is_multiple_of(8) {
+                Fragment::with_chips(
+                    format!("why does this fail, {n}? \u{FFFC}"),
+                    vec![Chip::new(paste.as_str(), "[pasted 2,000 lines]")],
+                )
+                .unwrap()
+            } else {
+                Fragment::text(format!("fix the parser's error on line {n}, and run the tests"))
+            };
+            let _ = write!(text, "{}", Entry::line(&project, &cortex_tui::history::kept(&prompt)));
+            n += 1;
+        }
+        std::fs::write(path, &text).unwrap();
+        text.len() as u64
+    }
+
+    /// The read at a start, of a file at its caps and of an older build's
+    /// past them (the follow-ups of step 23's measurement): its time, and
+    /// what one project holds after it. Run by hand, in a release build:
+    /// `cargo test --release -p cortex-cli --bin cortex perf_history -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, run by hand"]
+    fn perf_history_read_at_its_caps() {
+        let scratch = Scratch::new("perf");
+        for (name, bytes) in [
+            ("at_compact_bytes", COMPACT_BYTES - 1),
+            ("past_the_read_limit", READ_LIMIT * 4),
+        ] {
+            let path = scratch.join(name);
+            let mut times = Vec::new();
+            let mut held = 0;
+            for _ in 0..15 {
+                let size = history_of(&path, bytes);
+                let started = std::time::Instant::now();
+                let mine = read(&path, &format!("{:032x}", 3));
+                times.push(started.elapsed().as_secs_f64() * 1000.0);
+                held = mine
+                    .iter()
+                    .map(|prompt| {
+                        prompt.as_str().len()
+                            + prompt
+                                .chips()
+                                .iter()
+                                .map(|chip| chip.content().len() + chip.label().len())
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>();
+                let _ = size;
+            }
+            times.sort_by(f64::total_cmp);
+            cortex_testkit::numbers::report(
+                &format!("history.read.{name}.median"),
+                times[times.len() / 2],
+                "ms",
+            );
+            cortex_testkit::numbers::report(
+                &format!("history.read.{name}.slowest"),
+                times[times.len() - 1],
+                "ms",
+            );
+            cortex_testkit::numbers::report(
+                &format!("history.read.{name}.held"),
+                held as f64 / 1024.0,
+                "KiB",
+            );
+            cortex_testkit::numbers::report(
+                &format!("history.read.{name}.after"),
+                std::fs::metadata(&path).unwrap().len() as f64 / 1024.0,
+                "KiB",
+            );
+        }
     }
 }

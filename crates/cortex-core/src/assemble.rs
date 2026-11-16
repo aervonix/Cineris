@@ -2710,31 +2710,6 @@ mod tests {
 
     /// A shell inside a write root is passed over and the next on `PATH` is
     /// used; when nothing else is left, there is none.
-    /// A yes the store could not keep gives git only what the person was
-    /// shown or had trusted before.
-    #[test]
-    fn an_unkept_yes_gives_git_only_what_was_shown_or_trusted_before() {
-        assert!(!git_after_an_unkept_yes(false, false));
-        assert!(git_after_an_unkept_yes(true, false));
-        assert!(git_after_an_unkept_yes(false, true));
-    }
-
-    /// A start kept in a log names a directory below the root, and nothing
-    /// else.
-    #[test]
-    fn a_kept_start_is_below_the_root_or_not_taken() {
-        for good in ["src", "src/deep", "a b/c"] {
-            assert!(is_below(good), "{good}");
-        }
-        for bad in ["", "/", "/etc", "..", "src/..", "./src", "src//x", "src/"] {
-            assert!(!is_below(bad), "{bad:?}");
-        }
-        if cfg!(windows) {
-            assert!(!is_below("C:"));
-            assert!(!is_below("C:\\x"));
-        }
-    }
-
     #[test]
     fn a_shell_inside_a_write_root_is_passed_over() {
         let dir = std::env::temp_dir().join(format!(
@@ -2895,5 +2870,35 @@ mod shell_limit_tests {
             super::shell_limits(&settings),
             (Duration::from_secs(120), Duration::from_secs(600))
         );
+    }
+}
+
+#[cfg(test)]
+mod trust_and_start_tests {
+    use super::{git_after_an_unkept_yes, is_below};
+
+    /// A yes the store could not keep gives git only what the person was
+    /// shown or had trusted before.
+    #[test]
+    fn an_unkept_yes_gives_git_only_what_was_shown_or_trusted_before() {
+        assert!(!git_after_an_unkept_yes(false, false));
+        assert!(git_after_an_unkept_yes(true, false));
+        assert!(git_after_an_unkept_yes(false, true));
+    }
+
+    /// A start kept in a log names a directory below the root, and nothing
+    /// else.
+    #[test]
+    fn a_kept_start_is_below_the_root_or_not_taken() {
+        for good in ["src", "src/deep", "a b/c"] {
+            assert!(is_below(good), "{good}");
+        }
+        for bad in ["", "/", "/etc", "..", "src/..", "./src", "src//x", "src/"] {
+            assert!(!is_below(bad), "{bad:?}");
+        }
+        if cfg!(windows) {
+            assert!(!is_below("C:"));
+            assert!(!is_below("C:\\x"));
+        }
     }
 }

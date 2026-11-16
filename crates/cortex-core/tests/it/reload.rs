@@ -245,6 +245,7 @@ fn an_allow_rule_added_while_trusted_is_not_in_force() {
             &key,
             "~/work/app",
             &[Definition::of_rules(&[allow_github()])],
+            true,
         )
         .unwrap();
     world.project_config(ALLOW_GITHUB);
@@ -285,7 +286,7 @@ fn an_allow_rule_added_while_trusted_is_not_in_force() {
 fn trust_taken_away_from_outside_is_seen_by_the_next_look() {
     let world = World::new("reload_untrust", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[]).unwrap();
+    store.trust(&key, "~/work/app", &[], true).unwrap();
     world.project_config("[retry]\nattempts = 9\n");
     let core = world.core();
     world.run(async {
@@ -307,6 +308,44 @@ fn trust_taken_away_from_outside_is_seen_by_the_next_look() {
         assert_ne!(value(&front, "retry.attempts").await, Some(9.into()));
         let state = state_of(&front).await;
         assert_eq!(state.trust, Some(TrustStanding::Untrusted));
+        front.close().await;
+    });
+}
+
+/// A reload judges git as the open does (the follow-ups of step 23): a
+/// trusted repository whose git was never shown keeps git out of its
+/// configuration after a reload, so `git status` is still asked about (and
+/// denied here: nothing runs). Step 24's reload gave git to every trusted
+/// project.
+#[test]
+fn a_reload_reads_the_git_pin_as_an_open_does() {
+    let git_status = || {
+        crate::calls(&[(
+            "c1",
+            "shell",
+            serde_json::json!({"command": "git status --short"}),
+        )])
+    };
+    let world = World::new(
+        "reload_git_pin",
+        [git_status(), says("Done."), git_status(), says("Done.")],
+    );
+    let (store, key) = trust_store(&world);
+    store.trust(&key, "~/work/app", &[], false).unwrap();
+    // A repository, whose git the person was not shown.
+    std::fs::create_dir_all(world.workspace.join(".git")).unwrap();
+    let core = world.core();
+    world.run(async {
+        // The question about git, which the test's front end answers not
+        // now.
+        let front = Front::start(&world, &core).await;
+        assert_eq!(front.turn_denying("first").await, ["shell"], "asked at the open");
+        reload(&front, ConfigReloadParams::default()).await;
+        assert_eq!(
+            front.turn_denying("after a reload").await,
+            ["shell"],
+            "a reload gave git what the open did not"
+        );
         front.close().await;
     });
 }
@@ -533,6 +572,7 @@ fn the_load_uses_the_trust_just_judged() {
             &key,
             "~/work/app",
             &[Definition::of_rules(&[allow_github()])],
+            true,
         )
         .unwrap();
     world.project_config(ALLOW_GITHUB);
@@ -563,7 +603,7 @@ fn the_load_uses_the_trust_just_judged() {
             action: RuleAction::Allow,
         };
         store
-            .approve(&key, &[Definition::of_rules(&[allow_github(), curl])])
+            .approve(&key, &[Definition::of_rules(&[allow_github(), curl])], true)
             .unwrap();
         judged.release();
         let result = reloading.await;
@@ -665,7 +705,7 @@ fn a_reload_never_undoes_a_model_or_a_level_chosen_in_the_session() {
 fn trust_taken_away_with_a_broken_file_is_taken_away() {
     let world = World::new("reload_untrust_broken", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[]).unwrap();
+    store.trust(&key, "~/work/app", &[], true).unwrap();
     world.project_config("[retry]\nattempts = 9\n");
     let core = world.core();
     world.run(async {
@@ -703,7 +743,7 @@ fn trust_taken_away_with_a_broken_file_is_taken_away() {
 fn trust_taken_away_holds_when_another_part_of_the_reload_fails() {
     let world = World::new("reload_untrust_partial", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[]).unwrap();
+    store.trust(&key, "~/work/app", &[], true).unwrap();
     world.raw_user_config(
         "[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n\n[model]\nmain = \
          \"no-such-model\"\n",
@@ -764,7 +804,7 @@ fn a_limit_a_reload_added_stays_through_the_next() {
 fn two_reloads_of_a_session_never_interleave() {
     let world = World::new("reload_one_at_a_time", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[]).unwrap();
+    store.trust(&key, "~/work/app", &[], true).unwrap();
     world.project_config("[retry]\nattempts = 9\n");
     let core = world.core();
     let judged = cortex_testkit::Hold::new(cortex_core::TRUST_JUDGED);
@@ -854,6 +894,7 @@ fn a_rule_written_between_the_judgement_and_the_load_is_not_in_force() {
             &key,
             "~/work/app",
             &[Definition::of_rules(&[allow_github()])],
+            true,
         )
         .unwrap();
     world.project_config(ALLOW_GITHUB);
@@ -1032,6 +1073,7 @@ fn trust_taken_away_between_the_judgement_and_the_load_is_said_as_untrusted() {
             &key,
             "~/work/app",
             &[Definition::of_rules(&[allow_github()])],
+            true,
         )
         .unwrap();
     world.project_config(ALLOW_GITHUB);
@@ -1169,7 +1211,7 @@ fn trust_taken_away_with_a_part_that_fails_still_gives_the_epoch_its_keys() {
         [says("One."), says("Goal: the summary.")],
     );
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[]).unwrap();
+    store.trust(&key, "~/work/app", &[], true).unwrap();
     let user = "[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n\n[model]\nmain = \
                 \"no-such-model\"\n";
     world.raw_user_config(user);

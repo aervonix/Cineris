@@ -607,7 +607,7 @@ caught-by:
 rule: A project trusted with its rules changed since is asked about them with each marked changed.
 file: crates/cortex-core/src/assemble.rs
 in: look
-find: changed: rules_only
+find: changed: trusted
 replace: changed: false
 caught-by:
     cortex-core::it trusting::a_project_whose_rules_changed_is_asked_about_them
@@ -651,10 +651,10 @@ file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::key
 find:
     trusted: true,
-    never: false
+                    ..TrustResponse::default()
 replace:
     trusted: false,
-    never: false
+                    ..TrustResponse::default()
 caught-by:
     app::tests::the_trust_question_lists_what_trust_turns_on_and_takes_three_answers
 
@@ -939,20 +939,12 @@ rule: Each prompt is appended to the history file opened afresh under its lock, 
 file: crates/cortex-cli/src/history.rs
 in: append
 find:
-    for text in queue {
-        let entry = Entry {
-            project: project.to_owned(),
-            text,
-        };
+    for prompt in queue {
         let _lock = cortex_base::private::hold_lock(path).ok().flatten();
         if let Ok(mut file) = open(path) {
 replace:
     let mut kept = open(path).ok();
-    for text in queue {
-        let entry = Entry {
-            project: project.to_owned(),
-            text,
-        };
+    for prompt in queue {
         if let Some(file) = kept.as_mut() {
 packages: cortex-cli
 caught-by:
