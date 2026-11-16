@@ -158,6 +158,7 @@ pub(crate) fn state() -> SessionState {
         running_turn: None,
         queue_length: 0,
         write_roots: vec!["/work/app".to_owned()],
+        trust: None,
     }
 }
 
@@ -2453,6 +2454,10 @@ fn status_shows_the_session_and_the_limits_in_force() {
     ));
     drain(&mut app, now);
     let all = notices(&mut app, now);
+    assert!(
+        !all.contains("trust "),
+        "no standing given, none said: {all}"
+    );
     for shown in [
         "model      claude-opus-5-5",
         "mode       supervised",
@@ -2784,4 +2789,34 @@ fn ctrl_g_leaves_the_loop_for_the_editor_and_the_prompt_stays() {
         shown.contains("The external editor gave nothing back"),
         "{shown}"
     );
+}
+
+/// `/status` names a project marked never, with the commands that change
+/// it (the owner's answer of 2026-11-15).
+#[test]
+fn status_says_a_project_is_marked_never_and_how_to_change_it() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    let mut never = state();
+    never.trust = Some(cortex_protocol::session::TrustStanding::Never);
+    opened_with(&mut app, &link, now, never);
+    let _ = link.take_sent();
+    run_command(&mut app, "/status", now);
+    let (ticket, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::ConfigGet(_)))
+        .expect("config/get");
+    link.give(Inbound::Done(
+        ticket,
+        Ok(OpResult::ConfigGet(
+            cortex_protocol::methods::ConfigGetResult {
+                config: serde_json::Map::new(),
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    let all = notices(&mut app, now);
+    assert!(all.contains("trust      never"), "{all}");
+    assert!(all.contains("cortex permissions trust"), "{all}");
 }

@@ -1549,6 +1549,8 @@ export interface SessionState {
   speed: Speed;
   /** The session's title. */
   title?: string | null;
+  /** What the user has said of the project's trust, for a front end's status (since step 23). It informs only: what trust turns on is the core's to decide. */
+  trust?: TrustStanding | null;
   /** The workspace root. An absolute path on the server's machine. */
   workspace: string;
   /** The directories the session's commands may write to, as absolute paths: the workspace, the session's temporary directory and any the configuration adds. A front end keeps a program it runs for the person (an external editor) out of them, since a command could have put one there (since step 23). */
@@ -1902,6 +1904,9 @@ export interface TrustResponse {
   /** Whether the resources listed may be used. */
   trusted?: boolean;
 }
+
+/** What the user has said of a project's trust (since step 23). */
+export type TrustStanding = "untrusted" | "trusted" | "rules_changed" | "never" | "for_the_run" | (string & {});
 
 /** The turn is over and nothing automatic remains: no retry pending, no compaction running, no tool running. Clients wait on this one event. */
 export interface TurnCompleted {

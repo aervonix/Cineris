@@ -250,6 +250,24 @@ impl App {
             }
             line("mode", session.level.as_str().to_owned());
             line("sandbox", session.sandbox.as_str().to_owned());
+            if let Some(trust) = &session.trust {
+                use cortex_protocol::session::TrustStanding;
+                let said = match trust {
+                    TrustStanding::Never => {
+                        "never: you said never to trust it; `cortex permissions trust` trusts \
+                         it, `cortex permissions forget` asks again"
+                            .to_owned()
+                    }
+                    TrustStanding::RulesChanged => {
+                        "trusted, its rules changed since: `cortex permissions trust` approves \
+                         them"
+                            .to_owned()
+                    }
+                    TrustStanding::ForTheRun => "trusted for this run (--trust-project)".to_owned(),
+                    other => other.as_str().replace('_', " "),
+                };
+                line("trust", said);
+            }
             line("session", session.session_id.as_str().to_owned());
             line("workspace", session.workspace.clone());
         }

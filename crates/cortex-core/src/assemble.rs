@@ -52,7 +52,7 @@ use cortex_protocol::event::{Event, Notice, SandboxNotice};
 use cortex_protocol::lease::{Budget, HardLimits, Rule};
 use cortex_protocol::methods::{TrustResource, TrustResourceKind};
 use cortex_protocol::model::ModelRole;
-use cortex_protocol::session::SessionSettings;
+use cortex_protocol::session::{SessionSettings, TrustStanding};
 use cortex_protocol::{ArtifactId, ErrorData, ErrorKind, LeaseId, Plan, ProjectKey, SessionId};
 use cortex_session::entry::{LeaseEvent, LeaseRecord, Meta};
 use cortex_session::{
@@ -274,6 +274,8 @@ pub(crate) struct Trust {
     loaded: Loaded,
     /// What went wrong reading the trust store, for the user.
     problem: Option<String>,
+    /// What the user has said of the project, for a front end's status.
+    standing: TrustStanding,
 }
 
 /// The project's rules as trust pins them (the owner's answer of
@@ -599,6 +601,7 @@ fn trust(
             repository: true,
             loaded: load(true)?,
             problem: None,
+            standing: TrustStanding::ForTheRun,
         });
     }
     let (stored, problem) = match state {
@@ -628,11 +631,17 @@ fn trust(
                     .to_owned()
             })
         });
+        let standing = if stored.is_refused() {
+            TrustStanding::Never
+        } else {
+            TrustStanding::Untrusted
+        };
         return Ok(Trust {
             rules: false,
             repository: false,
             loaded: load(false)?,
             problem,
+            standing,
         });
     }
     // Trusted when the user last looked. The rules the project's files hold
@@ -658,6 +667,7 @@ fn trust(
             repository: true,
             loaded: peek,
             problem,
+            standing: TrustStanding::Trusted,
         })
     } else {
         // The user still trusts the project; what they have not seen is
@@ -672,6 +682,7 @@ fn trust(
                  settings and its allow rules are set aside until the change is approved."
                     .to_owned(),
             ),
+            standing: TrustStanding::RulesChanged,
         })
     }
 }
@@ -1225,6 +1236,7 @@ pub(crate) fn assemble(
         repository: repository_trusted,
         loaded,
         problem,
+        standing,
     } = match looked {
         Some(trust) => trust,
         None => trust(inner, state.as_ref(), &root, &load)?,
@@ -1726,6 +1738,7 @@ pub(crate) fn assemble(
             cortex_protocol::session::SandboxStatus::Off
         },
         write_roots,
+        trust: Some(standing),
     };
     let mut ledger = Ledger::new(Arc::clone(&clock))
         .with_account(Account::for_lease(&lease, Arc::clone(&clock)))

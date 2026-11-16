@@ -5485,6 +5485,17 @@
             "null"
           ]
         },
+        "trust": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrustStanding"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the user has said of the project's trust, for a front end's\nstatus (since step 23). It informs only: what trust turns on is the\ncore's to decide."
+        },
         "workspace": {
           "description": "The workspace root. An absolute path on the server's machine.",
           "type": "string"
@@ -6664,6 +6675,36 @@
         }
       },
       "type": "object"
+    },
+    "TrustStanding": {
+      "anyOf": [
+        {
+          "const": "untrusted",
+          "description": "Nothing: the project is not trusted."
+        },
+        {
+          "const": "trusted",
+          "description": "Trusted, its rules the ones the user saw."
+        },
+        {
+          "const": "rules_changed",
+          "description": "Trusted, its rules changed since: what they could loosen is set aside until the change is approved."
+        },
+        {
+          "const": "never",
+          "description": "The user said never to trust it: it is not asked about."
+        },
+        {
+          "const": "for_the_run",
+          "description": "Trusted for this run by the command line (`--trust-project`)."
+        },
+        {
+          "description": "A value this version of the protocol does not know. Receivers need a default branch.",
+          "type": "string",
+          "x-cortex-open": true
+        }
+      ],
+      "description": "What the user has said of a project's trust (since step 23)."
     },
     "TurnCompleted": {
       "description": "The turn is over and nothing automatic remains: no retry pending, no\ncompaction running, no tool running. Clients wait on this one event.",

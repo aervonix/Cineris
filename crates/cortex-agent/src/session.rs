@@ -222,6 +222,7 @@ impl Shared {
             running_turn: inbox.running.as_ref().map(|running| running.id.clone()),
             queue_length: u32::try_from(inbox.queue.len() + inbox.held.len()).unwrap_or(u32::MAX),
             write_roots: self.info.write_roots.clone(),
+            trust: self.info.trust.clone(),
         }
     }
 
