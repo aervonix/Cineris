@@ -886,3 +886,37 @@ fn sys_once_the_turns_time_for_checks_is_spent_a_failure_stands_and_nothing_runs
         front.close().await;
     });
 }
+
+#[test]
+fn in_ask_mode_the_checks_are_offered_and_in_off_mode_nothing_is_said() {
+    for (mode, offered) in [("ask", true), ("off", false)] {
+        let world = World::new(
+            &format!("verify_mode_{mode}"),
+            [writes("c1", "a.txt"), says("Done.")],
+        );
+        // It names no program: run, it would fail.
+        user_checks(
+            &world,
+            &["./missing-check"],
+            &format!("mode = \"{mode}\"\n"),
+        );
+        let core = world.core_with(|options| options.trust_project = true);
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            let ended = front.turn("change it").await;
+            assert_eq!(ended.verification, Some(Verification::Skipped), "{mode}");
+            let phases: Vec<VerificationPhase> = told(&front)
+                .into_iter()
+                .map(|notice| notice.phase)
+                .collect();
+            if offered {
+                assert_eq!(phases, [VerificationPhase::Offered]);
+                assert_eq!(told(&front)[0].checks[0].outcome, None);
+            } else {
+                assert!(phases.is_empty(), "{mode}: {phases:?}");
+            }
+            assert_eq!(world.provider.requests().len(), 2, "{mode}");
+            front.close().await;
+        });
+    }
+}
