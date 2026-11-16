@@ -17,6 +17,7 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use cortex_testkit::VTerm;
 use cortex_testkit::children::{ChildSpec, Roll};
 use cortex_testkit::pty::Session;
 use cortex_testkit::role::{ModeShell, NOT_RESTORED, RESTORED, Role, this_binary};
@@ -41,6 +42,12 @@ const FIRST_FRAME: Duration = if cfg!(windows) {
 } else {
     Duration::from_millis(250)
 };
+
+/// The header's title: the name and the version. Never the name alone, which
+/// a path on the screen can hold (a copy of the repository is named after it,
+/// and the trust question shows the workspace's path), and which would let a
+/// wait for the header pass before there is one.
+const HEADER: &str = concat!("Cortex-Harness ", env!("CARGO_PKG_VERSION"));
 
 /// What the shell says just before it starts the binary.
 const STARTING: &str = "starting cortex";
@@ -130,7 +137,7 @@ fn first_frame(session: &mut Session, phases: &Phases) {
     );
     // The session opens after it: its header follows.
     phases.mark("the session opens");
-    session.wait_for(LIMIT, "the session's header", |t| t.shows("Cortex-Harness"));
+    session.wait_for(LIMIT, "the session's header", |t| t.shows(HEADER));
 }
 
 /// Quits with `Ctrl+D` on the empty prompt, and checks that the terminal's
@@ -170,11 +177,20 @@ fn body(request: &cortex_testkit::server::ReceivedRequest) -> String {
     String::from_utf8_lossy(&request.body).into_owned()
 }
 
+/// Waits until the turn has ended and the input box is idle again. Its
+/// last answer is drawn before it ends, and a command that needs no turn
+/// to be running (`/undo`) is refused until then: "A turn is running".
+fn turn_ended(session: &mut Session) {
+    session.wait_for(LIMIT, "the turn's end", |t| t.shows(READY[0]));
+}
+
 fn wait_shows(session: &mut Session, what: &str) {
-    session.wait_for(LIMIT, what, |t| {
-        let all = t.history();
-        all.iter().any(|row| row.contains(what))
-    });
+    session.wait_for(LIMIT, what, |t| shows_ever(t, what));
+}
+
+/// Whether the screen or its scrollback holds `what`.
+fn shows_ever(t: &VTerm, what: &str) -> bool {
+    t.history().iter().any(|row| row.contains(what))
 }
 
 #[test]
@@ -232,8 +248,7 @@ fn sys_an_approval_is_asked_in_a_dialog_and_answered_with_a_key() {
         !machine.workspace.join(target).exists(),
         "it ran before the answer"
     );
-    session.send(b"y");
-    wait_shows(&mut session, "Noted.");
+    session.answer_dialog(LIMIT, "Allow once", b"y", |t| shows_ever(t, "Noted."));
     assert_eq!(
         std::fs::read_to_string(machine.workspace.join(target)).unwrap(),
         "remember the feature\n"
@@ -360,10 +375,13 @@ fn sys_a_steer_reaches_the_running_turn_and_a_queued_prompt_runs_after_it() {
     quit(&mut session, &phases);
 }
 
+/// The trust question's row of answers, which it draws once it takes keys.
+const TRUST_ANSWERS: &str = "x Never for this project";
+
 /// Waits for the trust question's answers, so that a key answers it.
 fn trust_asked(session: &mut Session) {
     wait_shows(session, "Trust this project?");
-    wait_shows(session, "x Never for this project");
+    wait_shows(session, TRUST_ANSWERS);
 }
 
 /// A project whose file sets a model is asked about it when its session
@@ -383,13 +401,12 @@ fn sys_a_project_is_trusted_from_its_dialog_and_its_model_is_used() {
     assert!(shown.contains("claude-opus-5-5"), "{shown}");
     // The folder as a person reads it, never the canonical form.
     assert!(!shown.contains(r"\\?\"), "{shown}");
-    session.send(b"y");
     // The header's box (`│`, or `|` in the ASCII glyphs a Windows console
     // gets) names the model the session runs on (the dialog
     // named it too, outside any box).
-    session.wait_for(LIMIT, "the header with the project's model", |t| {
-        let all = t.history();
-        all.iter()
+    session.answer_dialog(LIMIT, TRUST_ANSWERS, b"y", |t| {
+        t.history()
+            .iter()
             .any(|row| row.trim_start().starts_with(['│', '|']) && row.contains("claude-opus-5-5"))
     });
 
@@ -413,8 +430,7 @@ fn sys_a_projects_first_limit_is_listed_and_in_force_once_trusted() {
     let shown = everything(&session);
     assert!(shown.contains("limits.turn.time"), "{shown}");
     assert!(shown.contains("first limit"), "{shown}");
-    session.send(b"y");
-    session.wait_for(LIMIT, "the header", |t| t.shows("Cortex-Harness"));
+    session.answer_dialog(LIMIT, TRUST_ANSWERS, b"y", |t| t.shows(HEADER));
 
     phases.mark("the turn");
     type_text(&mut session, "go\r");
@@ -468,7 +484,7 @@ fn sys_a_never_survives_a_restart_and_permissions_trust_clears_it() {
     first_frame_before_trust(&mut session, &phases);
     phases.mark("never");
     trust_asked(&mut session);
-    session.send(b"x");
+    session.answer_dialog(LIMIT, TRUST_ANSWERS, b"x", |t| shows_ever(t, MODEL));
     header_with(&mut session, MODEL);
     quit(&mut session, &phases);
 
@@ -561,6 +577,7 @@ fn sys_undo_asks_about_a_file_edited_since_and_puts_it_back() {
     let mut session = machine.tui(&["--allow", "write notes.txt", "change the notes"]);
     first_frame(&mut session, &phases);
     wait_shows(&mut session, "Written.");
+    turn_ended(&mut session);
     // The turn made the file.
     assert_eq!(std::fs::read_to_string(&notes).unwrap(), "after\n");
 
@@ -568,10 +585,14 @@ fn sys_undo_asks_about_a_file_edited_since_and_puts_it_back() {
     // The person changes the file after the turn.
     std::fs::write(&notes, "after, and mine\n").unwrap();
     command(&mut session, "/undo");
-    wait_shows(&mut session, "notes.txt");
-    wait_shows(&mut session, "1 Put them back");
-    session.send(b"1");
-    wait_shows(&mut session, "The last turn is undone");
+    // The question names the file (the turn's tool line named it before,
+    // so the screen is read once the question is up).
+    session.wait_for(LIMIT, "the undo's question", |t| t.shows("1 Put them back"));
+    let screen = session.screen().screen().join("\n");
+    assert!(screen.contains("notes.txt"), "{screen}");
+    session.answer_dialog(LIMIT, "1 Put them back", b"1", |t| {
+        shows_ever(t, "The last turn is undone")
+    });
     assert!(
         !notes.exists(),
         "the file the undone turn made is still there"
@@ -704,8 +725,7 @@ fn sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_wait
     // A session of the untrusted project, stored: not now, then a turn.
     let mut session = machine.tui(&["remember this"]);
     trust_asked(&mut session);
-    session.send(b"n");
-    wait_shows(&mut session, "Stored.");
+    session.answer_dialog(LIMIT, TRUST_ANSWERS, b"n", |t| shows_ever(t, "Stored."));
     quit(&mut session, &phases);
     for ending in Ending::all() {
         let mut session = machine.tui(&["--continue"]);
@@ -733,6 +753,7 @@ fn sys_the_application_ends_at_once_while_the_undos_question_waits() {
         machine.reply_text("Written.");
         let mut session = machine.tui(&["--allow", "write notes.txt", "change the notes"]);
         wait_shows(&mut session, "Written.");
+        turn_ended(&mut session);
         std::fs::write(&notes, "after, and mine\n").unwrap();
         command(&mut session, "/undo");
         wait_shows(&mut session, "1 Put them back");
@@ -931,7 +952,7 @@ fn perf_idle_memory_and_a_keys_time_to_its_frame() {
     session.wait_for(LIMIT, "the first frame", |t| {
         READY.iter().any(|ready| t.shows(ready))
     });
-    session.wait_for(LIMIT, "the session's header", |t| t.shows("Cortex-Harness"));
+    session.wait_for(LIMIT, "the session's header", |t| t.shows(HEADER));
     #[cfg(target_os = "linux")]
     match resident_kib(&session) {
         Some(kib) => println!(
