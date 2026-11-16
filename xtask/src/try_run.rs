@@ -16,7 +16,7 @@ use crate::workspace::Package;
 const USAGE: &str = "\
 usage: cargo xtask try --command 'COMMAND [ARGUMENTS]' [--profile ci|release|dist]
                        [--count N] [--load N] [--cores K] [--filter 'EXPR; EXPR']
-                       [--against REF] [--commit SHA] [--dry-run]
+                       [--against REF] [--label NAME] [--commit SHA] [--dry-run]
                        [--os OS] [--testkit none|profile|starts] [--capture yes|no]
        cargo xtask try --dispatch BRANCH --command '...' [the same inputs]
                        [--queued-warn MIN]
@@ -73,10 +73,12 @@ test that any of them matches.
 branch, and `cargo xtask ab` builds both once and runs them in turn, --count
 rounds (5 when not given), on one runner, then compares them by tier, crate
 and test. --dispatch resolves REF to its full commit hash first, as GitHub has
-it at the dispatch, and passes the hash: a run that waits for a runner still
-compares with the commit REF named when it was dispatched. A full hash is
-passed as it is; a REF GitHub does not know is refused, and nothing is
-dispatched. It runs with --keep-going: a round in which a test fails is recorded
+it at the dispatch, and passes the hash, with REF as typed as the `label`
+input: a run that waits for a runner still compares with the commit REF named
+when it was dispatched, and its report still calls the base REF. A full hash
+is passed as it is; a REF GitHub does not know is refused, and nothing is
+dispatched. --label NAME (the `label` input) is what the report calls the
+base, --against's value when not given. It runs with --keep-going: a round in which a test fails is recorded
 and left out, the run goes on, and it ends as a failure after the comparison of
 the rounds that finished.
 
@@ -153,6 +155,9 @@ struct Inputs {
     /// With `--dispatch`: the minutes a run of the workflow on the branch
     /// may sit queued with no jobs before it is named.
     queued_warn: Option<u64>,
+    /// What an A/B's report calls the base: the ref as typed, when
+    /// `against` is the hash a dispatch resolved it to.
+    label: Option<String>,
 }
 
 /// The `os` inputs of the workflow.
@@ -308,6 +313,15 @@ impl Inputs {
                 "--queued-warn" | "--queued-limit" => {
                     inputs.queued_warn = Some(crate::runs::queued_warn_minutes(flag, value)?);
                 }
+                "--label" => {
+                    let label = value.trim();
+                    if !label.is_empty() {
+                        if !plain(label) {
+                            return Err(format!("`--label {label}` is not a ref's name"));
+                        }
+                        inputs.label = Some(label.to_owned());
+                    }
+                }
                 "--capture" => match value.trim() {
                     "" | "yes" => inputs.show_output = false,
                     "no" => inputs.show_output = true,
@@ -320,6 +334,12 @@ impl Inputs {
                 },
                 other => return Err(format!("unknown flag `{other}`\n\n{USAGE}")),
             }
+        }
+        if inputs.label.is_some() && inputs.against.is_none() {
+            return Err(
+                "`--label` goes with `--against`: it is what an A/B's report calls the base"
+                    .to_owned(),
+            );
         }
         if inputs.queued_warn.is_some() && inputs.dispatch.is_none() {
             return Err(
@@ -945,7 +965,7 @@ impl Inputs {
             "--base",
             AB_BASE,
             "--label",
-            &label_of(against),
+            &self.label_of(against),
             "--cargo-profile",
             profile,
         ]
@@ -959,6 +979,12 @@ impl Inputs {
         }
         command.extend(names);
         Ok(command)
+    }
+
+    /// What an A/B's report calls the base: the label given (the ref as the
+    /// dispatch was given it), else `against` ([`label_of`]).
+    fn label_of(&self, against: &str) -> String {
+        self.label.clone().unwrap_or_else(|| label_of(against))
     }
 
     /// The A/B run: `ab` against the tree the workflow checked out.
@@ -978,7 +1004,7 @@ impl Inputs {
             "--base",
             AB_BASE,
             "--label",
-            &label_of(against),
+            &self.label_of(against),
             "--top",
             "20",
             "--keep-going",
@@ -1001,9 +1027,8 @@ impl Inputs {
     }
 }
 
-/// What an A/B run calls the other side in its report: `against` as it was
-/// given, or a full commit hash's first twelve digits (a dispatch passes the
-/// hash it resolved the ref to).
+/// What an A/B run calls the other side in its report when no label says:
+/// `against` as it was given, or a full commit hash's first twelve digits.
 fn label_of(against: &str) -> String {
     if commit_hash(against) {
         against[..12].to_owned()
@@ -1045,7 +1070,9 @@ fn resolve_against(
 }
 
 /// The inputs a dispatch sends: `against` resolved to its commit by
-/// `resolve` ([`resolve_against`]), and the line that says so.
+/// `resolve` ([`resolve_against`]), the ref as typed kept as the label the
+/// report calls the base by (unless a label was given), and the line that
+/// says so.
 fn for_dispatch(
     mut inputs: Inputs,
     resolve: impl FnOnce(&str) -> Result<String>,
@@ -1053,7 +1080,10 @@ fn for_dispatch(
     let mut said = None;
     if let Some(against) = inputs.against.take() {
         let (resolved, note) = resolve_against(&against, resolve)?;
-        said = note;
+        if let Some(note) = note {
+            let label = inputs.label.get_or_insert_with(|| against.clone());
+            said = Some(format!("{note}; the report calls it {label}"));
+        }
         inputs.against = Some(resolved);
     }
     Ok((inputs, said))
@@ -1078,12 +1108,13 @@ fn url_path(reference: &str) -> String {
 /// checkout of the ref would take. Asked of GitHub and not of the local
 /// repository: a desk's `main` may be behind GitHub's, and a copy of the
 /// tree with no `.git` (the one `rx` builds in) has none.
+/// GitHub answers with the hash alone when asked for it by its media type.
 fn github_commit(reference: &str) -> Result<String> {
     crate::runs::gh(&[
         "api",
+        "-H",
+        "Accept: application/vnd.github.sha",
         &format!("repos/{{owner}}/{{repo}}/commits/{}", url_path(reference)),
-        "--jq",
-        ".sha",
     ])
 }
 
@@ -1235,6 +1266,9 @@ fn dispatch_arguments(branch: &str, inputs: &Inputs) -> Vec<String> {
     }
     if let Some(against) = &inputs.against {
         field("against", against.clone());
+    }
+    if let Some(label) = &inputs.label {
+        field("label", label.clone());
     }
     if let Some(commit) = &inputs.commit {
         field("commit", commit.clone());
@@ -1582,9 +1616,68 @@ mod tests {
         )
         .unwrap();
         let (inputs, said) = for_dispatch(inputs, |_| Ok(HASH.to_owned())).unwrap();
-        assert!(said.is_some_and(|said| said.contains("resolved at dispatch")));
+        assert_eq!(
+            said.as_deref(),
+            Some("against main is 0123456789ab (resolved at dispatch); the report calls it main")
+        );
         let sent = dispatch_arguments("b", &inputs).join(" ");
-        assert!(sent.ends_with(&format!("-f against={HASH}")), "{sent}");
+        assert!(
+            sent.ends_with(&format!("-f against={HASH} -f label=main")),
+            "{sent}"
+        );
+        // On the runner: the hash is the ref checked out, and the name the
+        // user typed is what the report calls it, `-f against=main` and all.
+        let command = try_command(&[
+            "--command",
+            "test -p x",
+            "--against",
+            HASH,
+            "--label",
+            "main",
+        ])
+        .unwrap();
+        assert!(
+            command.starts_with("ab --base ../ab-base --label main --top 20"),
+            "{command}"
+        );
+        let command = try_command(&[
+            "--command",
+            "perf -p x",
+            "--against",
+            HASH,
+            "--label",
+            "main",
+        ])
+        .unwrap();
+        assert!(command.contains("--label main "), "{command}");
+        assert!(
+            try_command(&["--command", "test", "--label", "main"])
+                .unwrap_err()
+                .contains("goes with `--against`")
+        );
+        // A label given is kept, and a hash given needs none.
+        let inputs = Inputs::parse(
+            &[
+                "--command",
+                "test",
+                "--against",
+                "main",
+                "--label",
+                "trunk",
+                "--dispatch",
+                "b",
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
+        let (inputs, _) = for_dispatch(inputs, |_| Ok(HASH.to_owned())).unwrap();
+        assert_eq!(inputs.label.as_deref(), Some("trunk"));
+        let inputs = Inputs::parse(
+            &["--command", "test", "--against", HASH, "--dispatch", "b"].map(str::to_owned),
+        )
+        .unwrap();
+        let (inputs, said) = for_dispatch(inputs, |_| Err("not asked".to_owned())).unwrap();
+        assert_eq!((inputs.label, said), (None, None));
         let inputs = Inputs::parse(
             &["--command", "test", "--against", "gone", "--dispatch", "b"].map(str::to_owned),
         )

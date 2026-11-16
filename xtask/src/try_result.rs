@@ -495,8 +495,7 @@ pub(crate) fn job_result(
         }
         // Kept since the tenth tooling step: an older run has none.
         if let Some(path) = &kept.walls {
-            let (label, walls) = crate::ab::walls_from_json(&read_text(path)?)?;
-            let _ = writeln!(result.text, "{}", crate::ab::walls_table(&label, &walls));
+            let _ = writeln!(result.text, "{}", walls_text(&read_text(path)?));
         }
         let mut by_report: BTreeMap<(usize, String), &PathBuf> = BTreeMap::new();
         for path in &kept.ab {
@@ -612,6 +611,16 @@ pub(crate) fn job_result(
         );
     }
     Ok(result)
+}
+
+/// The table of each side's wall time by round, from the file `ab` kept; a
+/// note in its place when the file cannot be read, which is no reason to
+/// lose the rest of what the run found.
+fn walls_text(kept: &str) -> String {
+    match crate::ab::walls_from_json(kept) {
+        Ok((label, walls)) => crate::ab::walls_table(&label, &walls),
+        Err(error) => format!("(each side's wall time is not shown: {error})\n"),
+    }
 }
 
 /// The budgets' OS of a `try` job named `try-<runner>`.
@@ -826,6 +835,50 @@ mod tests {
         )
         .unwrap();
         assert!(!every_job_ended(&queued), "no job yet");
+    }
+
+    #[test]
+    fn a_wall_times_file_that_cannot_be_read_is_a_note_and_not_a_failure() {
+        let text = super::walls_text("{ not json");
+        assert!(
+            text.starts_with("(each side's wall time is not shown: the wall times are not JSON"),
+            "{text}"
+        );
+        let whole = crate::ab::walls_json(
+            "main",
+            &[crate::ab::Wall {
+                round: 1,
+                seconds: [1.0, 2.0],
+                passed: [true, true],
+            }],
+        );
+        assert!(super::walls_text(&whole).starts_with("Each round's wall time"));
+        // The rest of the job is still read.
+        let dir = scratch("ab-walls");
+        for (side, xml) in [("base", MAIN), ("head", BRANCH)] {
+            keep(&dir, &format!("w/target/ab/{side}-round-1.xml"), xml);
+        }
+        keep(&dir, "w/target/ab/wall-times.json", "{ broken");
+        let result = job_result(
+            5,
+            &job("try-linux", "success"),
+            Os::Linux,
+            Some(&dir),
+            &|| Err("not asked".to_owned()),
+            &request(),
+        )
+        .unwrap();
+        assert!(
+            result.text.contains("wall time is not shown"),
+            "{}",
+            result.text
+        );
+        assert!(
+            result.text.contains("the median of 1 runs"),
+            "{}",
+            result.text
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
