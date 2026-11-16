@@ -2699,3 +2699,45 @@ fn a_new_session_reads_no_history() {
         "{sent:#?}"
     );
 }
+
+/// The workspace's files are asked for once the session is open, and `@`
+/// completes from them.
+#[test]
+fn at_completes_from_the_workspace_files_the_core_lists() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    let _ = app.frame(now);
+    app.drawn(now);
+    let (open, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::SessionNew(_)))
+        .expect("the open");
+    link.give(Inbound::Done(
+        open,
+        Ok(OpResult::SessionNew(SessionResult { session: state() })),
+    ));
+    drain(&mut app, now);
+    let (files, params) = link
+        .take_sent()
+        .into_iter()
+        .find_map(|(ticket, op)| match op {
+            Op::WorkspaceFiles(params) => Some((ticket, params)),
+            _ => None,
+        })
+        .expect("the files are asked for");
+    assert_eq!(params.session_id, SessionId::from(SESSION));
+    link.give(Inbound::Done(
+        files,
+        Ok(OpResult::WorkspaceFiles(
+            cortex_protocol::methods::WorkspaceFilesResult {
+                paths: vec!["src/lexer.rs".to_owned(), "README.md".to_owned()],
+                truncated: false,
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    type_text(&mut app, "look at @lex", now);
+    let menu = app.input().menu().cloned().expect("the file menu");
+    assert_eq!(menu.rows[0].label, "src/lexer.rs");
+}

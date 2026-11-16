@@ -87,6 +87,8 @@ enum Pending {
     Set,
     /// A page of a stored session's history, to draw.
     History,
+    /// The workspace's files, for `@` completion.
+    Files,
 }
 
 /// The most items of a stored session's history read at a time.
@@ -812,6 +814,9 @@ impl App {
                 self.session = Some(result.session);
             }
             (Pending::History, Ok(OpResult::SessionRead(page))) => self.history_read(page, now),
+            (Pending::Files, Ok(OpResult::WorkspaceFiles(files))) => {
+                self.input.set_files(files.paths);
+            }
             (Pending::History, Err(error)) => {
                 self.reading = false;
                 let held = std::mem::take(&mut self.held);
@@ -932,6 +937,15 @@ impl App {
         let stored = stored && state.seq > 0;
         let session_id = state.session_id.clone();
         self.session = Some(state);
+        // The workspace's files for `@`, listed by the core beside
+        // everything else.
+        let ticket = self.link.send(Op::WorkspaceFiles(
+            cortex_protocol::methods::WorkspaceFilesParams {
+                session_id: session_id.clone(),
+                limit: None,
+            },
+        ));
+        self.pending.insert(ticket, Pending::Files);
         if stored {
             self.reading = true;
             self.read_history(session_id, None);
