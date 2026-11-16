@@ -284,7 +284,6 @@ replace:
 packages: cortex-policy,cortex-core
 caught-by:
     cortex-policy::it trust::a_version_1_store_is_read_with_git_not_shown_and_written_as_version_2
-    cortex-policy::it trust::whether_git_was_shown_is_pinned_with_the_trust
     cortex-core::it trusting::a_version_1_store_asks_about_git_once_more
 
 [break] an-older-store-not-said
