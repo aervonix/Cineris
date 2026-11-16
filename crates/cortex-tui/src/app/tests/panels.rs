@@ -593,6 +593,29 @@ fn a_held_key_keys_read_together_and_a_paste_never_act() {
 }
 
 #[test]
+fn a_panel_key_the_ready_plan_has_no_use_for_goes_to_the_editor() {
+    let now = Instant::now() + Duration::from_secs(20);
+    for (n, binding) in ["y", "n", "p", "r", "g", "x"].into_iter().enumerate() {
+        let (mut app, link) = with_plan(now);
+        let ready = plan_focused(&mut app, now);
+        press(&mut app, binding, ready);
+        assert!(edits(&link).is_empty(), "{binding}");
+        assert_eq!(app.input().editor().expanded(), binding, "{n}: typed");
+        assert!(
+            app.input().focus().on_input(),
+            "{binding}: the focus came back"
+        );
+    }
+    // `tab` types nothing: it does nothing, and the focus stays.
+    let (mut app, link) = with_plan(now);
+    let ready = plan_focused(&mut app, now);
+    press(&mut app, "tab", ready);
+    assert!(edits(&link).is_empty());
+    assert_eq!(app.input().editor().expanded(), "");
+    assert_eq!(app.input().focus().focused(), Target::Panel(plan_id(&app)));
+}
+
+#[test]
 fn moving_and_esc_act_at_once_and_a_key_before_the_grace_is_typed() {
     let now = Instant::now() + Duration::from_secs(20);
     let (mut app, link) = with_plan(now);
