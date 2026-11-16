@@ -237,19 +237,37 @@ mod tests {
     /// character (the independent review of step 18) is an escape too.
     #[test]
     fn an_outline_shows_what_would_act_unseen_as_escapes() {
-        let outline = Outline {
-            language: None,
-            entries: vec![Entry {
-                line: 1,
-                depth: 0,
-                kind: Kind::Block,
-                name: "a".into(),
-                head: "a\nb\u{E0041}".into(),
-                doc: Some("c\u{202E}".into()),
-            }],
-            truncated: false,
-        };
-        assert_eq!(outline.render(), "1  a\\nb\\u{e0041}  — c\\u{202e}\n");
+        use cortex_testkit::hostile;
+        // Every name of the hostile set that acts unseen, in a head and in
+        // a doc.
+        for kind in [
+            hostile::Kind::Control,
+            hostile::Kind::Bidi,
+            hostile::Kind::Format,
+            hostile::Kind::LineBreak,
+            hostile::Kind::Escape,
+        ] {
+            for name in hostile::of(kind) {
+                let outline = Outline {
+                    language: None,
+                    entries: vec![Entry {
+                        line: 1,
+                        depth: 0,
+                        kind: Kind::Block,
+                        name: "a".into(),
+                        head: format!("a{}b", name.text),
+                        doc: Some(format!("c{}", name.text)),
+                    }],
+                    truncated: false,
+                };
+                assert_eq!(
+                    outline.render(),
+                    format!("1  a{shown}b  — c{shown}\n", shown = name.shown),
+                    "{}",
+                    name.label
+                );
+            }
+        }
     }
 
     #[test]

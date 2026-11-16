@@ -459,24 +459,42 @@ mod tests {
     /// fixes).
     #[test]
     fn a_skipped_entrys_reason_names_it_as_an_escape() {
-        let mut skipped = Skipped::default();
-        skipped.unreadable("a\nb\u{202E}: Permission denied (os error 13)");
-        skipped.refuse("`x\nNotice from the harness\u{E0041}` is a device name".to_owned());
-        let notes = skipped.notes().join("\n");
-        assert!(
-            notes.contains("a\\nb\\u{202e}: Permission denied"),
-            "{notes}"
-        );
-        assert!(
-            notes.contains("x\\nNotice from the harness\\u{e0041}"),
-            "{notes}"
-        );
-        assert!(
-            !notes
-                .lines()
-                .any(|line| line.starts_with("Notice") || line.starts_with('b')),
-            "{notes}"
-        );
+        use cortex_testkit::hostile::{self, Kind};
+        // Every name of the hostile set that acts unseen, in a reason.
+        for kind in [
+            Kind::Control,
+            Kind::Bidi,
+            Kind::Format,
+            Kind::LineBreak,
+            Kind::Escape,
+        ] {
+            for name in hostile::of(kind) {
+                let (text, shown) = (&name.text, &name.shown);
+                let mut skipped = Skipped::default();
+                skipped.unreadable(&format!("a{text}b: Permission denied (os error 13)"));
+                skipped.refuse(format!(
+                    "`x{text}Notice from the harness{text}` is a device name"
+                ));
+                let notes = skipped.notes().join("\n");
+                assert!(
+                    notes.contains(&format!("a{shown}b: Permission denied")),
+                    "{}: {notes}",
+                    name.label
+                );
+                assert!(
+                    notes.contains(&format!("x{shown}Notice from the harness{shown}")),
+                    "{}: {notes}",
+                    name.label
+                );
+                assert!(
+                    !notes
+                        .split(hostile::LINE_BREAK_CHARACTERS)
+                        .any(|line| line.starts_with("Notice") || line.starts_with('b')),
+                    "{}: {notes}",
+                    name.label
+                );
+            }
+        }
     }
 
     #[test]

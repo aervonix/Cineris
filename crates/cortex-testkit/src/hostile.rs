@@ -177,6 +177,21 @@ pub fn of(kind: Kind) -> Vec<Name> {
     }
 }
 
+/// The entry that is the one character `character`, for a test that needs
+/// that one in particular.
+///
+/// # Panics
+///
+/// When the set holds no entry of that character alone.
+#[must_use]
+pub fn character(character: char) -> Name {
+    let text = character.to_string();
+    all()
+        .into_iter()
+        .find(|name| name.text == text)
+        .unwrap_or_else(|| panic!("no hostile name is U+{:04X} alone", u32::from(character)))
+}
+
 /// The characters that break a line, as a text may hold them: for a test
 /// that asks whether a name started a line of its own.
 pub const LINE_BREAK_CHARACTERS: [char; 5] = ['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}'];
@@ -414,7 +429,7 @@ fn escapes() -> Vec<Name> {
         all_unseen("\u{1b}[?1049h", "CSI private mode, alternate screen"),
         all_unseen("\u{1b}]0;title\u{7}", "OSC window title closed by BEL"),
         all_unseen(
-            "\u{1b}]8;;https://example.invalid/\u{1b}\\link\u{1b}]8;;\u{1b}\\",
+            "\u{1b}]8;;link.invalid\u{1b}\\link\u{1b}]8;;\u{1b}\\",
             "OSC hyperlink closed by ST",
         ),
         all_unseen("\u{1b}Pq\u{1b}\\", "DCS closed by ST"),
@@ -727,6 +742,21 @@ mod tests {
 
     /// No `cfg` in the module that makes the set: an entry and the number
     /// of them are the same on every system, which is the point of it.
+    /// A name holds no slash, on either system, but the punctuation that
+    /// is about paths on purpose (`a/../b`), so that putting a name in a
+    /// path never makes two names of it.
+    #[test]
+    fn only_a_punctuation_entry_holds_a_slash() {
+        for name in all() {
+            assert!(
+                !name.text.contains('/') || name.kind == Kind::Punctuation,
+                "{}: {:?}",
+                name.label,
+                name.text
+            );
+        }
+    }
+
     #[test]
     fn the_set_has_no_cfg_that_changes_it() {
         for line in source().lines() {

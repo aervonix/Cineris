@@ -6,6 +6,7 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::symlink;
 
+use cortex_testkit::hostile::{self, Kind};
 use cortex_tools::{Effect, ListTool, ReadTool, SearchTool};
 use serde_json::json;
 
@@ -187,14 +188,36 @@ fn names_that_only_windows_refuses_are_ordinary_here() {
     let ws = Workspace::new("unix_windows_names");
     ws.file("notes:2026", "needle\n");
     ws.file("name.", "needle\n");
-    ws.file("aux", "needle\n");
+    // Every name of the hostile set that Windows keeps for a device, which
+    // a Unix file system takes as it takes any other.
+    let devices = hostile::of(Kind::Reserved);
+    for name in &devices {
+        assert!(
+            hostile::takes_file_name(&ws.dir, &name.text),
+            "{}: {:?}",
+            name.label,
+            name.text
+        );
+        ws.file(&name.text, "needle\n");
+    }
+    let text = ok(&ws.call(
+        &SearchTool::new(),
+        json!({"pattern": "needle", "mode": "files"}),
+    ));
+    let (header, listed) = text.split_once('\n').unwrap();
     assert_eq!(
-        ok(&ws.call(
-            &SearchTool::new(),
-            json!({"pattern": "needle", "mode": "files"})
-        )),
-        "3 files with a match for `needle` in `.`:\naux\nname.\nnotes:2026"
+        header,
+        format!(
+            "{} files with a match for `needle` in `.`:",
+            devices.len() + 2
+        )
     );
+    let mut expected: Vec<&str> = devices.iter().map(|name| name.text.as_str()).collect();
+    expected.extend(["name.", "notes:2026"]);
+    expected.sort_unstable();
+    let mut found: Vec<&str> = listed.lines().collect();
+    found.sort_unstable();
+    assert_eq!(found, expected);
     assert_eq!(
         ok(&ws.call(&ReadTool::new(), json!({"path": "notes:2026"}))),
         "notes:2026 (1 line)\nneedle"

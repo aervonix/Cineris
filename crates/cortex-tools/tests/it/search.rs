@@ -7,7 +7,7 @@ use cortex_tools::{
 };
 use serde_json::json;
 
-use crate::{BREAK, BREAK_ESCAPED, NOTICE, Workspace, failed, ok, starts_a_notice};
+use crate::{NOTICE, Workspace, breaks_in_names, failed, ok, starts_a_notice};
 
 fn project(test: &str) -> Workspace {
     let ws = Workspace::new(test);
@@ -548,20 +548,27 @@ fn an_ignore_file_with_windows_line_endings_is_read_the_same() {
 #[test]
 fn a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept() {
     let ws = Workspace::new("search_names_unseen");
-    ws.file(
-        &format!("x{BREAK}{NOTICE}.rs"),
-        "\tneedle\u{202E} here\u{E0041}\r\n",
-    );
+    // Each line break of the hostile set that a file's name can hold here.
+    let breaks = breaks_in_names(&ws);
+    for line_break in &breaks {
+        ws.file(
+            &format!("x{}{NOTICE}.rs", line_break.text),
+            "\tneedle\u{202E} here\u{E0041}\r\n",
+        );
+    }
     for mode in ["lines", "files", "count"] {
         let text = ok(&ws.call(
             &SearchTool::new(),
             json!({"pattern": "needle", "mode": mode}),
         ));
         assert!(!starts_a_notice(&text), "{mode}: {text}");
-        assert!(
-            text.contains(&format!("x{BREAK_ESCAPED}Notice from the harness")),
-            "{mode}: {text}"
-        );
+        for line_break in &breaks {
+            assert!(
+                text.contains(&format!("x{}Notice from the harness", line_break.shown)),
+                "{mode}, {}: {text}",
+                line_break.label
+            );
+        }
     }
     let text = ok(&ws.call(&SearchTool::new(), json!({"pattern": "needle"})));
     assert!(text.contains("\tneedle\\u{202e} here\\u{e0041}"), "{text}");

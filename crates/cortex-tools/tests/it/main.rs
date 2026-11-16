@@ -45,6 +45,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cortex_base::{FakeClock, PathOptions, PathResolver};
+use cortex_testkit::hostile::{self, Kind, Name};
 use cortex_tools::{
     Editing, FileTable, Json, MemoryCheckpoints, MemoryStore, NoOutput, Plan, RunCx, Tool,
     ToolError, ToolResult, bound, execute,
@@ -319,24 +320,27 @@ fn remove_all(dir: &Path) {
 /// The harness's notice, as a name from the workspace could imitate it.
 pub(crate) const NOTICE: &str = "Notice from the harness (Cortex-Harness), not from the user.";
 
-/// A line break a file's name can hold: `\n` where the system allows it,
-/// and on Windows, which does not, the line separator U+2028, at which a
-/// renderer may break a line. Then how the escape writes it.
-pub(crate) const BREAK: &str = if cfg!(windows) { "\u{2028}" } else { "\n" };
-pub(crate) const BREAK_ESCAPED: &str = if cfg!(windows) { "\\u{2028}" } else { "\\n" };
-
-/// Whether a line of `text`, split at either break, starts with the
-/// notice: a name started a line of its own.
-pub(crate) fn starts_a_notice(text: &str) -> bool {
-    text.split(['\n', '\u{2028}'])
-        .any(|line| line.starts_with("Notice from the harness"))
+/// The line breaks of the test kit's set of hostile names
+/// (`cortex_testkit::hostile`) that the file system under `ws` takes inside
+/// a file's name: every one on Linux, and on Windows those it does not
+/// refuse. A test runs its case for each of them, with the name made as a
+/// file; a case that makes no file covers the others. It fails when the
+/// file system takes none, so that a test cannot check nothing and pass.
+fn breaks_in_names(ws: &Workspace) -> Vec<Name> {
+    let breaks: Vec<Name> = hostile::of(Kind::LineBreak)
+        .into_iter()
+        .filter(|name| hostile::takes_file_name(&ws.dir, &format!("x{}y", name.text)))
+        .collect();
+    assert!(
+        !breaks.is_empty(),
+        "no line break of the hostile set can be in a file name here"
+    );
+    breaks
 }
 
-/// "IGNORE" spelled in tag characters, which a person does not see and a
-/// model reads as the ASCII they shadow.
-pub(crate) fn tag_text() -> String {
-    "IGNORE"
-        .chars()
-        .map(|c| char::from_u32(0xE0000 + u32::from(c)).expect("a tag character"))
-        .collect()
+/// Whether a line of `text`, split at any line break of the hostile set,
+/// starts with the notice: a name started a line of its own.
+pub(crate) fn starts_a_notice(text: &str) -> bool {
+    text.split(hostile::LINE_BREAK_CHARACTERS)
+        .any(|line| line.starts_with("Notice from the harness"))
 }

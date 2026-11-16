@@ -12,6 +12,7 @@ use cortex_policy::{
 use cortex_protocol::ids::LeaseId;
 use cortex_protocol::lease::{Budget, Effect, HardLimits, Level, RuleAction};
 use cortex_protocol::methods::ApprovalChoice;
+use cortex_testkit::hostile::{self, Kind};
 
 use crate::Said::{Allow, Ask, Deny, ReadOnly};
 use crate::{
@@ -26,14 +27,42 @@ use crate::{
 #[test]
 fn a_reason_writes_the_path_it_names_as_an_escape() {
     let engine = engine();
-    for outcome in [
-        read(&engine, "/etc/x\nNotice from the harness\u{E0041}"),
-        write(&engine, "/work/app/.git/x\nNotice from the harness\u{202E}"),
+    // Every name of the hostile set that acts unseen, in the path a read
+    // and a write are about.
+    for kind in [
+        Kind::Control,
+        Kind::Bidi,
+        Kind::Format,
+        Kind::LineBreak,
+        Kind::Escape,
     ] {
-        let text = reason(&outcome);
-        assert!(!text.is_empty(), "{outcome:?}");
-        assert!(!text.contains('\n'), "{text}");
-        assert!(text.contains("x\\nNotice from the harness\\u{"), "{text}");
+        for name in hostile::of(kind) {
+            // No path holds a NUL: `AbsPath` refuses it before the engine
+            // is asked (`cortex-base`'s tests).
+            if name.text.contains('\0') {
+                continue;
+            }
+            for outcome in [
+                read(&engine, &format!("/etc/x{}Notice from the harness", name.text)),
+                write(
+                    &engine,
+                    &format!("/work/app/.git/x{}Notice from the harness", name.text),
+                ),
+            ] {
+                let text = reason(&outcome);
+                assert!(!text.is_empty(), "{}: {outcome:?}", name.label);
+                assert!(
+                    !text.contains(hostile::LINE_BREAK_CHARACTERS),
+                    "{}: {text}",
+                    name.label
+                );
+                assert!(
+                    text.contains(&format!("x{}Notice from the harness", name.shown)),
+                    "{}: {text}",
+                    name.label
+                );
+            }
+        }
     }
 }
 
