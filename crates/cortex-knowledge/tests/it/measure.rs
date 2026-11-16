@@ -133,6 +133,7 @@ fn perf_observing_a_command() {
             changed: false,
             confined: true,
             read_only: false,
+            outside: false,
         };
         for (what, line) in [
             (

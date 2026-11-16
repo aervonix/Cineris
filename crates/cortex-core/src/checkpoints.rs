@@ -438,7 +438,7 @@ impl RecordingShell {
 /// not say.
 fn observed_run(
     command: String,
-    cwd: Option<String>,
+    cwd: Option<Option<String>>,
     payload: Option<&Json>,
     changes: Option<&Json>,
     confined: bool,
@@ -455,9 +455,15 @@ fn observed_run(
         .and_then(Json::as_i64);
     // A command that was stopped, or left something running, says nothing
     // about itself.
-    let cut_short = ["timed_out", "interrupted", "escaped", "background_stopped"]
-        .iter()
-        .any(|key| flag(key));
+    let cut_short = [
+        "timed_out",
+        "interrupted",
+        "escaped",
+        "outlived",
+        "background_stopped",
+    ]
+    .iter()
+    .any(|key| flag(key));
     let ending = match exit {
         _ if cut_short => cortex_knowledge::Ending::Other,
         Some(0) => cortex_knowledge::Ending::Succeeded,
@@ -481,7 +487,8 @@ fn observed_run(
     });
     cortex_knowledge::Run {
         command,
-        cwd,
+        outside: cwd.is_none(),
+        cwd: cwd.flatten(),
         ending,
         duration_ms: payload
             .and_then(|payload| payload.get("duration_ms"))
@@ -522,17 +529,18 @@ impl Tool for RecordingShell {
             // leave the sandbox is not looked at.
             let unconfined = plan.effects.contains(&Effect::Unconfined);
             // What the command observer is told afterwards: the line, and
-            // the directory it runs in when that is inside the workspace
-            // (a run outside it is not observed).
+            // the directory it runs in, relative to the workspace (`None`
+            // for a run outside it, which is counted for what it changed
+            // and teaches nothing).
             let observed = self.knowledge.as_ref().and_then(|_| {
                 plan.effects.iter().find_map(|effect| match effect {
-                    Effect::Exec { command, cwd } => cwd.relative().map(|relative| {
-                        let names: Vec<&str> = relative.names().collect();
-                        (
-                            command.clone(),
-                            (!names.is_empty()).then(|| names.join("/")),
-                        )
-                    }),
+                    Effect::Exec { command, cwd } => Some((
+                        command.clone(),
+                        cwd.relative().map(|relative| {
+                            let names: Vec<&str> = relative.names().collect();
+                            (!names.is_empty()).then(|| names.join("/"))
+                        }),
+                    )),
                     _ => None,
                 })
             });

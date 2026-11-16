@@ -320,7 +320,15 @@ impl Inner {
         &self,
         project: &cortex_protocol::ids::ProjectKey,
     ) -> Arc<crate::knowledge::Shared> {
-        Arc::clone(lock(&self.knowledge).entry(project.clone()).or_default())
+        let mut known = lock(&self.knowledge);
+        // What no session holds any more is let go.
+        known.retain(|_, shared| shared.strong_count() > 0);
+        if let Some(shared) = known.get(project).and_then(std::sync::Weak::upgrade) {
+            return shared;
+        }
+        let shared = Arc::new(crate::knowledge::Shared::default());
+        known.insert(project.clone(), Arc::downgrade(&shared));
+        shared
     }
 }
 
@@ -344,7 +352,9 @@ pub(crate) struct Inner {
     sessions: Mutex<BTreeMap<SessionId, Arc<Live>>>,
     /// What the sessions of each project share of its knowledge: the two
     /// files as they were last read (`crate::knowledge`).
-    knowledge: Mutex<BTreeMap<cortex_protocol::ids::ProjectKey, Arc<crate::knowledge::Shared>>>,
+    knowledge: Mutex<
+        BTreeMap<cortex_protocol::ids::ProjectKey, std::sync::Weak<crate::knowledge::Shared>>,
+    >,
     /// The shells found so far, by the program and arguments configured:
     /// a shell is asked its version once in the life of a core.
     pub(crate) shells: Mutex<BTreeMap<ShellKey, cortex_tools::Shell>>,
@@ -1597,6 +1607,11 @@ impl Core {
             plan: live.board.get(),
             by: Actor::Harness,
         }));
+        // Files put back are files changed: a test that failed before the
+        // rewind and passes after it has not flipped.
+        if restore_files && let Some(knowledge) = &live.knowledge {
+            knowledge.file_changed();
+        }
         if !not_restored.is_empty() {
             live.hooks.tell(format!(
                 "These files could not be put back as they were: {}.",

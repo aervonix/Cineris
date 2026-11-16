@@ -567,7 +567,7 @@ fn a_finished_command_is_read_for_the_observer_from_its_payload() {
     let run = |payload: serde_json::Value, changes: Option<&serde_json::Value>| {
         super::observed_run(
             "cargo test".to_owned(),
-            Some("crates/app".to_owned()),
+            Some(Some("crates/app".to_owned())),
             Some(&payload),
             changes,
             true,
@@ -583,6 +583,7 @@ fn a_finished_command_is_read_for_the_observer_from_its_payload() {
         (json!({"exit_code": 0, "timed_out": true}), Ending::Other),
         (json!({"exit_code": 1, "interrupted": true}), Ending::Other),
         (json!({"exit_code": 0, "escaped": true}), Ending::Other),
+        (json!({"exit_code": 0, "outlived": true}), Ending::Other),
         (
             json!({"exit_code": 0, "background_stopped": true}),
             Ending::Other,
@@ -614,5 +615,17 @@ fn a_finished_command_is_read_for_the_observer_from_its_payload() {
     let observed = run(json!({"exit_code": 0, "duration_ms": 1200}), Some(&clean));
     assert_eq!(observed.duration_ms, 1_200);
     assert_eq!(observed.cwd.as_deref(), Some("crates/app"));
-    assert!(observed.confined && !observed.read_only);
+    assert!(observed.confined && !observed.read_only && !observed.outside);
+    // A run outside the workspace is handed on as one: for what it
+    // changed, and to teach nothing.
+    let outside = super::observed_run(
+        "cargo test".to_owned(),
+        None,
+        Some(&json!({"exit_code": 0})),
+        None,
+        false,
+        false,
+    );
+    assert!(outside.outside && outside.changed);
+    assert_eq!(outside.cwd, None);
 }

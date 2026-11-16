@@ -739,8 +739,8 @@ caught-by:
 rule: Before a command is decided a session looks at its project's files, and drops every learned rule when either changed.
 file: crates/cortex-core/src/knowledge.rs
 in: Knowledge::before_command
-find: if !current {
-replace: if false {
+find: if current && !expired {
+replace: if true {
 caught-by:
     cortex-core::it knowledge::sys_a_command_another_process_turned_off_asks_at_its_next_run
 
@@ -786,7 +786,7 @@ in: target
 find: if !is_user(core, client) {
 replace: if false {
 caught-by:
-    cortex-core::it knowledge::sys_a_session_cannot_read_another_projects_store
+    cortex-core::it knowledge::a_session_cannot_read_another_projects_store
 
 [break] an-observer-changes-the-profile
 rule: `project/update` is a `user` client's alone.
@@ -795,13 +795,13 @@ in: update
 find: if !is_user(core, client) {
 replace: if false {
 caught-by:
-    cortex-core::it knowledge::sys_a_session_cannot_read_another_projects_store
+    cortex-core::it knowledge::a_session_cannot_read_another_projects_store
 
 [break] the-knowledge-is-read-when-a-session-is-made
 rule: Nothing of the project's knowledge is read until the session is open: the first read is at the first turn's start.
 file: crates/cortex-core/src/assemble.rs
-find: policy.on_command(Arc::new(move || before.before_command()));
-replace: policy.on_command(Arc::new(move || before.before_command())); let _ = cortex_agent::ProfileSource::section(&**knowledge);
+find: let before = Arc::downgrade(knowledge);
+replace: let before = Arc::downgrade(knowledge); let _ = cortex_agent::ProfileSource::section(&**knowledge);
 caught-by:
     cortex-core::it knowledge::the_knowledge_is_not_touched_until_the_session_is_open
 
@@ -837,7 +837,7 @@ caught-by:
 rule: Before a command is decided the files are compared with the snapshot this session's rules were made from, not the one the project's sessions share.
 file: crates/cortex-core/src/knowledge.rs
 in: Knowledge::before_command
-find: given.from.as_ref().is_some_and(|from| self.project.is_current(from))
+find: from.as_ref().is_some_and(|from| self.project.is_current(from))
 replace: self.peek().is_some_and(|shared| self.project.is_current(&shared))
 caught-by:
     cortex-core::it knowledge::sys_a_command_turned_off_elsewhere_asks_though_another_session_read_the_files_first
@@ -903,4 +903,94 @@ find: if self.context.history.tells_a_profile() {
 replace: if false {
 caught-by:
     cortex-agent::it profile::a_resume_into_a_new_epoch_says_the_profile_again_after_an_older_notice
+
+# ------------------------------------------------ after the full review
+
+[break] a-directory-that-is-not-plain-words-is-observed
+rule: A run is observed only in a directory of plain characters: the directory is shown beside the line in the system prompt, and a folder can be named anything.
+file: crates/cortex-knowledge/src/observe.rs
+in: Watch::see
+find: if !plain_directory {
+replace: if false {
+caught-by:
+    cortex-knowledge observe::tests::a_run_in_a_directory_that_is_not_plain_words_is_not_observed
+
+[break] a-run-outside-the-workspace-teaches
+rule: A command run outside the workspace counts for what it changed, and nothing is learned from it.
+file: crates/cortex-knowledge/src/observe.rs
+in: Watch::see
+find: if run.outside {
+replace: if false {
+caught-by:
+    cortex-knowledge observe::tests::a_run_outside_the_workspace_counts_as_a_change_and_teaches_nothing
+
+[break] two-targets-of-two-classes-are-the-first-ones
+rule: Where a program takes several targets or goals, every one must class the same.
+file: crates/cortex-knowledge/src/observe.rs
+in: all_of
+find: if found.is_some_and(|found| found != purpose) { return None; }
+replace:
+caught-by:
+    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+
+[break] a-name-that-begins-like-a-test-is-a-test
+rule: A script or a target is classed by its whole name, or the word before its first colon: `test-and-deploy` is not a test.
+file: crates/cortex-knowledge/src/observe.rs
+in: script
+find: name.split(':')
+replace: name.split([':', '-', '_', '.'])
+caught-by:
+    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+
+[break] an-options-argument-is-read-as-the-sub-command
+rule: A program's sub-command is the first word after it, so that an option's argument is never read as one.
+file: crates/cortex-knowledge/src/observe.rs
+in: classify
+find: rest.first().copied().filter(|word| !word.starts_with('-'))
+replace: rest.iter().copied().find(|word| !word.starts_with('-'))
+caught-by:
+    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+
+[break] a-program-on-a-drive-gets-a-check-the-store-refuses
+rule: A learned command whose program is on a drive gets no check: the store refuses such a path, and the command would never be learned.
+file: crates/cortex-knowledge/src/learn.rs
+in: check_of
+find: || program.contains(':')
+replace:
+caught-by:
+    cortex-knowledge::it learn::a_program_in_the_workspace_gets_a_check_that_it_exists
+
+[break] the-policy-holds-the-knowledge-that-holds-it
+rule: The callbacks a session's policy and checkpoints hold to its knowledge are weak, so a closed session is let go.
+file: crates/cortex-core/src/assemble.rs
+find: let before = Arc::downgrade(knowledge); policy.on_command(Arc::new(move || { if let Some(knowledge) = before.upgrade() { knowledge.before_command(); } }));
+replace: let before = Arc::clone(knowledge); policy.on_command(Arc::new(move || before.before_command()));
+caught-by:
+    cortex-core::it knowledge::a_closed_session_lets_its_knowledge_go
+
+[break] a-write-by-another-takes-the-safe-list-away
+rule: When a file changed, the look before a command reads the files again and gives the engine the rules that follow: the commands still accepted go on running unasked.
+file: crates/cortex-core/src/knowledge.rs
+in: Knowledge::before_command
+find: self.took(&snapshot);
+replace: let _ = snapshot; let _ = regive(&self.learned, |_| Err::<(), ()>(())); let _ = self.policy.engine().set_learned(Vec::new());
+caught-by:
+    cortex-core::it knowledge::sys_a_write_to_the_store_by_another_process_does_not_take_the_safe_list_away
+
+[break] files-a-rewind-put-back-are-not-a-change
+rule: Files a rewind puts back are files changed: a test that failed before it and passes after it has not flipped.
+file: crates/cortex-core/src/core.rs
+find: if restore_files && let Some(knowledge) = &live.knowledge { knowledge.file_changed(); }
+replace:
+caught-by:
+    cortex-core::it knowledge::sys_a_test_that_passes_after_an_undo_put_a_file_back_has_not_flipped
+
+[break] a-command-that-left-something-running-is-a-result
+rule: A command that left a process running is neither a success nor a failure.
+file: crates/cortex-core/src/checkpoints.rs
+in: observed_run
+find: "outlived"
+replace: "never"
+caught-by:
+    cortex-core checkpoints::tests::a_finished_command_is_read_for_the_observer_from_its_payload
 

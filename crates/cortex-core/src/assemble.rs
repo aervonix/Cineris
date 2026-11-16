@@ -1584,7 +1584,7 @@ pub(crate) fn assemble(
     // Made here and read nowhere yet: the first read of its files is at
     // the start of the session's first turn.
     let knowledge = knowledge_file.map(|file| {
-        Arc::new(crate::knowledge::Knowledge::new(crate::knowledge::Parts {
+        crate::knowledge::Knowledge::new(crate::knowledge::Parts {
             project: cortex_knowledge::Project::new(file, root.to_fs_path(), Arc::clone(&clock)),
             key: project.clone(),
             shared: inner.knowledge_of(&project),
@@ -1598,14 +1598,25 @@ pub(crate) fn assemble(
             rounds: rounds.clone(),
             shared_file: root.join(".cortex/profile.toml").ok(),
             on_read: options.knowledge_read.clone(),
-        }))
+        })
     });
     if let Some(knowledge) = &knowledge {
-        let before = Arc::clone(knowledge);
-        policy.on_command(Arc::new(move || before.before_command()));
+        // Held weakly: the knowledge holds the policy and the rounds, and
+        // a callback that held it back would keep a closed session's
+        // parts for as long as the process runs.
+        let before = Arc::downgrade(knowledge);
+        policy.on_command(Arc::new(move || {
+            if let Some(knowledge) = before.upgrade() {
+                knowledge.before_command();
+            }
+        }));
         if let Some(rounds) = &rounds {
-            let changed = Arc::clone(knowledge);
-            rounds.on_change(Arc::new(move || changed.file_changed()));
+            let changed = Arc::downgrade(knowledge);
+            rounds.on_change(Arc::new(move || {
+                if let Some(knowledge) = changed.upgrade() {
+                    knowledge.file_changed();
+                }
+            }));
         }
     }
 
