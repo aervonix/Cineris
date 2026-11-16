@@ -15,7 +15,7 @@ use crate::workspace;
 
 mod crate_graph;
 mod dependency_list;
-mod home_paths;
+pub(crate) mod home_paths;
 mod layout;
 mod links;
 mod rust_source;

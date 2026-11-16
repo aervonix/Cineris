@@ -158,6 +158,11 @@ fn build(profile: &str) -> Result<PathBuf> {
     {
         return Err(format!("`{profile}` is not the name of a cargo profile"));
     }
+    if profile == crate::shipped::PROFILE {
+        // The shipped binary, built as it is shipped.
+        crate::shipped::build(None)?;
+        return built(profile);
+    }
     steps::cargo(&[
         "build",
         "--locked",
@@ -168,6 +173,11 @@ fn build(profile: &str) -> Result<PathBuf> {
         "--bin",
         "cortex",
     ])?;
+    built(profile)
+}
+
+/// Where `cortex` built in `profile` is.
+fn built(profile: &str) -> Result<PathBuf> {
     let metadata = workspace::metadata(&workspace::root())?;
     Ok(metadata
         .target_directory

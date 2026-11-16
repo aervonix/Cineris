@@ -45,6 +45,7 @@ mod runs;
 mod schema;
 mod scratch_test;
 mod screens;
+mod shipped;
 mod stall;
 mod startup;
 mod steps;
@@ -181,8 +182,16 @@ Before a push
                     are not touched. `combine --help` has the rest.
 
 Not blocking (the `main` and `nightly` workflows run these)
-  size [--check]    Build the `dist` profile and report the binary's size and
-                    the number of crates in it. --check fails over the budget.
+  size [--check] [--target TRIPLE] [--against-main]
+                    Build the `dist` profile, with the build machine's folders
+                    taken out of its paths, and report the binary's size and
+                    the number of crates in it. It fails when the binary holds
+                    a path under a home folder; --check fails over the budget
+                    too. --against-main also reports the difference from the
+                    size the `main` workflow last recorded (through gh).
+  home-paths FILE...
+                    Fail when a built file holds a path under a home folder
+                    (/home/…, /Users/…, C:\\Users\\…) or under cargo's home.
   startup BINARY|--profile PROFILE [--runs N] [--budget desktop|linux|windows]
           [--check]
                     Time `--version` under both names, and a headless run to
@@ -335,6 +344,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "regen" => regen::run(rest),
         "schema" => schema::run(rest),
         "size" => nonblocking::size(rest),
+        "home-paths" => shipped::home_paths_command(rest),
         "startup" => startup::run(rest),
         "unused" => nonblocking::unused(),
         "partial-landlock" => nonblocking::partial_landlock(),

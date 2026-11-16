@@ -129,16 +129,23 @@ pub(crate) fn first_that_kept(runs: &[(u64, Vec<(String, bool)>)], needs: &[&str
 /// none, and is passed over. It is printed, so that a reader knows which
 /// run `main` was.
 pub(crate) fn latest_main_run(needs: &[&str]) -> Result<u64> {
+    latest_main_run_of("ci", "success", needs)
+}
+
+/// The main branch's latest run of `workflow` whose status is `status` (as
+/// `gh run list --status` takes it: `success`, `completed` and so on) that
+/// kept every artifact of `needs`.
+pub(crate) fn latest_main_run_of(workflow: &str, status: &str, needs: &[&str]) -> Result<u64> {
     let limit = MAIN_RUNS_LOOKED_AT.to_string();
     let listed = gh(&[
         "run",
         "list",
         "--workflow",
-        "ci",
+        workflow,
         "--branch",
         "main",
         "--status",
-        "success",
+        status,
         "--limit",
         &limit,
         "--json",
@@ -160,22 +167,24 @@ pub(crate) fn latest_main_run(needs: &[&str]) -> Result<u64> {
         })
         .unwrap_or_default();
     if listed.is_empty() {
-        return Err("the main branch has no successful run of the `ci` workflow".to_owned());
+        return Err(format!(
+            "the main branch has no run of the `{workflow}` workflow whose status is `{status}`"
+        ));
     }
     // One at a time, newest first: most of the time the first will do.
     for (run, sha) in &listed {
         let artifacts = artifacts(*run)?;
         if first_that_kept(&[(*run, artifacts)], needs).is_some() {
             println!(
-                "main: run {run} (at {sha}), the main branch's latest successful `ci` run that \
-                 kept {}",
+                "main: run {run} (at {sha}), the main branch's latest `{workflow}` run \
+                 ({status}) that kept {}",
                 needs.join(" and ")
             );
             return Ok(*run);
         }
     }
     Err(format!(
-        "none of the main branch's last {} successful `ci` runs kept {}",
+        "none of the main branch's last {} `{workflow}` runs ({status}) kept {}",
         listed.len(),
         needs.join(" and ")
     ))
