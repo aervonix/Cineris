@@ -225,6 +225,53 @@ impl Session {
         }
     }
 
+    /// Answers a dialog of the interactive application with `key`, as a
+    /// person does, and returns when the dialog had taken it.
+    ///
+    /// It waits for the dialog's row of answers (`answers`: text of that
+    /// row, which the dialog draws only once it takes keys, at the end of
+    /// its grace), types `key` alone, and waits until the row has left the
+    /// screen and `answered` holds of it: something only the answer can
+    /// bring (the session's header after trust, the tool's result after an
+    /// approval). The row alone is not enough: a frame can reach the
+    /// terminal in pieces, and one piece can lack the row while the dialog
+    /// is still up.
+    ///
+    /// The application reads keys that arrive in one read as typing, and a
+    /// dialog takes none of them as an answer (`cortex_tui`'s `App::burst`,
+    /// `docs/architecture/09-tui.md`). So a test that types its next keys
+    /// before the dialog has gone can have them read together with the
+    /// answer, which then goes to the input box and the dialog stays. On a
+    /// fast build that is most runs: a wait that passed too soon (a header
+    /// "seen" in a path on the screen) made the test type `go` and Enter a
+    /// few microseconds after its `y` (the eighth tooling step).
+    ///
+    /// # Panics
+    ///
+    /// When the answers are not shown within `limit`, or the dialog does not
+    /// go within `limit` of the key, with the screen.
+    pub fn answer_dialog(
+        &mut self,
+        limit: Duration,
+        answers: &str,
+        key: &[u8],
+        mut answered: impl FnMut(&VTerm) -> bool,
+    ) -> Instant {
+        self.wait_for(limit, &format!("the dialog's answers `{answers}`"), |t| {
+            t.shows(answers)
+        });
+        self.send(key);
+        self.wait_for(
+            limit,
+            &format!(
+                "the dialog to take the key {:?}, go, and be answered (its answers `{answers}` \
+                 still shown, or what the answer brings not yet)",
+                String::from_utf8_lossy(key)
+            ),
+            |t| !t.shows(answers) && answered(t),
+        )
+    }
+
     /// Reads the next piece of output, waiting at most `limit` for it, and
     /// returns when it arrived; `None` when the time ran out or the output
     /// has ended ([`ended`](Self::ended)).
