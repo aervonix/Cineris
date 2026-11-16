@@ -50,6 +50,11 @@ use crate::assemble;
 use crate::clients::ClientId;
 use crate::core::{Core, CoreOptions, Inner, Live, OpError, error};
 
+/// Where `session/set` has put a choice in force and not yet recorded it in
+/// the session's configuration: a point a test can hold it at, to show a
+/// reload never comes in between (`cortex_base::hook`).
+pub const CHOICE_BEING_KEPT: &str = "reload: a choice in force, not yet kept";
+
 /// Where a reload has judged the project's trust and not yet loaded with
 /// it: a point a test can hold the reload at (`cortex_base::hook`).
 pub const TRUST_JUDGED: &str =
@@ -1468,6 +1473,7 @@ pub(crate) async fn chosen(live: &Arc<Live>, choices: Vec<Override>) {
     if choices.is_empty() {
         return;
     }
+    cortex_base::hook::await_point!(CHOICE_BEING_KEPT);
     let (options, keys) = {
         let mut config = lock(&live.config);
         config.choose(choices);

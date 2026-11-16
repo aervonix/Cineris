@@ -57,7 +57,7 @@ pub use crate::knowledge::AFTER_THE_RULES;
 pub use crate::manage::{Project, ProjectFiles, ProviderCredential, TrustState, Trusted};
 pub use crate::policy::{AFTER_THE_LOOK, BEFORE_THE_NEW_LEVEL_IS_IN_FORCE, PermissionDenial};
 pub use crate::provider::{ANTHROPIC_KEY_ENV, Connector, EFFORT_ALIASES, KeyFound};
-pub use crate::reload::TRUST_JUDGED;
+pub use crate::reload::{CHOICE_BEING_KEPT, TRUST_JUDGED};
 pub use crate::repo_map::Probe;
 pub use crate::rules::parse_rule;
 pub use crate::usage::StatsSummary;
