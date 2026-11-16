@@ -13,15 +13,18 @@ use cortex_protocol::item::Delivery as ItemDelivery;
 use cortex_protocol::jsonrpc::RequestId;
 use cortex_protocol::message::Part;
 use cortex_protocol::methods::{
-    Disposition, ModelsListResult, Op, OpResult, ServerRequest, ServerResponse,
-    SessionCompactParams, SessionForkParams, SessionListParams, SessionNewParams, SessionRef,
-    TurnInterruptParams, TurnStartParams,
+    Disposition, ModelsListResult, Op, OpResult, ServerRequest, ServerResponse, SessionForkParams,
+    SessionListParams, SessionNewParams, SessionRef, TurnInterruptParams, TurnStartParams,
 };
 use cortex_protocol::model::{ModelInfo, ModelRole};
 use cortex_protocol::session::{SandboxStatus, SessionSettings, SessionState};
 use cortex_protocol::usage::{CostBasis, SessionUsage, UsageTotals};
 use cortex_protocol::{ErrorData, SessionEvent, SessionId, Speed};
 use cortex_term::{Capabilities, Cursor, Event as TermEvent, Line};
+
+mod commands;
+
+use commands::{Picker, Shown};
 
 use super::dialog::{Dialog, Keyed};
 use super::items::Mapper;
@@ -39,12 +42,14 @@ use crate::view::{self, Header, Hint, HintRow, Look, RunningKeys};
 pub const SECOND_INTERRUPT: Duration = Duration::from_secs(2);
 
 /// What the application asks the loop to do that it cannot do itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     /// Draw the live region again from nothing (`Ctrl+L`).
     Redraw,
     /// Stop the program as a shell's job.
     Suspend,
+    /// Put this text on the terminal's clipboard (`/copy`).
+    Copy(String),
 }
 
 /// What an operation's result is for.
@@ -70,6 +75,16 @@ enum Pending {
     Interrupt,
     /// Anything whose failure is said, and whose success needs nothing.
     Said,
+    /// `/sessions`: the list, for its picker.
+    Sessions,
+    /// `/undo`.
+    Undo,
+    /// `/permissions`: the list, for its picker.
+    Permissions,
+    /// `/status` or `/config`.
+    Config(Shown),
+    /// A change of the session's settings, from a picker.
+    Set,
 }
 
 /// The slash commands this build has, with what each does.
@@ -78,22 +93,27 @@ const COMMANDS: &[(&str, &str)] = &[
         "compact",
         "Compact the conversation now, keeping what you name",
     ),
+    ("config", "The configuration in effect"),
+    ("copy", "Copy the last answer to the clipboard"),
+    ("effort", "Choose the model's effort, and fast mode"),
     ("help", "The commands and the keys"),
+    ("mode", "Choose how much is asked before it is done"),
+    ("model", "Choose the model"),
     ("new", "Start a new session"),
+    ("permissions", "The approvals stored here, to remove"),
     ("quit", "Quit"),
+    ("sessions", "Switch to another session of this workspace"),
+    ("status", "The session's model, mode, sandbox and limits"),
+    ("theme", "Choose the colours, for this run"),
+    ("undo", "Undo the last turn, its files put back"),
+    ("view", "Open the session in a full-screen view"),
 ];
 
 /// The slash commands of 09-tui that this build does not have yet: one is
 /// said to be missing, not sent to the model as a prompt.
 const NOT_YET: &[&str] = &[
-    "sessions",
     "rewind",
-    "undo",
-    "model",
-    "effort",
-    "mode",
     "lease",
-    "permissions",
     "context",
     "usage",
     "plan",
@@ -102,11 +122,6 @@ const NOT_YET: &[&str] = &[
     "verify",
     "reload",
     "extend",
-    "status",
-    "view",
-    "copy",
-    "config",
-    "theme",
     "mcp",
     "extensions",
     "export",
@@ -126,6 +141,15 @@ pub struct App {
     open: Option<Open>,
     /// The workspace, for `/new`.
     workspace: String,
+    /// The terminal's capabilities, for the look of a theme chosen later.
+    caps: Capabilities,
+    /// The picker the application opened, and what its rows stand for.
+    picker: Option<(String, Picker)>,
+    /// Every line committed to the scrollback so far, for the viewer.
+    kept: Vec<Line>,
+    /// The viewer, while it is open: how many rows up from the end it is
+    /// scrolled.
+    viewer: Option<usize>,
     /// The settings `/new` opens a session with, and whether it is kept in
     /// memory only: as the command line asked for the first.
     fresh: (SessionSettings, bool),
@@ -223,6 +247,10 @@ impl App {
             },
             open: Some(start.open),
             workspace: start.workspace,
+            caps: *caps,
+            picker: None,
+            kept: Vec::new(),
+            viewer: None,
             forked_from: None,
             opening: false,
             held: Vec::new(),
@@ -257,6 +285,7 @@ impl App {
     /// The terminal's capabilities changed (a reply to a query): colours
     /// and glyphs follow.
     pub fn set_caps(&mut self, caps: &Capabilities) {
+        self.caps = *caps;
         self.look = super::look(&self.settings, caps);
         for dialog in &mut self.dialogs {
             dialog.restyled();
@@ -280,6 +309,77 @@ impl App {
         if let Some(dialog) = self.dialogs.front_mut() {
             dialog.drawn(at);
         }
+    }
+
+    /// The theme chosen for the run (`tui.theme`, or `/theme`).
+    #[must_use]
+    pub fn theme(&self) -> super::ThemeChoice {
+        self.settings.theme
+    }
+
+    /// Whether the viewer is open: the loop then draws [`viewer_frame`]
+    /// on the alternate screen, and nothing is committed meanwhile.
+    ///
+    /// [`viewer_frame`]: Self::viewer_frame
+    #[must_use]
+    pub fn viewing(&self) -> bool {
+        self.viewer.is_some()
+    }
+
+    /// The viewer's screen, `rows` rows of `width` columns: the session as
+    /// committed so far, then what is live, from where it is scrolled, and
+    /// a row of its keys.
+    pub fn viewer_frame(&mut self, rows: usize, width: usize, now: Instant) -> Vec<Line> {
+        let since = now.saturating_duration_since(self.began).as_millis();
+        self.tick = usize::try_from(since / super::SPIN.as_millis()).unwrap_or(0);
+        let mut all = self.kept.clone();
+        all.extend(self.transcript.live(width.max(1), &self.look, self.tick));
+        let body = rows.saturating_sub(1).max(1);
+        let most = all.len().saturating_sub(body);
+        let offset = self.viewer.unwrap_or(0).min(most);
+        self.viewer = Some(offset);
+        let end = all.len() - offset;
+        let start = end.saturating_sub(body);
+        let mut lines: Vec<Line> = all[start..end].to_vec();
+        while lines.len() < body {
+            lines.push(Line::new());
+        }
+        lines.push(Line::styled(
+            format!(
+                "  up down pgup pgdn home end · q or esc closes · {} of {} lines",
+                end,
+                all.len()
+            ),
+            self.look.theme.style(crate::theme::Token::Muted),
+        ));
+        lines
+    }
+
+    /// A key while the viewer is open: it scrolls, or closes it. Global
+    /// keys keep their meaning.
+    fn viewer_key(&mut self, key: cortex_term::Key, at: Instant) -> bool {
+        use cortex_term::KeyCode;
+        if let Some(action @ (crate::keys::Action::Interrupt | crate::keys::Action::Redraw)) =
+            self.input.keymap().lookup(&[], key)
+        {
+            let outcome = self.input.act(action);
+            self.outcome(outcome, at);
+            return true;
+        }
+        let page = self.rows.saturating_sub(2).max(1);
+        let offset = self.viewer.unwrap_or(0);
+        self.viewer = match key.code {
+            KeyCode::Up | KeyCode::Char('k') => Some(offset + 1),
+            KeyCode::Down | KeyCode::Char('j') => Some(offset.saturating_sub(1)),
+            KeyCode::PageUp => Some(offset + page),
+            KeyCode::PageDown => Some(offset.saturating_sub(page)),
+            KeyCode::Home | KeyCode::Char('g') => Some(usize::MAX),
+            KeyCode::End | KeyCode::Char('G') => Some(0),
+            KeyCode::Esc | KeyCode::Char('q') => None,
+            KeyCode::Char('o') if key.mods.contains(cortex_term::Mods::CTRL) => None,
+            _ => Some(offset),
+        };
+        true
     }
 
     /// When the application must draw again whatever else happens: the end
@@ -346,6 +446,11 @@ impl App {
     /// A terminal event, read at `at`. Says whether it was input (a key or a
     /// paste), whose frame is drawn at once.
     pub fn terminal(&mut self, event: &TermEvent, at: Instant) -> bool {
+        if self.viewer.is_some()
+            && let TermEvent::Key(key) = event
+        {
+            return self.viewer_key(*key, at);
+        }
         match event {
             TermEvent::Key(key) => {
                 // The key before this one: a dialog takes a key only after a
@@ -405,6 +510,11 @@ impl App {
                 self.mapper
                     .toggle_round(&mut self.transcript, Some(id), &self.look);
             }
+            Outcome::Picked(name, index) => self.picked(&name, index),
+            Outcome::Toggled(name, on) => self.toggled(&name, on),
+            Outcome::Removed(name, index) => self.removed(&name, index),
+            Outcome::PickerClosed(_) => self.picker = None,
+            Outcome::OpenViewer => self.viewer = Some(0),
             _ => {}
         }
     }
@@ -467,37 +577,6 @@ impl App {
     fn stop_running(&mut self) {
         self.running = None;
         self.input.set_running(false);
-    }
-
-    fn command(&mut self, name: &str, rest: &str, _at: Instant) {
-        match name {
-            "quit" => self.exit = Some(Exit::Quit),
-            "help" => {
-                let mut text = String::from("Commands: ");
-                text.push_str(
-                    &COMMANDS
-                        .iter()
-                        .map(|(name, what)| format!("/{name} ({what})"))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                );
-                text.push_str(". Keys: enter sends, esc stops a turn, ctrl+c twice quits.");
-                self.transcript.push(Block::Notice(text));
-            }
-            "new" => self.new_session(),
-            "compact" => {
-                let Some(session) = self.session.as_ref().map(|s| s.session_id.clone()) else {
-                    self.say("There is no session to compact yet.");
-                    return;
-                };
-                let ticket = self.link.send(Op::SessionCompact(SessionCompactParams {
-                    session_id: session,
-                    focus: (!rest.is_empty()).then(|| rest.to_owned()),
-                }));
-                self.pending.insert(ticket, Pending::Said);
-            }
-            _ => {}
-        }
     }
 
     /// The interrupt key while a turn runs; a second within
@@ -707,6 +786,25 @@ impl App {
                         .collect();
                     self.give_back(&text.join("\n"));
                 }
+            }
+            (Pending::Sessions, Ok(OpResult::SessionList(list))) => {
+                self.sessions_listed(list.sessions);
+            }
+            (Pending::Undo, Ok(OpResult::SessionUndo(result))) => {
+                self.session = Some(result.session);
+                self.say(
+                    "The last turn is undone: it is out of the conversation, and the files it \
+                     changed are as they were before it.",
+                );
+            }
+            (Pending::Permissions, Ok(OpResult::PermissionsList(list))) => {
+                self.permissions_listed(list.approvals);
+            }
+            (Pending::Config(shown), Ok(OpResult::ConfigGet(result))) => {
+                self.config_shown(shown, &result.config);
+            }
+            (Pending::Set, Ok(OpResult::SessionSet(result))) => {
+                self.session = Some(result.session);
             }
             (_, Err(error)) => self.error(&error),
             _ => {}
@@ -946,6 +1044,7 @@ impl App {
         let boxes = self.mapper.live_rounds(&mut self.transcript);
         self.input.focus_mut().update(&boxes, &[]);
         let commit = self.transcript.commit(width, &self.look);
+        self.kept.extend(commit.iter().cloned());
         let mut live = self.transcript.live(width, &self.look, self.tick);
 
         // The bottom: a dialog in the input box's place, or the input box

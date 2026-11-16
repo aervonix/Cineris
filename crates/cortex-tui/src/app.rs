@@ -420,6 +420,7 @@ fn take<D: Device>(
     for effect in app.take_effects() {
         match effect {
             Effect::Redraw => presenter.redraw(),
+            Effect::Copy(text) => terminal.copy(&text)?,
             Effect::Suspend => {
                 let caps = *terminal.caps();
                 presenter.finish(&caps, terminal)?;
@@ -440,6 +441,19 @@ fn draw<D: Device>(
     app: &mut App,
     now: Instant,
 ) -> io::Result<()> {
+    // The viewer is a full screen of its own, on the alternate screen: the
+    // main screen, its scrollback and the live region wait as they were.
+    if app.viewing() {
+        terminal.alternate(true)?;
+        let (cols, rows) = terminal.size()?;
+        let width = usize::from(cols).saturating_sub(1);
+        let lines = app.viewer_frame(usize::from(rows), width, now);
+        return terminal.draw_screen(&lines, width);
+    }
+    if terminal.is_alternate() {
+        terminal.alternate(false)?;
+        presenter.redraw();
+    }
     let (commit, live, cursor) = app.frame(now);
     let caps = *terminal.caps();
     presenter.draw(

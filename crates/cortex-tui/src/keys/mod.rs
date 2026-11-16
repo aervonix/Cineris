@@ -165,6 +165,9 @@ pub enum Action {
     // ------------------------------------------------------------ picker
     /// Delete the last character of the picker's filter (`Backspace`).
     PickerErase,
+    /// Remove the selected row of a picker that removes (`/permissions`):
+    /// `Delete` (since step 23).
+    PickerRemove,
     /// Turn the picker's toggle on or off: fast mode in `/effort` (`Tab`).
     ToggleFast,
 
@@ -391,6 +394,7 @@ pub const ACTIONS: &[Entry] = &[
         "erase",
         &["backspace"],
     ),
+    entry(Action::PickerRemove, Context::Picker, "remove", &["delete"]),
     entry(Action::ToggleFast, Context::Toggle, "fast", &["tab"]),
     entry(
         Action::SearchOlder,
