@@ -446,6 +446,11 @@ pub fn run(options: &Options) -> io::Result<()> {
         let Some(event) = terminal.next(timeout)? else {
             continue;
         };
+        // A key held down is the key, again.
+        let event = match event {
+            Event::Repeat(key) => Event::Key(key),
+            event => event,
+        };
         if let Event::Key(key) = event {
             last_key = key_name(key);
             scheduler.input();
@@ -514,7 +519,8 @@ pub fn run(options: &Options) -> io::Result<()> {
                 presenter.restart();
                 scheduler.input();
             }
-            Event::Focus(_) | Event::Reply(_) => {}
+            // Made a key above.
+            Event::Focus(_) | Event::Reply(_) | Event::Repeat(_) => {}
         }
     }
     let caps = *terminal.caps();

@@ -356,7 +356,8 @@ impl Input {
     /// Takes one event.
     pub fn handle(&mut self, event: &Event) -> Outcome {
         match event {
-            Event::Key(key) => self.key(*key),
+            // A repeat types as the key does.
+            Event::Key(key) | Event::Repeat(key) => self.key(*key),
             Event::Paste(text) => self.paste(text),
             _ => Outcome::Nothing,
         }
@@ -679,6 +680,24 @@ impl Input {
     }
 
     // ---------------------------------------------------------- internals
+
+    /// The interrupt key while the editor is hidden (a dialog, the viewer
+    /// has its place): a running turn is interrupted; otherwise the text,
+    /// the search and the menus, which cannot be seen, are left as they are,
+    /// and the first press arms the quit, which the hint row says, and the
+    /// second quits (the review of step 23).
+    pub fn interrupt_hidden(&mut self) -> Outcome {
+        if self.running {
+            self.quit_armed = false;
+            return Outcome::Interrupt;
+        }
+        if self.quit_armed {
+            Outcome::Quit
+        } else {
+            self.quit_armed = true;
+            Outcome::QuitArmed
+        }
+    }
 
     fn interrupt(&mut self) -> Outcome {
         if self.running {

@@ -333,7 +333,7 @@ pub fn run(options: &Options) -> io::Result<()> {
             continue;
         };
         match &event {
-            Event::Key(_) | Event::Paste(_) => {
+            Event::Key(_) | Event::Repeat(_) | Event::Paste(_) => {
                 key_read = Some(Instant::now());
                 match input.handle(&event) {
                     Outcome::Quit => break,

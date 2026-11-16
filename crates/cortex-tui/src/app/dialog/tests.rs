@@ -39,6 +39,7 @@ fn key(dialog: &mut Dialog, binding: &str, at: Instant) -> Keyed {
         parse(binding).expect("a key"),
         at,
         None,
+        false,
         &KeyMap::defaults(),
     )
 }

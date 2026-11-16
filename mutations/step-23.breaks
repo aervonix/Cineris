@@ -65,8 +65,8 @@ caught-by:
 [break] a-dialog-takes-typing-meant-for-the-editor
 rule: A dialog takes no key until its answers have been drawn, a grace after its first frame, whether or not anyone was typing: keys typed before they could see it are the editor's.
 file: crates/cortex-tui/src/app/dialog.rs
-in: Dialog::takes_keys_at
-find: self.answers_drawn
+in: Dialog::takes_keys
+find: self.answers_drawn && self.ready_at().is_some_and(|ready| at >= ready)
 replace: self.shown.is_some()
 caught-by:
     app::dialog::tests::in_its_grace_typing_passes_and_its_own_other_keys_do_nothing
@@ -86,7 +86,7 @@ caught-by:
 rule: A dialog draws its answers only once they can be pressed, at the end of its grace.
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::view
-find: let ready = self.shown.is_some_and(|shown| now >= shown + GRACE);
+find: let ready = self.ready_at().is_some_and(|ready| now >= ready);
 replace: let ready = true;
 caught-by:
     app::tests::a_dialog_takes_keys_and_shows_its_answers_only_after_its_grace
@@ -164,8 +164,8 @@ caught-by:
 [break] a-dialog-answered-before-it-is-drawn
 rule: A key read before a dialog's first frame was written never answers it.
 file: crates/cortex-tui/src/app/dialog.rs
-in: Dialog::takes_keys_at
-find: self.answers_drawn
+in: Dialog::takes_keys
+find: self.answers_drawn && self.ready_at().is_some_and(|ready| at >= ready)
 replace: true
 caught-by:
     app::tests::a_dialog_that_appears_while_the_person_types_takes_keys_only_after_a_grace
@@ -353,9 +353,9 @@ caught-by:
 [break] answers-counted-as-drawn-unseen
 rule: A dialog's answers count as drawn only once a frame with them has been drawn: a key cannot answer what was not shown, though the grace is over.
 file: crates/cortex-tui/src/app/dialog.rs
-in: Dialog::takes_keys_at
-find: self.answers_drawn
-replace: self.shown.is_some_and(|shown| at >= shown + GRACE)
+in: Dialog::takes_keys
+find: self.answers_drawn && self.ready_at()
+replace: self.ready_at()
 caught-by:
     app::tests::a_window_too_small_for_the_question_and_its_answers_takes_none
 
@@ -979,8 +979,8 @@ caught-by:
 rule: A key in the viewer is the key before the next, so that typing that goes on as it closes answers no dialog.
 file: crates/cortex-tui/src/app/state.rs
 in: App::terminal
-find: self.last_key = Some(at);
-replace: let _ = at;
+find: return self.viewer_key(*key, at);
+replace: { self.last_key = None; return self.viewer_key(*key, at); }
 packages: cortex-tui
 caught-by:
     app::tests::a_key_straight_after_the_viewer_closes_does_not_answer

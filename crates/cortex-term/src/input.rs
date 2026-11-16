@@ -175,8 +175,14 @@ pub enum Reply {
 /// Something the terminal sent.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Event {
-    /// A key was pressed, or repeated.
+    /// A key was pressed (or repeated, where the terminal does not say
+    /// which).
     Key(Key),
+    /// A key held down, repeated: only where the terminal says so (the
+    /// enhanced keyboard protocol's event types, Windows Terminal's win32
+    /// input mode), since the review of step 23. It types as a key does;
+    /// a dialog never takes one as its answer.
+    Repeat(Key),
     /// Text was pasted, with line breaks as `\n`. Control characters are
     /// kept: whoever shows it sanitises it like any other content. A paste
     /// of more than 4 MiB arrives as several of these, one after another,
@@ -220,6 +226,10 @@ pub struct Decoder {
     /// Inside a sequence longer than [`LONGEST_SEQUENCE`], which is being
     /// dropped to its end.
     skipping: Option<Skip>,
+    /// The virtual-key code of the key a win32 input record last said went
+    /// down, until a record says it went up: another down of it is the
+    /// key held, repeating.
+    held: Option<u32>,
 }
 
 /// A sequence too long to keep, being dropped until it ends.
@@ -387,8 +397,23 @@ impl Decoder {
     /// key that is only a modifier, and for the first half of a character.
     fn record(&mut self, record: Record) -> Option<Event> {
         if !record.down {
+            if self.held == Some(record.vk) {
+                self.held = None;
+            }
             return None;
         }
+        let event = self.record_down(record)?;
+        // A modifier is held under other keys, and says nothing of them.
+        let repeat = self.held == Some(record.vk);
+        self.held = Some(record.vk);
+        Some(match event {
+            Event::Key(key) if repeat => Event::Repeat(key),
+            event => event,
+        })
+    }
+
+    /// The key a win32 input record of a key going down stands for.
+    fn record_down(&mut self, record: Record) -> Option<Event> {
         let code = match record.vk {
             0x08 => KeyCode::Backspace,
             0x09 => KeyCode::Tab,
@@ -908,7 +933,8 @@ fn codepoint_key(code: u32) -> Option<KeyCode> {
 }
 
 /// The enhanced keyboard protocol: `CSI code[:shifted[:base]] ; mods[:kind]
-/// [; text] u`. A release (kind 3) is dropped.
+/// [; text] u`. A release (kind 3) is dropped; a repeat (kind 2) is
+/// [`Event::Repeat`].
 fn kitty(groups: &[Vec<Option<u32>>]) -> Option<Event> {
     let code = groups.first()?.first().copied().flatten()?;
     let modifiers = groups.get(1);
@@ -924,10 +950,12 @@ fn kitty(groups: &[Vec<Option<u32>>]) -> Option<Event> {
         .copied()
         .flatten()
         .unwrap_or(1);
-    if kind == 3 {
-        return None;
+    let key = Key::with(codepoint_key(code)?, mods);
+    match kind {
+        3 => None,
+        2 => Some(Event::Repeat(key)),
+        _ => Some(Event::Key(key)),
     }
-    Some(Event::Key(Key::with(codepoint_key(code)?, mods)))
 }
 
 #[cfg(test)]
@@ -996,13 +1024,52 @@ mod tests {
             (b"\x1b[Z", KeyCode::Tab, Mods::SHIFT),
             (b"\x1b[13;2u", KeyCode::Enter, Mods::SHIFT),
             (b"\x1b[97;5u", KeyCode::Char('a'), Mods::CTRL),
-            (b"\x1b[97;5:2u", KeyCode::Char('a'), Mods::CTRL),
             (b"\x1b[27;2;13~", KeyCode::Enter, Mods::SHIFT),
             (b"\x1b[1;16A", KeyCode::Up, Mods(15)),
         ];
         for (bytes, code, mods) in cases {
             assert_eq!(decode(bytes), keys(&[(*code, *mods)]), "{bytes:?}");
         }
+    }
+
+    /// The enhanced protocol's event types (since the review of step 23): a
+    /// press (kind 1, or none) is a key, a repeat (2) is a repeat, which a
+    /// dialog never takes, and a release (3) is nothing.
+    #[test]
+    fn a_repeat_is_told_apart_and_a_release_dropped() {
+        let ctrl_a = Key::with(KeyCode::Char('a'), Mods::CTRL);
+        assert_eq!(decode(b"\x1b[97;5:1u"), [Event::Key(ctrl_a)]);
+        assert_eq!(decode(b"\x1b[97;5:2u"), [Event::Repeat(ctrl_a)]);
+        assert_eq!(decode(b"\x1b[97;5:3u"), []);
+        assert_eq!(
+            decode(b"\x1b[27;1:2u\x1b[27;1:3u"),
+            [Event::Repeat(Key::plain(KeyCode::Esc))]
+        );
+    }
+
+    /// Win32 input: a key that goes down again with no record of it going
+    /// up is held, repeating; a modifier going down and up meanwhile changes
+    /// nothing.
+    #[test]
+    fn a_win32_key_down_again_before_it_went_up_is_a_repeat() {
+        let down = |vk: u32, unit: u32| format!("\x1b[{vk};0;{unit};1;0;1_");
+        let up = |vk: u32, unit: u32| format!("\x1b[{vk};0;{unit};0;0;1_");
+        let a = Key::plain(KeyCode::Char('a'));
+        let held = [down(0x41, 97), down(0x41, 97), down(0x41, 97), up(0x41, 97)].concat();
+        assert_eq!(
+            decode(held.as_bytes()),
+            [Event::Key(a), Event::Repeat(a), Event::Repeat(a)]
+        );
+        let pressed_twice = [down(0x41, 97), up(0x41, 97), down(0x41, 97), up(0x41, 97)].concat();
+        assert_eq!(
+            decode(pressed_twice.as_bytes()),
+            [Event::Key(a), Event::Key(a)]
+        );
+        let shifted = [down(0x41, 97), down(0x10, 0), up(0x10, 0), down(0x41, 97)].concat();
+        assert_eq!(
+            decode(shifted.as_bytes()),
+            [Event::Key(a), Event::Repeat(a)]
+        );
     }
 
     #[test]
