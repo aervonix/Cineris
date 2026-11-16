@@ -669,3 +669,116 @@ fn perf_a_year_is_twelve_files_and_adds_up() {
     assert_eq!(summary.days, 365);
     assert_summary_matches(&dir, &lines(&dir), &summary);
 }
+
+/// What step 24's usage panel's year is made of: every model of the
+/// generator (eleven, of five providers), twenty projects, and the fast
+/// tier where a model has one, on a heavy user's days.
+const PANEL_YEAR: Scale = Scale {
+    name: "panel-year",
+    projects: 20,
+    models: &[
+        ("claude-opus-5-5", 5),
+        ("claude-fable-5-2", 3),
+        ("claude-sonnet-5-5", 3),
+        ("claude-haiku-5-5", 2),
+        ("gpt-6-luna", 1),
+        ("z-ai/glm-5.3-flash", 1),
+        ("openai/gpt-6-luna", 1),
+        ("anthropic/claude-haiku-5.5", 1),
+        ("deepseek-flash", 1),
+        ("deepseek-v4-pro", 1),
+        ("deepseek-v4-flash-0731", 1),
+    ],
+    ..Scale::HEAVY
+};
+
+/// The core's half of the usage panel's first frame with a year of
+/// history (`docs/performance-budgets.md`: 16 ms from the aggregates, from
+/// the key to the frame with the rows): `usage/report` as the core makes it
+/// (`cortex-core`'s `usage::report`, on the blocking pool): the aggregates
+/// read, brought up to date with the files, the limits read, and the
+/// report made, for each range and grouping the panel asks for. The
+/// application's half is `cortex-tui`'s
+/// `perf_the_usage_panels_first_frame_with_a_year`. A measurement, in a
+/// release build:
+///
+/// ```text
+/// cargo test --release -p cortex-stats --lib perf_a_years_report -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn perf_a_years_report_for_the_usage_panel() {
+    use cortex_protocol::usage::{UsageGroup, UsageRange};
+
+    let scratch = scratch("perf_a_years_report_for_the_usage_panel");
+    let started = Instant::now();
+    let (dir, summary) = made(&scratch, "year", &Spec::year(24, PANEL_YEAR));
+    println!(
+        "a year for the panel: {} days, {} requests, {} KB of events, made in {} s",
+        summary.days,
+        summary.requests,
+        dir.size() / 1000,
+        started.elapsed().as_secs()
+    );
+    // The end of the year made, as the core's clock would have it.
+    let clock = FakeClock::starting_at("2026-12-31T18:00:00Z").unwrap();
+    let now = cortex_base::Clock::now(&clock);
+    let zone = Zone::utc();
+    // The first report brings the aggregates up to date with every month;
+    // the writer keeps them so, and the panel's reports after it find them
+    // current.
+    let mut first = Aggregates::load_for_saving(&dir, &clock).unwrap();
+    first
+        .sync(&dir, zone.date_of(now), &crate::month_of(now), Some(400))
+        .unwrap();
+    first.save(&dir, &clock).unwrap();
+    let ranges = [
+        UsageRange::Today,
+        UsageRange::Week,
+        UsageRange::Month,
+        UsageRange::All,
+    ];
+    let groups: [&[UsageGroup]; 4] = [
+        &[UsageGroup::Provider, UsageGroup::Model],
+        &[UsageGroup::Project],
+        &[UsageGroup::Speed],
+        &[UsageGroup::Project, UsageGroup::Provider],
+    ];
+    let mut times = Vec::new();
+    let mut most_rows = 0;
+    for _ in 0..20 {
+        for range in &ranges {
+            for group in groups {
+                let began = Instant::now();
+                let mut aggregates = Aggregates::load_for_saving(&dir, &clock).unwrap();
+                aggregates
+                    .sync(&dir, zone.date_of(now), &crate::month_of(now), Some(400))
+                    .unwrap();
+                let total = aggregates.total();
+                let limits = crate::LimitsFile::load(&dir);
+                let query = crate::Query {
+                    range: range.clone(),
+                    group_by: group.to_vec(),
+                    project: None,
+                    week_start: 0,
+                    rolling: false,
+                };
+                let report = crate::report(&total, &query, &zone, now, &limits.providers, true);
+                times.push(began.elapsed().as_secs_f64() * 1000.0);
+                most_rows = most_rows.max(report.rows.len());
+            }
+        }
+    }
+    times.sort_by(f64::total_cmp);
+    let at = |share: usize| times[(times.len() * share / 100).min(times.len() - 1)];
+    println!(
+        "a report from the year's aggregates, {} reports of up to {most_rows} rows, aggregates of {} KB: \
+         median {:.3} ms   p99 {:.3} ms   most {:.3} ms",
+        times.len(),
+        std::fs::metadata(dir.aggregates_file()).map_or(0, |meta| meta.len() / 1000),
+        at(50),
+        at(99),
+        times[times.len() - 1]
+    );
+    cortex_testkit::numbers::report("usage_panel.core_report_p99", at(99), "ms");
+}

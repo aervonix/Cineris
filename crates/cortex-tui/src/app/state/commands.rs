@@ -219,6 +219,7 @@ impl App {
             "view" => self.open_viewer(rest.trim().parse().ok()),
             "plan" => self.summon_panel("plan"),
             "project" => self.summon_panel("project"),
+            "usage" => self.summon_panel("usage"),
             _ => {}
         }
     }

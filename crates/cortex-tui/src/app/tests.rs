@@ -36,12 +36,14 @@ use crate::testkit::{
 mod commands;
 mod dialogs;
 mod files;
+mod measure;
 mod output;
 mod panels;
 mod project;
 mod restyle;
 mod sessions;
 mod trust_standing;
+mod usage;
 
 pub(crate) fn app_with(now: Instant, prompt: Option<&str>) -> (App, Scripted) {
     let open = Open::New {

@@ -38,12 +38,14 @@
 pub(crate) mod plan;
 pub(crate) mod project;
 pub(crate) mod review;
+pub(crate) mod usage;
 
 use std::time::Instant;
 
-use cortex_protocol::SessionId;
 use cortex_protocol::event::Event;
 use cortex_protocol::methods::{Op, OpResult};
+use cortex_protocol::session::SessionState;
+use cortex_protocol::{ErrorData, SessionId};
 use cortex_term::Line;
 
 use super::ready::Readiness;
@@ -183,12 +185,19 @@ pub(crate) trait Panel: std::fmt::Debug + Send {
         Show::Same
     }
 
-    /// What to ask the core for when a session is open here: `stored` when
-    /// it was opened from the store (resumed, switched to, forked), so that
-    /// what it already holds can be shown (`plan/get`). The result comes to
-    /// [`Panel::result`].
-    fn when_opened(&self, session: &SessionId, stored: bool) -> Option<Op> {
-        let _ = (session, stored);
+    /// What it sent or asked for was refused, with `error`, while that
+    /// session is still the one open: the application says the error too.
+    fn failed(&mut self, error: &ErrorData) -> Show {
+        let _ = error;
+        Show::Same
+    }
+
+    /// A session is open here, as `state` says it: what to ask the core
+    /// for, `stored` when it was opened from the store (resumed, switched
+    /// to, forked), so that what it already holds can be shown
+    /// (`plan/get`). The result comes to [`Panel::result`].
+    fn when_opened(&mut self, state: &SessionState, stored: bool) -> Option<Op> {
+        let _ = (state, stored);
         None
     }
 
@@ -209,10 +218,19 @@ pub(crate) trait Panel: std::fmt::Debug + Send {
     /// (a question in a row) is forgotten.
     fn focus_taken(&mut self) {}
 
+    /// The focus moved to `focused` inside it (`Up`, `Down`).
+    fn moved(&mut self, focused: usize) {
+        let _ = focused;
+    }
+
     /// It was drawn focused on `focused`, whose rows were all drawn when
     /// `whole`: a key that acts on what the person was shown asks this.
-    fn shown_whole(&mut self, focused: usize, whole: bool) {
+    /// `true` when that is something new to act on (an item's detail drawn
+    /// whole for the first time): its readiness starts again with this
+    /// frame.
+    fn shown_whole(&mut self, focused: usize, whole: bool) -> bool {
         let _ = (focused, whole);
+        false
     }
 
     /// Its collapsed rows, one or two: how it is drawn without the focus.
@@ -240,7 +258,10 @@ pub(crate) trait Panel: std::fmt::Debug + Send {
     /// the rows of `focused`. Asked of every open panel each frame, to know
     /// which can be focused in the room there is: a kind whose rows are
     /// costly to draw says it without drawing them, and must say what
-    /// `expanded` would draw.
+    /// `expanded` would draw. A kind whose focused item may be drawn cut
+    /// (the project panel's entry, its detail after it) may count its
+    /// item's first row alone: then what it does on that item is for what
+    /// was drawn whole ([`Panel::shown_whole`]).
     fn least_rows(&self, focused: usize, draw: &Draw<'_>) -> usize {
         let rows = self.expanded(focused, draw);
         let head = rows.iter().take_while(|row| row.item.is_none()).count();
@@ -380,6 +401,17 @@ impl Panels {
         closed
     }
 
+    /// What `id` sent or asked for was refused. Whether it closed.
+    pub(crate) fn failed(&mut self, id: u64, error: &ErrorData) -> bool {
+        let Some(slot) = self.slot_mut(id) else {
+            return false;
+        };
+        let show = slot.panel.failed(error);
+        let closed = self.apply(id, show);
+        self.observe(id);
+        closed
+    }
+
     /// The fewest rows `id` is drawn in when it takes the focus, on the
     /// item its focus starts on.
     pub(crate) fn rows_to_focus(&self, id: u64, draw: &Draw<'_>) -> usize {
@@ -418,12 +450,13 @@ impl Panels {
         was
     }
 
-    /// What every panel asks of the core when a session is open here.
-    pub(crate) fn when_opened(&self, session: &SessionId, stored: bool) -> Vec<(u64, Op)> {
+    /// What every panel asks of the core when a session is open here, as
+    /// `state` says it.
+    pub(crate) fn when_opened(&mut self, state: &SessionState, stored: bool) -> Vec<(u64, Op)> {
         self.slots
-            .iter()
+            .iter_mut()
             .enumerate()
-            .filter_map(|(at, slot)| Some((at as u64, slot.panel.when_opened(session, stored)?)))
+            .filter_map(|(at, slot)| Some((at as u64, slot.panel.when_opened(state, stored)?)))
             .collect()
     }
 
@@ -480,6 +513,7 @@ impl Panels {
             slot.focus.saturating_sub(1)
         };
         slot.focus_id = slot.panel.item(slot.focus).map(|key| key.id);
+        slot.panel.moved(slot.focus);
         slot.seen = slot.panel.item(slot.focus);
     }
 
@@ -718,7 +752,11 @@ impl Panels {
         let (start, end, marked) = window(body.len(), n, wanted.clone(), slot.scroll);
         slot.scroll = start;
         let whole = !wanted.is_empty() && start <= wanted.start && wanted.end <= end;
-        slot.panel.shown_whole(focus, whole);
+        if slot.panel.shown_whole(focus, whole) {
+            // Something new to act on, shown with this frame: its grace
+            // starts from it.
+            slot.ready.hide();
+        }
         if marked && start > 0 {
             lines.push(views::more(start, draw.width, draw.look));
         }

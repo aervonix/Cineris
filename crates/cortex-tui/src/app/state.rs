@@ -101,6 +101,8 @@ enum Pending {
     /// result is the panel's while the session is the one open, and its
     /// error is said.
     Panel { session: SessionId, panel: u64 },
+    /// What a panel asked as the session opened.
+    Opened { session: SessionId, panel: u64 },
     /// A file named with `@`, read ahead: nothing is said of its answer, a
     /// refusal included, since nothing the person asked for depends on it.
     Warm,
@@ -190,21 +192,17 @@ const COMMANDS: &[(&str, &str)] = &[
     ("status", "The session's model, mode, sandbox and limits"),
     ("theme", "Choose the colours, for this run"),
     ("undo", "Undo the last turn, its files put back"),
+    (
+        "usage",
+        "What this session and the days before used and cost, and the limits",
+    ),
     ("verify", "Run the project's checks now"),
     ("view", "Open the session in a full-screen view"),
 ];
 
 /// The slash commands of 09-tui that this build does not have yet: one is
 /// said to be missing, not sent to the model as a prompt.
-const NOT_YET: &[&str] = &[
-    "rewind",
-    "lease",
-    "usage",
-    "extend",
-    "mcp",
-    "extensions",
-    "export",
-];
+const NOT_YET: &[&str] = &["rewind", "lease", "extend", "mcp", "extensions", "export"];
 
 /// The application. See the [module documentation](self).
 pub struct App {
@@ -455,7 +453,7 @@ impl App {
             note_cut: None,
             untaken: None,
             taken: None,
-            panels: panel::registered(&clock),
+            panels: panel::registered(&clock, None),
             clock,
             panel_drawn: None,
             panel_untaken: None,
@@ -1299,8 +1297,22 @@ impl App {
             (Pending::Files(id), _) if !self.is_open(&id) => self.files_listing = false,
             (Pending::History(id), _) if !(self.reading && self.is_open(&id)) => {}
             // A panel's, for a session left meanwhile, is dropped.
-            (Pending::Panel { session, .. }, _) if !self.is_open(&session) => {}
-            (Pending::Panel { panel, .. }, Ok(result)) => self.panel_result(panel, &result),
+            (Pending::Panel { session, .. } | Pending::Opened { session, .. }, _)
+                if !self.is_open(&session) => {}
+            (Pending::Panel { panel, .. } | Pending::Opened { panel, .. }, Ok(result)) => {
+                self.panel_result(panel, &result);
+            }
+            // What a panel asked as the session opened, which the core has
+            // nothing of here: nothing the person asked for.
+            (Pending::Opened { .. }, Err(error)) if error.code == "not_available" => {}
+            // The panel hears of it (its rows stop `reading…`), and the
+            // error is said.
+            (Pending::Panel { panel, .. } | Pending::Opened { panel, .. }, Err(error)) => {
+                if self.panels.failed(panel, &error) {
+                    self.panel_closed(panel);
+                }
+                self.error(&error);
+            }
             (Pending::Undo(_), Ok(OpResult::SessionUndo(result))) => {
                 self.session = Some(result.session);
                 self.say(
@@ -1486,8 +1498,9 @@ impl App {
         let session_id = state.session_id.clone();
         self.left_session();
         self.session = Some(state);
-        // What the panels show of a session it already holds (its plan).
-        self.panels_ask(&session_id, stored);
+        // What the panels show of a session it already holds (its plan),
+        // and of its project (the entries that wait).
+        self.panels_ask(stored);
         // The workspace's files for `@` are listed on the first `@` typed
         // (`ask_files`), not here.
         if stored {

@@ -276,27 +276,43 @@ fn y_on_an_entry_whose_detail_does_not_fit_says_to_make_the_window_taller() {
     let said = notices(&mut app, ready);
     let said = said.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(said.contains(TALLER), "{said}");
-    // Taller, the same key accepts.
+    // Taller, the same key accepts, once the detail drawn whole has had
+    // its grace.
     app.resize(98, 60);
     let later = ready + Duration::from_secs(2);
     let _ = live_text(&mut app, later);
-    press(&mut app, "y", later);
+    press(&mut app, "y", later + GRACE);
     assert_eq!(
-        answered(&mut app, &link, &[], later),
+        answered(&mut app, &link, &[], later + GRACE),
         [change("k_1", EntryAction::Accept, None)]
     );
 }
 
 #[test]
-fn p_promotes_and_while_a_turn_runs_the_hint_says_so_and_the_refusal_is_said() {
+fn p_promotes_an_accepted_entry_and_while_a_turn_runs_the_hint_says_so_and_the_refusal_is_said() {
     let now = Instant::now() + Duration::from_secs(20);
     let (mut app, link) = with_entries(now, 60, &entries());
     app.resize(119, 60);
     let ready = project_focused(&mut app, &link, &entries(), now);
+    // A command never accepted has nothing to promote.
+    let hint = live_text(&mut app, ready)
+        .last()
+        .cloned()
+        .unwrap_or_default();
+    assert!(!hint.contains("promotes"), "{hint}");
+    press(&mut app, "p", ready);
+    assert!(answered(&mut app, &link, &[], ready).is_empty());
+    // The fact, accepted and in use, after the three that wait.
+    for _ in 0..3 {
+        key(&mut app, "down", ready);
+    }
+    let _ = live_text(&mut app, ready);
+    let ready = ready + Duration::from_secs(2);
+    let _ = live_text(&mut app, ready);
     press(&mut app, "p", ready);
     assert_eq!(
         answered(&mut app, &link, &[], ready),
-        [change("k_1", EntryAction::Promote, None)]
+        [change("k_3", EntryAction::Promote, None)]
     );
     // A turn of this session runs: the key says it waits for its end, and
     // the core refuses a promote meanwhile, with its sentence.
@@ -311,60 +327,65 @@ fn p_promotes_and_while_a_turn_runs_the_hint_says_so_and_the_refusal_is_said() {
     let sentence = "A turn of this project is running: promote the entry once it ends.";
     assert_eq!(
         refused(&mut app, &link, "turn_running", sentence, later),
-        [change("k_1", EntryAction::Promote, None)]
+        [change("k_3", EntryAction::Promote, None)]
     );
     assert!(notices(&mut app, later).contains(sentence));
-    // An entry of the repository's file, the third waiting, has nothing to
-    // promote.
-    for _ in 0..2 {
-        key(&mut app, "down", later);
+}
+
+/// This client's own prompt starts a turn: `p` says it waits, before the
+/// turn's first event.
+#[test]
+fn a_prompt_sent_says_promote_waits_for_the_turn() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_entries(now, 60, &entries());
+    app.resize(119, 60);
+    let ready = project_focused(&mut app, &link, &entries(), now);
+    for _ in 0..3 {
+        key(&mut app, "down", ready);
     }
-    let hint = live_text(&mut app, later)
+    app.focus_panel(None);
+    type_text(&mut app, "go on", ready);
+    key(&mut app, "enter", ready);
+    app.focus_panel(Some(project_id(&app)));
+    for _ in 0..3 {
+        key(&mut app, "down", ready);
+    }
+    let hint = live_text(&mut app, ready)
+        .last()
+        .cloned()
+        .unwrap_or_default();
+    assert!(hint.contains("p promotes after this turn"), "{hint}");
+}
+
+#[test]
+fn an_entry_of_the_repositorys_file_offers_no_edit_or_delete() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_entries(now, 60, &entries());
+    app.resize(119, 60);
+    let ready = project_focused(&mut app, &link, &entries(), now);
+    // The shared flaky test, the third that waits.
+    for _ in 0..2 {
+        key(&mut app, "down", ready);
+    }
+    let _ = live_text(&mut app, ready);
+    let ready = ready + Duration::from_secs(2);
+    let hint = live_text(&mut app, ready)
         .last()
         .cloned()
         .unwrap_or_default();
     assert!(
-        hint.contains("y accepts") && !hint.contains("promotes"),
+        hint.contains("y accepts") && !hint.contains("edits") && !hint.contains("deletes"),
         "{hint}"
     );
-}
-
-#[test]
-fn d_asks_in_the_row_y_then_deletes_once_ready_and_any_other_key_keeps_it() {
-    let now = Instant::now() + Duration::from_secs(20);
-    let (mut app, link) = with_entries(now, 60, &entries());
-    let ready = project_focused(&mut app, &link, &entries(), now);
-    press(&mut app, "d", ready);
-    let live = live_text(&mut app, ready);
-    assert!(
-        live.iter()
-            .any(|row| row == "    delete this entry? y deletes · any other key keeps it"),
-        "{live:#?}"
-    );
-    assert!(answered(&mut app, &link, &[], ready).is_empty());
-    // Any other key keeps it.
-    press(&mut app, "n", ready + GRACE);
-    assert!(answered(&mut app, &link, &[], ready + GRACE).is_empty());
-    let live = live_text(&mut app, ready + GRACE);
+    press(&mut app, "e", ready);
+    press(&mut app, "d", ready + Duration::from_secs(1));
+    let live = live_text(&mut app, ready + Duration::from_secs(1));
     assert!(
         !live.iter().any(|row| row.contains("delete this entry?")),
         "{live:#?}"
     );
-    // Asked again, `y` deletes: the entry goes, though the result does not
-    // carry it.
-    let at = ready + Duration::from_secs(2);
-    press(&mut app, "d", at);
-    press(&mut app, "y", at + GRACE);
-    assert_eq!(
-        answered(&mut app, &link, &[], at + GRACE),
-        [change("k_1", EntryAction::Delete, None)]
-    );
-    let live = live_text(&mut app, at + GRACE);
-    assert!(
-        live.iter()
-            .any(|row| row == "◇ Project  2 entries wait for review · 1 in use"),
-        "{live:#?}"
-    );
+    assert!(app.input().item_edit().is_none(), "no edit began");
+    assert!(answered(&mut app, &link, &[], ready).is_empty());
 }
 
 /// The question changes the focused row: a `y` read before the grace
@@ -480,4 +501,284 @@ fn hostile_entries_are_drawn_visible_in_the_frame() {
         // text and evidence.
         assert!(escaped >= 7, "{escaped}: {shown:#?}");
     }
+}
+
+/// A question of one entry is forgotten when the focus leaves it: `y` on
+/// the next entry accepts that one, and coming back asks nothing.
+#[test]
+fn the_delete_question_is_forgotten_when_the_focus_moves() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_entries(now, 60, &entries());
+    let ready = project_focused(&mut app, &link, &entries(), now);
+    press(&mut app, "d", ready);
+    press(&mut app, "down", ready);
+    let at = ready + Duration::from_secs(2);
+    let live = live_text(&mut app, at);
+    assert!(
+        !live.iter().any(|row| row.contains("delete this entry?")),
+        "{live:#?}"
+    );
+    press(&mut app, "y", at);
+    assert_eq!(
+        answered(&mut app, &link, &[], at),
+        [change("k_2", EntryAction::Accept, None)]
+    );
+    // Asked on the first, away and back: no question, and `y` accepts.
+    let at = at + Duration::from_secs(2);
+    press(&mut app, "up", at);
+    press(&mut app, "d", at + Duration::from_secs(1));
+    press(&mut app, "down", at + Duration::from_secs(1));
+    press(&mut app, "up", at + Duration::from_secs(1));
+    let at = at + Duration::from_secs(3);
+    let live = live_text(&mut app, at);
+    assert!(
+        !live.iter().any(|row| row.contains("delete this entry?")),
+        "{live:#?}"
+    );
+    press(&mut app, "y", at);
+    assert_eq!(
+        answered(&mut app, &link, &[], at),
+        [change("k_1", EntryAction::Accept, None)]
+    );
+}
+
+/// A delete held back for a change on its way is never sent, and the
+/// entry stays: the answer to the change on its way removes nothing.
+#[test]
+fn a_delete_held_back_leaves_the_entry() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_entries(now, 60, &entries());
+    let ready = project_focused(&mut app, &link, &entries(), now);
+    press(&mut app, "n", ready);
+    let (ticket, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::ProjectUpdate(_)))
+        .expect("the change on its way");
+    let at = ready + Duration::from_secs(2);
+    press(&mut app, "d", at);
+    press(&mut app, "y", at + GRACE);
+    assert!(
+        answered(&mut app, &link, &[], at + GRACE).is_empty(),
+        "held back"
+    );
+    let mut off = entries()[1].clone();
+    off.status = EntryStatus::Active;
+    link.give(Inbound::Done(
+        ticket,
+        Ok(OpResult::ProjectUpdate(ProjectEntriesResult {
+            entries: vec![off],
+            problems: Vec::new(),
+        })),
+    ));
+    drain(&mut app, at + GRACE);
+    let live = live_text(&mut app, at + GRACE);
+    assert!(
+        live.iter()
+            .any(|row| row.starts_with("  ? command  test: cargo test")),
+        "the first entry stays: {live:#?}"
+    );
+}
+
+#[test]
+fn a_result_for_a_session_left_is_dropped() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_entries(now, 60, &entries());
+    let ready = project_focused(&mut app, &link, &entries(), now);
+    press(&mut app, "y", ready);
+    let (ticket, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::ProjectUpdate(_)))
+        .expect("the accept");
+    app.focus_panel(None);
+    run_command(&mut app, "/new", ready);
+    assert!(
+        !app.panels().is_open(project_id(&app)),
+        "left with its session"
+    );
+    let mut accepted = entries()[0].clone();
+    accepted.accepted_at = Some(Timestamp::from("2026-11-16T12:00:00Z"));
+    link.give(Inbound::Done(
+        ticket,
+        Ok(OpResult::ProjectUpdate(ProjectEntriesResult {
+            entries: vec![accepted],
+            problems: Vec::new(),
+        })),
+    ));
+    drain(&mut app, ready);
+    assert!(!app.panels().is_open(project_id(&app)));
+}
+
+/// The focused entry changed by `project.updated` between its frame and
+/// `y`: the key acts on nothing the person was not shown.
+#[test]
+fn an_entry_changed_between_its_frame_and_y_holds_y_back() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_entries(now, 60, &entries());
+    let ready = project_focused(&mut app, &link, &entries(), now);
+    let mut changed = entries()[0].clone();
+    if let Some(command) = &mut changed.command {
+        command.command = "cargo test -p parser -- --ignored".to_owned();
+    }
+    link.give(event(Event::ProjectUpdated(ProjectUpdated {
+        entries: vec![changed],
+        removed: Vec::new(),
+    })));
+    drain(&mut app, ready);
+    key(&mut app, "y", ready);
+    assert!(answered(&mut app, &link, &[], ready).is_empty());
+    assert!(app.input().focus().on_input(), "typed, not taken");
+}
+
+/// The entries the session's open asks for, where the core keeps none (no
+/// state directory): nothing is said.
+#[test]
+fn no_project_kept_says_nothing_as_the_session_opens() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    for (ticket, op) in link.take_sent() {
+        if let Op::ProjectList(_) = op {
+            link.give(Inbound::Done(
+                ticket,
+                Err(ErrorData::new(
+                    ErrorKind::Usage,
+                    "not_available",
+                    "There is no state directory, so no project profile is kept.",
+                )),
+            ));
+        }
+    }
+    drain(&mut app, now);
+    assert!(!notices(&mut app, now).contains("no state directory"));
+}
+
+/// The detail drawn whole for an entry for the first time starts the
+/// readiness again: a `y` straight after a resize made it fit is held.
+#[test]
+fn a_detail_first_drawn_whole_has_its_grace() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_entries(now, 20, &entries());
+    let ready = project_focused(&mut app, &link, &entries(), now);
+    let _ = live_text(&mut app, ready);
+    app.resize(98, 60);
+    let at = ready + Duration::from_secs(2);
+    let _ = live_text(&mut app, at);
+    key(&mut app, "y", at + GRACE / 2);
+    assert!(
+        answered(&mut app, &link, &[], at).is_empty(),
+        "in its grace"
+    );
+}
+
+/// A question asked of an entry that went from the list meanwhile (the
+/// focus is on another now, with no move of the person's) takes no key:
+/// `y` on the entry shown accepts it.
+#[test]
+fn a_question_of_an_entry_gone_takes_no_key_of_the_next() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_entries(now, 60, &entries());
+    let ready = project_focused(&mut app, &link, &entries(), now);
+    press(&mut app, "d", ready);
+    link.give(event(Event::ProjectUpdated(ProjectUpdated {
+        entries: Vec::new(),
+        removed: vec![EntryId::from("k_1")],
+    })));
+    drain(&mut app, ready);
+    let at = ready + Duration::from_secs(2);
+    let _ = live_text(&mut app, at);
+    let at = at + GRACE;
+    let _ = live_text(&mut app, at);
+    press(&mut app, "y", at);
+    assert_eq!(
+        answered(&mut app, &link, &[], at),
+        [change("k_2", EntryAction::Accept, None)]
+    );
+}
+
+/// An accepted command runs without asking only in a project trusted as it
+/// is: the detail says what the session's trust, as `session.updated` gives
+/// it, lets it do.
+#[test]
+fn the_detail_says_what_the_sessions_trust_lets_a_command_do() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let mut accepted = entries();
+    accepted[0].accepted_at = Some(Timestamp::from("2026-11-15T10:00:00Z"));
+    let (mut app, link) = with_entries(now, 60, &accepted);
+    let ready = project_focused(&mut app, &link, &accepted, now);
+    // The two that wait, then the command.
+    for _ in 0..2 {
+        key(&mut app, "down", ready);
+    }
+    let said = |app: &mut App| live_text(app, ready).join(" ");
+    assert!(
+        said(&mut app).contains("still asks before it runs: this project is not trusted"),
+        "{}",
+        said(&mut app)
+    );
+    let mut trusted = crate::testkit::session().build();
+    trusted.trust = Some(cortex_protocol::session::TrustStanding::Trusted);
+    link.give(event(Event::SessionUpdated(
+        cortex_protocol::event::SessionUpdated { session: trusted },
+    )));
+    drain(&mut app, ready);
+    assert!(
+        said(&mut app).contains("in use and accepted: it runs without asking"),
+        "{}",
+        said(&mut app)
+    );
+}
+
+#[test]
+fn d_asks_in_the_row_y_then_deletes_once_ready_and_any_other_key_keeps_it() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_entries(now, 60, &entries());
+    let ready = project_focused(&mut app, &link, &entries(), now);
+    press(&mut app, "d", ready);
+    let live = live_text(&mut app, ready);
+    assert!(
+        live.iter()
+            .any(|row| row == "    delete this entry? y deletes · any other key keeps it"),
+        "{live:#?}"
+    );
+    assert!(answered(&mut app, &link, &[], ready).is_empty());
+    // Any other key keeps it, and is taken: the focus stays.
+    press(&mut app, "n", ready + GRACE);
+    assert!(answered(&mut app, &link, &[], ready + GRACE).is_empty());
+    assert_eq!(
+        app.input().focus().focused(),
+        Target::Panel(project_id(&app))
+    );
+    let live = live_text(&mut app, ready + GRACE);
+    assert!(
+        !live.iter().any(|row| row.contains("delete this entry?")),
+        "{live:#?}"
+    );
+    // Asked again, `y` deletes: the entry goes when the core says it was
+    // removed, as it tells every session of the project.
+    let at = ready + Duration::from_secs(2);
+    press(&mut app, "d", at);
+    press(&mut app, "y", at + GRACE);
+    assert_eq!(
+        answered(&mut app, &link, &[], at + GRACE),
+        [change("k_1", EntryAction::Delete, None)]
+    );
+    let live = live_text(&mut app, at + GRACE);
+    assert!(
+        live.iter()
+            .any(|row| row == "◇ Project  3 entries wait for review · 1 in use"),
+        "{live:#?}"
+    );
+    link.give(event(Event::ProjectUpdated(ProjectUpdated {
+        entries: Vec::new(),
+        removed: vec![EntryId::from("k_1")],
+    })));
+    drain(&mut app, at + GRACE);
+    let live = live_text(&mut app, at + GRACE);
+    assert!(
+        live.iter()
+            .any(|row| row == "◇ Project  2 entries wait for review · 1 in use"),
+        "{live:#?}"
+    );
 }

@@ -23,7 +23,6 @@
 
 use std::time::Instant;
 
-use cortex_protocol::SessionId;
 use cortex_protocol::event::{Event, Verification};
 use cortex_protocol::item::Item;
 use cortex_protocol::methods::OpResult;
@@ -31,6 +30,7 @@ use cortex_term::{Event as TermEvent, Key, Line};
 
 use super::super::panels::{
     Act, Draw, Panels, Seen, plan::PlanPanel, project::ProjectPanel, review::ReviewPanel,
+    usage::UsagePanel,
 };
 use super::super::ready::REPEAT;
 use super::{App, LastKey, Pending};
@@ -47,12 +47,18 @@ pub(crate) const LEAST_ROWS: usize = 8;
 pub(crate) const LIVE_KEPT: usize = 4;
 
 /// The panels of this build, each registered once: the plan's, the
-/// review's and the project's, their times read from `clock`.
-pub(super) fn registered(clock: &cortex_base::SharedClock) -> Panels {
+/// review's, the project's and the usage's, their times read from `clock`
+/// and said in `zone` (the system's, read when the usage panel first
+/// opens, when none is given).
+pub(super) fn registered(
+    clock: &cortex_base::SharedClock,
+    zone: Option<cortex_base::Zone>,
+) -> Panels {
     let mut panels = Panels::new();
     panels.register(Box::new(PlanPanel::default()));
     panels.register(Box::new(ReviewPanel::default()));
     panels.register(Box::new(ProjectPanel::new(clock.clone())));
+    panels.register(Box::new(UsagePanel::new(clock.clone(), zone)));
     panels
 }
 
@@ -109,11 +115,11 @@ impl App {
         }
     }
 
-    /// The time of day the panels read is `clock`'s: the panels are made
-    /// again, closed.
+    /// The time of day the panels read is `clock`'s, said in UTC: the
+    /// panels are made again, closed.
     #[cfg(any(test, feature = "test-kit"))]
     pub fn set_clock(&mut self, clock: cortex_base::SharedClock) {
-        self.panels = registered(&clock);
+        self.panels = registered(&clock, Some(cortex_base::Zone::utc()));
         self.clock = clock;
     }
 
@@ -168,18 +174,30 @@ impl App {
         });
     }
 
-    /// What the panels ask of the core when `session` is open here.
-    pub(super) fn panels_ask(&mut self, session: &SessionId, stored: bool) {
-        for (panel, op) in self.panels.when_opened(session, stored) {
+    /// What the panels ask of the core now that the session is open here.
+    /// A failure of one of these that says the core has nothing of the
+    /// kind here (`not_available`: no state directory) is not said: nothing
+    /// was asked by the person.
+    pub(super) fn panels_ask(&mut self, stored: bool) {
+        let Some(state) = self.session.clone() else {
+            return;
+        };
+        for (panel, op) in self.panels.when_opened(&state, stored) {
             let ticket = self.link.send(op);
             self.pending.insert(
                 ticket,
-                Pending::Panel {
-                    session: session.clone(),
+                Pending::Opened {
+                    session: state.session_id.clone(),
                     panel,
                 },
             );
         }
+    }
+
+    /// `panel` closed of itself: a focused one gives the focus back to the
+    /// input.
+    pub(super) fn panel_closed(&mut self, panel: u64) {
+        self.closed_panels(&[panel]);
     }
 
     /// The result of what `panel` sent, for the session still open.
@@ -222,7 +240,7 @@ impl App {
     /// an answer for a session left is no answer of the open one's.
     pub(super) fn panel_waiting(&self, id: u64) -> bool {
         self.pending.values().any(|pending| {
-            matches!(pending, Pending::Panel { session, panel }
+            matches!(pending, Pending::Panel { session, panel } | Pending::Opened { session, panel }
                 if *panel == id && self.is_open(session))
         })
     }

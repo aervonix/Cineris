@@ -21,6 +21,7 @@ use cortex_protocol::event::Event;
 use cortex_protocol::item::{Plan, PlanStatus};
 use cortex_protocol::methods::{Op, OpResult, PlanUpdateParams, SessionRef};
 use cortex_protocol::project::{PlanAdd, PlanEdit, PlanItemRef, PlanReorder, PlanReword};
+use cortex_protocol::session::SessionState;
 use cortex_term::Line;
 
 use super::{Act, Draw, ItemEditFor, ItemKey, Panel, Seen, Show};
@@ -124,11 +125,11 @@ impl Panel for PlanPanel {
         }
     }
 
-    fn when_opened(&self, session: &SessionId, stored: bool) -> Option<Op> {
+    fn when_opened(&mut self, state: &SessionState, stored: bool) -> Option<Op> {
         // A new session has no plan yet; a stored one may.
         stored.then(|| {
             Op::PlanGet(SessionRef {
-                session_id: session.clone(),
+                session_id: state.session_id.clone(),
             })
         })
     }

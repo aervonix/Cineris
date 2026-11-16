@@ -114,6 +114,7 @@ fn view(entries: &[ProjectEntry]) -> ProjectView<'_> {
         asking: None,
         reading: false,
         problems: &[],
+        trusted: false,
     }
 }
 
@@ -206,6 +207,19 @@ fn what_waits_for_review_is_a_proposal_or_an_entry_never_accepted() {
     assert!(!waits(&off), "turned off");
 }
 
+/// The focused entry's detail, its rows trimmed and joined, its spaces
+/// made one: what it says, whatever the width wrapped.
+fn said_whole(entry: &ProjectEntry, trusted: bool, width: usize) -> String {
+    detail(entry, false, now(), trusted, width, &look())
+        .iter()
+        .map(|line| line.text().trim().to_owned())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[test]
 fn the_focused_commands_detail_is_whole_and_wrapped_never_cut() {
     let look = look();
@@ -230,31 +244,28 @@ fn the_focused_commands_detail_is_whole_and_wrapped_never_cut() {
             );
             assert!(row.starts_with("    "), "four columns in: {row:?}");
         }
-        // The command line whole, across its rows.
-        let joined: String = detail
-            .iter()
-            .map(|row| row.trim())
-            .collect::<Vec<_>>()
-            .join(" ");
-        let words: Vec<&str> = command.split(' ').collect();
-        for word in words {
-            assert!(joined.contains(word), "{word} at {width}: {detail:#?}");
-        }
+        let said = said_whole(&entries[0], false, width);
+        // The command line whole, then what it is for and where.
         assert!(
-            joined.contains("in crates/parser · may change files"),
-            "{detail:#?}"
+            said.contains(&format!(
+                "runs {command} for test · in crates/parser · may change files"
+            )),
+            "{said}"
         );
         assert!(
-            joined.contains("observed 3 times, learned in session s_1 on 2026-11-14"),
-            "{detail:#?}"
+            said.contains("observed 3 times, learned in session s_1 on 2026-11-14"),
+            "{said}"
+        );
+        // Accepting renews a learned command for 90 days from now.
+        assert!(
+            said.contains(
+                "in use, and still asks before it runs accepting keeps it until 2027-02-14"
+            ),
+            "{said}"
         );
         assert!(
-            joined.contains("in use, and still asks before it runs, until 2026-12-14"),
-            "{detail:#?}"
-        );
-        assert!(
-            joined.contains("`Cargo.toml` exists, not run in this build"),
-            "{detail:#?}"
+            said.contains("`Cargo.toml` exists, not run in this build"),
+            "{said}"
         );
     }
 }
@@ -262,33 +273,77 @@ fn the_focused_commands_detail_is_whole_and_wrapped_never_cut() {
 #[test]
 fn each_origin_and_standing_is_said_as_cortex_project_says_it() {
     let look = look();
-    let said = |entry: &ProjectEntry| -> String {
-        detail(entry, false, now(), 200, &look)
-            .iter()
-            .map(|line| line.text().trim().to_owned())
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
     let entries = entries();
+    let said = |entry: &ProjectEntry| said_whole(entry, false, 200);
     assert!(said(&entries[1]).contains("proposed by the model in session s_1 on 2026-11-14"));
     assert!(said(&entries[1]).contains("waits for your review: not in use"));
+    // A convention, renewed for 60 days.
+    assert!(said(&entries[1]).contains("accepting keeps it until 2027-01-15"));
     assert!(said(&entries[3]).contains("from the repository's file"));
     let mut yours = entries[2].clone();
     yours.basis = None;
     yours.source.kind = EntrySourceKind::User;
     assert!(said(&yours).contains("you wrote it"));
+    // Accepted: it runs without asking only in a project trusted as it is.
     let mut accepted = entries[0].clone();
     accepted.accepted_at = Some(Timestamp::from("2026-11-15T10:00:00Z"));
-    assert!(said(&accepted).contains("in use, and accepted, until 2026-12-14"));
-    let mut old = entries[0].clone();
+    assert!(
+        said(&accepted).contains(
+            "in use and accepted, and still asks before it runs: this project is not trusted as it is, until 2026-12-14"
+        ),
+        "{}",
+        said(&accepted)
+    );
+    assert!(
+        said_whole(&accepted, true, 200)
+            .contains("in use and accepted: it runs without asking, until 2026-12-14")
+    );
+    assert!(
+        !said(&accepted).contains("accepting keeps"),
+        "nothing to accept"
+    );
+    // Expired, accepted or proposed: accepting renews it.
+    let mut old = accepted.clone();
     old.expires_at = Some(Timestamp::from("2026-11-01T00:00:00Z"));
-    assert!(said(&old).contains("expired on 2026-11-01: not in use"));
-    assert!(said(&entries[0]).contains("evidence  ran 3 times and passed"));
-    let asked = detail(&entries[0], true, now(), 200, &look);
+    assert!(
+        said(&old)
+            .contains("expired on 2026-11-01: not in use accepting keeps it until 2027-02-14"),
+        "{}",
+        said(&old)
+    );
+    let mut stale = entries[1].clone();
+    stale.expires_at = Some(Timestamp::from("2026-11-01T00:00:00Z"));
+    assert!(
+        said(&stale).contains("waits for your review: not in use, and it expired on 2026-11-01"),
+        "{}",
+        said(&stale)
+    );
+    assert!(said(&entries[0]).contains("evidence ran 3 times and passed"));
+    let asked = detail(&entries[0], true, now(), false, 200, &look);
     assert_eq!(
         asked.last().map(|line| line.text().into_owned()).as_deref(),
         Some("    delete this entry? y deletes · any other key keeps it")
     );
+}
+
+#[test]
+fn what_a_key_would_do_is_what_the_core_does() {
+    let entries = entries();
+    let now = now();
+    // `y`: what waits, what is off or expired, a command not accepted.
+    assert!(acceptable(&entries[0], now));
+    assert!(!acceptable(&entries[2], now), "accepted, in use");
+    let mut expired = entries[2].clone();
+    expired.expires_at = Some(Timestamp::from("2026-11-01T00:00:00Z"));
+    assert!(acceptable(&expired, now), "accepting brings it back");
+    // `p`: a private entry in use and accepted only.
+    assert!(promotable(&entries[2], now));
+    assert!(!promotable(&entries[0], now), "never accepted");
+    assert!(!promotable(&entries[1], now), "a proposal");
+    assert!(!promotable(&entries[3], now), "shared already");
+    assert!(!promotable(&expired, now), "expired");
+    // `e` and `d`: never an entry of the repository's file.
+    assert!(shared(&entries[3]) && !shared(&entries[0]));
 }
 
 #[test]
@@ -328,7 +383,16 @@ fn hostile_texts_commands_folders_checks_evidence_and_problems_are_drawn_visible
         command.source.session_id = Some(hostile.into());
         command.source.at = Some(Timestamp::from(hostile));
         command.expires_at = Some(Timestamp::from(hostile));
+        if let Some(inner) = &mut command.command {
+            inner.purpose = CommandPurpose::from_wire(hostile);
+        }
         let mut other = entry("k_2", EntryKind::from_wire(hostile), hostile);
+        other.check = Some(EntryCheck {
+            kind: EntryCheckKind::Command,
+            path: None,
+            pattern: None,
+            command: Some(hostile.to_owned()),
+        });
         other.status = EntryStatus::from_wire(hostile);
         let entries = vec![command, other];
         let problems = vec![hostile.to_owned()];

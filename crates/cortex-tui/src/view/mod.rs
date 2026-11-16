@@ -41,6 +41,7 @@ pub mod panel;
 pub mod plan;
 pub mod project;
 pub mod review;
+pub mod usage;
 
 pub use blocks::{error, listing, notice, reasoning, reasoning_live, turn_summary, user};
 pub use header::{Header, header};

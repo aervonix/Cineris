@@ -51,6 +51,9 @@ pub struct ProjectView<'a> {
     pub reading: bool,
     /// What is wrong with the project's files, a sentence each.
     pub problems: &'a [String],
+    /// Whether the person trusts the project as it is: without that, an
+    /// accepted command still asks before it runs.
+    pub trusted: bool,
 }
 
 /// Whether the user accepted `entry`, or wrote it in their own store: for
@@ -74,6 +77,64 @@ pub fn waits(entry: &ProjectEntry) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `y` would change `entry`: one waiting, turned off, expired, or
+/// a command in use that the person has not accepted.
+#[must_use]
+pub fn acceptable(entry: &ProjectEntry, now: UtcTime) -> bool {
+    waits(entry) || entry.status != EntryStatus::Active || !accepted(entry) || expired(entry, now)
+}
+
+/// Whether the core would promote `entry` to the repository's file: one of
+/// the private store, in use and accepted (the core refuses the others as
+/// `not_promotable`).
+#[must_use]
+pub fn promotable(entry: &ProjectEntry, now: UtcTime) -> bool {
+    entry.scope == EntryScope::Private
+        && entry.status == EntryStatus::Active
+        && !expired(entry, now)
+        && accepted(entry)
+}
+
+/// Whether an entry of the repository's file: the core changes its text
+/// and deletes it in no store (`shared_entry_read_only`).
+#[must_use]
+pub fn shared(entry: &ProjectEntry) -> bool {
+    entry.scope == EntryScope::Shared
+}
+
+/// When accepting `entry` at `now` has it expire: a learned entry is kept
+/// its kind's lifetime from the acceptance (90 days for a command, 60 for a
+/// convention or a fact, 30 for a flaky test, as `cortex-knowledge` keeps
+/// them); any other keeps its own expiry, or none.
+#[must_use]
+pub fn kept_until(entry: &ProjectEntry, now: UtcTime) -> Option<UtcTime> {
+    const DAY: u64 = 86_400;
+    if entry.source.kind != EntrySourceKind::Learned || entry.scope == EntryScope::Shared {
+        return entry
+            .expires_at
+            .as_ref()
+            .and_then(|at| UtcTime::parse(at.as_str()).ok())
+            .filter(|at| *at > now);
+    }
+    let days = match &entry.kind {
+        EntryKind::Command => 90,
+        EntryKind::Flaky => 30,
+        EntryKind::Convention | EntryKind::Fact => 60,
+        _ => return None,
+    };
+    now.checked_add(std::time::Duration::from_secs(days * DAY))
+}
+
+/// The day of `at`, as the protocol writes it: `2026-12-14`.
+fn day_of(at: UtcTime) -> String {
+    let stamp = at.to_timestamp();
+    stamp
+        .as_str()
+        .get(..10)
+        .unwrap_or(stamp.as_str())
+        .to_owned()
 }
 
 /// Whether `entry` is past its expiry at `now`.
@@ -157,7 +218,7 @@ pub fn project_rows(
         ));
         if focus {
             let asking = view.asking == Some(index);
-            for line in detail(entry, asking, view.now, width, look) {
+            for line in detail(entry, asking, view.now, view.trusted, width, look) {
                 rows.push(PanelRow::of(index, line));
             }
         }
@@ -234,14 +295,17 @@ pub fn entry_row(
 }
 
 /// The focused entry's detail, four columns in, wrapped at the width and
-/// never cut: what it runs and where, whether it only reads, where it came
-/// from, its standing, its check and its evidence; and, when its deletion
-/// is asked, the question.
+/// never cut: what it runs, what for and where, whether it only reads,
+/// where it came from, its standing (`trusted` when the project is trusted
+/// as it is), what accepting it keeps it until, its check and its
+/// evidence; and, when its deletion is asked, the question. Everything a
+/// `y` acts on is here: the entry's row, which is cut, is not needed.
 #[must_use]
 pub fn detail(
     entry: &ProjectEntry,
     asking: bool,
     now: UtcTime,
+    trusted: bool,
     width: usize,
     look: &Look,
 ) -> Vec<Line> {
@@ -255,7 +319,7 @@ pub fn detail(
                 Span::new("runs  ", muted),
                 Span::new(one_line(&command.command), theme.style(Token::Code)),
             ]);
-            let mut where_ = Vec::new();
+            let mut where_ = vec![format!("for {}", one_line(command.purpose.as_str()))];
             if let Some(cwd) = command.cwd.as_deref().filter(|cwd| !cwd.is_empty()) {
                 where_.push(format!("in {}", one_line(cwd)));
             }
@@ -278,8 +342,16 @@ pub fn detail(
         None => paragraphs.push(vec![Span::new(one_line(&entry.text), text)]),
     }
     paragraphs.push(vec![Span::new(origin(entry), muted)]);
-    let (standing, token) = standing(entry, now);
+    let (standing, token) = standing(entry, now, trusted);
     paragraphs.push(vec![Span::new(standing, theme.style(token))]);
+    if acceptable(entry, now)
+        && let Some(until) = kept_until(entry, now)
+    {
+        paragraphs.push(vec![Span::new(
+            format!("accepting keeps it until {}", day_of(until)),
+            muted,
+        )]);
+    }
     if let Some(check) = &entry.check {
         let field = |field: &Option<String>| one_line(field.as_deref().unwrap_or(""));
         let shown = match &check.kind {
@@ -354,35 +426,51 @@ fn origin(entry: &ProjectEntry) -> String {
 }
 
 /// The entry's standing, saying no more than the engine will do with it,
-/// and the token to draw it in.
-fn standing(entry: &ProjectEntry, now: UtcTime) -> (String, Token) {
+/// and the token to draw it in. An entry `y` would accept says no expiry:
+/// accepting gives one of its own, said after.
+fn standing(entry: &ProjectEntry, now: UtcTime, trusted: bool) -> (String, Token) {
     let day =
         |at: &cortex_protocol::Timestamp| one_line(at.as_str().get(..10).unwrap_or(at.as_str()));
     let until = entry
         .expires_at
         .as_ref()
+        .filter(|_| !acceptable(entry, now))
         .map(|at| format!(", until {}", day(at)))
         .unwrap_or_default();
+    let ended = || entry.expires_at.as_ref().map(day).unwrap_or_default();
     match &entry.status {
+        EntryStatus::Proposed if expired(entry, now) => (
+            format!(
+                "waits for your review: not in use, and it expired on {}",
+                ended()
+            ),
+            Token::Warning,
+        ),
         EntryStatus::Proposed => (
             "waits for your review: not in use".to_owned(),
             Token::Warning,
         ),
         EntryStatus::Disabled => ("turned off".to_owned(), Token::Muted),
-        EntryStatus::Active if expired(entry, now) => (
-            format!(
-                "expired on {}: not in use",
-                entry.expires_at.as_ref().map(day).unwrap_or_default()
-            ),
-            Token::Muted,
-        ),
+        EntryStatus::Active if expired(entry, now) => {
+            (format!("expired on {}: not in use", ended()), Token::Muted)
+        }
         EntryStatus::Active if entry.kind == EntryKind::Command && !accepted(entry) => (
-            format!("in use, and still asks before it runs{until}"),
+            "in use, and still asks before it runs".to_owned(),
             Token::Warning,
         ),
-        EntryStatus::Active if entry.kind == EntryKind::Command => {
-            (format!("in use, and accepted{until}"), Token::Muted)
-        }
+        // Accepted, it runs without asking only in a project trusted as
+        // it is.
+        EntryStatus::Active if entry.kind == EntryKind::Command && !trusted => (
+            format!(
+                "in use and accepted, and still asks before it runs: this project is not \
+                 trusted as it is{until}"
+            ),
+            Token::Warning,
+        ),
+        EntryStatus::Active if entry.kind == EntryKind::Command => (
+            format!("in use and accepted: it runs without asking{until}"),
+            Token::Muted,
+        ),
         EntryStatus::Active => (format!("in use{until}"), Token::Muted),
         other => (one_line(other.as_str()), Token::Muted),
     }

@@ -2337,7 +2337,9 @@ pub(crate) fn assemble(
 
     // ------------------------------------------ the project's knowledge
     // Made here and read nowhere yet: the first read of its files is at
-    // the start of the session's first turn.
+    // the start of the session's first turn, or a client's `project/list`
+    // before it (the interface asks as the session opens, to show what
+    // waits for review), each on the blocking pool.
     let knowledge = knowledge_file.map(|file| {
         crate::knowledge::Knowledge::new(crate::knowledge::Parts {
             project: cortex_knowledge::Project::new(file, root.to_fs_path(), Arc::clone(&clock)),
