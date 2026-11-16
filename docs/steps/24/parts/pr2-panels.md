@@ -67,12 +67,25 @@ All tier-1 unit tests of `cortex-tui`, with no real waiting (the application's t
 
 ## Breaking the code on purpose
 
-MUTATE
+`mutations/step-24-panels.breaks` holds 59 breaks, run with `cargo xtask mutate step-24-panels --jobs 2` on the desk's side slot: **58 caught, and 1 survives as its list expects** (`the-viewer-keeps-the-panels-readiness`: every key that closes the viewer is input no panel took, which holds the panel a quiet second, longer than the grace this break would leave).
+
+- The first run flagged 5. Three were caught by other tests than their lists named, and the names were put right. Two showed rules untested: a key read after a dialog came and before its first frame (`a_key_between_a_dialog_and_its_frame_is_typed_not_lost`), and the box's typing rule, whose test began with a panel's own letter (`a_letter_with_a_box_or_a_panel_focused_reaches_the_editor` now begins with one that is not).
+- After the review's fixes one was flagged: `a-held-panel-key-acts-again` was caught only by the new held-`x` test, because the hold for a change on its way dropped the held key's repeats first. Its own test now answers the press before the repeats come, and catches it again.
+- Taking the dialog's rule into `app/ready.rs` moved code out from under 11 of step 23's breaks (`step-23.breaks`, `step-23-fixes.breaks`). Each was moved to the code as it is now, and each is still caught. Two of this part's own would have made the same changes as two of those, and were dropped: step 23's carry those rules.
 
 ## Stress
 
-STRESS
+- `cargo xtask stress -p cortex-tui --count 50`: 470 tests, 50 times each, seeds 0 to 49: every test passed every time.
+- `cargo xtask stress -p cortex-tui --count 50 --cores 2 --load 6`: the same, every test passed every time.
 
 ## Tiers
 
-TIERS
+- **The sweep of the live region** first took 1.3 s at the desk in the `dev` profile: the application's own frame (the transcript's live round and the hint row, step 22's views) is most of a frame's cost, and the sweep draws about 5,500 frames. It is drawn at 40 columns (where the hint row is short) with one call live, the edits' round and the checks' notice committed, and is two tests, one with a round running and one without: **0.25 s and 0.40 s in CI's profile at the desk** (0.24 s and 0.38 s before the review's fixes).
+- **What this part's tests add:** 1.64 s of `cortex-tui`'s 7.08 s of tier-1 test time (23%), summed over the tests in CI's profile at the desk; nothing measurable to tier 2 (the bindings' and the decoder's loops take the new keys).
+- **The estimate for a hosted runner** (`cargo xtask ci --tiers --like-runner -p cortex-tui`), the whole crate: tier 1 4.7 s on Linux (6.8 s on a slow runner) and 6.1 s on Windows (7.4 s), tier 2 0.8 s on Linux, of budgets of 20 s and 40 s for the whole workspace. So this part adds about 1.1 s to tier 1 on Linux and 1.4 s on Windows.
+
+## Checks
+
+- `cargo xtask ci` on 327cfaa4 with this part on top: formatting, the breaks, the generated files, clippy, licences, tiers 1 and 2 (4030 tests) and the tier budgets pass. **`rules` fails on this record alone,** and so does the system test that runs the rules (`xtask rules::tests::sys_the_repository_follows_its_own_rules`): no record of step 24 on this branch links `parts/`. The step's `answered.md`, which does, is the first pull request's; with it the record is linked.
+- `cargo xwin clippy --target x86_64-pc-windows-msvc -p cortex-tui --all-targets --locked -- -D warnings`: clean.
+- `cargo xtask api-diff --against origin/main --features cortex-tui/test-kit -p cortex-tui`: 57 public items added, none removed or changed; the test kit is unchanged. `App` stays `Send` (a panel is `Send`).
