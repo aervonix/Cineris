@@ -145,7 +145,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [caught-by-names-checked-only-at-the-desk](caught-by-names-checked-only-at-the-desk.md): `check` in CI keeps no list of tests, so it does not check `caught-by` names. Owner: the owner.
 - [a-retried-tests-standard-error-in-the-report](a-retried-tests-standard-error-in-the-report.md): `xtask` reads a retried test's standard error from its first attempt, not the last. Owner: a later tooling step.
 - [actionlint-in-the-checks](actionlint-in-the-checks.md): The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary. Owner: the owner.
-- [cortex-llm-optimised-in-the-ci-build](cortex-llm-optimised-in-the-ci-build.md): Whether to build `cortex-llm` at `opt-level = 1` in the `ci` profile to speed its integration tests. Owner: the owner.
 - [perf-in-the-main-workflow](perf-in-the-main-workflow.md): `cargo xtask perf` is not yet run in the `main` workflow on both systems with stored baselines. Owner: a tooling step, or step 33.
 - [replace-and-the-comments-beside-a-match](replace-and-the-comments-beside-a-match.md): `replace` stacks a `--to`'s doc comment on the file's, and can leave a read-only file's temporary copy on Windows. Owner: a later tooling step.
 - [tests-the-fifth-tooling-step-left-unwritten](tests-the-fifth-tooling-step-left-unwritten.md): Seven behaviours of the fifth tooling step's tools that work and that no test or break holds yet. Owner: a later tooling step.
