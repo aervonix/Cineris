@@ -379,12 +379,13 @@ fn sys_a_project_is_trusted_from_its_dialog_and_its_model_is_used() {
     // The folder as a person reads it, never the canonical form.
     assert!(!shown.contains(r"\\?\"), "{shown}");
     session.send(b"y");
-    // The header's box names the model the session runs on (the dialog
+    // The header's box (`│`, or `|` in the ASCII glyphs a Windows console
+    // gets) names the model the session runs on (the dialog
     // named it too, outside any box).
     session.wait_for(LIMIT, "the header with the project's model", |t| {
         let all = t.history();
         all.iter()
-            .any(|row| row.trim_start().starts_with('│') && row.contains("claude-opus-5-5"))
+            .any(|row| row.trim_start().starts_with(['│', '|']) && row.contains("claude-opus-5-5"))
     });
 
     quit(&mut session, &phases);
@@ -454,7 +455,7 @@ fn sys_a_never_survives_a_restart_and_permissions_trust_clears_it() {
         session.wait_for(LIMIT, "the header's model", |t| {
             let all = t.history();
             all.iter()
-                .any(|row| row.trim_start().starts_with('│') && row.contains(model))
+                .any(|row| row.trim_start().starts_with(['│', '|']) && row.contains(model))
         });
     };
 
