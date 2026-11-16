@@ -127,11 +127,11 @@ caught-by:
     decision::tests::a_record_is_written_with_every_heading_of_the_format_and_its_row_after_the_last
 
 [break] decision-a-pipe-ends-the-cell
-rule: A `|` in a title is escaped in the index's cell.
+rule: A `|` in a title or a status is escaped in the index's cell.
 file: xtask/src/decision.rs
 in: indexed
-find: let cell = title.replace('|', "\\|");
-replace: let cell = title.to_owned();
+find: let cell = |text: &str| text.replace('|', "\\|");
+replace: let cell = |text: &str| text.to_owned();
 caught-by:
     decision::tests::a_pipe_in_the_title_does_not_end_its_cell
 
