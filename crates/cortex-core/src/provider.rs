@@ -1148,7 +1148,9 @@ base_url = "https://bücher.example"
             assert_eq!(error.kind, ErrorKind::Config, "{name}");
             assert_eq!(error.code, "invalid_provider", "{name}");
             assert!(
-                error.message.contains(&format!("providers.{name}.base_url"))
+                error
+                    .message
+                    .contains(&format!("providers.{name}.base_url"))
                     && error.message.contains("`bücher.example`")
                     && error.message.contains("`xn--"),
                 "{name}: {}",
