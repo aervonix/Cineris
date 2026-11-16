@@ -675,7 +675,7 @@ mod tests {
         let paste = "a log line of a build that failed, say\n".repeat(2_000);
         let mut text = String::new();
         let mut n = 0_usize;
-        while (text.len() as u64) < bytes {
+        loop {
             let project = format!("{:032x}", n % 20);
             let prompt = if n.is_multiple_of(8) {
                 Fragment::with_chips(
@@ -686,7 +686,11 @@ mod tests {
             } else {
                 Fragment::text(format!("fix the parser's error on line {n}, and run the tests"))
             };
-            let _ = write!(text, "{}", Entry::line(&project, &cortex_tui::history::kept(&prompt)));
+            let line = Entry::line(&project, &cortex_tui::history::kept(&prompt));
+            if (text.len() + line.len()) as u64 > bytes {
+                break;
+            }
+            let _ = write!(text, "{line}");
             n += 1;
         }
         std::fs::write(path, &text).unwrap();
@@ -702,7 +706,7 @@ mod tests {
     fn perf_history_read_at_its_caps() {
         let scratch = Scratch::new("perf");
         for (name, bytes) in [
-            ("at_compact_bytes", COMPACT_BYTES - 1),
+            ("at_compact_bytes", COMPACT_BYTES),
             ("past_the_read_limit", READ_LIMIT * 4),
         ] {
             let path = scratch.join(name);
@@ -711,7 +715,8 @@ mod tests {
             for _ in 0..15 {
                 let size = history_of(&path, bytes);
                 let started = std::time::Instant::now();
-                let mine = read(&path, &format!("{:032x}", 3));
+                // The first project, a paste in every other prompt of its.
+                let mine = read(&path, &format!("{:032x}", 0));
                 times.push(started.elapsed().as_secs_f64() * 1000.0);
                 held = mine
                     .iter()
