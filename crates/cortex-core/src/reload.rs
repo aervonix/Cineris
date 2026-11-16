@@ -398,17 +398,16 @@ async fn reload_core(core: &Core, asked: &Asked) -> ConfigChanged {
         return ConfigChanged::default();
     };
     let mix = Arc::new(mix);
-    if touches(&now, &["log.level"]) {
-        if let (Some(log), Some(level)) = (&core.inner.options.log, &mix.settings.log.level) {
-            if let Ok(filter) = cortex_base::log::Filter::parse(level) {
-                log.set_filter(filter);
-            }
-        }
+    if touches(&now, &["log.level"])
+        && let (Some(log), Some(level)) = (&core.inner.options.log, &mix.settings.log.level)
+        && let Ok(filter) = cortex_base::log::Filter::parse(level)
+    {
+        log.set_filter(filter);
     }
-    if touches(&now, &["stats.retention"]) {
-        if let Some(recorder) = &core.inner.stats {
-            recorder.set_retention(mix.settings.stats.retention);
-        }
+    if touches(&now, &["stats.retention"])
+        && let Some(recorder) = &core.inner.stats
+    {
+        recorder.set_retention(mix.settings.stats.retention);
     }
     config.in_force = mix;
     // The core's own configuration tells nobody of what waits: each
@@ -530,11 +529,11 @@ fn look(inner: &Inner, live: &Live, asked: &Asked) -> Option<Looked> {
         }
     };
     let mut dropped = Vec::new();
-    if latest.is_some() {
-        if let Some(profile) = &asked.profile {
-            config.options.profile = Some(profile.clone());
-            dropped = std::mem::take(&mut config.choices);
-        }
+    if latest.is_some()
+        && let Some(profile) = &asked.profile
+    {
+        config.options.profile = Some(profile.clone());
+        dropped = std::mem::take(&mut config.choices);
     }
     Some(Looked {
         trusted,
