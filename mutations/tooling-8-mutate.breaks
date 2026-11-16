@@ -219,7 +219,7 @@ in: locate_in_strings
 find: (several, None) => Err(Missing::Ambiguous(
 replace:
     (several, None) => Ok((several[0].clone(), scopes)),
-    (_, None) => Err(Missing::Ambiguous(
+    (several, None) => Err(Missing::Ambiguous(
 caught-by:
     mutate::lex::tests::a_text_is_found_only_inside_the_string_literals
 
