@@ -1245,6 +1245,49 @@ fn a_file_a_command_changed_after_a_read_is_carried_without_the_old_hash() {
     assert_eq!(carried("src/main.rs")["hash"], json!(old.to_hex()));
 }
 
+/// A compaction asked for while the model writes its last answer finds no
+/// boundary in that turn: when the turn ends, a turn that only compacts
+/// runs, as `session/compact` runs in an idle session, and the session is
+/// idle after it, not left holding the compaction for a prompt that may
+/// never come.
+#[test]
+fn a_compaction_asked_for_during_the_last_request_runs_when_the_turn_ends() {
+    let more = Gate::new();
+    let last = Response::new()
+        .text("The answer.")
+        .wait(&more)
+        .end(StopReason::End);
+    let world = World::new("compact_after_last", [last, says("Goal: the summary.")]);
+    let rig = Setup::new(&world).start(&world);
+    world.run(async {
+        rig.prompt("go");
+        rig.events.seen("delta:text", 1).await;
+        let asked = rig
+            .handle
+            .compact(Some("the answer".to_owned()))
+            .map_err(|error| *error)
+            .unwrap();
+        assert_eq!(
+            asked.turn_id.to_string(),
+            "t_1",
+            "answered with the running turn"
+        );
+        more.open();
+        rig.events.seen("idle", 1).await;
+    });
+    let ends = rig.events.ends();
+    assert_eq!(ends.len(), 2, "a turn of its own compacted: {ends:?}");
+    assert!(
+        ends.iter().all(|end| end.outcome == TurnOutcome::Completed),
+        "{ends:?}"
+    );
+    let summaries = rig.store.summaries();
+    assert_eq!(summaries.len(), 1, "the compaction ran");
+    // The summary request is the only other one: the compact-only turn
+    // asks the model for nothing else.
+    assert_eq!(world.provider.requests().len(), 2);
+}
+
 #[test]
 fn a_summary_too_large_for_the_new_epoch_fails_the_compaction_and_records_nothing() {
     let world = World::new(

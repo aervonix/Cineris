@@ -102,7 +102,7 @@ One review, on Opus, of the whole diff against the spec, before the first push. 
 | A repository's rules and a model's arguments reached the terminal with their control characters | low | Escaped everywhere text reaches the terminal; a unit test and a break |
 | The runtime page's "within two seconds" and "cancel the session token"; `--quiet` printed a bad log level; no record on a core-thread panic | low | The pages say what is built; `--quiet` silences it; a panic writes an `internal` record. A command line that cannot be read writes none, and the page says so |
 | Subcommands panicked on a closed pipe; `auth login` took any provider name and cut a long key silently | low | Output that ends quietly; an unknown provider and an over-long key are refused; a test and a break |
-| Early notices lost on a failure before the turn; an interrupted record's `error` differs by timing; `files_changed` trusts any tool's payload; `--continue` takes the newest created | low | [Outstanding](../../outstanding/headless-details-left-open.md), and [one for `--continue`](../../outstanding/continue-chooses-the-newest-session.md) |
+| Early notices lost on a failure before the turn; an interrupted record's `error` differs by timing; `files_changed` trusts any tool's payload; `--continue` takes the newest created | low | [Outstanding](../../outstanding/headless-details-left-open.md), and [one for `--continue`](../23/answered.md), closed in step 23 |
 
 ## After the merge: the signal test that failed on main, 2026-11-13
 

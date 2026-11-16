@@ -1789,8 +1789,8 @@ impl Session {
     }
 
     /// The prompt that follows a completed turn: a steering message that
-    /// found no boundary to be delivered at, and otherwise the first queued
-    /// prompt.
+    /// found no boundary to be delivered at, then the first queued prompt,
+    /// and otherwise a compaction that found none (since step 23).
     fn next_turn(&self, inbox: &mut Inbox) -> Option<(Running, Prompt)> {
         let steering = inbox
             .pending
@@ -1805,9 +1805,27 @@ impl Session {
                 compact: None,
             };
             (inbox.turn_ids.next_id(), prompt)
-        } else {
-            let queued = inbox.queue.pop_front()?;
+        } else if let Some(queued) = inbox.queue.pop_front() {
+            // A compaction still pending is taken at the queued turn's
+            // first boundary, before its request.
             (queued.turn, queued.prompt)
+        } else {
+            // A compaction asked for during the turn's last request found
+            // no boundary: a turn that only compacts, as an idle session's
+            // `session/compact` runs.
+            let position = inbox
+                .pending
+                .iter()
+                .position(|pending| matches!(pending, Pending::Compact(_)))?;
+            let Some(Pending::Compact(focus)) = inbox.pending.remove(position) else {
+                return None;
+            };
+            let prompt = Prompt {
+                input: Vec::new(),
+                delivery: None,
+                compact: Some(focus),
+            };
+            (inbox.turn_ids.next_id(), prompt)
         };
         let running = Running {
             id: turn,

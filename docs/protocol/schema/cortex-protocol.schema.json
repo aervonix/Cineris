@@ -5057,7 +5057,7 @@
       "type": "object"
     },
     "SessionCompactParams": {
-      "description": "`session/compact`",
+      "description": "`session/compact`: an idle session compacts in a turn of its own that\nsends nothing else; a running one at its next safe boundary. A turn\nwhose last request is under way has none left: when it ends, the turn\nthat follows takes the compaction at its first boundary, and when none\nfollows, a turn that only compacts runs. An interrupt drops it.",
       "properties": {
         "focus": {
           "description": "What the summary should keep in particular.",

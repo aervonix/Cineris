@@ -695,3 +695,13 @@ replace: .cmp(&time(&b.updated_at))
 packages: cortex-core
 caught-by:
     turns::the_list_gives_the_session_used_last_first
+
+[break] a-compaction-left-for-the-next-prompt
+rule: A compaction asked for during a turn's last request runs in a turn of its own when that turn ends and nothing follows it.
+file: crates/cortex-agent/src/turn.rs
+in: Session::next_turn
+find: .position(|pending| matches!(pending, Pending::Compact(_)))?;
+replace: .position(|pending| matches!(pending, Pending::Steer(_)))?;
+packages: cortex-agent
+caught-by:
+    context::a_compaction_asked_for_during_the_last_request_runs_when_the_turn_ends
