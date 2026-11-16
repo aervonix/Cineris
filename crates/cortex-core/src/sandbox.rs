@@ -120,8 +120,13 @@ pub(crate) struct Temp {
 /// The sandbox of one session: the launcher handed to its shell tool.
 #[derive(Debug)]
 pub(crate) struct SessionSandbox {
-    /// The launcher, when the sandbox enforces.
-    launcher: Option<SandboxLauncher>,
+    /// The launcher, when the sandbox enforces. A reload of the
+    /// configuration that changes the grant's write roots or network makes
+    /// another, for the commands started after it (step 24).
+    launcher: std::sync::RwLock<Option<SandboxLauncher>>,
+    /// What the launcher is made with, to make it again: the program and
+    /// its prefix, and the Landlock version.
+    made_with: Option<(PathBuf, Vec<OsString>, u8)>,
     /// The launcher the harness's own git is started through, when the
     /// sandbox enforces: the session's reads, and no write root, no
     /// network and no temporary directory, so that nothing git starts can
@@ -162,8 +167,10 @@ impl SessionSandbox {
         workspace: &Path,
         limits: Limits,
     ) -> Self {
+        let mut made_with = None;
         let (launcher, reader) = match (state, landlock, &core.program) {
             (SandboxState::Enforcing, Some(landlock), Some((program, prefix))) => {
+                made_with = Some((program.clone(), prefix.clone(), landlock));
                 let policy = policy_of(grant, &temp, landlock);
                 let reading = Policy {
                     read: policy.read.clone(),
@@ -195,7 +202,8 @@ impl SessionSandbox {
             .with_limits(limits)
         });
         let sandbox = Self {
-            launcher,
+            launcher: std::sync::RwLock::new(launcher),
+            made_with,
             reader,
             confine: AtomicBool::new(false),
             temp,
@@ -254,10 +262,41 @@ impl SessionSandbox {
         self.confine.load(Ordering::Acquire)
     }
 
+    /// The launcher as it is now, while commands are confined.
+    fn launcher(&self) -> Option<SandboxLauncher> {
+        if !self.confines() {
+            return None;
+        }
+        self.launcher
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Makes the launcher again from `grant` (a reload changed its write
+    /// roots or network), for the commands started from now on; one
+    /// running keeps its own. Nothing changes where the sandbox does not
+    /// enforce. What it watches of the protected paths is not changed:
+    /// `sandbox.protect` takes effect in a new session.
+    pub(crate) fn set_grant(&self, grant: &SandboxPolicy) {
+        let Some((program, prefix, landlock)) = &self.made_with else {
+            return;
+        };
+        let policy = policy_of(grant, &self.temp, *landlock);
+        *self
+            .launcher
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SandboxLauncher::new(
+            program.clone(),
+            prefix.clone(),
+            policy,
+        ));
+    }
+
     /// Follows a change of the session's level: nothing is confined at
     /// `unrestricted`.
     pub(crate) fn set_level(&self, level: &Level) {
-        let confine = self.launcher.is_some() && *level != Level::Unrestricted;
+        let confine = self.made_with.is_some() && *level != Level::Unrestricted;
         self.confine.store(confine, Ordering::Release);
     }
 
@@ -299,7 +338,7 @@ impl SessionSandbox {
 
 impl Launcher for SessionSandbox {
     fn launch(&self, command: CommandLine, cx: &LaunchCx<'_>) -> Result<Launch, String> {
-        let Some(launcher) = self.launcher.as_ref().filter(|_| self.confines()) else {
+        let Some(launcher) = self.launcher() else {
             return Direct.launch(command, cx);
         };
         let arguments: Vec<OsString> = command
@@ -328,7 +367,7 @@ impl Launcher for SessionSandbox {
     }
 
     fn explain(&self, exit: Option<Exit>, output: &str) -> Option<String> {
-        let launcher = self.launcher.as_ref().filter(|_| self.confines())?;
+        let launcher = self.launcher()?;
         let code = match exit {
             Some(Exit::Code(code)) => Some(code),
             _ => None,

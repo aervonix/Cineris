@@ -102,6 +102,10 @@ enum Message {
 struct Writer {
     receiver: Receiver<Message>,
     options: RecorderOptions,
+    /// How many months a monthly file stays after its own, as it is now:
+    /// read each time the files are pruned, so that a reload of the
+    /// configuration changes it (step 24).
+    retention: Arc<std::sync::atomic::AtomicU32>,
     clock: SharedClock,
     /// Events taken and not yet written.
     queued: Arc<AtomicU64>,
@@ -121,6 +125,8 @@ pub struct Recorder {
     /// The writer, until it is started.
     unstarted: Arc<Mutex<Option<Writer>>>,
     id: Arc<str>,
+    /// The writer's retention, which [`Recorder::set_retention`] changes.
+    retention: Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl std::fmt::Debug for Recorder {
@@ -256,6 +262,7 @@ impl Recorder {
             .unique("w_")
             .into();
         let queued = Arc::new(AtomicU64::new(0));
+        let retention = Arc::new(std::sync::atomic::AtomicU32::new(options.retention));
         Self {
             queue,
             dropped: Arc::new(AtomicU64::new(0)),
@@ -264,11 +271,20 @@ impl Recorder {
             unstarted: Arc::new(Mutex::new(Some(Writer {
                 receiver,
                 options,
+                retention: Arc::clone(&retention),
                 clock,
                 queued,
             }))),
             id,
+            retention,
         }
+    }
+
+    /// How many months a monthly file stays after its own, from the next
+    /// time the files are pruned (`stats.retention`, reloaded).
+    pub fn set_retention(&self, months: u32) {
+        self.retention
+            .store(months, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// This recorder's id (`w_…`), unique to it among every process's: what
@@ -584,7 +600,7 @@ fn settle(writer: &Writer, state: &mut State) {
                     dir,
                     zone.date_of(now),
                     &month_of(now),
-                    Some(writer.options.retention),
+                    Some(writer.retention.load(std::sync::atomic::Ordering::Relaxed)),
                 )
             {
                 let _ = aggregates.save(dir, writer.clock.as_ref());

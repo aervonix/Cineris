@@ -105,6 +105,58 @@ impl Default for ShellConfig {
     }
 }
 
+/// What of the `shell` tool's settings a reload of the configuration
+/// changes while its session runs (step 24): whether the project is
+/// trusted, so whether the look at what a command changed may ask git, and
+/// the providers' key variables, which no command is given. Both take
+/// effect for the next command.
+#[derive(Debug, Default)]
+pub struct ShellLive {
+    repository_trusted: std::sync::atomic::AtomicBool,
+    key_variables: Mutex<Vec<String>>,
+}
+
+impl ShellLive {
+    /// The settings a session starts with.
+    #[must_use]
+    pub fn new(repository_trusted: bool, key_variables: Vec<String>) -> Self {
+        Self {
+            repository_trusted: std::sync::atomic::AtomicBool::new(repository_trusted),
+            key_variables: Mutex::new(key_variables),
+        }
+    }
+
+    /// Whether the project is trusted now.
+    #[must_use]
+    pub fn repository_trusted(&self) -> bool {
+        self.repository_trusted
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// The project trusted, or no longer.
+    pub fn set_repository_trusted(&self, trusted: bool) {
+        self.repository_trusted
+            .store(trusted, std::sync::atomic::Ordering::Release);
+    }
+
+    /// The providers' key variables now.
+    #[must_use]
+    pub fn key_variables(&self) -> Vec<String> {
+        self.key_variables
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The providers' key variables, in place of those there were.
+    pub fn set_key_variables(&self, variables: Vec<String>) {
+        *self
+            .key_variables
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = variables;
+    }
+}
+
 /// What the project knows about a command
 /// (`docs/architecture/14-adaptation.md`). The project profile implements
 /// it; a session without one keeps the beginning and the end of every long
@@ -128,9 +180,12 @@ pub struct ShellTool {
     /// The environment commands inherit from, when it is not the
     /// process's own.
     inherited: Option<Vec<(std::ffi::OsString, std::ffi::OsString)>>,
-    /// The detector of the workspace the tool last ran in. It remembers,
-    /// for one workspace, that git is not installed.
-    detector: Mutex<Option<(AbsPath, Arc<ChangeDetector>)>>,
+    /// The detector of the workspace the tool last ran in, and whether it
+    /// may ask git. It remembers, for one workspace, that git is not
+    /// installed.
+    detector: Mutex<Option<(AbsPath, bool, Arc<ChangeDetector>)>>,
+    /// What a reload changes while the session runs.
+    live: Option<Arc<ShellLive>>,
     /// Where the harness's own git runs when it looks for what a command
     /// changed.
     git: Arc<dyn Confinement>,
@@ -156,7 +211,36 @@ impl ShellTool {
             inherited: None,
             detector: Mutex::new(None),
             git: Arc::new(AsItIs),
+            live: None,
         }
+    }
+
+    /// Sets what a reload of the configuration changes while the session
+    /// runs, in place of the trust in [`ShellConfig`] and no key variables
+    /// beyond its `env_remove`.
+    #[must_use]
+    pub fn with_live(mut self, live: Arc<ShellLive>) -> Self {
+        self.live = Some(live);
+        self
+    }
+
+    /// Whether the look at what a command changed may ask git now.
+    fn repository_trusted(&self) -> bool {
+        self.live
+            .as_ref()
+            .map_or(self.config.repository_trusted, |live| {
+                live.repository_trusted()
+            })
+    }
+
+    /// The variables no command is given, besides [`DEFAULT_REMOVED`]: the
+    /// configured ones and the providers' keys as they are now.
+    fn removed(&self) -> Vec<String> {
+        let mut removed = self.config.env_remove.clone();
+        if let Some(live) = &self.live {
+            removed.extend(live.key_variables());
+        }
+        removed
     }
 
     /// Sets the runner: its timer, its clock, its guard and its graces.
@@ -215,16 +299,19 @@ impl ShellTool {
     }
 
     fn detector(&self, root: &AbsPath) -> Arc<ChangeDetector> {
+        let trusted = self.repository_trusted();
         let mut held = self.detector.lock().unwrap_or_else(PoisonError::into_inner);
         match &*held {
-            Some((known, detector)) if known == root => Arc::clone(detector),
+            Some((known, was, detector)) if known == root && *was == trusted => {
+                Arc::clone(detector)
+            }
             _ => {
                 let detector = Arc::new(
                     ChangeDetector::new(root.to_native_string())
-                        .trusting_the_repository(self.config.repository_trusted)
+                        .trusting_the_repository(trusted)
                         .with_git(Arc::clone(&self.git)),
                 );
-                *held = Some((root.clone(), Arc::clone(&detector)));
+                *held = Some((root.clone(), trusted, Arc::clone(&detector)));
                 detector
             }
         }
@@ -452,14 +539,10 @@ impl Tool for ShellTool {
                 cwd: cwd.clone(),
                 env: env::starting_in(
                     match &self.inherited {
-                        Some(inherited) => env::build(
-                            inherited.iter().cloned(),
-                            &self.config.env_remove,
-                            cfg!(windows),
-                        ),
-                        None => {
-                            env::build(std::env::vars_os(), &self.config.env_remove, cfg!(windows))
+                        Some(inherited) => {
+                            env::build(inherited.iter().cloned(), &self.removed(), cfg!(windows))
                         }
+                        None => env::build(std::env::vars_os(), &self.removed(), cfg!(windows)),
                     },
                     cwd.as_os_str(),
                     cfg!(windows),
