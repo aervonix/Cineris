@@ -151,7 +151,7 @@ The first-release set. Each maps to one `Op`.
 | `initialize` | Handshake. |
 | `session/new` | Create a session: workspace, settings (models per role, reasoning level, speed, level), title, configuration overrides. |
 | `session/open` | Open a stored session by id. Returns its metadata and current state. |
-| `session/list` | List stored sessions for a workspace. |
+| `session/list` | List stored sessions for a workspace, the one added to last first (by `updated_at`). |
 | `session/read` | Read items of a session, paged, from the log, or one item by id. Also used to resynchronise: an item in progress comes back with the content it has so far, and the result says which items are incomplete. |
 | `session/fork`, `session/rewind` | Branching, as in [07-sessions-and-context.md](07-sessions-and-context.md). |
 | `session/close` | Stop using a session on this connection. |

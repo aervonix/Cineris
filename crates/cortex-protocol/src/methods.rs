@@ -213,7 +213,8 @@ pub struct SessionListParams {
     pub cursor: Option<String>,
 }
 
-/// The result of `session/list`: newest first.
+/// The result of `session/list`: the session added to last first (by
+/// `updated_at`, the id breaking a tie), not the one made last.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SessionListResult {

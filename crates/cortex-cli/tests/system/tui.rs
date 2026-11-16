@@ -627,6 +627,12 @@ fn perf_start_to_first_frame_under_both_names() {
 
 /// The resident memory of the process that the role shell started for
 /// `session`, in KiB: Linux only, read from `/proc`.
+/// Whether the prompt's box shows `text` typed: after `◆`, or after `>`
+/// where the console gets the ASCII glyphs (Windows).
+fn typed(screen: &cortex_testkit::VTerm, text: &str) -> bool {
+    screen.shows(&format!("◆ {text}")) || screen.shows(&format!("> {text}"))
+}
+
 /// A field of a process's `/proc` status: Linux only.
 #[cfg(target_os = "linux")]
 fn status_field(status: &str, name: &str) -> Option<String> {
@@ -752,7 +758,7 @@ fn perf_idle_memory_and_a_keys_time_to_its_frame() {
         let started = Instant::now();
         if n % 2 == 0 {
             session.send(b"x");
-            session.wait_for(LIMIT, "the key's echo", |t| t.shows("◆ x"));
+            session.wait_for(LIMIT, "the key's echo", |t| typed(t, "x"));
         } else {
             session.send(b"\x7f");
             session.wait_for(LIMIT, "the key taken back", |t| {
@@ -812,10 +818,10 @@ fn perf_a_streamed_piece_and_a_key_while_streaming() {
         // A key while the answer streams: typed, then taken back.
         let started = Instant::now();
         session.send(b"q");
-        session.wait_for(LIMIT, "the key's echo", |t| t.shows("◆ q"));
+        session.wait_for(LIMIT, "the key's echo", |t| typed(t, "q"));
         keys.push(started.elapsed().as_secs_f64() * 1000.0);
         session.send(b"\x7f");
-        session.wait_for(LIMIT, "the key taken back", |t| !t.shows("◆ q"));
+        session.wait_for(LIMIT, "the key taken back", |t| !typed(t, "q"));
     }
     percentiles("a streamed piece to its frame", pieces);
     percentiles("a key to its frame, streaming", keys);

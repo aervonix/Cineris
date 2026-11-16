@@ -3,7 +3,9 @@
 //! (`docs/architecture/03-agent-loop.md`,
 //! `docs/architecture/07-sessions-and-context.md`).
 
-use cortex_core::ClientInfo;
+use std::time::Duration;
+
+use cortex_core::{ClientId, ClientInfo};
 use cortex_protocol::event::{Event, TurnOutcome};
 use cortex_protocol::methods::{
     Op, OpResult, SessionForkParams, SessionListParams, SessionReadParams, SessionRef,
@@ -212,6 +214,84 @@ fn a_stored_session_is_listed_resumed_and_carries_on() {
         .map(|line| line["turn"].as_str().unwrap())
         .collect();
     assert_eq!(turns, ["t_1", "t_2"]);
+}
+
+/// `session/list` gives the session used last first, not the one made
+/// last: an older session that runs a turn again goes to the top, and
+/// `--continue` and the picker take that order.
+#[test]
+fn the_list_gives_the_session_used_last_first() {
+    let world = World::new("used_last", [says("a"), says("b"), says("c")]);
+    let core = world.core();
+    let list = |client: ClientId| {
+        let core = core.clone();
+        let workspace = world.workspace.to_str().unwrap().to_owned();
+        async move {
+            let OpResult::SessionList(listed) = core
+                .handle(
+                    client,
+                    Op::SessionList(SessionListParams {
+                        workspace: Some(workspace),
+                        limit: None,
+                        cursor: None,
+                    }),
+                )
+                .await
+                .unwrap()
+            else {
+                panic!("not a list");
+            };
+            listed
+                .sessions
+                .into_iter()
+                .map(|summary| summary.session_id)
+                .collect::<Vec<_>>()
+        }
+    };
+    world.run(async {
+        let older = Front::start(&world, &core).await;
+        older.turn("one").await;
+        older.close().await;
+        world.clock.advance(Duration::from_secs(60));
+        let newer = Front::start(&world, &core).await;
+        newer.turn("two").await;
+        newer.close().await;
+        assert_eq!(
+            list(newer.client.id).await,
+            [newer.session.clone(), older.session.clone()]
+        );
+
+        // The older one is opened again and used.
+        world.clock.advance(Duration::from_secs(60));
+        let client = core.connect(ClientInfo::user());
+        let OpResult::SessionOpen(opened) = core
+            .handle(
+                client.id,
+                Op::SessionOpen(SessionRef {
+                    session_id: older.session.clone(),
+                }),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("not a session");
+        };
+        let again = Front {
+            core: core.clone(),
+            client,
+            session: older.session.clone(),
+            state: opened.session,
+            seen: std::cell::RefCell::new(Vec::new()),
+            answered: std::cell::RefCell::new(Vec::new()),
+            answering: std::cell::RefCell::new(crate::Answering::default()),
+        };
+        again.turn("three").await;
+        again.close().await;
+        assert_eq!(
+            list(again.client.id).await,
+            [older.session.clone(), newer.session.clone()]
+        );
+    });
 }
 
 #[test]
