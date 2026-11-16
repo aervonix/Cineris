@@ -148,18 +148,17 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### The tooling and CI
 
 - [caught-by-names-checked-only-at-the-desk](caught-by-names-checked-only-at-the-desk.md): `check` in CI keeps no list of tests, so it does not check `caught-by` names. Owner: the owner.
-- [a-mutate-jobs-test-that-once-finished-every-piece](a-mutate-jobs-test-that-once-finished-every-piece.md): A test of `mutate`'s jobs failed once in 50 repeats under load, finishing every piece where its time should have run out. Owner: a later tooling step.
 - [a-retried-tests-standard-error-in-the-report](a-retried-tests-standard-error-in-the-report.md): `xtask` reads a retried test's standard error from its first attempt, not the last. Owner: a later tooling step.
 - [actionlint-in-the-checks](actionlint-in-the-checks.md): The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary. Owner: the owner.
 - [perf-in-the-main-workflow](perf-in-the-main-workflow.md): `cargo xtask perf` is not yet run in the `main` workflow on both systems with stored baselines. Owner: a tooling step, or step 33.
-- [rough-edges-of-the-seventh-tooling-steps-commands](rough-edges-of-the-seventh-tooling-steps-commands.md): Small faults of the seventh tooling step's commands (try-result's `--os`, ci-times' silent OS, api-diff's re-export homes, the corpus pin's repairs) that let no comparison pass wrongly. Owner: a later tooling step.
+- [rough-edges-of-the-seventh-tooling-steps-commands](rough-edges-of-the-seventh-tooling-steps-commands.md): Small faults of the seventh tooling step's commands (try-result's `--os`, ci-times' unchecked `--against`, api-diff's re-export homes, the corpus lock in the dependency graph) that let no comparison pass wrongly. Owner: a later tooling step.
 - [replace-and-the-comments-beside-a-match](replace-and-the-comments-beside-a-match.md): `replace` stacks a `--to`'s doc comment on the file's, and can leave a read-only file's temporary copy on Windows. Owner: a later tooling step.
 - [tests-the-fifth-tooling-step-left-unwritten](tests-the-fifth-tooling-step-left-unwritten.md): Seven behaviours of the fifth tooling step's tools that work and that no test or break holds yet. Owner: a later tooling step.
 - [tests-the-eighth-tooling-step-left-thin](tests-the-eighth-tooling-step-left-thin.md): What the eighth tooling step's tools do that no test holds (the re-run's wiring in `ci`, its put-back paths), and `apply`'s fmt beyond the plan. Owner: a later tooling step.
-- [tests-the-seventh-tooling-step-left-thin](tests-the-seventh-tooling-step-left-thin.md): Behaviours of the seventh tooling step's tools no blocking test holds (a hold's wait for another, `ab`'s glue, `api-diff`'s report, `os:` breaks' names). Owner: a later tooling step.
+- [tests-the-seventh-tooling-step-left-thin](tests-the-seventh-tooling-step-left-thin.md): Behaviours of the seventh tooling step's tools no blocking test holds (`ab`'s glue, `try`'s commit check, `api-diff`'s report and its Windows runs, the corpus on Windows). Owner: a later tooling step.
 - [timeout-report-for-tests-without-the-test-kit](timeout-report-for-tests-without-the-test-kit.md): A test using none of the test kit's waits gets no timeout report, since nextest lacks pre-timeout scripts. Owner: a later tooling step.
 - [typed-values-in-composite-actions](typed-values-in-composite-actions.md): The repo rule against event values in scripts reads `.github/workflows/` only, not composite actions under `.github/actions/`. Owner: a later tooling step.
-- [the-pr-size-jobs-rough-edges](the-pr-size-jobs-rough-edges.md): `ci-wait` and `ci-times` count `pr-size` with the blocking jobs; its difference is from `main`'s newest record, not the base; a change to the job is not run on its own pull request. Owner: a tooling step.
+- [the-pr-size-jobs-rough-edges](the-pr-size-jobs-rough-edges.md): `ci-wait` counts `pr-size` with the blocking jobs; its difference is from `main`'s newest record, not the base. Owner: a tooling step.
 
 ### Windows
 
