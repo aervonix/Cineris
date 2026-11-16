@@ -126,7 +126,7 @@ An independent review of the branch (its experiments: the coordinator's `target/
 
 **What the fixes changed:**
 
-- A second `commit-records` of the same file, after the first commit, is now refused: the branch has the new copy and `HEAD` the old. That follows from finding 4; the refusal says how to go on.
+- (Undone by the second round, below:) a second `commit-records` of the same file, after the first commit, was refused: the branch had the new copy and `HEAD` the old.
 - A dispatch with `--commit` of a commit from before this step, and `--against`, fails at the job's start with "unknown flag" for `--label`, as for any input added since a commit. Documented in the input's row.
 
 **Git starts after the fixes** (strace, as before): the test on both systems 29 (unchanged: `check-ref-format` added, `worktree list` gone); the Unix records test 62; the Unix rewrite test 130.
@@ -136,3 +136,29 @@ An independent review of the branch (its experiments: the coordinator's `target/
 **Breaks after the fixes:** `rx --side -- cargo xtask mutate tooling-10-runs --jobs 2`, one run, exit 0: **42 of 42 did what the list expects**. 41 were caught by the tests they name, and `rewrite-fold-reads-the-index-in-place` survived, as its list entry expects.
 
 **Stress after the fixes:** `rx --side -- env TMPDIR=/mnt/rxtmp/t10s cargo xtask stress -p xtask --count 50 --cores 2 --load 6`: 720 tests, 50 times each (seeds 0 to 49), every test passed every time (278 s). The short `TMPDIR` is there because of the socket path above.
+
+
+### The second round
+
+The second review (c8539f82..8f06e088; its experiments `review3/exp7.sh` cases 1 to 5, and `exp3.sh`) found that the fix for finding 4 broke `commit-records`' main use, and two new gaps. Fixed in `7d3071aa`, `2f722979` and `d16c8ddb`, each with a test and a break.
+
+| Finding | Fix | Test | Break(s) |
+|---|---|---|---|
+| A. The check compared the branch's copy with `HEAD`'s, which never changes, so the main use (the branch has `ci.md`, the worktree's `HEAD` has not) and its own advice (`git show B:FILE > FILE`, add a section, run again) were refused for ever (exp7 1–2). | For each file: taken when the branch has no copy, when the branch's copy is `HEAD`'s, or when the branch's copy's lines are all in the working file in their order (`built_on`: a subsequence of lines, `\r\n` read as `\n`); otherwise refused, with the branch's blob, `git show B:FILE > FILE`, and `--replace`. `--replace` (new) takes it knowingly. The branch's copies are read in one `cat-file --batch`, only when one is not `HEAD`'s. A second run after the first commit now works (the file has the branch's lines, and more). | Unit: `built_on` (equal, a section added, CRLF, out of order, a line dropped) and the decision for each case. Unix records test: a second run with a section added committed; the advice followed (the branch has a file `HEAD` has not, made from its copy plus a section) committed; a file that dropped the branch's lines refused, then committed with `--replace`. | `records-written-over-another-version` (moved), `records-built-on-ignores-the-order`, `records-replace-is-ignored` |
+| B. `--branch '@{-1}'` (or `-`) was expanded by `check-ref-format --branch`, and moved a branch the user did not name (exp7 3). | Refused when the name `check-ref-format` gives back is not the one given: "`@{-1}` stands for `previous`: name the branch itself". | Unix records test (`@{-1}` after a switch) | `records-takes-a-name-git-expands` |
+| C. A folder link inside the repository was followed: `docs/steps/99 -> ../../xtask` published `xtask/notes.md` (exp7 4). | Every part of the path, from the top down, is read with `symlink_metadata`, and a link anywhere is refused, wherever it leads, as `git add` refuses a path beyond one. The canonical-path check is gone (it let an inside link through). | Unix records test: a link to a file outside, a folder link out, a folder link inside | `records-follows-a-link` (moved), `records-through-a-folder-that-is-a-link` (renamed) |
+| The compare-and-swap of `commit-records` had no test: dropping `&old` survived. | `records_transaction(branch, new, old)` builds the `update-ref --stdin` text, unit-tested. | `what_each_command_prints_and_gives_git_is_what_it_must_be` | `records-moves-the-branch-from-wherever-it-is` |
+
+**Found while running the breaks:** the first run of `records-replace-is-ignored` was NOT CAUGHT by the Unix records test it named (caught only by the unit test). `commit_records` skipped reading the branch's copies under `--replace`, and an empty text reads as built on: a second path for `--replace` that hid the check's own. `d16c8ddb` reads them under `--replace` too (one git more, only then), and the break is caught by both tests.
+
+**Left, as the coordinator decided (D):**
+- Branches a `rebase --update-refs` will move (`rebase-merge/update-refs`) are not read as in use.
+- A worktree whose folder was deleted and not pruned still blocks its branch: conservative, and what git does.
+
+**Git starts:** the test on both systems still 29; the Unix records test 103 (it now commits four times and tries three links); the Unix rewrite test 130.
+
+**`rx -- env TMPDIR=/mnt/rxtmp/t10r cargo xtask ci`:** every step ok (the socket-path failure with rx's own `TMPDIR` is fixed in PR #84, not on this base).
+
+**Breaks:** `rx --side -- cargo xtask mutate tooling-10-runs --jobs 2`: first run exit 1, 45 of 46 (the flag above); after `d16c8ddb`, **46 of 46 did what the list expects**, 45 caught by the tests they name and `rewrite-fold-reads-the-index-in-place` survived, as listed.
+
+**Stress:** `rx --side -- env TMPDIR=/mnt/rxtmp/t10s cargo xtask stress -p xtask --count 50 --cores 2 --load 6`: 720 tests, 50 times each (seeds 0 to 49), every test passed every time (261 s).

@@ -809,29 +809,29 @@ caught-by:
     branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
 
 [break] records-follows-a-link
-rule: commit-records commits a record's own text, and refuses a link, whose target may be outside the repository.
+rule: commit-records commits a record's own text, and refuses a path with a link on it, whose target may be anywhere.
 file: xtask/src/branch.rs
 in: regular_inside
-find: if !kind.is_file()
-replace: if kind.is_dir()
+find: if kind.is_symlink()
+replace: if false
 caught-by:
     branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
 
-[break] records-through-a-folder-that-leads-out
-rule: commit-records refuses a record reached through a link that leads out of the repository.
+[break] records-through-a-folder-that-is-a-link
+rule: commit-records refuses a record reached through a folder that is a link, wherever it leads, as git add refuses a path beyond one.
 file: xtask/src/branch.rs
 in: regular_inside
-find: real.starts_with(&top)
-replace: real.starts_with(&top) || real.exists()
+find: if kind.is_symlink()
+replace: if kind.is_symlink() && last
 caught-by:
     branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
 
 [break] records-written-over-another-version
-rule: commit-records refuses a record whose copy on the branch is not the one HEAD has: the working file was not written over the branch's version.
+rule: commit-records refuses a record not built on the branch's copy (the branch's lines not all in it, in order), unless the copy is HEAD's.
 file: xtask/src/branch.rs
 in: not_from_the_branch
-find: if theirs == ours
-replace: if true
+find: built_on(text, working)
+replace: true
 caught-by:
     branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
     branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
@@ -898,3 +898,42 @@ find: Err(error) => format!("(each side's wall time is not shown: {error})\n")
 replace: Err(error) => panic!("{error}")
 caught-by:
     try_result::tests::a_wall_times_file_that_cannot_be_read_is_a_note_and_not_a_failure
+
+# The second review's findings.
+
+[break] records-built-on-ignores-the-order
+rule: A file is built on the branch's copy when the copy's lines are all in it in their order, not only somewhere in it.
+file: xtask/src/branch.rs
+in: built_on
+find: .all(|line| rest.any(|candidate| candidate == line))
+replace: .all(|line| working.contains(line))
+caught-by:
+    branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
+
+[break] records-replace-is-ignored
+rule: --replace puts the file in place of the branch's copy, knowingly, whatever the check says.
+file: xtask/src/branch.rs
+in: not_from_the_branch
+find: replace || Some(blob) == ours
+replace: Some(blob) == ours
+caught-by:
+    branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] records-takes-a-name-git-expands
+rule: commit-records moves the branch named, and refuses @{-1} or -, which git expands to another.
+file: xtask/src/branch.rs
+in: commit_records
+find: if branch != request.branch
+replace: if false
+caught-by:
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] records-moves-the-branch-from-wherever-it-is
+rule: commit-records moves the branch only from the commit it read at the start.
+file: xtask/src/branch.rs
+in: records_transaction
+in-string: update {branch} {new} {old}
+replace: update {branch} {new}
+caught-by:
+    branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
