@@ -87,8 +87,8 @@ pub(crate) struct EnginePolicy {
     stopped: Mutex<Option<(u64, String)>>,
     denials: Mutex<Vec<PermissionDenial>>,
     /// Called before a command is decided: the project's knowledge looks
-    /// at whether its files changed, and takes its learned rules back when
-    /// they did (`crate::knowledge`).
+    /// at whether its files changed, and gives the engine the learned
+    /// rules that follow from them when they did (`crate::knowledge`).
     before_command: std::sync::OnceLock<Arc<dyn Fn() + Send + Sync>>,
 }
 

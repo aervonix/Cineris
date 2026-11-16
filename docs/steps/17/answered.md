@@ -319,10 +319,28 @@ An independent reviewer then read the whole diff against the specification, with
 - **Two sentences of the docs were not true of the code:** a run "blocked by the sandbox" is a failure like any other (the sentence is gone; the two runs of a flip must have the same confinement), and a command that left a process running was read as a result (it is not, now).
 - **The step 24 line of the build plan named a table of error codes that did not exist:** 14-adaptation's row for the two operations lists them. "Both or neither" is `invalid_params`, as `usage/report` says it.
 - **Two tests named `sys_` started no process:** renamed.
-- **A promote told the sessions of its write after it,** so a confined command finishing in between could take it for a change from outside: they are told before as well. No test: the window is between two lines.
+- **A promote tells the sessions of its write after it,** so a confined command whose two looks at the protected paths span the write takes it for a change from outside and stops its turn. Telling them before as well was tried and taken out again by the last read: it does not close the window, and a promote that is then refused would leave the file marked as the harness's own. Left as [an item](../../outstanding/a-promote-while-a-confined-command-runs.md).
 - **Errors in a notice went out unescaped,** and what a session says once was not bounded: through `visible`, and 256 things at most.
 
 **Written down, not changed:** the watch forgets the failed command with the smallest name first, not the oldest, when it holds 64; a store that is full is read at every observed run of a command it does not hold; `at()` says only that a path "cannot be a workspace", whatever was wrong with it; the measurements of the observer go into `performance-budgets.md` with the third pull request.
+
+### The last read
+
+The second pull request's last round: a reviewer read the fixes above alone.
+
+| # | Finding | Fix | Held by |
+|---|---|---|---|
+| 1 | **A test read the "expired" notice without waiting for it.** The mark is made beside the turn now, so its notice may still be in the client's queue when the turn has ended. The stress run met it once in fifty. | The test waits for the notice, and so does the one that reads "Learned:". | the two tests, under stress |
+| 2 | **The stricter table still classed lines that do something else,** one of them new with the fix: `make SHELL=./deploy.sh test` (an assignment was passed over), `make --eval=…`, `python deploy.py -m pytest`, `zig build deploy`, `dotnet build -t:Deploy`, `cmake --build . -- install`, `go test -exec=./deploy.sh`, `npm run test:publish`. | Make-like lines pass over a short list of options and refuse everything else; `-m` is the first word; `zig build` is classed by its steps; an option that names something to run refuses the line; a script's variant after `:` is one of a few words. A few options that take no value may stand before a sub-command again (`cargo --locked test`, `pnpm -r test`). | `observe::tests::the_table_classes_the_common_builds_tests_and_checks`, with the reviewer's lines |
+| 3 | **Sentences and comments that the fixes had made untrue:** the look before a command "drops every rule"; the read "takes no lock" (it tries one, without waiting, for the good copy); "holds up no turn" (a `remember` call waits for the lock). | Corrected, in the code, the breaks and 14-adaptation. | by reading |
+| 4 | **A rewind's count of changed files could be skipped,** when the client that asked went away or the restore failed half way. | Counted before the files are touched. | `knowledge::sys_a_test_that_passes_after_an_undo_put_a_file_back_has_not_flipped` (the ordinary case; the two others by reading) |
+| 5 | **Telling the sessions before a promote's write did not close its window,** and could hide a change from outside after a refused promote. | Taken out again; the window is an item. | [the item](../../outstanding/a-promote-while-a-confined-command-runs.md) |
+
+**From its notes:** the flag that keeps one mark of expired entries at a time is reset however the mark ends, and if it never starts; a directory with a `:` is not observed (the store refuses one that could name a drive). **Written down, not changed:** a `took` that carries an older snapshot can still put older rules in force for the moment between a command's look and its decision, and the next look corrects it; a guard against it was written and left out, being logic on the trust path that no reviewer would have read. Two `project/list` at once: the second may answer before the first one's wait is over.
+
+**No further round follows:** these last fixes were not read again by a reviewer. They are the table (stricter only, with its rows), a test's wait, comments, and two calls moved.
+
+**The tests' cost on Windows.** The new system tests started about 34 shell commands, and a shell's start on a hosted Windows runner is a third of a second: the A/B (`try` 43863357445, the median of five runs on one runner) put tier 3 at 58.2 s against `main`'s 46.5 s, and on a slower runner that is the tier's budget. So a command that only has to ask is refused where it was allowed (no process starts), and the call that waits for an answer while a test acts is refused too: about 18 commands are left.
 
 ## Measured
 

@@ -736,7 +736,7 @@ caught-by:
     cortex-core::it knowledge::sys_a_change_of_level_keeps_what_was_accepted_and_nothing_that_was_turned_off
 
 [break] the-files-are-not-looked-at-before-a-command
-rule: Before a command is decided a session looks at its project's files, and drops every learned rule when either changed.
+rule: Before a command is decided a session looks at its project's files, and makes its learned rules again from them when either changed.
 file: crates/cortex-core/src/knowledge.rs
 in: Knowledge::before_command
 find: if current && !expired {
@@ -934,11 +934,11 @@ caught-by:
     cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
 
 [break] a-name-that-begins-like-a-test-is-a-test
-rule: A script or a target is classed by its whole name, or the word before its first colon: `test-and-deploy` is not a test.
+rule: A script or a target is classed by its whole name, or by the word before a colon and one of a few variants after it: `test:publish` is not a test.
 file: crates/cortex-knowledge/src/observe.rs
 in: script
-find: name.split(':')
-replace: name.split([':', '-', '_', '.'])
+find: if !parts.all(|part| VARIANTS.contains(&part)) { return None; }
+replace:
 caught-by:
     cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
 
@@ -993,4 +993,31 @@ find: "outlived"
 replace: "never"
 caught-by:
     cortex-core checkpoints::tests::a_finished_command_is_read_for_the_observer_from_its_payload
+
+[break] an-assignment-or-a-makefile-is-passed-over
+rule: A make-like line with an assignment, another makefile or any option outside a short list is not classed: each can make any target do anything.
+file: crates/cortex-knowledge/src/observe.rs
+in: targets
+find: _ if word.starts_with('-') || assignment(word) => return None
+replace: _ if word.starts_with('-') || assignment(word) => {}
+caught-by:
+    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+
+[break] an-option-that-names-a-program-is-passed-over
+rule: A line with an option that names something to run is not classed.
+file: crates/cortex-knowledge/src/observe.rs
+in: classify
+find: if rest.iter().any(|word| runs_something_else(word)) { return None; }
+replace:
+caught-by:
+    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+
+[break] a-module-flag-after-a-file-is-the-interpreters
+rule: `python -m` is classed only when `-m` is the first word: after a file's name it is the file's own argument.
+file: crates/cortex-knowledge/src/observe.rs
+in: classify
+find: match (*rest.first()?, *rest.get(1)?) {
+replace: match ("-m", *rest.get(rest.iter().position(|word| *word == "-m")? + 1)?) {
+caught-by:
+    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
 

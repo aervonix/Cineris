@@ -23,14 +23,17 @@
 //! turn, on the blocking pool; the engine is given the learned rules
 //! there, before the turn's first request.
 //!
-//! # Nothing on a turn's path waits for the store's lock
+//! # A turn's start and a command's result wait for no lock
 //!
-//! A read takes no lock. What writes the store for the session itself
-//! (what the observer saw, the mark on an entry that expired) is done
-//! beside the turn, on the blocking pool ([`Knowledge::beside`]): a
-//! process that holds the lock and has stopped cannot hold up a turn's
-//! start or a command's result. `project/list` waits for that work, so a
-//! listing after a turn holds what the turn's commands showed.
+//! A read waits for nothing: it takes no lock for the store, and tries
+//! the lock without waiting when it has the good copy to bring up to
+//! date. What writes the store for the session itself (what the observer
+//! saw, the mark on an entry that expired) is done beside the turn, on
+//! the blocking pool ([`Knowledge::beside`]): a process that holds the
+//! lock and has stopped cannot hold up a turn's start or a command's
+//! result. `project/list` waits for that work, so a listing after a turn
+//! holds what the turn's commands showed. A `remember` call writes the
+//! store itself, and waits for the lock as any change does.
 //!
 //! # A session's parts do not hold each other
 //!
@@ -68,8 +71,9 @@
 
 #![allow(
     clippy::disallowed_methods,
-    reason = "the two stamps looked at before a command's decision are two stat calls; \
-              everything else here that blocks runs on the blocking pool"
+    reason = "before a command's decision the two files' stamps are looked at (two stat \
+              calls), and the files read again when one changed (a bounded read that waits \
+              for nothing); everything else here that blocks runs on the blocking pool"
 )]
 
 use std::collections::BTreeSet;
@@ -220,6 +224,19 @@ pub(crate) struct Knowledge {
 /// The most things a session says once: past it, nothing new is said.
 const MAX_TOLD: usize = 256;
 
+/// Lets the next mark of expired entries be made, when it is dropped.
+struct Marked(std::sync::Weak<Knowledge>);
+
+impl Drop for Marked {
+    fn drop(&mut self) {
+        if let Some(knowledge) = self.0.upgrade() {
+            knowledge
+                .marking
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
 impl std::fmt::Debug for Knowledge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Knowledge")
@@ -337,10 +354,12 @@ impl Knowledge {
                 return self.peek().unwrap_or(snapshot);
             }
             if !self.marking.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                self.beside(|this| {
+                // However the mark ends, and if it never starts, the next
+                // one may be made.
+                let done = Marked(self.me.clone());
+                self.beside(move |this| {
+                    let _done = done;
                     this.mark_lapsed();
-                    this.marking
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
                 });
             }
         }
@@ -457,11 +476,11 @@ impl Knowledge {
 
     /// Before a command is decided: when either of the project's files
     /// changed since this session's rules were made from them, or the
-    /// first of the entries behind the rules has expired, every learned
-    /// rule is dropped at once, and given again from the files at the next
-    /// turn's start. Another process's `cortex project disable` then takes
-    /// a command off the safe list before its next run, not at the next
-    /// turn.
+    /// first of the entries behind the rules has expired, the rules are
+    /// made again there and then, from the files as they are. Another
+    /// process's `cortex project disable` then takes a command off the
+    /// safe list before its next decision, not at the next turn, and the
+    /// commands still accepted go on running unasked.
     ///
     /// The files are compared with the snapshot **these rules were made
     /// from**, not with the one the project's sessions share: another
@@ -490,8 +509,8 @@ impl Knowledge {
             return;
         }
         // The rules are made again before this command is decided: from
-        // the files as they are now when they changed (a read, with no
-        // lock taken), or from the same snapshot at the time it is now
+        // the files as they are now when they changed (a read that waits
+        // for nothing), or from the same snapshot at the time it is now
         // when an entry expired. A command turned off asks; the others
         // still run unasked.
         let snapshot = match from {
@@ -892,18 +911,6 @@ pub(crate) async fn update(
         .changes
         .iter()
         .any(|change| change.action == EntryAction::Promote);
-    // A promote writes the repository's shared file, which the sandbox
-    // looks at around a confined command. The sessions are told before
-    // the write as well as after it: a command that finishes between the
-    // two would otherwise take the write for a change made from outside,
-    // and stop its turn.
-    if promoted {
-        for live in core.sessions_of(&key) {
-            if let Some(knowledge) = &live.knowledge {
-                knowledge.touched_shared_file();
-            }
-        }
-    }
     let updated = Core::blocking(move || {
         let finds = |text: &str| {
             filter

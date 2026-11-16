@@ -124,6 +124,15 @@ async fn list_at(
         .await
 }
 
+/// Waits until the user was told something that holds `words`: what is
+/// told beside a turn may still be in the client's queue when the turn
+/// has ended.
+async fn told_of(front: &Front, words: &str) {
+    front
+        .until(|_| front.notices().iter().any(|notice| notice.contains(words)))
+        .await;
+}
+
 fn updates_in(seen: &[Outgoing]) -> usize {
     seen.iter()
         .filter(|outgoing| {
@@ -171,24 +180,40 @@ fn other_process(world: &World) -> Project {
     )
 }
 
-/// A second program in the workspace, which nothing allows: it asks, and
-/// a test acts while it waits.
-fn deploy(world: &World) -> &'static str {
-    if cfg!(windows) {
-        world.put("deploy.cmd", "@echo off\r\nexit /b 0\r\n");
-        "./deploy.cmd"
-    } else {
-        world.put("deploy", "#!/bin/sh\nexit 0\n");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                world.workspace.join("deploy"),
-                std::fs::Permissions::from_mode(0o755),
-            )
-            .unwrap();
+/// A command that nothing allows, so that it asks: a test acts while its
+/// question is open, and then refuses it, so that no process is started
+/// for it.
+const WAITS: &str = "./release-it now";
+
+fn waiting(id: &str) -> cortex_testkit::Response {
+    run(id, WAITS)
+}
+
+/// Sends a prompt and waits for its turn to end, refusing every call that
+/// is asked about. Returns the tools that were asked about, in order.
+///
+/// A test that only needs to know that a command asks refuses it: a
+/// command that runs costs a shell's start, which on Windows is a third
+/// of a second.
+async fn turn_denying(front: &Front, text: &str) -> Vec<String> {
+    let before = front.ends().len();
+    front.prompt(text).await;
+    let mut asked = Vec::new();
+    loop {
+        front
+            .until(|seen| {
+                front.ends().len() > before
+                    || crate::requests_in(seen)
+                        .iter()
+                        .any(|(id, _)| !front.answered.borrow().contains(id))
+            })
+            .await;
+        if front.ends().len() > before {
+            return asked;
         }
-        "./deploy"
+        let (id, request) = front.approval().await;
+        asked.push(request.tool.clone());
+        front.answer(&id, ApprovalChoice::Deny).unwrap();
     }
 }
 
@@ -280,6 +305,8 @@ fn sys_a_command_seen_to_succeed_twice_is_learned_told_and_runs_unasked_once_acc
             "where it was learned"
         );
         let id = entry.id.as_str().to_owned();
+        // The notice is told beside the turn, after the entries' event.
+        told_of(&front, "Learned:").await;
         let told: Vec<String> = front
             .notices()
             .into_iter()
@@ -292,7 +319,7 @@ fn sys_a_command_seen_to_succeed_twice_is_learned_told_and_runs_unasked_once_acc
 
         // Active is not accepted: it reaches the model, as a notice in the
         // epoch that began without it, and it still asks.
-        assert_eq!(front.turn_allowing("a third time").await, ["shell"]);
+        assert_eq!(turn_denying(&front, "a third time").await, ["shell"]);
         let third = world.provider.requests()[4].clone();
         let sent: String = third.messages.iter().map(texts).collect();
         assert!(sent.contains(PROFILE_CHANGED), "{sent}");
@@ -309,7 +336,7 @@ fn sys_a_command_seen_to_succeed_twice_is_learned_told_and_runs_unasked_once_acc
 
         // Turned off, it asks again, at once.
         change(&front, &id, EntryAction::Disable).await;
-        assert_eq!(front.turn_allowing("a fifth").await, ["shell"]);
+        assert_eq!(turn_denying(&front, "a fifth").await, ["shell"]);
         // And it is not learned again from that run.
         assert_eq!(list(&front).await[0].status, EntryStatus::Disabled);
         front.close().await;
@@ -319,7 +346,7 @@ fn sys_a_command_seen_to_succeed_twice_is_learned_told_and_runs_unasked_once_acc
 /// An accepted command still waits for the project's trust, as the
 /// project's own allow rules do, and the user is told that it waits.
 #[test]
-fn sys_an_accepted_command_waits_for_the_projects_trust() {
+fn an_accepted_command_waits_for_the_projects_trust() {
     let mut world = World::new("knowledge_untrusted", []);
     let line = passing(&world);
     world.provider = cortex_testkit::ScriptedProvider::new([run("c1", &line), says("One.")]);
@@ -345,7 +372,7 @@ fn sys_an_accepted_command_waits_for_the_projects_trust() {
     let core = world.core();
     world.run(async {
         let front = Front::start(&world, &core).await;
-        assert_eq!(front.turn_allowing("test it").await, ["shell"]);
+        assert_eq!(turn_denying(&front, "test it").await, ["shell"]);
         assert!(
             front
                 .notices()
@@ -494,7 +521,7 @@ fn sys_a_repositorys_shared_file_is_proposals_until_the_user_accepts_them() {
         let front = Front::start(&world, &core).await;
         // Even in a trusted project: nothing of it in the prompt, and the
         // command asks.
-        assert_eq!(front.turn_allowing("test it").await, ["shell"]);
+        assert_eq!(turn_denying(&front, "test it").await, ["shell"]);
         let first = &world.provider.requests()[0];
         assert!(
             !first.system.contains("Project profile"),
@@ -612,7 +639,7 @@ fn sys_a_change_of_level_keeps_what_was_accepted_and_nothing_that_was_turned_off
         change(&front, &id, EntryAction::Disable).await;
         level(Level::ReadOnly).await.unwrap();
         level(Level::Supervised).await.unwrap();
-        assert_eq!(front.turn_allowing("again").await, ["shell"]);
+        assert_eq!(turn_denying(&front, "again").await, ["shell"]);
         front.close().await;
     });
 }
@@ -624,27 +651,9 @@ fn sys_a_change_of_level_keeps_what_was_accepted_and_nothing_that_was_turned_off
 fn sys_a_command_another_process_turned_off_asks_at_its_next_run() {
     let mut world = World::new("knowledge_other_process", []);
     let line = passing(&world);
-    // A second program, which nothing allows: it asks, and the test acts
-    // while it waits.
-    let other = if cfg!(windows) {
-        world.put("deploy.cmd", "@echo off\r\nexit /b 0\r\n");
-        "./deploy.cmd"
-    } else {
-        world.put("deploy", "#!/bin/sh\nexit 0\n");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                world.workspace.join("deploy"),
-                std::fs::Permissions::from_mode(0o755),
-            )
-            .unwrap();
-        }
-        "./deploy"
-    };
     world.provider = cortex_testkit::ScriptedProvider::new([
         run("c1", &line),
-        run("c2", other),
+        waiting("c2"),
         run("c3", &line),
         says("Done."),
     ]);
@@ -674,7 +683,7 @@ fn sys_a_command_another_process_turned_off_asks_at_its_next_run() {
         // The first ran unasked. The second, which nothing allows, asks:
         // while it waits, another process turns the first off.
         let (asked, request) = front.approval().await;
-        assert!(format!("{request:?}").contains("deploy"), "{request:?}");
+        assert!(format!("{request:?}").contains(WAITS), "{request:?}");
         project
             .update(
                 &[EntryChange {
@@ -686,7 +695,7 @@ fn sys_a_command_another_process_turned_off_asks_at_its_next_run() {
                 None,
             )
             .unwrap();
-        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        front.answer(&asked, ApprovalChoice::Deny).unwrap();
         // The third run of the turn is the first command again, and asks:
         // a second question comes before the turn ends.
         front
@@ -698,7 +707,8 @@ fn sys_a_command_another_process_turned_off_asks_at_its_next_run() {
         );
         let (asked, request) = front.approval().await;
         assert!(format!("{request:?}").contains(&line), "{request:?}");
-        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        // It asked: that is the test. Refused, it starts no process.
+        front.answer(&asked, ApprovalChoice::Deny).unwrap();
         front.turns(1).await;
         front.close().await;
     });
@@ -930,8 +940,9 @@ fn sys_a_credential_is_not_learned_and_not_remembered() {
     let line = passing(&world);
     let key = format!("ghp_{}", "a1B2".repeat(9));
     world.provider = cortex_testkit::ScriptedProvider::new([
+        // Once is enough: a line that is observed is in the store, as a
+        // proposal, from its first success.
         run("c1", &format!("{line} --token={key}")),
-        run("c2", &format!("{line} --token={key}")),
         calls(&[(
             "c3",
             "remember",
@@ -954,9 +965,9 @@ fn sys_a_credential_is_not_learned_and_not_remembered() {
     let core = world.core();
     world.run(async {
         let front = Front::start(&world, &core).await;
-        front.turn_allowing("run it twice and remember").await;
+        front.turn_allowing("run it and remember").await;
         let results = front.results();
-        for result in &results[2..4] {
+        for result in &results[1..3] {
             assert_eq!(result.1, "error");
             assert!(result.2.contains("looks like a credential"), "{}", result.2);
         }
@@ -976,8 +987,7 @@ fn sys_learning_can_be_turned_off_and_the_sections_budget_set() {
     let mut world = World::new("knowledge_settings", []);
     world.user_config("[project]\nlearn = false\nprofile_tokens = 0\n");
     let line = passing(&world);
-    world.provider =
-        cortex_testkit::ScriptedProvider::new([run("c1", &line), run("c2", &line), says("Done.")]);
+    world.provider = cortex_testkit::ScriptedProvider::new([run("c1", &line), says("Done.")]);
     other_process(&world)
         .update(
             &[],
@@ -993,8 +1003,9 @@ fn sys_learning_can_be_turned_off_and_the_sections_budget_set() {
     let core = world.core();
     world.run(async {
         let front = Front::start(&world, &core).await;
-        assert_eq!(front.turn_allowing("run it twice").await.len(), 2);
-        // Nothing was learned from two successes.
+        assert_eq!(front.turn_allowing("run it").await.len(), 1);
+        // Nothing was learned from a success: not even the proposal a
+        // first success makes.
         let entries = list(&front).await;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].kind, EntryKind::Fact);
@@ -1032,17 +1043,17 @@ fn sys_learning_can_be_turned_off_and_the_sections_budget_set() {
 fn sys_a_command_accepted_while_a_turn_runs_stops_asking_at_once() {
     let mut world = World::new("knowledge_accept_mid_turn", []);
     let line = passing(&world);
-    let other = deploy(&world);
     world.provider =
-        cortex_testkit::ScriptedProvider::new([run("c1", other), run("c2", &line), says("Done.")]);
+        cortex_testkit::ScriptedProvider::new([waiting("c1"), run("c2", &line), says("Done.")]);
     let (_project, id) = learned(&world, &line);
     let core = world.core_with(|options| options.trust_project = true);
     world.run(async {
         let front = Front::start(&world, &core).await;
         front.prompt("two commands").await;
-        let (asked, _) = front.approval().await;
+        let (asked, request) = front.approval().await;
+        assert!(format!("{request:?}").contains(WAITS), "{request:?}");
         change(&front, id.as_str(), EntryAction::Accept).await;
-        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        front.answer(&asked, ApprovalChoice::Deny).unwrap();
         // An unanswered question fails the test at once.
         front.turns(1).await;
         assert_eq!(front.approvals().len(), 1, "the accepted command asked");
@@ -1060,10 +1071,9 @@ fn sys_a_command_accepted_while_a_turn_runs_stops_asking_at_once() {
 fn sys_a_command_turned_off_elsewhere_asks_though_another_session_read_the_files_first() {
     let mut world = World::new("knowledge_two_sessions", []);
     let line = passing(&world);
-    let other = deploy(&world);
     world.provider = cortex_testkit::ScriptedProvider::new([
         run("c1", &line),
-        run("c2", other),
+        waiting("c2"),
         run("c3", &line),
         says("Done."),
     ]);
@@ -1077,7 +1087,8 @@ fn sys_a_command_turned_off_elsewhere_asks_though_another_session_read_the_files
         let second = Front::start(&world, &core).await;
         front.prompt("three commands").await;
         // The first ran unasked; the second asks.
-        let (asked, _) = front.approval().await;
+        let (asked, request) = front.approval().await;
+        assert!(format!("{request:?}").contains(WAITS), "{request:?}");
         assert_eq!(front.results().len(), 1);
         project
             .update(&[change_of(&id, EntryAction::Disable)], &[], None)
@@ -1086,14 +1097,15 @@ fn sys_a_command_turned_off_elsewhere_asks_though_another_session_read_the_files
         // is the new one now, and only the other session's engine was
         // given its rules.
         assert_eq!(list(&second).await[0].status, EntryStatus::Disabled);
-        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        front.answer(&asked, ApprovalChoice::Deny).unwrap();
         let asked = asks_again(
             &front,
             2,
             "the command another process turned off ran without asking",
         )
         .await;
-        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        // It asked: that is the test. Refused, it starts no process.
+        front.answer(&asked, ApprovalChoice::Deny).unwrap();
         front.turns(1).await;
         second.close().await;
         front.close().await;
@@ -1107,10 +1119,9 @@ fn sys_a_command_turned_off_elsewhere_asks_though_another_session_read_the_files
 fn sys_an_accepted_command_that_expires_while_a_turn_runs_asks() {
     let mut world = World::new("knowledge_expires_mid_turn", []);
     let line = passing(&world);
-    let other = deploy(&world);
     world.provider = cortex_testkit::ScriptedProvider::new([
         run("c1", &line),
-        run("c2", other),
+        waiting("c2"),
         run("c3", &line),
         says("Done."),
     ]);
@@ -1122,15 +1133,17 @@ fn sys_an_accepted_command_that_expires_while_a_turn_runs_asks() {
     world.run(async {
         let front = Front::start(&world, &core).await;
         front.prompt("three commands").await;
-        let (asked, _) = front.approval().await;
+        let (asked, request) = front.approval().await;
+        assert!(format!("{request:?}").contains(WAITS), "{request:?}");
         assert_eq!(front.results().len(), 1, "the accepted command ran unasked");
         // A learned command's acceptance lasts 90 days.
         world
             .clock
             .advance(std::time::Duration::from_secs(91 * 24 * 60 * 60));
-        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        front.answer(&asked, ApprovalChoice::Deny).unwrap();
         let asked = asks_again(&front, 2, "the expired command ran without asking").await;
-        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        // It asked: that is the test. Refused, it starts no process.
+        front.answer(&asked, ApprovalChoice::Deny).unwrap();
         front.turns(1).await;
         front.close().await;
     });
@@ -1198,13 +1211,8 @@ fn an_entry_with_a_credential_in_its_evidence_is_not_promoted() {
 fn sys_a_write_to_the_store_by_another_process_does_not_take_the_safe_list_away() {
     let mut world = World::new("knowledge_other_write", []);
     let line = passing(&world);
-    let other = deploy(&world);
-    world.provider = cortex_testkit::ScriptedProvider::new([
-        run("c1", &line),
-        run("c2", other),
-        run("c3", &line),
-        says("Done."),
-    ]);
+    world.provider =
+        cortex_testkit::ScriptedProvider::new([waiting("c1"), run("c2", &line), says("Done.")]);
     let (project, id) = learned(&world, &line);
     project
         .update(&[change_of(&id, EntryAction::Accept)], &[], None)
@@ -1212,8 +1220,9 @@ fn sys_a_write_to_the_store_by_another_process_does_not_take_the_safe_list_away(
     let core = world.core_with(|options| options.trust_project = true);
     world.run(async {
         let front = Front::start(&world, &core).await;
-        front.prompt("three commands").await;
-        let (asked, _) = front.approval().await;
+        front.prompt("two commands").await;
+        let (asked, request) = front.approval().await;
+        assert!(format!("{request:?}").contains(WAITS), "{request:?}");
         // Another process sees a command of its own for the first time.
         project
             .learn(
@@ -1229,11 +1238,11 @@ fn sys_a_write_to_the_store_by_another_process_does_not_take_the_safe_list_away(
                 None,
             )
             .unwrap();
-        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        front.answer(&asked, ApprovalChoice::Deny).unwrap();
         // An unanswered question fails the test at once.
         front.turns(1).await;
         assert_eq!(front.approvals().len(), 1, "the accepted command asked");
-        assert_eq!(front.results().len(), 3);
+        assert_eq!(front.results().len(), 2);
         front.close().await;
     });
 }
@@ -1339,6 +1348,9 @@ fn an_entry_that_expires_between_two_turns_drops_out_and_is_told() {
         // The mark is written beside the turn; the listing waits for it.
         let entries = list(&front).await;
         assert_eq!(entries[0].status, EntryStatus::Disabled);
+        // The listing waited for the mark, and so for its notice to be
+        // sent; it is read from the queue here.
+        told_of(&front, "expired, and is no longer used").await;
         let told = front.notices();
         assert!(
             told.iter().any(|notice| notice.contains(&format!(
