@@ -99,6 +99,9 @@ pub struct Machine {
     pub server: SseServer,
     /// The variables the binary is given beside the inherited ones.
     vars: Vec<(String, OsString)>,
+    /// Whether the user's configuration leaves the shell to the binary's
+    /// own pick ([`Machine::with_product_shell`]).
+    product_shell: bool,
     _scratch: Scratch,
 }
 
@@ -110,6 +113,18 @@ impl Machine {
     }
 
     pub fn with_config(test: &str, extra: &str) -> Self {
+        Self::made(test, extra, false)
+    }
+
+    /// As [`new`](Self::new), with the shell left to the binary's own pick
+    /// on Windows too (PowerShell 7 on a hosted runner), where every other
+    /// machine is given Windows PowerShell ([`user_config`](Self::user_config)):
+    /// for the test that keeps the product's own pick covered end to end.
+    pub fn with_product_shell(test: &str) -> Self {
+        Self::made(test, "", true)
+    }
+
+    fn made(test: &str, extra: &str, product_shell: bool) -> Self {
         let _set_up = cortex_testkit::profile::phase("set-up");
         let scratch = Scratch::outside("cortex-cli-system", test);
         let home = scratch.path().join("home");
@@ -137,6 +152,7 @@ impl Machine {
             workspace,
             server: SseServer::start(),
             vars,
+            product_shell,
             _scratch: scratch,
         };
         machine.user_config(extra);
@@ -160,14 +176,34 @@ impl Machine {
     /// Writes the user's configuration file: the machine's own settings as
     /// dotted keys at the top, so that `extra` may add to any table, and
     /// then `extra`.
+    ///
+    /// On Windows the shell is Windows PowerShell, unless `extra` says
+    /// anything of the shell (a `shell.` key or a `[shell]` table) or the
+    /// machine was made [`with_product_shell`](Self::with_product_shell):
+    /// it starts in about two thirds of PowerShell 7's time on a hosted
+    /// runner, and the binary asks no version of it on the side, where it
+    /// starts PowerShell 7 once a machine to ask. These tests are not about
+    /// which PowerShell runs a command (`cortex-tools`' tests run each
+    /// shell).
     pub fn user_config(&self, extra: &str) {
         let file = self.dirs().user_config.unwrap();
         fs::create_dir_all(file.parent().unwrap()).unwrap();
+        // Left out when `extra` says anything of the shell: a `[shell]`
+        // table after the dotted key would not parse (on Windows only).
+        let shell = if cfg!(windows)
+            && !self.product_shell
+            && !extra.contains("shell.")
+            && !extra.contains("[shell")
+        {
+            "shell.program = \"powershell\"\n"
+        } else {
+            ""
+        };
         fs::write(
             file,
             format!(
                 "session.durability = \"never\"\ncredentials.store = \"file\"\nmodel.main = \
-                 \"{MODEL}\"\nretry.attempts = 1\nproviders.anthropic.base_url = \"{}\"\n{extra}",
+                 \"{MODEL}\"\nretry.attempts = 1\nproviders.anthropic.base_url = \"{}\"\n{shell}{extra}",
                 self.server.base_url()
             ),
         )

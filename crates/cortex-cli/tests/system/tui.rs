@@ -307,7 +307,10 @@ fn sys_an_approval_is_asked_in_a_dialog_and_answered_with_a_key() {
 #[test]
 fn sys_a_turn_is_interrupted_mid_stream_and_mid_tool() {
     let phases = Phases::new("sys_a_turn_is_interrupted_mid_stream_and_mid_tool");
-    let machine = Machine::new("tui_interrupt");
+    // The shell the binary picks itself, where every other test of this
+    // binary has Windows PowerShell: this one keeps the product's own pick
+    // covered, from a key to a command it stops.
+    let machine = Machine::with_product_shell("tui_interrupt");
     // Mid-stream: part of an answer, then nothing until the client hangs up.
     let closed = Gate::new();
     machine.server.push(

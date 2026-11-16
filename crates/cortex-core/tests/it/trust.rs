@@ -27,7 +27,7 @@ use cortex_policy::{Definition, TrustStore};
 use cortex_protocol::Item;
 use cortex_protocol::event::TurnOutcome;
 use cortex_protocol::lease::{Effect, Rule, RuleAction};
-use cortex_protocol::methods::ApprovalDetail;
+use cortex_protocol::methods::{ApprovalChoice, ApprovalDetail};
 use cortex_protocol::model::ModelRole;
 use serde_json::{Value, json};
 
@@ -172,7 +172,21 @@ fn observe(world: &World, change: impl FnOnce(&mut CoreOptions)) -> (Seen, Vec<S
             .model
             .as_str()
             .to_owned();
-        let asked = front.turn_allowing("go").await;
+        // Everything asked about is allowed but `git status`: whether it is
+        // asked is what the test reads of it, and refused it starts no
+        // shell. Where it is not asked it runs, which is the point.
+        let asked = front
+            .turn_answering("go", |request| {
+                if matches!(
+                    &request.detail,
+                    ApprovalDetail::Command(command) if command.command.starts_with("git status")
+                ) {
+                    ApprovalChoice::Deny
+                } else {
+                    ApprovalChoice::AllowOnce
+                }
+            })
+            .await;
         let method = front
             .items()
             .iter()

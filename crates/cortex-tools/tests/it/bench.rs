@@ -455,8 +455,31 @@ pub(crate) fn shell(name: &str) -> Option<Shell> {
     }
 }
 
-/// The shell this system gives when nothing is configured.
+/// A shell for a test that is not about which shell runs its command: the
+/// one this system gives when nothing is configured, but on Windows
+/// Windows PowerShell where it is there, which starts in about two thirds
+/// of PowerShell 7's time on a hosted runner. Each shell's own tests are in
+/// `shell.rs`.
 pub(crate) fn default_shell() -> Shell {
+    let search = ShellSearch::from_env();
+    if cfg!(windows) {
+        match search.find(Some("powershell"), None) {
+            Ok(shell) => return shell,
+            // Quietly going back to PowerShell 7 would lose the saving
+            // with no sign of it.
+            Err(error) => assert!(
+                std::env::var_os("CI").is_none(),
+                "Windows PowerShell is not on PATH on this runner: {error}"
+            ),
+        }
+    }
+    product_shell()
+}
+
+/// The shell the harness picks itself when nothing is configured:
+/// PowerShell 7 on a Windows runner. For a test that is about how that
+/// shell takes what the process runner does to it (a console event).
+pub(crate) fn product_shell() -> Shell {
     ShellSearch::from_env()
         .find(None, None)
         .expect("every system these tests run on has a shell")

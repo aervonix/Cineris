@@ -92,7 +92,10 @@ fn sys_cancelling_a_call_stops_the_whole_tree() {
 
 #[test]
 fn sys_the_polite_interrupt_is_enough_for_a_command_that_listens() {
-    let bench = Bench::new("process_polite", default_shell());
+    // The shell the harness picks itself: the polite stage is a console
+    // event the shell receives too, and each PowerShell takes it its own
+    // way.
+    let bench = Bench::new("process_polite", bench::product_shell());
     let roll = Roll::new();
     let command = bench::child(
         bench.shell(),
