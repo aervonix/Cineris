@@ -155,10 +155,27 @@ impl Drop for LocalMemory {
     }
 }
 
+/// The security identifier of the user this process runs as, in text
+/// (`S-1-5-21-…`). It is read once: a process's user does not change. It is
+/// checked to be `S`, digits and hyphens alone, so that it can go into a
+/// descriptor's text with nothing else spliced in.
+///
+/// For what is the user's own outside a file: the named pipe of `cortex
+/// serve --socket` is named for it, owned by it and opened by it alone
+/// (`docs/steps/27/answered.md`, "The design, before building", point 1).
+///
+/// # Errors
+///
+/// When Windows does not report the process's user.
+pub fn current_user_sid() -> io::Result<&'static str> {
+    current_user()
+}
+
 /// The security identifier of the user this process runs as, in text. It is
 /// read once: a process's user does not change. It is the process's user,
-/// not the calling thread's: the harness never impersonates, and a thread
-/// that did would still get a file for the process's user.
+/// not the calling thread's: a thread that impersonates another user (the
+/// pipe's check of a client does, for a moment) would still get a file for
+/// the process's user.
 fn current_user() -> io::Result<&'static str> {
     static USER: OnceLock<String> = OnceLock::new();
     if let Some(user) = USER.get() {
