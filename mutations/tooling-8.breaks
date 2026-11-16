@@ -1,0 +1,186 @@
+# The eighth tooling step's breaks: the session's own, and, at the end, the
+# parts its sub-agents wrote, merged in (`cargo xtask mutate --merge`).
+
+# `cargo xtask apply` (item 2).
+
+[break] apply-a-failed-check-leaves-the-changes
+rule: When a check fails, every file the script touched is put back as it was, unless --keep says otherwise.
+file: xtask/src/apply.rs
+in: run_with
+find: return match put(&plan, false) {
+replace: return match Ok::<(), String>(()) {
+caught-by:
+    apply::tests::a_failed_check_puts_every_file_back_and_runs_no_later_check
+
+[break] apply-runs-the-checks-after-a-failed-one
+rule: A failed check stops the run: the checks after it are not run.
+file: xtask/src/apply.rs
+in: run_with
+find: if keep {
+replace: if keep || true { continue; } if keep {
+caught-by:
+    apply::tests::a_failed_check_puts_every_file_back_and_runs_no_later_check
+    apply::tests::keep_leaves_the_changes_when_a_check_fails
+
+[break] apply-keep-is-not-kept
+rule: --keep leaves the changes in place when a check fails.
+file: xtask/src/apply.rs
+in: run_with
+find: "--keep" => keep = true,
+replace: "--keep" => keep = false,
+caught-by:
+    apply::tests::keep_leaves_the_changes_when_a_check_fails
+
+[break] apply-a-dry-run-writes
+rule: A dry run writes nothing and runs no check.
+file: xtask/src/apply.rs
+in: run_with
+find: if dry_run {
+replace: if false {
+caught-by:
+    apply::tests::a_dry_run_writes_nothing_and_checks_nothing
+
+[break] apply-a-made-file-stays-when-put-back
+rule: A file the script made is removed when the files are put back.
+file: xtask/src/apply.rs
+in: put
+find: None if path.exists() => fs::remove_file(path),
+replace: None if false => fs::remove_file(path),
+caught-by:
+    apply::tests::a_failed_check_puts_every_file_back_and_runs_no_later_check
+
+[break] apply-an-edit-of-a-deleted-file-is-made
+rule: An edit of a file the script deleted, or never made, is refused and nothing is written.
+file: xtask/src/apply.rs
+in: plan
+find: let Some(current) = files[index].2.as_deref() else {
+replace: let Some(current) = files[index].2.as_deref().or(Some("")) else {
+caught-by:
+    apply::tests::a_change_that_cannot_be_made_plans_nothing
+
+[break] apply-a-deleted-file-can-be-deleted-again
+rule: A file that is not there cannot be deleted.
+file: xtask/src/apply.rs
+in: plan
+find: if files[index].2.is_none() {
+replace: if false {
+caught-by:
+    apply::tests::a_change_that_cannot_be_made_plans_nothing
+
+[break] apply-a-quote-does-not-hold-a-word-together
+rule: A check's word in quotes keeps its spaces.
+file: xtask/src/apply.rs
+in: words
+find: (Some(_), c) => word.push(c),
+replace: (Some(_), c) if !c.is_whitespace() => word.push(c), (Some(_), _) => {}
+caught-by:
+    apply::tests::a_checks_words_are_split_at_spaces_and_kept_together_by_quotes
+
+[break] apply-a-write-loses-its-last-line-break
+rule: A whole file written by `@@ write:` ends with a line break, as its lines were given.
+file: xtask/src/apply.rs
+in: parse
+find: body.push('\n');
+replace: body.push(' ');
+caught-by:
+    apply::tests::a_script_is_read_in_order_with_the_edits_lines_where_they_were
+    apply::tests::every_change_stays_when_every_check_passes
+
+[break] apply-a-write-ends-at-a-check-line
+rule: Inside `@@ write:` every line is the file's, a line that looks like a check or a comment included.
+file: xtask/src/apply.rs
+in: parse
+find: if marker == Some("end") {
+replace: if marker == Some("end") || line.starts_with("@@ check:") {
+occurrence: 1
+caught-by:
+    apply::tests::a_script_is_read_in_order_with_the_edits_lines_where_they_were
+
+[break] apply-build-needs-no-crate
+rule: `build` and `clippy` name their crates; the whole workspace is `check clippy` or `test`.
+file: xtask/src/apply.rs
+in: check
+find: "build" => needs_crates(&words, "build").map(|()| Check::Build(words)),
+replace: "build" => Ok(Check::Build(words)),
+caught-by:
+    apply::tests::every_check_is_read_and_a_wrong_one_is_refused
+
+# `cargo xtask decision new` (item 7).
+
+[break] decision-numbers-from-the-lowest
+rule: A new record takes the number after the highest record's.
+file: xtask/src/decision.rs
+in: next_number
+find: .max()
+replace: .min()
+caught-by:
+    decision::tests::the_number_is_the_one_after_the_highest_record
+    decision::tests::a_record_is_written_with_every_heading_of_the_format_and_its_row_after_the_last
+
+[break] decision-row-after-the-first
+rule: The record's row goes after the last row of the index's table.
+file: xtask/src/decision.rs
+in: indexed
+find: .rposition(
+replace: .position(
+caught-by:
+    decision::tests::a_record_is_written_with_every_heading_of_the_format_and_its_row_after_the_last
+
+[break] decision-a-pipe-ends-the-cell
+rule: A `|` in a title is escaped in the index's cell.
+file: xtask/src/decision.rs
+in: indexed
+find: let cell = title.replace('|', "\\|");
+replace: let cell = title.to_owned();
+caught-by:
+    decision::tests::a_pipe_in_the_title_does_not_end_its_cell
+
+[break] decision-a-second-record-of-one-name
+rule: A title whose file name a record already has is refused.
+file: xtask/src/decision.rs
+in: plan
+find: if names.iter().any(|name| name.ends_with(&format!("-{slug}.md"))) {
+replace: if false {
+caught-by:
+    decision::tests::a_title_that_names_nothing_or_a_record_already_there_is_refused
+
+# `ci-times` and the jobs that block nothing (item 8).
+
+[break] ci-times-a-size-job-blocks
+rule: The pull request's size jobs block nothing and are marked so in a step's jobs table.
+file: xtask/src/records.rs
+in: blocks
+find: !NON_BLOCKING.iter().any(
+replace: NON_BLOCKING.iter().any(
+caught-by:
+    records::tests::a_job_blocks_unless_it_is_of_a_kind_that_blocks_nothing
+    records::tests::the_pull_requests_section_is_in_the_records_form
+
+[break] ci-times-a-job-of-a-name-like-it-blocks-nothing
+rule: Only a job named for a kind that blocks nothing, and the kind's own jobs, block nothing.
+file: xtask/src/records.rs
+in: blocks
+find: rest.is_empty() || rest.starts_with('-')
+replace: true
+caught-by:
+    records::tests::a_job_blocks_unless_it_is_of_a_kind_that_blocks_nothing
+
+# The rough edges of the seventh step's commands (item 9).
+
+[break] scratch-test-a-cargo-profile-twice
+rule: A cargo profile given by scratch-test and again after `--` is refused before the build.
+file: xtask/src/scratch_test.rs
+in: Request::parse
+find: if options.cargo_profile.is_some() && says(&rest, "--cargo-profile", None) {
+replace: if false {
+caught-by:
+    scratch_test::tests::a_cargo_profile_or_ignored_tests_asked_for_on_both_sides_of_the_separator_are_refused
+
+[break] corpus-a-bad-pin-is-read-as-the-built-one
+rule: A corpus/PIN that is not a pin is an error, which says `corpus pin` mends it.
+file: xtask/src/corpus.rs
+in: pinned
+find: Pin::parse(text)
+replace: Pin::parse(shared::PIN_TEXT)
+caught-by:
+    corpus::tests::a_pin_that_is_not_one_is_an_error_that_says_how_to_mend_it
