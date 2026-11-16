@@ -292,3 +292,119 @@ fn a_session_has_at_most_one_supervisor() {
         front.close().await;
     });
 }
+
+/// The supervisor's allow is judged by the session as it is when the
+/// answer comes, not when the question was put (the review of step 27's
+/// second pull request). Here the grant is `autonomous`, so a command is
+/// within it while the session's commands are confined; the user moves the
+/// session to `unrestricted` while the question is open, where nothing is
+/// confined, and the same allow is then beyond the grant.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_supervisors_allow_is_judged_by_the_session_as_it_is_when_it_answers() {
+    let world = World::new(
+        "supervisor_judged_late",
+        [shell("c1", "ninja"), says("Refused.")],
+    );
+    let core = world.core_with(|options| {
+        options.launcher = Some(crate::sandbox::launcher());
+        options.sandbox = Some(cortex_sandbox::support::Support::Landlock(8));
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        assert_eq!(
+            front.state.sandbox,
+            cortex_protocol::session::SandboxStatus::Enforcing
+        );
+        let mut autonomous = grant();
+        autonomous.grant.level = Level::Autonomous;
+        autonomous.grant.rules.clear();
+        let layer = supervise(&front, Some(autonomous)).await.unwrap();
+        front.prompt("build it").await;
+        let (id, _) = layer.approval().await;
+        front
+            .op(Op::SessionSet(cortex_protocol::methods::SessionSetParams {
+                session_id: front.session.clone(),
+                settings: cortex_protocol::session::SessionSettings {
+                    level: Some(Level::Unrestricted),
+                    ..cortex_protocol::session::SessionSettings::default()
+                },
+            }))
+            .await
+            .expect("the user raises the level");
+        let refused = layer.answer(&id, ApprovalChoice::AllowOnce).unwrap_err();
+        assert_eq!(refused.code, code::ROLE_NOT_ALLOWED, "{}", refused.message);
+        front.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        assert_eq!(front.results()[0].1, "denied");
+        front.close().await;
+        layer.close().await;
+    });
+}
+
+/// A grant that has expired by the core's clock covers nothing, and the
+/// refusal says so: the request stays open for the users.
+#[test]
+fn an_expired_grant_takes_no_allow() {
+    let world = World::new(
+        "supervisor_expired",
+        [shell("c1", "make"), says("Refused.")],
+    );
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let mut expired = grant();
+        expired.expires.kind = cortex_protocol::lease::ExpiryKind::At;
+        expired.expires.at = Some(cortex_protocol::Timestamp::from("2026-11-13T09:00:00Z"));
+        let layer = supervise(&front, Some(expired)).await.unwrap();
+        front.prompt("build it").await;
+        let (id, _) = layer.approval().await;
+        let refused = layer.answer(&id, ApprovalChoice::AllowOnce).unwrap_err();
+        assert_eq!(refused.code, code::ROLE_NOT_ALLOWED);
+        assert!(refused.message.contains("expired"), "{}", refused.message);
+        front.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        assert_eq!(front.results()[0].1, "denied");
+        front.close().await;
+        layer.close().await;
+    });
+}
+
+/// The same for a reload that tightens the rules while the request is open
+/// (step 24's `config/reload`): the user's configuration now asks about the
+/// command, and the supervisor's allow, within the grant when the question
+/// was put, is beyond it when the answer comes.
+#[test]
+fn a_reload_that_tightens_the_rules_reaches_an_open_requests_judge() {
+    let world = World::new("supervisor_reload", [shell("c1", "make"), says("Refused.")]);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let layer = supervise(&front, Some(grant())).await.unwrap();
+        front.prompt("build it").await;
+        let (id, _) = layer.approval().await;
+        world.user_config(
+            "[[permissions.rules]]\neffect = \"exec\"\nmatch = \"make\"\naction = \"ask\"\n",
+        );
+        let reloaded = front
+            .op(Op::ConfigReload(
+                cortex_protocol::methods::ConfigReloadParams {
+                    session_id: Some(front.session.clone()),
+                    ..cortex_protocol::methods::ConfigReloadParams::default()
+                },
+            ))
+            .await
+            .expect("the reload answers");
+        let OpResult::ConfigReload(reloaded) = reloaded else {
+            panic!("not the result of config/reload");
+        };
+        assert!(reloaded.errors.is_empty(), "{reloaded:?}");
+        let refused = layer.answer(&id, ApprovalChoice::AllowOnce).unwrap_err();
+        assert_eq!(refused.code, code::ROLE_NOT_ALLOWED, "{}", refused.message);
+        front.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        assert_eq!(front.results()[0].1, "denied");
+        front.close().await;
+        layer.close().await;
+    });
+}
