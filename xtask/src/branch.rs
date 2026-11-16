@@ -680,7 +680,7 @@ pub(crate) fn commit_records(git: &Git, request: &RecordsRequest) -> Result<Comm
                 .filter(|theirs| Some(theirs) != ours.as_ref())
         })
         .collect();
-    let texts = if differ.is_empty() || request.replace {
+    let texts = if differ.is_empty() {
         Vec::new()
     } else {
         git.blobs(&differ)?
