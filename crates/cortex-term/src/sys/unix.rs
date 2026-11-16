@@ -231,7 +231,8 @@ extern "C" fn on_ending(signal: libc::c_int) {
     // Handed to the program, which ends itself; the watchdog, whose default
     // action ends the process, does so if it has not within 3 s. A second
     // signal finds the first taken, and ends the process now.
-    if super::hand_over(128 + u8::try_from(signal).unwrap_or(0)) {
+    // SIGABRT is not handed over: an abort ends the process as it asks.
+    if signal != libc::SIGABRT && super::hand_over(128 + u8::try_from(signal).unwrap_or(0)) {
         // SAFETY: `alarm` and the waker's atomics and pipe write are
         // async-signal-safe.
         unsafe { libc::alarm(WATCHDOG_SECONDS) };
