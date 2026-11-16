@@ -542,7 +542,11 @@ pub(crate) fn answer_trust(
             store
                 .refuse(&question.key, &question.root)
                 .map_err(failed)?;
-            Ok(trust)
+            // In force at once: the session asked in is put together with
+            // the project refused, as a later start is, not with the trust
+            // worked out before the answer (the review of the second pull
+            // request).
+            self::trust(inner, place.state.as_ref(), &place.root, &place.load)
         }
         TrustAnswer::NotNow => {
             inner

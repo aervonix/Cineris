@@ -257,7 +257,13 @@ fn never_is_kept_across_starts_until_the_project_is_trusted() {
     let core = world.core();
     let (state, asked) = world.run(open(&world, &core, ClientInfo::user(), never()));
     assert_eq!(asked.len(), 1);
-    assert_eq!(model(&state.expect("the session opens")), MODEL);
+    let state = state.expect("the session opens");
+    assert_eq!(model(&state), MODEL);
+    assert_eq!(
+        state.trust,
+        Some(cortex_protocol::session::TrustStanding::Never),
+        "the session it was said in says it"
+    );
     let (store, key) = store(&world);
     assert!(store.project(&key).unwrap().is_refused());
     let later = world.core();
@@ -308,6 +314,32 @@ fn a_project_whose_rules_changed_is_asked_about_them() {
     let (state, asked) = world.run(open(&world, &world.core(), ClientInfo::user(), not_now()));
     assert!(asked.is_empty(), "{asked:#?}");
     assert_eq!(model(&state.expect("the session opens")), OTHER_MODEL);
+}
+
+/// Never, said of a trusted project whose rules changed, is in force in the
+/// session it was said in: the project's trust is gone there, not only at
+/// the next start.
+#[test]
+fn never_of_a_trusted_project_is_in_force_at_once() {
+    let world = world("trusting_changed_never");
+    let (store, key) = store(&world);
+    let seen = Rule {
+        effect: Effect::Write,
+        pattern: "docs/**".to_owned(),
+        action: RuleAction::Allow,
+    };
+    store
+        .trust(&key, "~/work/app", &[Definition::of_rules(&[seen])])
+        .unwrap();
+    let core = world.core();
+    let (state, asked) = world.run(open(&world, &core, ClientInfo::user(), never()));
+    assert_eq!(asked.len(), 1);
+    let state = state.expect("the session opens");
+    assert_eq!(model(&state), MODEL, "the project's settings were used");
+    assert_eq!(
+        state.trust,
+        Some(cortex_protocol::session::TrustStanding::Never)
+    );
 }
 
 /// A change to the project's rules while the question is open is not
