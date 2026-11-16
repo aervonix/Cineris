@@ -1110,25 +1110,25 @@ caught-by:
 [break] events-of-an-item-in-progress-are-dropped-after-the-read
 rule: Of an item the read holds in progress, the events after the read's seq continue it; those up to it are in its content.
 file: crates/cortex-tui/src/app/state.rs
-in: App::history_read
-find: Some(Some(seq)) => event.seq > *seq,
-replace: Some(Some(_)) => false,
+in: ReadMark::holds
+find: Some(Some(seq)) => event.seq <= *seq
+replace: Some(Some(_)) => true
 caught-by:
     app::tests::sessions::an_answer_in_progress_at_the_read_is_drawn_once_and_whole
 
 [break] events-of-an-item-in-progress-are-all-shown
 rule: Of an item the read holds in progress, the events up to the read's seq are dropped: its content holds them.
 file: crates/cortex-tui/src/app/state.rs
-in: App::history_read
-find: Some(Some(seq)) => event.seq > *seq,
-replace: Some(Some(_)) => true,
+in: ReadMark::holds
+find: Some(Some(seq)) => event.seq <= *seq
+replace: Some(Some(_)) => false
 caught-by:
     app::tests::sessions::an_answer_in_progress_at_the_read_is_drawn_once_and_whole
 
 [break] a-turn-is-running-from-the-open-alone
 rule: Whether a turn ran at the read is taken from the turn's events held up to it, not only from what the open said.
 file: crates/cortex-tui/src/app/state.rs
-in: App::history_read
+in: App::read_ended
 find: Event::TurnStarted(_) => running = true,
 replace: Event::TurnStarted(_) => {}
 caught-by:
@@ -1137,7 +1137,7 @@ caught-by:
 [break] an-item-in-progress-does-not-say-a-turn-runs
 rule: An item in progress at the read says a turn was running then: nothing is cut off, and Enter steers it.
 file: crates/cortex-tui/src/app/state.rs
-in: App::history_read
+in: App::read_ended
 find:
     if drawn.values().any(Option::is_some) {
         running = true;
@@ -1150,7 +1150,7 @@ caught-by:
 [break] a-turn-found-running-is-not-steered
 rule: A turn found running at the read is one Enter steers.
 file: crates/cortex-tui/src/app/state.rs
-in: App::history_read
+in: App::read_ended
 find:
     if running {
         // A turn this client did not start (another's, or one begun
@@ -1241,3 +1241,48 @@ replace:
 caught-by:
     app::tests::sessions::a_command_lines_prompt_that_is_a_command_is_done_as_one
     app::tests::sessions::a_command_lines_prompt_that_is_a_command_not_built_yet_is_given_back
+
+[break] the-reads-mark-ends-with-the-read
+rule: Events the read already holds that are taken after its result (the link gives a result before the events queued ahead of it) are not drawn again.
+file: crates/cortex-tui/src/app/state.rs
+in: App::event
+find: if mark.holds(&event) {
+replace: if false {
+caught-by:
+    app::tests::sessions::events_the_read_holds_that_come_after_its_result_are_not_drawn_twice
+
+[break] a-held-update-of-another-session-decides-the-turn
+rule: Whether a turn runs at the read is decided from the read session's own held events, not a late one of the session left.
+file: crates/cortex-tui/src/app/state.rs
+in: App::read_ended
+find: .filter(|event| event.session_id == session && seq.is_none_or(|seq| event.seq <= seq))
+replace: .filter(|event| seq.is_none_or(|seq| event.seq <= seq))
+caught-by:
+    app::tests::sessions::a_late_update_of_the_session_left_does_not_decide_the_next_ones_turn
+
+[break] an-error-of-the-session-left-is-shown
+rule: An undo, a change of settings or a status that fails for a session left meanwhile is not said in the one open now.
+file: crates/cortex-tui/src/app/state.rs
+in: App::done
+find: (Pending::Undo(id) | Pending::Set(id) | Pending::Config(_, id), _)
+replace: (Pending::Undo(id) | Pending::Set(id) | Pending::Config(_, id), Ok(_))
+caught-by:
+    app::tests::sessions::an_error_of_the_session_left_is_not_shown_in_the_next
+
+[break] a-failed-page-replays-everything
+rule: A history whose page fails part-way ends as a whole read does: what it drew is not drawn again, and whether a turn runs is decided.
+file: crates/cortex-tui/src/app/state.rs
+in: App::done
+find: self.read_ended(id, seq, now);
+replace: self.read_ended(id, None, now);
+caught-by:
+    app::tests::sessions::a_history_whose_page_fails_part_way_draws_nothing_twice
+
+[break] a-failed-file-listing-is-never-asked-again
+rule: A workspace/files that fails is asked again on the next @.
+file: crates/cortex-tui/src/app/state.rs
+in: App::done
+find: self.files_listing = false;
+replace: self.files_listing = true;
+caught-by:
+    app::tests::files::a_failed_file_listing_says_why_and_is_asked_again_on_the_next_at

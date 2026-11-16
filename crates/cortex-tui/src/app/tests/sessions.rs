@@ -675,3 +675,187 @@ fn a_command_lines_prompt_that_is_a_command_not_built_yet_is_given_back() {
     assert!(notices(&mut app, now).contains("/rewind is not in this build yet"));
     assert!(!app.running());
 }
+
+// --------------------------- the review of the fixes after step 23's review
+
+/// The binary's link gives an operation's result before the events queued
+/// ahead of it: events the read already holds can be taken after the read
+/// has ended, and are not drawn a second time.
+#[test]
+fn events_the_read_holds_that_come_after_its_result_are_not_drawn_twice() {
+    let now = Instant::now();
+    let (mut app, link) = app_opening(now, Some("go on"), Open::Resume(SessionId::from("s_a")));
+    let (read, _) = resumed(&mut app, &link, "s_a", "claude-opus-5-5", now);
+    // Taken while the read was under way: held.
+    link.give(ev("s_a", 6, Event::TurnStarted(TurnStarted {})));
+    drain(&mut app, now);
+    // The read's result, taken before what was queued ahead of it.
+    link.give(Inbound::Done(
+        read,
+        Ok(read_result(
+            vec![
+                user("i_5", "go on"),
+                answer("i_6", vec![Part::text("Hello ")]),
+            ],
+            &["i_6"],
+            9,
+        )),
+    ));
+    // Queued before the read was taken (up to its `seq`), taken after its
+    // result.
+    link.give(ev(
+        "s_a",
+        7,
+        Event::ItemCompleted(ItemCompleted {
+            item: user("i_5", "go on"),
+        }),
+    ));
+    link.give(ev("s_a", 8, answer_started("i_6")));
+    link.give(ev("s_a", 9, delta("i_6", "Hello ")));
+    // After the read.
+    link.give(ev("s_a", 10, delta("i_6", "world.")));
+    link.give(ev(
+        "s_a",
+        11,
+        Event::ItemCompleted(ItemCompleted {
+            item: answer("i_6", vec![Part::text("Hello world.")]),
+        }),
+    ));
+    drain(&mut app, now);
+    let shown = everything(&mut app, now).join("\n");
+    assert!(
+        shown.contains("Hello world.") && !shown.contains("Hello Hello"),
+        "{shown}"
+    );
+    assert_eq!(shown.matches("go on").count(), 1, "{shown}");
+}
+
+/// Opens and reads `s_a`, switches to `s_b`, gives A's late
+/// `session.updated` while B opens when `late_update`, and opens B, whose
+/// open says another client's turn runs, with a read that holds no item in
+/// progress.
+fn switched_to_a_running_session(late_update: bool) -> App {
+    let now = Instant::now();
+    let (mut app, link) = app_opening(now, None, Open::Resume(SessionId::from("s_a")));
+    let (read, _) = resumed(&mut app, &link, "s_a", "claude-opus-5-5", now);
+    link.give(Inbound::Done(
+        read,
+        Ok(read_result(vec![user("i_1", "hi")], &[], 5)),
+    ));
+    drain(&mut app, now);
+    let _ = link.take_sent();
+    pick_second_session(&mut app, &link, now);
+    let open_b = ticket(
+        &link.take_sent(),
+        |op| matches!(op, Op::SessionOpen(o) if o.session_id == SessionId::from("s_b")),
+    );
+    if late_update {
+        // A's title, set after its last turn.
+        let mut a_titled = state_of("s_a", "claude-opus-5-5");
+        a_titled.title = Some("Fix the build".to_owned());
+        link.give(ev(
+            "s_a",
+            3,
+            Event::SessionUpdated(cortex_protocol::event::SessionUpdated { session: a_titled }),
+        ));
+        drain(&mut app, now);
+    }
+    let mut b = state_of("s_b", "claude-opus-5-5");
+    b.seq = 9;
+    b.running_turn = Some(TurnId::from("t_4"));
+    link.give(Inbound::Done(
+        open_b,
+        Ok(OpResult::SessionOpen(SessionResult { session: b })),
+    ));
+    drain(&mut app, now);
+    let read_b = ticket(&link.take_sent(), |op| matches!(op, Op::SessionRead(_)));
+    link.give(Inbound::Done(
+        read_b,
+        Ok(read_result(vec![user("i_1", "go on")], &[], 9)),
+    ));
+    drain(&mut app, now);
+    app
+}
+
+/// A late `session.updated` of the session left, held while the next one
+/// opens, does not decide whether the next one's turn runs.
+#[test]
+fn a_late_update_of_the_session_left_does_not_decide_the_next_ones_turn() {
+    let app = switched_to_a_running_session(true);
+    assert!(app.running(), "B's turn, which its open said runs");
+}
+
+/// The control: with no late update, B's turn is taken as running.
+#[test]
+fn a_turn_the_open_says_runs_is_taken_as_running_at_the_read() {
+    let app = switched_to_a_running_session(false);
+    assert!(app.running(), "B's turn, which its open said runs");
+}
+
+/// An `/undo` of A that fails once the person has left A for B is not said
+/// in B.
+#[test]
+fn an_error_of_the_session_left_is_not_shown_in_the_next() {
+    let now = Instant::now();
+    let (mut app, link) = app_opening(now, None, Open::Resume(SessionId::from("s_a")));
+    let undo = left_while_waiting(&mut app, &link, ("/undo", &[]), now, |op| {
+        matches!(op, Op::SessionUndo(_))
+    });
+    link.give(Inbound::Done(
+        undo,
+        Err(ErrorData::new(
+            ErrorKind::Usage,
+            "nothing_to_undo",
+            "Session A has no turn to undo.",
+        )),
+    ));
+    drain(&mut app, now);
+    let all = notices(&mut app, now);
+    assert!(!all.contains("no turn to undo"), "{all}");
+}
+
+/// A history whose second page fails: what the first page drew is not
+/// drawn again from the events held meanwhile, and the item it drew in
+/// progress says a turn runs.
+#[test]
+fn a_history_whose_page_fails_part_way_draws_nothing_twice() {
+    let now = Instant::now();
+    let (mut app, link) = app_opening(now, None, Open::Resume(SessionId::from("s_a")));
+    let (read, _) = resumed(&mut app, &link, "s_a", "claude-opus-5-5", now);
+    link.give(ev(
+        "s_a",
+        8,
+        Event::ItemCompleted(ItemCompleted {
+            item: answer("i_2", vec![Part::text("Answered on page one.\n")]),
+        }),
+    ));
+    drain(&mut app, now);
+    link.give(Inbound::Done(
+        read,
+        Ok(OpResult::SessionRead(SessionReadResult {
+            items: vec![
+                user("i_1", "first page"),
+                answer("i_2", vec![Part::text("Answered on page one.\n")]),
+                answer("i_3", vec![Part::text("Working ")]),
+            ],
+            incomplete: vec![ItemId::from("i_3")],
+            next_cursor: Some("500".to_owned()),
+            seq: 9,
+        })),
+    ));
+    drain(&mut app, now);
+    let next = ticket(&link.take_sent(), |op| matches!(op, Op::SessionRead(_)));
+    link.give(Inbound::Done(
+        next,
+        Err(ErrorData::new(
+            ErrorKind::Internal,
+            "store_failed",
+            "The session's log could not be read.",
+        )),
+    ));
+    drain(&mut app, now);
+    let all = notices(&mut app, now);
+    assert_eq!(all.matches("Answered on page one.").count(), 1, "{all}");
+    assert!(all.contains("could not be read"), "{all}");
+    assert!(app.running(), "the item in progress says a turn runs");
+}
