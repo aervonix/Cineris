@@ -29,7 +29,7 @@ use cortex_protocol::lease::Rule;
 use cortex_protocol::methods::StoredApproval;
 use cortex_protocol::{ApprovalId, ErrorKind, ProjectKey};
 
-use crate::assemble::{project_rules, resolve_dir};
+use crate::assemble::{pinned_rules, resolve_dir};
 use crate::core::{Core, OpError, error};
 use crate::provider::{builtin_names, key_variable};
 
@@ -69,8 +69,10 @@ pub enum TrustState {
 #[derive(Debug)]
 pub struct Trusted {
     /// The project's permission rules, as its files hold them now: every
-    /// allow, deny and ask rule. These are what a later start compares.
-    pub rules: Vec<Rule>,
+    /// allow, deny and ask rule, outside any profile and in each profile its
+    /// files define, with the profile (`None`: outside any). These are what
+    /// a later start compares.
+    pub rules: Vec<(Option<String>, Rule)>,
     /// The project's settings that wait for trust, which now apply.
     pub settings: Vec<Withheld>,
     /// Whether the project was trusted before (its rules are approved
@@ -190,8 +192,8 @@ impl Core {
         if !stored.is_trusted() {
             return Ok(TrustState::Untrusted);
         }
-        let rules = project_rules(&self.load_trusted(project)?);
-        Ok(if stored.rules_approved(&rules) {
+        let rules = self.pinned(project)?;
+        Ok(if stored.project_rules_approved(&rules) {
             TrustState::Trusted
         } else {
             TrustState::RulesChanged
@@ -207,8 +209,7 @@ impl Core {
     /// When the project's configuration is invalid, or the trust store
     /// cannot be read or written.
     pub fn trust_project(&self, project: &Project) -> Result<Trusted, OpError> {
-        let loaded = self.load_trusted(project)?;
-        let rules = project_rules(&loaded);
+        let rules = self.pinned(project)?;
         // What an untrusted load holds back is what trust now turns on.
         let settings = self.load(project, ConfigTrust::Untrusted)?.withheld;
         let store = self.trust_store()?;
@@ -216,7 +217,7 @@ impl Core {
             error(ErrorKind::Internal, "store_failed", failure.to_string())
         };
         let was_trusted = store.project(&project.key).map_err(failed)?.is_trusted();
-        let pin = [Definition::of_rules(&rules)];
+        let pin = [Definition::of_project_rules(&rules)];
         if was_trusted {
             store.approve(&project.key, &pin).map_err(failed)?;
         } else {
@@ -225,7 +226,10 @@ impl Core {
                 .map_err(failed)?;
         }
         Ok(Trusted {
-            rules,
+            rules: rules
+                .each()
+                .map(|(profile, rule)| (profile.map(str::to_owned), rule.clone()))
+                .collect(),
             settings,
             was_trusted,
         })
@@ -359,5 +363,29 @@ impl Core {
 
     fn load_trusted(&self, project: &Project) -> Result<Loaded, OpError> {
         self.load(project, ConfigTrust::Trusted)
+    }
+
+    /// The project's rules as trust pins them, in every profile its files
+    /// define, as a session's start compares them.
+    fn pinned(&self, project: &Project) -> Result<cortex_policy::ProjectRules, OpError> {
+        let loaded = self.load_trusted(project)?;
+        pinned_rules(&loaded, &|profile| {
+            let options = &self.inner.options;
+            let mut load = LoadOptions::new(options.env.clone());
+            if let Some(dirs) = &options.dirs {
+                load.dirs = dirs.clone();
+            }
+            load.workspace = Some(project.root.clone());
+            load.profile = Some(profile.to_owned());
+            load.overrides.clone_from(&options.overrides);
+            load.trust = ConfigTrust::Trusted;
+            cortex_config::load(&load).map_err(|failure| {
+                error(
+                    ErrorKind::Config,
+                    "invalid_configuration",
+                    failure.render(&options.env),
+                )
+            })
+        })
     }
 }

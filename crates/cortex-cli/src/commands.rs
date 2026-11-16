@@ -474,9 +474,13 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 );
                 if !trusted.rules.is_empty() {
                     out.push_str("Its permission rules, as they are now:\n");
-                    for rule in &trusted.rules {
+                    for (profile, rule) in &trusted.rules {
+                        let place = profile
+                            .as_deref()
+                            .map(|profile| format!("  (profile {profile})"))
+                            .unwrap_or_default();
                         out.push_str(&format!(
-                            "  {} {} {}\n",
+                            "  {} {} {}{place}\n",
                             rule.action.as_str(),
                             rule.effect.as_str(),
                             rule.pattern

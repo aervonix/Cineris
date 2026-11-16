@@ -25,9 +25,9 @@ use cortex_base::{PathOptions, PathResolver};
 use cortex_core::CoreOptions;
 use cortex_policy::{Definition, TrustStore};
 use cortex_protocol::Item;
+use cortex_protocol::event::TurnOutcome;
 use cortex_protocol::lease::{Effect, Rule, RuleAction};
 use cortex_protocol::methods::ApprovalDetail;
-use cortex_protocol::event::TurnOutcome;
 use cortex_protocol::model::ModelRole;
 use serde_json::{Value, json};
 

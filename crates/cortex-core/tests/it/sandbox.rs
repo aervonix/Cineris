@@ -1146,16 +1146,14 @@ fn sys_an_unconfined_command_does_not_trip_the_next_command() {
 #[cfg(target_os = "linux")]
 async fn reopened(core: &cortex_core::Core, session: &cortex_protocol::SessionId) -> Front {
     let client = core.connect(cortex_core::ClientInfo::user());
-    let opened = core
-        .handle(
-            client.id,
-            Op::SessionOpen(cortex_protocol::methods::SessionRef {
-                session_id: session.clone(),
-            }),
-        )
-        .await
-        .expect("the session opens");
-    let OpResult::SessionOpen(opened) = opened else {
+    let open = core.handle(
+        client.id,
+        Op::SessionOpen(cortex_protocol::methods::SessionRef {
+            session_id: session.clone(),
+        }),
+    );
+    let (opened, read) = crate::not_now(core, &client, open).await;
+    let OpResult::SessionOpen(opened) = opened.expect("the session opens") else {
         panic!("not the result of session/open");
     };
     Front {
@@ -1163,7 +1161,7 @@ async fn reopened(core: &cortex_core::Core, session: &cortex_protocol::SessionId
         client,
         session: session.clone(),
         state: opened.session,
-        seen: std::cell::RefCell::default(),
+        seen: std::cell::RefCell::new(read),
         answered: std::cell::RefCell::default(),
         answering: std::cell::RefCell::default(),
     }

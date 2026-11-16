@@ -21,9 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cortex_protocol::error::code;
 use cortex_protocol::jsonrpc::RequestId;
-use cortex_protocol::methods::{
-    ClientCapabilities, ClientRole, ServerRequest, ServerResponse,
-};
+use cortex_protocol::methods::{ClientCapabilities, ClientRole, ServerRequest, ServerResponse};
 use cortex_protocol::{ErrorData, ErrorKind, SessionId};
 use tokio::sync::oneshot;
 
@@ -303,7 +301,10 @@ impl Clients {
             return;
         };
         for (id, open) in lock(&self.open).iter_mut() {
-            if self.askable(&[client.0], Kind::of(&open.request)).is_empty() {
+            if self
+                .askable(&[client.0], Kind::of(&open.request))
+                .is_empty()
+            {
                 continue;
             }
             if open.session == *session && !open.asked.contains(&client.0) {
@@ -453,9 +454,15 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(wrong.code, "request_not_open");
-        assert!(answer.try_recv().is_err(), "an answer of another kind was delivered");
+        assert!(
+            answer.try_recv().is_err(),
+            "an answer of another kind was delivered"
+        );
         assert_eq!(clients.answer(user, &id, allow()).unwrap(), session);
-        assert_eq!(answer_of(answer.try_recv().unwrap()).as_deref(), Some("yes"));
+        assert_eq!(
+            answer_of(answer.try_recv().unwrap()).as_deref(),
+            Some("yes")
+        );
         let late = clients.answer(user, &id, allow()).unwrap_err();
         assert_eq!(late.code, "request_not_open");
         assert!(!clients.close(&id), "an answered request is closed");
@@ -496,7 +503,10 @@ mod tests {
         let refused = clients.answer(late, &elsewhere, allow()).unwrap_err();
         assert_eq!(refused.code, code::ROLE_NOT_ALLOWED);
         assert_eq!(clients.answer(late, &id, allow()).unwrap(), session);
-        assert_eq!(answer_of(answer.try_recv().unwrap()).as_deref(), Some("yes"));
+        assert_eq!(
+            answer_of(answer.try_recv().unwrap()).as_deref(),
+            Some("yes")
+        );
     }
 
     #[test]
