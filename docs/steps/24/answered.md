@@ -186,7 +186,7 @@ Each moves from `NOT_YET` into `COMMANDS` with its test.
 | Item | This step | How |
 |---|---|---|
 | `config-reload-through-the-core` (closed in step 24) | **Closes** (PR 1) | Point 1, with `next session` for the keys a session is made with once, and the `NextEpoch` keys at the next compaction. |
-| [config-provenance-in-the-application](../../outstanding/config-provenance-in-the-application.md) | **Closes** (PRs 1, 3) | `config/get`'s origins; `/config` shows them. |
+| `config-provenance-in-the-application` (closed in step 24) | **Closes** (PRs 1, 3) | `config/get`'s origins; `/config` shows them. |
 | [statistics-a-build-cannot-use-are-said-only-in-the-log](../../outstanding/statistics-a-build-cannot-use-are-said-only-in-the-log.md) | **Closes** (PRs 1, 3) | `UsageReport.notes`; the panel and `/usage` say what `cortex stats` says. No notice at the start. |
 | `verify-run-a-turn-that-only-verifies` | **Settled by the owner** on `main` (2026-11-16, tooling 10's #86): `verify/run` starts a turn that only verifies, or answers `no_checks` with its reason | `/verify` (the third pull request) shows the turn, or the reason. |
 | [a-promote-while-a-confined-command-runs](../../outstanding/a-promote-while-a-confined-command-runs.md) | **Most of it** (PR 1) | The core refuses a promote while a session of the project runs a turn. Left: another process's promote during a command, with the item's recommendation. |
