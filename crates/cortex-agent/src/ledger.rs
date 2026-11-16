@@ -205,6 +205,25 @@ impl Account {
         }
     }
 
+    /// This account with another budget: the same name, the same time
+    /// opened, and the same spending, which the two share from then on. A
+    /// reload of the configuration changes a session's limits so, keeping
+    /// what was spent (step 24).
+    #[must_use]
+    pub fn with_budget(&self, budget: Budget) -> Self {
+        let inner = &self.inner;
+        Self {
+            inner: Arc::new(Inner {
+                name: inner.name.clone(),
+                budget,
+                clock: Arc::clone(&inner.clock),
+                opened: inner.opened,
+                spent: Arc::clone(&inner.spent),
+                catch_up: inner.catch_up.clone(),
+            }),
+        }
+    }
+
     /// Adds what was spent elsewhere: a [`CatchUp`]'s figures.
     pub fn add_spent(&self, more: Spent) {
         let mut spent = self.lock();
@@ -363,6 +382,21 @@ impl Ledger {
     #[must_use]
     pub fn accounts(&self) -> &[Account] {
         &self.accounts
+    }
+
+    /// The accounts the session draws on, in place of those it had. What an
+    /// account made with [`Account::with_budget`] had spent is kept.
+    pub fn set_accounts(&mut self, accounts: Vec<Account>) {
+        self.accounts = accounts;
+    }
+
+    /// The budget of each turn from now on, the running turn's included:
+    /// what it has spent is kept.
+    pub fn set_turn_budget(&mut self, budget: Budget) {
+        if let Some(turn) = &self.turn {
+            self.turn = Some(turn.with_budget(budget.clone()));
+        }
+        self.turn_budget = budget;
     }
 
     /// Opens the account of a new turn.

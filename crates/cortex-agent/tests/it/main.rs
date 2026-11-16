@@ -46,6 +46,7 @@ mod order;
 mod plan;
 mod pressure;
 mod profile;
+mod reconfigure;
 mod redecide;
 mod retries;
 mod roles;

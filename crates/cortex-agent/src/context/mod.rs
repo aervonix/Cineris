@@ -350,6 +350,20 @@ impl Context {
     /// Replaces what the context holds with the session as the store has
     /// it: the epoch in force on the branch, and the history from its last
     /// summary on.
+    /// Fixes an epoch read without variants (a log written before step
+    /// 16, or with a choice this build does not know) to `variants`, the
+    /// main model's in force as it is read, so that its requests and an
+    /// epoch begun from it carry them, and do not follow a model built again
+    /// later (`docs/outstanding/an-epoch-read-without-its-variants.md`,
+    /// closed in step 24).
+    pub(crate) fn fix_variants(&mut self, variants: &cortex_llm::Variants) {
+        if let Some(epoch) = &mut self.epoch
+            && epoch.variants.is_none()
+        {
+            epoch.variants = Some(variants.clone());
+        }
+    }
+
     pub(crate) fn load(&mut self, opened: &Opened) {
         self.unchecked = true;
         // The count was of the history as it was; the ratio of bytes to

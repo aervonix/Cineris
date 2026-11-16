@@ -178,6 +178,10 @@ pub(crate) struct Inbox {
     /// loaded, which stand in for the catalog's.
     pub(crate) windows: BTreeMap<(ProviderId, ModelId), u64>,
     pub(crate) closed: bool,
+    /// Settings a reload changed, for the loop's next request.
+    pub(crate) reconfigured: Option<crate::reconfigure::Reconfigure>,
+    /// What waits for the next context epoch, taken as a compaction begins.
+    pub(crate) next_epoch: Option<crate::reconfigure::EpochChange>,
 }
 
 pub(crate) struct Shared {
@@ -588,6 +592,28 @@ impl SessionHandle {
         let models = inbox.models.clone().with_role(role, model);
         inbox.models = models;
         self.shared.emit_updated(&inbox);
+    }
+
+    /// Settings a reload of the configuration changed, which apply from
+    /// the loop's next request: a request already under way keeps what it
+    /// began with. A second change before then is laid over the first.
+    pub fn reconfigure(&self, change: crate::reconfigure::Reconfigure) {
+        if change.is_empty() {
+            return;
+        }
+        let mut inbox = self.shared.lock();
+        match &mut inbox.reconfigured {
+            Some(waiting) => waiting.merge(change),
+            None => inbox.reconfigured = Some(change),
+        }
+    }
+
+    /// What waits for the session's next context epoch, in place of what
+    /// waited (`None`: nothing waits). The loop takes it when a compaction
+    /// begins, and calls its `taken`; a change of model keeps the prompt,
+    /// and so does not take it.
+    pub fn at_next_epoch(&self, change: Option<crate::reconfigure::EpochChange>) {
+        self.shared.lock().next_epoch = change;
     }
 
     /// The model a role runs on now. `None` for a role with no model.

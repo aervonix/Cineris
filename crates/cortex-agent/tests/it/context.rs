@@ -1580,6 +1580,89 @@ fn a_resumed_session_goes_on_in_its_epoch_when_the_prompt_is_the_same() {
     );
 }
 
+/// An epoch read from a log written before variants were recorded is
+/// fixed, as the session is resumed, to the variants in force then: a
+/// model rebuilt in the middle of a turn with other variants (a reload)
+/// does not change what the epoch's requests carry
+/// (`docs/outstanding/an-epoch-read-without-its-variants.md`, closed in
+/// step 24).
+#[test]
+fn an_epoch_read_without_variants_keeps_those_in_force_when_it_was_resumed() {
+    let gate = Gate::new();
+    let world = World::new(
+        "resume_no_variants",
+        [
+            says("One."),
+            Response::new()
+                .tool_call("c1", "read", &json!({"path": "a"}))
+                .wait(&gate)
+                .end(StopReason::ToolCalls),
+            says("Done."),
+        ],
+    );
+    let probe = Setup::new(&world).start(&world);
+    world.run(async {
+        probe.prompt("probe");
+        probe.events.turns(1).await;
+    });
+    let epoch = probe.store.epochs().remove(0);
+    let (rig, store) = resumed(&world, &epoch.system);
+    drop(rig);
+    let rebuilt = MemorySessionStore::new();
+    {
+        let mut writer = rebuilt.clone();
+        for (turn, mut record) in store.records() {
+            if let cortex_agent::Record::Epoch(stored) = &mut record {
+                stored.tools.clone_from(&epoch.tools);
+                stored.base = epoch.base;
+                stored.instructions.clear();
+                assert!(stored.variants.is_none());
+            }
+            cortex_testkit::block_on(cortex_agent::SessionStore::append(
+                &mut writer,
+                &turn,
+                record,
+            ))
+            .unwrap();
+        }
+    }
+    let mut setup = Setup::new(&world);
+    setup.id = "s_2".to_owned();
+    setup.memory = rebuilt.clone();
+    let rig = setup.start(&world);
+    let resumed_style = rig
+        .handle
+        .role_model(&ModelRole::Main)
+        .unwrap()
+        .variants
+        .prompt_style;
+    world.run(async {
+        rig.prompt("after");
+        rig.events.seen("started:assistant", 1).await;
+        // In the middle of the turn, the main model built again with
+        // another prompt style, as a reload's rebuild could.
+        let mut model = rig.handle.role_model(&ModelRole::Main).unwrap();
+        model.variants.prompt_style = if resumed_style == "guided" {
+            "concise".to_owned()
+        } else {
+            "guided".to_owned()
+        };
+        rig.handle.set_role_model(ModelRole::Main, model);
+        gate.open();
+        rig.events.turns(1).await;
+    });
+    assert_eq!(rebuilt.epochs().len(), 1, "the epoch went on");
+    let requests = world.provider.requests();
+    let [.., first, second] = requests.as_slice() else {
+        panic!("{} requests", requests.len());
+    };
+    assert_eq!(first.variants.prompt_style, resumed_style);
+    assert_eq!(
+        second.variants.prompt_style, resumed_style,
+        "the epoch's request followed the rebuilt model's variants"
+    );
+}
+
 /// A client whose stable prefix is not the beginning of the one before
 /// it: the loop's debug-build check must stop the turn.
 struct Shifting {
