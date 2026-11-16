@@ -786,6 +786,19 @@ impl Policy for EnginePolicy {
                 |_| ServerRequest::Approval(request.clone()),
                 self.judge(&call),
             );
+            // A client that opened the session from another thread between
+            // the look at who may answer and the request being open found
+            // nothing to be put (`Clients::join`), and is put it now; one
+            // that opens it after this is put it by its own join. Found by
+            // the review of step 27's core changes: with `keep_sessions` the
+            // client that opens a session with nobody on it is the only one
+            // who can answer.
+            for client in self.clients.approvers(&self.sink.subscribers()) {
+                if !asked.contains(&client) {
+                    self.clients
+                        .join(call.session, crate::clients::ClientId(client));
+                }
+            }
             let mut open = Asked {
                 policy: self,
                 id: id.clone(),
