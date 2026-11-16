@@ -1,0 +1,815 @@
+//! One client's connection: lines in, operations through the lane, lines
+//! out (`docs/architecture/11-rpc-protocol.md`; `docs/steps/27/answered.md`,
+//! "The design, before building").
+//!
+//! Three parts run at once on the core's runtime:
+//!
+//! - **The reader** takes the client's bytes, splits them into lines and
+//!   reads each: a request goes to the lane (or is answered at once when it
+//!   cannot be run), an answer to a request the server put goes to
+//!   `Core::respond`. **It never stops reading** while the connection is
+//!   open: the answer an operation waits on comes in on the same stream.
+//! - **The lane** ([`Dispatcher`]) runs the operations in the order every
+//!   front end's run in.
+//! - **The writer** takes the next thing to send, in [`Order`], only once
+//!   the line before it has gone: a client that reads slowly leaves its
+//!   backlog in the core's queue, where deltas merge and then drop. While a
+//!   line waits, it looks at the client's queue at most once a second, and
+//!   closes the connection when whole events wait past the queue's capacity
+//!   and the client has taken no line for [`ServeOptions::stalled_client`],
+//!   or when far more wait (02-runtime, "Event backpressure").
+//!
+//! **What the server holds for a client is bounded.** A request counts
+//! against the connection's budget from when it is read until its result
+//! is written: at most [`ServeOptions::max_requests`], and at most
+//! [`ServeOptions::max_request_bytes`] of their lines. A request past
+//! either is answered at once (`overloaded`, of kind `limit`) and not run.
+//! Those answers, and the errors for lines that are not requests, are
+//! counted until written too: a client with more of them unread than
+//! requests may run is sending and not reading, and its connection is
+//! closed ([`Ended::Flooded`]). Beside them: one line being read (the
+//! framing's limit) and one being written.
+//!
+//! **The handshake.** Nothing but `initialize` is taken before it. Its role
+//! and capabilities make the client's [`ClientInfo`]; the core then answers
+//! it (the version, the role's validity), and a refused `initialize`
+//! disconnects that client again and leaves the connection open for
+//! another.
+//!
+//! **The end.** When the client's stream ends, the server stops or the
+//! client stalls, the client is disconnected from the core first, which
+//! withdraws what it was asked so that no question it never answered holds
+//! its lane, and only then is the lane's operation waited for, at most
+//! [`ServeOptions::lane_end`] (as the in-process link does: step 23's
+//! second pull request).
+
+use std::collections::{BTreeMap, VecDeque};
+use std::future::{Future, poll_fn};
+use std::io;
+use std::pin::pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::Poll;
+use std::time::Duration;
+
+use cortex_base::framing::{DEFAULT_MAX_LINE_LEN, FrameDecoder};
+use cortex_base::{CancelToken, SharedTimer};
+use cortex_core::{Client, ClientInfo, Core, EventQueue, Outgoing, QUEUE_CAPACITY};
+use cortex_protocol::error::code;
+use cortex_protocol::event::Event;
+use cortex_protocol::jsonrpc::{ErrorObject, Request, RequestId, Response};
+use cortex_protocol::methods::{Empty, InitializeParams, Op, OpResult, ServerResponse};
+use cortex_protocol::{ErrorData, ErrorKind};
+use tokio::sync::{Notify, mpsc};
+
+use crate::lane::{Dispatcher, Run};
+use crate::order::{Next, Order};
+use crate::transport::Transport;
+use crate::wire::{self, Incoming};
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    // Every change behind these locks is whole before the lock is let go.
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// What a connection is given.
+#[derive(Debug, Clone)]
+pub struct ServeOptions {
+    /// Every wait of the server: the core's timer, so that a test's waits
+    /// are on its fake clock.
+    pub timer: SharedTimer,
+    /// How long a client may take no line while whole events wait past its
+    /// queue's capacity, before its connection is closed (`rpc.stalled_client`).
+    pub stalled_client: Duration,
+    /// How many events may wait for a client before its deltas are dropped.
+    pub queue: usize,
+    /// The most requests of one client that may be running, or waiting to
+    /// run or to have their results written.
+    pub max_requests: usize,
+    /// The most bytes of those requests' lines.
+    pub max_request_bytes: usize,
+    /// The longest line read.
+    pub max_line: usize,
+    /// A line longer than this is read on the blocking pool, so that the
+    /// core thread is not held while it is parsed.
+    pub long_line: usize,
+    /// How long a connection's end waits for the operation its lane runs.
+    pub lane_end: Duration,
+    /// How long the end of the server waits for requests still running.
+    pub requests_end: Duration,
+    /// How long the end waits to write what is already queued.
+    pub drain: Duration,
+}
+
+impl ServeOptions {
+    /// The defaults, on `timer`.
+    #[must_use]
+    pub fn new(timer: SharedTimer) -> Self {
+        Self {
+            timer,
+            stalled_client: Duration::from_secs(30),
+            queue: QUEUE_CAPACITY,
+            max_requests: 256,
+            max_request_bytes: 64 * 1024 * 1024,
+            max_line: DEFAULT_MAX_LINE_LEN,
+            long_line: 1024 * 1024,
+            lane_end: Duration::from_secs(1),
+            requests_end: Duration::from_secs(2),
+            drain: Duration::from_secs(2),
+        }
+    }
+}
+
+/// How often a writer that waits on its client looks at the client's
+/// queue, at most. Only while a line is waiting to go: an idle connection
+/// sets no timer.
+const LOOK: Duration = Duration::from_secs(1);
+
+/// How many times the queue's capacity may wait before a client that is
+/// not reading is closed at once, whatever the time.
+const CEILING: usize = 4;
+
+/// How a connection ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Ended {
+    /// The client's stream ended.
+    Closed,
+    /// The client's stream failed.
+    Failed,
+    /// Writing to the client failed: it has gone.
+    Gone,
+    /// The client took nothing while whole events waited past its queue's
+    /// capacity, for too long or too many.
+    Stalled,
+    /// The client sent more than may wait for it and read none of what it
+    /// was answered.
+    Flooded,
+    /// The client asked the server to stop (`shutdown`).
+    Shutdown,
+    /// The server stopped it.
+    Stopped,
+}
+
+/// What is counted against a connection's limits.
+#[derive(Debug, Default)]
+struct Budget {
+    /// Requests read and not yet answered on the wire.
+    requests: usize,
+    /// The bytes of their lines.
+    bytes: usize,
+    /// Of those, the ones still running in the core.
+    running: usize,
+    /// Answers the reader gave at once (a refusal, an error for a line that
+    /// is not a request) that are not yet written.
+    refusals: usize,
+}
+
+/// A line ready to be written, and what it frees once it is.
+#[derive(Debug)]
+struct Ready {
+    line: Vec<u8>,
+    frees: Frees,
+}
+
+/// What writing a line gives back to the budget.
+#[derive(Debug, Clone, Copy)]
+enum Frees {
+    /// A request's place, and its line's bytes.
+    Request(usize),
+    /// A refusal's place.
+    Refusal,
+}
+
+/// What the parts of a connection share.
+struct Shared {
+    core: Core,
+    options: ServeOptions,
+    /// Responses, as lines, ready to be written in their turn.
+    results: Mutex<VecDeque<Ready>>,
+    /// Wakes the writer: a result is ready, the client's queue holds
+    /// something, or the end is draining.
+    wake: Notify,
+    budget: Mutex<Budget>,
+    /// Told when a request ends.
+    freed: Notify,
+    /// The requests put to this client and not yet answered, with each one's
+    /// method, which its answer is read against.
+    asked: Mutex<BTreeMap<RequestId, &'static str>>,
+    client: Mutex<Option<Client>>,
+    /// The end is under way: the writer stops once nothing is left.
+    draining: AtomicBool,
+}
+
+impl Shared {
+    fn queue(&self) -> Option<Arc<EventQueue>> {
+        lock(&self.client)
+            .as_ref()
+            .map(|client| Arc::clone(&client.queue))
+    }
+
+    fn ready(&self, line: Vec<u8>, frees: Frees) {
+        lock(&self.results).push_back(Ready { line, frees });
+        self.wake.notify_one();
+    }
+
+    /// A request's result, as its line.
+    fn answered(&self, id: RequestId, result: Result<OpResult, ErrorData>, frees: Frees) {
+        let mut line = Vec::new();
+        let written = wire::result(id.clone(), result, &mut line).or_else(|error| {
+            tracing::error!(%error, "a result could not be written as a line");
+            line.clear();
+            wire::error(
+                Some(id),
+                wire::application(
+                    ErrorKind::Internal,
+                    "unwritable_result",
+                    "The result could not be written as JSON.",
+                ),
+                &mut line,
+            )
+        });
+        if written.is_ok() {
+            self.ready(line, frees);
+        } else {
+            // Nothing can be said; its place is given back all the same.
+            self.free(frees);
+        }
+    }
+
+    /// Answers at once with an error, counted as a refusal until written.
+    /// False when the client has too many unread already: it is flooding.
+    #[must_use]
+    fn refuse(&self, id: Option<RequestId>, error: ErrorObject) -> bool {
+        {
+            let mut budget = lock(&self.budget);
+            if budget.refusals >= self.options.max_requests.max(1) {
+                return false;
+            }
+            budget.refusals += 1;
+        }
+        let mut line = Vec::new();
+        if wire::error(id, error, &mut line).is_ok() {
+            self.ready(line, Frees::Refusal);
+        } else {
+            self.free(Frees::Refusal);
+        }
+        true
+    }
+
+    /// The same, for an error of the protocol's own kind.
+    #[must_use]
+    fn refuse_with(&self, id: RequestId, kind: ErrorKind, code: &str, message: &str) -> bool {
+        self.refuse(Some(id), wire::application(kind, code, message))
+    }
+
+    fn free(&self, frees: Frees) {
+        let mut budget = lock(&self.budget);
+        match frees {
+            Frees::Request(bytes) => {
+                budget.requests = budget.requests.saturating_sub(1);
+                budget.bytes = budget.bytes.saturating_sub(bytes);
+            }
+            Frees::Refusal => budget.refusals = budget.refusals.saturating_sub(1),
+        }
+    }
+
+    fn nothing_running(&self) -> bool {
+        lock(&self.budget).running == 0
+    }
+}
+
+/// One client's connection. Made with [`Connection::start`], served with
+/// [`Connection::run`] until it ends, and finished with
+/// [`Connection::finish`].
+pub struct Connection {
+    shared: Arc<Shared>,
+    input: mpsc::Receiver<io::Result<Vec<u8>>>,
+    decoder: FrameDecoder,
+    dispatcher: Option<Dispatcher<(RequestId, usize)>>,
+    writer: tokio::task::JoinHandle<Ended>,
+    /// Whether the writer has ended: its handle is not polled again.
+    writer_done: bool,
+    /// The `shutdown` request that ended the connection, answered once the
+    /// server has stopped.
+    shutdown: Option<RequestId>,
+}
+
+impl std::fmt::Debug for Connection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Connection").finish_non_exhaustive()
+    }
+}
+
+/// What the reader waited for.
+enum Step {
+    Chunk(Option<io::Result<Vec<u8>>>),
+    Writer(Ended),
+}
+
+impl Connection {
+    /// Starts serving a client over `transport`. Must be called inside the
+    /// core's runtime: the writer is a task of it.
+    #[must_use]
+    pub fn start(core: Core, transport: Transport, options: ServeOptions) -> Self {
+        let decoder = FrameDecoder::with_max_line_len(options.max_line);
+        let shared = Arc::new(Shared {
+            core,
+            options,
+            results: Mutex::new(VecDeque::new()),
+            wake: Notify::new(),
+            budget: Mutex::new(Budget::default()),
+            freed: Notify::new(),
+            asked: Mutex::new(BTreeMap::new()),
+            client: Mutex::new(None),
+            draining: AtomicBool::new(false),
+        });
+        let writer = tokio::spawn(write(Arc::clone(&shared), transport.output));
+        Self {
+            shared,
+            input: transport.input,
+            decoder,
+            dispatcher: None,
+            writer,
+            writer_done: false,
+            shutdown: None,
+        }
+    }
+
+    /// The client, once it has said `initialize`.
+    #[must_use]
+    pub fn client(&self) -> Option<Client> {
+        lock(&self.shared.client).clone()
+    }
+
+    /// Reads and serves the client until its stream ends, the writer finds
+    /// it gone or stalled, it floods, it asks for `shutdown`, or `stop` is
+    /// cancelled. Then disconnects it from the core and waits for its
+    /// lane's operation at most [`ServeOptions::lane_end`].
+    pub async fn run(&mut self, stop: &CancelToken) -> Ended {
+        let ended = self.serve(stop).await;
+        // What it was asked and never answered is withdrawn, which ends an
+        // operation waiting on the answer, before the lane is waited for.
+        if let Some(client) = self.client() {
+            self.shared.core.disconnect(client.id).await;
+        }
+        if let Some(lane) = self.dispatcher.as_mut().and_then(Dispatcher::close)
+            && within(&self.shared.options.timer, self.shared.options.lane_end, lane)
+                .await
+                .is_none()
+        {
+            tracing::warn!("the connection's last operation did not end in time");
+        }
+        tracing::debug!(?ended, "a connection ended");
+        ended
+    }
+
+    /// The end of the server, for this connection: waits for its requests
+    /// still running, at most [`ServeOptions::requests_end`]; answers the
+    /// `shutdown` that ended it; and, unless the client is gone, stalled or
+    /// flooding, writes what is queued, at most [`ServeOptions::drain`].
+    pub async fn finish(mut self, ended: Ended) {
+        let shared = Arc::clone(&self.shared);
+        let running = until(&shared.freed, || shared.nothing_running());
+        if within(&shared.options.timer, shared.options.requests_end, running)
+            .await
+            .is_none()
+        {
+            tracing::warn!("requests were still running at the server's end");
+        }
+        if let Some(id) = self.shutdown.take() {
+            // Its place was taken when it was read.
+            shared.answered(id, Ok(OpResult::Shutdown(Empty {})), Frees::Refusal);
+        }
+        shared.draining.store(true, Ordering::SeqCst);
+        shared.wake.notify_one();
+        if self.writer_done || matches!(ended, Ended::Gone | Ended::Stalled | Ended::Flooded) {
+            self.writer.abort();
+            return;
+        }
+        let writer = &mut self.writer;
+        if within(&shared.options.timer, shared.options.drain, writer)
+            .await
+            .is_none()
+        {
+            self.writer.abort();
+        }
+    }
+
+    async fn serve(&mut self, stop: &CancelToken) -> Ended {
+        loop {
+            let writer = &mut self.writer;
+            let input = &mut self.input;
+            let next = poll_fn(|context| {
+                if let Poll::Ready(chunk) = input.poll_recv(context) {
+                    return Poll::Ready(Step::Chunk(chunk));
+                }
+                if let Poll::Ready(ended) = std::pin::Pin::new(&mut *writer).poll(context) {
+                    return Poll::Ready(Step::Writer(ended.unwrap_or(Ended::Gone)));
+                }
+                Poll::Pending
+            });
+            let Some(step) = stop.race(next).await else {
+                return Ended::Stopped;
+            };
+            match step {
+                Step::Writer(ended) => {
+                    self.writer_done = true;
+                    return ended;
+                }
+                Step::Chunk(None) => {
+                    if let Err(error) = self.decoder.finish() {
+                        let _ = self.shared.refuse(None, error.to_error_object());
+                    }
+                    return Ended::Closed;
+                }
+                Step::Chunk(Some(Err(error))) => {
+                    tracing::warn!(%error, "the client's stream failed");
+                    return Ended::Failed;
+                }
+                Step::Chunk(Some(Ok(bytes))) => {
+                    self.decoder.push(&bytes);
+                    if let Some(ended) = self.lines().await {
+                        return ended;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Serves every whole line the decoder holds. An end when one of them
+    /// ended the connection.
+    async fn lines(&mut self) -> Option<Ended> {
+        let long_line = self.shared.options.long_line;
+        loop {
+            let (bytes, incoming) = match self.decoder.next_line() {
+                None => return None,
+                Some(Err(error)) => {
+                    if !self.shared.refuse(None, error.to_error_object()) {
+                        return Some(Ended::Flooded);
+                    }
+                    continue;
+                }
+                Some(Ok(line)) if line.len() > long_line => {
+                    // Parsed on the blocking pool: a long line holds the
+                    // core thread for as long as it takes to read.
+                    let line = line.to_vec();
+                    let bytes = line.len();
+                    let read = tokio::task::spawn_blocking(move || wire::read(&line)).await;
+                    match read {
+                        Ok(incoming) => (bytes, incoming),
+                        Err(_) => continue,
+                    }
+                }
+                Some(Ok(line)) => (line.len(), wire::read(line)),
+            };
+            match self.line(bytes, incoming).await {
+                Served::On => {}
+                Served::Ended(ended) => return Some(ended),
+            }
+        }
+    }
+
+    /// Serves one line.
+    async fn line(&mut self, bytes: usize, incoming: Incoming) -> Served {
+        match incoming {
+            Incoming::Bad { id, error } => {
+                if self.shared.refuse(id, error) {
+                    Served::On
+                } else {
+                    Served::Ended(Ended::Flooded)
+                }
+            }
+            Incoming::Notification => Served::On,
+            Incoming::Response(response) => {
+                self.answer(response);
+                Served::On
+            }
+            Incoming::Request(request) => self.request(bytes, request).await,
+        }
+    }
+
+    /// The client's answer to a request the server put to it. A JSON-RPC
+    /// error in its place declines it: the request stays open for the
+    /// others asked, and for its time limit.
+    fn answer(&self, response: Response) {
+        let Some(id) = response.id else {
+            tracing::debug!("an answer with no id was dropped");
+            return;
+        };
+        let Some(client) = self.client() else {
+            return;
+        };
+        let Some(method) = lock(&self.shared.asked).get(&id).copied() else {
+            tracing::debug!(%id, "an answer to a request this client was not put was dropped");
+            return;
+        };
+        let value = match response.result {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::debug!(%id, message = %error.message, "a client declined a request");
+                return;
+            }
+        };
+        let answer = match ServerResponse::from_wire(method, value) {
+            Ok(answer) => answer,
+            Err(error) => {
+                tracing::debug!(%id, %error, "an answer that does not fit its request was dropped");
+                return;
+            }
+        };
+        match self.shared.core.respond(client.id, &id, answer) {
+            Ok(()) => {
+                lock(&self.shared.asked).remove(&id);
+            }
+            Err(error) => {
+                // Settled meanwhile, or refused: the core says how the
+                // request was settled in an event. One refused for its
+                // content (an answer that contradicts itself) stays open.
+                if error.code == "request_not_open" {
+                    lock(&self.shared.asked).remove(&id);
+                }
+                tracing::debug!(%id, code = %error.code, "an answer was not taken");
+            }
+        }
+    }
+
+    /// A request.
+    async fn request(&mut self, bytes: usize, request: Request) -> Served {
+        let Request { id, method, params } = request;
+        if self.dispatcher.is_none() {
+            if method == "initialize" {
+                return self.initialize(id, params).await;
+            }
+            return self.refused(self.shared.refuse_with(
+                id,
+                ErrorKind::Usage,
+                code::NOT_INITIALIZED,
+                "The first request on a connection must be `initialize`.",
+            ));
+        }
+        let op = match Op::from_wire(&method, params) {
+            Ok(op) => op,
+            Err(error) => {
+                return self.refused(self.shared.refuse(Some(id), error.to_error_object()));
+            }
+        };
+        match op {
+            Op::Initialize(_) => self.refused(self.shared.refuse_with(
+                id,
+                ErrorKind::Usage,
+                code::ALREADY_INITIALIZED,
+                "This connection has said `initialize` already.",
+            )),
+            Op::Shutdown(params) => self.shutdown(id, params).await,
+            op => {
+                let taken = {
+                    let mut budget = lock(&self.shared.budget);
+                    let fits = budget.requests < self.shared.options.max_requests
+                        && budget.bytes.saturating_add(bytes)
+                            <= self.shared.options.max_request_bytes;
+                    if fits {
+                        budget.requests += 1;
+                        budget.bytes += bytes;
+                        budget.running += 1;
+                    }
+                    fits
+                };
+                if !taken {
+                    return self.refused(self.shared.refuse_with(
+                        id,
+                        ErrorKind::Limit,
+                        "overloaded",
+                        "Too many requests of this connection are running or waiting to be \
+                         answered; send it again once some have been.",
+                    ));
+                }
+                if let Some(dispatcher) = &self.dispatcher {
+                    dispatcher.send((id, bytes), op);
+                }
+                Served::On
+            }
+        }
+    }
+
+    /// On, when a refusal was queued; the end, when the client is flooding.
+    fn refused(&self, queued: bool) -> Served {
+        if queued {
+            Served::On
+        } else {
+            Served::Ended(Ended::Flooded)
+        }
+    }
+
+    /// `shutdown`: the core stops, outside the lane.
+    async fn shutdown(&mut self, id: RequestId, params: Empty) -> Served {
+        let Some(client) = self.client() else {
+            return Served::On;
+        };
+        // Counted as a refusal until its answer is written, as it is
+        // answered outside the lane.
+        {
+            let mut budget = lock(&self.shared.budget);
+            budget.refusals += 1;
+        }
+        match self
+            .shared
+            .core
+            .handle(client.id, Op::Shutdown(params))
+            .await
+        {
+            Ok(_) => {
+                self.shutdown = Some(id);
+                Served::Ended(Ended::Shutdown)
+            }
+            Err(error) => {
+                self.shared.answered(id, Err(*error), Frees::Refusal);
+                Served::On
+            }
+        }
+    }
+
+    /// `initialize`: the client is connected with the role and the
+    /// capabilities it says, and the core answers.
+    async fn initialize(&mut self, id: RequestId, params: Option<serde_json::Value>) -> Served {
+        let params = match Op::from_wire("initialize", params) {
+            Ok(Op::Initialize(params)) => params,
+            Ok(_) => return Served::On,
+            Err(error) => {
+                return self.refused(self.shared.refuse(Some(id), error.to_error_object()));
+            }
+        };
+        let InitializeParams {
+            role, capabilities, ..
+        } = &params;
+        let info = ClientInfo {
+            role: role.clone(),
+            capabilities: capabilities.clone(),
+            queue: self.shared.options.queue,
+        };
+        let core = self.shared.core.clone();
+        let client = core.connect(info);
+        {
+            let mut budget = lock(&self.shared.budget);
+            budget.refusals += 1;
+        }
+        match core.handle(client.id, Op::Initialize(params)).await {
+            Ok(result) => {
+                let wake = Arc::clone(&self.shared);
+                client
+                    .queue
+                    .set_wake(Arc::new(move || wake.wake.notify_one()));
+                *lock(&self.shared.client) = Some(client.clone());
+                let client_id = client.id;
+                let run: Run = Arc::new(move |op| {
+                    let core = core.clone();
+                    Box::pin(async move { core.handle(client_id, op).await })
+                });
+                let shared = Arc::clone(&self.shared);
+                let done = Arc::new(move |(id, bytes): (RequestId, usize), result| {
+                    shared.answered(id, result, Frees::Request(bytes));
+                    let mut budget = lock(&shared.budget);
+                    budget.running = budget.running.saturating_sub(1);
+                    drop(budget);
+                    shared.freed.notify_waiters();
+                });
+                self.dispatcher = Some(Dispatcher::start(run, done));
+                self.shared.answered(id, Ok(result), Frees::Refusal);
+            }
+            Err(error) => {
+                core.disconnect(client.id).await;
+                self.shared.answered(id, Err(*error), Frees::Refusal);
+            }
+        }
+        Served::On
+    }
+}
+
+/// What serving a line came to.
+enum Served {
+    On,
+    Ended(Ended),
+}
+
+/// Waits until `done` holds, looking again each time `notify` is told.
+async fn until(notify: &Notify, done: impl Fn() -> bool) {
+    loop {
+        let mut notified = pin!(notify.notified());
+        // Registered before the look, so that a change in between is not
+        // missed.
+        notified.as_mut().enable();
+        if done() {
+            return;
+        }
+        notified.await;
+    }
+}
+
+/// `future`, or `None` once `limit` has passed on `timer`.
+async fn within<F: Future>(timer: &SharedTimer, limit: Duration, future: F) -> Option<F::Output> {
+    let mut future = pin!(future);
+    let mut sleep = timer.sleep(limit);
+    poll_fn(|context| {
+        if let Poll::Ready(output) = future.as_mut().poll(context) {
+            return Poll::Ready(Some(output));
+        }
+        if sleep.as_mut().poll(context).is_ready() {
+            return Poll::Ready(None);
+        }
+        Poll::Pending
+    })
+    .await
+}
+
+/// The writer: the next thing for the client, in order, one line at a time.
+async fn write(shared: Arc<Shared>, output: mpsc::Sender<Vec<u8>>) -> Ended {
+    let mut order = Order::default();
+    loop {
+        let queue = shared.queue();
+        let next = match &queue {
+            Some(queue) => order.next(queue, &shared.results),
+            None => lock(&shared.results).pop_front().map(Next::Result),
+        };
+        let mut line = Vec::new();
+        let mut frees = None;
+        match next {
+            Some(Next::Result(ready)) => {
+                line = ready.line;
+                frees = Some(ready.frees);
+            }
+            Some(Next::Core(Outgoing::Event(event))) => {
+                if let Event::RequestResolved(resolved) = &event.event {
+                    lock(&shared.asked).remove(&resolved.request_id);
+                }
+                if let Err(error) = wire::event(&event, &mut line) {
+                    tracing::error!(%error, "an event could not be written as a line");
+                    continue;
+                }
+            }
+            Some(Next::Core(Outgoing::Request { id, request })) => {
+                lock(&shared.asked).insert(id.clone(), request.method());
+                if let Err(error) = wire::request(id, &request, &mut line) {
+                    tracing::error!(%error, "a request could not be written as a line");
+                    continue;
+                }
+            }
+            None => {
+                let woken = shared.wake.notified();
+                if shared.draining.load(Ordering::SeqCst) {
+                    return Ended::Closed;
+                }
+                woken.await;
+                continue;
+            }
+        }
+        let sent = send(&shared, &output, line, queue.as_deref()).await;
+        // A result written gives its place back, whether or not the client
+        // took it: one that is gone ends the connection anyway.
+        if let Some(frees) = frees {
+            shared.free(frees);
+        }
+        if let Err(ended) = sent {
+            return ended;
+        }
+    }
+}
+
+/// Sends one line, closing the connection when the client takes nothing
+/// for too long while whole events wait past its queue's capacity, or
+/// when far more than that wait.
+async fn send(
+    shared: &Shared,
+    output: &mpsc::Sender<Vec<u8>>,
+    line: Vec<u8>,
+    queue: Option<&EventQueue>,
+) -> Result<(), Ended> {
+    let options = &shared.options;
+    let look = LOOK.min(options.stalled_client).max(Duration::from_millis(1));
+    let mut sending = pin!(output.send(line));
+    let mut waited = Duration::ZERO;
+    loop {
+        match within(&options.timer, look, sending.as_mut()).await {
+            Some(Ok(())) => return Ok(()),
+            Some(Err(_)) => return Err(Ended::Gone),
+            None => {
+                waited += look;
+                let Some(queue) = queue else {
+                    continue;
+                };
+                let waiting = queue.len();
+                let past = waiting > options.queue;
+                if waiting > options.queue.saturating_mul(CEILING)
+                    || (past && waited >= options.stalled_client)
+                {
+                    tracing::warn!(
+                        waiting,
+                        waited_ms = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX),
+                        "a client took nothing while whole events waited for it: its connection \
+                         is closed"
+                    );
+                    return Err(Ended::Stalled);
+                }
+            }
+        }
+    }
+}

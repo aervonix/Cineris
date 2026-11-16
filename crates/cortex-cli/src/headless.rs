@@ -746,7 +746,7 @@ fn prompt(words: Option<&str>) -> io::Result<Option<String>> {
 /// Starts the log: the file in the state directory's `logs/`, and the
 /// stderr sink at `warn` (`info` with `--verbose`, off with `--quiet`).
 /// A log that cannot start is said once, and the run goes on without it.
-fn start_log(run: &Run, env: &Env, name: &str) -> Option<Arc<LogHandle>> {
+pub(crate) fn start_log(run: &Run, env: &Env, name: &str) -> Option<Arc<LogHandle>> {
     let clock = Arc::new(SystemClock::new());
     let mut options = LogOptions::new(clock);
     let level = run

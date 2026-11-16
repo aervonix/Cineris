@@ -13,6 +13,7 @@
 //! | [`exit`] | The exit codes. |
 //! | [`signals`] | Ctrl-C, SIGTERM and the console's events. |
 //! | [`commands`] | The subcommands: sessions, configuration, permissions, credentials. |
+//! | [`serve`] | The RPC server over standard input and output. |
 //!
 //! The program behaves identically under both names. It reads the name it
 //! was started with only to echo it in usage, help and error text
@@ -39,6 +40,7 @@ mod history;
 mod interactive;
 mod project_view;
 mod report;
+mod serve;
 mod signals;
 mod usage_view;
 
@@ -109,6 +111,7 @@ fn dispatch(command: Command, name: &'static str, started: Instant) -> u8 {
         Command::Usage(command) => commands::usage(command, name),
         Command::Stats(command) => commands::stats(command, name),
         Command::Project(command) => commands::project(command, name),
+        Command::Serve(serve) => serve::run(*serve, name),
     }
 }
 

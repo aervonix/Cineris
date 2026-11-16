@@ -134,9 +134,10 @@ settings! {
         /// detected when it is not set.
         [nested]
         pub terminal: TerminalSettings,
-        /// The RPC server: socket path, token, client timeouts.
-        [reserved UserOnly]
-        pub rpc: Reserved,
+        /// The RPC server (`cortex serve`): how long it waits for its
+        /// clients.
+        [nested]
+        pub rpc: RpcSettings,
         /// Hooks by name.
         [reserved RunsCode]
         pub hooks: Reserved,
@@ -856,6 +857,24 @@ settings! {
         /// `--log-level` override it.
         [UserOnly, Now]
         pub level: Option<String>,
+    }
+}
+
+settings! {
+    /// The RPC server (`cortex serve`, `docs/architecture/11-rpc-protocol.md`).
+    /// Read when the server starts. A project's file may shorten a wait and
+    /// may not lengthen it.
+    pub struct RpcSettings {
+        /// How long an approval waits for a client's answer before it is a
+        /// denial (`"0s"`: for as long as it takes). The terminal UI is not
+        /// a server and sets none.
+        [TightenOnly, Restart, 0s..=1d]
+        pub approval_timeout: Duration = Duration::from_secs(600),
+        /// How long a client may take nothing the server sends while whole
+        /// events wait for it past its queue, before its connection is
+        /// closed. The session goes on.
+        [TightenOnly, Restart, 1s..=1h]
+        pub stalled_client: Duration = Duration::from_secs(30),
     }
 }
 

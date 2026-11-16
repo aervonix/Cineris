@@ -11,7 +11,26 @@ doctest = false
 
 [dependencies]
 cortex-protocol.workspace = true
+cortex-base.workspace = true
 cortex-core.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+# Every task of a connection runs on the core thread's runtime (`rt`); the
+# channels to the transport and the wake-ups of the writer (`sync`). The
+# timer is not asked of it: every wait is on `cortex_base::Timer`.
+tokio = { workspace = true, features = ["rt", "sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+cortex-testkit.workspace = true
+# A core with a scripted model, for the tests only: its configuration's
+# environment (`cortex-config`), the model client it is given
+# (`cortex-llm`), and the seeded order of the loop's blocking work
+# (`cortex-tools`).
+cortex-config.workspace = true
+cortex-llm.workspace = true
+cortex-tools = { workspace = true, features = ["test-hooks"] }
 
 [lints]
 workspace = true

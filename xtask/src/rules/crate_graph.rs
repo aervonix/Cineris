@@ -70,12 +70,19 @@ const CRATES: &[(&str, &[&str])] = &[
             AGENT, EXT, USAGE, MCP,
         ],
     ),
-    (RPC, &[PROTOCOL, CORE]),
+    (RPC, &[PROTOCOL, BASE, CORE]),
     (TERM, &[BASE]),
     (TUI, &[PROTOCOL, BASE, TERM]),
     (CLI, &[PROTOCOL, BASE, SANDBOX, CORE, RPC, TUI, CONFIG]),
     (TESTKIT, &[PROTOCOL, BASE, LLM, TERM]),
 ];
+
+/// Workspace crates a crate's tests may use beside the ones it may depend
+/// on: a dev-dependency only. `cortex-rpc`'s tests make a core with a
+/// scripted model, as `cortex-core`'s own do, which takes the model client's
+/// types, the configuration's environment and the seeded order of the
+/// loop's blocking work (step 27).
+const DEV_ONLY: &[(&str, &[&str])] = &[(RPC, &[CONFIG, LLM, TOOLS])];
 
 /// Third-party crates that only their owner may depend on directly (rule 5),
 /// so that a change elsewhere never rebuilds them and replacing one touches
@@ -294,6 +301,13 @@ fn check_edges(package: &Package, violations: &mut Vec<Violation>) {
         // turns a feature on, for tests only, which `check_test_hooks`
         // holds to dev-dependencies.
         if to == name && dependency.kind == DepKind::Dev {
+            continue;
+        }
+        if dependency.kind == DepKind::Dev
+            && DEV_ONLY
+                .iter()
+                .any(|(krate, tests)| *krate == name && tests.contains(&to))
+        {
             continue;
         }
         if !allowed.contains(&to) {
