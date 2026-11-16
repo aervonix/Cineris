@@ -223,11 +223,17 @@ jobs:
           CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}/target/testkit-profile', github.workspace) || '' }}
         run: |
           set -o pipefail
+          # The inputs added since a commit was made are passed only when
+          # they are not their defaults, so that `-f commit` runs an older
+          # commit's own `try`, which does not know them, for the others.
+          added=()
+          if [ -n "$TRY_COMMIT" ]; then added+=(--commit "$TRY_COMMIT"); fi
+          if [ "$TRY_CAPTURE" = "no" ]; then added+=(--capture no); fi
           cargo run --locked --quiet --package xtask -- try \
             --command "$TRY_COMMAND" --profile "$TRY_PROFILE" \
             --count "$TRY_COUNT" --load "$TRY_LOAD" --cores "$TRY_CORES" \
             --filter "$TRY_FILTER" --against "$TRY_AGAINST" \
-            --commit "$TRY_COMMIT" --capture "$TRY_CAPTURE" \
+            "${added[@]}" \
             2>&1 | tee "$RUNNER_TEMP/try-output.log"
       - name: Run (Windows)
         if: runner.os == 'Windows'
@@ -247,11 +253,16 @@ jobs:
         run: |
           # A line cargo writes to its standard error is not an error here.
           $ErrorActionPreference = 'Continue'
+          # As on Linux: the inputs added since a commit was made only when
+          # they are not their defaults.
+          $added = @()
+          if ($env:TRY_COMMIT -ne '') { $added += @('--commit', $env:TRY_COMMIT) }
+          if ($env:TRY_CAPTURE -eq 'no') { $added += @('--capture', 'no') }
           cargo run --locked --quiet --package xtask -- try `
             --command "$env:TRY_COMMAND" --profile "$env:TRY_PROFILE" `
             --count "$env:TRY_COUNT" --load "$env:TRY_LOAD" --cores "$env:TRY_CORES" `
             --filter "$env:TRY_FILTER" --against "$env:TRY_AGAINST" `
-            --commit "$env:TRY_COMMIT" --capture "$env:TRY_CAPTURE" `
+            @added `
             2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath "$env:RUNNER_TEMP\try-output.log"
           exit $LASTEXITCODE
       - name: Put the end of the output in the summary
