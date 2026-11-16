@@ -126,6 +126,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     let root = workspace.to_string_lossy().into_owned();
     let prompt = run.prompt.clone();
     let link = core.link();
+    let history = history_for(&env, &workspace);
 
     // A panic of the interface's own unwinds to here: the terminal has been
     // put back by then (the terminal layer's hook, and its drop), and the
@@ -143,7 +144,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
                 settings,
                 keymap,
                 notices,
-                history: Box::new(MemoryHistory::new()),
+                history,
                 highlighter: Highlighter::new(move || wake.wake()),
             };
             (Box::new(link) as Box<dyn Link>, start)
@@ -205,6 +206,21 @@ fn ending(
             exit::INTERNAL,
             Some(format!("{name}: the terminal failed: {error}")),
         ),
+    }
+}
+
+/// The editor's history: the state directory's, for this project, read on
+/// a thread of its own; in memory when there is no state directory.
+fn history_for(env: &Env, workspace: &Path) -> Box<dyn cortex_tui::history::HistoryStore + Send> {
+    let state = StateDir::from_dirs(&Dirs::from_env(env));
+    let project = cortex_base::PathResolver::new(workspace, cortex_base::PathOptions::new())
+        .map(|resolver| resolver.root().project_key().into_string());
+    match (state, project) {
+        (Some(state), Ok(project)) => Box::new(crate::history::FileHistory::open(
+            state.history_file(),
+            project,
+        )),
+        _ => Box::new(MemoryHistory::new()),
     }
 }
 

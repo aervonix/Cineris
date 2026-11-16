@@ -35,6 +35,7 @@ mod commands;
 mod exit;
 mod headless;
 mod help;
+mod history;
 mod interactive;
 mod report;
 mod signals;

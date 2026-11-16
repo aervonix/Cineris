@@ -553,7 +553,9 @@ pub(crate) fn answer_trust(
     }
 }
 
-/// A root as a person reads it: under the home directory with `~`.
+/// A root as a person reads it: under the home directory with `~`, and
+/// otherwise as the path's own text, never the system's canonical form
+/// (`\\?\C:\…` on Windows).
 fn shown_root(root: &AbsPath, home: Option<&Path>) -> String {
     let path = root.to_fs_path();
     let home = home.and_then(resolve_dir).map(|home| home.to_fs_path());
@@ -563,7 +565,7 @@ fn shown_root(root: &AbsPath, home: Option<&Path>) -> String {
     {
         Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
         Some(rest) => format!("~/{}", rest.to_string_lossy().replace('\\', "/")),
-        None => path.to_string_lossy().into_owned(),
+        None => root.to_string(),
     }
 }
 
