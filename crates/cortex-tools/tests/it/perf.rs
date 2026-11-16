@@ -358,10 +358,14 @@ fn median_of(mut values: Vec<f64>) -> f64 {
 ///
 /// **Held to the budget** of `docs/performance-budgets.md` (the owner's
 /// decision of 2026-11-16): the rare literal's, the regular expression's and
-/// the miss's medians at most [`SEARCH_REAL_CODE_BUDGET_MS`], a hosted
+/// the miss's medians at most [`SEARCH_REAL_CODE_BUDGET_MS`], a Linux
 /// runner's figure, since the test cannot tell a desk from a runner; the
-/// desk's own figure, 100 ms, is read from the printed lines. The common
-/// literal is reported and not held.
+/// desk's own figure, 100 ms, is read from the printed lines. On Windows
+/// the medians are reported against the runner's 500 ms and not held: a
+/// runner measured 305 to 320 ms (`try` 43943290230), and hosted Windows
+/// runners differ in speed by a factor of two, so a held line would fail
+/// on a slow runner and stop a comparison of some other change. The
+/// common literal is reported and not held.
 ///
 /// ```text
 /// gh workflow run try --ref <branch> -f os=windows -f command="perf -p cortex-tools search_real"
@@ -408,7 +412,10 @@ fn perf_search_real_code() {
         // and takes about a third longer than the other three, which the
         // budget's figures were measured from: it is reported, not held,
         // so that it does not fail a Windows runner near the line.
-        if name != "search.literal_common_real_code" && median > SEARCH_REAL_CODE_BUDGET_MS {
+        if cfg!(not(windows))
+            && name != "search.literal_common_real_code"
+            && median > SEARCH_REAL_CODE_BUDGET_MS
+        {
             over.push(format!("{name} {median:.0} ms"));
         }
     }
@@ -419,10 +426,10 @@ fn perf_search_real_code() {
     );
 }
 
-/// A search of the corpus of real code, at the median: the hosted runner's
-/// budget of `docs/performance-budgets.md` (400 ms on Linux, 500 ms on
-/// Windows, which measured 316 to 382 ms).
-const SEARCH_REAL_CODE_BUDGET_MS: f64 = if cfg!(windows) { 500.0 } else { 400.0 };
+/// A search of the corpus of real code, at the median: the Linux runner's
+/// budget of `docs/performance-budgets.md` (400 ms; Windows' 500 ms is
+/// reported, not held: see [`perf_search_real_code`]).
+const SEARCH_REAL_CODE_BUDGET_MS: f64 = 400.0;
 
 /// A re-read's diff, at the median and the 95th percentile: the hosted
 /// runner's budget of `docs/performance-budgets.md`, in microseconds (the
