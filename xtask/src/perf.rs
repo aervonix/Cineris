@@ -80,6 +80,12 @@ fn parse(arguments: &[String]) -> Result<Request> {
     Ok(request)
 }
 
+/// Whether `cargo xtask perf` would take `arguments`, which it reads and
+/// runs nothing: how `try` refuses what it cannot pass on before it builds.
+pub(crate) fn check_arguments(arguments: &[String]) -> Result<()> {
+    parse(arguments).map(|_| ())
+}
+
 /// Where cargo puts the optimised example `name`.
 fn demo_binary(name: &str) -> PathBuf {
     let target = std::env::var_os("CARGO_TARGET_DIR")

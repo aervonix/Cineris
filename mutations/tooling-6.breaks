@@ -7,15 +7,15 @@
 rule: A run that failed is a failed attempt, whatever report it left; only a finished one is compared.
 file: xtask/src/ab.rs
 in: attempt_of
-find: Err(error) => Ok(Attempt::Failed(failure_of(report.ok().as_deref(), error)))
-replace: Err(_) => report.map(Attempt::Finished)
+find: Some(error) => Ok(Attempt::Failed(failure_of(report.ok(), error, job.by_tests)))
+replace: Some(_) => report.map(|report| Attempt::Finished(report.cases))
 caught-by:
     ab::tests::a_run_that_failed_is_a_failed_attempt_whatever_its_report_says
 
 [break] ab-compares-the-numbers-of-the-wrong-rounds
 rule: The rounds both sides finished keep their own numbers in the table, counted from 1.
 file: xtask/src/ab.rs
-in: finished_by_both
+in: comparable
 find: compared.numbers.push(index + 1);
 replace: compared.numbers.push(compared.numbers.len() + 1);
 caught-by:
@@ -24,9 +24,9 @@ caught-by:
 [break] ab-takes-the-heads-runs-from-the-base
 rule: Each side's runs are its own.
 file: xtask/src/ab.rs
-in: finished_by_both
-find: compared.head.push(head.clone());
-replace: compared.head.push(base.clone());
+in: comparable
+find: compared.head.push(without(head));
+replace: compared.head.push(without(base));
 caught-by:
     ab::tests::only_the_rounds_both_sides_finished_are_compared
 
@@ -51,7 +51,7 @@ caught-by:
 [break] ab-names-no-test-of-a-failed-run
 rule: A failed run's list names the tests its report says failed.
 file: xtask/src/ab.rs
-in: failure_of
+in: Report::of
 find: .filter(|case| case.failed)
 replace: .filter(|case| !case.failed)
 caught-by:
@@ -181,7 +181,7 @@ caught-by:
 [break] try-perf-with-a-crate-is-the-terminal-demo
 rule: `perf` with a crate is the preset, and without one step 20's measurement.
 file: xtask/src/try_run.rs
-in: command
+in: Inputs::build
 find: if !packages.is_empty() {
 replace: if packages.is_empty() {
 caught-by:

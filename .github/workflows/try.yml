@@ -13,7 +13,18 @@
 #   gh workflow run try --ref <branch> -f os=linux-22.04 -f command=partial-landlock
 #   gh workflow run try --ref <branch> -f os=linux -f command=ci
 #   gh workflow run try --ref <branch> -f os=windows -f command=test -f testkit=profile
+#   gh workflow run try --ref <branch> -f os=windows -f command="test --dependents -p cortex-config"
+#   gh workflow run try --ref <branch> -f os=windows -f command="mutate tooling-7-try-ab --jobs 2"
+#   gh workflow run try --ref <branch> -f commit=<40-digit commit hash> -f command="test -p cortex-base"
 #   ci-wait --workflow try                    (from the branch, for its head commit)
+#
+# `commit` makes the branch's side of the run that commit (and not the
+# branch's head), so that a variant needs no branch of its own: commit each
+# variant on one branch, each on top of the last, push, and dispatch with
+# each commit's hash. The workflow file is the ref's; the commit's own `xtask`
+# runs the command, so the commit must contain this workflow's `try`. `cargo
+# xtask try --dry-run --command "..."` shows, at a desk, the command the job
+# would run and fails as the job would.
 #
 # The inputs reach `cargo xtask try` as arguments, through the environment,
 # and never as text in a script. `try` checks them and chooses the command:
@@ -33,7 +44,7 @@ on:
         options: [both, linux, windows, linux-22.04]
         default: both
       command:
-        description: "test [-p CRATE] [FILTER], stress -p CRATE [ARGS], startup, perf [ARGS], perf -p CRATE (its ignored perf_ tests, in release), ci [ARGS], or a nightly job: partial-landlock, advisories, unused."
+        description: "test [-p CRATE] [--dependents] [FILTER], stress -p CRATE [ARGS], startup, perf [ARGS], perf -p CRATE (its ignored perf_ tests, in release), ci [ARGS], mutate BREAK... [--jobs N], or a nightly job: partial-landlock, advisories, unused."
         required: true
         default: "test"
       profile:
@@ -61,6 +72,10 @@ on:
         description: "A ref to compare the branch with, both run in turn on one runner (count rounds). Empty: no comparison."
         required: false
         default: ""
+      commit:
+        description: "A full 40-digit commit hash to run in place of the ref's head (its own xtask runs the command, so it must contain this try). Empty: the ref's head."
+        required: false
+        default: ""
       testkit:
         description: "A test-kit switch for the tests: profile (CORTEX_TESTKIT_PROFILE, each test's report kept as a file; not with against). none: nothing set."
         type: choice
@@ -86,18 +101,34 @@ jobs:
     name: try-${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     # Not a blocking check: a dist build from scratch takes most of this on
-    # Windows.
-    timeout-minutes: 40
+    # Windows. A mutate run builds copies of the tree from cold and runs to
+    # its end.
+    timeout-minutes: ${{ startsWith(inputs.command, 'mutate') && 90 || 40 }}
     strategy:
       fail-fast: false
       matrix:
         # linux-22.04: Landlock ABI 4, the partial case no other runner has.
         include: ${{ fromJSON(inputs.os == 'linux' && '[{"name":"linux","os":"ubuntu-latest"}]' || inputs.os == 'windows' && '[{"name":"windows","os":"windows-latest"}]' || inputs.os == 'linux-22.04' && '[{"name":"linux-22.04","os":"ubuntu-22.04"}]' || '[{"name":"linux","os":"ubuntu-latest"},{"name":"windows","os":"windows-latest"}]') }}
     steps:
+      # A commit is checked before it is used, and before anything is
+      # built: the shell reads it from the environment. `cargo xtask try`
+      # checks it again, and that the checkout is at it.
+      - name: Check the commit's name
+        if: inputs.commit != ''
+        shell: bash
+        env:
+          TRY_COMMIT: ${{ inputs.commit }}
+        run: |
+          if ! [[ "$TRY_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "commit: the full 40 hexadecimal digits of a hash, in lower case" >&2
+            exit 1
+          fi
       # No token is kept in the checkout: what an A/B run builds may be any
-      # ref's code, and nothing here pushes.
+      # ref's code, and nothing here pushes. With no `commit` the ref is
+      # empty, which is the ref the run was dispatched on.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.commit }}
           persist-credentials: false
       - name: Keep cargo's and rustup's files off the system disk (Windows)
         if: runner.os == 'Windows'
@@ -170,6 +201,7 @@ jobs:
           TRY_CORES: ${{ inputs.cores }}
           TRY_FILTER: ${{ inputs.filter }}
           TRY_AGAINST: ${{ inputs.against }}
+          TRY_COMMIT: ${{ inputs.commit }}
           # The test kit's switches, from a list: each is set or left empty.
           CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
           CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}/target/testkit-profile', github.workspace) || '' }}
@@ -179,6 +211,7 @@ jobs:
             --command "$TRY_COMMAND" --profile "$TRY_PROFILE" \
             --count "$TRY_COUNT" --load "$TRY_LOAD" --cores "$TRY_CORES" \
             --filter "$TRY_FILTER" --against "$TRY_AGAINST" \
+            --commit "$TRY_COMMIT" \
             2>&1 | tee "$RUNNER_TEMP/try-output.log"
       - name: Run (Windows)
         if: runner.os == 'Windows'
@@ -191,6 +224,7 @@ jobs:
           TRY_CORES: ${{ inputs.cores }}
           TRY_FILTER: ${{ inputs.filter }}
           TRY_AGAINST: ${{ inputs.against }}
+          TRY_COMMIT: ${{ inputs.commit }}
           CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
           CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}\target\testkit-profile', github.workspace) || '' }}
         run: |
@@ -200,6 +234,7 @@ jobs:
             --command "$env:TRY_COMMAND" --profile "$env:TRY_PROFILE" `
             --count "$env:TRY_COUNT" --load "$env:TRY_LOAD" --cores "$env:TRY_CORES" `
             --filter "$env:TRY_FILTER" --against "$env:TRY_AGAINST" `
+            --commit "$env:TRY_COMMIT" `
             2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath "$env:RUNNER_TEMP\try-output.log"
           exit $LASTEXITCODE
       - name: Put the end of the output in the summary
@@ -227,5 +262,7 @@ jobs:
             target/nextest/perf/junit.xml
             target/ab/*.xml
             target/testkit-profile/
+            target/mutate/results.jsonl
+            target/mutate/logs/
           if-no-files-found: ignore
           retention-days: 14

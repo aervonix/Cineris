@@ -71,7 +71,7 @@ caught-by:
 [break] try-runs-any-command
 rule: A try run runs only test, stress, startup, perf or ci.
 file: xtask/src/try_run.rs
-in: Inputs::command
+in: Inputs::build
 find: if !COMMANDS.contains(&verb.as_str())
 replace: if verb.is_empty()
 caught-by:
@@ -80,7 +80,7 @@ caught-by:
 [break] try-count-is-ignored
 rule: A count makes a test run a stress run.
 file: xtask/src/try_run.rs
-in: Inputs::command
+in: Inputs::build
 find: "test" | "stress" if verb == "stress" || self.count.is_some() =>
 replace: "test" | "stress" if verb == "stress" =>
 caught-by:

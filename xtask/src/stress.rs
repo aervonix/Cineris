@@ -174,6 +174,12 @@ impl Request {
     }
 }
 
+/// Whether `cargo xtask stress` would take `arguments`, which it reads and
+/// runs nothing: how `try` refuses what it cannot pass on before it builds.
+pub(crate) fn check_arguments(arguments: &[String]) -> Result<()> {
+    Request::parse(arguments).map(|_| ())
+}
+
 /// `cargo xtask stress`
 pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let request = Request::parse(arguments)?;

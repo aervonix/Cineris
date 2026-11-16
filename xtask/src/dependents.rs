@@ -60,36 +60,73 @@ pub(crate) fn dependents(packages: &[Package], changed: &[String]) -> Result<Vec
     Ok(tested.into_iter().collect())
 }
 
+/// `--dependents` in a list of arguments, resolved.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Expanded {
+    /// The arguments with the flag taken out and `-p` for each crate that
+    /// is named or a dependent of one.
+    pub(crate) arguments: Vec<String>,
+    /// The crates the arguments named.
+    pub(crate) named: Vec<String>,
+    /// The crates added: those whose tests can see a change to a named one.
+    pub(crate) added: Vec<String>,
+}
+
+impl Expanded {
+    /// What to tell of it: the crates named and the ones added.
+    pub(crate) fn said(&self) -> String {
+        format!(
+            "--dependents: {} and {} crate(s) whose tests can see it: {}",
+            self.named.join(", "),
+            self.added.len(),
+            if self.added.is_empty() {
+                "none".to_owned()
+            } else {
+                self.added.join(", ")
+            }
+        )
+    }
+}
+
 /// The arguments of `cargo xtask test --dependents …`: the packages named
 /// replaced by them and their dependents, and the flag taken out. Arguments
-/// without the flag come back as they are.
-pub(crate) fn expand(arguments: &[String]) -> Result<Vec<String>> {
+/// without the flag come back as they are, and `None` is returned.
+pub(crate) fn expand_in(arguments: &[String], packages: &[Package]) -> Result<Option<Expanded>> {
     let (before, after) = split_at_separator(arguments);
     if !before.iter().any(|word| word == "--dependents") {
-        return Ok(arguments.to_vec());
+        return Ok(None);
     }
     let named = workspace::packages_named(&before);
     if named.is_empty() {
         return Err("--dependents needs the crates whose dependents to test: -p CRATE".to_owned());
     }
+    let all = dependents(packages, &named)?;
+    let added: Vec<String> = all
+        .iter()
+        .filter(|name| !named.contains(name))
+        .cloned()
+        .collect();
+    Ok(Some(Expanded {
+        arguments: replace_packages(&before, &all, &after),
+        named,
+        added,
+    }))
+}
+
+/// The arguments of `cargo xtask test --dependents …`, resolved against this
+/// workspace, with what was added said. Arguments without the flag come back
+/// as they are.
+pub(crate) fn expand(arguments: &[String]) -> Result<Vec<String>> {
+    let (before, _) = split_at_separator(arguments);
+    if !before.iter().any(|word| word == "--dependents") {
+        return Ok(arguments.to_vec());
+    }
     let metadata = workspace::metadata(&workspace::root())?;
-    let all = dependents(&metadata.packages, &named)?;
-    let added: Vec<&String> = all.iter().filter(|name| !named.contains(name)).collect();
-    println!(
-        "--dependents: {} and {} crate(s) whose tests can see it: {}",
-        named.join(", "),
-        added.len(),
-        if added.is_empty() {
-            "none".to_owned()
-        } else {
-            added
-                .iter()
-                .map(|name| name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        }
-    );
-    Ok(replace_packages(&before, &all, &after))
+    let Some(expanded) = expand_in(arguments, &metadata.packages)? else {
+        return Ok(arguments.to_vec());
+    };
+    println!("{}", expanded.said());
+    Ok(expanded.arguments)
 }
 
 /// `arguments` split before their `--`, which goes with what follows it.
@@ -127,7 +164,7 @@ fn replace_packages(before: &[String], packages: &[String], after: &[String]) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{dependents, replace_packages};
+    use super::{dependents, expand_in, replace_packages};
     use crate::workspace::{DepKind, Dependency, Package};
 
     fn package(name: &str, edges: &[(&str, DepKind)]) -> Package {
@@ -221,5 +258,35 @@ mod tests {
             out,
             words("--profile fast -E test(a) -p agent -p tools -- --nocapture")
         );
+    }
+
+    #[test]
+    fn the_flag_is_resolved_against_the_packages_given_and_said() {
+        let words = |text: &str| text.split(' ').map(str::to_owned).collect::<Vec<_>>();
+        let expanded = expand_in(
+            &words("--dependents -p testkit -E x -- --nocapture"),
+            &workspace(),
+        )
+        .expect("known")
+        .expect("the flag is there");
+        assert_eq!(expanded.named, ["testkit"]);
+        assert_eq!(expanded.added, ["agent"]);
+        assert_eq!(
+            expanded.arguments,
+            words("-E x -p agent -p testkit -- --nocapture")
+        );
+        assert_eq!(
+            expanded.said(),
+            "--dependents: testkit and 1 crate(s) whose tests can see it: agent"
+        );
+        // Without the flag, or with it only past the command's own `--`,
+        // there is nothing to resolve.
+        assert_eq!(expand_in(&words("-p tools"), &workspace()), Ok(None));
+        assert_eq!(
+            expand_in(&words("-p tools -- --dependents"), &workspace()),
+            Ok(None)
+        );
+        let error = expand_in(&words("--dependents"), &workspace()).unwrap_err();
+        assert!(error.contains("-p CRATE"), "{error}");
     }
 }

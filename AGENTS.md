@@ -71,6 +71,8 @@ Each cost a session hours to find. The details are in [docs/steps/11/](docs/step
 | Estimate what a hosted runner would report, before pushing | `cargo xtask ci --tiers --like-runner [-p <crate>]` |
 | Ask whether a change is slower on the runner, for one crate (about two minutes) | `gh workflow run try --ref <branch> -f os=windows -f command="test -p <crate>" -f against=main -f count=5`, then `cargo xtask ci-times --ab <run id>` |
 | Read a CI job's log, any workflow's (the nightly's included), with its escape codes taken out | `cargo xtask ci-log <run id> [--job NAME] [--grep RE]` for a run's failed jobs, or `<job id>` for one job; through `rx`, `rx -- env GH_REPO=<owner>/<repo> cargo xtask ci-log …` |
+| Check what a `try` dispatch would run, and have it refused as the job would refuse it, before dispatching (it resolves `--dependents`, checks a commit and builds nothing) | `cargo xtask try --dry-run --command "test --dependents -p <crate>" [--against main] [--commit <hash>]` |
+| Try a variant on the runners with no branch of its own: commit it on top of the last, push, and name the commit | `gh workflow run try --ref <branch> -f commit=$(git rev-parse HEAD) -f os=windows -f command="test -p <crate>"` (the commit must contain `try`'s `commit` input) |
 | Run a crate's ignored `perf_` tests in a release build on a runner, and nothing else | `gh workflow run try --ref <branch> -f os=windows -f command="perf -p <crate>"` |
 | Ask the permission engine about a command | `cargo xtask decide [--rule '…'] -- <command>` |
 | Format | `cargo xtask fmt` |

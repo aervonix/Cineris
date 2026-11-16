@@ -1,0 +1,484 @@
+# The seventh tooling step's part on `ab` and `try`: a test that failed on both
+# sides of an A/B, a commit for the branch's side, `mutate` and `--dependents`
+# through `try`, and the words `try` refuses before anything is built. Written
+# with the code, and run with `cargo xtask mutate tooling-7-try-ab`.
+
+# ------------------------------------------------ ab: a test failed on both
+
+[break] ab-takes-a-test-that-failed-on-one-side-for-both
+rule: A test that failed on one side only is a failure of its round: the two sides must name the same failed tests.
+file: xtask/src/ab.rs
+in: failed_on_both
+find: ids(base) != ids(head)
+replace: false
+caught-by:
+    ab::tests::a_test_that_failed_on_one_side_only_is_still_a_failed_round
+
+[break] ab-takes-a-run-that-broke-for-the-tests-failing
+rule: A round is compared past its failed tests only when every failed run failed by its tests.
+file: xtask/src/ab.rs
+in: failed_on_both
+find: if !base.by_tests || !head.by_tests || base.cases.is_empty() || head.cases.is_empty() {
+replace: if base.cases.is_empty() || head.cases.is_empty() {
+caught-by:
+    ab::tests::a_failure_that_the_tests_do_not_explain_is_not_a_test_failing_on_both_sides
+
+[break] ab-takes-a-report-that-names-no-failure-as-the-tests
+rule: A report that names no failed test explains nothing of a failed run.
+file: xtask/src/ab.rs
+in: failure_of
+find: let explained = by_tests && !report.failed.is_empty();
+replace: let explained = by_tests;
+caught-by:
+    ab::tests::a_failed_run_names_the_tests_its_report_says_failed
+
+[break] ab-takes-a-run-with-no-report-as-the-tests
+rule: A run that wrote no report is not explained by its tests.
+file: xtask/src/ab.rs
+in: failure_of
+find: by_tests: false
+replace: by_tests: true
+caught-by:
+    ab::tests::a_failed_run_names_the_tests_its_report_says_failed
+
+[break] ab-leaves-a-round-with-a-shared-failure-out
+rule: A round in which the same tests failed on both sides is compared, without them.
+file: xtask/src/ab.rs
+in: comparable
+find: if failed_on_both(round).is_some() => {
+replace: if false => {
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-skips-a-test-only-in-the-round-it-failed
+rule: A test that failed on both sides in a round is left out of every round, not only that one.
+file: xtask/src/ab.rs
+in: comparable
+find: .filter(|case| !skipped.contains_key(&case.id()))
+replace: .filter(|_| true)
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-forgets-which-rounds-a-skipped-test-failed-in
+rule: A skipped test is named with each round it failed on both sides in.
+file: xtask/src/ab.rs
+in: comparable
+find: .push(index + 1);
+replace: .push(1);
+occurrence: 1
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-swaps-the-sides-messages
+rule: A skipped test's message for each side is that side's own.
+file: xtask/src/ab.rs
+in: comparable
+find: base: base.message.clone()
+replace: base: head.message.clone()
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-lists-a-compared-round-as-failed
+rule: A round that is compared past a shared failure is not listed as a failed round.
+file: xtask/src/ab.rs
+in: failed_rounds
+find: if failed_on_both(round).is_some() {
+replace: if false {
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-names-no-skipped-test-when-there-is-none
+rule: With no test failed on both sides there is nothing to say of one.
+file: xtask/src/ab.rs
+in: skipped_text
+find: if skipped.is_empty() {
+replace: if false {
+caught-by:
+    ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
+
+[break] ab-says-the-whole-message-not-its-first-line
+rule: A failure is shown by the first line of its message.
+file: xtask/src/ab.rs
+in: first_line
+find: text.lines()
+replace: std::iter::once(text)
+caught-by:
+    ab::tests::a_report_names_each_failed_test_with_the_first_line_of_its_message
+
+[break] ab-takes-an-exit-code-for-the-tests
+rule: A run failed by its tests when nextest's exit code says so and its report names a failed test.
+file: xtask/src/ab.rs
+in: end_of
+find: } else if code == Some(TEST_RUN_FAILED) && a_test_failed {
+replace: } else if a_test_failed {
+caught-by:
+    ab::tests::a_run_is_the_tests_failing_only_by_nextests_code_and_a_failed_test_in_its_report
+
+[break] ab-takes-a-code-for-the-tests-with-no-failed-test
+rule: A run whose report names no failed test is not known to have failed by its tests.
+file: xtask/src/ab.rs
+in: end_of
+find: } else if code == Some(TEST_RUN_FAILED) && a_test_failed {
+replace: } else if code == Some(TEST_RUN_FAILED) {
+caught-by:
+    ab::tests::a_run_is_the_tests_failing_only_by_nextests_code_and_a_failed_test_in_its_report
+
+[break] ab-takes-the-wrong-exit-code-for-failing-tests
+rule: nextest exits 100 when tests failed in a run.
+file: xtask/src/ab.rs
+find: pub(crate) const TEST_RUN_FAILED: i32 = 100;
+replace: pub(crate) const TEST_RUN_FAILED: i32 = 101;
+caught-by:
+    ab::tests::a_run_is_the_tests_failing_only_by_nextests_code_and_a_failed_test_in_its_report
+
+# --------------------------------------------- ab: the job's two runs
+
+[break] ab-stops-the-job-at-its-first-failing-run-when-keeping-going
+rule: With --keep-going a failure in tiers 1 and 2 does not leave the system tests unmeasured.
+file: xtask/src/ab.rs
+in: drive_job
+find: let stop = failed && !keep_going;
+replace: let stop = failed;
+caught-by:
+    ab::tests::a_failure_in_the_first_run_does_not_stop_the_second_with_keep_going
+
+[break] ab-keeps-going-without-being-asked-in-the-job
+rule: Without --keep-going the first failing run ends the job.
+file: xtask/src/ab.rs
+in: drive_job
+find: let stop = failed && !keep_going;
+replace: let stop = false;
+caught-by:
+    ab::tests::without_keep_going_the_first_failing_run_ends_the_job
+
+[break] ab-sets-a-report-aside-when-it-is-the-jobs-last
+rule: The job's last run, or the one that ended it, brings the reports together.
+file: xtask/src/ab.rs
+in: drive_job
+find: index + 1 == runs || stop
+replace: index + 1 == runs
+caught-by:
+    ab::tests::without_keep_going_the_first_failing_run_ends_the_job
+
+[break] ab-takes-a-run-that-broke-for-its-tests
+rule: A job in which a run broke is not failed by its tests.
+file: xtask/src/ab.rs
+in: drive_job
+find: RunEnd::Broke(said) => { errors.push(said); by_tests = false;
+replace: RunEnd::Broke(said) => { errors.push(said);
+caught-by:
+    ab::tests::a_run_that_broke_or_a_report_that_could_not_be_put_together_is_not_the_tests
+
+[break] ab-takes-reports-that-would-not-come-together-for-the-tests
+rule: A job whose reports could not be put together is not failed by its tests.
+file: xtask/src/ab.rs
+in: drive_job
+find: if let Err(error) = after(index, index + 1 == runs || stop) { errors.push(error); by_tests = false;
+replace: if let Err(error) = after(index, index + 1 == runs || stop) { errors.push(error);
+caught-by:
+    ab::tests::a_run_that_broke_or_a_report_that_could_not_be_put_together_is_not_the_tests
+
+[break] ab-takes-the-first-rounds-count-as-a-refusal
+rule: A count of rounds that ab refuses is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "ab" => crate::ab::check_arguments(arguments).map_err(refused),
+replace: "ab" => Ok(()),
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+# ----------------------------------------------------- try: a commit
+
+[break] try-takes-a-short-hash-for-a-commit
+rule: A commit is the full 40 digits of a hash.
+file: xtask/src/try_run.rs
+in: commit_hash
+find: text.len() == 40
+replace: text.len() >= 7
+caught-by:
+    try_run::tests::a_commit_is_a_full_lower_case_hash_or_nothing
+
+[break] try-takes-upper-case-for-a-commit
+rule: A commit is in lower case.
+file: xtask/src/try_run.rs
+in: commit_hash
+find: b'a'..=b'f'
+replace: b'a'..=b'f' | b'A'..=b'F'
+caught-by:
+    try_run::tests::a_commit_is_a_full_lower_case_hash_or_nothing
+
+[break] try-takes-a-name-for-a-commit
+rule: A commit is hexadecimal digits and nothing else.
+file: xtask/src/try_run.rs
+in: commit_hash
+find: text.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+replace: text.bytes().all(|byte| byte.is_ascii_alphanumeric())
+caught-by:
+    try_run::tests::a_commit_is_a_full_lower_case_hash_or_nothing
+
+[break] try-runs-in-a-checkout-that-is-not-the-commit
+rule: A run asked for one commit never measures another.
+file: xtask/src/try_run.rs
+in: check_checkout
+find: if head.trim() == commit {
+replace: if true {
+caught-by:
+    try_run::tests::the_checkout_must_be_the_commit_asked_for
+
+[break] try-says-nothing-of-the-commit
+rule: The plan says which commit the branch's side is.
+file: xtask/src/try_run.rs
+in: plan
+find: if let Some(commit) = &inputs.commit {
+replace: if let Some(commit) = inputs.commit.as_ref().filter(|_| false) {
+caught-by:
+    try_run::tests::a_commit_is_said_in_the_plan
+
+# ------------------------------------------------------- try: mutate
+
+[break] try-mutate-has-a-time-budget
+rule: A mutate run on a runner goes to its end in one job.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: ["mutate", "--minutes", "0"]
+replace: ["mutate", "--minutes", "5"]
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-runs-no-break-with-check
+rule: Options that run no break are refused with mutate.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: "--check" | "--list" | "--report" | "--tests" | "--fix-in" | "--write" => {
+replace: "--list" | "--report" | "--tests" | "--fix-in" | "--write" => {
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-names-nothing
+rule: A mutate run names the breaks to run.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: if !named {
+replace: if false {
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-against-a-ref
+rule: A mutate run is refused --against.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: (self.against.is_some(), "--against")
+replace: (false, "--against")
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-with-a-count
+rule: A mutate run is refused --count.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: (self.count.is_some(), "--count")
+replace: (false, "--count")
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-with-a-load
+rule: A mutate run is refused --load.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: (self.load.is_some(), "--load")
+replace: (false, "--load")
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-with-cores
+rule: A mutate run is refused --cores.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: (self.cores.is_some(), "--cores")
+replace: (false, "--cores")
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-in-another-profile
+rule: A mutate run is in the ci profile.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: if self.profile != "ci" {
+replace: if false {
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-mutate-with-its-own-minutes
+rule: A mutate run is given --minutes 0 by try, not by the caller.
+file: xtask/src/try_run.rs
+in: Inputs::mutate
+find: "--minutes" => {
+replace: "--minutes-x" => {
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] try-does-not-read-mutates-options
+rule: What mutate would refuse (a number of jobs out of range) is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "mutate" => crate::mutate::check_arguments(arguments).map_err(refused),
+replace: "mutate" => Ok(()),
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+# -------------------------------------------- try: --dependents and words
+
+[break] try-leaves-dependents-for-nextest
+rule: --dependents beside -p is resolved by try into the crates it adds.
+file: xtask/src/try_run.rs
+in: Inputs::resolve_dependents
+find: if !before.any(|word| word == "--dependents") {
+replace: if !before.any(|word| word == "--dependents-x") {
+caught-by:
+    try_run::tests::dependents_become_the_crates_the_job_runs_and_are_named
+
+[break] try-resolves-dependents-for-any-command
+rule: --dependents goes with test, stress and perf -p.
+file: xtask/src/try_run.rs
+in: Inputs::resolve_dependents
+find: if !matches!(verb.as_str(), "test" | "stress" | "perf") {
+replace: if false {
+caught-by:
+    try_run::tests::dependents_that_cannot_be_resolved_are_refused_before_anything_is_built
+
+[break] try-does-not-name-the-crates-dependents-added
+rule: The crates --dependents added are named.
+file: xtask/src/try_run.rs
+in: plan
+find: notes.push(expanded.said());
+replace: let _ = expanded.said();
+caught-by:
+    try_run::tests::dependents_become_the_crates_the_job_runs_and_are_named
+
+[break] try-reads-the-workspace-for-every-run
+rule: The workspace is read only when --dependents is there.
+file: xtask/src/try_run.rs
+in: Inputs::resolve_dependents
+find: if !before.any(|word| word == "--dependents") {
+replace: if false {
+caught-by:
+    try_run::tests::dependents_that_cannot_be_resolved_are_refused_before_anything_is_built
+
+[break] try-passes-a-word-after-the-commands-own-separator-to-the-check
+rule: A word after the command's own `--` is the test binaries', and is not looked at.
+file: xtask/src/try_run.rs
+in: refuse_foreign_words
+find: .take_while(|word| *word != "--")
+replace: .take_while(|_| true)
+caught-by:
+    try_run::tests::a_word_that_nextest_would_not_take_is_refused_with_its_reason
+
+[break] try-reads-an-option-with-a-value-as-another-word
+rule: An option given as --name=value is the option.
+file: xtask/src/try_run.rs
+in: refuse_foreign_words
+find: let flag = word.split_once('=').map_or(word.as_str(), |(flag, _)| flag);
+replace: let flag = word.as_str();
+caught-by:
+    try_run::tests::a_word_that_nextest_would_not_take_is_refused_with_its_reason
+
+[break] try-refuses-a-stress-runs-own-options
+rule: A stress run takes --count, --load, --cores and --first-seed itself.
+file: xtask/src/try_run.rs
+in: refuse_foreign_words
+find: if into_stress && STRESS_OWN.contains(&flag) {
+replace: if false {
+caught-by:
+    try_run::tests::a_word_that_nextest_would_not_take_is_refused_with_its_reason
+
+[break] try-takes-a-count-for-a-stress-runs-in-an-ab-run
+rule: With `against` a count is rounds: a --count word is nextest's to refuse, so try refuses it.
+file: xtask/src/try_run.rs
+in: Inputs::refuse_words
+find: verb == "stress" || verb == "test" && self.count.is_some() && self.against.is_none()
+replace: verb == "stress" || verb == "test" && self.count.is_some()
+caught-by:
+    try_run::tests::a_word_that_nextest_would_not_take_is_refused_with_its_reason
+
+[break] try-refuses-nothing-of-perf-with-crates
+rule: The words of perf -p CRATE go to nextest, and are checked as a test's are.
+file: xtask/src/try_run.rs
+in: Inputs::refuse_words
+find: "perf" => !packages_and_others(rest)?.0.is_empty(),
+replace: "perf" => false,
+caught-by:
+    try_run::tests::a_word_that_nextest_would_not_take_is_refused_with_its_reason
+
+[break] try-lets-ci-take-any-words
+rule: What `cargo xtask ci` would refuse is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "ci" => crate::checks::check_ci_arguments(arguments).map_err(refused),
+replace: "ci" => Ok(()),
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+[break] try-lets-stress-take-any-words
+rule: What `cargo xtask stress` would refuse is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "stress" => crate::stress::check_arguments(arguments).map_err(refused),
+replace: "stress" => Ok(()),
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+[break] try-lets-perf-take-any-words
+rule: What `cargo xtask perf` would refuse is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "perf" => crate::perf::check_arguments(arguments).map_err(refused),
+replace: "perf" => Ok(()),
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+[break] try-lets-startup-take-any-words
+rule: What `cargo xtask startup` would refuse is refused by try before the build.
+file: xtask/src/try_run.rs
+in: validate
+find: "startup" => check_startup(arguments).map_err(refused),
+replace: "startup" => Ok(()),
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+[break] try-takes-a-second-profile-for-startup
+rule: The profile of a startup run is the input's.
+file: xtask/src/try_run.rs
+in: check_startup
+find: "--profile" if !seen_profile => {
+replace: "--profile" => {
+caught-by:
+    try_run::tests::what_the_commands_own_parser_would_refuse_is_refused_here
+
+# ------------------------------------------------------- try: a dry run
+
+[break] try-dry-run-says-nothing-of-testkit
+rule: A dry run says that testkit=profile is not set for an `against` run.
+file: xtask/src/try_run.rs
+in: plan
+find: inputs.testkit.as_deref() == Some("profile") && inputs.against.is_some()
+replace: inputs.testkit.as_deref() == Some("profile") && inputs.against.is_none()
+caught-by:
+    try_run::tests::a_dry_run_and_the_workflows_other_inputs_are_read
+
+[break] try-dry-run-says-nothing-of-the-partial-landlock-runner
+rule: A dry run says that partial-landlock runs on os=linux-22.04.
+file: xtask/src/try_run.rs
+in: plan
+find: && inputs.os.as_deref() != Some("linux-22.04")
+replace: && inputs.os.as_deref() == Some("linux-22.04")
+caught-by:
+    try_run::tests::a_dry_run_and_the_workflows_other_inputs_are_read
+
+[break] try-takes-an-os-the-workflow-has-not
+rule: The workflow's os input is one of its list.
+file: xtask/src/try_run.rs
+in: Inputs::parse
+find: if !OSES.contains(&os) {
+replace: if false {
+caught-by:
+    try_run::tests::a_dry_run_and_the_workflows_other_inputs_are_read

@@ -201,6 +201,12 @@ enum Mode {
     Report,
 }
 
+/// Whether `cargo xtask mutate` would take `arguments`, which it reads and
+/// runs nothing: how `try` refuses what it cannot pass on before it builds.
+pub(crate) fn check_arguments(arguments: &[String]) -> Result<()> {
+    Request::parse(arguments).map(|_| ())
+}
+
 impl Request {
     fn parse(arguments: &[String]) -> Result<Self> {
         let mut request = Self {

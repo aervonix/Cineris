@@ -413,6 +413,22 @@ pub(crate) fn ci(arguments: &[String]) -> Result<()> {
     }
 }
 
+/// Whether `cargo xtask ci` would take `arguments`, which it reads and runs
+/// nothing: how `try` refuses what it cannot pass on before it builds.
+pub(crate) fn check_ci_arguments(arguments: &[String]) -> Result<()> {
+    if arguments.first().is_some_and(|first| first == "--tiers") {
+        return TiersRequest::parse(&arguments[1..]).map(|_| ());
+    }
+    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    match arguments.as_slice() {
+        [] | ["lint" | "test"] => Ok(()),
+        other => Err(format!(
+            "`ci {}` is not a form of `ci`: `ci`, `ci lint`, `ci test` or `ci --tiers …`",
+            other.join(" ")
+        )),
+    }
+}
+
 const CI_USAGE: &str = "usage: cargo xtask ci [lint|test]
        cargo xtask ci --tiers [-p CRATE]... [--top N] [-- NEXTEST ARGUMENT...]
        cargo xtask ci --tiers --from JUNIT.XML [--os linux|windows] [--top N]

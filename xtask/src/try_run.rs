@@ -8,12 +8,16 @@
 //! OSes, under unit tests; and a typed input is only ever split into words
 //! and checked, never handed to a shell.
 
+use std::process::ExitCode;
+
 use crate::Result;
+use crate::workspace::Package;
 
 const USAGE: &str = "\
 usage: cargo xtask try --command 'COMMAND [ARGUMENTS]' [--profile ci|release|dist]
                        [--count N] [--load N] [--cores K] [--filter 'EXPR; EXPR']
-                       [--against REF]
+                       [--against REF] [--commit SHA] [--dry-run]
+                       [--os OS] [--testkit none|profile]
 
 COMMAND is one of:
   test [-p CRATE]... [FILTER]...   the tests, as the blocking job builds and runs
@@ -28,6 +32,13 @@ COMMAND is one of:
                                    time, output shown, and nothing else; a NAME
                                    narrows them
   ci [ARGS]...                     any form of `cargo xtask ci`
+  mutate BREAK... [OPTION]...      `cargo xtask mutate` of the breaks (a break,
+                                   a list or the end of a name) on the runner,
+                                   run to its end in one job (--minutes 0);
+                                   the results and logs are kept; --jobs N,
+                                   --again, --no-compile-check and --file PATH
+                                   pass; --count, --load, --cores, --filter
+                                   and --against are refused with it
   partial-landlock                 the nightly's job: cortex-sandbox's tests on
                                    a kernel with the partial Landlock (on
                                    os=linux-22.04, the one runner that has it)
@@ -50,15 +61,29 @@ and test. It runs with --keep-going: a round in which a test fails is recorded
 and left out, the run goes on, and it ends as a failure after the comparison of
 the rounds that finished.
 
+--dependents beside -p, in `test`, `stress` or `perf -p`, is resolved here, as
+`cargo xtask test --dependents -p CRATE` resolves it: the crates it added are
+named, and the job runs every one of them.
+
+--commit SHA (40 hex digits, lower case) makes the branch's side of the run the
+tree of that commit, whose own `xtask` then runs the command: it must contain
+this `try`. --ref stays the workflow file, and --against the other side.
+
+A word that `try` cannot pass on to what it runs is refused before anything is
+built, with the word and the reason. --dry-run does only that: it prints the
+command the job would run, and fails as the job would; --os and --testkit are
+the workflow's other inputs, which it checks too.
+
 An empty value is the same as leaving the flag out.";
 
 /// The commands a `try` run may run.
-const COMMANDS: [&str; 8] = [
+const COMMANDS: [&str; 9] = [
     "test",
     "stress",
     "startup",
     "perf",
     "ci",
+    "mutate",
     "partial-landlock",
     "advisories",
     "unused",
@@ -84,6 +109,31 @@ struct Inputs {
     filters: Vec<String>,
     /// The ref an A/B run compares the branch with.
     against: Option<String>,
+    /// The commit the branch's side of the run is, in place of the branch's
+    /// head.
+    commit: Option<String>,
+    /// Print the command the job would run, and run nothing.
+    dry_run: bool,
+    /// The workflow's own inputs, which a dry run checks and a run is not
+    /// given.
+    os: Option<String>,
+    testkit: Option<String>,
+}
+
+/// The `os` inputs of the workflow.
+const OSES: [&str; 4] = ["both", "linux", "windows", "linux-22.04"];
+
+/// The `testkit` inputs of the workflow.
+const TESTKITS: [&str; 2] = ["none", "profile"];
+
+/// Whether `text` is a full commit hash: 40 hexadecimal digits, in lower
+/// case. A short one, or a name, is not: the workflow checks the commit out
+/// by what it says, and a name is the ref's.
+fn commit_hash(text: &str) -> bool {
+    text.len() == 40
+        && text
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Where the workflow puts the ref of an A/B run: beside the branch's
@@ -137,6 +187,10 @@ impl Inputs {
             if flag == "--help" || flag == "-h" {
                 return Err(USAGE.to_owned());
             }
+            if flag == "--dry-run" {
+                inputs.dry_run = true;
+                continue;
+            }
             let value = rest
                 .next()
                 .ok_or_else(|| format!("`{flag}` needs a value\n\n{USAGE}"))?;
@@ -176,6 +230,37 @@ impl Inputs {
                         inputs.against = Some(against.to_owned());
                     }
                 }
+                "--commit" => {
+                    let commit = value.trim();
+                    if !commit.is_empty() {
+                        if !commit_hash(commit) {
+                            return Err(format!(
+                                "`--commit {commit}` is not a commit: the full 40 hexadecimal \
+                                 digits of its hash, in lower case (a branch or a short hash is \
+                                 not one: `git rev-parse <name>` gives it)"
+                            ));
+                        }
+                        inputs.commit = Some(commit.to_owned());
+                    }
+                }
+                "--os" => {
+                    let os = value.trim();
+                    if !os.is_empty() {
+                        if !OSES.contains(&os) {
+                            return Err(format!("`--os {os}`: {}", OSES.join(", ")));
+                        }
+                        inputs.os = Some(os.to_owned());
+                    }
+                }
+                "--testkit" => {
+                    let testkit = value.trim();
+                    if !testkit.is_empty() {
+                        if !TESTKITS.contains(&testkit) {
+                            return Err(format!("`--testkit {testkit}`: none or profile"));
+                        }
+                        inputs.testkit = Some(testkit.to_owned());
+                    }
+                }
                 other => return Err(format!("unknown flag `{other}`\n\n{USAGE}")),
             }
         }
@@ -194,8 +279,17 @@ impl Inputs {
         Ok(inputs)
     }
 
-    /// The `cargo xtask` arguments the inputs come to.
+    /// The `cargo xtask` arguments the inputs come to, checked: a word that
+    /// the command cannot take is refused here, before anything is built.
     fn command(&self) -> Result<Vec<String>> {
+        let command = self.build()?;
+        self.refuse_words()?;
+        validate(&command)?;
+        Ok(command)
+    }
+
+    /// The `cargo xtask` arguments the inputs come to.
+    fn build(&self) -> Result<Vec<String>> {
         let Some((verb, rest)) = self.words.split_first() else {
             return Err(format!("say what to run\n\n{USAGE}"));
         };
@@ -206,6 +300,9 @@ impl Inputs {
         }
         if !self.filters.is_empty() && !matches!(verb.as_str(), "test" | "stress") {
             return Err("`--filter` chooses tests: it goes with `test` or `stress`".to_owned());
+        }
+        if verb == "mutate" {
+            return self.mutate(rest);
         }
         if NIGHTLY_JOBS.contains(&verb.as_str()) {
             return self.nightly_job(verb, rest);
@@ -297,7 +394,293 @@ impl Inputs {
     }
 }
 
+/// What nextest does not take, as a word of a `test`, `stress` or `perf -p`
+/// command, and why: they are options of another command, or something a
+/// `try` input says. Passed on, each would reach nextest after the build and
+/// fail the job with no test run.
+const NOT_FOR_NEXTEST: [(&str, &str); 20] = [
+    (
+        "--tiers",
+        "it is an option of `cargo xtask ci`, and a `test` run already ends with the tier \
+         report (use the `ci` command)",
+    ),
+    (
+        "--top",
+        "it is an option of `cargo xtask ci --tiers`: a `test` run lists 20 tests a tier",
+    ),
+    (
+        "--like-runner",
+        "it is an option of `cargo xtask ci --tiers` (use the `ci` command)",
+    ),
+    (
+        "--from",
+        "it is an option of `cargo xtask ci --tiers` (use the `ci` command)",
+    ),
+    (
+        "--compare",
+        "it is an option of `cargo xtask ci --tiers` (use the `ci` command)",
+    ),
+    (
+        "--factors-from",
+        "it is an option of `cargo xtask ci --tiers` (use the `ci` command)",
+    ),
+    (
+        "--cargo-profile",
+        "the `profile` input chooses cargo's profile",
+    ),
+    (
+        "--profile",
+        "`try` chooses nextest's profile, and the `profile` input cargo's",
+    ),
+    (
+        "-P",
+        "`try` chooses nextest's profile, and the `profile` input cargo's",
+    ),
+    (
+        "--count",
+        "it is the `count` input, and makes the run a stress run",
+    ),
+    (
+        "--first-seed",
+        "it is an option of `cargo xtask stress`: use the `stress` command",
+    ),
+    ("--load", "it is the `load` input, for a stress run"),
+    ("--cores", "it is the `cores` input, for a stress run"),
+    (
+        "--keep-going",
+        "it is an option of `cargo xtask ab`, which `try` gives an `against` run itself",
+    ),
+    (
+        "--base",
+        "it is an option of `cargo xtask ab`, which `try` runs for the `against` input",
+    ),
+    (
+        "--label",
+        "it is an option of `cargo xtask ab`, which `try` runs for the `against` input",
+    ),
+    ("--against", "it is the `against` input"),
+    (
+        "--filter",
+        "it is the `filter` input (nextest's own is `-E`)",
+    ),
+    ("--commit", "it is the `commit` input"),
+    (
+        "--dry-run",
+        "it is an option of `cargo xtask try`, not of the command",
+    ),
+];
+
+/// The options of a stress run that are the command's own when it is one.
+const STRESS_OWN: [&str; 4] = ["--count", "--first-seed", "--load", "--cores"];
+
+/// Refuses a word of `words` that nextest would not take, before the part
+/// of them that follows a `--` of their own (which is the test binaries').
+/// `into_stress`: the command is a stress run, which takes the options of
+/// [`STRESS_OWN`] itself.
+fn refuse_foreign_words(words: &[String], into_stress: bool) -> Result<()> {
+    let words = words.iter().take_while(|word| *word != "--");
+    for word in words {
+        let flag = word.split_once('=').map_or(word.as_str(), |(flag, _)| flag);
+        let Some((_, why)) = NOT_FOR_NEXTEST.iter().find(|(name, _)| *name == flag) else {
+            continue;
+        };
+        if into_stress && STRESS_OWN.contains(&flag) {
+            continue;
+        }
+        return Err(format!(
+            "`{word}` cannot be passed on to the tests: {why}. Nothing was built."
+        ));
+    }
+    Ok(())
+}
+
+/// Refuses what the command `command` (after `try` has made it) would
+/// refuse itself, by reading its arguments as it does, and running nothing.
+fn validate(command: &[String]) -> Result<()> {
+    let Some((verb, arguments)) = command.split_first() else {
+        return Ok(());
+    };
+    let refused = |error: String| {
+        let first = error.lines().next().unwrap_or_default();
+        format!("`cargo xtask {verb}` would refuse this: {first}. Nothing was built.")
+    };
+    match verb.as_str() {
+        "ci" => crate::checks::check_ci_arguments(arguments).map_err(refused),
+        "stress" => crate::stress::check_arguments(arguments).map_err(refused),
+        "ab" => crate::ab::check_arguments(arguments).map_err(refused),
+        "perf" => crate::perf::check_arguments(arguments).map_err(refused),
+        "mutate" => crate::mutate::check_arguments(arguments).map_err(refused),
+        "startup" => check_startup(arguments).map_err(refused),
+        _ => Ok(()),
+    }
+}
+
+/// Whether `cargo xtask startup` takes `arguments`: the profile's build
+/// (the runner has no binary to name), the runs, the budget column and the
+/// check. The profile is set by the `profile` input.
+fn check_startup(arguments: &[String]) -> Result<()> {
+    let mut seen_profile = false;
+    let mut words = arguments.iter();
+    while let Some(word) = words.next() {
+        let mut value = |what: &str| words.next().ok_or_else(|| format!("`{word}` needs {what}"));
+        match word.as_str() {
+            "--runs" => {
+                let text = value("a number")?;
+                if !text.parse::<u32>().is_ok_and(|runs| runs > 0) {
+                    return Err(format!("`--runs {text}` is not a number above zero"));
+                }
+            }
+            "--budget" => {
+                let text = value("a column")?;
+                if !["desktop", "linux", "windows"].contains(&text.as_str()) {
+                    return Err(format!("`--budget {text}`: desktop, linux or windows"));
+                }
+            }
+            "--check" => {}
+            "--workspace" => {
+                value("a directory")?;
+            }
+            "--profile" if !seen_profile => {
+                value("a cargo profile")?;
+                seen_profile = true;
+            }
+            "--profile" => {
+                return Err(
+                    "a second `--profile`: the `profile` input chooses the build".to_owned(),
+                );
+            }
+            flag if flag.starts_with('-') => return Err(format!("unknown flag `{flag}`")),
+            path => {
+                return Err(format!(
+                    "`{path}`: a try run measures a build of its own, and names no binary"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Inputs {
+    /// Refuses a word the command's words hold that nextest would not take
+    /// ([`refuse_foreign_words`]).
+    fn refuse_words(&self) -> Result<()> {
+        let Some((verb, rest)) = self.words.split_first() else {
+            return Ok(());
+        };
+        let tests = match verb.as_str() {
+            "test" | "stress" => true,
+            "perf" => !packages_and_others(rest)?.0.is_empty(),
+            _ => false,
+        };
+        if !tests {
+            return Ok(());
+        }
+        let into_stress =
+            verb == "stress" || verb == "test" && self.count.is_some() && self.against.is_none();
+        refuse_foreign_words(rest, into_stress)
+    }
+
+    /// `--dependents` in the command's words resolved into `-p` for each
+    /// crate that is named or can see a change to one, as `cargo xtask test
+    /// --dependents -p CRATE` resolves it. `packages` reads the workspace's,
+    /// and is asked only when the flag is there.
+    fn resolve_dependents(
+        &mut self,
+        packages: impl FnOnce() -> Result<Vec<Package>>,
+    ) -> Result<Option<crate::dependents::Expanded>> {
+        let Some((verb, rest)) = self.words.split_first() else {
+            return Ok(None);
+        };
+        let mut before = rest.iter().take_while(|word| *word != "--");
+        if !before.any(|word| word == "--dependents") {
+            return Ok(None);
+        }
+        if !matches!(verb.as_str(), "test" | "stress" | "perf") {
+            return Err(format!(
+                "`--dependents` adds the crates whose tests can see a change to the ones                  named with `-p`: it goes with `test`, `stress` or `perf -p`, not `{verb}`"
+            ));
+        }
+        let expanded = crate::dependents::expand_in(rest, &packages()?)?;
+        let Some(expanded) = expanded else {
+            return Ok(None);
+        };
+        let verb = verb.clone();
+        self.words = std::iter::once(verb)
+            .chain(expanded.arguments.iter().cloned())
+            .collect();
+        Ok(Some(expanded))
+    }
+
+    /// `mutate`: `cargo xtask mutate` of the breaks named, run to its end in
+    /// one job (`--minutes 0`: its time budget is for a desk's shared test
+    /// lock, which a runner has no one to share). The results and the logs
+    /// are in `target/mutate`, which the workflow keeps.
+    fn mutate(&self, rest: &[String]) -> Result<Vec<String>> {
+        for (given, flag) in [
+            (self.against.is_some(), "--against"),
+            (self.count.is_some(), "--count"),
+            (self.load.is_some(), "--load"),
+            (self.cores.is_some(), "--cores"),
+        ] {
+            if given {
+                return Err(format!(
+                    "`{flag}` does not go with `mutate`, which runs the breaks of the lists                      named once, to the end"
+                ));
+            }
+        }
+        if self.profile != "ci" {
+            return Err(
+                "`mutate` builds its own copy of the tree, as it does at a desk: the ci profile"
+                    .to_owned(),
+            );
+        }
+        let mut command: Vec<String> = ["mutate", "--minutes", "0"].map(str::to_owned).to_vec();
+        let mut named = false;
+        let mut words = rest.iter();
+        while let Some(word) = words.next() {
+            match word.as_str() {
+                "--check" | "--list" | "--report" | "--tests" | "--fix-in" | "--write" => {
+                    return Err(format!(
+                        "`{word}` runs no break: it is for a desk, which reads the lists and                          the tree. A try run runs the breaks"
+                    ));
+                }
+                "--minutes" => {
+                    return Err(
+                        "`--minutes`: a try run gives `--minutes 0` itself, so that the run                          goes to its end in one job"
+                            .to_owned(),
+                    );
+                }
+                "--jobs" | "-j" | "--file" => {
+                    command.push(word.clone());
+                    command.push(
+                        words
+                            .next()
+                            .ok_or_else(|| format!("`{word}` needs a value"))?
+                            .clone(),
+                    );
+                    named |= word == "--file";
+                }
+                "--again" | "--no-compile-check" => command.push(word.clone()),
+                option if option.starts_with('-') => {
+                    return Err(format!(
+                        "`{option}` is not an option a try run gives `mutate`: --jobs, --again,                          --no-compile-check and --file"
+                    ));
+                }
+                name => {
+                    command.push(name.to_owned());
+                    named = true;
+                }
+            }
+        }
+        if !named {
+            return Err(
+                "name the breaks to run (`mutate step-12`, or a break's name, or the end of                  one): the whole of every list is more than one job's time"
+                    .to_owned(),
+            );
+        }
+        Ok(command)
+    }
+
     /// One of the nightly's jobs, as the nightly runs it.
     fn nightly_job(&self, verb: &str, rest: &[String]) -> Result<Vec<String>> {
         let added = !rest.is_empty()
@@ -436,18 +819,136 @@ fn packages_and_others(words: &[String]) -> Result<(Vec<String>, Vec<String>)> {
     Ok((packages, others))
 }
 
+/// What the inputs come to: the inputs, the command the job runs, and what
+/// is worth saying of how they were read.
+#[derive(Debug)]
+struct Plan {
+    inputs: Inputs,
+    command: Vec<String>,
+    /// Lines to print before the command: the crates `--dependents` added,
+    /// the commit, and in a dry run what the workflow's other inputs mean.
+    notes: Vec<String>,
+}
+
+/// Reads the inputs, resolves `--dependents` (`packages` reads the
+/// workspace's packages, and is asked only then) and makes the command, and
+/// refuses what the job would refuse: all of it before anything is built.
+fn plan(arguments: &[String], packages: impl FnOnce() -> Result<Vec<Package>>) -> Result<Plan> {
+    let mut inputs = Inputs::parse(arguments)?;
+    let mut notes = Vec::new();
+    if let Some(expanded) = inputs.resolve_dependents(packages)? {
+        notes.push(expanded.said());
+    }
+    let command = inputs.command()?;
+    if let Some(commit) = &inputs.commit {
+        notes.push(format!(
+            "commit {commit}: the branch's side of the run is that commit, whose own `xtask` \
+             runs the command"
+        ));
+    }
+    if inputs.dry_run {
+        if inputs.testkit.as_deref() == Some("profile") && inputs.against.is_some() {
+            notes.push(
+                "testkit=profile is not set for an `against` run: the workflow leaves it out"
+                    .to_owned(),
+            );
+        }
+        if inputs
+            .words
+            .first()
+            .is_some_and(|verb| verb == "partial-landlock")
+            && inputs.os.as_deref() != Some("linux-22.04")
+        {
+            notes.push(
+                "partial-landlock runs on os=linux-22.04, the one runner whose kernel has the \
+                 partial case"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(Plan {
+        inputs,
+        command,
+        notes,
+    })
+}
+
+/// Whether the checked-out tree is the commit asked for: `head` is what
+/// `HEAD` names there. A run that was asked for one commit must never
+/// measure another.
+fn check_checkout(commit: &str, head: &str) -> Result<()> {
+    if head.trim() == commit {
+        Ok(())
+    } else {
+        Err(format!(
+            "the checkout is at {}, not at the commit asked for ({commit}): nothing was built",
+            head.trim()
+        ))
+    }
+}
+
+/// The commit `HEAD` names in this tree.
+fn head_commit() -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(crate::workspace::root())
+        .output()
+        .map_err(|error| format!("could not ask git for HEAD: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git could not say what HEAD is: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
 /// `cargo xtask try …`
-pub(crate) fn run(arguments: &[String]) -> Result<()> {
-    let command = Inputs::parse(arguments)?.command()?;
-    println!("$ cargo xtask {}", command.join(" "));
-    crate::steps::append_job_summary(&format!("### `cargo xtask {}`\n\n", command.join(" ")));
-    let (first, rest) = command.split_first().ok_or("nothing to run")?;
-    crate::run(first, rest)
+pub(crate) fn main(arguments: &[String]) -> ExitCode {
+    match run(arguments) {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("xtask: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(arguments: &[String]) -> Result<ExitCode> {
+    let plan = plan(arguments, || {
+        Ok(crate::workspace::metadata(&crate::workspace::root())?.packages)
+    })?;
+    for note in &plan.notes {
+        println!("{note}");
+    }
+    println!("$ cargo xtask {}", plan.command.join(" "));
+    if plan.inputs.dry_run {
+        println!("(a dry run: nothing was built or run)");
+        return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(commit) = &plan.inputs.commit {
+        check_checkout(commit, &head_commit()?)?;
+    }
+    crate::steps::append_job_summary(&format!(
+        "### `cargo xtask {}`\n\n{}",
+        plan.command.join(" "),
+        plan.notes
+            .iter()
+            .map(|note| format!("{note}\n\n"))
+            .collect::<String>()
+    ));
+    let (first, rest) = plan.command.split_first().ok_or("nothing to run")?;
+    // Its exit code says more than pass or fail.
+    if first == "mutate" {
+        return Ok(crate::mutate::main(rest));
+    }
+    crate::run(first, rest).map(|()| ExitCode::SUCCESS)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Inputs;
+    use super::{Inputs, check_checkout, plan};
+    use crate::workspace::{DepKind, Dependency, Package};
 
     fn try_command(arguments: &[&str]) -> Result<String, String> {
         let arguments: Vec<String> = arguments.iter().map(|word| (*word).to_owned()).collect();
@@ -770,10 +1271,7 @@ mod tests {
     #[test]
     fn what_a_try_run_does_not_run_is_refused() {
         for (arguments, expected) in [
-            (
-                &["--command", "mutate step-12"][..],
-                "not a command a try run runs",
-            ),
+            (&["--command", "fmt"][..], "not a command a try run runs"),
             (&["--command", ""], "say what to run"),
             (&["--command", "test; curl evil"], "has a character"),
             (&["--command", "test $(id)"], "has a character"),
@@ -798,5 +1296,536 @@ mod tests {
             let error = try_command(arguments).unwrap_err();
             assert!(error.contains(expected), "{arguments:?}: {error}");
         }
+    }
+
+    // The commit, `mutate`, `--dependents`, and what cannot be passed on.
+
+    const HASH: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn a_commit_is_a_full_lower_case_hash_or_nothing() {
+        let parse = |commit: &str| {
+            Inputs::parse(&[
+                "--command".to_owned(),
+                "test".to_owned(),
+                "--commit".to_owned(),
+                commit.to_owned(),
+            ])
+        };
+        assert_eq!(parse(HASH).unwrap().commit.as_deref(), Some(HASH));
+        assert_eq!(parse("").unwrap().commit, None);
+        assert_eq!(parse("  ").unwrap().commit, None);
+        for bad in [
+            "main",
+            "0123456",
+            // 39 and 41 digits.
+            &HASH[..39],
+            &format!("{HASH}0"),
+            // Upper case, a letter past f, and the flag-looking.
+            &HASH.to_uppercase(),
+            &format!("{}g", &HASH[..39]),
+            "--help",
+            &format!("{}; id", &HASH[..30]),
+        ] {
+            let error = parse(bad).unwrap_err();
+            assert!(error.contains("40 hexadecimal digits"), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn the_checkout_must_be_the_commit_asked_for() {
+        assert_eq!(check_checkout(HASH, &format!("{HASH}\n")), Ok(()));
+        let error = check_checkout(HASH, "fedcba9876543210fedcba9876543210fedcba98\n").unwrap_err();
+        assert!(error.contains("not at the commit asked for"), "{error}");
+        assert!(check_checkout(HASH, "").is_err());
+    }
+
+    #[test]
+    fn mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have() {
+        assert_eq!(
+            try_command(&["--command", "mutate tooling-7-try-ab"]),
+            Ok("mutate --minutes 0 tooling-7-try-ab".to_owned())
+        );
+        assert_eq!(
+            try_command(&[
+                "--command",
+                "mutate step-12 step-14/deny --jobs 2 --again --no-compile-check"
+            ]),
+            Ok(
+                "mutate --minutes 0 step-12 step-14/deny --jobs 2 --again --no-compile-check"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            try_command(&["--command", "mutate -j 3 --file mutations/x.breaks"]),
+            Ok("mutate --minutes 0 -j 3 --file mutations/x.breaks".to_owned())
+        );
+        for (arguments, expected) in [
+            (
+                &["--command", "mutate step-12", "--against", "main"][..],
+                "`--against` does not go with `mutate`",
+            ),
+            (
+                &["--command", "mutate step-12", "--count", "3"],
+                "`--count` does not go with `mutate`",
+            ),
+            (
+                &["--command", "mutate step-12", "--load", "3"],
+                "`--load` does not go with `mutate`",
+            ),
+            (
+                &["--command", "mutate step-12", "--cores", "2"],
+                "`--cores` does not go with `mutate`",
+            ),
+            (
+                &["--command", "mutate step-12", "--filter", "test(x)"],
+                "goes with `test` or `stress`",
+            ),
+            (
+                &["--command", "mutate step-12", "--profile", "release"],
+                "the ci profile",
+            ),
+            (&["--command", "mutate"], "name the breaks to run"),
+            (&["--command", "mutate --jobs 2"], "name the breaks to run"),
+            (&["--command", "mutate --check step-12"], "runs no break"),
+            (&["--command", "mutate --report step-12"], "runs no break"),
+            (&["--command", "mutate --tests step-12"], "runs no break"),
+            (
+                &["--command", "mutate --minutes 5 step-12"],
+                "gives `--minutes 0` itself",
+            ),
+            (
+                &["--command", "mutate --fast step-12"],
+                "not an option a try run gives",
+            ),
+            (&["--command", "mutate step-12 --jobs"], "needs a value"),
+            // What `mutate` itself would say of the number.
+            (
+                &["--command", "mutate step-12 --jobs 99"],
+                "a number from 1 to 16",
+            ),
+        ] {
+            let error = try_command(arguments).unwrap_err();
+            assert!(error.contains(expected), "{arguments:?}: {error}");
+        }
+    }
+
+    /// base <- tools <- agent <- core; stats dev-uses base; other alone.
+    fn workspace() -> Vec<Package> {
+        let package = |name: &str, edges: &[(&str, DepKind)]| Package {
+            name: name.to_owned(),
+            manifest: format!("crates/{name}/Cargo.toml"),
+            publish_disabled: true,
+            dependencies: edges
+                .iter()
+                .map(|(to, kind)| Dependency {
+                    name: (*to).to_owned(),
+                    kind: *kind,
+                    in_workspace: true,
+                    default_features: true,
+                    features: Vec::new(),
+                    optional: false,
+                })
+                .collect(),
+            targets: Vec::new(),
+            features: Vec::new(),
+        };
+        vec![
+            package("core", &[("agent", DepKind::Normal)]),
+            package("agent", &[("tools", DepKind::Normal)]),
+            package("tools", &[("base", DepKind::Normal)]),
+            package("base", &[]),
+            package("stats", &[("base", DepKind::Dev)]),
+            package("other", &[]),
+        ]
+    }
+
+    fn planned(arguments: &[&str]) -> Result<(String, Vec<String>), String> {
+        let arguments: Vec<String> = arguments.iter().map(|word| (*word).to_owned()).collect();
+        plan(&arguments, || Ok(workspace())).map(|plan| (plan.command.join(" "), plan.notes))
+    }
+
+    #[test]
+    fn dependents_become_the_crates_the_job_runs_and_are_named() {
+        let (command, notes) =
+            planned(&["--command", "test --dependents -p tools shell::"]).unwrap();
+        assert_eq!(
+            command,
+            "ci --tiers --top 20 -p agent -p core -p tools -- shell::"
+        );
+        assert_eq!(
+            notes,
+            ["--dependents: tools and 2 crate(s) whose tests can see it: agent, core"]
+        );
+        // A change to the base reaches the crate that dev-uses it.
+        let (command, _) = planned(&["--command", "test --dependents -pbase"]).unwrap();
+        assert_eq!(
+            command,
+            "ci --tiers --top 20 -p agent -p base -p core -p stats -p tools"
+        );
+        // With a count, in the release profile, for an A/B, a stress run and
+        // the perf tests: each takes the crates.
+        let (command, _) = planned(&[
+            "--command",
+            "test --dependents -p tools",
+            "--against",
+            "main",
+            "--count",
+            "3",
+        ])
+        .unwrap();
+        assert_eq!(
+            command,
+            "ab --base ../ab-base --label main --top 20 --keep-going --count 3 -p agent -p core -p tools"
+        );
+        let (command, _) =
+            planned(&["--command", "stress --dependents -p tools --count 9"]).unwrap();
+        assert_eq!(
+            command,
+            "stress --cargo-profile ci --count 9 -p agent -p core -p tools"
+        );
+        let (command, _) = planned(&[
+            "--command",
+            "test --dependents -p tools",
+            "--profile",
+            "release",
+        ])
+        .unwrap();
+        assert_eq!(
+            command,
+            "test --cargo-profile release --profile ci -p agent -p core -p tools"
+        );
+        let (command, _) = planned(&["--command", "perf --dependents -p tools warm"]).unwrap();
+        assert!(
+            command.contains("-p agent -p core -p tools --run-ignored only"),
+            "{command}"
+        );
+        // A crate with nothing built on it adds none, and says so.
+        let (_, notes) = planned(&["--command", "test --dependents -p other"]).unwrap();
+        assert_eq!(
+            notes,
+            ["--dependents: other and 0 crate(s) whose tests can see it: none"]
+        );
+    }
+
+    #[test]
+    fn dependents_that_cannot_be_resolved_are_refused_before_anything_is_built() {
+        for (arguments, expected) in [
+            (
+                &["--command", "test --dependents"][..],
+                "needs the crates whose dependents to test",
+            ),
+            (
+                &["--command", "test --dependents -p nope"],
+                "`nope` is not a package",
+            ),
+            (
+                &["--command", "ci --dependents -p tools"],
+                "goes with `test`, `stress` or `perf -p`, not `ci`",
+            ),
+            (
+                &[
+                    "--command",
+                    "startup --dependents -p tools",
+                    "--profile",
+                    "dist",
+                ],
+                "not `startup`",
+            ),
+            (
+                &["--command", "advisories --dependents -p tools"],
+                "not `advisories`",
+            ),
+        ] {
+            let error = planned(arguments).unwrap_err();
+            assert!(error.contains(expected), "{arguments:?}: {error}");
+        }
+        // The flag after the command's own `--` is for the test binaries.
+        let (command, notes) = planned(&["--command", "test -p tools -- --dependents"]).unwrap();
+        assert_eq!(command, "ci --tiers --top 20 -p tools -- -- --dependents");
+        assert!(notes.is_empty());
+        // The workspace is read only when the flag is there.
+        let arguments = ["--command".to_owned(), "test -p tools".to_owned()];
+        let command = plan(&arguments, || panic!("no --dependents: no workspace read"));
+        assert!(command.is_ok());
+    }
+
+    #[test]
+    fn a_word_that_nextest_would_not_take_is_refused_with_its_reason() {
+        for (arguments, word, why) in [
+            (
+                &["--command", "test -p x --tiers"][..],
+                "--tiers",
+                "tier report",
+            ),
+            (&["--command", "test -p x --top 5"], "--top", "lists 20"),
+            (
+                &["--command", "test -p x --profile fast"],
+                "--profile",
+                "`try` chooses nextest's profile",
+            ),
+            (
+                &["--command", "test -p x --cargo-profile dist"],
+                "--cargo-profile",
+                "`profile` input",
+            ),
+            (
+                &["--command", "test -p x --count 3"],
+                "--count",
+                "`count` input",
+            ),
+            (
+                &["--command", "test -p x --load=3"],
+                "--load=3",
+                "`load` input",
+            ),
+            (
+                &["--command", "test -p x --keep-going"],
+                "--keep-going",
+                "cargo xtask ab",
+            ),
+            (
+                &["--command", "test -p x --filter test(a)"],
+                "--filter",
+                "`filter` input",
+            ),
+            (
+                &["--command", "stress -p x --cargo-profile dist"],
+                "--cargo-profile",
+                "`profile` input",
+            ),
+            (
+                &["--command", "stress -p x --tiers"],
+                "--tiers",
+                "tier report",
+            ),
+            (
+                &["--command", "perf -p x --profile fast"],
+                "--profile",
+                "chooses nextest's profile",
+            ),
+            (
+                &["--command", "test -p x --tiers", "--against", "main"],
+                "--tiers",
+                "tier report",
+            ),
+            (
+                &["--command", "test -p x --commit abc"],
+                "--commit",
+                "`commit` input",
+            ),
+            // With `against` a count is rounds, not a stress run's: the word
+            // is not the stress run's own.
+            (
+                &[
+                    "--command",
+                    "test -p x --count 3",
+                    "--against",
+                    "main",
+                    "--count",
+                    "4",
+                ],
+                "--count",
+                "`count` input",
+            ),
+        ] {
+            let error = try_command(arguments).unwrap_err();
+            assert!(
+                error.contains(&format!("`{word}` cannot be passed on")) && error.contains(why),
+                "{arguments:?}: {error}"
+            );
+            assert!(error.contains("Nothing was built"), "{error}");
+        }
+        // What is the stress run's own is allowed in one, and a `--` ends
+        // the words that are nextest's.
+        assert!(try_command(&["--command", "stress -p x --count 5 --load 2 --cores 1"]).is_ok());
+        assert!(
+            try_command(&["--command", "test -p x --count 5", "--count", "9"]).is_ok(),
+            "a test with a count is a stress run"
+        );
+        assert!(try_command(&["--command", "test -p x -- --profile"]).is_ok());
+        // A crate that is named like an option is a crate.
+        assert!(try_command(&["--command", "test -p top"]).is_ok());
+        // The real nextest options pass.
+        assert!(
+            try_command(&[
+                "--command",
+                "test -p x --run-ignored only --no-capture -E test(a)"
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn what_the_commands_own_parser_would_refuse_is_refused_here() {
+        for (arguments, command, expected) in [
+            (
+                &["--command", "ci --nope"][..],
+                "ci",
+                "`ci --nope` is not a form of `ci`",
+            ),
+            (
+                &["--command", "ci lint test"],
+                "ci",
+                "`ci lint test` is not a form of `ci`",
+            ),
+            (
+                &["--command", "ci --tiers --top many"],
+                "ci",
+                "`--top many` is not a number",
+            ),
+            (
+                &["--command", "stress -p x --stress-count 3"],
+                "stress",
+                "is set by this command",
+            ),
+            (
+                &["--command", "test", "--against", "main", "--count", "100"],
+                "ab",
+                "a number of rounds from 2 to 50",
+            ),
+            (
+                &["--command", "stress --count 3"],
+                "stress",
+                "say which crates to stress",
+            ),
+            (
+                &["--command", "perf --nope"],
+                "perf",
+                "unknown argument `--nope`",
+            ),
+            (
+                &["--command", "startup foo", "--profile", "dist"],
+                "startup",
+                "names no binary",
+            ),
+            (
+                &[
+                    "--command",
+                    "startup --profile release",
+                    "--profile",
+                    "dist",
+                ],
+                "startup",
+                "a second `--profile`",
+            ),
+            (
+                &["--command", "startup --runs 0", "--profile", "dist"],
+                "startup",
+                "not a number above zero",
+            ),
+            (
+                &["--command", "startup --budget moon", "--profile", "dist"],
+                "startup",
+                "desktop, linux or windows",
+            ),
+        ] {
+            let error = try_command(arguments).unwrap_err();
+            assert!(
+                error.contains(&format!("`cargo xtask {command}` would refuse this"))
+                    && error.contains(expected),
+                "{arguments:?}: {error}"
+            );
+        }
+        for arguments in [
+            &["--command", "ci lint"][..],
+            &["--command", "ci test"],
+            &["--command", "ci"],
+            &["--command", "ci --tiers --top 3 -p x -- -E test(a)"],
+            &[
+                "--command",
+                "startup --check --budget windows",
+                "--profile",
+                "dist",
+            ],
+            &["--command", "stress -p x --first-seed 7 -- --exact"],
+        ] {
+            assert!(try_command(arguments).is_ok(), "{arguments:?}");
+        }
+    }
+
+    #[test]
+    fn a_dry_run_and_the_workflows_other_inputs_are_read() {
+        let parse = |words: &[&str]| {
+            let arguments: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
+            Inputs::parse(&arguments)
+        };
+        let inputs = parse(&[
+            "--command",
+            "test",
+            "--dry-run",
+            "--os",
+            "linux-22.04",
+            "--testkit",
+            "profile",
+        ])
+        .unwrap();
+        assert!(inputs.dry_run);
+        assert_eq!(inputs.os.as_deref(), Some("linux-22.04"));
+        assert_eq!(inputs.testkit.as_deref(), Some("profile"));
+        assert!(!parse(&["--command", "test"]).unwrap().dry_run);
+        assert_eq!(parse(&["--command", "test", "--os", ""]).unwrap().os, None);
+        for (words, expected) in [
+            (
+                &["--command", "test", "--os", "macos"][..],
+                "both, linux, windows, linux-22.04",
+            ),
+            (
+                &["--command", "test", "--testkit", "all"],
+                "none or profile",
+            ),
+        ] {
+            let error = parse(words).unwrap_err();
+            assert!(error.contains(expected), "{words:?}: {error}");
+        }
+        // Notes of a dry run only.
+        let arguments: Vec<String> = [
+            "--command",
+            "test",
+            "--dry-run",
+            "--against",
+            "main",
+            "--testkit",
+            "profile",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let planned = plan(&arguments, || Ok(Vec::new())).unwrap();
+        assert!(
+            planned
+                .notes
+                .iter()
+                .any(|note| note.contains("testkit=profile is not set"))
+        );
+        let arguments: Vec<String> = [
+            "--command",
+            "partial-landlock",
+            "--dry-run",
+            "--os",
+            "linux",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let planned = plan(&arguments, || Ok(Vec::new())).unwrap();
+        assert!(
+            planned
+                .notes
+                .iter()
+                .any(|note| note.contains("os=linux-22.04"))
+        );
+        assert_eq!(planned.command, ["partial-landlock"]);
+    }
+
+    #[test]
+    fn a_commit_is_said_in_the_plan() {
+        let arguments: Vec<String> = ["--command", "test -p cortex-base", "--commit", HASH]
+            .map(str::to_owned)
+            .to_vec();
+        let planned = plan(&arguments, || Ok(Vec::new())).unwrap();
+        assert_eq!(
+            planned.command,
+            ["ci", "--tiers", "--top", "20", "-p", "cortex-base"]
+        );
+        assert!(planned.notes[0].contains(HASH), "{:?}", planned.notes);
     }
 }
