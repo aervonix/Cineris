@@ -57,7 +57,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-core
 
-- [a-redecide-test-under-load](a-redecide-test-under-load.md): The re-decide test of a copy through a link fails about once in fifty under load: the link can run before the copy is decided. Owner: a fix session of the re-decide work.
 - [the-core-thread-waits-on-a-revokes-write](the-core-thread-waits-on-a-revokes-write.md): A change of level waits on the core thread for a revoke's or a record's write of the project's approvals, under the lock that keeps them from losing each other. Owner: the next change to the core's policy, or step 32.
 - [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it; one CI flake. Owner: the next step that changes the base capture, or step 32.
 - [a-closed-view-can-still-answer](a-closed-view-can-still-answer.md): After `session/close` a client stays among those an approval request went to, so its answer is still taken. Owner: the owner; before step 27.
