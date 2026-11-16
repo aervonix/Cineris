@@ -19,12 +19,20 @@ use std::time::{Duration, Instant};
 
 use cortex_testkit::VTerm;
 use cortex_testkit::children::{ChildSpec, Roll};
+use cortex_testkit::exit::{Exit, Verdict};
+use cortex_testkit::glyphs::{GlyphSets, RowPattern};
 use cortex_testkit::pty::Session;
 use cortex_testkit::role::{ModeShell, NOT_RESTORED, RESTORED, Role, this_binary};
 use cortex_testkit::{Gate, Phases, ServerReply};
+use cortex_tui::glyphs::Glyphs;
 use serde_json::{Value, json};
 
 use super::{CORTEX, LEFT_OUT, MODEL, Machine};
+
+/// The glyph sets the interface draws in: a test spells a glyph once, as the
+/// product's tables have it, and the screen may show either set (a Windows
+/// console gets the ASCII one).
+const GLYPHS: GlyphSets<'static, Glyphs> = GlyphSets::new(&[Glyphs::UNICODE, Glyphs::ASCII]);
 
 /// The role of the shell the binary runs under: its options are the path
 /// of the file that says how.
@@ -78,7 +86,12 @@ pub fn child() {
     for (name, value) in spec["env"].as_object().expect("variables") {
         command.env(name, value.as_str().expect("a value"));
     }
-    ModeShell::new().announcing(STARTING).run(command);
+    // It lives through a hang-up on Unix, to say how the binary ended after
+    // the console was closed under it.
+    ModeShell::new()
+        .surviving_hangup()
+        .announcing(STARTING)
+        .run(command);
 }
 
 impl Machine {
@@ -401,13 +414,12 @@ fn sys_a_project_is_trusted_from_its_dialog_and_its_model_is_used() {
     assert!(shown.contains("claude-opus-5-5"), "{shown}");
     // The folder as a person reads it, never the canonical form.
     assert!(!shown.contains(r"\\?\"), "{shown}");
-    // The header's box (`│`, or `|` in the ASCII glyphs a Windows console
-    // gets) names the model the session runs on (the dialog
+    // The header's box names the model the session runs on (the dialog
     // named it too, outside any box).
     session.answer_dialog(LIMIT, TRUST_ANSWERS, b"y", |t| {
-        t.history()
-            .iter()
-            .any(|row| row.trim_start().starts_with(['│', '|']) && row.contains("claude-opus-5-5"))
+        GLYPHS.history_has_row(t, |g| {
+            RowPattern::starting_with(g.vertical).containing("claude-opus-5-5")
+        })
     });
 
     quit(&mut session, &phases);
@@ -474,9 +486,9 @@ fn sys_a_never_survives_a_restart_and_permissions_trust_clears_it() {
     machine.project_config("[model]\nmain = \"claude-opus-5-5\"\n");
     let header_with = |session: &mut Session, model: &str| {
         session.wait_for(LIMIT, "the header's model", |t| {
-            let all = t.history();
-            all.iter()
-                .any(|row| row.trim_start().starts_with(['│', '|']) && row.contains(model))
+            GLYPHS.history_has_row(t, |g| {
+                RowPattern::starting_with(g.vertical).containing(model)
+            })
         });
     };
 
@@ -677,11 +689,12 @@ fn ends_while_the_lane_waits(session: &mut Session, ending: Ending, waiting: &st
         took < ENDING,
         "{ending:?} while {waiting}: the application took {took:?} to end"
     );
-    // `ExitStatus` says "exit status" on Unix and "exit code" on Windows.
-    let code = ending.code();
-    assert!(
-        shown.contains(&format!("{RESTORED} (exit status: {code})"))
-            || shown.contains(&format!("{RESTORED} (exit code: {code})")),
+    assert_eq!(
+        Verdict::parse(&shown),
+        Some(Verdict {
+            restored: true,
+            exit: Exit::Code(ending.code())
+        }),
         "{ending:?} while {waiting}: {shown}"
     );
     let modes = session.screen().modes();
@@ -811,10 +824,9 @@ fn perf_start_to_first_frame_under_both_names() {
     }
 }
 
-/// Whether the prompt's box shows `text` typed: after `◆`, or after `>`
-/// where the console gets the ASCII glyphs (Windows).
+/// Whether the prompt's box shows `text` typed, after the user's glyph.
 fn typed(screen: &cortex_testkit::VTerm, text: &str) -> bool {
-    screen.shows(&format!("◆ {text}")) || screen.shows(&format!("> {text}"))
+    GLYPHS.shows(screen, |g| format!("{} {text}", g.user))
 }
 
 /// A field of a process's `/proc` status: Linux only.
@@ -884,10 +896,13 @@ fn sys_a_signal_ends_the_application_gracefully_with_its_code() {
         session.wait_for(LIMIT, "the shell's verdict", |t| {
             t.shows(RESTORED) || t.shows(NOT_RESTORED)
         });
-        let shown = everything(&session);
-        assert!(
-            shown.contains(&format!("{RESTORED} (exit status: {code})")),
-            "SIG{signal}: {shown}"
+        assert_eq!(
+            Verdict::parse(&everything(&session)),
+            Some(Verdict {
+                restored: true,
+                exit: Exit::Code(code)
+            }),
+            "SIG{signal}"
         );
         assert!(closed.wait(LIMIT), "SIG{signal}: the turn was not stopped");
     }
@@ -912,11 +927,96 @@ fn sys_a_signal_ends_the_application_gracefully_with_its_code() {
     session.wait_for(LIMIT, "the shell's verdict", |t| {
         (t.shows(RESTORED) || t.shows(NOT_RESTORED)) && t.shows(")")
     });
-    let shown = everything(&session);
-    assert!(
-        shown.contains(RESTORED) && shown.contains("signal: 6"),
-        "SIGABRT: {shown}"
+    assert_eq!(
+        Verdict::parse(&everything(&session)),
+        Some(Verdict {
+            restored: true,
+            exit: Exit::Signal(6)
+        }),
+        "SIGABRT"
     );
+}
+
+/// How long the application has to end once its console is closed under it:
+/// under the watchdog (3 s) that ends a process that does not, so that an
+/// end the watchdog made fails. It takes a few milliseconds at the desk.
+const CLOSING: Duration = Duration::from_secs(2);
+
+/// Closes the console under the application in `session`, and checks that
+/// it ends in order (`docs/steps/23/answered.md`, "Signals, a failed write
+/// and a panic": the console's close is SIGHUP's twin): within [`CLOSING`],
+/// `stopped` having happened by then, and on Unix with the terminal put
+/// back and the code of SIGHUP's end, 129. On Windows the shell goes with
+/// the console, so nothing is said on the screen: the test reads what the
+/// application leaves outside it, which is `stopped`.
+fn closes_in_order(session: &mut Session, what: &str, stopped: impl FnOnce() -> bool) {
+    let started = session.close_console();
+    assert!(stopped(), "{what}: not stopped when the console closed");
+    let took = started.elapsed();
+    assert!(
+        took < CLOSING,
+        "{what}: the application took {took:?} to stop after its console closed"
+    );
+    #[cfg(unix)]
+    {
+        session.wait_for(LIMIT, "the shell's verdict", |t| {
+            Verdict::parse(&t.history().join("\n")).is_some()
+        });
+        assert_eq!(
+            Verdict::parse(&everything(session)),
+            Some(Verdict {
+                restored: true,
+                exit: Exit::Code(129)
+            }),
+            "{what}"
+        );
+    }
+    #[cfg(windows)]
+    session.wait_exit(LIMIT);
+}
+
+/// The console closing while a turn streams, which is a closed tab: the
+/// turn's request is dropped and the application ends, as for SIGHUP
+/// (`sys_a_signal_ends_the_application_gracefully_with_its_code`, which
+/// Linux alone can send).
+#[test]
+fn sys_the_console_closing_ends_the_application_and_stops_its_turn() {
+    let machine = Machine::new("tui_console_stream");
+    let closed = Gate::new();
+    machine.server.push(
+        ServerReply::sse()
+            .send(super::sse(&[
+                super::message_start(),
+                json!({"type": "content_block_start", "index": 0,
+                    "content_block": {"type": "text", "text": ""}}),
+                json!({"type": "content_block_delta", "index": 0,
+                    "delta": {"type": "text_delta", "text": "Working on it\n"}}),
+            ]))
+            .hang_until_closed(&closed),
+    );
+    let mut session = machine.tui(&["work"]);
+    wait_shows(&mut session, "Working on it");
+    closes_in_order(&mut session, "mid-stream", || closed.wait(LIMIT));
+}
+
+/// The same while a tool's command runs: it is stopped with the turn, not
+/// left behind.
+#[test]
+fn sys_the_console_closing_stops_a_running_command() {
+    let machine = Machine::new("tui_console_tool");
+    let roll = Roll::new();
+    let command = ChildSpec::new(&roll, "command");
+    machine.reply_tool(
+        "toolu_1",
+        "shell",
+        &json!({"command": super::signals::shell_line(&command), "timeout_ms": 600_000}),
+    );
+    let mut session = machine.tui(&["--permission-mode", "unrestricted", "run it"]);
+    let [running]: [_; 1] = roll
+        .all(&["command"], LIMIT)
+        .try_into()
+        .unwrap_or_else(|_| panic!("the command did not start"));
+    closes_in_order(&mut session, "mid-tool", || running.gone_within(LIMIT));
 }
 
 #[expect(clippy::print_stdout, reason = "a measurement prints what it measured")]

@@ -196,6 +196,7 @@ pub fn same_modes_as_the_shell() -> Option<bool> {
 pub struct ModeShell {
     old_console: bool,
     ignoring_interrupts: bool,
+    surviving_hangup: bool,
     announce: Option<String>,
 }
 
@@ -224,6 +225,17 @@ impl ModeShell {
         self
     }
 
+    /// Stays through the terminal hanging up while the child runs (Unix:
+    /// SIGHUP, with a handler that does nothing, which the child does not
+    /// inherit), so that the shell can say how its child ended after
+    /// [`Session::close_console`](crate::pty::Session::close_console). Does
+    /// nothing on Windows, where the shell goes with the console.
+    #[must_use]
+    pub fn surviving_hangup(mut self) -> Self {
+        self.surviving_hangup = true;
+        self
+    }
+
     /// Prints `text` just before the child starts.
     #[must_use]
     pub fn announcing(mut self, text: &str) -> Self {
@@ -241,6 +253,9 @@ impl ModeShell {
         cortex_term::pty::ignore_control_events();
         if self.old_console {
             cortex_term::pty::set_vt_output(false).expect("turn off virtual-terminal processing");
+        }
+        if self.surviving_hangup {
+            cortex_term::pty::pass_over_hangup().expect("pass SIGHUP over");
         }
         let before = cortex_term::pty::modes().expect("the terminal's modes");
         if let Some(text) = &self.announce {
