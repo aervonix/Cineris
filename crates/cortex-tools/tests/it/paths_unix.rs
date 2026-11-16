@@ -215,8 +215,8 @@ fn names_that_only_windows_refuses_are_ordinary_here() {
     let mut expected: Vec<&str> = devices.iter().map(|name| name.text.as_str()).collect();
     expected.extend(["name.", "notes:2026"]);
     expected.sort_unstable();
-    let mut found: Vec<&str> = listed.lines().collect();
-    found.sort_unstable();
+    // In the order a search lists files: sorted, as the names' bytes sort.
+    let found: Vec<&str> = listed.lines().collect();
     assert_eq!(found, expected);
     assert_eq!(
         ok(&ws.call(&ReadTool::new(), json!({"path": "notes:2026"}))),
