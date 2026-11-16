@@ -554,3 +554,65 @@ fn the_continuity_note_names_its_paths_as_escapes() {
     );
     assert!(!note.contains('\n'), "{note}");
 }
+
+/// What the command observer is told of a finished command, from the
+/// payload of its result: how it ended, and whether it changed a file or
+/// could not say.
+#[test]
+fn a_finished_command_is_read_for_the_observer_from_its_payload() {
+    use cortex_knowledge::Ending;
+    use serde_json::json;
+
+    let clean = json!({"complete": true, "modified": [], "created": [], "deleted": []});
+    let run = |payload: serde_json::Value, changes: Option<&serde_json::Value>| {
+        super::observed_run(
+            "cargo test".to_owned(),
+            Some("crates/app".to_owned()),
+            Some(&payload),
+            changes,
+            true,
+            false,
+        )
+    };
+    // How it ended.
+    for (payload, ending) in [
+        (json!({"exit_code": 0}), Ending::Succeeded),
+        (json!({"exit_code": 1}), Ending::Failed),
+        (json!({"exit_code": 101, "duration_ms": 5}), Ending::Failed),
+        // Stopped, or it left something behind: it says nothing of itself.
+        (json!({"exit_code": 0, "timed_out": true}), Ending::Other),
+        (json!({"exit_code": 1, "interrupted": true}), Ending::Other),
+        (json!({"exit_code": 0, "escaped": true}), Ending::Other),
+        (
+            json!({"exit_code": 0, "background_stopped": true}),
+            Ending::Other,
+        ),
+        (json!({"exit_code": null, "signal": 9}), Ending::Other),
+        (json!({}), Ending::Other),
+    ] {
+        assert_eq!(
+            run(payload.clone(), Some(&clean)).ending,
+            ending,
+            "{payload}"
+        );
+    }
+    // Whether it changed anything: no account of it is "it may have".
+    assert!(!run(json!({"exit_code": 0}), Some(&clean)).changed);
+    assert!(run(json!({"exit_code": 0}), None).changed);
+    for changes in [
+        json!({"complete": false, "modified": [], "created": [], "deleted": []}),
+        json!({"complete": true, "modified": ["a"], "created": [], "deleted": []}),
+        json!({"complete": true, "modified": [], "created": ["a"], "deleted": []}),
+        json!({"complete": true, "modified": [], "created": [], "deleted": ["a"]}),
+        json!({"modified": [], "created": [], "deleted": []}),
+    ] {
+        assert!(
+            run(json!({"exit_code": 0}), Some(&changes)).changed,
+            "{changes}"
+        );
+    }
+    let observed = run(json!({"exit_code": 0, "duration_ms": 1200}), Some(&clean));
+    assert_eq!(observed.duration_ms, 1_200);
+    assert_eq!(observed.cwd.as_deref(), Some("crates/app"));
+    assert!(observed.confined && !observed.read_only);
+}

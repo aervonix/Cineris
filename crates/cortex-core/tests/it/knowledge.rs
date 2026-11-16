@@ -625,7 +625,15 @@ fn sys_a_command_another_process_turned_off_asks_at_its_next_run() {
             )
             .unwrap();
         front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
-        // The third run of the turn is the first command again, and asks.
+        // The third run of the turn is the first command again, and asks:
+        // a second question comes before the turn ends.
+        front
+            .until(|seen| crate::requests_in(seen).len() >= 2 || !front.ends().is_empty())
+            .await;
+        assert!(
+            front.ends().is_empty(),
+            "the command another process turned off ran without asking"
+        );
         let (asked, request) = front.approval().await;
         assert!(format!("{request:?}").contains(&line), "{request:?}");
         front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
@@ -878,6 +886,64 @@ fn sys_a_credential_is_not_learned_and_not_remembered() {
         assert_eq!(list(&front).await, Vec::<ProjectEntry>::new());
         let file = store_file(&world, &world.workspace);
         assert!(!file.exists() || !std::fs::read_to_string(&file).unwrap().contains(&key));
+        front.close().await;
+    });
+}
+
+/// The two settings. With `project.learn` off nothing is observed, and
+/// what is known is used as before. `project.profile_tokens` is the
+/// section's budget: at nothing, the prompt has no section, and the user
+/// is told what was left out.
+#[test]
+fn sys_learning_can_be_turned_off_and_the_sections_budget_set() {
+    let mut world = World::new("knowledge_settings", []);
+    world.user_config("[project]\nlearn = false\nprofile_tokens = 0\n");
+    let line = passing(&world);
+    world.provider =
+        cortex_testkit::ScriptedProvider::new([run("c1", &line), run("c2", &line), says("Done.")]);
+    other_process(&world)
+        .update(
+            &[],
+            &[NewEntry {
+                kind: EntryKind::Fact,
+                text: "The docs are in docs/.".to_owned(),
+                command: None,
+                check: None,
+            }],
+            None,
+        )
+        .unwrap();
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        assert_eq!(front.turn_allowing("run it twice").await.len(), 2);
+        // Nothing was learned from two successes.
+        let entries = list(&front).await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, EntryKind::Fact);
+        assert!(
+            !front
+                .notices()
+                .iter()
+                .any(|notice| notice.starts_with("Learned:"))
+        );
+        // The fact is known and has no room in the prompt, which is said.
+        for request in world.provider.requests() {
+            assert!(
+                !request.system.contains("Project profile"),
+                "{}",
+                request.system
+            );
+        }
+        assert!(
+            front
+                .notices()
+                .iter()
+                .any(|notice| notice
+                    .contains("larger than its budget of 0 tokens: 1 of its entries")),
+            "{:?}",
+            front.notices()
+        );
         front.close().await;
     });
 }

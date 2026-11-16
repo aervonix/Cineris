@@ -574,3 +574,260 @@ replace: if false
 caught-by:
     cortex-knowledge file::tests::a_number_past_what_an_id_may_hold_refuses_the_file
 
+# ------------------------------------------------------------- the observer
+
+[break] a-line-with-a-quote-or-an-operator-is-observed
+rule: Only a line of plain words is observed: an observed line reaches the system prompt without a review, so it must not be able to carry a sentence.
+file: crates/cortex-knowledge/src/observe.rs
+in: normal_line
+find: !word.chars().all(plain)
+replace: false
+caught-by:
+    cortex-knowledge observe::tests::a_line_is_observed_only_as_plain_words
+    cortex-knowledge observe::tests::a_success_of_a_classed_line_is_seen_and_nothing_else_is
+
+[break] a-change-between-two-runs-is-still-a-flip
+rule: A flip is a failure and then a success of one test command with no change the harness saw between them, under the same confinement.
+file: crates/cortex-knowledge/src/observe.rs
+in: Watch::see
+find: before == Some((self.changes, run.confined)) && !run.changed
+replace: before.is_some()
+caught-by:
+    cortex-knowledge observe::tests::a_change_between_the_two_runs_is_not_a_flip
+    cortex-knowledge observe::tests::the_two_runs_of_a_flip_ran_under_the_same_confinement
+
+[break] a-build-that-fails-then-passes-is-a-flaky-test
+rule: Only a test command can flip: a build that fails and then passes was fixed.
+file: crates/cortex-knowledge/src/observe.rs
+in: Watch::see
+find: purpose == Purpose::Test && !run.changed
+replace: !run.changed
+caught-by:
+    cortex-knowledge observe::tests::a_test_that_fails_then_passes_with_nothing_changed_is_a_flip
+
+[break] an-entry-seen-once-is-active
+rule: A command seen once is a proposal: it becomes active at the second consistent observation.
+file: crates/cortex-knowledge/src/learn.rs
+in: Project::learn
+find: entry.status = Status::Proposed;
+replace: entry.status = Status::Active;
+caught-by:
+    cortex-knowledge::it learn::a_command_seen_to_succeed_twice_becomes_active_and_can_be_undone
+
+[break] becoming-active-is-being-accepted
+rule: An entry that became active by itself is not accepted: it is in the prompt, and it still asks.
+file: crates/cortex-knowledge/src/learn.rs
+in: Project::learn
+find: entry.status = Status::Active; entry.expires = now.checked_add(lifetime); Outcome::Activated
+replace: entry.status = Status::Active; entry.accepted = Some(now); entry.expires = now.checked_add(lifetime); Outcome::Activated
+caught-by:
+    cortex-knowledge::it learn::a_command_seen_to_succeed_twice_becomes_active_and_can_be_undone
+
+[break] an-entry-the-user-disabled-is-learned-again
+rule: An entry the user turned off is not learned again, however often it is seen.
+file: crates/cortex-knowledge/src/learn.rs
+in: Project::learn
+find: Status::Disabled => Outcome::Nothing
+replace: Status::Disabled => { follow(entry); entry.status = Status::Active; Outcome::Revived }
+caught-by:
+    cortex-knowledge::it learn::a_command_seen_to_succeed_twice_becomes_active_and_can_be_undone
+
+[break] an-expired-entry-comes-back-accepted
+rule: An entry that lapsed comes back unaccepted when it is seen again, whether or not the clock's pass had marked it.
+file: crates/cortex-knowledge/src/learn.rs
+in: Project::learn
+find: follow(entry); entry.accepted = None; entry.expires = now.checked_add(lifetime); Outcome::Revived
+replace: follow(entry); entry.expires = now.checked_add(lifetime); Outcome::Revived
+caught-by:
+    cortex-knowledge::it learn::an_entry_that_lapsed_comes_back_unaccepted_when_it_is_seen_again
+
+[break] an-active-entry-is-written-at-every-run
+rule: A later success confirms an active entry at most once a day: one write a day a command, not one a run.
+file: crates/cortex-knowledge/src/learn.rs
+in: confirm_due
+find: since >= DAY
+replace: true
+caught-by:
+    cortex-knowledge::it learn::an_active_entry_is_confirmed_at_most_once_a_day
+
+[break] entries-seen-once-fill-the-store
+rule: At most 40 entries seen once are kept: the one seen longest ago goes when a new one comes.
+file: crates/cortex-knowledge/src/learn.rs
+in: make_room
+find: >= MAX_SEEN_ONCE
+replace: >= usize::MAX
+caught-by:
+    cortex-knowledge::it learn::entries_seen_once_are_bounded_and_do_not_wait_for_ever
+
+# ------------------------------------------------------ the profile's epoch
+
+[break] the-epochs-prompt-is-built-without-the-profile
+rule: The profile is section 5 of the prompt an epoch is built with.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::build_prompt
+find: profile: Some(&profile)
+replace: profile: None
+caught-by:
+    cortex-agent::it profile::the_profile_is_section_five_of_the_epochs_prompt_and_its_hash_is_recorded
+
+[break] a-changed-profile-is-not-told
+rule: A profile that is not the one the model has is told as a notice at the turn's start.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::profile_changes
+find: now == self.context.given_profile
+replace: true
+caught-by:
+    cortex-agent::it profile::the_prompt_is_fixed_for_the_epoch_and_a_change_follows_as_a_notice
+    cortex-agent::it profile::a_resume_after_the_profile_changed_goes_on_in_its_epoch_and_is_told
+
+[break] the-profile-is-told-at-every-turn
+rule: Nothing is told when the profile is the one the model has.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: Session::profile_changes
+find: now == self.context.given_profile
+replace: false
+caught-by:
+    cortex-agent::it profile::the_prompt_is_fixed_for_the_epoch_and_a_change_follows_as_a_notice
+
+[break] a-summary-replays-an-older-profile
+rule: After a summary the old epoch's profile notices are not replayed: the new prompt holds the profile as it is then.
+file: crates/cortex-agent/src/context/history.rs
+in: History::extend_projected
+find: if meta.map || meta.profile {
+replace: if meta.map {
+caught-by:
+    cortex-agent::it profile::a_compaction_builds_the_prompt_with_the_profile_as_it_is_and_replays_no_older_one
+
+[break] a-reload-replays-an-older-profile
+rule: A history read again from the log leaves the old epoch's profile notices out after a summary, as the live session did.
+file: crates/cortex-agent/src/context/mod.rs
+in: Context::load
+find: NoticeSource::Map | NoticeSource::Profile
+replace: NoticeSource::Map
+caught-by:
+    cortex-agent::it profile::a_compaction_builds_the_prompt_with_the_profile_as_it_is_and_replays_no_older_one
+
+[break] a-session-read-again-forgets-what-it-was-told
+rule: What the model has of the profile is the epoch's hash, then the last profile notice on the branch: a session read again tells nothing twice.
+file: crates/cortex-agent/src/context/mod.rs
+in: Context::load
+find: self.given_profile = profile::told(&notice.text);
+replace:
+caught-by:
+    cortex-agent::it profile::a_resume_after_the_profile_changed_goes_on_in_its_epoch_and_is_told
+
+# ---------------------------------------------------------------- the core
+
+[break] an-active-command-is-given-to-the-engine-unaccepted
+rule: The engine is given a rule only for a command the user accepted: one that became active by itself still asks.
+file: crates/cortex-core/src/knowledge.rs
+in: Knowledge::give_rules
+find: .runs_unasked(now)
+replace: .in_use(now)
+caught-by:
+    cortex-core::it knowledge::sys_a_command_seen_to_succeed_twice_is_learned_told_and_runs_unasked_once_accepted
+
+[break] a-new-engine-is-not-given-the-learned-rules
+rule: A change of level makes a new engine, which is given the learned rules from the one place that holds them.
+file: crates/cortex-core/src/core.rs
+find: knowledge.reapply();
+replace:
+caught-by:
+    cortex-core::it knowledge::sys_a_change_of_level_keeps_what_was_accepted_and_nothing_that_was_turned_off
+
+[break] the-files-are-not-looked-at-before-a-command
+rule: Before a command is decided a session looks at its project's files, and drops every learned rule when either changed.
+file: crates/cortex-core/src/knowledge.rs
+in: Knowledge::before_command
+find: if !current {
+replace: if false {
+caught-by:
+    cortex-core::it knowledge::sys_a_command_another_process_turned_off_asks_at_its_next_run
+
+[break] an-update-does-not-reach-the-running-sessions
+rule: Every session of the project in the process takes an update at once: an accepted command stops asking, and one turned off asks.
+file: crates/cortex-core/src/knowledge.rs
+in: update
+find: knowledge.took(&updated.snapshot);
+replace:
+caught-by:
+    cortex-core::it knowledge::sys_a_command_seen_to_succeed_twice_is_learned_told_and_runs_unasked_once_accepted
+
+[break] a-proposal-with-a-credential-is-stored
+rule: A proposal that holds what looks like a credential is refused.
+file: crates/cortex-core/src/knowledge.rs
+find: self.finds_secret(&proposal.text) || self.finds_secret(&proposal.evidence)
+replace: false
+caught-by:
+    cortex-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
+
+[break] a-command-with-a-credential-is-observed
+rule: A command line that holds what looks like a credential is not observed.
+file: crates/cortex-core/src/knowledge.rs
+in: Knowledge::observed
+find: || self.finds_secret(&run.command)
+replace:
+caught-by:
+    cortex-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
+
+[break] learning-is-on-when-the-setting-is-off
+rule: With `project.learn` off nothing is observed.
+file: crates/cortex-core/src/knowledge.rs
+in: Knowledge::observed
+find: !self.learn ||
+replace:
+caught-by:
+    cortex-core::it knowledge::sys_learning_can_be_turned_off_and_the_sections_budget_set
+
+[break] an-observer-names-a-project-by-its-path
+rule: Only a `user` client may name a project by its workspace.
+file: crates/cortex-core/src/knowledge.rs
+in: target
+find: if !is_user(core, client) {
+replace: if false {
+caught-by:
+    cortex-core::it knowledge::sys_a_session_cannot_read_another_projects_store
+
+[break] an-observer-changes-the-profile
+rule: `project/update` is a `user` client's alone.
+file: crates/cortex-core/src/knowledge.rs
+in: update
+find: if !is_user(core, client) {
+replace: if false {
+caught-by:
+    cortex-core::it knowledge::sys_a_session_cannot_read_another_projects_store
+
+[break] the-knowledge-is-read-when-a-session-is-made
+rule: Nothing of the project's knowledge is read until the session is open: the first read is at the first turn's start.
+file: crates/cortex-core/src/assemble.rs
+find: policy.on_command(Arc::new(move || before.before_command()));
+replace: policy.on_command(Arc::new(move || before.before_command())); let _ = cortex_agent::ProfileSource::section(&**knowledge);
+caught-by:
+    cortex-core::it knowledge::the_knowledge_is_not_touched_until_the_session_is_open
+
+[break] a-command-that-could-not-say-what-it-changed-changed-nothing
+rule: No account of a command's changes is an account that it may have changed something.
+file: crates/cortex-core/src/checkpoints.rs
+in: observed_run
+find: changes.is_none_or(
+replace: changes.is_some_and(
+caught-by:
+    cortex-core checkpoints::tests::a_finished_command_is_read_for_the_observer_from_its_payload
+
+[break] a-command-that-was-stopped-is-a-result
+rule: A command that timed out, was interrupted or left something running is neither a success nor a failure.
+file: crates/cortex-core/src/checkpoints.rs
+in: observed_run
+find: _ if cut_short => cortex_knowledge::Ending::Other
+replace: _ if false => cortex_knowledge::Ending::Other
+caught-by:
+    cortex-core checkpoints::tests::a_finished_command_is_read_for_the_observer_from_its_payload
+
+[break] a-project-turns-learning-on
+rule: `project.learn` is the user's alone.
+file: crates/cortex-config/src/schema/sections.rs
+find: [UserOnly, Restart] pub learn
+replace: [Preference, Restart] pub learn
+caught-by:
+    cortex-config::it trust::every_key_has_a_trust_class
+
