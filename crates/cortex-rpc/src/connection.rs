@@ -160,13 +160,44 @@ pub enum Ended {
 struct Budget {
     /// Requests read and not yet answered on the wire.
     requests: usize,
-    /// The bytes of their lines.
+    /// The bytes of their lines, or of their results once larger.
     bytes: usize,
     /// Of those, the ones still running in the core.
     running: usize,
     /// Answers the reader gave at once (a refusal, an error for a line that
-    /// is not a request) that are not yet written.
+    /// is not a request, `initialize`, `shutdown`) that are not yet written.
     refusals: usize,
+}
+
+impl Budget {
+    /// Takes a request of `bytes` if it fits under `most` requests and
+    /// `most_bytes`.
+    fn take_request(&mut self, bytes: usize, most: usize, most_bytes: usize) -> bool {
+        let fits = self.requests < most && self.bytes.saturating_add(bytes) <= most_bytes;
+        if fits {
+            self.requests += 1;
+            self.bytes += bytes;
+            self.running += 1;
+        }
+        fits
+    }
+
+    /// A request of `bytes` has its result, of `length` bytes: what it
+    /// counts from now on, which writing it gives back.
+    fn result(&mut self, bytes: usize, length: usize) -> usize {
+        let more = length.saturating_sub(bytes);
+        self.bytes += more;
+        bytes + more
+    }
+
+    /// Takes an answer given outside the lane, if fewer than `most` wait.
+    fn take_refusal(&mut self, most: usize) -> bool {
+        if self.refusals >= most.max(1) {
+            return false;
+        }
+        self.refusals += 1;
+        true
+    }
 }
 
 /// A line ready to be written, and what it frees once it is.
@@ -240,9 +271,7 @@ impl Shared {
             // before they pile up.
             let frees = match frees {
                 Frees::Request(bytes) => {
-                    let more = line.len().saturating_sub(bytes);
-                    lock(&self.budget).bytes += more;
-                    Frees::Request(bytes + more)
+                    Frees::Request(lock(&self.budget).result(bytes, line.len()))
                 }
                 other => other,
             };
@@ -274,12 +303,7 @@ impl Shared {
     /// unread as requests may run: it sends and does not read.
     #[must_use]
     fn take_refusal(&self) -> bool {
-        let mut budget = lock(&self.budget);
-        if budget.refusals >= self.options.max_requests.max(1) {
-            return false;
-        }
-        budget.refusals += 1;
-        true
+        lock(&self.budget).take_refusal(self.options.max_requests)
     }
 
     /// Whether the client is near a bound, so that the reader lets the
@@ -648,18 +672,11 @@ impl Connection {
             )),
             Op::Shutdown(params) => self.shutdown(id, params, ending).await,
             op => {
-                let taken = {
-                    let mut budget = lock(&self.shared.budget);
-                    let fits = budget.requests < self.shared.options.max_requests
-                        && budget.bytes.saturating_add(bytes)
-                            <= self.shared.options.max_request_bytes;
-                    if fits {
-                        budget.requests += 1;
-                        budget.bytes += bytes;
-                        budget.running += 1;
-                    }
-                    fits
-                };
+                let taken = lock(&self.shared.budget).take_request(
+                    bytes,
+                    self.shared.options.max_requests,
+                    self.shared.options.max_request_bytes,
+                );
                 if !taken {
                     return self.refused(self.shared.refuse_with(
                         id,
@@ -911,5 +928,49 @@ async fn send(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A request fits under both bounds, or is refused; a result larger
+    /// than its request counts by its own size from then on, so the next
+    /// request is refused while it waits; writing it gives back all of it.
+    #[test]
+    fn the_budget_counts_requests_and_their_results_by_size() {
+        let mut budget = Budget::default();
+        assert!(budget.take_request(100, 4, 1000));
+        assert!(budget.take_request(100, 4, 1000));
+        assert!(!budget.take_request(900, 4, 1000), "past the bytes");
+        let counted = budget.result(100, 700);
+        assert_eq!(counted, 700);
+        assert_eq!(budget.bytes, 800);
+        assert!(
+            !budget.take_request(300, 4, 1000),
+            "the result's size counts"
+        );
+        assert_eq!(
+            budget.result(100, 50),
+            100,
+            "a small result counts its request"
+        );
+        assert!(budget.take_request(100, 4, 1000));
+        assert!(budget.take_request(100, 4, 1000));
+        assert!(!budget.take_request(0, 4, 1000), "past the count");
+    }
+
+    /// Answers given outside the lane are counted up to the bound, at least
+    /// one.
+    #[test]
+    fn refusals_are_counted_up_to_their_bound() {
+        let mut budget = Budget::default();
+        assert!(budget.take_refusal(2));
+        assert!(budget.take_refusal(2));
+        assert!(!budget.take_refusal(2));
+        let mut none = Budget::default();
+        assert!(none.take_refusal(0));
+        assert!(!none.take_refusal(0));
     }
 }

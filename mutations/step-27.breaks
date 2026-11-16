@@ -73,19 +73,21 @@ caught-by:
 [break] a-request-past-the-budget-is-run
 rule: A request past the connection's budget is refused `overloaded` and not run, so what a client may hold is bounded.
 file: crates/cortex-rpc/src/connection.rs
-in: request
-find: let fits = budget.requests < self.shared.options.max_requests
-replace: let fits = budget.requests < usize::MAX
+in: Budget::take_request
+find: let fits = self.requests < most && self.bytes.saturating_add(bytes) <= most_bytes;
+replace: let fits = self.bytes.saturating_add(bytes) <= most_bytes;
 caught-by:
+    cortex-rpc connection::tests::the_budget_counts_requests_and_their_results_by_size
     cortex-rpc::it wire::a_client_that_floods_and_reads_nothing_is_closed
 
 [break] refusals-are-held-without-end
 rule: A client with more refusals unread than requests may run is closed: it sends and does not read.
 file: crates/cortex-rpc/src/connection.rs
-in: refuse
-find: if budget.refusals >= self.options.max_requests.max(1) {
-replace: if budget.refusals >= usize::MAX {
+in: Budget::take_refusal
+find: if self.refusals >= most.max(1) {
+replace: if self.refusals >= usize::MAX {
 caught-by:
+    cortex-rpc connection::tests::refusals_are_counted_up_to_their_bound
     cortex-rpc::it wire::a_client_that_floods_and_reads_nothing_is_closed
 
 [break] a-client-that-takes-nothing-is-never-closed
@@ -238,11 +240,11 @@ caught-by:
 [break] a-result-counts-only-its-request
 rule: A result counts against the budget by its own size once it is larger than its request's line.
 file: crates/cortex-rpc/src/connection.rs
-in: Shared::answered
-find: let more = line.len().saturating_sub(bytes);
+in: Budget::result
+find: let more = length.saturating_sub(bytes);
 replace: let more = 0;
 caught-by:
-    cortex-rpc::it wire::a_result_counts_against_the_budget_by_its_own_size
+    cortex-rpc connection::tests::the_budget_counts_requests_and_their_results_by_size
 
 [break] the-requests-after-a-shutdown-go-unanswered
 rule: The requests read with a `shutdown`, after it, are answered `shutting_down`.

@@ -159,6 +159,19 @@ pub mod anthropic {
         ServerReply::sse().send(body(&events))
     }
 
+    /// The model says `pieces` and ends its turn, once `held` opens: the
+    /// response begins at once and marks `arrived`, then waits.
+    #[must_use]
+    pub fn held(pieces: &[&str], arrived: &crate::Gate, held: &crate::Gate) -> ServerReply {
+        let mut events = vec![start()];
+        events.extend(text_block(0, pieces));
+        events.extend(end("end_turn"));
+        ServerReply::sse()
+            .mark(arrived)
+            .wait(held)
+            .send(body(&events))
+    }
+
     /// The model begins to say `piece` and then sends nothing more, until
     /// the request is given up.
     #[must_use]
@@ -229,6 +242,9 @@ pub enum Step {
     Until(&'static str),
     /// Opens a gate a scripted reply waits on: the model goes on.
     Open(crate::Gate),
+    /// Waits until a scripted reply has marked a gate: the model's request
+    /// has reached the server.
+    Reached(crate::Gate),
 }
 
 impl std::fmt::Debug for Step {
@@ -240,6 +256,7 @@ impl std::fmt::Debug for Step {
             Self::Answer(_) => f.write_str("Answer"),
             Self::Until(event) => write!(f, "Until({event})"),
             Self::Open(_) => f.write_str("Open"),
+            Self::Reached(_) => f.write_str("Reached"),
         }
     }
 }
@@ -470,18 +487,21 @@ pub fn scenarios() -> Vec<Scenario> {
             ],
         },
         {
-            let held = crate::Gate::new();
+            // The reply begins, and holds before its events until the step
+            // opens it: the steer or the queue comes while the model's
+            // request is under way, never before it is sent.
+            let (arrived, held) = (crate::Gate::new(), crate::Gate::new());
             Scenario {
                 name: "steering a running turn",
                 files: vec![],
                 model: vec![
-                    anthropic::text(&["First."]).hold_until(&held),
+                    anthropic::held(&["First."], &arrived, &held),
                     anthropic::text(&["Also done."]),
                 ],
                 steps: vec![
                     new_session(),
                     prompt("first"),
-                    Step::Until("turn.started"),
+                    Step::Reached(arrived),
                     prompt_with("and this too", cortex_protocol::item::Delivery::Steer),
                     Step::Open(held),
                     Step::Until("session.idle"),
@@ -491,18 +511,21 @@ pub fn scenarios() -> Vec<Scenario> {
             }
         },
         {
-            let held = crate::Gate::new();
+            // The reply begins, and holds before its events until the step
+            // opens it: the steer or the queue comes while the model's
+            // request is under way, never before it is sent.
+            let (arrived, held) = (crate::Gate::new(), crate::Gate::new());
             Scenario {
                 name: "a prompt queued behind a turn",
                 files: vec![],
                 model: vec![
-                    anthropic::text(&["First."]).hold_until(&held),
+                    anthropic::held(&["First."], &arrived, &held),
                     anthropic::text(&["Second."]),
                 ],
                 steps: vec![
                     new_session(),
                     prompt("first"),
-                    Step::Until("turn.started"),
+                    Step::Reached(arrived),
                     prompt_with("then this", cortex_protocol::item::Delivery::Queue),
                     Step::Open(held),
                     Step::Until("session.idle"),
@@ -760,6 +783,11 @@ pub fn run(
                 keep(&mut ctx, &mut kept, method, result);
             }
             Step::Open(gate) => gate.open(),
+            Step::Reached(gate) => assert!(
+                gate.wait(std::time::Duration::from_secs(30)),
+                "{}: the model's request never reached the server",
+                scenario.name
+            ),
             Step::Answer(make) => loop {
                 if let Some((_, Some((id, request)))) = take(carrier, &mut ctx, &mut kept) {
                     carrier.respond(id, make(&request));
