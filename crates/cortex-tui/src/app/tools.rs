@@ -182,8 +182,9 @@ fn result_text(result: &ToolResultItem) -> String {
 }
 
 /// A unified diff's lines, numbered as the gutter shows them: a removed
-/// line by the old file's number, any other by the new one's. The changed
-/// middle of a removed line and the added line after it is emphasised.
+/// line by the old file's number, any other by the new one's. Of a removed
+/// line and the added line after it, the whole words that changed are
+/// emphasised (see [`emphasise`]).
 #[must_use]
 pub(crate) fn diff_lines(diff: &str) -> Vec<DiffLine> {
     let mut lines = Vec::new();
@@ -244,6 +245,16 @@ fn hunk_starts(header: &str) -> (u64, u64) {
 
 /// Marks what changed in each removed line followed at once by an added
 /// one: the middle between their common start and common end.
+/// Marks what changed between a removed line and the added line after it
+/// (09-tui, "Diff": changed words are bold; the owner, 2026-11-16). Each
+/// line is cut into tokens: a word (a run of letters, digits and `_`, so
+/// that `foo_bar` is one), a run of spaces, or any other single character.
+/// The tokens the two lines do not share, in order, are the change; of
+/// those, the words are emphasised, whole, and the punctuation and spaces
+/// around them stay plain. A line whose change holds no word (a comma
+/// added) has its changed punctuation emphasised, so that the change still
+/// shows; a change of spaces alone has nothing to emphasise, and is shown
+/// by the line's sign and tint.
 fn emphasise(lines: &mut [DiffLine]) {
     for at in 1..lines.len() {
         if lines[at - 1].change != Change::Removed || lines[at].change != Change::Added {
@@ -253,36 +264,128 @@ fn emphasise(lines: &mut [DiffLine]) {
             // Several lines changed together: no one pairing is right.
             continue;
         }
-        let (removed, added) = (&lines[at - 1].text, &lines[at].text);
-        let prefix = common_prefix(removed, added);
-        let suffix = common_suffix(&removed[prefix..], &added[prefix..]);
-        let removed_end = removed.len() - suffix;
-        let added_end = added.len() - suffix;
-        if prefix < removed_end {
-            lines[at - 1].emphasis = std::iter::once(prefix..removed_end).collect();
-        }
-        if prefix < added_end {
-            lines[at].emphasis = std::iter::once(prefix..added_end).collect();
-        }
+        let removed = tokens(&lines[at - 1].text);
+        let added = tokens(&lines[at].text);
+        let (removed_kept, added_kept) =
+            shared(&lines[at - 1].text, &removed, &lines[at].text, &added);
+        lines[at - 1].emphasis = changed(&removed, &removed_kept);
+        lines[at].emphasis = changed(&added, &added_kept);
     }
 }
 
-fn common_prefix(a: &str, b: &str) -> usize {
-    a.char_indices()
-        .zip(b.chars())
-        .find(|((_, x), y)| x != y)
-        .map_or_else(|| a.len().min(b.len()), |((at, _), _)| at)
+/// What a token is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Piece {
+    /// Letters, digits and `_`.
+    Word,
+    /// A run of spaces.
+    Space,
+    /// Any other single character.
+    Mark,
 }
 
-fn common_suffix(a: &str, b: &str) -> usize {
-    let mut length = 0;
-    for (x, y) in a.chars().rev().zip(b.chars().rev()) {
-        if x != y {
-            break;
+/// `text`'s tokens, with their byte ranges.
+fn tokens(text: &str) -> Vec<(std::ops::Range<usize>, Piece)> {
+    let kind = |c: char| {
+        if c.is_alphanumeric() || c == '_' {
+            Piece::Word
+        } else if c.is_whitespace() {
+            Piece::Space
+        } else {
+            Piece::Mark
         }
-        length += x.len_utf8();
+    };
+    let mut out: Vec<(std::ops::Range<usize>, Piece)> = Vec::new();
+    for (at, c) in text.char_indices() {
+        let piece = kind(c);
+        let end = at + c.len_utf8();
+        match out.last_mut() {
+            Some((range, last)) if *last == piece && piece != Piece::Mark => range.end = end,
+            _ => out.push((at..end, piece)),
+        }
     }
-    length
+    out
+}
+
+/// The most tokens two lines are compared by, the product of their counts:
+/// past it (lines of thousands of tokens) the shared tokens are the common
+/// start and end alone.
+const COMPARED: usize = 250_000;
+
+/// Which tokens of each line the other shares, in order (their longest
+/// common run of tokens, by text).
+fn shared(
+    a_text: &str,
+    a: &[(std::ops::Range<usize>, Piece)],
+    b_text: &str,
+    b: &[(std::ops::Range<usize>, Piece)],
+) -> (Vec<bool>, Vec<bool>) {
+    let same = |i: usize, j: usize| a_text[a[i].0.clone()] == b_text[b[j].0.clone()];
+    let mut a_kept = vec![false; a.len()];
+    let mut b_kept = vec![false; b.len()];
+    if a.len().saturating_mul(b.len()) > COMPARED {
+        let start = (0..a.len().min(b.len()))
+            .take_while(|&i| same(i, i))
+            .count();
+        let end = (0..a.len().min(b.len()) - start)
+            .take_while(|&k| same(a.len() - 1 - k, b.len() - 1 - k))
+            .count();
+        for i in (0..start).chain(a.len() - end..a.len()) {
+            a_kept[i] = true;
+        }
+        for j in (0..start).chain(b.len() - end..b.len()) {
+            b_kept[j] = true;
+        }
+        return (a_kept, b_kept);
+    }
+    // lengths[i][j]: the longest common run of a[i..] and b[j..].
+    let width = b.len() + 1;
+    let mut lengths = vec![0u32; (a.len() + 1) * width];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            lengths[i * width + j] = if same(i, j) {
+                lengths[(i + 1) * width + j + 1] + 1
+            } else {
+                lengths[(i + 1) * width + j].max(lengths[i * width + j + 1])
+            };
+        }
+    }
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if same(i, j) {
+            a_kept[i] = true;
+            b_kept[j] = true;
+            i += 1;
+            j += 1;
+        } else if lengths[(i + 1) * width + j] >= lengths[i * width + j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    (a_kept, b_kept)
+}
+
+/// The ranges to emphasise: the changed words, or, when the change holds
+/// none, its changed punctuation.
+fn changed(
+    tokens: &[(std::ops::Range<usize>, Piece)],
+    kept: &[bool],
+) -> Vec<std::ops::Range<usize>> {
+    let of = |wanted: Piece| -> Vec<std::ops::Range<usize>> {
+        tokens
+            .iter()
+            .zip(kept)
+            .filter(|((_, piece), kept)| !**kept && *piece == wanted)
+            .map(|((range, _), _)| range.clone())
+            .collect()
+    };
+    let words = of(Piece::Word);
+    if words.is_empty() {
+        of(Piece::Mark)
+    } else {
+        words
+    }
 }
 
 #[cfg(test)]
@@ -418,6 +521,52 @@ mod tests {
             lines[2].emphasis,
             std::iter::once(11..12).collect::<Vec<_>>()
         );
+    }
+
+    /// The emphasis of a replaced line's pair, as text.
+    fn bold(removed: &str, added: &str) -> (Vec<String>, Vec<String>) {
+        let lines = diff_lines(&format!("@@ -1 +1 @@\n-{removed}\n+{added}"));
+        let of = |line: &DiffLine| {
+            line.emphasis
+                .iter()
+                .map(|range| line.text[range.clone()].to_owned())
+                .collect()
+        };
+        (of(&lines[0]), of(&lines[1]))
+    }
+
+    /// The owner's rule (2026-11-16): whole changed words are bold, and the
+    /// punctuation and spaces around them stay plain.
+    #[test]
+    fn whole_changed_words_are_bold_and_what_is_around_them_plain() {
+        // Screen 2a's line: a word added after a comma.
+        assert_eq!(
+            bold(
+                "        with: { components: rustfmt }",
+                "        with: { components: rustfmt, clippy }"
+            ),
+            (Vec::new(), vec!["clippy".to_owned()])
+        );
+        // A change inside a word: the word, whole.
+        assert_eq!(
+            bold("let foo_bar = 1;", "let foo_baz = 1;"),
+            (vec!["foo_bar".to_owned()], vec!["foo_baz".to_owned()])
+        );
+        // Several words changed: each changed one, and none that stayed.
+        assert_eq!(
+            bold("let total = a + b;", "let sum = a + c;"),
+            (
+                vec!["total".to_owned(), "b".to_owned()],
+                vec!["sum".to_owned(), "c".to_owned()]
+            )
+        );
+        // A change of punctuation alone still shows: its character is bold.
+        assert_eq!(
+            bold("call(a b)", "call(a, b)"),
+            (Vec::new(), vec![",".to_owned()])
+        );
+        // A change of spaces alone has nothing to make bold.
+        assert_eq!(bold("a  b", "a b"), (Vec::new(), Vec::new()));
     }
 
     #[test]

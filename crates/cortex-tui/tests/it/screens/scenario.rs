@@ -526,7 +526,7 @@ fn ci_diff() -> Vec<DiffLine> {
             30,
             Change::Added,
             "        with: { components: rustfmt, clippy }",
-            std::iter::once(35..43).collect(),
+            std::iter::once(37..43).collect(),
         ),
         line(
             31,
