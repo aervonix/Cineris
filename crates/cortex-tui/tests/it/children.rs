@@ -30,6 +30,8 @@ const EDITOR: Role = Role::new("cxtui-editor=");
 pub(crate) const WAITING: &str = "waiting for a key";
 /// What the application prints when it has no terminal after the editor.
 pub(crate) const LOST: &str = "the application has no terminal";
+/// What the application prints when a resize reached it after the editor.
+pub(crate) const RESIZED: &str = "the application was resized";
 /// What the editor prints while it waits for a line.
 pub(crate) const EDITOR_WAITING: &str = "editor waiting for a line";
 /// The variable the shell gives the application, and through it the
@@ -91,10 +93,9 @@ fn app(scenario: &str) -> ! {
     let temp = scratch.join("temp");
     std::fs::create_dir_all(&temp).expect("the temporary folder");
     let mut terminal = Some(Terminal::enter(Overrides::default()).expect("enter the terminal"));
-    if scenario == "signal" {
-        // As the application does: a signal is its own to end.
-        terminal.as_mut().unwrap().hand_signals_over();
-    }
+    // As the application does: a signal is its own to end, and its
+    // handlers stay while the editor has the terminal.
+    terminal.as_mut().unwrap().hand_signals_over();
     let (cols, rows) = terminal.as_ref().unwrap().size().expect("the size");
     let mut inline = Inline::new(cols, rows);
     draw(&mut terminal, &mut inline, &format!("app: {scenario}"));
@@ -165,6 +166,11 @@ fn app(scenario: &str) -> ! {
             Some(Event::Key(key)) => {
                 report("key", &format!("{:?}", key.code));
                 break;
+            }
+            // The resize handler is in place again after the editor.
+            Some(Event::Resize { .. }) => {
+                report("resized", "yes");
+                write_terminal(&format!("\r\n{RESIZED}\r\n"));
             }
             _ => continue,
         }

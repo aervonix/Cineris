@@ -70,25 +70,53 @@ pub(crate) fn restore_sequence() -> &'static [u8] {
 /// Where in every restore sequence the erase of the live region begins.
 const ERASE: &[u8] = b"\r\x1b[J";
 
-/// How many rows of the live region are above the cursor, as last drawn:
-/// the emergency restore moves up that many before it erases, so that the
-/// region's top rows (the input box's top border, the text that streamed)
-/// do not stay on the screen (since the review of step 23).
+/// How many rows of the live region are above the cursor once the frame
+/// last handed to the terminal has landed (the presenter says so before it
+/// writes the frame): the emergency restore moves up that many before it
+/// erases, so that the region's top rows (the input box's top border, the
+/// text that streamed) do not stay on the screen (since the review of step
+/// 23).
 static ROWS_ABOVE: AtomicU16 = AtomicU16::new(0);
 
-/// Records how many rows of the live region are above the cursor.
+/// Set while a write to the terminal is under way: the cursor is then
+/// anywhere in the frame, and a restore that interrupts it moves up
+/// nothing; the write sends the restore again once its frame has landed,
+/// when [`ROWS_ABOVE`] is exact.
+static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Records how many rows of the live region will be above the cursor once
+/// the frame about to be written has landed.
 pub(crate) fn set_rows_above(rows: usize) {
     ROWS_ABOVE.store(u16::try_from(rows).unwrap_or(u16::MAX), Ordering::SeqCst);
+}
+
+/// A write to the terminal begins (`true`) or has ended.
+#[cfg_attr(
+    windows,
+    allow(dead_code, reason = "Windows lets a frame finish before its restore")
+)]
+pub(crate) fn set_in_flight(on: bool) {
+    IN_FLIGHT.store(on, Ordering::SeqCst);
+}
+
+/// The rows a restore moves up now: none while a write is under way.
+/// Async-signal-safe: atomic loads.
+pub(crate) fn rows_to_move_up() -> u16 {
+    if IN_FLIGHT.load(Ordering::SeqCst) {
+        0
+    } else {
+        ROWS_ABOVE.load(Ordering::SeqCst)
+    }
 }
 
 /// Room for the longest restore sequence with its move up.
 pub(crate) const RESTORE_MOST: usize = 128;
 
 /// The restore sequence for the terminal's state now, written into
-/// `buffer`: [`restore_sequence`], with the move up to the live region's
-/// first row before its erase. Async-signal-safe: atomic loads, and copies
-/// into a buffer on the caller's stack.
-pub(crate) fn restore(buffer: &mut [u8; RESTORE_MOST]) -> &[u8] {
+/// `buffer`: [`restore_sequence`], with a move up of `rows` before its
+/// erase, to the live region's first row. Async-signal-safe: atomic loads,
+/// and copies into a buffer on the caller's stack.
+pub(crate) fn restore(buffer: &mut [u8; RESTORE_MOST], rows: u16) -> &[u8] {
     fn push(buffer: &mut [u8; RESTORE_MOST], length: &mut usize, bytes: &[u8]) {
         for &byte in bytes {
             if *length < RESTORE_MOST {
@@ -104,7 +132,6 @@ pub(crate) fn restore(buffer: &mut [u8; RESTORE_MOST]) -> &[u8] {
         .unwrap_or(sequence.len());
     let mut length = 0;
     push(buffer, &mut length, &sequence[..at]);
-    let rows = ROWS_ABOVE.load(Ordering::SeqCst);
     if rows > 0 {
         // `ESC [ n A`, its number written out by hand: nothing here may
         // allocate.
@@ -205,10 +232,15 @@ pub(crate) fn hang_up() -> bool {
     hand_over(129) || ended_by().is_some()
 }
 
-/// Whether a signal of exit code `code` is the one a hang-up has already
-/// ended the program for. Async-signal-safe: atomics alone.
+/// Whether a signal of exit code `code` is a hang-up the program is already
+/// ending for: a SIGHUP (or a console's close) after one was handed over,
+/// or after the terminal went away under a read. The kernel and shells send
+/// it more than once (to the session's leader, then to the jobs), and in
+/// either order with the read's end of input, so it is never a second
+/// signal that ends the process at once. Async-signal-safe: atomics alone.
 pub(crate) fn hung_up_already(code: u8) -> bool {
-    code == 129 && HUNG_UP.load(Ordering::SeqCst) && ended_by().is_some()
+    code == 129
+        && (ended_by() == Some(129) || (HUNG_UP.load(Ordering::SeqCst) && ended_by().is_some()))
 }
 
 /// The exit code of the signal handed over, once one has come.
@@ -264,15 +296,13 @@ mod tests {
     #[test]
     fn the_restore_moves_up_to_the_live_regions_first_row_before_it_erases() {
         let mut buffer = [0u8; RESTORE_MOST];
-        set_rows_above(0);
-        assert_eq!(restore(&mut buffer), restore_sequence());
+        assert_eq!(restore(&mut buffer, 0), restore_sequence());
         for (rows, up) in [
             (1, &b"\x1b[1A"[..]),
             (12, b"\x1b[12A"),
             (40_000, b"\x1b[40000A"),
         ] {
-            set_rows_above(rows);
-            let sequence = restore(&mut buffer).to_vec();
+            let sequence = restore(&mut buffer, rows).to_vec();
             let at = sequence
                 .windows(ERASE.len())
                 .position(|window| window == ERASE)
@@ -282,6 +312,19 @@ mod tests {
             without.extend_from_slice(&sequence[at..]);
             assert_eq!(without, restore_sequence(), "{rows}");
         }
+    }
+
+    /// While a frame is being written the cursor is anywhere in it: a
+    /// restore then moves up nothing, and the write sends it again with the
+    /// frame's own count once it has landed.
+    #[test]
+    fn a_restore_during_a_write_moves_up_nothing() {
+        set_rows_above(3);
+        assert_eq!(rows_to_move_up(), 3);
+        set_in_flight(true);
+        assert_eq!(rows_to_move_up(), 0);
+        set_in_flight(false);
+        assert_eq!(rows_to_move_up(), 3);
         set_rows_above(0);
     }
 }

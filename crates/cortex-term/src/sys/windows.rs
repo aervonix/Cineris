@@ -208,7 +208,7 @@ pub(crate) fn emergency() {
         return;
     }
     let mut buffer = [0u8; RESTORE_MOST];
-    let _ = write_all(restore(&mut buffer));
+    let _ = write_all(restore(&mut buffer, super::rows_to_move_up()));
     super::set_rows_above(0);
     restore_modes();
 }
@@ -553,6 +553,13 @@ fn gone(error: io::Error) -> io::Result<Ready> {
                 if ended != 0 {
                     // SAFETY: the event lives for the life of the process.
                     unsafe { WaitForSingleObject(ended as HANDLE, 3000) };
+                } else {
+                    // No event to wait on: the watchdog's time all the same.
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "the watchdog's own thread waits its time out"
+                    )]
+                    std::thread::sleep(Duration::from_secs(3));
                 }
                 if !super::has_ended() {
                     #[expect(clippy::exit, reason = "the watchdog ends a program that did not")]

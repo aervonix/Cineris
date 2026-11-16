@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use cortex_testkit::pty::Session;
 
-use crate::children::{EDITOR_WAITING, LOST, NOT_RESTORED, RESTORED, SHELL, WAITING, this_binary};
+use crate::children::{
+    EDITOR_WAITING, LOST, NOT_RESTORED, RESIZED, RESTORED, SHELL, WAITING, this_binary,
+};
 
 /// A bound on every wait, which only a broken test reaches.
 const LIMIT: Duration = Duration::from_secs(20);
@@ -78,6 +80,15 @@ fn run(scenario: &str, test: &str, editor: &Editor) -> String {
             session.screen().keyboard()
         );
     }
+    // The terminal's handlers are all in place again: a resize reaches the
+    // application (the review of step 23: the terminal entered again with
+    // the hand-off's handlers kept installs the rest).
+    if cfg!(unix) {
+        session.resize(110, 30);
+        session.wait_for(LIMIT, "the resize to reach the application", |t| {
+            t.shows(RESIZED)
+        });
+    }
     session.send(b"x");
     session.wait_for(LIMIT, "the shell's verdict", |t| {
         t.shows(RESTORED) || t.shows(NOT_RESTORED)
@@ -89,11 +100,15 @@ fn run(scenario: &str, test: &str, editor: &Editor) -> String {
     );
     session.wait_exit(LIMIT);
     let report = scratch.read_text("report.txt");
+    let resized: &[&str] = if cfg!(unix) { &["resized: yes"] } else { &[] };
     for line in [
         "raw again: yes",
         "key: Char('x')",
         "temporary folder empty: yes",
-    ] {
+    ]
+    .iter()
+    .chain(resized)
+    {
         assert!(
             report.contains(line) || scenario == "nottext" && line.starts_with("temporary"),
             "{scenario}: no `{line}` in\n{report}"

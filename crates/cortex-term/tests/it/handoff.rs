@@ -1,8 +1,8 @@
 //! Signals handed to the program (`Terminal::hand_signals_over`, step 23),
 //! on Unix: the restore erases the whole live region, the watchdog is set
 //! when the first signal is handed over, a second signal ends the process
-//! at once, and the terminal hanging up under a read is SIGHUP's end (the
-//! review of step 23).
+//! at once but a second SIGHUP is the same end, and the terminal going away
+//! under a read is SIGHUP's end (the review of step 23).
 //!
 //! Each case runs in a child of its own in a pseudo-terminal, this test
 //! binary run again: a signal's action is the process's.
@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use cortex_testkit::role::Role;
 
-/// This binary as a child that plays one case: `watchdog` or `second`.
+/// This binary as a child that plays one case: `watchdog`, `second`,
+/// `sighup-twice` or `eof`.
 const HANDOFF: Role = Role::new("cxterm-handoff=");
 
 /// The live region's rows the child draws, the cursor left on the last.
@@ -27,6 +28,24 @@ const ROWS: [&str; 4] = [
 /// What the child says once a signal was handed to it.
 #[cfg(unix)]
 const HANDED: &str = "handed over";
+
+/// The variable that names the file a child with no terminal left says
+/// what happened in.
+#[cfg(unix)]
+const REPORT: &str = "CXTERM_HANDOFF_REPORT";
+
+/// Says `line` in the report file the test named.
+#[cfg(unix)]
+fn report(line: &str) {
+    use std::io::Write as _;
+    let path = std::env::var_os(REPORT).expect("the report's path");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .expect("the report");
+    writeln!(file, "{line}").expect("write the report");
+}
 
 /// Plays the case this process was started for, if it was.
 pub(crate) fn enter() {
@@ -68,14 +87,34 @@ fn play(case: &str) {
         .expect("draw");
     // Waits for the signal, as the application's loop does.
     let code = loop {
-        let _ = terminal.next(None);
+        if let Err(error) = terminal.next(None) {
+            // The terminal went away, and that was not taken as SIGHUP's end.
+            report(&format!("a read failed: {error}"));
+            #[expect(clippy::exit, reason = "the child ends when it has said so")]
+            std::process::exit(0);
+        }
         if let Some(code) = terminal.ending() {
             break code;
         }
     };
     let left = cortex_term::pty::watchdog_left();
+    if case == "eof" {
+        // The terminal is gone: the report says it.
+        report(&format!("{HANDED} {code}, the watchdog at {left} s"));
+        drop(terminal);
+        cortex_term::signal_ended();
+        return;
+    }
     write_terminal(&format!("{HANDED} {code}, the watchdog at {left} s\r\n"));
     match case {
+        // A second SIGHUP, as the kernel and a shell send one after the
+        // other when a terminal closes: the same end, which goes on.
+        "sighup-twice" => {
+            cortex_term::pty::raise_hangup().expect("raise SIGHUP");
+            write_terminal("survived the second SIGHUP\r\n");
+            drop(terminal);
+            cortex_term::signal_ended();
+        }
         // Ends itself in time: the watchdog is put off for good.
         "watchdog" => {
             drop(terminal);
@@ -160,5 +199,76 @@ fn sys_a_second_signal_ends_the_process_at_once() {
         status.signal(),
         Some(15),
         "the second SIGTERM did not end the process by its own action: {status}"
+    );
+}
+
+/// A SIGHUP after a SIGHUP handed over is the same end, not a second
+/// signal: the kernel sends one to the session's leader and its jobs, and a
+/// shell resends one, when a terminal closes. The program goes on ending.
+#[cfg(unix)]
+#[test]
+fn sys_a_second_sighup_is_the_same_end() {
+    let mut session = start("sighup-twice");
+    kill(&session, "HUP");
+    let status = session.wait_exit(LIMIT);
+    let screen = session.screen();
+    assert!(
+        screen.shows("handed over 129") && screen.shows("survived the second SIGHUP"),
+        "{status}\n{}",
+        screen.dump()
+    );
+    assert!(status.success(), "{status}");
+}
+
+/// The terminal going away under a read, with no signal at all (the
+/// program does not have it as its controlling terminal, so the kernel
+/// sends it none): its end of input is SIGHUP's end, exit code 129, with
+/// the watchdog set.
+#[cfg(unix)]
+#[test]
+fn sys_a_terminal_that_goes_away_under_a_read_is_sighups_end() {
+    use std::io::Read as _;
+
+    let scratch = cortex_testkit::Scratch::outside("cortex-term-handoff", "eof");
+    let report = scratch.path().join("report.txt");
+    let pty = cortex_term::pty::Pty::spawn_without_control(
+        &super::this_binary(),
+        &HANDOFF.arguments("eof"),
+        &[(REPORT.to_owned(), report.display().to_string())],
+        80,
+        24,
+    )
+    .expect("start the child");
+    // Reads until the live region is drawn, then lets go of this end.
+    let mut reader = pty.reader().expect("the output");
+    let (seen, drawn) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut all = Vec::new();
+        let mut buffer = [0u8; 4096];
+        while let Ok(count) = reader.read(&mut buffer) {
+            if count == 0 {
+                break;
+            }
+            all.extend_from_slice(&buffer[..count]);
+            if String::from_utf8_lossy(&all).contains(ROWS[3]) {
+                break;
+            }
+        }
+        let _ = seen.send(());
+    });
+    drawn.recv_timeout(LIMIT).expect("the live region");
+    drop(pty);
+    let deadline = std::time::Instant::now() + LIMIT;
+    let said = loop {
+        let text = std::fs::read_to_string(&report).unwrap_or_default();
+        if !text.is_empty() || std::time::Instant::now() >= deadline {
+            break text;
+        }
+        std::thread::yield_now();
+    };
+    assert!(
+        said.contains("handed over 129, the watchdog at 3 s")
+            || said.contains("handed over 129, the watchdog at 2 s"),
+        "{said}"
     );
 }

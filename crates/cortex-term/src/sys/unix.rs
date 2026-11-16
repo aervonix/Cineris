@@ -181,11 +181,15 @@ pub(crate) fn emergency() {
         return;
     }
     let mut buffer = [0u8; RESTORE_MOST];
-    let bytes = restore(&mut buffer);
+    let rows = super::rows_to_move_up();
+    let bytes = restore(&mut buffer, rows);
     // SAFETY: the pointer and length are those of a buffer on this stack.
     unsafe { libc::write(STDOUT, bytes.as_ptr().cast(), bytes.len()) };
-    // The live region is erased: a restore sent again moves up no more.
-    super::set_rows_above(0);
+    // The live region is erased, unless a frame was cut short: its write
+    // sends the restore again, with the frame's count, once it has landed.
+    if rows > 0 {
+        super::set_rows_above(0);
+    }
     if let Some(original) = ORIGINAL.get() {
         // SAFETY: `original` is the complete `termios` the terminal had.
         unsafe { libc::tcsetattr(STDIN, libc::TCSADRAIN, original) };
@@ -561,12 +565,16 @@ pub(crate) fn write(bytes: &[u8]) -> io::Result<()> {
     if !ACTIVE.load(Ordering::SeqCst) {
         return Err(io::Error::other("the terminal has been put back"));
     }
+    super::set_in_flight(true);
     let written = write_all(bytes);
-    // Put back while this frame was being written, from another thread:
-    // the frame may have landed after the restore, so it goes again.
+    super::set_in_flight(false);
+    // Put back while this frame was being written, by a signal on this
+    // thread or a panic on another: the frame may have landed after the
+    // restore, so it goes again, now that the frame's rows are known.
     if !ACTIVE.load(Ordering::SeqCst) {
         let mut buffer = [0u8; RESTORE_MOST];
-        let _ = write_all(restore(&mut buffer));
+        let _ = write_all(restore(&mut buffer, super::rows_to_move_up()));
+        super::set_rows_above(0);
     }
     written
 }
@@ -756,6 +764,20 @@ pub(crate) mod pty {
             cols: u16,
             rows: u16,
         ) -> io::Result<Self> {
+            Self::spawn_as(program, arguments, env, (cols, rows), true)
+        }
+
+        /// As [`spawn`](Self::spawn); `controlling`: the pseudo-terminal is
+        /// the program's controlling terminal, in a session it leads. Without
+        /// it the program reads and writes the terminal and is sent no
+        /// signal when it closes: its reads alone say so.
+        pub(crate) fn spawn_as(
+            program: &str,
+            arguments: &[String],
+            env: &[(String, String)],
+            (cols, rows): (u16, u16),
+            controlling: bool,
+        ) -> io::Result<Self> {
             // SAFETY: `posix_openpt` returns a new descriptor or -1.
             let master = check(unsafe {
                 libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC)
@@ -803,9 +825,11 @@ pub(crate) mod pty {
             // pseudo-terminal (its standard input by now) as its controlling
             // terminal.
             unsafe {
-                command.pre_exec(|| {
+                command.pre_exec(move || {
                     check(libc::setsid())?;
-                    check(libc::ioctl(0, libc::TIOCSCTTY, 0))?;
+                    if controlling {
+                        check(libc::ioctl(0, libc::TIOCSCTTY, 0))?;
+                    }
                     Ok(())
                 });
             }
@@ -983,6 +1007,14 @@ pub(crate) mod pty {
     pub(crate) fn raise_interrupt() -> io::Result<()> {
         // SAFETY: `raise` reads nothing but its argument.
         check(unsafe { libc::raise(libc::SIGINT) })?;
+        Ok(())
+    }
+
+    /// Raises SIGHUP on the calling thread: its handler has run when this
+    /// returns.
+    pub(crate) fn raise_hangup() -> io::Result<()> {
+        // SAFETY: `raise` reads nothing but its argument.
+        check(unsafe { libc::raise(libc::SIGHUP) })?;
         Ok(())
     }
 }

@@ -238,6 +238,9 @@ fn a_key_soon_after_a_paste_does_not_answer() {
 fn a_key_inside_the_grace_goes_to_the_editor() {
     let now = Instant::now();
     let (mut app, link) = approval_up(now);
+    // A frame inside the grace, as a spinner draws them: still no answers.
+    let _ = app.frame(ms(now, 200));
+    app.drawn(ms(now, 200));
     press(&mut app, "y", ms(now, 200));
     assert!(answers(&link).is_empty());
     assert_eq!(app.input().editor().expanded(), "y");
@@ -481,7 +484,8 @@ fn a_key_soon_after_a_paste_does_not_trust_the_project() {
         &TermEvent::Paste("yesterday's build broke: ".to_owned()),
         pasted,
     );
-    press(&mut app, "y", pasted + Duration::from_millis(100));
+    // Past the pause since the paste, inside the quiet after it.
+    press(&mut app, "y", pasted + Duration::from_millis(400));
     assert!(responses(&link).is_empty(), "a key after a paste trusted");
 }
 

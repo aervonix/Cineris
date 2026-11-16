@@ -407,3 +407,22 @@ fn a_flush_within_a_limit_gives_up_on_a_stuck_writer() {
     let text = std::fs::read_to_string(rig.dir.join(FILE_NAME)).unwrap();
     assert!(text.contains("a line"), "{text}");
 }
+
+/// Finishing the log within a limit leaves no flush after it that waits
+/// for a stuck writer: the handle's own drop is never run.
+#[test]
+fn finishing_the_log_within_a_limit_never_waits_for_a_stuck_writer() {
+    let mut rig = Rig::new("finish_within");
+    let (subscriber, handle) = start(rig.options.take().unwrap()).unwrap();
+    let hold = crate::hook::Hold::new(super::file::WRITING_A_BATCH);
+    tracing::subscriber::with_default(subscriber, || tracing::warn!("a line"));
+    assert!(
+        hold.wait_reached(Duration::from_secs(5)),
+        "the writer never took the line"
+    );
+    assert!(!std::sync::Arc::new(handle).finish_within(Duration::ZERO));
+    // Had a flush waited on, the writer would have been held to the
+    // hold's bound and let go by it.
+    assert_eq!(hold.timed_out(), 0, "something waited for the stuck writer");
+    hold.release();
+}

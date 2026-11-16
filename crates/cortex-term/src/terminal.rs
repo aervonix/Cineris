@@ -418,7 +418,10 @@ impl<D: Device> Terminal<D> {
         self.alternate = on;
         // The emergency restore's record says on before the screen is, and
         // off only once it is not: a signal in between finds it on and
-        // leaves it, which on the main screen does nothing.
+        // leaves it. On the main screen that is not quite nothing (xterm
+        // and VTE move the cursor to the position saved last), but it never
+        // leaves the terminal on the alternate screen, which the other
+        // order could.
         if on {
             sys::set_alternate(true);
             self.device.write(ALTERNATE_ON)
@@ -834,6 +837,28 @@ mod tests {
             steps: steps.iter().map(|(r, b)| (*r, b.to_vec())).collect(),
             base: Some(Instant::now()),
             ..Script::default()
+        }
+    }
+
+    /// A stop's restore left the alternate screen; continued, the terminal
+    /// turns it on again while the program still has it on (the viewer),
+    /// and not otherwise (the review of step 23, step 25's note).
+    #[test]
+    fn a_resume_enters_the_alternate_screen_again_if_it_was_on() {
+        for on in [true, false] {
+            let device = script(&[(Ready::Resumed, b"")]);
+            let written = Arc::clone(&device.written);
+            let mut terminal = Terminal::with_device(device, caps()).unwrap();
+            terminal.alternate(on).unwrap();
+            written.lock().unwrap().clear();
+            assert_eq!(terminal.next(None).unwrap(), Some(Event::Resumed));
+            let again = written.lock().unwrap().clone();
+            assert_eq!(
+                again.windows(ALTERNATE_ON.len()).any(|w| w == ALTERNATE_ON),
+                on,
+                "{on}: {again:?}"
+            );
+            terminal.alternate(false).unwrap();
         }
     }
 
