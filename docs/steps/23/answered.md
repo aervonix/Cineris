@@ -92,7 +92,7 @@ So a key's frame waits for the key's own handling, at most one batch of 64 event
 - **`item.resync`:** the item's deltas stop until it completes; the completed item's text past what arrived is then added, so an answer never loses its middle.
 - **A resumed session's history** is read with `session/read` and drawn into the scrollback; a live event with a `seq` at or below the read's `seq` is dropped.
 
-**Dialogs take only keys meant for them.** A dialog that appears while the person is typing (the trust question arrives just after the first frame; an approval while a steering message is being written) must not take that typing as its answer. A dialog takes keys read after its first frame was written and 300 ms more (a comparison of the key's time with the frame's, no timer); earlier keys go on into the editor, where they were going. A paste never answers a dialog.
+**Dialogs take only keys meant for them.** A dialog that appears while the person is typing (the trust question arrives just after the first frame; an approval while a steering message is being written) must not take that typing as its answer. A dialog takes keys read after its first frame was written and 300 ms more (a comparison of the key's time with the frame's, no timer); earlier keys go on into the editor, where they were going. A paste never answers a dialog. *As built (after PR 1's review):* the answers are drawn only once the grace has passed, the loop woken for that, and a key also needs 300 ms since the key before it, so that typing that carries on through the grace never answers. A first version kept the grace only for a dialog drawn while someone was typing; the review found that weaker than this design, and it was put back.
 
 ### 3. The question and trust dialogs
 

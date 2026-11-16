@@ -403,3 +403,31 @@ fn ctrl_t_opens_and_closes_the_running_rounds_box() {
     let measure = rig.calls()[0].measure.clone();
     assert_eq!(measure, Measure::None);
 }
+
+/// Output that streamed in part, its deltas then stopped (`item.resync`):
+/// the box shows the result's own text, which is whole.
+#[test]
+fn a_commands_output_whose_deltas_stopped_is_taken_from_its_result() {
+    let mut rig = Rig::new();
+    rig.started("i_1");
+    rig.call("i_1", "c_1", "shell");
+    // A second call keeps the round open, so that its box can be read.
+    rig.call("i_1", "c_2", "shell");
+    rig.running("i_2", "c_1", "shell");
+    rig.delta(
+        "i_2",
+        Delta::ToolOutput(TextDelta {
+            text: "the part that streamed\n".to_owned(),
+        }),
+    );
+    rig.event(Event::ItemResync(ItemRef {
+        item_id: ItemId::from("i_2"),
+    }));
+    rig.result("i_2", "c_1", "shell", ToolOutcome::Success);
+    let calls = rig.calls();
+    let crate::view::Detail::Output(output) = &calls[0].detail else {
+        panic!("the output: {:?}", calls[0].detail);
+    };
+    assert!(output.contains("what the model saw"), "{output}");
+    assert!(!output.contains("streamed"), "{output}");
+}

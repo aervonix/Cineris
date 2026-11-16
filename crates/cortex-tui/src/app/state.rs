@@ -18,9 +18,9 @@ use cortex_protocol::methods::{
     TurnInterruptParams, TurnStartParams,
 };
 use cortex_protocol::model::{ModelInfo, ModelRole};
-use cortex_protocol::session::{SessionSettings, SessionState};
+use cortex_protocol::session::{SandboxStatus, SessionSettings, SessionState};
 use cortex_protocol::usage::{CostBasis, SessionUsage, UsageTotals};
-use cortex_protocol::{ErrorData, SessionEvent, Speed};
+use cortex_protocol::{ErrorData, SessionEvent, SessionId, Speed};
 use cortex_term::{Capabilities, Cursor, Event as TermEvent, Line};
 
 use super::dialog::{Dialog, Keyed};
@@ -59,6 +59,8 @@ enum Pending {
         settings: SessionSettings,
         ephemeral: bool,
     },
+    /// The session `--fork` forks, opened first: the fork follows.
+    ForkFrom(SessionId),
     /// The list of models, for the hint row and the context's share.
     Models,
     /// A prompt: put back in the editor if it is refused.
@@ -77,7 +79,37 @@ const COMMANDS: &[(&str, &str)] = &[
         "Compact the conversation now, keeping what you name",
     ),
     ("help", "The commands and the keys"),
+    ("new", "Start a new session"),
     ("quit", "Quit"),
+];
+
+/// The slash commands of 09-tui that this build does not have yet: one is
+/// said to be missing, not sent to the model as a prompt.
+const NOT_YET: &[&str] = &[
+    "sessions",
+    "rewind",
+    "undo",
+    "model",
+    "effort",
+    "mode",
+    "lease",
+    "permissions",
+    "context",
+    "usage",
+    "plan",
+    "project",
+    "profile",
+    "verify",
+    "reload",
+    "extend",
+    "status",
+    "view",
+    "copy",
+    "config",
+    "theme",
+    "mcp",
+    "extensions",
+    "export",
 ];
 
 /// The application. See the [module documentation](self).
@@ -92,6 +124,14 @@ pub struct App {
     folder: String,
     /// The session to open after the first frame.
     open: Option<Open>,
+    /// The workspace, for `/new`.
+    workspace: String,
+    /// The settings `/new` opens a session with, and whether it is kept in
+    /// memory only: as the command line asked for the first.
+    fresh: (SessionSettings, bool),
+    /// The session `--fork` forked, still open on this client until the
+    /// fork is: it is closed then.
+    forked_from: Option<SessionId>,
     /// Whether the open is under way: its events are held until it returns.
     opening: bool,
     held: Vec<SessionEvent>,
@@ -168,7 +208,22 @@ impl App {
             mapper: Mapper::new(highlighter),
             version: start.version,
             folder: start.folder,
+            fresh: match &start.open {
+                Open::New {
+                    settings,
+                    ephemeral,
+                    ..
+                }
+                | Open::Continue {
+                    settings,
+                    ephemeral,
+                    ..
+                } => (settings.clone(), *ephemeral),
+                Open::Resume(_) | Open::Fork(_) => (SessionSettings::default(), false),
+            },
             open: Some(start.open),
+            workspace: start.workspace,
+            forked_from: None,
             opening: false,
             held: Vec::new(),
             held_prompts: VecDeque::new(),
@@ -203,6 +258,9 @@ impl App {
     /// and glyphs follow.
     pub fn set_caps(&mut self, caps: &Capabilities) {
         self.look = super::look(&self.settings, caps);
+        for dialog in &mut self.dialogs {
+            dialog.restyled();
+        }
     }
 
     /// The window changed size.
@@ -220,8 +278,18 @@ impl App {
             self.send_open(open);
         }
         if let Some(dialog) = self.dialogs.front_mut() {
-            dialog.drawn(at, self.last_key);
+            dialog.drawn(at);
         }
+    }
+
+    /// When the application must draw again whatever else happens: the end
+    /// of an open dialog's grace, when its answers appear, until a frame
+    /// with them has been drawn. The time may have passed, and a frame is
+    /// then due at once. `None` while nothing is due, so that an idle
+    /// interface sleeps.
+    #[must_use]
+    pub fn deadline(&self) -> Option<Instant> {
+        self.dialogs.front().and_then(Dialog::deadline)
     }
 
     /// What to do before the next frame, taken.
@@ -268,16 +336,23 @@ impl App {
 
     // ----------------------------------------------------------- terminal
 
+    /// Keys that arrived together with the next one, read at `at`, are
+    /// typing, though a stall held them back: the next key is judged as
+    /// following one read at `at`, so that it does not answer a dialog.
+    pub fn burst(&mut self, at: Instant) {
+        self.last_key = Some(at);
+    }
+
     /// A terminal event, read at `at`. Says whether it was input (a key or a
     /// paste), whose frame is drawn at once.
     pub fn terminal(&mut self, event: &TermEvent, at: Instant) -> bool {
         match event {
             TermEvent::Key(key) => {
-                // When the person last typed: a dialog drawn soon after
-                // waits before it takes keys.
-                self.last_key = Some(at);
+                // The key before this one: a dialog takes a key only after a
+                // pause, so that it never takes typing meant for the editor.
+                let previous = self.last_key.replace(at);
                 if let Some(dialog) = self.dialogs.front_mut() {
-                    match dialog.key(*key, at, self.input.keymap()) {
+                    match dialog.key(*key, at, previous, self.input.keymap()) {
                         Keyed::Pass => {}
                         Keyed::Global(action) => {
                             let outcome = self.input.act(action);
@@ -288,14 +363,23 @@ impl App {
                             self.answer(response);
                             return true;
                         }
-                        Keyed::Changed | Keyed::ShowWhole | Keyed::Nothing => return true,
+                        Keyed::Changed | Keyed::Nothing => return true,
                     }
                 }
                 let outcome = self.input.handle(event);
                 self.outcome(outcome, at);
                 true
             }
-            // A paste never answers a dialog: it goes to the editor.
+            // A paste never answers a dialog: it is a note being written, or
+            // it goes to the editor.
+            TermEvent::Paste(text)
+                if self
+                    .dialogs
+                    .front_mut()
+                    .is_some_and(|dialog| dialog.paste(text)) =>
+            {
+                true
+            }
             TermEvent::Paste(_) => {
                 let outcome = self.input.handle(event);
                 self.outcome(outcome, at);
@@ -335,12 +419,24 @@ impl App {
                 self.command(name, rest.trim(), at);
                 return;
             }
+            if NOT_YET.contains(&name) {
+                self.say(&format!(
+                    "/{name} is not in this build yet. /help lists the commands there are."
+                ));
+                self.give_back(&text);
+                return;
+            }
         }
         self.last_cost = None;
         let Some(session) = self.session.as_ref().map(|s| s.session_id.clone()) else {
-            // The session is still being opened: the prompt goes when it is.
-            self.held_prompts.push_back(text);
-            self.start_running(at);
+            if self.opening || self.open.is_some() {
+                // The session is being opened: the prompt goes when it is.
+                self.held_prompts.push_back(text);
+                self.start_running(at);
+            } else {
+                self.say("No session is open: /new starts one.");
+                self.give_back(&text);
+            }
             return;
         };
         let started = delivery == Delivery::Prompt;
@@ -388,6 +484,7 @@ impl App {
                 text.push_str(". Keys: enter sends, esc stops a turn, ctrl+c twice quits.");
                 self.transcript.push(Block::Notice(text));
             }
+            "new" => self.new_session(),
             "compact" => {
                 let Some(session) = self.session.as_ref().map(|s| s.session_id.clone()) else {
                     self.say("There is no session to compact yet.");
@@ -411,8 +508,9 @@ impl App {
             .is_some_and(|last| at.saturating_duration_since(last) <= SECOND_INTERRUPT);
         self.last_interrupt = Some(at);
         let Some(session) = self.session.as_ref().map(|s| s.session_id.clone()) else {
-            // Nothing was sent yet: the held prompts are not sent.
-            self.held_prompts.clear();
+            // Nothing was sent yet: the held prompts are not sent, and come
+            // back into the editor.
+            self.give_back_held();
             self.stop_running();
             return;
         };
@@ -447,12 +545,13 @@ impl App {
                 Op::SessionOpen(SessionRef { session_id: id }),
                 Pending::Open,
             ),
+            // A session is forked from its log, so it is opened first; the
+            // fork follows its result.
             Open::Fork(id) => (
-                Op::SessionFork(SessionForkParams {
-                    session_id: id,
-                    at: None,
+                Op::SessionOpen(SessionRef {
+                    session_id: id.clone(),
                 }),
-                Pending::Open,
+                Pending::ForkFrom(id),
             ),
             Open::Continue {
                 workspace,
@@ -520,7 +619,12 @@ impl App {
         // person.
         if let ServerRequest::Approval(approval) = request {
             self.mapper.waiting(&mut self.transcript, &approval.call_id);
-            self.dialogs.push_back(Dialog::approval(id, approval));
+            let confined = self
+                .session
+                .as_ref()
+                .is_some_and(|session| session.sandbox == SandboxStatus::Enforcing);
+            self.dialogs
+                .push_back(Dialog::approval(id, approval, confined));
         }
     }
 
@@ -539,16 +643,17 @@ impl App {
             ) => {
                 self.opened(result.session, now);
             }
-            (Pending::Open, Err(error)) => {
-                self.opening = false;
-                let held = std::mem::take(&mut self.held);
-                for event in held {
-                    self.event(event, now);
-                }
-                self.held_prompts.clear();
-                self.stop_running();
-                self.error(&error);
+            (Pending::Open, Err(error)) => self.open_failed(Some(&error), now),
+            (Pending::ForkFrom(original), Ok(OpResult::SessionOpen(_))) => {
+                let ticket = self.link.send(Op::SessionFork(SessionForkParams {
+                    session_id: original.clone(),
+                    at: None,
+                }));
+                self.pending.insert(ticket, Pending::Open);
+                self.forked_from = Some(original);
             }
+            (Pending::ForkFrom(_), result) => self.open_failed(result.err().as_ref(), now),
+            (Pending::Continue { .. }, Err(error)) => self.open_failed(Some(&error), now),
             (
                 Pending::Continue {
                     workspace,
@@ -605,6 +710,72 @@ impl App {
         }
     }
 
+    /// The session could not be opened: what was held while it was being
+    /// opened is shown or given back, and why is said. A fork's original,
+    /// opened for it, is closed.
+    fn open_failed(&mut self, error: Option<&ErrorData>, now: Instant) {
+        self.opening = false;
+        if let Some(original) = self.forked_from.take() {
+            let ticket = self.link.send(Op::SessionClose(SessionRef {
+                session_id: original,
+            }));
+            self.pending.insert(ticket, Pending::Said);
+        }
+        // What was held is of a session that is not this client's: a
+        // fork's original, the one `/new` closed, or one that failed to open.
+        // Only its notices are shown.
+        let held = std::mem::take(&mut self.held);
+        for event in held {
+            if matches!(event.event, Event::Notice(_)) {
+                self.event(event, now);
+            }
+        }
+        self.give_back_held();
+        self.stop_running();
+        if let Some(error) = error {
+            self.error(error);
+        }
+    }
+
+    /// The prompts held for a session that will not open come back into
+    /// the editor.
+    fn give_back_held(&mut self) {
+        let held: Vec<String> = self.held_prompts.drain(..).collect();
+        for text in held {
+            self.give_back(&text);
+        }
+    }
+
+    /// `/new`: the session open now is closed, and a new one opened in the
+    /// workspace, with its own header.
+    fn new_session(&mut self) {
+        if self.running.is_some() {
+            self.say("A turn is running: wait for it to end, or stop it with esc.");
+            return;
+        }
+        if self.opening {
+            self.say("A session is being opened: /new can start another once it is.");
+            return;
+        }
+        if let Some(session) = self.session.take() {
+            let ticket = self.link.send(Op::SessionClose(SessionRef {
+                session_id: session.session_id,
+            }));
+            self.pending.insert(ticket, Pending::Said);
+        }
+        self.had_turn = false;
+        self.last_cost = None;
+        self.usage = None;
+        // As the command line asked for the first: its settings, and kept
+        // in memory only if it was.
+        let (settings, ephemeral) = self.fresh.clone();
+        self.send_open(Open::New {
+            workspace: self.workspace.clone(),
+            settings,
+            ephemeral,
+        });
+    }
+
     /// A prompt that was not delivered goes back into the editor, after
     /// whatever is there.
     fn give_back(&mut self, text: &str) {
@@ -621,6 +792,12 @@ impl App {
 
     fn opened(&mut self, state: SessionState, now: Instant) {
         self.opening = false;
+        if let Some(original) = self.forked_from.take() {
+            let ticket = self.link.send(Op::SessionClose(SessionRef {
+                session_id: original,
+            }));
+            self.pending.insert(ticket, Pending::Said);
+        }
         let main = state.roles.get(&ModelRole::Main);
         self.transcript.push(Block::Header(Header {
             version: self.version.clone(),
@@ -714,8 +891,12 @@ impl App {
                 self.stop_running();
                 self.last_interrupt = None;
             }
+            // The session open on this client changed. An update of another,
+            // while none is open, is not taken for it.
             Event::SessionUpdated(updated) => {
-                self.session = Some(updated.session.clone());
+                if self.session.is_some() {
+                    self.session = Some(updated.session.clone());
+                }
             }
             Event::UsageUpdated(updated) => self.usage = Some(updated.usage.clone()),
             Event::Notice(notice) => {
@@ -770,11 +951,29 @@ impl App {
         let cursor_row;
         let mut cursor_col = 0;
         let half = (self.rows / 2).max(1);
-        if let Some(dialog) = self.dialogs.front() {
-            let detail = half.saturating_sub(8).max(3);
-            bottom.extend(dialog.view(self.input.keymap(), detail, width, &self.look));
-            bottom.push(Line::new());
-            bottom.push(self.hint_row(Hint::Keys(dialog.hint_keys(self.input.keymap())), now));
+        if !self.dialogs.is_empty() {
+            // The dialog fits the window whole, with a blank row and the hint
+            // row under it while there is room for them: its detail is what
+            // gives way, and says so.
+            let chrome = self.rows >= 6;
+            let rows = if chrome {
+                self.rows - 2
+            } else {
+                self.rows.max(1)
+            };
+            let keymap = self.input.keymap();
+            let (lines, keys) = match self.dialogs.front_mut() {
+                Some(dialog) => (
+                    dialog.view(keymap, rows, width, &self.look, now),
+                    dialog.hint_keys(keymap),
+                ),
+                None => (Vec::new(), Vec::new()),
+            };
+            bottom.extend(lines);
+            if chrome {
+                bottom.push(Line::new());
+                bottom.push(self.hint_row(Hint::Keys(keys), now));
+            }
             cursor_row = None;
         } else {
             let drawn = view::input::input(&self.input, &self.look, width);

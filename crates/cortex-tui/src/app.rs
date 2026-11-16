@@ -169,6 +169,8 @@ pub struct Start {
     /// The workspace as the person writes it (`~/src/parser`), for the
     /// header.
     pub folder: String,
+    /// The workspace's root, where `/new` opens a session.
+    pub workspace: String,
     /// The session to open.
     pub open: Open,
     /// A prompt given on the command line, sent once the session is open.
@@ -300,43 +302,58 @@ pub fn run<D: Device>(terminal: &mut Terminal<D>, app: &mut App) -> io::Result<(
     let mut scheduler = Scheduler::new();
     scheduler.input();
     loop {
-        let now = Instant::now();
+        let now = terminal.now();
         if scheduler.wake(now) == Wake::Now {
             draw(terminal, &mut presenter, app, now)?;
             scheduler.drawn(now);
-            app.drawn(Instant::now());
+            app.drawn(terminal.now());
         }
         if app.exit().is_some() {
             break;
         }
         scheduler.animate(app.animating().then_some(SPIN), now);
-        let timeout = match scheduler.wake(now) {
+        let mut timeout = match scheduler.wake(now) {
             Wake::Now => Some(Duration::ZERO),
             Wake::At(at) => Some(at.saturating_duration_since(now)),
             Wake::Idle => None,
         };
+        // Something the application must draw at a time of its own: a
+        // dialog's answers, at the end of its grace.
+        let due = app.deadline();
+        if let Some(due) = due {
+            let wait = due.saturating_duration_since(now);
+            timeout = Some(timeout.map_or(wait, |timeout| timeout.min(wait)));
+        }
 
         // Every terminal event already read; a key's frame at once.
         let mut next = terminal.next(timeout)?;
         let mut input = false;
         while let Some(event) = next.take() {
             input |= take(terminal, &mut presenter, &mut scheduler, app, &event)?;
+            // After the last key the application takes, what is typed is
+            // the shell's: nothing more is read.
+            if app.exit().is_some() {
+                break;
+            }
             next = terminal.next(Some(Duration::ZERO))?;
         }
+        if due.is_some_and(|due| terminal.now() >= due) {
+            scheduler.input();
+        }
         if input {
-            let now = Instant::now();
+            let now = terminal.now();
             draw(terminal, &mut presenter, app, now)?;
             scheduler.drawn(now);
-            app.drawn(Instant::now());
+            app.drawn(terminal.now());
             if app.exit().is_some() {
                 break;
             }
         }
 
         // What arrived from the core, a slice of it.
-        let began = Instant::now();
+        let began = terminal.now();
         loop {
-            let drained = app.drain(Instant::now(), BATCH);
+            let drained = app.drain(terminal.now(), BATCH);
             if drained.request {
                 scheduler.input();
             } else if drained.changed {
@@ -345,7 +362,7 @@ pub fn run<D: Device>(terminal: &mut Terminal<D>, app: &mut App) -> io::Result<(
             if app.exit().is_some() || !drained.more {
                 break;
             }
-            if began.elapsed() >= SLICE {
+            if terminal.now().saturating_duration_since(began) >= SLICE {
                 // The rest waits in the core's queue, for the next frame.
                 scheduler.stream();
                 break;
@@ -360,7 +377,7 @@ pub fn run<D: Device>(terminal: &mut Terminal<D>, app: &mut App) -> io::Result<(
             }
         }
         if app.exit().is_some() {
-            let now = Instant::now();
+            let now = terminal.now();
             draw(terminal, &mut presenter, app, now)?;
             break;
         }
@@ -394,7 +411,12 @@ fn take<D: Device>(
         }
         _ => {}
     }
-    let input = app.terminal(event, Instant::now());
+    // Keys read together were typed together: the first of them does not
+    // answer a dialog however long the read before them took.
+    if matches!(event, Event::Key(_)) && terminal.queued() {
+        app.burst(terminal.now());
+    }
+    let input = app.terminal(event, terminal.now());
     for effect in app.take_effects() {
         match effect {
             Effect::Redraw => presenter.redraw(),

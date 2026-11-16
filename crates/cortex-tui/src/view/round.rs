@@ -391,6 +391,16 @@ fn detail_rows(call: &Call, placement: Placement, room: usize, look: &Look) -> V
 /// A diff's rows: the line number and the sign in a gutter beside the code,
 /// added and removed lines tinted to the box's edge.
 pub(crate) fn diff_rows(lines: &[DiffLine], room: usize, look: &Look) -> Vec<(Line, Style)> {
+    diff_rows_cut(lines, room, look).0
+}
+
+/// [`diff_rows`], and whether any row lost its end to `room`.
+pub(crate) fn diff_rows_cut(
+    lines: &[DiffLine],
+    room: usize,
+    look: &Look,
+) -> (Vec<(Line, Style)>, bool) {
+    let mut cut_any = false;
     let theme = &look.theme;
     let digits = lines
         .iter()
@@ -435,9 +445,10 @@ pub(crate) fn diff_rows(lines: &[DiffLine], room: usize, look: &Look) -> Vec<(Li
                 (row, body)
             }
         };
+        cut_any |= row.width() > room;
         rows.push((cut(&row, room, look.glyphs.ellipsis), fill));
     }
-    rows
+    (rows, cut_any)
 }
 
 /// `shown` (the line's text, sanitised and with its tabs expanded) with the

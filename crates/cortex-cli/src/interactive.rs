@@ -94,8 +94,17 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     let logs = StateDir::from_dirs(&Dirs::from_env(&env)).map(|state| state.logs_dir());
     install_panic_hook(logs.clone());
 
+    // A rule the command line gives that cannot be read stops the program,
+    // as it does a headless run: a deny that was mistyped must not be lost.
+    let options = match core_options(&run, &env, &loaded, log.as_ref()) {
+        Ok(options) => options,
+        Err(message) => {
+            eprintln!("{name}: {}", crate::visible(&message));
+            return exit::USAGE;
+        }
+    };
     // The core, on its thread, waited for.
-    let core = match CoreThread::start(core_options(&run, &env, &loaded, log.as_ref())) {
+    let core = match CoreThread::start(options) {
         Ok(core) => core,
         Err(error) => {
             eprintln!("{name}: {}", crate::visible(&error.message));
@@ -114,53 +123,88 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     let overrides = overrides(&loaded.settings.terminal);
     let folder = shown_folder(&workspace, env.home().as_deref());
     let open = open(&run, &workspace);
+    let root = workspace.to_string_lossy().into_owned();
     let prompt = run.prompt.clone();
     let link = core.link();
 
-    let ended = app::interactive(overrides, move |waker, _caps| {
-        link.slot.set(waker.clone());
-        let wake = waker.clone();
-        let start = Start {
-            version: crate::VERSION.to_owned(),
-            folder,
-            open,
-            prompt,
-            settings,
-            keymap,
-            notices,
-            history: Box::new(MemoryHistory::new()),
-            highlighter: Highlighter::new(move || wake.wake()),
-        };
-        (Box::new(link) as Box<dyn Link>, start)
-    });
+    // A panic of the interface's own unwinds to here: the terminal has been
+    // put back by then (the terminal layer's hook, and its drop), and the
+    // core is still ended in order and the report's pointer printed.
+    let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        app::interactive(overrides, move |waker, _caps| {
+            link.slot.set(waker.clone());
+            let wake = waker.clone();
+            let start = Start {
+                version: crate::VERSION.to_owned(),
+                folder,
+                workspace: root,
+                open,
+                prompt,
+                settings,
+                keymap,
+                notices,
+                history: Box::new(MemoryHistory::new()),
+                highlighter: Highlighter::new(move || wake.wake()),
+            };
+            (Box::new(link) as Box<dyn Link>, start)
+        })
+    }));
     core.end();
     if let Some(log) = &log {
         log.flush();
     }
-    if let Some(report) = CRASH.get() {
-        eprintln!(
-            "{name}: the interface failed; the report is in {}",
-            crate::visible(&report.display().to_string())
-        );
-        return exit::INTERNAL;
+    let (code, said) = ending(
+        ended,
+        CRASH.get().map(PathBuf::as_path),
+        name,
+        cortex_tui_terminal,
+    );
+    if let Some(said) = said {
+        eprintln!("{said}");
     }
-    match ended {
-        Ok(Exit::Quit) => exit::COMPLETED,
-        Ok(Exit::Gone(error)) => {
-            eprintln!("{name}: {}", crate::visible(&error.message));
-            exit::INTERNAL
+    code
+}
+
+/// The exit code of the interface's end, and the line to print for it. A
+/// panic of the interface (`ended` is `Err`) is exit code 1 with a pointer
+/// to its report, when one was written; `terminal` says whether standard
+/// input and output are a terminal, asked only when the terminal failed.
+fn ending(
+    ended: std::thread::Result<io::Result<Exit>>,
+    crash: Option<&Path>,
+    name: &str,
+    terminal: impl FnOnce() -> bool,
+) -> (u8, Option<String>) {
+    let ended = match ended {
+        Ok(ended) => ended,
+        Err(_) => {
+            let said = match crash {
+                Some(report) => format!(
+                    "{name}: the interface failed; the report is in {}",
+                    crate::visible(&report.display().to_string())
+                ),
+                None => format!("{name}: the interface failed; the log file has the details"),
+            };
+            return (exit::INTERNAL, Some(said));
         }
-        Err(error) if error.kind() == io::ErrorKind::Unsupported || !cortex_tui_terminal() => {
-            eprintln!(
+    };
+    match ended {
+        Ok(Exit::Quit) => (exit::COMPLETED, None),
+        Ok(Exit::Gone(error)) => (
+            exit::INTERNAL,
+            Some(format!("{name}: {}", crate::visible(&error.message))),
+        ),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported || !terminal() => (
+            exit::USAGE,
+            Some(format!(
                 "{name}: the interactive application needs a terminal ({error}). Run a prompt \
                  headless with `{name} -p \"…\"`."
-            );
-            exit::USAGE
-        }
-        Err(error) => {
-            eprintln!("{name}: the terminal failed: {error}");
-            exit::INTERNAL
-        }
+            )),
+        ),
+        Err(error) => (
+            exit::INTERNAL,
+            Some(format!("{name}: the terminal failed: {error}")),
+        ),
     }
 }
 
@@ -227,7 +271,7 @@ fn core_options(
     env: &Env,
     loaded: &Loaded,
     log: Option<&Arc<LogHandle>>,
-) -> CoreOptions {
+) -> Result<CoreOptions, String> {
     let mut options = CoreOptions::new(env.clone(), Arc::new(TokioTimer));
     options.profile.clone_from(&run.common.profile);
     options.overrides = crate::headless::overrides(run);
@@ -237,9 +281,7 @@ fn core_options(
         (&run.deny, cortex_protocol::lease::RuleAction::Deny),
     ] {
         for text in texts {
-            if let Ok(rule) = cortex_core::parse_rule(text, action) {
-                options.rules.push(rule);
-            }
+            options.rules.push(cortex_core::parse_rule(text, action)?);
         }
     }
     options.trust_project = run.trust_project;
@@ -263,7 +305,7 @@ fn core_options(
             log.add_secret(secret);
         }));
     }
-    options
+    Ok(options)
 }
 
 /// The `[tui]` settings in the application's terms; a theme it does not
@@ -624,6 +666,7 @@ impl CoreThread {
             done: Arc::clone(&self.done),
             slot: self.slot.clone(),
             next: 0,
+            gone_said: false,
         }
     }
 
@@ -644,6 +687,8 @@ struct InProcess {
     done: Done,
     slot: Slot,
     next: u64,
+    /// Whether the end of the connection was told.
+    gone_said: bool,
 }
 
 impl Link for InProcess {
@@ -687,16 +732,74 @@ impl Link for InProcess {
         {
             return Some(done);
         }
-        match self.queue.try_next()? {
-            Outgoing::Event(event) => Some(Inbound::Event(event)),
-            Outgoing::Request { id, request } => Some(Inbound::Request(id, request)),
+        let next = self.queue.try_next();
+        inbound(next, self.queue.is_closed(), &mut self.gone_said)
+    }
+}
+
+/// What the link gives for what the client's queue gave: an event, a
+/// request, or, once the queue is closed and empty, the end of the
+/// connection, said once.
+fn inbound(next: Option<Outgoing>, closed: bool, gone_said: &mut bool) -> Option<Inbound> {
+    match next {
+        Some(Outgoing::Event(event)) => Some(Inbound::Event(event)),
+        Some(Outgoing::Request { id, request }) => Some(Inbound::Request(id, request)),
+        // The core disconnected this client: nothing more will come.
+        None if closed && !*gone_said => {
+            *gone_said = true;
+            Some(Inbound::Gone(ErrorData::new(
+                ErrorKind::Internal,
+                "client_closed",
+                "The core closed this interface's connection.",
+            )))
         }
+        None => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A panic of the interface is exit code 1, with the report's place;
+    /// the core's end is not skipped for it (`run` ends the core first).
+    #[test]
+    fn a_panic_of_the_interface_is_exit_1_and_points_at_its_report() {
+        let panicked: std::thread::Result<io::Result<Exit>> = Err(Box::new("boom"));
+        let report = Path::new("logs").join("crash-1.txt");
+        let (code, said) = ending(panicked, Some(&report), "cortex", || true);
+        assert_eq!(code, exit::INTERNAL);
+        let said = said.unwrap_or_default();
+        assert!(said.contains("the interface failed"), "{said}");
+        assert!(said.contains("crash-1.txt"), "{said}");
+        let (code, said) = ending(Err(Box::new("boom")), None, "cortex", || true);
+        assert_eq!(code, exit::INTERNAL);
+        assert!(said.unwrap_or_default().contains("the log file"));
+        assert_eq!(
+            ending(Ok(Ok(Exit::Quit)), None, "cortex", || true),
+            (exit::COMPLETED, None)
+        );
+        let (code, _) = ending(
+            Ok(Err(io::Error::other("no terminal"))),
+            None,
+            "cortex",
+            || false,
+        );
+        assert_eq!(code, exit::USAGE);
+    }
+
+    /// A queue the core closed is the end of the connection, said once,
+    /// after what was in it.
+    #[test]
+    fn a_closed_queue_is_the_end_of_the_connection_said_once() {
+        let mut said = false;
+        assert!(inbound(None, false, &mut said).is_none());
+        assert!(matches!(
+            inbound(None, true, &mut said),
+            Some(Inbound::Gone(error)) if error.code == "client_closed"
+        ));
+        assert!(inbound(None, true, &mut said).is_none(), "said once");
+    }
 
     #[test]
     fn the_folder_is_shown_from_the_home_directory() {

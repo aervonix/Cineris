@@ -17,6 +17,7 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use cortex_testkit::children::{ChildSpec, Roll};
 use cortex_testkit::pty::Session;
 use cortex_testkit::role::{ModeShell, NOT_RESTORED, RESTORED, Role, this_binary};
 use cortex_testkit::{Gate, Phases, ServerReply};
@@ -213,8 +214,8 @@ fn sys_an_approval_is_asked_in_a_dialog_and_answered_with_a_key() {
         &json!({"path": target, "content": "remember the feature\n"}),
     );
     machine.reply_text("Noted.");
-    // The prompt is on the command line: nobody types before the dialog,
-    // so it takes keys at once.
+    // The prompt is on the command line. The dialog's answers are drawn at
+    // the end of its grace, when they can be pressed.
     let mut session = machine.tui(&["note that the build needs the feature"]);
     first_frame(&mut session, &phases);
 
@@ -253,19 +254,16 @@ fn sys_a_turn_is_interrupted_mid_stream_and_mid_tool() {
             ]))
             .hang_until_closed(&closed),
     );
-    // Mid-tool: a command that waits.
-    let command = if cfg!(windows) {
-        "Start-Sleep -Seconds 60"
-    } else {
-        "sleep 60"
-    };
-    machine.reply_tool("toolu_1", "shell", &json!({"command": command}));
-    let allow = if cfg!(windows) {
-        "exec Start-Sleep *"
-    } else {
-        "exec sleep *"
-    };
-    let mut session = machine.tui(&["--allow", allow]);
+    // Mid-tool: a command that says when it is up, and then waits until it
+    // is stopped (the test kit's child, which the roll sees start and end).
+    let roll = Roll::new();
+    let command = ChildSpec::new(&roll, "command");
+    machine.reply_tool(
+        "toolu_1",
+        "shell",
+        &json!({"command": super::signals::shell_line(&command), "timeout_ms": 600_000}),
+    );
+    let mut session = machine.tui(&["--permission-mode", "unrestricted"]);
     first_frame(&mut session, &phases);
 
     phases.mark("interrupted mid-stream");
@@ -279,13 +277,14 @@ fn sys_a_turn_is_interrupted_mid_stream_and_mid_tool() {
 
     phases.mark("interrupted mid-tool");
     type_text(&mut session, "wait a minute\r");
-    session.wait_for(LIMIT, "the command running", |t| {
-        let all = t.history();
-        all.iter()
-            .any(|row| row.contains("Run ") && row.contains("60"))
-    });
+    // The command is up: it is stopped mid-tool, not before it ran.
+    let [running]: [_; 1] = roll
+        .all(&["command"], LIMIT)
+        .try_into()
+        .unwrap_or_else(|_| panic!("the command did not start"));
     let began = Instant::now();
     session.send(b"\x1b");
+    assert!(running.gone_within(LIMIT), "the command was not stopped");
     session.wait_for(LIMIT, "the second interruption", |t| {
         let all = t.history();
         all.iter()

@@ -367,6 +367,21 @@ impl<D: Device> Terminal<D> {
         self.device.waker()
     }
 
+    /// Whether events already read wait to be given: a key with another
+    /// behind it came in the same read, typed in one burst.
+    #[must_use]
+    pub fn queued(&self) -> bool {
+        !self.events.is_empty()
+    }
+
+    /// The time now, on the device's clock: a device for tests gives a
+    /// time of its own, so that a loop over the terminal can be tested
+    /// without waiting.
+    #[must_use]
+    pub fn now(&self) -> Instant {
+        self.device.now()
+    }
+
     /// The next event, waiting at most `timeout` for one (`None`: as long as
     /// it takes). `Ok(None)` when the time ran out or a [`Waker`] woke it.
     ///

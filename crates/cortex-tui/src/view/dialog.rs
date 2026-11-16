@@ -13,19 +13,21 @@
 //! ```
 //!
 //! The question is bold after a `?` in the warning colour, with a dim line
-//! for each reason it is asked. The detail is exactly what would happen,
-//! wrapped and never shortened, a diff with its gutter; a diff taller than
-//! the room it is given is clipped with a line that says so, and `Ctrl+O`
-//! shows it whole. The answers are on one line, each key in the accent.
-//! Everything from outside passes through `cortex_term::sanitize`.
+//! for each reason it is asked. The detail is exactly what would happen, a
+//! command wrapped and never shortened, a diff with its gutter; detail of
+//! any kind taller than the room it is given is clipped with a line that
+//! says how much more there is, and the drawing says it was clipped, so
+//! that the caller offers no lasting answer for what was not seen. The
+//! answers are on one line, each key in the accent. Everything from
+//! outside passes through `cortex_term::sanitize`.
 
 use cortex_protocol::lease::Effect;
 use cortex_protocol::methods::{ApprovalDetail, ApprovalRequest};
-use cortex_term::{Line, Span, sanitize};
+use cortex_term::{Line, Span, Style, sanitize};
 
-use super::round::diff_rows;
+use super::round::diff_rows_cut;
 use super::{DiffLine, Look};
-use crate::layout::{cut, wrap};
+use crate::layout::{cut, pad, wrap};
 use crate::theme::Token;
 
 /// One answer as the dialog lists it: its key, as the key map names it, and
@@ -41,20 +43,50 @@ pub struct Answer {
 /// What an approval dialog shows beside its request.
 #[derive(Debug, Clone, Default)]
 pub struct ApprovalView<'a> {
-    /// The answers on offer, in order.
+    /// The answers on offer, in order, wrapped onto as many rows as they
+    /// need.
     pub answers: Vec<Answer>,
+    /// The answers cannot be pressed yet: their rows are left blank, as
+    /// many as they would take.
+    pub answers_hidden: bool,
     /// A diff's lines, parsed from the request's detail.
-    pub diff: Vec<DiffLine>,
-    /// The most rows the detail may take; the rest is behind `Ctrl+O`.
+    pub diff: &'a [DiffLine],
+    /// The most rows the detail may take; the rest is said, not shown.
     pub detail_rows: usize,
     /// The note being written, after "deny with a note".
     pub note: Option<&'a str>,
+    /// It is a request to leave the sandbox: a command that would run
+    /// outside it in a session whose commands are confined.
+    pub leaving: bool,
+    /// No lasting answer is offered (the dialog did not fit the window), so
+    /// what one would allow is not said.
+    pub withheld: bool,
 }
 
-/// Whether the request is one to leave the sandbox: a command that would
-/// run outside it.
+/// The dialog's rows, and what of it did not fit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Drawn {
+    /// The rows.
+    pub lines: Vec<Line>,
+    /// Some of the detail did not fit: rows of it, or the end of a diff's
+    /// line.
+    pub clipped: bool,
+    /// How many of the rows are the question's: the first.
+    pub question: usize,
+    /// How many of the rows are the detail's, the line that says it was
+    /// clipped included.
+    pub detail: usize,
+    /// How many of the rows are the answers': the last.
+    pub answer_rows: usize,
+    /// For each answer, whether it was drawn whole.
+    pub whole: Vec<bool>,
+}
+
+/// Whether the request is for a command that would run outside the
+/// sandbox. In a session whose commands are confined, that is a request to
+/// leave it; in one whose sandbox is off, every command runs so.
 #[must_use]
-pub fn leaves_sandbox(request: &ApprovalRequest) -> bool {
+pub fn outside_sandbox(request: &ApprovalRequest) -> bool {
     matches!(&request.detail, ApprovalDetail::Command(command) if command.outside_sandbox)
 }
 
@@ -65,96 +97,93 @@ pub fn approval(
     view: &ApprovalView<'_>,
     width: usize,
     look: &Look,
-) -> Vec<Line> {
+) -> Drawn {
     let theme = &look.theme;
     let muted = theme.style(Token::Muted);
     let mut lines = Vec::new();
-    let outside = leaves_sandbox(request);
-    let question = if outside {
+    let question = if view.leaving {
         "Run outside the sandbox?".to_owned()
     } else {
         format!("{}?", sanitize(&request.summary).replace(['\n', '\t'], " "))
     };
-    let title = Line::from(Span::new(look.glyphs.waiting, theme.style(Token::Warning)))
-        .with(Span::plain(" "))
-        .with(Span::new(question, theme.style(Token::Title)));
-    lines.push(cut(&title, width, look.glyphs.ellipsis));
-    if !outside {
+    // The question is wrapped, never cut: it says what is asked.
+    for (index, row) in wrap(
+        &[Span::new(question, theme.style(Token::Title))],
+        width.saturating_sub(2).max(1),
+    )
+    .into_iter()
+    .enumerate()
+    {
+        let mut line = if index == 0 {
+            Line::from(Span::new(look.glyphs.waiting, theme.style(Token::Warning)))
+                .with(Span::plain(" "))
+        } else {
+            Line::plain("  ")
+        };
+        for span in row.spans() {
+            line.push(span.clone());
+        }
+        lines.push(line);
+    }
+    let question_rows = lines.len();
+    if !view.leaving {
         for reason in &request.reasons {
-            indented(&mut lines, &sanitize(reason), muted, 2, width);
+            lines.extend(indented(&sanitize(reason), muted, 2, width));
         }
     }
     lines.push(Line::new());
 
+    let mut detail: Vec<Line> = Vec::new();
+    let mut after: Vec<Line> = Vec::new();
+    // A diff's line wider than the window loses its end.
+    let mut sideways = false;
     match &request.detail {
         ApprovalDetail::Command(command) => {
             let accent = theme.style(Token::AccentText);
             // Exactly what would run, line breaks and all.
             for line in sanitize(&command.command).split('\n') {
-                indented(&mut lines, line, accent, 4, width);
+                detail.extend(indented(line, accent, 4, width));
             }
-            indented(
-                &mut lines,
+            after.extend(indented(
                 &format!("in {}", sanitize(&command.cwd)),
                 muted,
                 4,
                 width,
-            );
-            if outside {
-                lines.push(Line::new());
-                indented(
-                    &mut lines,
+            ));
+            if view.leaving {
+                after.push(Line::new());
+                after.extend(indented(
                     "It would run with your full rights: it can write anywhere you can, and use \
                      the network. This is asked every time.",
                     theme.style(Token::Warning),
                     2,
                     width,
-                );
+                ));
             }
         }
         ApprovalDetail::Diff(diff) => {
             if view.diff.is_empty() {
-                indented(
-                    &mut lines,
+                detail.extend(indented(
                     &sanitize(&diff.path),
                     theme.style(Token::Code),
                     4,
                     width,
-                );
+                ));
                 let why = diff
                     .omitted
                     .as_deref()
                     .unwrap_or("The change has no lines to show.");
-                indented(&mut lines, &sanitize(why), muted, 4, width);
+                detail.extend(indented(&sanitize(why), muted, 4, width));
             } else {
-                let rows = diff_rows(&view.diff, width.saturating_sub(1), look);
-                let room = view.detail_rows.max(1);
-                let more = rows.len().saturating_sub(room);
-                let shown = if more > 0 {
-                    room.saturating_sub(1)
-                } else {
-                    rows.len()
-                };
-                for (row, fill) in rows.into_iter().take(shown) {
+                let (rows, cut_any) = diff_rows_cut(view.diff, width.saturating_sub(1), look);
+                sideways = cut_any;
+                for (row, fill) in rows {
                     let mut line = Line::plain(" ");
                     for span in row.spans() {
                         line.push(span.clone());
                     }
-                    let line = crate::layout::pad(line, width, fill);
-                    lines.push(cut(&line, width, look.glyphs.ellipsis));
-                }
-                if more > 0 {
-                    let hidden = more + 1;
-                    indented(
-                        &mut lines,
-                        &format!(
-                            "{} {hidden} more lines: ctrl+o shows it whole",
-                            look.glyphs.ellipsis
-                        ),
-                        muted,
-                        4,
-                        width,
-                    );
+                    let line = pad(line, width, fill);
+                    detail.push(cut(&line, width, look.glyphs.ellipsis));
                 }
             }
         }
@@ -165,84 +194,158 @@ pub fn approval(
                 Effect::Network => "Connect to",
                 _ => "Use",
             };
-            indented(
-                &mut lines,
+            detail.extend(indented(
                 &format!("{what} {}", sanitize(&target.target)),
                 theme.style(Token::Code),
                 4,
                 width,
-            );
+            ));
         }
         ApprovalDetail::Tool(tool) => {
             let text = serde_json::to_string_pretty(&tool.arguments).unwrap_or_default();
             for line in sanitize(&text).split('\n') {
-                indented(&mut lines, line, theme.style(Token::Code), 4, width);
+                detail.extend(indented(line, theme.style(Token::Code), 4, width));
             }
         }
-        _ => indented(
-            &mut lines,
+        _ => detail.extend(indented(
             "This build cannot show what the call would do.",
             muted,
             4,
             width,
-        ),
+        )),
     }
+    // Clipped to its room: the first rows, and one that says how many more.
+    let room = view.detail_rows.max(2);
+    let mut clipped = sideways;
+    if detail.len() > room {
+        clipped = true;
+        let hidden = detail.len() - (room - 1);
+        detail.truncate(room - 1);
+        detail.extend(indented(
+            &format!(
+                "{} {hidden} more lines are not shown, so only this call can be allowed",
+                look.glyphs.ellipsis
+            ),
+            muted,
+            4,
+            width,
+        ));
+    }
+    let detail_rows = detail.len();
+    lines.extend(detail);
+    lines.extend(after);
 
     // What "this session" and "here" would allow from then on, in full.
-    if !request.adds.is_empty() && !outside {
+    if !request.adds.is_empty() && !view.leaving && !clipped && !view.withheld {
         lines.push(Line::new());
         let rules: Vec<String> = request
             .adds
             .iter()
             .map(|rule| format!("{} {}", effect_word(&rule.effect), sanitize(&rule.pattern)))
             .collect();
-        indented(
-            &mut lines,
+        lines.extend(indented(
             &format!("Allowing it for longer allows: {}", rules.join(", ")),
             muted,
             2,
             width,
-        );
+        ));
     }
 
     lines.push(Line::new());
-    match view.note {
-        Some(note) => {
-            let row = Line::plain("  ")
-                .with(Span::new("Note for the model: ", theme.style(Token::Title)))
-                .with(Span::plain(sanitize(note).replace(['\n', '\t'], " ")));
-            lines.push(cut(&row, width, look.glyphs.ellipsis));
+    let (answer_lines, whole) = match view.note {
+        Some(note) => (vec![note_row(note, width, look)], Vec::new()),
+        None => answer_rows(&view.answers, view.answers_hidden, width, look),
+    };
+    let answer_rows = answer_lines.len();
+    lines.extend(answer_lines);
+    Drawn {
+        lines,
+        clipped,
+        question: question_rows,
+        detail: detail_rows,
+        answer_rows,
+        whole,
+    }
+}
+
+/// The answers, wrapped between answers onto as many rows as they need,
+/// and for each whether it was drawn whole. Hidden, they are blank rows.
+fn answer_rows(
+    answers: &[Answer],
+    hidden: bool,
+    width: usize,
+    look: &Look,
+) -> (Vec<Line>, Vec<bool>) {
+    const GAP: &str = "   ";
+    let key_style = look.theme.style(Token::Key);
+    let mut rows: Vec<Line> = Vec::new();
+    let mut whole = Vec::with_capacity(answers.len());
+    let mut row = Line::plain("  ");
+    let mut items = 0;
+    for answer in answers {
+        let item = Line::from(Span::new(answer.key.clone(), key_style))
+            .with(Span::plain(format!(" {}", answer.label)));
+        let gap = if items == 0 { 0 } else { GAP.len() };
+        if items > 0 && row.width() + gap + item.width() > width {
+            rows.push(std::mem::replace(&mut row, Line::plain("  ")));
+            items = 0;
         }
-        None => {
-            let mut row = Line::plain("  ");
-            for answer in &view.answers {
-                row.push(Span::new(answer.key.clone(), theme.style(Token::Key)));
-                row.push(Span::plain(format!(" {}   ", answer.label)));
+        if items > 0 {
+            row.push(Span::plain(GAP));
+        }
+        whole.push(row.width() + item.width() <= width);
+        for span in item.spans() {
+            row.push(span.clone());
+        }
+        items += 1;
+    }
+    rows.push(row);
+    let rows = rows
+        .into_iter()
+        .map(|row| {
+            if hidden {
+                Line::new()
+            } else {
+                cut(&row, width, look.glyphs.ellipsis)
             }
-            lines.push(cut(&row, width, look.glyphs.ellipsis));
+        })
+        .collect();
+    (rows, whole)
+}
+
+/// The note being written, its end shown when it is longer than the row.
+fn note_row(note: &str, width: usize, look: &Look) -> Line {
+    let label = "Note for the model: ";
+    let text = sanitize(note).replace(['\n', '\t'], " ");
+    let room = width.saturating_sub(2 + label.len()).max(1);
+    let rows = wrap(&[Span::plain(text)], room.saturating_sub(2).max(1));
+    let mut row = Line::plain("  ").with(Span::new(label, look.theme.style(Token::Title)));
+    if rows.len() > 1 {
+        row.push(Span::plain(format!("{} ", look.glyphs.ellipsis)));
+    }
+    if let Some(last) = rows.last() {
+        for span in last.spans() {
+            row.push(span.clone());
         }
     }
-    lines
+    cut(&row, width, look.glyphs.ellipsis)
 }
 
 /// The rows of a dialog's detail, wrapped at `width` and set `indent`
 /// columns in.
-fn indented(
-    lines: &mut Vec<Line>,
-    text: &str,
-    style: cortex_term::Style,
-    indent: usize,
-    width: usize,
-) {
+fn indented(text: &str, style: Style, indent: usize, width: usize) -> Vec<Line> {
     let room = width.saturating_sub(indent).max(1);
     let pad = " ".repeat(indent);
-    for row in wrap(&[Span::new(text, style)], room) {
-        let mut line = Line::plain(pad.clone());
-        for span in row.spans() {
-            line.push(span.clone());
-        }
-        lines.push(line);
-    }
+    wrap(&[Span::new(text, style)], room)
+        .into_iter()
+        .map(|row| {
+            let mut line = Line::plain(pad.clone());
+            for span in row.spans() {
+                line.push(span.clone());
+            }
+            line
+        })
+        .collect()
 }
 
 fn effect_word(effect: &Effect) -> &'static str {

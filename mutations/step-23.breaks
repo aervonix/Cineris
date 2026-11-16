@@ -63,20 +63,110 @@ caught-by:
     events::tests::the_wake_hook_is_called_once_a_burst_and_when_the_queue_closes
 
 [break] a-dialog-takes-typing-meant-for-the-editor
-rule: A dialog drawn while the person is typing takes keys only from a grace after its first frame: keys typed before they could see it are the editor's.
+rule: A dialog takes no key until its answers have been drawn, a grace after its first frame, whether or not anyone was typing: keys typed before they could see it are the editor's.
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::takes_keys_at
-find: (!self.typing || at >= shown + GRACE)
+find: self.answers_drawn
+replace: self.shown.is_some()
+caught-by:
+    app::dialog::tests::in_its_grace_typing_passes_and_its_own_other_keys_do_nothing
+    app::tests::typing_that_goes_on_past_the_grace_never_answers_a_dialog
+    app::tests::a_window_too_small_for_the_question_and_its_answers_takes_none
+
+[break] typing-carries-on-into-a-dialog
+rule: After its grace a dialog takes a key only after a pause since the key before it: typing that carries on through the dialog's arrival never answers it.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::takes_keys_at
+find: previous.is_none_or(|previous| at.saturating_duration_since(previous) >= GRACE)
 replace: true
 caught-by:
-    app::tests::a_dialog_that_appears_while_the_person_types_takes_keys_only_after_a_grace
+    app::tests::typing_that_goes_on_past_the_grace_never_answers_a_dialog
+
+[break] answers-shown-before-they-can-be-pressed
+rule: A dialog draws its answers only once they can be pressed, at the end of its grace.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::view
+find: let ready = self.shown.is_some_and(|shown| now >= shown + GRACE);
+replace: let ready = true;
+caught-by:
+    app::tests::a_dialog_takes_keys_and_shows_its_answers_only_after_its_grace
+    app::tests::the_loop_wakes_for_a_dialogs_answers_and_sleeps_while_idle
+
+[break] the-loop-sleeps-through-the-grace
+rule: The loop wakes at the end of a dialog's grace to draw its answers, though nothing else happens.
+file: crates/cortex-tui/src/app.rs
+in: run
+find: timeout = Some(timeout.map_or(wait, |timeout| timeout.min(wait)));
+replace: let _ = wait;
+caught-by:
+    app::tests::the_loop_wakes_for_a_dialogs_answers_and_sleeps_while_idle
+
+[break] the-loop-reads-past-the-end
+rule: Once the application has ended the loop reads nothing more from the terminal: what is typed after the last key it takes is the shell's.
+file: crates/cortex-tui/src/app.rs
+in: run
+find:
+    if app.exit().is_some() {
+        break;
+    }
+    next = terminal.next(Some(Duration::ZERO))?;
+replace: next = terminal.next(Some(Duration::ZERO))?;
+caught-by:
+    app::tests::the_loop_wakes_for_a_dialogs_answers_and_sleeps_while_idle
+
+[break] a-lasting-answer-for-what-was-not-seen
+rule: A request any of whose rows did not fit the window offers no lasting answer: no lasting rule is added for what could not be read.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::answers
+find: let lasting = !(self.leaving || clipped);
+replace: let lasting = !self.leaving;
+caught-by:
+    app::tests::a_dialog_taller_than_the_window_keeps_its_question_and_offers_only_this_call
+
+[break] leaving-the-sandbox-for-longer
+rule: A request to leave the sandbox offers only "run once" and "deny".
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::answers
+find: let lasting = !(self.leaving || clipped);
+replace: let lasting = !clipped;
+caught-by:
+    app::tests::leaving_a_confined_sessions_sandbox_offers_only_once_and_deny
+
+[break] the-leave-form-with-the-sandbox-off
+rule: The leave-the-sandbox form is for a session whose sandbox is enforcing: with it off every command runs outside it, and is asked as any other call.
+file: crates/cortex-tui/src/app/state.rs
+in: App::request
+find: .is_some_and(|session| session.sandbox == SandboxStatus::Enforcing)
+replace: .is_some()
+caught-by:
+    app::tests::a_command_in_a_session_with_the_sandbox_off_may_be_allowed_for_longer
+
+[break] detail-is-never-clipped
+rule: Detail taller than its room is clipped, with a line that says how much more there is.
+file: crates/cortex-tui/src/view/dialog.rs
+in: approval
+find: if detail.len() > room {
+replace: if false {
+caught-by:
+    view::dialog::tests::a_tall_command_is_clipped_and_says_so
+    view::dialog::tests::a_tall_diff_is_clipped_with_how_much_more_there_is
+    app::tests::a_dialog_taller_than_the_window_keeps_its_question_and_offers_only_this_call
+
+[break] the-dialog-overflows-the-window
+rule: The dialog fits the window: when its rows are more than the window has, its detail gives way, not its question.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::draw
+find: let over = fitted.lines.len().saturating_sub(rows);
+replace: let over = 0;
+caught-by:
+    app::tests::a_dialog_one_row_too_tall_drops_the_lasting_note_and_keeps_its_question
 
 [break] a-dialog-answered-before-it-is-drawn
 rule: A key read before a dialog's first frame was written never answers it.
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::takes_keys_at
-find: self.shown
-replace: Some(at)
+find: self.answers_drawn
+replace: true
 caught-by:
     app::tests::a_dialog_that_appears_while_the_person_types_takes_keys_only_after_a_grace
 
@@ -159,3 +249,284 @@ find: libc::SIGABRT
 replace: libc::SIGQUIT
 caught-by:
     cortex-term::it system::sys_the_terminal_is_put_back_after_an_abort
+
+[break] held-prompts-lost-when-the-open-fails
+rule: Prompts held while the session was being opened come back into the editor when the open fails.
+file: crates/cortex-tui/src/app/state.rs
+in: App::open_failed
+find: self.give_back_held();
+replace: self.held_prompts.clear();
+caught-by:
+    app::tests::prompts_held_for_a_session_that_does_not_open_come_back_with_why
+    app::tests::a_continue_whose_list_fails_says_why
+
+[break] held-prompts-lost-on-an-early-interrupt
+rule: An interrupt before the session is open gives the held prompts back into the editor.
+file: crates/cortex-tui/src/app/state.rs
+in: App::interrupt
+find: self.give_back_held();
+replace: self.held_prompts.clear();
+caught-by:
+    app::tests::stopping_before_the_session_is_open_gives_the_held_prompts_back
+
+[break] a-prompt-held-for-no-session
+rule: With no session open and none on its way, a prompt is given back with a line that says how to start one; it is not held for ever.
+file: crates/cortex-tui/src/app/state.rs
+in: App::submit
+find: if self.opening || self.open.is_some() {
+replace: if true {
+caught-by:
+    app::tests::prompts_held_for_a_session_that_does_not_open_come_back_with_why
+
+[break] a-fork-of-a-session-not-open
+rule: A session is forked from its log, so --fork opens it first, and forks it once it is open.
+file: crates/cortex-tui/src/app/state.rs
+in: App::send_open
+find: Pending::ForkFrom(id)
+replace: Pending::Open
+caught-by:
+    app::tests::a_fork_opens_its_session_forks_it_and_closes_the_original
+
+[break] a-forks-original-left-open
+rule: The session a fork was made from is closed once the fork is open.
+file: crates/cortex-tui/src/app/state.rs
+in: App::opened
+find: self.forked_from.take()
+replace: self.forked_from.clone().filter(|_| false)
+caught-by:
+    app::tests::a_fork_opens_its_session_forks_it_and_closes_the_original
+
+[break] new-leaves-the-old-session-open
+rule: /new closes the session open now before it opens another.
+file: crates/cortex-tui/src/app/state.rs
+in: App::new_session
+find: if let Some(session) = self.session.take() {
+replace: if let Some(session) = None::<SessionState> {
+caught-by:
+    app::tests::new_closes_the_session_and_opens_another_in_the_workspace
+
+[break] a-command-not-built-goes-to-the-model
+rule: A slash command of 09-tui that this build does not have is said to be missing, and is no prompt for the model.
+file: crates/cortex-tui/src/app/state.rs
+in: App::submit
+find: if NOT_YET.contains(&name) {
+replace: if NOT_YET.contains(&name) && false {
+caught-by:
+    app::tests::a_command_not_in_this_build_is_said_and_not_sent
+
+[break] resynced-output-kept-in-part
+rule: A tool result whose output deltas stopped (item.resync) is shown from the result's own text, not from the part that streamed.
+file: crates/cortex-tui/src/app/items.rs
+in: Mapper::result
+find: Detail::Output(text) if !resynced => text.clone()
+replace: Detail::Output(text) => text.clone()
+caught-by:
+    app::items::tests::a_commands_output_whose_deltas_stopped_is_taken_from_its_result
+
+[break] a-mistyped-rule-dropped
+rule: A rule of --allow or --deny that cannot be read stops the interactive application with exit code 2, as it stops a headless run: a mistyped deny is never dropped.
+file: crates/cortex-cli/src/interactive.rs
+in: core_options
+find: .push(cortex_core::parse_rule(text, action)?);
+replace: .extend(cortex_core::parse_rule(text, action).ok());
+caught-by:
+    cortex-cli::system runs::sys_exit_2_for_mistakes_and_invalid_configuration_before_anything_is_sent
+
+[break] answers-counted-as-drawn-unseen
+rule: A dialog's answers count as drawn only once a frame with them has been drawn: a key cannot answer what was not shown, though the grace is over.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::takes_keys_at
+find: self.answers_drawn
+replace: self.shown.is_some_and(|shown| at >= shown + GRACE)
+caught-by:
+    app::tests::a_window_too_small_for_the_question_and_its_answers_takes_none
+
+[break] esc-in-the-grace-stops-the-turn
+rule: In a dialog's grace its own keys that type nothing (Esc) do nothing: a key meant to deny never stops the turn instead.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::key
+find: typed(key).is_none() && action.is_some_and(dialogs)
+replace: false
+caught-by:
+    app::tests::esc_in_a_dialogs_grace_neither_denies_nor_stops_the_turn
+    app::dialog::tests::in_its_grace_typing_passes_and_its_own_other_keys_do_nothing
+
+[break] ctrl-t-lost-in-a-dialog
+rule: Ctrl+T opens and closes the round's box from a dialog, in its grace and after it.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::key
+find: | Action::ToggleRound
+replace:
+caught-by:
+    app::dialog::tests::ctrl_t_opens_the_rounds_box_from_a_dialog_whenever_it_comes
+
+[break] the-detail-gives-way-before-the-lasting-note
+rule: A dialog too tall drops the line of what a lasting answer would allow before it cuts the detail: the command stays whole.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::draw
+find: if !view.withheld && !request.adds.is_empty() && !self.leaving {
+replace: if false {
+caught-by:
+    app::tests::a_dialog_one_row_too_tall_drops_the_lasting_note_and_keeps_its_question
+
+[break] a-tiny-window-cuts-the-question
+rule: In a window too small for any detail, a dialog keeps its question and its answers: the rows between them are dropped.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::draw
+find: if lines.len() > rows {
+replace: if false {
+caught-by:
+    app::tests::in_a_tiny_window_a_dialog_keeps_its_question_and_its_answers
+
+[break] new-forgets-the-command-line
+rule: /new opens its session with the settings the command line gave the first, in memory only after --no-session.
+file: crates/cortex-tui/src/app/state.rs
+in: App::new_session
+find: let (settings, ephemeral) = self.fresh.clone();
+replace: let (settings, ephemeral) = (SessionSettings::default(), false);
+caught-by:
+    app::tests::new_keeps_what_the_command_line_asked_for
+
+[break] a-failed-forks-original-left-open
+rule: The session a fork was made from is closed when the fork fails too.
+file: crates/cortex-tui/src/app/state.rs
+in: App::open_failed
+find: if let Some(original) = self.forked_from.take() {
+replace: if let Some(original) = None::<SessionId> {
+caught-by:
+    app::tests::a_fork_that_fails_closes_its_original_and_takes_nothing_of_it
+
+[break] a-failed-open-shows-anothers-events
+rule: Of the events held while a session was being opened, a failed open shows only the notices: the rest are of a session that is not this client's.
+file: crates/cortex-tui/src/app/state.rs
+in: App::open_failed
+find: if matches!(event.event, Event::Notice(_)) {
+replace: if true {
+caught-by:
+    app::tests::a_fork_that_fails_closes_its_original_and_takes_nothing_of_it
+
+[break] an-update-of-another-session-taken
+rule: With no session open on this client, an update of another session is not taken for one.
+file: crates/cortex-tui/src/app/state.rs
+in: App::event
+find: if self.session.is_some() {
+replace: if true {
+caught-by:
+    app::tests::a_fork_that_fails_closes_its_original_and_takes_nothing_of_it
+
+[break] a-panic-of-the-interface-is-success
+rule: A panic of the interface ends the program with exit code 1 and the report's place.
+file: crates/cortex-cli/src/interactive.rs
+in: ending
+find: return (exit::INTERNAL, Some(said));
+replace: return (exit::COMPLETED, Some(said));
+caught-by:
+    cortex-cli::bin/cortex interactive::tests::a_panic_of_the_interface_is_exit_1_and_points_at_its_report
+
+[break] the-end-of-the-connection-never-said
+rule: A queue the core closed is the end of the connection: the application is told, and ends.
+file: crates/cortex-cli/src/interactive.rs
+in: inbound
+find: None if closed && !*gone_said => {
+replace: None if false => {
+caught-by:
+    cortex-cli::bin/cortex interactive::tests::a_closed_queue_is_the_end_of_the_connection_said_once
+
+[break] answers-cut-on-one-row
+rule: The answers wrap between answers onto as many rows as they need, so that each is drawn whole.
+file: crates/cortex-tui/src/view/dialog.rs
+in: answer_rows
+find: if items > 0 && row.width() + gap + item.width() > width {
+replace: if false {
+caught-by:
+    app::tests::in_a_narrow_window_the_answers_wrap_and_each_can_be_pressed
+
+[break] an-answer-pressed-though-cut
+rule: Only an answer drawn whole can be pressed.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::draw
+find: .filter(|(_, whole)| **whole)
+replace:
+caught-by:
+    app::tests::an_answer_not_drawn_whole_cannot_be_pressed
+
+[break] the-detail-cut-before-it-must-be
+rule: A detail that fits the window is shown whole: it gives way only to what does not fit.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::draw
+find: rows.max(LEAST_DETAIL)
+replace: rows.saturating_sub(8).max(LEAST_DETAIL)
+caught-by:
+    app::tests::a_detail_that_fits_is_shown_whole_with_every_answer
+
+[break] the-question-cut-at-the-edge
+rule: The question is wrapped, never cut.
+file: crates/cortex-tui/src/view/dialog.rs
+in: approval
+find: width.saturating_sub(2).max(1)
+replace: usize::MAX
+caught-by:
+    app::tests::a_long_question_wraps_and_is_never_cut
+
+[break] a-diff-cut-sideways-unseen
+rule: A diff's line wider than the window loses its end, and that counts as clipped: no lasting answer is offered for it.
+file: crates/cortex-tui/src/view/dialog.rs
+in: approval
+find: sideways = cut_any;
+replace: let _ = cut_any;
+caught-by:
+    view::dialog::tests::a_diff_line_wider_than_the_window_counts_as_clipped
+
+[break] an-unreadable-dialog-answered
+rule: In a window too small for the question and the answers together, no answer is taken.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::draw
+find: readable = rows >= question + answer_rows;
+replace: readable = true;
+caught-by:
+    app::tests::a_window_too_small_for_the_question_and_its_answers_takes_none
+
+[break] the-loop-woken-for-answers-that-cannot-show
+rule: A dialog too small to show its answers asks for no frame for them: the loop is not kept busy.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::deadline
+find: if self.answers_drawn || self.unreadable {
+replace: if self.answers_drawn {
+caught-by:
+    app::tests::a_window_too_small_for_the_question_and_its_answers_takes_none
+
+[break] a-paste-lost-from-the-note
+rule: While a note is written, a paste is the note's, not the hidden editor's.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: .is_some_and(|dialog| dialog.paste(text))
+replace: .is_some_and(|_| text.is_empty() && false)
+caught-by:
+    app::tests::a_paste_while_a_note_is_written_is_the_notes
+
+[break] the-note-shows-its-start
+rule: A note longer than its row shows its end, where the typing is.
+file: crates/cortex-tui/src/view/dialog.rs
+in: note_row
+find: if let Some(last) = rows.last() {
+replace: if let Some(last) = rows.first() {
+caught-by:
+    app::tests::a_long_note_shows_its_end
+
+[break] keys-read-together-answer
+rule: Keys that come in one read were typed together: none of them answers a dialog, though a stall made the read before them long ago.
+file: crates/cortex-tui/src/app.rs
+in: take
+find: if matches!(event, Event::Key(_)) && terminal.queued() {
+replace: if false {
+caught-by:
+    app::tests::keys_read_together_never_answer_a_dialog
+
+[break] a-dialog-drawn-in-the-old-look
+rule: When the look changes, an open dialog is drawn again in it, not taken from what was drawn before.
+file: crates/cortex-tui/src/app/state.rs
+in: App::set_caps
+find: dialog.restyled();
+replace: let _ = dialog;
+caught-by:
+    app::tests::a_dialog_is_drawn_again_when_the_look_changes

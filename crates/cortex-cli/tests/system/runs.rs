@@ -131,6 +131,15 @@ fn sys_exit_2_for_mistakes_and_invalid_configuration_before_anything_is_sent() {
     machine
         .run(&["-p", "x", "--allow", "not-an-effect:x"])
         .expect_code(2);
+    // The interactive application refuses it too, before it looks for a
+    // terminal: a mistyped deny is never dropped.
+    let refused = machine.run(&["--deny", "not-an-effect:x"]);
+    refused.expect_code(2);
+    assert!(
+        refused.stderr.contains("is not an effect"),
+        "{}",
+        refused.stderr
+    );
 
     let unknown = machine.run(&["-p", "x", "--model", "no-such-model", "--output", "json"]);
     let record = unknown.expect_code(2).json();

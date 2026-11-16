@@ -80,6 +80,9 @@ pub(crate) struct Mapper {
     calls: HashMap<CallId, Place>,
     /// A tool result item that is running, and the call it answers.
     results: HashMap<ItemId, CallId>,
+    /// Tool results whose output deltas stopped (`item.resync`): their box
+    /// shows the result's own text, not the part that streamed.
+    resynced: std::collections::HashSet<ItemId>,
     /// The rounds still live, by the number the focus ring knows them by.
     rounds: Vec<(u64, LiveRound)>,
     next_round: u64,
@@ -94,6 +97,7 @@ impl Mapper {
             responses: HashMap::new(),
             calls: HashMap::new(),
             results: HashMap::new(),
+            resynced: std::collections::HashSet::new(),
             rounds: Vec::new(),
             next_round: 1,
             last_answer: String::new(),
@@ -207,6 +211,9 @@ impl Mapper {
             Event::ItemResync(resync) => {
                 if let Some(response) = self.responses.get_mut(&resync.item_id) {
                     response.resync = true;
+                }
+                if self.results.contains_key(&resync.item_id) {
+                    self.resynced.insert(resync.item_id.clone());
                 }
             }
             Event::ItemCompleted(completed) => self.completed(transcript, &completed.item, now),
@@ -535,6 +542,7 @@ impl Mapper {
 
     fn result(&mut self, transcript: &mut Transcript, result: &ToolResultItem) {
         self.results.remove(&result.id);
+        let resynced = self.resynced.remove(&result.id);
         if !self.calls.contains_key(&result.call_id) {
             // A result for a call this interface never saw begin: a box of
             // its own.
@@ -559,8 +567,10 @@ impl Mapper {
             return;
         };
         if let Some(line) = self.call_mut(transcript, place) {
+            // What streamed, unless some of it was dropped: then the
+            // result's own text, which is whole.
             let output = match &line.detail {
-                Detail::Output(text) => text.clone(),
+                Detail::Output(text) if !resynced => text.clone(),
                 _ => String::new(),
             };
             tools::finish(line, result, &output);
