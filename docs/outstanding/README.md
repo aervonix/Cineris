@@ -23,8 +23,10 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-reasoning-budget-request-past-the-window-on-older-models](a-reasoning-budget-request-past-the-window-on-older-models.md): A main request with a reasoning budget can pass the window with its `max_tokens` on Anthropic's models before Claude 4.5, failing every turn alike. Owner: the step that adds a budget model to the catalog.
 - [a-summary-cut-off-at-the-output-limit](a-summary-cut-off-at-the-output-limit.md): A summary cut off at the output limit is marked only in its text, not in the log's `summary` entry. Owner: a later step on compaction, with the owner for the format.
 - [an-instruction-file-left-out-for-the-cap](an-instruction-file-left-out-for-the-cap.md): An instruction file left out of the prompt for `context.instructions_cap` is still listed in the epoch as given. Owner: a later step on instruction files, with the owner for the format.
+- [config-provenance-in-the-application](config-provenance-in-the-application.md): `/config` shows the values in effect, not the layer each came from; `config/get` gives no provenance. Owner: step 24.
 - [statistics-a-build-cannot-use-are-said-only-in-the-log](statistics-a-build-cannot-use-are-said-only-in-the-log.md): A newer build's or an unreadable statistics file is said in the log and by `cortex usage` and `cortex stats`, not by the application. Owner: step 24.
 - [stopping-at-a-task-lease-edge](stopping-at-a-task-lease-edge.md): At a task lease's edge the loop should stop and report, then fall back to the standing lease. Owner: step 37.
+- [the-export-command-has-no-step](the-export-command-has-no-step.md): `/export`, in 09-tui's commands, is built by no step. Owner: the owner.
 - [the-maps-share-of-the-context-record](the-maps-share-of-the-context-record.md): The repository map is counted among the notices in the context record, so the profiler cannot say what it costs. Owner: step 44, or step 16.
 - [the-token-counting-endpoint-near-the-limit](the-token-counting-endpoint-near-the-limit.md): The provider's token-counting endpoint is never asked near the limit; needs a `Protocol` method and loop call. Owner: a later step that touches the budget, or step 33.
 
@@ -35,9 +37,8 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cortex-cli
 
 - [headless-details-left-open](headless-details-left-open.md): Six small gaps in headless mode: dropped early notices, error records, `files_changed` matching, Windows close, untested signals. Owner: step 27 or step 32.
-- [reading-a-key-at-a-terminal](reading-a-key-at-a-terminal.md): `cortex auth login` refuses a terminal because reading a key without echo needs the terminal layer. Owner: step 23 or step 25.
+- [reading-a-key-at-a-terminal](reading-a-key-at-a-terminal.md): `cortex auth login` refuses a terminal because reading a key without echo needs the terminal layer. Owner: step 25.
 - [shell-completions](shell-completions.md): Completions should come from an `xtask` command over the `FLAGS` table; the table exists, the command does not. Owner: step 34.
-- [trust-of-a-profile-a-project-defines](trust-of-a-profile-a-project-defines.md): `cortex permissions trust` takes no `--profile`, so a project-defined profile's rules read as changed. Owner: the owner, with step 23.
 
 ### cortex-config
 
@@ -55,7 +56,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-supervisor-lowering-a-wait](a-supervisor-lowering-a-wait.md): A client that is not a `user` is refused every tighten-only key in `session/new`'s overrides, a shorter value too; taking a lower one needs a comparison with a second load. Owner: step 37.
 - [an-observer-that-ends-a-session](an-observer-that-ends-a-session.md): An observer's `session/close` or disconnect can end a session that has no client left that may drive it. Owner: the owner; before step 27.
 - [config-reload-through-the-core](config-reload-through-the-core.md): `config/reload` answers `not_available`; step 23 settled what a reload applies to a running session, key by key, and step 24 wires it. Owner: step 24.
-- [log-level-from-configuration-in-headless-mode](log-level-from-configuration-in-headless-mode.md): A headless run starts the log before configuration is read, so `log.level` is ignored. Owner: step 23 or step 27.
+- [log-level-from-configuration-in-headless-mode](log-level-from-configuration-in-headless-mode.md): A headless run starts the log before configuration is read, so `log.level` is ignored there (the interactive half is done). Owner: step 32.
 - [secret-filter-on-what-clients-are-sent](secret-filter-on-what-clients-are-sent.md): Events, approval requests and in-progress items sent to clients skip the secret filter applied to disk writes. Owner: the owner; before step 27.
 - [shutdown-and-a-session-being-put-together](shutdown-and-a-session-being-put-together.md): `Core::shutdown` returns before a session still being put together has ended itself. Owner: step 27.
 - [the-top-of-a-tree-past-the-listing-cap](the-top-of-a-tree-past-the-listing-cap.md): A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree. Owner: a later index step, or step 33.
@@ -128,10 +129,9 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 - [editor-cost-on-very-large-text](editor-cost-on-very-large-text.md): The prompt editor lays out all its text on every key; a shortened `@` query refilters all paths. Owner: step 33.
 - [external-editor-test-gaps](external-editor-test-gaps.md): Parts of the external editor (umask, ConPTY modes, failed hand-over, `.cmd` editors, interrupt guard) are untested. Owner: step 32.
-- [file-completion-on-a-large-workspace](file-completion-on-a-large-workspace.md): Filtering an `@` menu over about 100,000 paths on the key's path can miss the idle key budget. Owner: step 23.
 - [highlighted-code-drawn-again](highlighted-code-drawn-again.md): `Markdown::render` draws code plain when a finished answer is redrawn at another width. Owner: step 25.
 - [the-bincode-advisory-ignored-for-syntect](the-bincode-advisory-ignored-for-syntect.md): `deny.toml` ignores RUSTSEC-2025-0141, `bincode` unmaintained, reached only through `syntect`'s loading of its packed grammars; drop it when `syntect` moves off `bincode` or a flaw is named. Owner: the next step that touches highlighting, otherwise step 25.
-- [the-default-editor-on-windows-11](the-default-editor-on-windows-11.md): Windows 11's tabbed Notepad may exit at once, so `Ctrl+G` removes the prompt's folder while it is open. Owner: the owner, by hand, after step 23.
+- [the-default-editor-on-windows-11](the-default-editor-on-windows-11.md): Windows 11's tabbed Notepad may exit at once, so `Ctrl+G` removes the prompt's folder while it is open; a folder left behind is not tried again. Owner: the owner, by hand; the folder half, step 32.
 
 ### cortex-testkit
 
