@@ -8,8 +8,9 @@ use super::*;
 fn status_says_a_trust_kept_for_now_only_without_naming_one_cause() {
     let now = Instant::now();
     let (mut app, link) = app(now);
-    let mut for_now = state();
-    for_now.trust = Some(cortex_protocol::session::TrustStanding::ForTheRun);
+    let for_now = session()
+        .trust(cortex_protocol::session::TrustStanding::ForTheRun)
+        .build();
     opened_with(&mut app, &link, now, for_now);
     let _ = link.take_sent();
     run_command(&mut app, "/status", now);

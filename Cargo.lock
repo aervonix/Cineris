@@ -413,6 +413,7 @@ dependencies = [
  "cortex-protocol",
  "cortex-term",
  "cortex-testkit",
+ "cortex-tui",
  "serde_json",
  "syntect",
 ]

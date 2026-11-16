@@ -5,6 +5,8 @@
 //! two dialogs at once; a note cut off by its request's end; `Ctrl+C` over a
 //! dialog; and the viewer's paste and scroll.
 
+use cortex_testkit::cadence::{AutoRepeat, Cadence, Stroke};
+
 use super::*;
 use crate::app::dialog::{GRACE, QUIET, REPEAT};
 
@@ -40,18 +42,30 @@ fn press(app: &mut App, binding: &str, at: Instant) {
 /// Typing `text` from `from`, a key every `every` milliseconds, each with
 /// its frame. Returns when the last key was read.
 fn typing(app: &mut App, text: &str, from: Instant, every: u64) -> Instant {
-    let mut at = from;
-    for c in text.chars() {
-        at += Duration::from_millis(every);
-        wake_until(app, at);
-        app.terminal(
-            &TermEvent::Key(cortex_term::Key::plain(cortex_term::KeyCode::Char(c))),
-            at,
-        );
-        let _ = app.frame(at);
-        app.drawn(at);
+    feed(
+        app,
+        &Cadence::starting(from)
+            .typing(text, Duration::from_millis(every))
+            .strokes(),
+    )
+}
+
+/// Input as the loop takes it: its wakes before each read, a key read with
+/// more input as one of a burst (`App::burst`), and a frame after each
+/// read. Returns when the last was read.
+fn feed(app: &mut App, strokes: &[Stroke]) -> Instant {
+    for stroke in strokes {
+        wake_until(app, stroke.at);
+        if stroke.queued && matches!(stroke.event, TermEvent::Key(_)) {
+            app.burst(stroke.at);
+        }
+        app.terminal(&stroke.event, stroke.at);
+        if !stroke.queued {
+            let _ = app.frame(stroke.at);
+            app.drawn(stroke.at);
+        }
     }
-    at
+    strokes.last().expect("input to feed").at
 }
 
 /// The loop's frame at the dialog's moment, as it is woken for it: the
@@ -185,6 +199,61 @@ fn a_held_key_whose_first_repeat_comes_after_the_grace_never_answers() {
         at += Duration::from_millis(33);
     }
     assert!(answers(&link).is_empty(), "a held key answered");
+}
+
+/// A key the dialog offers, held from inside the grace, at each system's
+/// default auto-repeat, marked as a repeat or not: never an answer, and
+/// all of it typing.
+#[test]
+fn a_held_key_never_answers_at_either_systems_auto_repeat() {
+    let now = Instant::now();
+    let y = parse("y").unwrap();
+    for repeat in [AutoRepeat::X11, AutoRepeat::WINDOWS] {
+        let (mut app, link) = approval_up(now);
+        let strokes = Cadence::starting(ms(now, 50)).hold(y, repeat, 40).strokes();
+        let last = feed(&mut app, &strokes);
+        assert!(answers(&link).is_empty(), "{repeat:?}: a held key answered");
+        assert_eq!(
+            app.input().editor().expanded(),
+            "y".repeat(41),
+            "{repeat:?}"
+        );
+        // A second after it is let go, one press answers.
+        let ready = wake(&mut app).expect("the answers' frame");
+        assert_eq!(ready, last + QUIET, "{repeat:?}");
+        press(&mut app, "y", ready + Duration::from_millis(400));
+        assert_eq!(answers(&link), [ApprovalChoice::AllowOnce], "{repeat:?}");
+    }
+}
+
+/// Keys that arrive in one read (a paste where the terminal has no
+/// bracketed paste, or typing a stall held back) are typing, and none of
+/// them answers, though the dialog takes keys; one key read alone after the
+/// quiet does.
+#[test]
+fn keys_read_together_never_answer_and_one_read_alone_does() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    let ready = wake(&mut app).expect("the answers' frame");
+    let read = feed(
+        &mut app,
+        &Cadence::starting(ready)
+            .wait(Duration::from_millis(500))
+            .together("yes")
+            .strokes(),
+    );
+    assert!(answers(&link).is_empty(), "keys read together answered");
+    assert_eq!(app.input().editor().expanded(), "yes");
+    let again = wake(&mut app).expect("the answers again");
+    assert_eq!(again, read + QUIET);
+    feed(
+        &mut app,
+        &Cadence::starting(again)
+            .wait(Duration::from_millis(400))
+            .key(parse("y").unwrap())
+            .strokes(),
+    );
+    assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
 /// A key held from before the dialog came, whose first repeat comes after
@@ -636,14 +705,17 @@ fn a_key_held_after_answering_one_dialog_never_answers_the_next() {
     let (mut app, link) = approval_up(now);
     link.give(Inbound::Request(RequestId::Number(8), approval("c_8")));
     drain(&mut app, now);
-    let pressed = ms(now, 1500);
-    press(&mut app, "y", pressed);
+    let held = Cadence::starting(ms(now, 1500))
+        .hold(
+            parse("y").unwrap(),
+            AutoRepeat::new(Duration::from_millis(500), Duration::from_millis(33)),
+            10,
+        )
+        .strokes();
+    let (pressed, repeats) = held.split_first().unwrap();
+    feed(&mut app, std::slice::from_ref(pressed));
     assert_eq!(answers(&link).len(), 1, "the first press answers");
-    let mut at = pressed + Duration::from_millis(500);
-    for _ in 0..10 {
-        press(&mut app, "y", at);
-        at += Duration::from_millis(33);
-    }
+    feed(&mut app, repeats);
     assert!(
         answers(&link).is_empty(),
         "a held key answered the next dialog"

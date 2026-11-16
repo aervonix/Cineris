@@ -31,7 +31,7 @@
 //! | `dialog` | The dialogs in the input box's place, and their keys |
 //! | `wording` | What an error says, and what to do next |
 
-mod dialog;
+pub(crate) mod dialog;
 mod files;
 mod items;
 pub mod link;

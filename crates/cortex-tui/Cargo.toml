@@ -18,6 +18,11 @@ highlight = ["dep:syntect"]
 # --features demo`), for measuring key latency with the editor in the loop.
 # A feature of its own so that test builds do not link it.
 demo = []
+# The application's test kit (`testkit`): a scripted link, a session made with
+# sane defaults, and the calls that open a session and show a dialog. Code for
+# tests only: dev-dependencies turn it on, and nothing else may
+# (`cargo xtask rules`).
+test-kit = []
 
 [dependencies]
 cortex-protocol.workspace = true
@@ -30,6 +35,9 @@ syntect = { workspace = true, optional = true }
 
 [dev-dependencies]
 cortex-testkit.workspace = true
+# The crate's integration tests use its own test kit. Not an edge of the crate
+# table.
+cortex-tui = { workspace = true, features = ["test-kit"] }
 
 [[example]]
 name = "editor-demo"

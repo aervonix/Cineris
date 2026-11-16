@@ -110,7 +110,9 @@ fn an_at_typed_before_the_session_is_open_lists_the_files_once_it_is() {
     assert!(files_asked(&link).is_empty(), "asked with no session");
     link.give(Inbound::Done(
         open,
-        Ok(OpResult::SessionNew(SessionResult { session: state() })),
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().build(),
+        })),
     ));
     drain(&mut app, now);
     let _ = app.frame(now);
