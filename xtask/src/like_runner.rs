@@ -285,18 +285,25 @@ const WORK_FACTORS: &[(&str, Tier, f64)] = &[
     ("xtask", Tier::System, 13.09),
 ];
 
+/// A crate's work factor: [`WORK_FACTORS`]' where it has one, [`FACTORS`]'
+/// otherwise, and never under 1: a hosted runner is not quicker than the
+/// desk at a test's work, and a factor of 0 (a crate whose Linux-only tests
+/// start more than its Windows run costs) would hide every change to its
+/// tests' work from a comparison.
+const LEAST_WORK_FACTOR: f64 = 1.0;
+
 fn work_factor(krate: &str, tier: Tier) -> f64 {
     WORK_FACTORS
         .iter()
         .find(|(name, of, _)| *name == krate && *of == tier)
         .map_or_else(|| factor(krate, tier, Os::Windows), |(.., value)| *value)
+        .max(LEAST_WORK_FACTOR)
 }
 
 /// One test's time on the Windows runner, estimated from its time at the
-/// desk above `start` and the processes it started: its work, scaled by its
-/// crate's factor, and each start at what the runner charges for it. A test
-/// that started nothing is its time times the crate's factor, as before
-/// starts were counted.
+/// desk above `start` and the processes it started: its work (its time less
+/// what its starts cost at the desk), scaled by its crate's work factor,
+/// and each start at what the runner charges for it.
 pub(crate) fn windows_seconds(case: &TestCase, start: f64, counts: &Counts) -> f64 {
     let krate = tiers::crate_of(&case.binary);
     let tier = Tier::of(&case.binary, &case.name);
@@ -761,28 +768,32 @@ mod tests {
     fn a_tests_starts_are_charged_at_the_runners_price_and_its_work_by_its_crate() {
         // 0.104 s at the desk above a 2 ms start: 0.1 s of it the work, and
         // two bash starts at 2 ms each.
-        let case = case("cortex-core::it", "trust::sys_a", 0.106);
-        let counts = starts(&[("cortex-core::it", "trust::sys_a", "bash", 2)])
-            .of("cortex-core::it", "trust::sys_a");
+        // `cortex-policy`'s system tests, whose work factor is well above 1.
+        let case = case("cortex-policy::it", "trust::sys_a", 0.106);
+        assert!(work_factor("cortex-policy", Tier::System) > 2.0);
+        let counts = starts(&[("cortex-policy::it", "trust::sys_a", "bash", 2)])
+            .of("cortex-policy::it", "trust::sys_a");
         let seconds = windows_seconds(&case, 0.002, &counts);
-        let work = 0.1 * work_factor("cortex-core", Tier::System);
+        // The work is the time less the two starts' desk cost.
+        let work = (0.104 - 2.0 * cost(Kind::Posix, Os::Linux))
+            * work_factor("cortex-policy", Tier::System);
         let shells = 2.0 * cost(Kind::WindowsPowerShell, Os::Windows);
         assert!((seconds - (work + shells)).abs() < 1e-9, "{seconds}");
         // A test that started nothing is all work.
         let quiet = windows_seconds(&case, 0.002, &Counts::default());
         assert!(
-            (quiet - 0.104 * work_factor("cortex-core", Tier::System)).abs() < 1e-9,
+            (quiet - 0.104 * work_factor("cortex-policy", Tier::System)).abs() < 1e-9,
             "{quiet}"
         );
         // A version probe at the desk costs nothing on Windows, where the
         // tests' shell is asked nothing.
-        let probed = starts(&[("cortex-core::it", "trust::sys_a", "probe>bash", 3)])
-            .of("cortex-core::it", "trust::sys_a");
+        let probed = starts(&[("cortex-policy::it", "trust::sys_a", "probe>bash", 3)])
+            .of("cortex-policy::it", "trust::sys_a");
         let seconds = windows_seconds(&case, 0.002, &probed);
         assert!(
             (seconds
                 - (0.104 - 3.0 * cost(Kind::Probe, Os::Linux))
-                    * work_factor("cortex-core", Tier::System))
+                    * work_factor("cortex-policy", Tier::System))
             .abs()
                 < 1e-9,
             "{seconds}"
@@ -793,8 +804,8 @@ mod tests {
             seconds: 0.003,
             ..case.clone()
         };
-        let many = starts(&[("cortex-core::it", "trust::sys_a", "git", 50)])
-            .of("cortex-core::it", "trust::sys_a");
+        let many = starts(&[("cortex-policy::it", "trust::sys_a", "git", 50)])
+            .of("cortex-policy::it", "trust::sys_a");
         let seconds = windows_seconds(&short, 0.002, &many);
         assert!(
             (seconds - 50.0 * cost(Kind::Git, Os::Windows)).abs() < 1e-9,
@@ -841,6 +852,13 @@ mod tests {
         let (text, warned) = compare((&head, &head_starts), (&head, &head_starts), "main", 5);
         assert!(!warned, "{text}");
         assert!(!text.contains("warning"), "{text}");
+    }
+
+    #[test]
+    fn a_crate_whose_factor_was_measured_at_0_still_shows_its_work() {
+        assert_eq!(work_factor("cortex-core", Tier::System), LEAST_WORK_FACTOR);
+        let case = case("cortex-core::it", "trust::sys_a", 1.002);
+        assert!((windows_seconds(&case, 0.002, &Counts::default()) - 1.0).abs() < 1e-9);
     }
 
     #[test]

@@ -151,8 +151,11 @@ impl Starts {
         let mut starts = Starts::default();
         // The launcher's own start, counted as its own program's by whoever
         // started it (the harness's binary, or a test binary in that role),
-        // is the program it became: `launcher>LAUNCHER>PROGRAM`.
-        let mut launched: BTreeMap<(String, String, Kind), usize> = BTreeMap::new();
+        // is the program it became: `launcher>LAUNCHER>PROGRAM`. Only as
+        // many are moved as the launcher was started: a command wrapped and
+        // never started (a refusal after the wrap, a test of the wrap) is
+        // no start.
+        let mut launched: BTreeMap<(String, String, Kind, Kind), usize> = BTreeMap::new();
         for line in lines.lines() {
             let mut fields = line.split('\t');
             let (Some(binary), Some(name), Some(program), None) =
@@ -160,35 +163,39 @@ impl Starts {
             else {
                 continue;
             };
-            let key = (binary.to_owned(), name.to_owned());
-            let program = match program
+            if let Some((launcher, program)) = program
                 .strip_prefix(LAUNCHED)
                 .and_then(|rest| rest.split_once('>'))
             {
-                Some((launcher, program)) => {
-                    *launched
-                        .entry((key.0.clone(), key.1.clone(), Kind::of(launcher)))
-                        .or_default() += 1;
-                    program
-                }
-                None => program,
-            };
+                *launched
+                    .entry((
+                        binary.to_owned(),
+                        name.to_owned(),
+                        Kind::of(launcher),
+                        Kind::of(program),
+                    ))
+                    .or_default() += 1;
+                continue;
+            }
             *starts
                 .by_test
-                .entry(key)
+                .entry((binary.to_owned(), name.to_owned()))
                 .or_default()
                 .0
                 .entry(Kind::of(program))
                 .or_default() += 1;
         }
-        for ((binary, name, kind), count) in launched {
-            if let Some(launchers) = starts
-                .by_test
-                .get_mut(&(binary, name))
-                .and_then(|counts| counts.0.get_mut(&kind))
-            {
-                *launchers = launchers.saturating_sub(count);
+        for ((binary, name, launcher, program), count) in launched {
+            let Some(counts) = starts.by_test.get_mut(&(binary, name)) else {
+                continue;
+            };
+            let started = counts.of(launcher);
+            let moved = count.min(started);
+            if moved == 0 {
+                continue;
             }
+            counts.0.insert(launcher, started - moved);
+            *counts.0.entry(program).or_default() += moved;
         }
         starts
     }
@@ -266,6 +273,16 @@ mod tests {
         assert_eq!(
             (x.of(Kind::Posix), x.of(Kind::Other), x.of(Kind::Binary)),
             (1, 0, 1)
+        );
+        // A command wrapped and never started is no start of anything.
+        let starts = Starts::parse(
+            "cortex-sandbox\tlaunch::tests::wrap\tlauncher>cortex>bash\n\
+             cortex-sandbox\tlaunch::tests::wrap\tgit\n",
+        );
+        let w = starts.of("cortex-sandbox", "launch::tests::wrap");
+        assert_eq!(
+            (w.of(Kind::Posix), w.of(Kind::Binary), w.total()),
+            (0, 0, 1)
         );
     }
 

@@ -996,7 +996,7 @@ fn a_wait_for_a_question_goes_on_while_a_turn_is_queued() {
     world.run(async {
         let front = Front::start(&world, &core).await;
         front.prompt("first").await;
-        front
+        let queued = front
             .op(cortex_protocol::methods::Op::TurnStart(
                 cortex_protocol::methods::TurnStartParams {
                     session_id: front.session.clone(),
@@ -1005,12 +1005,19 @@ fn a_wait_for_a_question_goes_on_while_a_turn_is_queued() {
                 },
             ))
             .await
-            .expect("the second prompt is queued");
+            .expect("the second prompt is accepted");
+        assert!(
+            matches!(
+                queued,
+                cortex_protocol::methods::OpResult::TurnStart(ref started)
+                    if started.disposition == cortex_protocol::methods::Disposition::Queued
+            ),
+            "the second prompt waits behind the first: {queued:?}"
+        );
         let (id, request) = front.approval().await;
         assert_eq!(request.call_id.as_str(), "c1");
         front.answer(&id, ApprovalChoice::Deny).unwrap();
         front.turns(2).await;
-        assert_eq!(front.ends().len(), 2, "the question was the second turn's");
         front.close().await;
     });
 }

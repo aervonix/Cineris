@@ -177,8 +177,8 @@ caught-by:
 rule: The launcher's own start is counted as the program it became, not beside it.
 file: xtask/src/starts.rs
 in: Starts::parse
-find: *launchers = launchers.saturating_sub(count);
-replace: let _ = (launchers, count);
+find: counts.0.insert(launcher, started - moved);
+replace: let _ = started;
 caught-by:
     starts::tests::the_launcher_becoming_a_shell_is_the_shells_start_and_not_the_binarys
 
@@ -262,3 +262,39 @@ find: if growth <= GROWTH_TO_EXPLAIN {
 replace: if growth <= 0 {
 caught-by:
     nonblocking::tests::growth_past_100_kb_is_explained_by_crate_and_less_is_not
+
+[break] estimate-a-work-factor-of-0
+rule: A crate's work factor is never under 1, so a change to its tests' work shows.
+file: xtask/src/like_runner.rs
+in: work_factor
+find: .max(LEAST_WORK_FACTOR)
+replace:
+caught-by:
+    like_runner::tests::a_crate_whose_factor_was_measured_at_0_still_shows_its_work
+
+[break] estimate-the-desk-starts-stay-in-the-work
+rule: A test's work is its desk time less what its starts cost at the desk.
+file: xtask/src/like_runner.rs
+in: windows_seconds
+find: let work = (above - at_desk(counts)).max(0.0);
+replace: let work = above;
+caught-by:
+    like_runner::tests::a_tests_starts_are_charged_at_the_runners_price_and_its_work_by_its_crate
+
+[break] size-a-record-failure-fails-the-job
+rule: The bytes by crate fail size only when they were asked for by name.
+file: xtask/src/nonblocking.rs
+in: breakdown_outcome
+find: if asked_by_name =>
+replace: if true =>
+caught-by:
+    nonblocking::tests::a_breakdown_fails_size_only_when_it_was_asked_for_by_name
+
+[break] starts-a-wrap-with-no-start-is-a-start
+rule: A command wrapped and never started is no start: only as many launches move as the launcher was started.
+file: xtask/src/starts.rs
+in: Starts::parse
+find: let moved = count.min(started);
+replace: let moved = count;
+caught-by:
+    starts::tests::the_launcher_becoming_a_shell_is_the_shells_start_and_not_the_binarys
