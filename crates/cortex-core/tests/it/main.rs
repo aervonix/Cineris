@@ -822,7 +822,9 @@ impl Front {
     /// ran out of time.
     pub async fn told(&self, text: &str) -> String {
         let _waiting = cortex_testkit::watch::doing(format!("a notice that says {text:?}"));
-        let key = (self.client.id, self.session.clone());
+        // The front's own record of what it was sent: two fronts of one
+        // client and session (a second core, a front built by hand) are two.
+        let key = std::ptr::from_ref(&self.seen) as usize;
         let taken = TOLD.with(|told| told.borrow().get(&key).cloned().unwrap_or_default());
         let found = |seen: &[Outgoing]| {
             notices_in(seen)
@@ -991,9 +993,9 @@ fn notices_in(seen: &[Outgoing]) -> Vec<String> {
 
 thread_local! {
     /// The notices [`Front::told`] gave back already, by their place among
-    /// a front's notices, for each client and session: kept beside the
-    /// front, which tests also build by hand.
-    static TOLD: std::cell::RefCell<std::collections::HashMap<(cortex_core::ClientId, SessionId), Vec<usize>>> =
+    /// a front's notices, for each front (by where its record of what it
+    /// was sent is): kept beside the front, which tests also build by hand.
+    static TOLD: std::cell::RefCell<std::collections::HashMap<usize, Vec<usize>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 

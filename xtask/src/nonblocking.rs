@@ -764,13 +764,19 @@ pub(crate) fn size(arguments: &[String]) -> Result<()> {
     let explain = growth.is_some_and(|growth| growth > GROWTH_TO_EXPLAIN);
     let sizes = (request.breakdown || ((request.record_crates || explain) && readable))
         .then(|| breakdown(&tree, &target_directory, &target, &request, bytes));
-    if let (Some(Ok(sizes)), true) = (&sizes, archive.is_none()) {
-        let file = target_directory
-            .join("size")
-            .join(crates_record_name(&target));
-        fs::write(&file, crates_record(sizes))
-            .map_err(|error| format!("could not write {}: {error}", file.display()))?;
-    }
+    let sizes = match (sizes, archive.is_none()) {
+        (Some(Ok(sizes)), true) => {
+            let file = target_directory
+                .join("size")
+                .join(crates_record_name(&target));
+            Some(
+                fs::write(&file, crates_record(&sizes))
+                    .map(|()| sizes)
+                    .map_err(|error| format!("could not write {}: {error}", file.display())),
+            )
+        }
+        (sizes, _) => sizes,
+    };
     if let (Some(growth), Some(Ok(main))) = (growth, &main) {
         let now = match &sizes {
             Some(Ok(sizes)) => Some(sizes.as_slice()),
@@ -782,10 +788,21 @@ pub(crate) fn size(arguments: &[String]) -> Result<()> {
         }
     }
     verdict(paths, report.over, request.check)?;
-    match sizes {
-        // Asked for by name, its failure is the command's.
-        Some(Err(error)) if request.breakdown => Err(error),
-        // Made for the record or to explain growth, it fails nothing.
+    breakdown_outcome(
+        sizes.as_ref().map(|sizes| sizes.as_ref().map(|_| ())),
+        request.breakdown,
+    )
+}
+
+/// How the bytes by crate end `size`: asked for by name (`--breakdown`),
+/// their failure is the command's; made for the record (`--record-crates`)
+/// or to explain growth, it is said and fails nothing.
+fn breakdown_outcome(
+    made: Option<std::result::Result<(), &String>>,
+    asked_by_name: bool,
+) -> Result<()> {
+    match made {
+        Some(Err(error)) if asked_by_name => Err(error.clone()),
         Some(Err(error)) => {
             println!("  the bytes by crate were not read: {error}");
             Ok(())
@@ -1133,6 +1150,18 @@ mod tests {
         // Growth no symbol holds.
         let same = growth_text(150_000, Some(&main), Some(&main)).unwrap();
         assert!(same.contains("in no symbol"), "{same}");
+    }
+
+    #[test]
+    fn a_breakdown_fails_size_only_when_it_was_asked_for_by_name() {
+        let failed = "nm failed".to_owned();
+        assert_eq!(
+            breakdown_outcome(Some(Err(&failed)), true),
+            Err(failed.clone())
+        );
+        assert_eq!(breakdown_outcome(Some(Err(&failed)), false), Ok(()));
+        assert_eq!(breakdown_outcome(Some(Ok(())), true), Ok(()));
+        assert_eq!(breakdown_outcome(None, false), Ok(()));
     }
 
     #[test]
