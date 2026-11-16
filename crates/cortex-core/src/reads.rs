@@ -6,6 +6,7 @@
 
 #![allow(
     clippy::disallowed_methods,
+    clippy::disallowed_types,
     reason = "the reads here run on the blocking pool or on a thread of their own"
 )]
 
