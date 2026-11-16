@@ -1,6 +1,8 @@
 //! Atomic writes on a real file system.
 
 use std::fs;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use cortex_base::atomic::BEFORE_THE_RENAME;
@@ -195,6 +197,68 @@ fn a_reader_sees_the_old_content_or_the_new_and_never_a_mixture() {
 /// is over, and a reader that spins on the name could not tell an empty
 /// file made early from one made at the rename: it would see a file, and
 /// the content it saw would depend on when it looked.
+/// The race itself, beside the stops above: a reader that reads while a
+/// hundred replaces run, at whatever moments the machine gives it. On
+/// Windows a read can meet a rename in the middle, which no stop can make
+/// happen; there the reader's read may fail, and the replace may be
+/// refused, but neither may give a mixture.
+#[test]
+fn a_reader_racing_the_replaces_never_sees_a_mixture() {
+    let scratch = Scratch::new("atomic_racing_reader");
+    let target = scratch.join("shared.txt");
+    let old = vec![b'a'; 64 * 1024];
+    let new = vec![b'b'; 80 * 1024];
+    fs::write(&target, &old).unwrap();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let reader = {
+        let (target, stop, old, new) =
+            (target.clone(), Arc::clone(&stop), old.clone(), new.clone());
+        std::thread::spawn(move || {
+            let mut reads = 0u32;
+            let mut torn = 0u32;
+            while !stop.load(Ordering::Relaxed) || reads == 0 {
+                // A read can fail outright while the file is being swapped
+                // on Windows. What it must never do is succeed with part of
+                // one content or a mixture of the two.
+                if let Ok(seen) = fs::read(&target) {
+                    reads += 1;
+                    if seen != old && seen != new {
+                        torn += 1;
+                    }
+                }
+            }
+            (reads, torn)
+        })
+    };
+
+    let mut replaced = 0;
+    for round in 0..100 {
+        let contents = if round % 2 == 0 { &new } else { &old };
+        // On Windows a reader that has the file open at the wrong moment
+        // can make one replace fail: the retries wait on the fake clock, so
+        // they take no time and the reader may still be there. The file is
+        // then unchanged, which is the property under test.
+        match write_atomic(&target, contents, &options(), &FakeClock::default()) {
+            Ok(()) => replaced += 1,
+            Err(AtomicWriteError::InUse { .. } | AtomicWriteError::Io { .. }) if cfg!(windows) => {}
+            Err(error) => panic!("round {round}: {error}"),
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    let (reads, torn) = reader.join().expect("the reader finishes");
+
+    assert!(replaced > 0, "no replace succeeded");
+    assert!(reads > 0, "the reader never read");
+    assert_eq!(
+        torn, 0,
+        "{torn} of {reads} reads saw a file that was neither version"
+    );
+    let last = fs::read(&target).unwrap();
+    assert!(last == old || last == new);
+    assert_eq!(scratch.listing(""), ["shared.txt"]);
+}
+
 #[test]
 fn a_file_that_is_created_is_not_there_until_its_content_is_complete() {
     let scratch = Scratch::new("atomic_created_whole");
