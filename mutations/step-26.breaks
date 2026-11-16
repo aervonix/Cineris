@@ -242,7 +242,7 @@ caught-by:
 [break] protected-paths-not-looked-at
 rule: Every confined command has its protected paths looked at before and after it.
 file: crates/cortex-core/src/checkpoints.rs
-in: RecordingShell::run
+in: RecordingShell::run_by
 find: .filter(|_| !unconfined)
 replace: .filter(|_| false)
 caught-by:
@@ -251,7 +251,7 @@ caught-by:
 [break] a-protected-change-is-not-kept-for-undo
 rule: What a changed protected path held before the command is kept in the round's checkpoint, so undo puts it back.
 file: crates/cortex-core/src/checkpoints.rs
-in: RecordingShell::run
+in: RecordingShell::run_by
 find: rounds.record_protected(&protected)
 replace: { let _ = protected; Vec::new() }
 caught-by:
@@ -260,7 +260,7 @@ caught-by:
 [break] a-protected-change-does-not-stop-the-turn
 rule: A confined command that changed protected paths stops its turn at the next call.
 file: crates/cortex-core/src/checkpoints.rs
-in: RecordingShell::run
+in: RecordingShell::run_by
 find: self.policy.stop_turn(cx.turn, note);
 replace: let _ = note;
 caught-by:
@@ -465,7 +465,7 @@ caught-by:
 [break] a-look-the-command-cut-short-goes-on
 rule: A command that makes the look after it stop at its bound, where the look before did not, stops the turn.
 file: crates/cortex-core/src/checkpoints.rs
-in: RecordingShell::run
+in: RecordingShell::run_by
 find: if !changed.is_empty() || (complete.0 && !complete.1) {
 replace: if !changed.is_empty() {
 caught-by:

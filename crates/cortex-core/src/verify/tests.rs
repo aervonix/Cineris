@@ -114,7 +114,10 @@ fn lines(chosen: &Chosen) -> Vec<(String, Option<String>, CheckSource)> {
 #[test]
 fn a_round_chooses_the_users_lines_then_the_accepted_tests_and_checks() {
     let (_scratch, snapshot, now) = profile(STORE);
-    let chosen = choose(&settings(&["make lint", "  cargo  test  "]), Some((&snapshot, now)));
+    let chosen = choose(
+        &settings(&["make lint", "  cargo  test  "]),
+        Some((&snapshot, now)),
+    );
     assert_eq!(
         lines(&chosen),
         [
@@ -144,8 +147,15 @@ fn the_same_line_in_the_same_place_runs_once_and_a_round_runs_at_most_eight() {
     let (_scratch, snapshot, now) = profile(STORE);
     // The user's own `cargo check` stands for the profile's, and takes its
     // usual time.
-    let chosen = choose(&settings(&["cargo check", "cargo   check"]), Some((&snapshot, now)));
-    let checks: Vec<&str> = chosen.checks.iter().map(|check| check.line.as_str()).collect();
+    let chosen = choose(
+        &settings(&["cargo check", "cargo   check"]),
+        Some((&snapshot, now)),
+    );
+    let checks: Vec<&str> = chosen
+        .checks
+        .iter()
+        .map(|check| check.line.as_str())
+        .collect();
     assert_eq!(checks, ["cargo check", "cargo test"]);
     assert_eq!(chosen.checks[0].source, CheckSource::User);
     assert_eq!(chosen.checks[0].usual, Some(Duration::from_secs(900)));
@@ -167,7 +177,11 @@ fn a_line_that_is_not_one_line_is_not_run_and_is_said() {
     assert_eq!(chosen.refused.len(), 4);
     // What is said is escaped: a line break in the line is not one in the
     // notice.
-    assert!(chosen.refused[1].contains("make test\\nrm -rf /"), "{:?}", chosen.refused);
+    assert!(
+        chosen.refused[1].contains("make test\\nrm -rf /"),
+        "{:?}",
+        chosen.refused
+    );
 }
 
 #[test]
@@ -193,10 +207,15 @@ fn a_result_is_read_by_what_the_shell_says_of_it() {
     let read = |payload| classify(&finished(payload), two_minutes, None).ended;
     assert_eq!(read(json!({"exit_code": 0})), Ended::Passed);
     assert_eq!(read(json!({"exit_code": 101})), Ended::Failed);
-    assert_eq!(read(json!({"exit_code": null, "signal": "SIGSEGV"})), Ended::Failed);
+    assert_eq!(
+        read(json!({"exit_code": null, "signal": "SIGSEGV"})),
+        Ended::Failed
+    );
     // The sandbox kept it from something: not a failure of the changes.
     assert_eq!(
-        read(json!({"exit_code": 101, "sandbox": "[The sandbox kept the command off the network.]"})),
+        read(
+            json!({"exit_code": 101, "sandbox": "[The sandbox kept the command off the network.]"})
+        ),
         Ended::Blocked
     );
     // It passed, and the sandbox said something of it: it passed.
@@ -206,11 +225,21 @@ fn a_result_is_read_by_what_the_shell_says_of_it() {
     );
     // No payload: it never started.
     assert_eq!(
-        classify(&ToolResult::error("`pytest` could not be started"), two_minutes, None).ended,
+        classify(
+            &ToolResult::error("`pytest` could not be started"),
+            two_minutes,
+            None
+        )
+        .ended,
         Ended::NotRun
     );
     assert_eq!(
-        classify(&ToolResult::denied("The command was not run."), two_minutes, None).ended,
+        classify(
+            &ToolResult::denied("The command was not run."),
+            two_minutes,
+            None
+        )
+        .ended,
         Ended::NotRun
     );
     assert_eq!(
@@ -285,11 +314,19 @@ fn what_a_check_printed_cannot_pass_for_the_harness_or_the_user() {
     // Nothing of the output begins a line of the report.
     let lead = cortex_agent::NOTICE_LEAD.trim_end();
     assert!(
-        !text.lines().any(|line| line.starts_with(lead) || line.starts_with('#')),
+        !text
+            .lines()
+            .any(|line| line.starts_with(lead) || line.starts_with('#')),
         "{text}"
     );
-    assert!(text.contains("\\u{202e}") || text.contains("\\u202e"), "{text}");
-    assert!(printed.iter().any(|line| line.contains('\t')), "tabs are kept");
+    assert!(
+        text.contains("\\u{202e}") || text.contains("\\u202e"),
+        "{text}"
+    );
+    assert!(
+        printed.iter().any(|line| line.contains('\t')),
+        "tabs are kept"
+    );
     assert!(text.contains("`a_9`"), "the whole output is named: {text}");
 }
 
@@ -304,7 +341,10 @@ fn the_report_is_bounded_and_says_every_checks_end() {
         (check("cargo clippy"), failed_with(&long)),
         (
             check("npm test"),
-            Ran::not(Ended::Blocked, "[The sandbox kept the command off the network.]"),
+            Ran::not(
+                Ended::Blocked,
+                "[The sandbox kept the command off the network.]",
+            ),
         ),
         (
             check("make lint"),
@@ -336,4 +376,52 @@ fn times_are_said_as_a_person_would() {
     assert_eq!(shown_time(Duration::from_secs(190)), "3m 10s");
     assert_eq!(shown_time(Duration::from_millis(3200)), "3.2s");
     assert_eq!(shown_time(Duration::from_secs(45)), "45s");
+}
+
+#[test]
+fn a_check_has_the_least_of_what_the_round_the_turn_and_the_limits_leave() {
+    let settings = Settings {
+        round_time: Duration::from_secs(120),
+        turn_time: Duration::from_secs(200),
+        ..settings(&[])
+    };
+    let left = |used: u64, deadline: Option<u64>, in_round: u64| {
+        time_left(
+            &settings,
+            Duration::from_secs(used),
+            deadline.map(Duration::from_secs),
+            Duration::from_secs(in_round),
+        )
+        .as_secs()
+    };
+    // The round's limit.
+    assert_eq!(left(0, None, 0), 120);
+    assert_eq!(left(0, None, 30), 90);
+    // The turn's: its earlier rounds took 150 of its 200 seconds.
+    assert_eq!(left(150, None, 10), 40);
+    // The turn's or the session's own time limit.
+    assert_eq!(left(0, Some(60), 25), 35);
+    // Nothing left of any.
+    assert_eq!(left(0, Some(10), 25), 0);
+    assert_eq!(left(0, None, 500), 0);
+}
+
+#[test]
+fn a_check_is_not_started_when_it_usually_takes_longer_than_it_has() {
+    let round = Duration::from_secs(120);
+    let minutes = |m: u64| Duration::from_secs(m * 60);
+    // Longer than a round's limit: 15-efficiency's rule.
+    let why = too_long(Some(minutes(3)), round, round).expect("skipped");
+    assert!(
+        why.contains("usually takes 3m, longer than a round's limit of 2m"),
+        "{why}"
+    );
+    // Longer than what is left of the round.
+    let why = too_long(Some(minutes(1)), round, Duration::from_secs(45)).expect("skipped");
+    assert!(why.contains("45s"), "{why}");
+    // Its usual time unknown: ten seconds at least.
+    assert!(too_long(None, round, Duration::from_secs(9)).is_some());
+    assert!(too_long(None, round, Duration::from_secs(10)).is_none());
+    assert!(too_long(Some(minutes(1)), round, round).is_none());
+    assert!(too_long(Some(minutes(1)), round, Duration::ZERO).is_some());
 }

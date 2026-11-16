@@ -1601,10 +1601,7 @@ impl Session {
         let emitter = Arc::clone(&self.env.emitter);
         let turn_id = turn.id.clone();
         let notify = move |notice: VerificationNotice| {
-            emitter.emit(
-                Some(&turn_id),
-                Event::Notice(Notice::Verification(notice)),
-            );
+            emitter.emit(Some(&turn_id), Event::Notice(Notice::Verification(notice)));
         };
         let cx = VerifyCx {
             session: &self.shared.info.id,
@@ -1667,9 +1664,8 @@ impl Session {
                 }
                 // The model is told why, as a stopped tool round tells it
                 // in the call's result.
-                let note = format!(
-                    "The project's checks were stopped, and this turn with them: {reason}"
-                );
+                let note =
+                    format!("The project's checks were stopped, and this turn with them: {reason}");
                 if let Err(error) = self
                     .record_notice(turn, NoticeSource::Verification, note)
                     .await

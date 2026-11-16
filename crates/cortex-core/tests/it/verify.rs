@@ -8,13 +8,13 @@
 //! a time limit, and a flaky test's retry. The rest of what runs is the
 //! same code on both systems, and runs on Linux.
 
+use cortex_protocol::Item;
 use cortex_protocol::event::{
     CheckOutcome, Event, Notice, TurnOutcome, Verification, VerificationNotice, VerificationPhase,
 };
 use cortex_protocol::lease::Level;
 use cortex_protocol::methods::{Op, SessionSetParams};
 use cortex_protocol::session::SessionSettings;
-use cortex_protocol::Item;
 use cortex_testkit::Response;
 use serde_json::json;
 
@@ -24,7 +24,10 @@ use crate::{Front, World, calls, says, texts};
 /// on Linux, a batch file on Windows, whichever shell the machine has.
 fn program(world: &World, name: &str, unix: &str, windows: &str) -> String {
     if cfg!(windows) {
-        world.put(&format!("{name}.cmd"), format!("@echo off\r\n{windows}\r\n"));
+        world.put(
+            &format!("{name}.cmd"),
+            format!("@echo off\r\n{windows}\r\n"),
+        );
         format!("./{name}.cmd")
     } else {
         world.put(name, format!("#!/bin/sh\n{unix}\n"));
@@ -55,8 +58,9 @@ fn user_checks(world: &World, lines: &[&str], extra: &str) {
     ));
 }
 
-/// The project's private store, as `cortex project` keeps it.
-fn store(world: &World, text: &str) {
+/// The project's private store, as `cortex project` keeps it: written, and
+/// its path given back.
+fn store(world: &World, text: &str) -> std::path::PathBuf {
     let key = cortex_base::PathResolver::new(&world.workspace, cortex_base::PathOptions::new())
         .unwrap()
         .root()
@@ -69,7 +73,8 @@ fn store(world: &World, text: &str) {
         .join(key.as_str())
         .join("knowledge.toml");
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    std::fs::write(file, text).unwrap();
+    std::fs::write(&file, text).unwrap();
+    file
 }
 
 /// The verification notices the front end was sent.
@@ -103,7 +108,11 @@ fn rounds(front: &Front) -> Vec<(VerificationPhase, Vec<(String, Option<CheckOut
 
 /// Runs a turn to its end, letting every wait on the world's timer go: a
 /// check's time limit, and the graces of stopping it.
-async fn turn_letting_time_pass(world: &World, front: &Front, text: &str) -> cortex_protocol::event::TurnCompleted {
+async fn turn_letting_time_pass(
+    world: &World,
+    front: &Front,
+    text: &str,
+) -> cortex_protocol::event::TurnCompleted {
     let mut turn = std::pin::pin!(front.turn(text));
     std::future::poll_fn(|context| {
         if let std::task::Poll::Ready(ended) = turn.as_mut().poll(context) {
@@ -129,9 +138,16 @@ fn nothing_runs_when_no_check_is_known() {
         let ended = front.turn("change it").await;
         assert_eq!(ended.outcome, TurnOutcome::Completed);
         assert_eq!(ended.verification, Some(Verification::Skipped));
-        assert!(told(&front).is_empty(), "nothing is said: {:?}", told(&front));
         assert!(
-            !front.notices().iter().any(|notice| notice.contains("check")),
+            told(&front).is_empty(),
+            "nothing is said: {:?}",
+            told(&front)
+        );
+        assert!(
+            !front
+                .notices()
+                .iter()
+                .any(|notice| notice.contains("check")),
             "{:?}",
             front.notices()
         );
@@ -146,7 +162,7 @@ fn in_a_project_the_user_has_not_trusted_no_check_runs() {
     // runs a repository's code before the user trusts it. Neither line
     // names a program that exists, so a run would fail the test.
     user_checks(&world, &["./missing-check"], "");
-    store(
+    let _ = store(
         &world,
         "version = 1\n\n[[entry]]\nkind = \"command\"\ntext = \"Tests.\"\nstatus = \
          \"active\"\ncommand = { purpose = \"test\", run = \"./missing-test\" }\n",
@@ -217,6 +233,54 @@ fn at_the_read_only_level_no_check_runs() {
             "{:?}",
             front.notices()
         );
+        front.close().await;
+    });
+}
+
+#[test]
+fn a_users_check_that_a_rule_refuses_does_not_run() {
+    let world = World::new("verify_denied", [writes("c1", "a.txt"), says("Done.")]);
+    // The line names no program: run, it would fail, not be refused.
+    world.user_config(
+        "[verify]\ncommands = ['./missing-check']\n\n[[permissions.rules]]\neffect = \
+         \"exec\"\nmatch = \"./missing-check\"\naction = \"deny\"\n",
+    );
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let ended = front.turn("change it").await;
+        assert_eq!(ended.verification, Some(Verification::Skipped));
+        let finished = told(&front).pop().expect("a finished round");
+        assert_eq!(finished.checks[0].outcome, Some(CheckOutcome::NotRun));
+        assert!(
+            finished.checks[0]
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("A rule refuses it")),
+            "{finished:?}"
+        );
+        front.close().await;
+    });
+}
+
+#[test]
+fn an_accepted_check_the_engine_would_ask_about_does_not_run() {
+    let world = World::new("verify_would_ask", [writes("c1", "a.txt"), says("Done.")]);
+    // The user wrote it, so it is accepted; but a line of two commands is
+    // not one a rule can allow exactly, so it would ask, and does not run.
+    let _ = store(
+        &world,
+        "version = 1\n\n[[entry]]\nkind = \"command\"\ntext = \"Tests.\"\nstatus = \
+         \"active\"\ncommand = { purpose = \"test\", run = \"./missing && ./missing\" }\n",
+    );
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let ended = front.turn("change it").await;
+        assert_eq!(ended.verification, Some(Verification::Skipped));
+        let finished = told(&front).pop().expect("a finished round");
+        assert_eq!(finished.checks[0].outcome, Some(CheckOutcome::NotRun));
+        assert!(front.approvals().is_empty(), "a check never asks");
         front.close().await;
     });
 }
@@ -312,12 +376,7 @@ fn sys_a_failed_check_goes_back_to_the_model_marked_as_its_output_and_passes_whe
 #[test]
 fn sys_a_check_over_its_time_limit_is_stopped_and_said_and_not_fed_back() {
     let world = World::new("verify_time_limit", [writes("c1", "a.txt"), says("Done.")]);
-    let check = program(
-        &world,
-        "slow",
-        "sleep 600",
-        "ping -n 600 127.0.0.1 > nul",
-    );
+    let check = program(&world, "slow", "sleep 600", "ping -n 600 127.0.0.1 > nul");
     user_checks(&world, &[&check], "round_time = \"30s\"\n");
     let core = world.core_with(|options| options.trust_project = true);
     world.run(async {
@@ -352,7 +411,7 @@ fn sys_a_known_flaky_test_that_fails_runs_once_more_and_passing_is_said_to_be_fl
         "if exist once (exit /b 0)\r\n>once echo x\r\nexit /b 1",
     );
     user_checks(&world, &[&check], "");
-    store(
+    let _ = store(
         &world,
         &format!(
             "version = 1\n\n[[entry]]\nkind = \"flaky\"\ntext = \"It flips.\"\nstatus = \
@@ -379,7 +438,7 @@ fn sys_only_the_users_lines_and_the_commands_the_user_accepted_run() {
     let observed = program(&world, "observed", "exit 1", "exit /b 1");
     // One the user accepted, and one that became active by observation
     // alone: that one is in the prompt, and not among the checks.
-    store(
+    let _ = store(
         &world,
         &format!(
             "version = 1\n\n[[entry]]\nid = \"k_1\"\nkind = \"command\"\ntext = \"Tests.\"\nstatus \
@@ -409,7 +468,13 @@ fn sys_only_the_users_lines_and_the_commands_the_user_accepted_run() {
                 ),
             ]
         );
-        assert_eq!(told(&front)[0].checks[0].entry.as_ref().map(|id| id.as_str()), Some("k_1"));
+        assert_eq!(
+            told(&front)[0].checks[0]
+                .entry
+                .as_ref()
+                .map(|id| id.as_str()),
+            Some("k_1")
+        );
         front.close().await;
     });
 }
@@ -469,7 +534,15 @@ fn sys_a_check_that_changes_a_protected_path_stops_the_turn_and_undo_puts_it_bac
     if !crate::sandbox::enforcing_here() {
         return;
     }
-    let world = World::new("verify_protected", [says("Ready."), writes("c1", "a.txt"), says("Done."), says("Never.")]);
+    let world = World::new(
+        "verify_protected",
+        [
+            says("Ready."),
+            writes("c1", "a.txt"),
+            says("Done."),
+            says("Never."),
+        ],
+    );
     world.put(".git/config", "[core]\n");
     world.put(".git/hooks/pre-commit.sample", "#!/bin/sh\n");
     let check = program(&world, "check", "echo evil > .git/hooks/pre-commit", "");
@@ -512,19 +585,149 @@ fn sys_a_check_that_changes_a_protected_path_stops_the_turn_and_undo_puts_it_bac
             })
             .collect();
         assert!(
-            reason.iter().any(|text| text.contains(".git/hooks/pre-commit")),
+            reason
+                .iter()
+                .any(|text| text.contains(".git/hooks/pre-commit")),
             "the model is told why: {reason:?}"
         );
         // What the check changed is the turn's, and its undo puts it back.
         front
-            .op(Op::SessionRewind(cortex_protocol::methods::SessionRewindParams {
-                session_id: front.session.clone(),
-                to: keep,
-                restore_files: true,
-            }))
+            .op(Op::SessionRewind(
+                cortex_protocol::methods::SessionRewindParams {
+                    session_id: front.session.clone(),
+                    to: keep,
+                    restore_files: true,
+                },
+            ))
             .await
             .unwrap();
         assert!(world.read(".git/hooks/pre-commit").is_none());
+        front.close().await;
+    });
+}
+
+/// A store holding one command the user wrote, with its status.
+#[cfg(unix)]
+fn one_command(line: &str, status: &str) -> String {
+    format!(
+        "version = 1\n\n[[entry]]\nid = \"k_1\"\nkind = \"command\"\ntext = \"Tests.\"\nstatus = \
+         \"{status}\"\ncommand = {{ purpose = \"test\", run = \"{line}\" }}\n"
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn sys_an_entry_turned_off_while_its_round_runs_does_not_run() {
+    let world = World::new("verify_turned_off", [writes("c1", "a.txt"), says("Done.")]);
+    let accepted = program(&world, "accepted", "exit 0", "");
+    let file = store(&world, &one_command(&accepted, "active"));
+    // The user's own check runs first, and turns the entry off, as
+    // `cortex project disable` in another terminal would.
+    let disable = program(
+        &world,
+        "disable",
+        &format!(
+            "cat > '{}' <<'END'\n{}END",
+            file.display(),
+            one_command(&accepted, "disabled")
+        ),
+        "",
+    );
+    user_checks(&world, &[&disable], "");
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let ended = front.turn("change it").await;
+        assert_eq!(
+            rounds(&front)[1],
+            (
+                VerificationPhase::Finished,
+                vec![
+                    (disable.clone(), Some(CheckOutcome::Passed)),
+                    (accepted.clone(), Some(CheckOutcome::NotRun)),
+                ]
+            )
+        );
+        assert_eq!(ended.verification, Some(Verification::Incomplete));
+        front.close().await;
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn sys_a_check_confirms_what_the_profile_holds_and_teaches_it_nothing_new() {
+    let world = World::new(
+        "verify_teaches_nothing",
+        [
+            writes("c1", "a.txt"),
+            says("Done."),
+            writes("c2", "b.txt"),
+            says("Done again."),
+        ],
+    );
+    // A test runner the observer classes by its name: seen to pass twice
+    // in the model's own calls, it would be learned.
+    let check = program(&world, "jest", "exit 0", "");
+    user_checks(&world, &[&check], "");
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        for text in ["change it", "and again"] {
+            let ended = front.turn(text).await;
+            assert_eq!(ended.verification, Some(Verification::Passed));
+        }
+        let listed = front
+            .op(Op::ProjectList(
+                cortex_protocol::methods::ProjectListParams {
+                    session_id: Some(front.session.clone()),
+                    workspace: None,
+                },
+            ))
+            .await
+            .expect("project/list");
+        let cortex_protocol::methods::OpResult::ProjectList(listed) = listed else {
+            panic!("not the result of project/list");
+        };
+        assert_eq!(listed.entries, [], "the harness's own runs teach nothing");
+        assert!(
+            !front
+                .notices()
+                .iter()
+                .any(|notice| notice.starts_with("Learned")),
+            "{:?}",
+            front.notices()
+        );
+        front.close().await;
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn sys_what_a_failed_check_printed_keeps_the_lines_that_report_a_problem() {
+    let world = World::new(
+        "verify_lines_that_matter",
+        [writes("c1", "a.txt"), says("Done."), says("Seen.")],
+    );
+    // Three thousand lines that are not alike, and one error among them:
+    // more than a result holds, by its count of lines.
+    let check = program(
+        &world,
+        "check",
+        "awk 'BEGIN { for (i = 0; i < 3000; i++) { if (i == 1500) print \"error: the parser \
+         broke at line 7\"; printf \"work %c%c%c\\n\", 97 + i % 26, 97 + int(i / 26) % 26, 97 + \
+         int(i / 676) % 26 } }'\nexit 1",
+        "",
+    );
+    user_checks(&world, &[&check], "");
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("change it").await;
+        let report = sent_report(&world);
+        assert!(
+            report.contains("| error: the parser broke at line 7"),
+            "{report}"
+        );
         front.close().await;
     });
 }
