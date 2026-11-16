@@ -128,7 +128,9 @@ fn play(case: &str) {
     // On a row of its own: replies to the queries that come once the
     // terminal is put back are echoed, and the text after them on their row
     // would wrap, its words split across two rows.
-    write_terminal(&format!("\r\n{HANDED} {code}, the watchdog at {left} s\r\n"));
+    write_terminal(&format!(
+        "\r\n{HANDED} {code}, the watchdog at {left} s\r\n"
+    ));
     match case {
         // A second SIGHUP, as the kernel and a shell send one after the
         // other when a terminal closes: the same end, which goes on.
