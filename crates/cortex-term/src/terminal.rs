@@ -375,6 +375,30 @@ impl<D: Device> Terminal<D> {
         self.device.waker()
     }
 
+    /// Hands the signals that end the program to it from now on (since step
+    /// 23): SIGTERM, SIGHUP, SIGINT and SIGQUIT on Unix; on Windows
+    /// `Ctrl+Break`, `Ctrl+C` as a console event, and the console's close,
+    /// log-off and shutdown. The terminal is put back at once, as it always
+    /// is, and the program is then woken to end itself instead of being
+    /// ended: [`ending`](Self::ending) says the exit code to end with, and
+    /// [`signal_ended`] that it has ended. A watchdog ends the process if
+    /// it has not within 3 s (`alarm` on Unix; on Windows the handler's
+    /// thread waits that long, since Windows ends the process when it
+    /// returns from a close). A second signal ends the process at once.
+    pub fn hand_signals_over(&mut self) {
+        #[cfg(windows)]
+        sys::prepare_hand_off();
+        sys::set_hand_off(true);
+    }
+
+    /// The exit code a signal handed over asks the program to end with:
+    /// 143 for SIGTERM and `Ctrl+Break`, 129 for SIGHUP and the console's
+    /// close, 130 for SIGINT, 131 for SIGQUIT. `None` while none has come.
+    #[must_use]
+    pub fn ending(&self) -> Option<u8> {
+        sys::ended_by()
+    }
+
     /// Turns the alternate screen on or off: the viewer's full screen, which
     /// leaves the main screen, its scrollback and the live region as they
     /// were (since step 23). While it is on, an emergency restore leaves it
@@ -658,6 +682,15 @@ impl<D: Device> Terminal<D> {
             }
         }
     }
+}
+
+/// The program has ended what a signal handed to it asked (see
+/// [`Terminal::hand_signals_over`]): on Windows the console's handler stops
+/// waiting for it. Called last, just before the program exits.
+pub fn signal_ended() {
+    sys::mark_ended();
+    #[cfg(windows)]
+    sys::signal_ended();
 }
 
 /// `bytes` in the standard base64 alphabet, padded: what the clipboard

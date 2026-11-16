@@ -1,7 +1,7 @@
 //! The operating system's side of the terminal: one module per system, the
 //! only places in this crate where `unsafe` is allowed, and what both share.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 #[cfg(unix)]
 mod unix;
@@ -86,6 +86,55 @@ pub(crate) fn set_win32(on: bool) {
 /// Records whether the alternate screen is on.
 pub(crate) fn set_alternate(on: bool) {
     set(ALTERNATE, on);
+}
+
+/// Whether a signal that ends the program is handed to it (since step 23):
+/// the terminal is put back at once, as always, and then the program is
+/// woken to end itself, with a watchdog, instead of being ended there.
+static HAND_OFF: AtomicBool = AtomicBool::new(false);
+/// The exit code of the signal handed over (`128 +` its number), 0 while
+/// none has come.
+static ENDED_BY: AtomicU8 = AtomicU8::new(0);
+/// Set once the program has done what the signal asked, for Windows's
+/// handler, which waits for it.
+static ENDED: AtomicBool = AtomicBool::new(false);
+
+/// Hands the signals that end the program to it from now on.
+pub(crate) fn set_hand_off(on: bool) {
+    HAND_OFF.store(on, Ordering::SeqCst);
+}
+
+/// Takes a signal for the program, `code` its exit code: `true` for the
+/// first, which the program is woken for; `false` when the hand-off is off
+/// or a signal came before, and this one ends the process at once.
+/// Async-signal-safe: atomics alone.
+pub(crate) fn hand_over(code: u8) -> bool {
+    HAND_OFF.load(Ordering::SeqCst)
+        && ENDED_BY
+            .compare_exchange(0, code, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+}
+
+/// The exit code of the signal handed over, once one has come.
+pub(crate) fn ended_by() -> Option<u8> {
+    match ENDED_BY.load(Ordering::SeqCst) {
+        0 => None,
+        code => Some(code),
+    }
+}
+
+/// The program has done what the signal asked.
+pub(crate) fn mark_ended() {
+    ENDED.store(true, Ordering::SeqCst);
+}
+
+/// Whether the program has.
+#[cfg_attr(
+    not(windows),
+    allow(dead_code, reason = "only Windows's handler waits")
+)]
+pub(crate) fn has_ended() -> bool {
+    ENDED.load(Ordering::SeqCst)
 }
 
 #[cfg(test)]

@@ -325,6 +325,22 @@ impl App {
         }
     }
 
+    /// A signal that ends the program came, its exit code `code`: a running
+    /// turn is stopped at once (`turn/interrupt` with `now`), and the
+    /// application ends.
+    pub fn signalled(&mut self, code: u8) {
+        if self.running.is_some()
+            && let Some(session) = self.session.as_ref().map(|s| s.session_id.clone())
+        {
+            let ticket = self.link.send(Op::TurnInterrupt(TurnInterruptParams {
+                session_id: session,
+                now: true,
+            }));
+            self.pending.insert(ticket, Pending::Said);
+        }
+        self.exit = Some(Exit::Signal(code));
+    }
+
     /// Whether the person asked for the external editor, taken: the loop
     /// hands the terminal over, runs it on [`editor_text`], and gives the
     /// result to [`edited`].

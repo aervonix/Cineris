@@ -26,21 +26,23 @@
 use std::io;
 use std::ptr;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{FALSE, HANDLE, TRUE, WAIT_OBJECT_0};
 use windows_sys::Win32::Storage::FileSystem::WriteFile;
 use windows_sys::Win32::System::Console::{
-    CONSOLE_SCREEN_BUFFER_INFO, CTRL_C_EVENT, DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT,
-    ENABLE_LINE_INPUT, ENABLE_MOUSE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_PROCESSED_OUTPUT,
-    ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT,
-    GetConsoleCP, GetConsoleMode, GetConsoleOutputCP, GetConsoleScreenBufferInfo,
-    GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD, KEY_EVENT, ReadConsoleInputW,
-    STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCP, SetConsoleCtrlHandler, SetConsoleMode,
-    SetConsoleOutputCP, WINDOW_BUFFER_SIZE_EVENT,
+    CONSOLE_SCREEN_BUFFER_INFO, CTRL_BREAK_EVENT, CTRL_C_EVENT, DISABLE_NEWLINE_AUTO_RETURN,
+    ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_MOUSE_INPUT, ENABLE_PROCESSED_INPUT,
+    ENABLE_PROCESSED_OUTPUT, ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+    ENABLE_WINDOW_INPUT, GetConsoleCP, GetConsoleMode, GetConsoleOutputCP,
+    GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD,
+    KEY_EVENT, ReadConsoleInputW, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCP,
+    SetConsoleCtrlHandler, SetConsoleMode, SetConsoleOutputCP, WINDOW_BUFFER_SIZE_EVENT,
 };
-use windows_sys::Win32::System::Threading::{CreateEventW, SetEvent, WaitForMultipleObjects};
+use windows_sys::Win32::System::Threading::{
+    CreateEventW, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
+};
 
 use super::{Ready, restore_sequence};
 
@@ -200,9 +202,56 @@ unsafe extern "system" fn on_control(event: u32) -> windows_sys::core::BOOL {
         return TRUE;
     }
     emergency();
+    // Handed to the program, which ends itself: Windows ends the process
+    // when this returns from a close, log-off or shutdown event, so it
+    // waits for the program, at most 3 s, on its own thread.
+    let code = match event {
+        CTRL_C_EVENT => 130,
+        CTRL_BREAK_EVENT => 143,
+        _ => 129,
+    };
+    if super::hand_over(code) {
+        wake();
+        let ended = ended_event();
+        if ended != 0 {
+            // SAFETY: the event lives for the life of the process.
+            unsafe { WaitForSingleObject(ended as HANDLE, 3000) };
+        }
+        return if super::has_ended() { TRUE } else { FALSE };
+    }
     // Not handled: the next handler, in the end the system's, ends the
     // process as the event asks.
     FALSE
+}
+
+/// The event the program sets once it has ended what a signal asked.
+static ENDED_EVENT: AtomicUsize = AtomicUsize::new(0);
+
+fn ended_event() -> usize {
+    ENDED_EVENT.load(Ordering::SeqCst)
+}
+
+/// Makes the event [`on_control`] waits on, once: before the handler that
+/// waits is installed.
+pub(crate) fn prepare_hand_off() {
+    if ENDED_EVENT.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    // SAFETY: an unnamed manual-reset event, not signalled, default
+    // security.
+    let event = unsafe { CreateEventW(ptr::null(), TRUE, FALSE, ptr::null()) };
+    if !event.is_null() {
+        ENDED_EVENT.store(event as usize, Ordering::SeqCst);
+    }
+}
+
+/// The program has ended what the signal asked: the handler's wait ends.
+pub(crate) fn signal_ended() {
+    let event = ENDED_EVENT.load(Ordering::SeqCst);
+    if event != 0 {
+        // SAFETY: the event lives for the life of the process.
+        unsafe { SetEvent(event as HANDLE) };
+    }
 }
 
 fn wake_event() -> io::Result<HANDLE> {

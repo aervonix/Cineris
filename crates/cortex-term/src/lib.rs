@@ -48,4 +48,5 @@ pub use style::{Color, ColorDepth, Style};
 pub use sys::Ready;
 pub use terminal::{
     Device, InterruptsIgnored, System, Terminal, Waker, ignore_interrupts, is_terminal,
+    signal_ended,
 };

@@ -46,7 +46,7 @@ use cortex_protocol::{ErrorData, SessionId};
 /// What the binary hands the terminal layer, through this crate: the
 /// `[terminal]` overrides, the colour depth they name, the waker a link
 /// calls, and what the terminal can do.
-pub use cortex_term::{Capabilities, ColorDepth, Overrides, Waker};
+pub use cortex_term::{Capabilities, ColorDepth, Overrides, Waker, signal_ended};
 use cortex_term::{Device, Event, Frame, Inline, Scheduler, Terminal, Wake};
 
 pub use link::{Inbound, Link, Ticket};
@@ -205,6 +205,10 @@ pub enum Exit {
     Quit,
     /// The core went away: its thread ended, or the connection closed.
     Gone(ErrorData),
+    /// A signal that ends the program came (SIGTERM, SIGHUP, SIGINT,
+    /// SIGQUIT, or Windows's console events): the program ends with this
+    /// exit code, the terminal already put back (since step 23).
+    Signal(u8),
 }
 
 /// The look for `settings` on a terminal with `caps`.
@@ -269,6 +273,11 @@ pub fn interactive(
     make: impl FnOnce(&Waker, &Capabilities) -> (Box<dyn Link>, Start),
 ) -> io::Result<Exit> {
     let mut terminal = Some(Terminal::enter(overrides)?);
+    // A signal that ends the program is the application's to end: the
+    // terminal is put back at once, then the loop is woken.
+    if let Some(entered) = terminal.as_mut() {
+        entered.hand_signals_over();
+    }
     let (waker, caps, (cols, rows)) = match terminal.as_ref() {
         Some(entered) => (entered.waker(), *entered.caps(), entered.size()?),
         None => return Ok(Exit::Quit),
@@ -316,6 +325,11 @@ pub fn interactive(
         }
     };
     let left = terminal.map_or(Ok(()), Terminal::leave);
+    // After a signal the terminal was put back already, and the layer
+    // writes nothing more: what leaving it again says is not news.
+    if let Some(Exit::Signal(code)) = app.exit() {
+        return Ok(Exit::Signal(*code));
+    }
     ran?;
     left?;
     Ok(app.exit().cloned().unwrap_or(Exit::Quit))
@@ -362,6 +376,12 @@ fn run_with<D: Device>(
     let mut scheduler = Scheduler::new();
     scheduler.input();
     loop {
+        // A signal handed over: the terminal is put back already, so
+        // nothing is drawn; the application ends what it was doing.
+        if let Some(code) = terminal.ending() {
+            app.signalled(code);
+            return Ok(Ran::Ended);
+        }
         let now = terminal.now();
         if scheduler.wake(now) == Wake::Now {
             draw(terminal, presenter, app, now)?;
@@ -387,6 +407,10 @@ fn run_with<D: Device>(
 
         // Every terminal event already read; a key's frame at once.
         let mut next = terminal.next(timeout)?;
+        if let Some(code) = terminal.ending() {
+            app.signalled(code);
+            return Ok(Ran::Ended);
+        }
         let mut input = false;
         while let Some(event) = next.take() {
             input |= take(terminal, presenter, &mut scheduler, app, &event)?;

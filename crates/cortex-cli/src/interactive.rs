@@ -61,6 +61,10 @@ use crate::exit;
 /// the core's own shutdown waits at most 2 s for the statistics' writer.
 const CORE_END: Duration = Duration::from_secs(5);
 
+/// How long the core's end waits after a signal: the watchdog ends the
+/// process 3 s after the signal came.
+const SIGNAL_END: Duration = Duration::from_secs(2);
+
 /// Runs the interactive application. Returns the exit code.
 pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     if let Some(flag) = headless_only(&run) {
@@ -150,7 +154,9 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
             (Box::new(link) as Box<dyn Link>, start)
         })
     }));
-    core.end();
+    // After a signal the watchdog gives 3 s in all: the core has 2.
+    let signalled = matches!(&ended, Ok(Ok(Exit::Signal(_))));
+    core.end(if signalled { SIGNAL_END } else { CORE_END });
     if let Some(log) = &log {
         log.flush();
     }
@@ -163,6 +169,8 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     if let Some(said) = said {
         eprintln!("{said}");
     }
+    // A signal's watchdog on Windows waits for this.
+    cortex_tui::app::signal_ended();
     code
 }
 
@@ -191,6 +199,9 @@ fn ending(
     };
     match ended {
         Ok(Exit::Quit) => (exit::COMPLETED, None),
+        // Ended by a signal, gracefully: the code the signal's own end
+        // would have given.
+        Ok(Exit::Signal(code)) => (code, None),
         Ok(Exit::Gone(error)) => (
             exit::INTERNAL,
             Some(format!("{name}: {}", crate::visible(&error.message))),
@@ -688,9 +699,9 @@ impl CoreThread {
 
     /// Ends the core: no more operations, then its shutdown, waited for at
     /// most [`CORE_END`].
-    fn end(mut self) {
+    fn end(mut self, within: Duration) {
         self.ops = None;
-        let _ = self.ended.recv_timeout(CORE_END);
+        let _ = self.ended.recv_timeout(within);
     }
 }
 
