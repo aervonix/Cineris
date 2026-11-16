@@ -413,9 +413,12 @@ pub(crate) fn config(command: ConfigCommand, name: &'static str) -> Done {
 
 /// `cortex project …`
 pub(crate) fn project(command: ProjectCommand, name: &'static str) -> Done {
+    use cortex_protocol::methods::ProjectEntriesResult;
     use cortex_protocol::project::{
         CommandPurpose, EntryAction, EntryChange, EntryKind, NewCommand, NewEntry,
     };
+
+    use crate::project_view::{self, Listing};
 
     let context = Context::new(name);
     result((|| {
@@ -426,8 +429,15 @@ pub(crate) fn project(command: ProjectCommand, name: &'static str) -> Done {
             context.say(&message);
             exit::USAGE
         };
-        // What a change made, an entry a line.
-        let changed = |result: &cortex_protocol::methods::ProjectEntriesResult, what: &str| {
+        let now = now().to_timestamp();
+        let now = now.as_str();
+        // Whether the project is trusted as it is. A store that cannot say
+        // is "not trusted", which is how a session would take it: it only
+        // decides whether to say that an accepted command still asks.
+        let trusted = || core.project_trust(&project).ok() == Some(TrustState::Trusted);
+        // What a change made, an entry a line, and then, where a command
+        // was accepted or written, whether it still asks for want of trust.
+        let changed = |result: &ProjectEntriesResult, what: &str| {
             let mut out = String::new();
             for entry in &result.entries {
                 out.push_str(&format!("{what} {}\n", entry.id));
@@ -435,29 +445,55 @@ pub(crate) fn project(command: ProjectCommand, name: &'static str) -> Done {
             for problem in &result.problems {
                 out.push_str(&format!("problem: {problem}\n"));
             }
+            if result
+                .entries
+                .iter()
+                .any(|entry| project_view::runs_once_trusted(entry, now))
+                && !trusted()
+            {
+                out.push_str(&project_view::waits_for_trust(name));
+                out.push('\n');
+            }
             out
+        };
+        // The files that could not be read, said before a mistake that may
+        // follow from them: an id of a file that was not read is "not
+        // there".
+        let problems = |listed: &ProjectEntriesResult| {
+            for problem in &listed.problems {
+                context.say(problem);
+            }
         };
         match command {
             ProjectCommand::List { all, kind, json } => {
                 let listed = core.project_entries(&project).map_err(fail)?;
+                let kind = kind.as_deref().map(EntryKind::from_wire);
                 if json {
-                    let text = serde_json::to_string(&listed).map_err(|error| {
-                        context.say(&error.to_string());
-                        exit::INTERNAL
-                    })?;
-                    crate::print_out(&format!("{text}\n"));
+                    // `project/list`'s result, with the listing's choice of
+                    // entries.
+                    let chosen = serde_json::json!({
+                        "entries": project_view::chosen(&listed.entries, all, kind.as_ref()),
+                        "problems": listed.problems,
+                    });
+                    crate::print_out(&format!(
+                        "{}\n",
+                        project_view::json_line(&chosen.to_string())
+                    ));
                     return Ok(exit::COMPLETED);
                 }
-                let kind = kind.as_deref().map(EntryKind::from_wire);
                 out!(
                     "{}\n{}",
                     project.shown,
-                    crate::project_view::listing(
+                    project_view::listing(
                         &listed.entries,
                         &listed.problems,
-                        all,
-                        kind.as_ref(),
-                        name
+                        Listing {
+                            all,
+                            kind: kind.as_ref(),
+                            now,
+                            trusted: trusted(),
+                            name,
+                        }
                     )
                 );
                 Ok(exit::COMPLETED)
@@ -469,16 +505,27 @@ pub(crate) fn project(command: ProjectCommand, name: &'static str) -> Done {
             } => {
                 let listed = core.project_entries(&project).map_err(fail)?;
                 let ids = if shared {
-                    crate::project_view::waiting_shared(&listed.entries)
+                    project_view::waiting_shared(&listed.entries)
                 } else {
-                    ids.iter()
-                        .map(|given| crate::project_view::resolve(&listed.entries, given))
+                    let named = ids
+                        .iter()
+                        .map(|given| project_view::resolve(&listed.entries, given))
                         .collect::<Result<Vec<_>, _>>()
-                        .map_err(usage)?
+                        .map_err(|message| {
+                            problems(&listed);
+                            usage(message)
+                        })?;
+                    project_view::each_once(named)
                 };
                 if ids.is_empty() {
-                    out!("No entry of the repository's file waits for you.\n");
-                    return Ok(exit::COMPLETED);
+                    // Nothing waits; or the file that would say so could
+                    // not be read, which is not "nothing".
+                    if listed.problems.is_empty() {
+                        out!("No entry of the repository's file waits for you.\n");
+                        return Ok(exit::COMPLETED);
+                    }
+                    problems(&listed);
+                    return Err(exit::USAGE);
                 }
                 let changes: Vec<EntryChange> = ids
                     .into_iter()
@@ -502,23 +549,15 @@ pub(crate) fn project(command: ProjectCommand, name: &'static str) -> Done {
                         out.push_str(&format!("Deleted {}\n", change.id));
                     }
                 }
-                // An accepted command runs without asking only in a
-                // project the user trusts.
-                if action == "accept"
-                    && done.entries.iter().any(|entry| entry.command.is_some())
-                    && core.project_trust(&project).map_err(fail)? != TrustState::Trusted
-                {
-                    out.push_str(&format!(
-                        "An accepted command runs without asking once the project is trusted: \
-                         `{name} permissions trust`.\n"
-                    ));
-                }
                 out!("{out}");
                 Ok(exit::COMPLETED)
             }
             ProjectCommand::Edit { id, text } => {
                 let listed = core.project_entries(&project).map_err(fail)?;
-                let id = crate::project_view::resolve(&listed.entries, &id).map_err(usage)?;
+                let id = project_view::resolve(&listed.entries, &id).map_err(|message| {
+                    problems(&listed);
+                    usage(message)
+                })?;
                 let done = core
                     .change_project_entries(
                         &project,
@@ -541,8 +580,9 @@ pub(crate) fn project(command: ProjectCommand, name: &'static str) -> Done {
                 cwd,
                 read_only,
             } => {
-                let command = command.map(|line| NewCommand {
-                    purpose: CommandPurpose::from_wire(purpose.as_deref().unwrap_or("run")),
+                // The parser gives a purpose with every command.
+                let command = command.zip(purpose).map(|(line, purpose)| NewCommand {
+                    purpose: CommandPurpose::from_wire(&purpose),
                     command: line,
                     cwd,
                     read_only,

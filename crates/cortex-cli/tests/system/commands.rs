@@ -237,9 +237,11 @@ fn sys_project_writes_lists_accepts_and_turns_off_entries() {
         "--cwd",
         "crates/app",
     ]);
-    assert_eq!(
-        added.expect_code(0).stdout,
-        "Added k_1\n",
+    // A command the user writes is accepted at once, and still asks until
+    // the project is trusted: that is said.
+    let out = &added.expect_code(0).stdout;
+    assert!(
+        out.starts_with("Added k_1\n") && out.contains("an accepted command still asks"),
         "{}",
         shown(&added)
     );
@@ -284,7 +286,13 @@ fn sys_project_writes_lists_accepts_and_turns_off_entries() {
         "No entry of the repository's file waits for you.\n"
     );
 
-    // An id cut short; then what is turned off is listed only with --all.
+    // `--json` prints the listing's own choice of entries.
+    let commands = machine.run(&["project", "list", "--kind", "command", "--json"]);
+    let listed: Value = serde_json::from_str(commands.expect_code(0).stdout.trim()).unwrap();
+    assert_eq!(listed["entries"].as_array().unwrap().len(), 1, "{listed}");
+    assert_eq!(listed["entries"][0]["id"], "k_1");
+
+    // What is turned off is listed only with --all.
     let off = machine.run(&["project", "disable", "k_2"]);
     assert_eq!(
         off.expect_code(0).stdout,
@@ -331,5 +339,19 @@ fn sys_project_writes_lists_accepts_and_turns_off_entries() {
     assert!(
         out.contains("knowledge.toml") && out.contains("profile.toml"),
         "{out}"
+    );
+
+    // A repository's file that cannot be read is said, not taken for one
+    // with nothing in it.
+    std::fs::write(
+        machine.workspace.join(".cortex").join("profile.toml"),
+        "version = 99\n",
+    )
+    .unwrap();
+    let unread = machine.run(&["project", "accept", "--shared"]);
+    assert!(
+        unread.expect_code(2).stderr.contains("profile.toml"),
+        "{}",
+        shown(&unread)
     );
 }

@@ -71,6 +71,7 @@ test and check commands, its conventions, its flaky tests and facts.
 Commands:
   list           The entries (the default). Options: --all adds the ones
                  that are turned off, --kind KIND keeps one kind, --json
+                 prints the same choice as one line of JSON
   accept ID…     Put a proposal to use, or turn an entry on again. For a
                  command it is also what lets it run without asking, once
                  the project is trusted
@@ -82,16 +83,20 @@ Commands:
   edit ID TEXT   Replace the text of an entry of your own store
   add KIND TEXT  Write an entry: KIND is command, convention, flaky or
                  fact. A command takes --purpose build|test|check|format|run
-                 and --command LINE, and may take --cwd DIR and --read-only
+                 and --command LINE, and may take --cwd DIR and --read-only;
+                 a flaky test may name its command the same way
   path           Where the two files are
 
-An ID may be cut short to a start that only one entry has.
+An ID is given as the listing shows it. One of the repository's file,
+which is long, may be cut short to a start that only one of them has.
 
 A command the harness saw succeed twice is listed as \"active, asks\": the
 model is told of it, and it still asks before it runs. `{name} project
-accept` is what lets it run without asking. An entry of the repository's
-file, .cortex/profile.toml, is a proposal until you accept it, whoever
-wrote it; a change to it is a proposal again.
+accept` is what lets it run without asking, in a project you trust, and
+only a line that is one plain command: the line as it is written, wherever
+in the workspace it runs. An entry of the repository's file,
+.cortex/profile.toml, is a proposal until you accept it, whoever wrote it;
+a change to it is a proposal again.
 "
         ),
         Topic::Usage => format!(
