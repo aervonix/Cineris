@@ -1418,7 +1418,16 @@ impl Core {
             Op::ProjectUpdate(params) => Ok(OpResult::ProjectUpdate(
                 crate::knowledge::update(self, client, params).await?,
             )),
-            Op::VerifyRun(_) => not_built("Verification", "verification (step 19)"),
+            // Running the checks on request needs a turn that only
+            // verifies, a transition the owner has not allowed yet
+            // (`docs/outstanding/verify-run-a-turn-that-only-verifies.md`).
+            Op::VerifyRun(_) => Err(error(
+                ErrorKind::Usage,
+                "not_available",
+                "Running the project's checks on request is not in this build yet: it waits for a \
+                 choice of how, with `/verify`. The checks run by themselves at the end of a turn \
+                 that changed files.",
+            )),
             Op::ModelsList(_) => Ok(OpResult::ModelsList(ModelsListResult {
                 models: self
                     .inner
