@@ -3,6 +3,7 @@
 //! overwrites a file the person edited, and `workspace/files`.
 
 use cortex_core::{ClientInfo, Outgoing};
+use cortex_protocol::event::{Event, Resolution};
 use cortex_protocol::methods::{
     Op, OpResult, QuestionResponse, ServerRequest, ServerResponse, SessionUndoParams,
     WorkspaceFilesParams,
@@ -170,14 +171,16 @@ fn with_nobody_to_ask_an_edited_file_is_kept() {
     });
 }
 
-/// The asking client goes away: the undo ends as "keep", and the session
-/// can be used again.
+/// The asking client goes away: the undo ends as "keep", the session can
+/// be used again, and a client watching it is told the question was
+/// withdrawn, not answered.
 #[test]
 fn a_question_whose_client_went_away_ends_as_no_answer() {
     let world = changed_world("undo_gone");
     let core = world.core();
     world.run(async {
         let front = Front::start(&world, &core).await;
+        let watching = front.join(ClientInfo::observer()).await;
         front.turn("change it").await;
         world.put("a.txt", "edited by hand\n");
         let (asking, client, op) = (core.clone(), front.client.id, undo(&front));
@@ -193,6 +196,16 @@ fn a_question_whose_client_went_away_ends_as_no_answer() {
         // give.
         let _ = undoing.await.unwrap();
         assert_eq!(world.read("a.txt").as_deref(), Some("edited by hand\n"));
+        watching.drain();
+        let resolutions: Vec<Resolution> = watching
+            .events()
+            .into_iter()
+            .filter_map(|event| match event.event {
+                Event::RequestResolved(resolved) => Some(resolved.resolution),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resolutions, [Resolution::Cancelled]);
     });
 }
 

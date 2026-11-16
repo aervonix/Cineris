@@ -756,6 +756,58 @@ fn a_dialog_that_comes_under_the_viewer_waits_for_the_inline_screen() {
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
+/// A viewer opened over a dialog whose grace had begun (`/view` typed
+/// during it, which goes to the editor) leaves nothing due while it is
+/// open: the loop sleeps instead of drawing the full screen again and again.
+#[test]
+fn a_viewer_opened_over_a_dialog_in_its_grace_leaves_nothing_due() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    link.give(Inbound::Request(RequestId::Number(34), approval("c_1")));
+    drain(&mut app, now);
+    let _ = app.frame(now);
+    app.drawn(now);
+    assert!(app.deadline().is_some(), "the dialog's grace is under way");
+    // Typed in one go, during the grace: the editor takes it.
+    for c in "/view".chars() {
+        app.terminal(
+            &TermEvent::Key(cortex_term::Key::plain(cortex_term::KeyCode::Char(c))),
+            now,
+        );
+    }
+    key(&mut app, "enter", now);
+    key(&mut app, "enter", now);
+    assert!(app.viewing(), "the viewer did not open");
+    let past = now + dialog::GRACE * 4;
+    let _ = app.viewer_frame(30, 80, past);
+    app.drawn(past);
+    assert_eq!(app.deadline(), None, "a deadline under the viewer");
+    let _ = link;
+}
+
+/// A key in the viewer is the key before the next: `Ctrl+O` on an
+/// approval, `Esc` back, and `y` typed at once does not answer it.
+#[test]
+fn a_key_straight_after_the_viewer_closes_does_not_answer() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let at = shown_dialog(&mut app, &link, 35, now);
+    key(&mut app, "ctrl+o", at + dialog::GRACE);
+    assert!(app.viewing());
+    let closed = at + dialog::GRACE * 4;
+    key(&mut app, "esc", closed);
+    assert!(!app.viewing());
+    key(&mut app, "y", closed + dialog::GRACE / 6);
+    assert!(
+        answers(&link).is_empty(),
+        "a key straight after the viewer answered"
+    );
+    key(&mut app, "y", closed + dialog::GRACE * 3);
+    assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
+}
+
 /// Shows a dialog, and draws the frame with its answers as the loop does at
 /// the end of its grace: the time a key may answer it.
 fn shown_dialog(app: &mut App, link: &Scripted, id: i64, now: Instant) -> Instant {
