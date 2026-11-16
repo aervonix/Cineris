@@ -1,0 +1,152 @@
+# The fixes after step 23's review, its sessions part: a history read while
+# a turn runs, and leaving a session part-way. Each rule broken alone.
+
+[break] an-item-in-progress-at-the-read-is-skipped
+rule: An item the read gives in progress is drawn as far as it had gone, and goes on with the events after the read.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find:
+    if incomplete {
+        self.mapper.in_progress(&mut self.transcript, &item, now);
+    } else {
+replace:
+    if incomplete {
+    } else {
+caught-by:
+    app::tests::sessions::an_answer_in_progress_at_the_read_is_drawn_once_and_whole
+    app::tests::sessions::a_command_running_at_the_read_ends_in_one_box_that_succeeded
+
+[break] events-of-an-item-in-progress-are-dropped-after-the-read
+rule: Of an item the read holds in progress, the events after the read's seq continue it; those up to it are in its content.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find: Some(Some(seq)) => event.seq > *seq,
+replace: Some(Some(_)) => false,
+caught-by:
+    app::tests::sessions::an_answer_in_progress_at_the_read_is_drawn_once_and_whole
+
+[break] events-of-an-item-in-progress-are-all-shown
+rule: Of an item the read holds in progress, the events up to the read's seq are dropped: its content holds them.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find: Some(Some(seq)) => event.seq > *seq,
+replace: Some(Some(_)) => true,
+caught-by:
+    app::tests::sessions::an_answer_in_progress_at_the_read_is_drawn_once_and_whole
+
+[break] a-turn-is-running-from-the-open-alone
+rule: Whether a turn ran at the read is taken from the turn's events held up to it, not only from what the open said.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find: Event::TurnStarted(_) => running = true,
+replace: Event::TurnStarted(_) => {}
+caught-by:
+    app::tests::sessions::a_call_of_a_turn_that_began_before_the_read_is_not_cut_off
+
+[break] an-item-in-progress-does-not-say-a-turn-runs
+rule: An item in progress at the read says a turn was running then: nothing is cut off, and Enter steers it.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find:
+    if drawn.values().any(Option::is_some) {
+        running = true;
+    }
+replace:
+caught-by:
+    app::tests::sessions::a_command_running_at_the_read_ends_in_one_box_that_succeeded
+    app::tests::sessions::enter_steers_a_turn_found_running_at_the_read
+
+[break] a-turn-found-running-is-not-steered
+rule: A turn found running at the read is one Enter steers.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find:
+    if running {
+        // A turn this client did not start (another's, or one begun
+        // before the open) is running: `Enter` steers it.
+        self.start_running(now);
+    } else {
+replace:
+    if running {
+    } else {
+caught-by:
+    app::tests::sessions::enter_steers_a_turn_found_running_at_the_read
+
+[break] a-response-whose-start-was-not-seen-is-drawn-as-it-comes
+rule: A response whose item.started was never seen is drawn whole when it completes, not from deltas that may begin part-way.
+file: crates/cortex-tui/src/app/items.rs
+in: Response::unseen
+find: resync: true
+replace: resync: false
+caught-by:
+    app::tests::sessions::a_response_whose_start_was_never_seen_is_drawn_whole_once
+
+[break] a-switch-while-a-history-is-read
+rule: /sessions does not switch while a session's history is being read.
+file: crates/cortex-tui/src/app/state/commands.rs
+in: App::switch_to
+find: if self.opening || self.reading {
+replace: if self.opening {
+caught-by:
+    app::tests::sessions::a_switch_while_a_history_is_read_is_refused_and_the_read_goes_on
+
+[break] a-switch-while-a-session-opens
+rule: /sessions does not switch while a session is being opened.
+file: crates/cortex-tui/src/app/state/commands.rs
+in: App::switch_to
+find: if self.opening || self.reading {
+replace: if self.reading {
+caught-by:
+    app::tests::sessions::a_switch_while_a_session_opens_is_refused
+
+[break] new-while-a-history-is-read
+rule: /new does not start another session while a session's history is being read.
+file: crates/cortex-tui/src/app/state.rs
+in: App::new_session
+find: if self.opening || self.reading {
+replace: if self.opening {
+caught-by:
+    app::tests::sessions::new_while_a_history_is_read_says_so
+
+[break] a-result-of-the-session-left-is-taken
+rule: An undo, a change of settings or a status that comes back for a session left meanwhile is not taken for the one open now.
+file: crates/cortex-tui/src/app/state.rs
+in: App::done
+find: if !self.is_open(&id) => {}
+replace: if false => {}
+occurrence: 1
+caught-by:
+    app::tests::sessions::an_undo_of_the_session_left_does_not_make_it_the_session_again
+    app::tests::sessions::a_setting_of_the_session_left_does_not_make_it_the_session_again
+    app::tests::sessions::a_status_of_the_session_left_is_not_shown_for_the_next
+
+[break] every-event-is-shown-with-no-session
+rule: With no session open, only the notices of the one closed are shown.
+file: crates/cortex-tui/src/app/state.rs
+in: App::event
+find: None if !matches!(event.event, Event::Notice(_)) => return,
+replace: None if false => return,
+caught-by:
+    app::tests::sessions::with_no_session_open_only_notices_of_the_one_closed_are_shown
+
+[break] give-back-expands-the-editors-chips
+rule: A prompt given back goes after what the editor holds, whose chips stay chips.
+file: crates/cortex-tui/src/app/state.rs
+in: App::give_back
+find: let mut now = self.input.editor().fragment();
+replace: let mut now = Fragment::text(self.input.editor().expanded());
+caught-by:
+    app::tests::sessions::a_prompt_given_back_keeps_the_editors_chips
+
+[break] the-command-lines-command-is-a-prompt
+rule: A command line's prompt that is a slash command is done as one, not sent to the model.
+file: crates/cortex-tui/src/app/state.rs
+in: App::opened
+find:
+    if self.slash_command(&text, now) {
+        continue;
+    }
+replace:
+caught-by:
+    app::tests::sessions::a_command_lines_prompt_that_is_a_command_is_done_as_one
+    app::tests::sessions::a_command_lines_prompt_that_is_a_command_not_built_yet_is_given_back

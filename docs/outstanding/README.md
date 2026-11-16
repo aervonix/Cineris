@@ -151,6 +151,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [editor-cost-on-very-large-text](editor-cost-on-very-large-text.md): The prompt editor lays out all its text on every key; a shortened `@` query refilters all paths. Owner: step 33.
 - [external-editor-test-gaps](external-editor-test-gaps.md): Parts of the external editor (umask, ConPTY modes, failed hand-over, `.cmd` editors, interrupt guard) are untested. Owner: step 32.
 - [highlighted-code-drawn-again](highlighted-code-drawn-again.md): `Markdown::render` draws code plain when a finished answer is redrawn at another width. Owner: step 25.
+- [prompt-delivery-at-a-turns-edges](prompt-delivery-at-a-turns-edges.md): Held prompts after a refused first, `Enter` between two turns, and an open onto another's running turn send a prompt with the wrong delivery or in the wrong order. Owner: step 27, with the owner.
 - [the-bincode-advisory-ignored-for-syntect](the-bincode-advisory-ignored-for-syntect.md): `deny.toml` ignores RUSTSEC-2025-0141, `bincode` unmaintained, reached only through `syntect`'s loading of its packed grammars; drop it when `syntect` moves off `bincode` or a flaw is named. Owner: the next step that touches highlighting, otherwise step 25.
 - [the-default-editor-on-windows-11](the-default-editor-on-windows-11.md): Windows 11's tabbed Notepad may exit at once, so `Ctrl+G` removes the prompt's folder while it is open; a folder left behind is not tried again. Owner: the owner, by hand; the folder half, step 32.
 

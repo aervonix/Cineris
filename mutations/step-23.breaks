@@ -213,8 +213,8 @@ caught-by:
 rule: Of the events held while the history was read, those it already holds (seq up to the read's) are dropped.
 file: crates/cortex-tui/src/app/state.rs
 in: App::history_read
-find: if event.seq > page.seq || !of_an_item {
-replace: if true {
+find: None => event.seq > page.seq
+replace: None => true
 caught-by:
     app::tests::a_resumed_session_draws_its_history_then_what_came_after
 
@@ -326,7 +326,7 @@ caught-by:
 [break] a-command-not-built-goes-to-the-model
 rule: A slash command of 09-tui that this build does not have is said to be missing, and is no prompt for the model.
 file: crates/cortex-tui/src/app/state.rs
-in: App::submit
+in: App::slash_command
 find: if NOT_YET.contains(&name) {
 replace: if NOT_YET.contains(&name) && false {
 caught-by:

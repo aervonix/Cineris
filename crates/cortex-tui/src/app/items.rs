@@ -16,7 +16,10 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use cortex_protocol::event::{Delta, Event, ItemKind};
+use cortex_protocol::event::{
+    Delta, Event, ItemCompleted, ItemDelta, ItemKind, ItemStarted, TextDelta, ToolArgsDelta,
+    ToolCallDelta,
+};
 use cortex_protocol::item::{
     AssistantMessageItem, NoticeSource, StopReason, ToolResultItem, UserMessageItem,
 };
@@ -46,13 +49,26 @@ struct Response {
     round: Option<u64>,
     /// The bytes of answer text that arrived as deltas.
     text: usize,
-    /// Its deltas stopped arriving (`item.resync`): what is missing is
-    /// taken from the completed item.
+    /// Its deltas stopped arriving (`item.resync`), or its start was never
+    /// seen, so that what arrived is not known to be all of it: what is
+    /// missing, or all of it, is taken from the completed item.
     resync: bool,
     /// Its calls, in order.
     calls: Vec<CallId>,
     /// Their arguments, as they streamed.
     args: HashMap<CallId, String>,
+}
+
+impl Response {
+    /// A response whose deltas arrive with no `item.started` before them:
+    /// they may begin part-way, so none is drawn, and the whole is drawn
+    /// when it completes.
+    fn unseen() -> Self {
+        Self {
+            resync: true,
+            ..Self::default()
+        }
+    }
 }
 
 /// Where one call's line is.
@@ -221,6 +237,98 @@ impl Mapper {
         }
     }
 
+    /// An item a read gave in progress, with what it had then: drawn as
+    /// its events would have drawn it, to go on with the events after the
+    /// read.
+    pub(crate) fn in_progress(&mut self, transcript: &mut Transcript, item: &Item, now: Instant) {
+        let mut events = Vec::new();
+        let delta = |item_id: &ItemId, delta: Delta| {
+            Event::ItemDelta(ItemDelta {
+                item_id: item_id.clone(),
+                delta,
+            })
+        };
+        match item {
+            Item::AssistantMessage(message) => {
+                events.push(Event::ItemStarted(ItemStarted {
+                    item_id: message.id.clone(),
+                    kind: ItemKind::AssistantMessage,
+                    tool: None,
+                    call_id: None,
+                }));
+                for part in &message.parts {
+                    match part {
+                        Part::Reasoning(reasoning) => events.push(delta(
+                            &message.id,
+                            Delta::Reasoning(TextDelta {
+                                text: reasoning.text.clone(),
+                            }),
+                        )),
+                        Part::Text(text) => events.push(delta(
+                            &message.id,
+                            Delta::Text(TextDelta {
+                                text: text.text.clone(),
+                            }),
+                        )),
+                        Part::ToolCall(call) => {
+                            events.push(delta(
+                                &message.id,
+                                Delta::ToolCall(ToolCallDelta {
+                                    call_id: call.id.clone(),
+                                    name: call.name.clone(),
+                                }),
+                            ));
+                            // Not valid JSON until the call is complete:
+                            // the text so far, as text.
+                            let json = match &call.arguments {
+                                Value::Null => String::new(),
+                                Value::String(json) => json.clone(),
+                                arguments => arguments.to_string(),
+                            };
+                            if !json.is_empty() {
+                                events.push(delta(
+                                    &message.id,
+                                    Delta::ToolArgs(ToolArgsDelta {
+                                        call_id: call.id.clone(),
+                                        json,
+                                    }),
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Item::ToolResult(result) => {
+                events.push(Event::ItemStarted(ItemStarted {
+                    item_id: result.id.clone(),
+                    kind: ItemKind::ToolResult,
+                    tool: Some(result.tool.clone()),
+                    call_id: Some(result.call_id.clone()),
+                }));
+                let output: String = result
+                    .content
+                    .iter()
+                    .filter_map(|part| match part {
+                        Part::Text(text) => Some(text.text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                if !output.is_empty() {
+                    events.push(delta(
+                        &result.id,
+                        Delta::ToolOutput(TextDelta { text: output }),
+                    ));
+                }
+            }
+            // Nothing else streams: it is drawn as it is.
+            item => events.push(Event::ItemCompleted(ItemCompleted { item: item.clone() })),
+        }
+        for event in &events {
+            self.event(transcript, event, now);
+        }
+    }
+
     fn delta(&mut self, transcript: &mut Transcript, item: &ItemId, delta: &Delta, now: Instant) {
         match delta {
             Delta::ToolOutput(output) => {
@@ -245,7 +353,10 @@ impl Mapper {
                 }
             }
             Delta::Reasoning(text) => {
-                let response = self.responses.entry(item.clone()).or_default();
+                let response = self
+                    .responses
+                    .entry(item.clone())
+                    .or_insert_with(Response::unseen);
                 if response.resync {
                     return;
                 }
@@ -265,7 +376,10 @@ impl Mapper {
                 response.reasoning = Some((block, now));
             }
             Delta::Text(text) => {
-                let response = self.responses.entry(item.clone()).or_default();
+                let response = self
+                    .responses
+                    .entry(item.clone())
+                    .or_insert_with(Response::unseen);
                 if response.resync {
                     return;
                 }
@@ -291,7 +405,10 @@ impl Mapper {
             }
             Delta::ToolCall(call) => {
                 let round = self.response_round(transcript, item, now);
-                let response = self.responses.entry(item.clone()).or_default();
+                let response = self
+                    .responses
+                    .entry(item.clone())
+                    .or_insert_with(Response::unseen);
                 response.calls.push(call.call_id.clone());
                 let index = match self.round_block(transcript, round) {
                     Some(Block::Round(boxed)) => {
@@ -311,7 +428,10 @@ impl Mapper {
                 );
             }
             Delta::ToolArgs(args) => {
-                let response = self.responses.entry(item.clone()).or_default();
+                let response = self
+                    .responses
+                    .entry(item.clone())
+                    .or_insert_with(Response::unseen);
                 response
                     .args
                     .entry(args.call_id.clone())
@@ -325,7 +445,10 @@ impl Mapper {
     /// The response's round, made when its first call begins: its reasoning
     /// and its answer end there.
     fn response_round(&mut self, transcript: &mut Transcript, item: &ItemId, now: Instant) -> u64 {
-        let response = self.responses.entry(item.clone()).or_default();
+        let response = self
+            .responses
+            .entry(item.clone())
+            .or_insert_with(Response::unseen);
         if let Some(reasoning) = response.reasoning.take() {
             finish_reasoning(transcript, reasoning, now);
         }
@@ -367,7 +490,7 @@ impl Mapper {
             return;
         };
         self.end_response(transcript, response, now);
-        // The retried response streams under the same id.
+        // The retried response streams under the same id, from its start.
         self.responses.insert(item.clone(), Response::default());
     }
 
