@@ -26,6 +26,7 @@
 //! outside, carries on from there the next time. The budget is there so that
 //! a run through `rx` gives the shared test lock back between slices.
 
+mod changed;
 mod drive;
 mod fix;
 mod jobs;
@@ -113,6 +114,16 @@ Without one, every break.
                  parts and merges nothing: a list of its own can have such a
                  name (step-12-fixes).
   --dry-run      With --merge: say what it would do, and do none of it.
+  --changed REF  Run only the breaks the working tree's diff from REF (a branch,
+                 a tag or a commit; new files count) can affect: one whose
+                 file the diff touches, or a test its `caught-by` names, or
+                 that is new or changed in its list, or the build's settings
+                 changed. Says how many it left and why, and chooses a break
+                 when it cannot tell (a test name no file has). Needs git's
+                 history: at the desk, `rx --git -- cargo xtask mutate
+                 --changed REF ...`. Narrows names, --file and --flagged; not
+                 with --check, --break or --merge. A full run, without it,
+                 is what a report rests on.
   --list         Print the breaks chosen, and stop.
   --report       Print what is known so far for the tree as it is. Runs nothing.
   --minutes N    Stop starting new work after N minutes, and carry on from
@@ -168,6 +179,8 @@ struct Request {
     one_off: list::OneOff,
     /// `--flagged`: only the breaks the last run left without a verdict.
     flagged: bool,
+    /// `--changed REF`: only the breaks the diff from `REF` can affect.
+    changed: Option<String>,
     /// `--merge STEP`: put the parts of a step's list together.
     merge: Option<String>,
     /// `--dry-run`, with `--merge`.
@@ -274,6 +287,7 @@ impl Request {
             files: Vec::new(),
             one_off: list::OneOff::default(),
             flagged: false,
+            changed: None,
             merge: None,
             dry_run: false,
         };
@@ -303,6 +317,18 @@ impl Request {
                         .into(),
                 ),
                 "--write" => request.write = true,
+                "--changed" => {
+                    let reference = rest.next().ok_or_else(|| {
+                        format!("`--changed` needs a branch, a tag or a commit\n\n{USAGE}")
+                    })?;
+                    if reference.is_empty() || reference.starts_with('-') {
+                        return Err(format!(
+                            "`--changed {reference}`: a branch, a tag or a commit, not an \
+                             option\n\n{USAGE}"
+                        ));
+                    }
+                    request.changed = Some(reference.clone());
+                }
                 "--flagged" => request.flagged = true,
                 "--dry-run" => request.dry_run = true,
                 "--merge" => {
@@ -447,9 +473,33 @@ impl Request {
                 ));
             }
         }
+        if self.changed.is_some() {
+            if one_off {
+                return Err(format!(
+                    "`--changed` chooses among the breaks of lists: `--break` is one break of its \
+                     own\n\n{USAGE}"
+                ));
+            }
+            if self.mode == Mode::Merge {
+                return Err(format!(
+                    "`--merge` goes with no other option but `--dry-run`\n\n{USAGE}"
+                ));
+            }
+            if self.mode == Mode::Check {
+                return Err(format!(
+                    "`--changed` is for a run, `--list` or `--report`: a check reads every list \
+                     whole, since a break that does not apply is wrong whether or not it is run \
+                     today\n\n{USAGE}"
+                ));
+            }
+        }
         if self.mode == Mode::Merge {
-            let others =
-                !self.files.is_empty() || self.flagged || self.again || self.tests || self.fix_in;
+            let others = !self.files.is_empty()
+                || self.flagged
+                || self.again
+                || self.tests
+                || self.fix_in
+                || self.changed.is_some();
             if others {
                 return Err(format!(
                     "`--merge` goes with no other option but `--dry-run`\n\n{USAGE}"
@@ -555,6 +605,22 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     } else {
         choose(&from_files, &request.only)?
     };
+    // Narrowed to what the diff can affect, before anything asks which of
+    // the rest were left without a verdict.
+    let mut reasons = BTreeMap::new();
+    if let Some(reference) = &request.changed {
+        let git = changed::Git::open(&root, reference)?;
+        let files = git.changed_files()?;
+        let known = list::load_all(&root)?;
+        let selection = changed::select(&known, &chosen, &files, &git);
+        println!("{}", selection.summary(reference));
+        reasons = selection.reasons();
+        chosen = selection.breaks();
+        if chosen.is_empty() {
+            println!("Nothing to run: no break is affected by the diff.");
+            return Ok(done);
+        }
+    }
     // Read only when it is needed: a list that does not apply is told before
     // anything asks cargo where the target directory is.
     let mut scratch = None;
@@ -591,6 +657,9 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
                 chosen.place(),
                 chosen.rule
             );
+            if let Some(why) = reasons.get(&chosen.id) {
+                println!("    chosen: {why}");
+            }
         }
         println!("{} break(s)", chosen.len());
         return Ok(done);
@@ -1908,6 +1977,7 @@ replace: 5
                 files: Vec::new(),
                 one_off: list::OneOff::default(),
                 flagged: false,
+                changed: None,
                 merge: None,
                 dry_run: false,
             }
@@ -2169,6 +2239,32 @@ replace: 5
             (&["--merge", "step-9", "--check"], "say one of"),
             (&["--dry-run"], "`--dry-run` is for use with `--merge`"),
             (&["--check", "--flagged"], "`--flagged` is for a run"),
+            (&["--changed"], "needs a branch, a tag or a commit"),
+            (
+                &["--changed", "--list"],
+                "a branch, a tag or a commit, not an option",
+            ),
+            (
+                &["--changed", "main", "--check"],
+                "`--changed` is for a run, `--list` or `--report`",
+            ),
+            (
+                &[
+                    "--changed",
+                    "main",
+                    "--break",
+                    "f.rs",
+                    "--find",
+                    "a",
+                    "--replace",
+                    "b",
+                ],
+                "`--changed` chooses among the breaks of lists",
+            ),
+            (
+                &["--changed", "main", "--merge", "step-9"],
+                "`--merge` goes with no other option",
+            ),
         ] {
             let error = Request::parse(&strings(arguments)).unwrap_err();
             assert!(error.contains(expected), "{arguments:?}: {error}");
@@ -2406,5 +2502,30 @@ replace: overloaded;
             let error = Request::parse(&strings(arguments)).unwrap_err();
             assert!(error.contains(expected), "{arguments:?}: {error}");
         }
+    }
+
+    #[test]
+    fn changed_narrows_a_run_and_goes_with_what_narrows_or_lists() {
+        let request = Request::parse(&strings(&[
+            "--changed",
+            "origin/main",
+            "--file",
+            "review.breaks",
+            "--flagged",
+            "--again",
+            "--jobs",
+            "2",
+            "--minutes",
+            "0",
+            "step-12",
+        ]))
+        .unwrap();
+        assert_eq!(request.changed.as_deref(), Some("origin/main"));
+        assert_eq!(request.only, strings(&["step-12"]));
+        for mode in ["--list", "--report"] {
+            let request = Request::parse(&strings(&[mode, "--changed", "HEAD~3"])).unwrap();
+            assert_eq!(request.changed.as_deref(), Some("HEAD~3"));
+        }
+        assert_eq!(Request::parse(&[]).unwrap().changed, None);
     }
 }
