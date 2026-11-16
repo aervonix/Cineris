@@ -355,6 +355,10 @@ impl Carrier for InProcess {
             .respond(self.client, &id, response)
             .expect("the answer is taken");
     }
+
+    fn forget(&mut self) {
+        while self.queue.try_next().is_some() {}
+    }
 }
 
 /// The carrier over the wire: the RPC connection `serve --stdio` runs, over
