@@ -237,3 +237,30 @@ find: | Op::ProjectList(_)
 replace: | Op::ModelsList(_)
 caught-by:
     cortex-rpc lane::tests::the_panels_reads_run_beside_the_lane_and_a_refresh_never_waits_in_it
+
+[break] a-new-key-variable-reaches-the-commands
+rule: A variable a new `key_env` names is taken from the next command.
+file: crates/cortex-tools/src/shell/mod.rs
+in: removed
+find: removed.extend(live.key_variables());
+replace: let _ = live;
+caught-by:
+    cortex-tools shell::tests::a_reload_reaches_the_next_command
+
+[break] the-detector-keeps-the-trust-it-was-made-with
+rule: Trust taken away reaches the shell's look at what a command changed: its detector is made again.
+file: crates/cortex-tools/src/shell/mod.rs
+in: detector
+find: Some((known, was, detector)) if known == root && *was == trusted => {
+replace: Some((known, _, detector)) if known == root => {
+caught-by:
+    cortex-tools shell::tests::a_reload_reaches_the_next_command
+
+[break] the-verifier-keeps-what-it-was-opened-with
+rule: A reload of `[verify]` reaches the next round.
+file: crates/cortex-core/src/verify.rs
+in: set_live
+find: *lock(&self.live) = live;
+replace: let _ = live;
+caught-by:
+    cortex-core::it verify::a_reload_of_verify_reaches_the_next_round

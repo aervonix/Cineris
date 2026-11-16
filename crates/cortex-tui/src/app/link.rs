@@ -20,11 +20,6 @@ pub struct Ticket(pub u64);
 
 /// What arrives from the core.
 #[derive(Debug, Clone, PartialEq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "nearly everything is an event, taken out and handled at once: a box would be an \
-              allocation per event"
-)]
 pub enum Inbound {
     /// An event of a session this client has open.
     Event(SessionEvent),
