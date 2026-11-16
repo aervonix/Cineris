@@ -36,6 +36,7 @@ pub mod events;
 mod instructions;
 mod knowledge;
 mod manage;
+mod paging;
 mod policy;
 mod provider;
 mod reads;

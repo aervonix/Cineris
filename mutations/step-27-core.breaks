@@ -282,3 +282,32 @@ find: sessions.iter().any(|summary| at.is_before(summary))
 replace: sessions.iter().any(|summary| at.is_before(summary) && summary.turns == u64::MAX)
 caught-by:
     cortex-core::it turns::the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages
+
+[break] the-items-in-progress-come-on-every-page
+rule: `session/read` gives the items in progress only in the last page, so a page's end never splits them from the log after it.
+file: crates/cortex-core/src/paging.rs
+in: page
+find: if next < total {
+replace: if next < total && limit == usize::MAX {
+caught-by:
+    cortex-core paging::tests::nothing_moves_between_pages_when_items_in_progress_end_out_of_order
+    cortex-core::it events::the_items_in_progress_come_whole_in_the_last_page_of_a_read
+
+[break] an-item-that-completed-is-given-twice
+rule: An item that completed between a read's two looks is given once, from the log.
+file: crates/cortex-core/src/paging.rs
+in: page
+find: .is_some_and(|id| !logged.iter().any(|logged| logged.id() == Some(id)))
+replace: .is_some_and(|id| !id.is_empty())
+caught-by:
+    cortex-core paging::tests::an_item_is_given_once_and_one_can_be_read_by_its_id
+
+[break] an-item-in-progress-is-not-read-by-its-id
+rule: One item read by its id is found in progress too, and said to be incomplete.
+file: crates/cortex-core/src/paging.rs
+in: page
+find: let found: Vec<Item> = progress.into_iter().filter(is).collect();
+replace: let found: Vec<Item> = progress.into_iter().filter(|_| false).collect();
+caught-by:
+    cortex-core paging::tests::an_item_is_given_once_and_one_can_be_read_by_its_id
+    cortex-core::it events::an_item_in_progress_can_be_read_with_what_it_has_so_far
