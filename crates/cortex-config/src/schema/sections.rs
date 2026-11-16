@@ -202,7 +202,7 @@ settings! {
         /// minutes: past that, `standard` answers sooner than the tier would,
         /// whatever keeping it saves. A project's file may lower it and may
         /// not raise it: every wait is the session's.
-        [TightenOnly, Now, 0..=120_000]
+        [TightenOnly, Now, 0s..=2m]
         pub speed_wait: Duration = Duration::from_secs(20),
         /// How long requests stay at `standard` after a fallback, when the
         /// provider does not say when the tier is available again. From one
@@ -210,13 +210,13 @@ settings! {
         /// session does not change speed (and perhaps write its cache again)
         /// every few requests; to an hour, past which a tier that keeps
         /// refusing is better turned off with `model.speed`.
-        [Preference, Now, 60_000..=3_600_000]
+        [Preference, Now, 1m..=1h]
         pub speed_cooldown: Duration = Duration::from_secs(600),
         /// The least time requests stay at `standard` after a fallback when
         /// the provider does say when the tier is available again: its time,
         /// or this long, whichever is later. `"0s"` takes the provider's
         /// time as given. At most an hour, as `speed_cooldown` is.
-        [Preference, Now, 0..=3_600_000]
+        [Preference, Now, 0s..=1h]
         pub speed_cooldown_min: Duration = Duration::from_secs(60),
         /// Settings of one role: `main`, `fast` or `judge`.
         [nested]
@@ -276,12 +276,12 @@ settings! {
         /// How long a response stream may be silent before the request
         /// fails. Overrides `retry.idle_timeout` for this provider, within
         /// the same range: 30 seconds to an hour.
-        [UserOnly, Now, 30_000..=3_600_000]
+        [UserOnly, Now, 30s..=1h]
         pub idle_timeout: Option<Duration>,
         /// How long to wait for the first event of a response. Overrides
         /// `retry.first_event_timeout` for this provider, within the same
         /// range: 30 seconds to an hour.
-        [UserOnly, Now, 30_000..=3_600_000]
+        [UserOnly, Now, 30s..=1h]
         pub first_event_timeout: Option<Duration>,
         /// Capability flags of the endpoint, as the provider's protocol
         /// names them. For `anthropic-messages`: `replay_reasoning`
@@ -306,7 +306,7 @@ settings! {
         /// 100 ms, below which the attempts are spent before a brief outage
         /// can pass, to a minute. A project's file may lower it and may not
         /// raise it.
-        [TightenOnly, Now, 100..=60_000]
+        [TightenOnly, Now, 100ms..=1m]
         pub backoff_base: Duration = Duration::from_secs(1),
         /// What the wait is multiplied by after each attempt. A project's
         /// file may lower it and may not raise it: a larger one makes every
@@ -317,7 +317,7 @@ settings! {
         /// attempts span more than a moment, to five minutes, past which a
         /// provider is down rather than busy. A project's file may lower it
         /// and may not raise it.
-        [TightenOnly, Now, 1_000..=300_000]
+        [TightenOnly, Now, 1s..=5m]
         pub backoff_cap: Duration = Duration::from_secs(30),
         /// The longest wait a provider may ask for. A longer one ends the
         /// turn with the error and the provider's hint. From a minute, the
@@ -325,20 +325,20 @@ settings! {
         /// an ordinary rate limit end a turn, to an hour, past which the wait
         /// is a quota and not a rate limit. A project's file may lower it and
         /// may not raise it.
-        [TightenOnly, Now, 60_000..=3_600_000]
+        [TightenOnly, Now, 1m..=1h]
         pub max_wait: Duration = Duration::from_secs(120),
         /// How long a response stream may be silent before the request
         /// fails. From 30 seconds, within which a hosted provider that is
         /// still working sends a token or a ping, to an hour, past the five
         /// minutes the built-in entries give a local server. A project's
         /// file may lower it and may not raise it.
-        [TightenOnly, Now, 30_000..=3_600_000]
+        [TightenOnly, Now, 30s..=1h]
         pub idle_timeout: Duration = Duration::from_secs(90),
         /// How long to wait for the first event of a response. From 30
         /// seconds, below which a long prompt would fail every time, to an
         /// hour, past the ten minutes the built-in entries give a local
         /// server. A project's file may lower it and may not raise it.
-        [TightenOnly, Now, 30_000..=3_600_000]
+        [TightenOnly, Now, 30s..=1h]
         pub first_event_timeout: Duration = Duration::from_secs(60),
     }
 }
@@ -524,7 +524,7 @@ settings! {
         /// epoch's first request, and a repository's file must not make
         /// the sessions in it wait (found by the independent review of step
         /// 18).
-        [UserOnly, NextEpoch, 0..=1_000]
+        [UserOnly, NextEpoch, 0s..=1s]
         pub map_wait: Option<Duration>,
         /// The most files the index reads. Past it, the files nearest the
         /// top of the tree are indexed, and the map says it is partial.
@@ -587,12 +587,12 @@ settings! {
         /// fail, to half an hour, past which a command that hangs holds up
         /// its turn too long. A project's file may lower it and may not
         /// raise it.
-        [TightenOnly, NextEpoch, 1_000..=1_800_000]
+        [TightenOnly, NextEpoch, 1s..=30m]
         pub timeout: Duration = Duration::from_secs(120),
         /// The longest time limit a command may ask for. From ten seconds,
         /// below which a build or a test run could never finish, to a day.
         /// A project's file may lower it and may not raise it.
-        [TightenOnly, NextEpoch, 10_000..=86_400_000]
+        [TightenOnly, NextEpoch, 10s..=1d]
         pub max_timeout: Duration = Duration::from_secs(30 * 60),
         /// Environment variables that commands are not given, besides
         /// the key variables of the providers, which are always removed.
