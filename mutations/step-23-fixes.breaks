@@ -816,3 +816,428 @@ find: let (seq, progress) = live.sink.snapshot(reader.as_deref());
 replace: let (seq, progress) = live.sink.snapshot(reader.as_deref().filter(|_| false));
 caught-by:
     cortex-core::it events::a_read_by_a_client_behind_and_the_deltas_after_it_hold_the_answer_once
+
+# From mutations/step-23-fixes-budgets.breaks (part `budgets`).
+# The fixes of the review of step 23, the budgets' part (finding 12): the
+# workspace's files listed on the first `@` and kept compactly, and the
+# coarse limit on a key's echo in the real binary. Broken one at a time,
+# with the tests that must fail.
+
+[break] the-files-listed-at-open
+rule: The workspace's files are asked of the core on the first `@` typed, not when the session opens: an idle application holds no list of them.
+file: crates/cortex-tui/src/app/state.rs
+in: App::ask_files
+find: && self.input.wants_files()
+replace: && (self.input.wants_files() || self.session.is_some())
+packages: cortex-tui
+caught-by:
+    app::tests::files::the_workspace_files_are_listed_on_the_first_at_and_not_when_the_session_opens
+
+[break] the-files-asked-for-every-frame
+rule: The workspace's files are asked for once: frames drawn while the list is on its way do not ask again.
+file: crates/cortex-tui/src/app/state.rs
+in: App::ask_files
+find: self.files_listing = true;
+replace: self.files_listing = false;
+packages: cortex-tui
+caught-by:
+    app::tests::files::the_workspace_files_are_listed_on_the_first_at_and_not_when_the_session_opens
+    app::tests::files::an_at_typed_before_the_session_is_open_lists_the_files_once_it_is
+
+[break] a-candidate-starts-at-the-buffers-start
+rule: Each candidate in the one buffer starts where the one before it ends.
+file: crates/cortex-tui/src/complete/fuzzy.rs
+in: Candidates::get
+find: .map_or(0, |before| self.ends[before] as usize);
+replace: .map_or(0, |_| 0);
+packages: cortex-tui
+caught-by:
+    complete::fuzzy::tests::the_candidates_are_kept_in_one_buffer_in_order
+    complete::fuzzy::tests::the_characters_in_order_ignoring_case_match
+
+[break] a-path-not-ascii-matched-by-byte
+rule: A candidate that is not ASCII is marked so, and matched by character.
+file: crates/cortex-tui/src/complete/fuzzy.rs
+in: Candidates::new
+find: .push(if is_ascii { name } else { name | NOT_ASCII });
+replace: .push(name);
+packages: cortex-tui
+caught-by:
+    complete::fuzzy::tests::the_candidates_are_kept_in_one_buffer_in_order
+    complete::fuzzy::tests::paths_that_are_not_ascii_match_by_character
+
+[break] the-interface-waits-before-each-key
+rule: A key reaches the screen of the real binary within the coarse limit: an interface thread that waits on something before taking a key fails a blocking test (review of step 23, finding 12d).
+file: crates/cortex-tui/src/app.rs
+in: run_with
+find: input |= take(terminal, presenter, &mut scheduler, app, &event)?;
+replace: input |= { std::thread::sleep(std::time::Duration::from_millis(600)); take(terminal, presenter, &mut scheduler, app, &event)? };
+packages: cortex-cli
+caught-by:
+    cortex-cli::system tui::sys_a_turn_with_tools_runs_in_the_interface_and_the_terminal_is_put_back
+
+# From mutations/step-23-fixes-output.breaks (part `output`).
+# The fixes of what the review of step 23 found in what reaches the
+# terminal and the clipboard: their rules broken one at a time, with the
+# tests that must fail. Written with the code.
+
+[break] an-entity-brings-back-what-acts-unseen
+rule: The character a numeric entity in a model's markdown stands for is made safe as content's is: a bidirectional override, a tag character or a zero-width space from `&#x202E;` is drawn as its escape.
+file: crates/cortex-tui/src/markdown/inline.rs
+find: _ => cortex_term::sanitize(ch.encode_utf8(&mut [0; 4])).into_owned()
+replace: _ => cortex_term::sanitize::visible(ch).map_or(ch.to_string(), |symbol| symbol.to_string())
+caught-by:
+    markdown::inline::tests::escapes_entities_and_breaks
+    markdown::tests::content_reaches_no_line_unsanitised_and_no_line_is_too_wide
+
+[break] the-rest-of-a-line-sanitised-alone
+rule: The rest of a line part of which a paragraph already has is sanitised as it reads after the part given: an emoji's selector that came in the next piece is kept, as in the whole answer.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::rest_of_line
+find: sanitize_after(before, &raw[taken..])
+replace: sanitize_after(before.filter(|_| false), &raw[taken..])
+caught-by:
+    markdown::tests::an_emoji_selector_in_the_next_piece_is_drawn_as_in_the_whole
+
+[break] a-piece-of-a-line-sanitised-alone
+rule: A piece of a line given to a paragraph before the line ends is sanitised as it reads after the piece before it.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::partial
+find: sanitize_after(before, &self.pending[taken..usable])
+replace: sanitize_after(before.filter(|_| false), &self.pending[taken..usable])
+caught-by:
+    markdown::tests::an_emoji_selector_in_the_next_piece_is_drawn_as_in_the_whole
+
+[break] a-lines-first-piece-sanitised-without-its-marks
+rule: The first piece of a line given to a paragraph is sanitised as it reads after the container marks before it, as the whole line is.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: Markdown::partial
+find: sanitize_after(before, &self.pending[start..usable])
+replace: sanitize_after(before.filter(|_| false), &self.pending[start..usable])
+caught-by:
+    markdown::tests::an_emoji_selector_in_the_next_piece_is_drawn_as_in_the_whole
+
+[break] a-piece-forgets-the-character-before-it
+rule: A piece of a longer text, escaped after the character before it, keeps a variation selector at its start when that character is shown as it is: pieces read as the whole does.
+file: crates/cortex-base/src/visible.rs
+in: visible_keeping_after
+find: let mut base = before.is_some_and(|c| !is_selector(c) && !acts_unseen(c) && !keep.contains(&c));
+replace: let mut base = before.is_some_and(|_| false);
+packages: cortex-base, cortex-term
+caught-by:
+    visible::tests::a_piece_escaped_after_the_one_before_reads_as_the_whole_does
+    sanitize::tests::a_piece_reads_after_the_character_before_it
+
+[break] copy-copies-the-raw-answer
+rule: `/copy` puts on the clipboard the answer with its control characters dropped (but the line feed and the tab) and what acts unseen escaped, never the raw text.
+file: crates/cortex-tui/src/app/state/commands.rs
+find: for_clipboard(self.mapper.last_answer())
+replace: self.mapper.last_answer().to_owned()
+caught-by:
+    app::tests::output::copy_drops_control_characters_and_escapes_what_acts_unseen
+    app::tests::output::copy_of_an_answer_of_control_characters_copies_nothing
+
+[break] copy-keeps-control-characters
+rule: A control character on the clipboard would be typed when pasted into a terminal: `/copy` drops every one but the line feed and the tab.
+file: crates/cortex-tui/src/app/state/commands.rs
+in: for_clipboard
+find: .filter(|&c| matches!(c, '\n' | '\t') || cortex_term::sanitize::visible(c).is_none())
+replace: .filter(|_| true)
+caught-by:
+    app::tests::output::copy_drops_control_characters_and_escapes_what_acts_unseen
+    app::tests::output::copy_of_an_answer_of_control_characters_copies_nothing
+
+[break] copy-keeps-what-acts-unseen
+rule: `/copy` writes what acts unseen (a bidirectional override, a tag character, a zero-width space) as its escape, as the screen shows it.
+file: crates/cortex-tui/src/app/state/commands.rs
+in: for_clipboard
+find: cortex_term::sanitize(&typed).into_owned()
+replace: typed
+caught-by:
+    app::tests::output::copy_drops_control_characters_and_escapes_what_acts_unseen
+
+[break] the-editor-counts-what-acts-unseen-as-nothing
+rule: The editor lays a cluster out in the columns the input box draws it in: what acts unseen in its escape's, so that the cursor stays after the text and no row is cut.
+file: crates/cortex-tui/src/editor/cluster.rs
+in: width
+find: Cow::Owned(shown) => text::width(&shown)
+replace: Cow::Owned(_) => text::grapheme_width(cluster)
+caught-by:
+    view::input::tests::what_acts_unseen_takes_the_columns_of_its_escape
+
+[break] the-editor-counts-a-chip-by-its-raw-label
+rule: A chip is laid out as wide as its label is drawn, made safe to show.
+file: crates/cortex-tui/src/editor/layout.rs
+in: cluster_width
+find: chip_width(&cortex_term::sanitize(chip.label()), width)
+replace: chip_width(chip.label(), width)
+caught-by:
+    view::input::tests::a_chip_is_laid_out_as_wide_as_its_label_is_drawn
+
+[break] any-scheme-is-a-link
+rule: Only a web address (`http`, `https`) is written as a terminal hyperlink: a `file:` address names a share a click sends credentials to, or a local file the system runs.
+file: crates/cortex-term/src/line.rs
+in: linkable
+find: let web = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+replace: let web = !scheme.is_empty();
+packages: cortex-term, cortex-tui
+caught-by:
+    line::tests::only_a_web_address_becomes_a_link
+    markdown::tests::a_link_that_is_not_a_web_address_shows_its_address
+
+[break] a-refused-link-hides-its-address
+rule: A link that may not be a hyperlink is drawn with its address after its text, though the terminal shows links.
+file: crates/cortex-tui/src/markdown/rows.rs
+in: Laid::new
+find: && !(frame.look.hyperlinks && cortex_term::line::linkable(&url))
+replace: && !frame.look.hyperlinks
+caught-by:
+    markdown::tests::a_link_that_is_not_a_web_address_shows_its_address
+
+[break] a-table-hides-a-links-address
+rule: A link in a table's cell is drawn with its address after its text where the terminal shows no links or the address may not be one, as in a paragraph.
+file: crates/cortex-tui/src/markdown/table.rs
+in: cell
+find: if !(frame.look.hyperlinks && cortex_term::line::linkable(url)) && shown != *url {
+replace: if false {
+caught-by:
+    markdown::tests::a_link_that_is_not_a_web_address_shows_its_address
+
+# The review's breaks S1 to S9: removing `sanitize` at a site where only
+# control characters were tested, which the renderer shows as symbols
+# anyway. Each is now caught by text holding what acts unseen.
+
+[break] approval-summary-unsanitised
+rule: An approval's summary is drawn with what acts unseen escaped.
+file: crates/cortex-tui/src/view/dialog.rs
+in: approval
+find: sanitize(&request.summary)
+replace: std::borrow::Cow::<str>::Borrowed(&request.summary)
+caught-by:
+    view::dialog::tests::every_field_of_an_approval_escapes_what_acts_unseen
+
+[break] approval-reason-unsanitised
+rule: An approval's reasons are drawn with what acts unseen escaped.
+file: crates/cortex-tui/src/view/dialog.rs
+in: approval
+find: sanitize(reason)
+replace: std::borrow::Cow::<str>::Borrowed(reason.as_str())
+caught-by:
+    view::dialog::tests::every_field_of_an_approval_escapes_what_acts_unseen
+
+[break] approval-arguments-unsanitised
+rule: A tool's arguments in an approval are drawn with what acts unseen escaped.
+file: crates/cortex-tui/src/view/dialog.rs
+in: approval
+find: sanitize(&text)
+replace: std::borrow::Cow::<str>::Borrowed(text.as_str())
+caught-by:
+    view::dialog::tests::every_field_of_an_approval_escapes_what_acts_unseen
+
+[break] approval-rule-pattern-unsanitised
+rule: The pattern of a rule a lasting answer would add is drawn with what acts unseen escaped.
+file: crates/cortex-tui/src/view/dialog.rs
+in: approval
+find: sanitize(&rule.pattern)
+replace: rule.pattern
+caught-by:
+    view::dialog::tests::every_field_of_an_approval_escapes_what_acts_unseen
+
+[break] trust-workspace-unsanitised
+rule: The trust question's workspace is drawn with what acts unseen escaped.
+file: crates/cortex-tui/src/view/dialog.rs
+in: trust
+find: sanitize(&request.workspace)
+replace: std::borrow::Cow::<str>::Borrowed(request.workspace.as_str())
+caught-by:
+    view::dialog::tests::every_field_of_the_trust_question_escapes_what_acts_unseen
+
+[break] trust-detail-unsanitised
+rule: A trust resource's detail is drawn with what acts unseen escaped.
+file: crates/cortex-tui/src/view/dialog.rs
+in: trust
+find: sanitize(&resource.detail).into_owned()
+replace: resource.detail.clone()
+caught-by:
+    view::dialog::tests::every_field_of_the_trust_question_escapes_what_acts_unseen
+
+[break] question-text-unsanitised
+rule: A question of the core's is drawn with what acts unseen escaped.
+file: crates/cortex-tui/src/view/dialog.rs
+in: title
+find: let text = sanitize(text)
+replace: let text = std::borrow::Cow::<str>::Borrowed(text)
+caught-by:
+    view::dialog::tests::a_question_escapes_what_acts_unseen
+
+[break] listing-unsanitised
+rule: A command's listing is drawn with what acts unseen escaped.
+file: crates/cortex-tui/src/view/blocks.rs
+in: listing
+find: clean(line)
+replace: line.clone()
+caught-by:
+    view::blocks::tests::content_is_sanitised_and_never_too_wide
+
+[break] menu-detail-unsanitised
+rule: A menu row's note is drawn with what acts unseen escaped.
+file: crates/cortex-tui/src/view/menu.rs
+in: rows
+find: super::one_line(&row.detail)
+replace: row.detail.clone()
+caught-by:
+    view::menu::tests::a_picker_escapes_what_acts_unseen_in_every_part
+
+# From mutations/step-23-fixes-sessions.breaks (part `sessions`).
+# The fixes after step 23's review, its sessions part: a history read while
+# a turn runs, and leaving a session part-way. Each rule broken alone.
+
+[break] an-item-in-progress-at-the-read-is-skipped
+rule: An item the read gives in progress is drawn as far as it had gone, and goes on with the events after the read.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find:
+    if incomplete {
+        self.mapper.in_progress(&mut self.transcript, &item, now);
+    } else {
+replace:
+    if incomplete {
+    } else {
+caught-by:
+    app::tests::sessions::an_answer_in_progress_at_the_read_is_drawn_once_and_whole
+    app::tests::sessions::a_command_running_at_the_read_ends_in_one_box_that_succeeded
+
+[break] events-of-an-item-in-progress-are-dropped-after-the-read
+rule: Of an item the read holds in progress, the events after the read's seq continue it; those up to it are in its content.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find: Some(Some(seq)) => event.seq > *seq,
+replace: Some(Some(_)) => false,
+caught-by:
+    app::tests::sessions::an_answer_in_progress_at_the_read_is_drawn_once_and_whole
+
+[break] events-of-an-item-in-progress-are-all-shown
+rule: Of an item the read holds in progress, the events up to the read's seq are dropped: its content holds them.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find: Some(Some(seq)) => event.seq > *seq,
+replace: Some(Some(_)) => true,
+caught-by:
+    app::tests::sessions::an_answer_in_progress_at_the_read_is_drawn_once_and_whole
+
+[break] a-turn-is-running-from-the-open-alone
+rule: Whether a turn ran at the read is taken from the turn's events held up to it, not only from what the open said.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find: Event::TurnStarted(_) => running = true,
+replace: Event::TurnStarted(_) => {}
+caught-by:
+    app::tests::sessions::a_call_of_a_turn_that_began_before_the_read_is_not_cut_off
+
+[break] an-item-in-progress-does-not-say-a-turn-runs
+rule: An item in progress at the read says a turn was running then: nothing is cut off, and Enter steers it.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find:
+    if drawn.values().any(Option::is_some) {
+        running = true;
+    }
+replace:
+caught-by:
+    app::tests::sessions::a_command_running_at_the_read_ends_in_one_box_that_succeeded
+    app::tests::sessions::enter_steers_a_turn_found_running_at_the_read
+
+[break] a-turn-found-running-is-not-steered
+rule: A turn found running at the read is one Enter steers.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find:
+    if running {
+        // A turn this client did not start (another's, or one begun
+        // before the open) is running: `Enter` steers it.
+        self.start_running(now);
+    } else {
+replace:
+    if running {
+    } else {
+caught-by:
+    app::tests::sessions::enter_steers_a_turn_found_running_at_the_read
+
+[break] a-response-whose-start-was-not-seen-is-drawn-as-it-comes
+rule: A response whose item.started was never seen is drawn whole when it completes, not from deltas that may begin part-way.
+file: crates/cortex-tui/src/app/items.rs
+in: Response::unseen
+find: resync: true
+replace: resync: false
+caught-by:
+    app::tests::sessions::a_response_whose_start_was_never_seen_is_drawn_whole_once
+
+[break] a-switch-while-a-history-is-read
+rule: /sessions does not switch while a session's history is being read.
+file: crates/cortex-tui/src/app/state/commands.rs
+in: App::switch_to
+find: if self.opening || self.reading {
+replace: if self.opening {
+caught-by:
+    app::tests::sessions::a_switch_while_a_history_is_read_is_refused_and_the_read_goes_on
+
+[break] a-switch-while-a-session-opens
+rule: /sessions does not switch while a session is being opened.
+file: crates/cortex-tui/src/app/state/commands.rs
+in: App::switch_to
+find: if self.opening || self.reading {
+replace: if self.reading {
+caught-by:
+    app::tests::sessions::a_switch_while_a_session_opens_is_refused
+
+[break] new-while-a-history-is-read
+rule: /new does not start another session while a session's history is being read.
+file: crates/cortex-tui/src/app/state.rs
+in: App::new_session
+find: if self.opening || self.reading {
+replace: if self.opening {
+caught-by:
+    app::tests::sessions::new_while_a_history_is_read_says_so
+
+[break] a-result-of-the-session-left-is-taken
+rule: An undo, a change of settings or a status that comes back for a session left meanwhile is not taken for the one open now.
+file: crates/cortex-tui/src/app/state.rs
+in: App::done
+find: if !self.is_open(&id) => {}
+replace: if false => {}
+occurrence: 1
+caught-by:
+    app::tests::sessions::an_undo_of_the_session_left_does_not_make_it_the_session_again
+    app::tests::sessions::a_setting_of_the_session_left_does_not_make_it_the_session_again
+    app::tests::sessions::a_status_of_the_session_left_is_not_shown_for_the_next
+
+[break] every-event-is-shown-with-no-session
+rule: With no session open, only the notices of the one closed are shown.
+file: crates/cortex-tui/src/app/state.rs
+in: App::event
+find: None if !matches!(event.event, Event::Notice(_)) => return,
+replace: None if false => return,
+caught-by:
+    app::tests::sessions::with_no_session_open_only_notices_of_the_one_closed_are_shown
+
+[break] give-back-expands-the-editors-chips
+rule: A prompt given back goes after what the editor holds, whose chips stay chips.
+file: crates/cortex-tui/src/app/state.rs
+in: App::give_back
+find: let mut now = self.input.editor().fragment();
+replace: let mut now = Fragment::text(self.input.editor().expanded());
+caught-by:
+    app::tests::sessions::a_prompt_given_back_keeps_the_editors_chips
+
+[break] the-command-lines-command-is-a-prompt
+rule: A command line's prompt that is a slash command is done as one, not sent to the model.
+file: crates/cortex-tui/src/app/state.rs
+in: App::opened
+find:
+    if self.slash_command(&text, now) {
+        continue;
+    }
+replace:
+caught-by:
+    app::tests::sessions::a_command_lines_prompt_that_is_a_command_is_done_as_one
+    app::tests::sessions::a_command_lines_prompt_that_is_a_command_not_built_yet_is_given_back
