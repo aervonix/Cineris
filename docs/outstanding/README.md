@@ -26,7 +26,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-summary-cut-off-at-the-output-limit](a-summary-cut-off-at-the-output-limit.md): A summary cut off at the output limit is marked only in its text, not in the log's `summary` entry. Owner: a later step on compaction, with the owner for the format.
 - [a-tool-that-makes-links-beside-other-calls](a-tool-that-makes-links-beside-other-calls.md): An extension's tool that declares itself read-only or keyed and makes a link runs beside later calls, which were decided before it ended. Owner: step 28.
 - [an-instruction-file-left-out-for-the-cap](an-instruction-file-left-out-for-the-cap.md): An instruction file left out of the prompt for `context.instructions_cap` is still listed in the epoch as given. Owner: a later step on instruction files, with the owner for the format.
-- [config-provenance-in-the-application](config-provenance-in-the-application.md): `/config` shows the values in effect, not the layer each came from; `config/get` gives no provenance. Owner: step 24.
 - [diff-emphasis-on-a-line-with-a-tab](diff-emphasis-on-a-line-with-a-tab.md): A diff's line with a tab or an escaped character loses the bold of its changed words. Owner: step 32.
 - [edits-held-behind-calls-not-yet-started](edits-held-behind-calls-not-yet-started.md): Where an answer may be a stop, a later call with side effects waits behind every earlier call not started while a changing call runs, so edits of different files run less in parallel. Owner: the owner, with a measurement; step 32.
 - [statistics-a-build-cannot-use-are-said-only-in-the-log](statistics-a-build-cannot-use-are-said-only-in-the-log.md): A newer build's or an unreadable statistics file is said in the log and by `cortex usage` and `cortex stats`, not by the application. Owner: step 24.
@@ -99,6 +98,10 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [rust-toolchain-is-not-a-protected-path](rust-toolchain-is-not-a-protected-path.md): `rust-toolchain.toml` can be written by a confined command and chooses the compiler the user's next `cargo` runs. Owner: the owner, then step 32.
 - [words-of-unmodelled-lines-the-check-misreads](words-of-unmodelled-lines-the-check-misreads.md): The word check misreads split command words, program text, tricky `cd` targets and over-bound lines, at `autonomous`. Owner: step 32.
 
+### cortex-protocol
+
+- [the-files-a-command-changed](the-files-a-command-changed.md): The review panel lists the files the file tools changed; which files a shell command changed is in the checkpoints, not in any event. Owner: none yet.
+
 ### cortex-sandbox
 
 - [a-launcher-refusal-read-from-the-commands-output](a-launcher-refusal-read-from-the-commands-output.md): The launcher's refusal is read from the command's own output, so a check can pass for blocked and not be fed back. Owner: step 32.
@@ -155,6 +158,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [prompt-delivery-at-a-turns-edges](prompt-delivery-at-a-turns-edges.md): Held prompts after a refused first, `Enter` between two turns, and an open onto another's running turn send a prompt with the wrong delivery or in the wrong order. Owner: step 27, with the owner.
 - [the-bincode-advisory-ignored-for-syntect](the-bincode-advisory-ignored-for-syntect.md): `deny.toml` ignores RUSTSEC-2025-0141, `bincode` unmaintained, reached only through `syntect`'s loading of its packed grammars; drop it when `syntect` moves off `bincode` or a flaw is named. Owner: the next step that touches highlighting, otherwise step 25.
 - [the-default-editor-on-windows-11](the-default-editor-on-windows-11.md): Windows 11's tabbed Notepad may exit at once, so `Ctrl+G` removes the prompt's folder while it is open; a folder left behind is not tried again. Owner: the owner, by hand; the folder half, step 32.
+- [user-theme-files](user-theme-files.md): 09-tui describes themes as TOML tables that assign a colour to each token; no step builds a user's theme file, and step 24's hot reload reloads `tui.theme`, the name of a built-in theme. Owner: none yet.
 
 ### The tooling and CI
 
