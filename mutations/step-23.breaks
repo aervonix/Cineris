@@ -721,8 +721,8 @@ caught-by:
 rule: The operations that change a session run on a task of their own, so that the end of the interface is never behind the one in progress.
 file: crates/cortex-cli/src/interactive.rs
 in: CoreThread::start
-find: let _ = writes.send((ticket, op));
-replace: push(&thread_done, Inbound::Done(ticket, core.handle(client.id, op).await.map_err(|e| *e))); thread_slot.wake();
+find: let _ = writes.send((ticket, op, write));
+replace: { if write { routes.written(); } push(&thread_done, Inbound::Done(ticket, core.handle(client.id, op).await.map_err(|e| *e))); thread_slot.wake(); }
 packages: cortex-cli
 caught-by:
     cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
@@ -898,3 +898,15 @@ replace: if found.len() >= usize::MAX {
 packages: cortex-tools
 caught-by:
     walk::tests::the_workspace_walk_stops_at_its_bound_and_says_there_were_more
+
+[break] never-waits-for-the-next-start
+rule: Never is in force in the session it was said in, as at a later start.
+file: crates/cortex-core/src/assemble.rs
+in: answer_trust
+find: self::trust(inner, place.state.as_ref(), &place.root, &place.load)
+occurrence: 2
+replace: Ok(trust)
+packages: cortex-core
+caught-by:
+    trusting::never_is_kept_across_starts_until_the_project_is_trusted
+    trusting::never_of_a_trusted_project_is_in_force_at_once
