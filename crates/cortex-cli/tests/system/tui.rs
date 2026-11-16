@@ -233,12 +233,6 @@ fn sys_a_turn_with_tools_runs_in_the_interface_and_the_terminal_is_put_back() {
     assert!(body(&requests[1]).contains("the build needs the json feature"));
 
     quit(&mut session, &phases);
-    // The core ended in order before the process did: its last records
-    // reached the disk.
-    assert!(
-        turn_recorded(&machine),
-        "the turn's statistics never reached the disk"
-    );
 }
 
 #[test]

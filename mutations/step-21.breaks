@@ -526,7 +526,7 @@ caught-by:
 rule: Leaving the terminal under a guard keeps the guard's handler.
 file: crates/cortex-term/src/sys/unix.rs
 in: leave
-find: if GUARDING.load(Ordering::SeqCst) && is_interrupt(signal) {
+find: if guarding && is_interrupt(signal) {
 replace: if false {
 caught-by:
     sys::unix::tests::leaving_the_terminal_under_a_guard_keeps_the_guard_and_puts_back_what_was_before

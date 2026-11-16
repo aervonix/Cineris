@@ -91,6 +91,10 @@ fn app(scenario: &str) -> ! {
     let temp = scratch.join("temp");
     std::fs::create_dir_all(&temp).expect("the temporary folder");
     let mut terminal = Some(Terminal::enter(Overrides::default()).expect("enter the terminal"));
+    if scenario == "signal" {
+        // As the application does: a signal is its own to end.
+        terminal.as_mut().unwrap().hand_signals_over();
+    }
     let (cols, rows) = terminal.as_ref().unwrap().size().expect("the size");
     let mut inline = Inline::new(cols, rows);
     draw(&mut terminal, &mut inline, &format!("app: {scenario}"));
@@ -139,6 +143,15 @@ fn app(scenario: &str) -> ! {
         yes(std::fs::read_dir(&temp).expect("list it").next().is_none()),
     );
 
+    if scenario == "signal" {
+        // A signal came while the editor had the terminal: it is not taken
+        // back, and the program ends as the signal asks.
+        report("taken back", yes(terminal.is_some()));
+        report("ending", &format!("{:?}", cortex_term::signalled()));
+        cortex_term::signal_ended();
+        #[expect(clippy::exit, reason = "a child ends when it has reported")]
+        std::process::exit(0);
+    }
     if terminal.is_none() {
         report("raw again", "NO: the terminal was not taken back");
         write_terminal(&format!("\r\n{LOST}\r\n"));
@@ -237,6 +250,19 @@ fn editor(scenario: &str, file: &Path) -> ! {
             // screen, the mouse and keyboard flags left on.
             write_terminal("\x1b[?1049h\x1b[?1000h\x1b[>1u\x1b[>1u");
             std::process::abort()
+        }
+        // The application is sent SIGTERM while this editor has the
+        // terminal; the editor then ends, its change saved.
+        #[cfg(unix)]
+        "signal" => {
+            let parent = std::os::unix::process::parent_id().to_string();
+            let sent = std::process::Command::new("kill")
+                .args(["-TERM", parent.as_str()])
+                .status()
+                .expect("kill");
+            report("signal sent", yes(sent.success()));
+            std::fs::write(file, had.replace("hello", "hello edited")).expect("write");
+            0
         }
         "nottext" => {
             std::fs::write(file, b"caf\xe9 au lait").expect("write");

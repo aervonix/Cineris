@@ -219,3 +219,38 @@ fn sys_a_missing_editor_is_not_found_and_never_hands_the_terminal_over() {
     assert!(report.contains("result: error: NotFound("), "{report}");
     assert!(!report.contains("editor modes"), "{report}");
 }
+
+/// A signal that comes while the editor has the terminal is the
+/// application's to end (its handlers stay past leaving the terminal): the
+/// editor finishes, the terminal is not taken back, and the program ends as
+/// the signal asks, its prompt's folder removed (the review of step 23).
+#[cfg(unix)]
+#[test]
+fn sys_a_signal_while_the_editor_runs_leaves_the_terminal_to_the_shell() {
+    let scratch = cortex_testkit::Scratch::outside("cortex-tui-external", "signal");
+    let options = format!("signal|{}", scratch.path().display());
+    let mut session =
+        Session::start(&this_binary(), &SHELL.arguments(&options), 100, 30).answering();
+    session.wait_for(LIMIT, "the editor to wait for a line", |t| {
+        t.shows(EDITOR_WAITING)
+    });
+    session.send(b"\r");
+    session.wait_for(LIMIT, "the shell's verdict", |t| {
+        t.shows(RESTORED) || t.shows(NOT_RESTORED)
+    });
+    assert!(
+        session.screen().shows(RESTORED),
+        "the terminal was not put back:\n{}",
+        session.screen().dump()
+    );
+    session.wait_exit(LIMIT);
+    let report = scratch.read_text("report.txt");
+    for line in [
+        "signal sent: yes",
+        "taken back: NO",
+        "ending: Some(143)",
+        "temporary folder empty: yes",
+    ] {
+        assert!(report.contains(line), "no `{line}` in\n{report}");
+    }
+}
