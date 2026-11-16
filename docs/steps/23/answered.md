@@ -388,3 +388,17 @@ Tests of each trigger (`cortex-tui`'s `app::tests::dialogs`): `steady_typing_slo
 | A comment said a stray `?1049l` on the main screen does nothing | It moves the cursor to the position saved last in xterm and VTE; the order chosen still never leaves the terminal on the alternate screen, and the comment says so |
 
 Left as the reviewer found them, by reading: when a signal comes while the core ends after the core went away, the program ends as the signal, and the core's failure message is not printed; a terminal that hangs up during a normal end makes the last drain of replies wait out its 100 ms.
+
+**The full review of the first pull request.** A second reviewer read all of it. What it found, and what each changed:
+
+| Finding | Changed |
+|---|---|
+| Asking for the enhanced protocol's event types made every arrow, `Home`, `End`, `PageUp`, `PageDown`, `Delete`, `Insert` and function key arrive twice: their legacy forms carry the event type too, and a release was read as a second press | The legacy forms read the event type as the `u` form does: a release is nothing, a repeat is `Event::Repeat` (`a_legacy_keys_release_is_dropped_and_its_repeat_told_apart`) |
+| Typing slower than 300 ms a key still answered a dialog whose first frame came between two keys: the loop drew the answers at the grace's end, before any key reached the editor, and the first tests left the loop's wake out | The quiet counts any input no dialog took, from just before the dialog as well as while it is up (a dialog's first frame takes the last such time); a key a ready dialog has no use for that types a character goes on to the editor as typing; the tests wake as the loop does (`steady_typing_through_the_loops_wake_never_answers`, `typing_just_before_the_dialog_counts_as_typing`, `a_typing_key_the_dialog_has_no_use_for_goes_to_the_editor`) |
+| A key held after answering one dialog answered the next, which was never seen | The dialog after one a key answered is ready no sooner than a second after that key (`a_key_held_after_answering_one_dialog_never_answers_the_next`) |
+| The row could offer a key the dialog dropped as a key held down (typing that ended in `y`, then `y` at the row; `Esc` closing the viewer, then `Esc` to deny) | The row shows only a quiet second after the last key no dialog took, so the same-key rule never meets a key the row offers (`a_key_the_row_offers_is_taken`, `esc_after_closing_the_viewer_denies_when_the_row_offers_it`); `Ctrl+O` works before the dialog is ready, since it answers nothing |
+| A quit armed by `Ctrl+C` over a dialog stayed armed after the dialog took a key | A key a dialog takes disarms it (`answering_the_dialog_disarms_the_quit`) |
+| The enhanced protocol marks no repeats of the keys that type text, which the docs implied | `dialog.rs` and 09-tui say so: those rely on the same-key rule, the quiet and the wait after an answer |
+| Five rules had no break | Each has one, with a test where it had none (`a_paste_after_a_cut_note_holds_the_enter_too`) |
+
+Left, by reading: a win32 key-up that never arrives (focus lost while the key is down) makes the next press of that key one repeat; any other key, or its up, ends it.

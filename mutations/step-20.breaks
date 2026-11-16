@@ -127,7 +127,7 @@ caught-by:
 [break] key-release-kept
 rule: A key release is dropped.
 file: crates/cortex-term/src/input.rs
-in: kitty
+in: of_kind
 find: 3 => None,
 replace: 99 => None,
 caught-by:

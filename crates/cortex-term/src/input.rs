@@ -877,9 +877,29 @@ fn decode_csi(raw: &[u8], intermediates: &[u8], final_byte: u8) -> Option<Event>
                 _ => return None,
             };
             let mods = Mods::from_param(number(1, 0).unwrap_or(1));
-            Some(Event::Key(Key::with(code, mods)))
+            of_kind(Key::with(code, mods), &groups)
         }
         _ => None,
+    }
+}
+
+/// A key with the enhanced protocol's event type, the second part of its
+/// modifiers' group (`CSI … ; mods:kind …`), which the protocol's flag 2
+/// adds to the legacy forms of the keys with no text too (arrows, `Home`,
+/// `Delete`, the function keys): a release (3) is nothing, a repeat (2)
+/// is [`Event::Repeat`], and a press (1, or none) is the key (since the
+/// review of step 23).
+fn of_kind(key: Key, groups: &[Vec<Option<u32>>]) -> Option<Event> {
+    match groups
+        .get(1)
+        .and_then(|group| group.get(1))
+        .copied()
+        .flatten()
+        .unwrap_or(1)
+    {
+        3 => None,
+        2 => Some(Event::Repeat(key)),
+        _ => Some(Event::Key(key)),
     }
 }
 
@@ -900,7 +920,7 @@ fn tilde(first: u32, groups: &[Vec<Option<u32>>]) -> Option<Event> {
         201 => return None,
         27 => {
             let c = groups.get(2)?.first().copied().flatten()?;
-            return Some(Event::Key(Key::with(codepoint_key(c)?, mods)));
+            return of_kind(Key::with(codepoint_key(c)?, mods), groups);
         }
         1 | 7 => KeyCode::Home,
         2 => KeyCode::Insert,
@@ -915,7 +935,7 @@ fn tilde(first: u32, groups: &[Vec<Option<u32>>]) -> Option<Event> {
         31..=34 => KeyCode::F(u8::try_from(first - 14).ok()?),
         _ => return None,
     };
-    Some(Event::Key(Key::with(code, mods)))
+    of_kind(Key::with(code, mods), groups)
 }
 
 /// The key a Unicode code point stands for in a reported key.
@@ -945,17 +965,7 @@ fn kitty(groups: &[Vec<Option<u32>>]) -> Option<Event> {
             .flatten()
             .unwrap_or(1),
     );
-    let kind = modifiers
-        .and_then(|group| group.get(1))
-        .copied()
-        .flatten()
-        .unwrap_or(1);
-    let key = Key::with(codepoint_key(code)?, mods);
-    match kind {
-        3 => None,
-        2 => Some(Event::Repeat(key)),
-        _ => Some(Event::Key(key)),
-    }
+    of_kind(Key::with(codepoint_key(code)?, mods), groups)
 }
 
 #[cfg(test)]
@@ -1045,6 +1055,30 @@ mod tests {
             decode(b"\x1b[27;1:2u\x1b[27;1:3u"),
             [Event::Repeat(Key::plain(KeyCode::Esc))]
         );
+    }
+
+    /// With the protocol's flag 2, the keys with no text keep their legacy
+    /// forms and carry the event type in them too: a release is not a
+    /// second press (the review of these fixes found Up moving two history
+    /// entries, Delete taking two characters).
+    #[test]
+    fn a_legacy_keys_release_is_dropped_and_its_repeat_told_apart() {
+        let up = Key::plain(KeyCode::Up);
+        let delete = Key::plain(KeyCode::Delete);
+        let f5 = Key::with(KeyCode::F(5), Mods::SHIFT);
+        for (bytes, events) in [
+            (&b"\x1b[1;1:1A\x1b[1;1:3A"[..], vec![Event::Key(up)]),
+            (
+                b"\x1b[1;1:2A\x1b[1;1:2A\x1b[1;1:3A",
+                vec![Event::Repeat(up), Event::Repeat(up)],
+            ),
+            (b"\x1b[3;1:1~\x1b[3;1:3~", vec![Event::Key(delete)]),
+            (b"\x1b[3;1:2~", vec![Event::Repeat(delete)]),
+            (b"\x1b[15;2:3~\x1b[15;2~", vec![Event::Key(f5)]),
+            (b"\x1b[1;5:3H", vec![]),
+        ] {
+            assert_eq!(decode(bytes), events, "{bytes:?}");
+        }
     }
 
     /// Win32 input: a key that goes down again with no record of it going

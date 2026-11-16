@@ -13,8 +13,25 @@ fn ms(now: Instant, n: u64) -> Instant {
     now + Duration::from_millis(n)
 }
 
-/// One key read at `at`, and the frame the loop draws for it.
+/// The loop's own wakes up to `until`: when the dialog's moment has come
+/// by then, a frame at that moment, as `run_with` draws it.
+fn wake_until(app: &mut App, until: Instant) {
+    while let Some(due) = app.deadline() {
+        if due > until {
+            break;
+        }
+        let _ = app.frame(due);
+        app.drawn(due);
+        if app.deadline() == Some(due) {
+            break;
+        }
+    }
+}
+
+/// One key read at `at`, after the loop's wakes before it, and the frame
+/// the loop draws for it.
 fn press(app: &mut App, binding: &str, at: Instant) {
+    wake_until(app, at);
     key(app, binding, at);
     let _ = app.frame(at);
     app.drawn(at);
@@ -26,6 +43,7 @@ fn typing(app: &mut App, text: &str, from: Instant, every: u64) -> Instant {
     let mut at = from;
     for c in text.chars() {
         at += Duration::from_millis(every);
+        wake_until(app, at);
         app.terminal(
             &TermEvent::Key(cortex_term::Key::plain(cortex_term::KeyCode::Char(c))),
             at,
@@ -51,13 +69,14 @@ fn answers_shown(app: &mut App, at: Instant) -> bool {
     text(&live).iter().any(|line| line.contains("Allow once"))
 }
 
-/// A session open with a turn running, and an approval whose first frame
-/// was drawn at `at`.
+/// A session open with a turn running (its prompt typed long before), and
+/// an approval whose first frame was drawn at `at`.
 fn approval_up(at: Instant) -> (App, Scripted) {
-    let (mut app, link) = app(at);
-    opened(&mut app, &link, at);
-    type_text(&mut app, "hi", at);
-    key(&mut app, "enter", at);
+    let long_before = at - Duration::from_secs(5);
+    let (mut app, link) = app(long_before);
+    opened(&mut app, &link, long_before);
+    type_text(&mut app, "hi", long_before);
+    key(&mut app, "enter", long_before);
     link.take_sent();
     ask(&mut app, &link, 7, approval("c_7"), at);
     (app, link)
@@ -181,8 +200,9 @@ fn a_key_held_from_before_the_dialog_never_answers_and_a_press_after_does() {
     // `a` pressed and held; the approval comes 100 ms later.
     press(&mut app, "a", ms(now, 1000));
     ask(&mut app, &link, 7, outside("c_7"), ms(now, 1100));
+    // The press just before it counts as typing at it: a quiet second.
     let ready = wake(&mut app).expect("the answers' frame");
-    assert_eq!(ready, ms(now, 1100) + GRACE);
+    assert_eq!(ready, ms(now, 1000) + QUIET);
     // The first repeat, 500 ms after the press, and more.
     let mut at = ms(now, 1500);
     for _ in 0..10 {
@@ -196,7 +216,7 @@ fn a_key_held_from_before_the_dialog_never_answers_and_a_press_after_does() {
 }
 
 /// A repeat the terminal marks (the enhanced protocol's event types, win32
-/// input) answers nothing, and goes nowhere once the dialog takes keys.
+/// input) answers nothing.
 #[test]
 fn a_repeat_the_terminal_marks_never_answers() {
     let now = Instant::now();
@@ -208,8 +228,14 @@ fn a_repeat_the_terminal_marks_never_answers() {
         app.terminal(&TermEvent::Repeat(y), at);
     }
     assert!(answers(&link).is_empty(), "a repeat answered");
-    assert_eq!(app.input().editor().expanded(), "", "a repeat was typed");
-    assert!(answers_shown(&mut app, ready + Duration::from_millis(600)));
+    // A key held down whose press no dialog took is typing: the first
+    // repeat is dropped and hides the answers, and the rest, the dialog no
+    // longer taking keys, go on to the editor as typing; the answers wait
+    // a quiet second after the last.
+    assert_eq!(app.input().editor().expanded(), "yyyy");
+    assert!(!answers_shown(&mut app, ready + Duration::from_millis(600)));
+    let again = wake(&mut app).expect("the answers again");
+    assert_eq!(again, ready + Duration::from_millis(400 + 33 * 4) + QUIET);
 }
 
 /// The review's trigger: typing, an approval, a paste, and a key 100 ms
@@ -395,6 +421,29 @@ fn a_note_cut_off_by_another_clients_answer_is_a_draft() {
     assert_eq!(app.input().editor().expanded(), "no");
 }
 
+/// A paste after a note was cut off carries the typing on as a key does:
+/// an `Enter` soon after it does not send, though the cut was long before.
+#[test]
+fn a_paste_after_a_cut_note_holds_the_enter_too() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    let ready = wake(&mut app).expect("the answers' frame");
+    press(&mut app, "e", ready + Duration::from_millis(400));
+    let at = typing(&mut app, "no", ready + Duration::from_millis(400), 80);
+    link.give(event(Event::RequestResolved(RequestResolved {
+        request_id: RequestId::Number(7),
+        resolution: Resolution::Answered,
+    })));
+    drain(&mut app, at);
+    let pasted = at + QUIET - Duration::from_millis(100);
+    app.terminal(&TermEvent::Paste(", use make".to_owned()), pasted);
+    press(&mut app, "enter", pasted + Duration::from_millis(300));
+    assert!(
+        turn_start(&link.take_sent()).is_empty(),
+        "an Enter just after a paste sent the cut note"
+    );
+}
+
 /// `Ctrl+C` over a dialog with no turn running (the trust question, the
 /// undo's question) leaves the text the dialog hides, and says that a
 /// second quits.
@@ -489,13 +538,15 @@ fn a_key_soon_after_a_paste_does_not_trust_the_project() {
     assert!(responses(&link).is_empty(), "a key after a paste trusted");
 }
 
-/// A question's digits too: typing "2 files" through the undo's question
-/// does not pick its second choice; a digit once the typing stopped does.
+/// A question's digits too: typing that began before the undo's question
+/// and goes on through it, "2 files" among it, does not pick its second
+/// choice; a digit once the typing stopped does.
 #[test]
 fn typing_through_a_question_does_not_pick_a_choice() {
     let now = Instant::now();
-    let (mut app, link) = app(now);
-    opened(&mut app, &link, now);
+    let (mut app, link) = app(now - Duration::from_secs(5));
+    opened(&mut app, &link, now - Duration::from_secs(5));
+    let before = typing(&mut app, "keep ", now - Duration::from_millis(1750), 350);
     ask(
         &mut app,
         &link,
@@ -507,10 +558,11 @@ fn typing_through_a_question_does_not_pick_a_choice() {
             choices: vec!["Keep them".to_owned(), "Put them back".to_owned()],
             extension: None,
         }),
-        now,
+        before + Duration::from_millis(100),
     );
-    let last = typing(&mut app, "2 files", now, 350);
+    let last = typing(&mut app, "2 files", before, 350);
     assert!(responses(&link).is_empty(), "typing picked a choice");
+    assert_eq!(app.input().editor().expanded(), "keep 2 files");
     let ready = wake(&mut app).expect("the answers' frame");
     assert_eq!(ready, last + QUIET);
     press(&mut app, "1", ready + GRACE);
@@ -535,4 +587,185 @@ fn end_then_page_down_in_the_viewer_stays_at_the_end() {
         key(&mut app, binding, ms(now, 10));
     }
     let _ = app.viewer_frame(40, 98, ms(now, 20));
+}
+
+// The independent review of these fixes, with the loop's wakes the first
+// tests left out.
+
+/// The review's own trigger through the loop: typing at a key every 350
+/// ms, the approval's first frame between two keys. The loop wakes at the
+/// grace's end; the keys after it are still typing.
+#[test]
+fn steady_typing_through_the_loops_wake_never_answers() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    typing(&mut app, "try a smaller fix", now, 350);
+    assert!(answers(&link).is_empty(), "steady typing answered");
+    assert_eq!(app.input().editor().expanded(), "try a smaller fix");
+}
+
+/// A slow typist (a key every 500 ms), the approval 100 ms after a key:
+/// the typing before it counts as typing at it.
+#[test]
+fn typing_just_before_the_dialog_counts_as_typing() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now - Duration::from_secs(10));
+    // The first dialog answered long ago; the typing starts afresh.
+    let _ = wake(&mut app);
+    press(&mut app, "n", now - Duration::from_secs(8));
+    assert_eq!(answers(&link), [ApprovalChoice::Deny]);
+    let last = typing(&mut app, "please ", now - Duration::from_secs(4), 500);
+    ask(
+        &mut app,
+        &link,
+        8,
+        approval("c_8"),
+        last + Duration::from_millis(100),
+    );
+    typing(&mut app, "say yes", last, 500);
+    assert!(
+        answers(&link).is_empty(),
+        "typing before the dialog answered it"
+    );
+    assert_eq!(app.input().editor().expanded(), "please say yes");
+}
+
+/// Two approvals at once; `y` answers the first and is held a little long:
+/// its repeats never answer the second, which was not seen yet.
+#[test]
+fn a_key_held_after_answering_one_dialog_never_answers_the_next() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    link.give(Inbound::Request(RequestId::Number(8), approval("c_8")));
+    drain(&mut app, now);
+    let pressed = ms(now, 1500);
+    press(&mut app, "y", pressed);
+    assert_eq!(answers(&link).len(), 1, "the first press answers");
+    let mut at = pressed + Duration::from_millis(500);
+    for _ in 0..10 {
+        press(&mut app, "y", at);
+        at += Duration::from_millis(33);
+    }
+    assert!(
+        answers(&link).is_empty(),
+        "a held key answered the next dialog"
+    );
+    // Once a second has passed with nothing typed, one key answers it.
+    let ready = wake(&mut app).expect("the second's answers");
+    press(&mut app, "n", ready + Duration::from_millis(400));
+    assert_eq!(answers(&link), [ApprovalChoice::Deny]);
+}
+
+/// The answers row is drawn only when a key on it is taken: typing that
+/// ended in `y` just before the dialog, then `y` pressed whenever the row
+/// shows it, answers at the first press the row offers.
+#[test]
+fn a_key_the_row_offers_is_taken() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now - Duration::from_secs(10));
+    let _ = wake(&mut app);
+    press(&mut app, "n", now - Duration::from_secs(8));
+    answers(&link);
+    let last = typing(&mut app, "try", now - Duration::from_secs(1), 120);
+    ask(
+        &mut app,
+        &link,
+        8,
+        approval("c_8"),
+        last + Duration::from_millis(100),
+    );
+    let mut at = last + Duration::from_millis(900);
+    for _ in 0..4 {
+        wake_until(&mut app, at);
+        let offered = answers_shown(&mut app, at);
+        press(&mut app, "y", at);
+        let given = answers(&link);
+        if offered {
+            assert_eq!(given, [ApprovalChoice::AllowOnce], "the row offered y");
+            return;
+        }
+        assert!(
+            given.is_empty(),
+            "y answered while the row did not offer it"
+        );
+        at += Duration::from_millis(1100);
+    }
+    panic!("the row never offered y");
+}
+
+/// `Ctrl+O` shows the request whole, `Esc` closes the viewer, and `Esc`
+/// again is to deny: taken when the row offers it, never dropped then.
+#[test]
+fn esc_after_closing_the_viewer_denies_when_the_row_offers_it() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    press(&mut app, "ctrl+o", ms(now, 1500));
+    assert!(app.viewing(), "ctrl+o opens the viewer");
+    let closed = ms(now, 4500);
+    press(&mut app, "esc", closed);
+    assert!(!app.viewing());
+    // An `Esc` before the row is back is typing too: the next waits a
+    // quiet second after it.
+    for wait in [600, 1700] {
+        let at = closed + Duration::from_millis(wait);
+        wake_until(&mut app, at);
+        let offered = answers_shown(&mut app, at);
+        press(&mut app, "esc", at);
+        let given = answers(&link);
+        assert_eq!(
+            !given.is_empty(),
+            offered,
+            "at +{wait} ms: offered {offered}"
+        );
+        if offered {
+            assert_eq!(given, [ApprovalChoice::Deny]);
+            return;
+        }
+    }
+    panic!("the row never offered esc");
+}
+
+/// `Ctrl+C` over a question with no turn running arms the quit; a key the
+/// question takes disarms it.
+#[test]
+fn answering_the_dialog_disarms_the_quit() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    ask(
+        &mut app,
+        &link,
+        5,
+        ServerRequest::Question(cortex_protocol::methods::QuestionRequest {
+            session_id: SessionId::from(SESSION),
+            turn_id: None,
+            question: "Overwrite the files edited since?".to_owned(),
+            choices: vec!["yes".to_owned(), "no".to_owned()],
+            extension: None,
+        }),
+        ms(now, 1000),
+    );
+    press(&mut app, "ctrl+c", ms(now, 2500));
+    assert!(app.input().quit_armed());
+    press(&mut app, "esc", ms(now, 4000));
+    assert_eq!(responses(&link).len(), 1, "esc answers");
+    assert!(!app.input().quit_armed(), "the quit is still armed");
+}
+
+/// A key the ready dialog has no use for that types a character goes on to
+/// the editor, as typing resumed after a pause: kept, and the answers are
+/// hidden again for a quiet second.
+#[test]
+fn a_typing_key_the_dialog_has_no_use_for_goes_to_the_editor() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    let ready = wake(&mut app).expect("the answers' frame");
+    let last = typing(&mut app, "try", ready + Duration::from_millis(100), 400);
+    assert!(answers(&link).is_empty(), "resumed typing answered");
+    assert_eq!(app.input().editor().expanded(), "try");
+    assert!(!answers_shown(&mut app, last));
+    // A key that types nothing and answers nothing does nothing.
+    let ready = wake(&mut app).expect("the answers again");
+    press(&mut app, "ctrl+b", ready + Duration::from_millis(400));
+    assert!(answers_shown(&mut app, ready + Duration::from_millis(400)));
 }

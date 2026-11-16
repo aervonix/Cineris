@@ -143,8 +143,11 @@ caught-by:
 rule: A paste that reaches the editor while a dialog is up is input: the dialog waits for a second with no input after it.
 file: crates/cortex-tui/src/app/state.rs
 in: App::terminal
-find: dialog.typed(at);
-replace: let _ = dialog;
+find:
+    TermEvent::Paste(_) => {
+        self.not_taken(at);
+replace:
+    TermEvent::Paste(_) => {
 caught-by:
     app::tests::dialogs::a_key_soon_after_a_paste_does_not_answer
     app::tests::dialogs::a_key_soon_after_a_paste_does_not_trust_the_project
@@ -197,11 +200,12 @@ caught-by:
 [break] a-kitty-repeat-is-a-press
 rule: The enhanced protocol's repeat (event type 2) is a repeat, not a press.
 file: crates/cortex-term/src/input.rs
-in: kitty
+in: of_kind
 find: 2 => Some(Event::Repeat(key)),
 replace: 2 => Some(Event::Key(key)),
 caught-by:
     input::tests::a_repeat_is_told_apart_and_a_release_dropped
+    input::tests::a_legacy_keys_release_is_dropped_and_its_repeat_told_apart
 
 [break] repeats-are-not-asked-for
 rule: The terminal is asked for the enhanced protocol's event types, so that it marks repeats.
@@ -289,8 +293,8 @@ caught-by:
 rule: A paste while the viewer is open is the viewer's search's, never the hidden editor's.
 file: crates/cortex-tui/src/app/state.rs
 in: App::terminal
-find: TermEvent::Paste(text) => return self.viewer_paste(text),
-replace: TermEvent::Paste(_) => {}
+find: return self.viewer_paste(text);
+replace: let _ = text;
 caught-by:
     app::tests::dialogs::a_paste_in_the_viewer_goes_to_its_search_and_not_the_editor
 
@@ -340,3 +344,105 @@ find: std::mem::forget(self);
 replace: drop(self);
 caught-by:
     log::tests::finishing_the_log_within_a_limit_never_waits_for_a_stuck_writer
+
+# What the full review of the first pull request found.
+
+[break] a-legacy-keys-release-is-a-press
+rule: With the enhanced protocol's event types on, the keys with no text keep their legacy forms with the event type in them: a release is not a second press.
+file: crates/cortex-term/src/input.rs
+in: decode_csi
+find: of_kind(Key::with(code, mods), &groups)
+replace: Some(Event::Key(Key::with(code, mods)))
+caught-by:
+    input::tests::a_legacy_keys_release_is_dropped_and_its_repeat_told_apart
+
+[break] typing-before-the-dialog-is-not-typing
+rule: Input no dialog took just before a dialog came holds it as typing while it is up would: a quiet second after it.
+file: crates/cortex-tui/src/app/state.rs
+in: App::drawn
+find: dialog.typed(untaken);
+replace: let _ = untaken;
+caught-by:
+    app::tests::dialogs::typing_just_before_the_dialog_counts_as_typing
+
+[break] the-next-dialog-takes-a-held-answer
+rule: The dialog after one a key answered is ready no sooner than the repeat window after that key.
+file: crates/cortex-tui/src/app/state.rs
+in: App::drawn
+find: dialog.not_before(taken + REPEAT);
+replace: let _ = taken;
+caught-by:
+    app::tests::dialogs::a_key_held_after_answering_one_dialog_never_answers_the_next
+
+[break] a-key-not-taken-is-not-typing
+rule: A key a dialog does not take (passed on to the editor, or nothing while it is not ready) is typing: the dialog waits a quiet second after it, and the row hides.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: dialog.typed(at);
+replace: let _ = &dialog;
+caught-by:
+    app::tests::dialogs::steady_typing_through_the_loops_wake_never_answers
+    app::tests::dialogs::esc_after_closing_the_viewer_denies_when_the_row_offers_it
+
+[break] answers-stay-shown-over-typing
+rule: Input that reaches the editor after the answers were drawn hides them again.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::typed
+find: self.hide_answers();
+replace: let _ = ();
+caught-by:
+    app::tests::dialogs::answers_shown_are_hidden_again_by_input_that_reaches_the_editor
+
+[break] fg-keeps-the-grace
+rule: Continued after a stop, the dialog shown starts its grace again.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: dialog.hide();
+replace: let _ = &dialog;
+caught-by:
+    app::tests::dialogs::after_fg_the_dialog_starts_its_grace_again
+
+[break] answering-leaves-the-quit-armed
+rule: A key a dialog takes disarms a quit a Ctrl+C armed.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: self.input.disarm_quit();
+replace: let _ = ();
+caught-by:
+    app::tests::dialogs::answering_the_dialog_disarms_the_quit
+
+[break] an-unused-typing-key-is-swallowed
+rule: A key that types a character and that the ready dialog has no use for goes on to the editor, as typing.
+file: crates/cortex-tui/src/app/dialog.rs
+in: unused
+find: Keyed::Pass
+replace: Keyed::Nothing
+caught-by:
+    app::tests::dialogs::a_typing_key_the_dialog_has_no_use_for_goes_to_the_editor
+
+[break] show-whole-waits-for-the-answers
+rule: Showing the request whole answers nothing, and works before the dialog takes keys.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::key
+find: return Keyed::ShowWhole;
+replace: return Keyed::Nothing;
+caught-by:
+    app::tests::ctrl_o_shows_the_request_whole_and_esc_returns_to_its_dialog
+
+[break] a-paste-after-a-cut-note-sends-it
+rule: A paste after a note was cut off carries the hold on Enter on, as a key does.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: *cut = at;
+replace: let _ = cut;
+caught-by:
+    app::tests::dialogs::a_paste_after_a_cut_note_holds_the_enter_too
+
+[break] a-paste-to-the-viewers-search-is-lost
+rule: A paste while the viewer's search is being typed goes into the search.
+file: crates/cortex-tui/src/app/state/viewer.rs
+in: App::viewer_paste
+find: query.extend(text.chars().map(|c| if c.is_control() { ' ' } else { c }));
+replace: let _ = (query, text);
+caught-by:
+    app::tests::dialogs::a_paste_in_the_viewer_goes_to_its_search_and_not_the_editor

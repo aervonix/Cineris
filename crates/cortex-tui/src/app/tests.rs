@@ -571,7 +571,11 @@ fn leaving_a_confined_sessions_sandbox_offers_only_once_and_deny() {
     key(&mut app, "a", at + dialog::GRACE);
     key(&mut app, "e", at + dialog::GRACE * 2);
     assert!(answers(&link).is_empty());
-    key(&mut app, "y", at + dialog::GRACE * 3);
+    // Answers it does not offer type into the editor: it waits a quiet
+    // second again.
+    assert_eq!(app.input().editor().expanded(), "sae");
+    let at = ready_again(&mut app);
+    key(&mut app, "y", at);
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
@@ -638,7 +642,8 @@ fn a_dialog_taller_than_the_window_keeps_its_question_and_offers_only_this_call(
     );
     key(&mut app, "s", at);
     assert!(answers(&link).is_empty());
-    key(&mut app, "y", at + dialog::GRACE);
+    let at = ready_again(&mut app);
+    key(&mut app, "y", at);
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
@@ -811,9 +816,23 @@ fn shown_dialog(app: &mut App, link: &Scripted, id: i64, now: Instant) -> Instan
     drain(app, now);
     let _ = app.frame(now);
     app.drawn(now);
-    let at = now + dialog::GRACE * 2;
+    // Its answers, when it is ready: after its grace, or a second after a
+    // key that answered the dialog before it.
+    let at = app.deadline().map_or(now + dialog::GRACE * 2, |due| {
+        due.max(now + dialog::GRACE * 2)
+    });
     let _ = app.frame(at);
     at
+}
+
+/// After input that reached the editor while a dialog was up (a key it does
+/// not offer types into it): the frame the loop draws when the dialog is
+/// ready again, and a moment later, when a key answers it.
+fn ready_again(app: &mut App) -> Instant {
+    let due = app.deadline().expect("the dialog is due to be ready again");
+    let _ = app.frame(due);
+    app.drawn(due);
+    due + dialog::GRACE
 }
 
 #[test]
@@ -855,10 +874,12 @@ fn a_choice_not_on_offer_is_not_taken() {
     let (mut app, link) = app(now);
     opened(&mut app, &link, now);
     let at = shown_dialog(&mut app, &link, 3, now);
-    // The request offers no "always allow here".
+    // The request offers no "always allow here": `a` types into the editor.
     key(&mut app, "a", at);
     assert!(link.script().answers.is_empty());
-    key(&mut app, "s", at + dialog::GRACE);
+    assert_eq!(app.input().editor().expanded(), "a");
+    let at = ready_again(&mut app);
+    key(&mut app, "s", at);
     assert_eq!(link.script().answers.len(), 1);
 }
 
@@ -1573,7 +1594,8 @@ fn in_a_tiny_window_a_dialog_keeps_its_question_and_its_answers() {
     );
     key(&mut app, "s", at);
     assert!(answers(&link).is_empty());
-    key(&mut app, "y", at + dialog::GRACE);
+    let at = ready_again(&mut app);
+    key(&mut app, "y", at);
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
@@ -1802,7 +1824,11 @@ fn an_answer_not_drawn_whole_cannot_be_pressed() {
     key(&mut app, "a", at + dialog::GRACE);
     key(&mut app, "e", at + dialog::GRACE * 2);
     assert!(answers(&link).is_empty());
-    key(&mut app, "y", at + dialog::GRACE * 3);
+    // Answers it does not offer type into the editor: it waits a quiet
+    // second again.
+    assert_eq!(app.input().editor().expanded(), "sae");
+    let at = ready_again(&mut app);
+    key(&mut app, "y", at);
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
@@ -1960,7 +1986,8 @@ fn esc_without_a_pause_after_the_answers_are_drawn_does_nothing() {
         "{sent:#?}"
     );
     assert!(answers(&link).is_empty());
-    key(&mut app, "esc", at + dialog::GRACE * 2);
+    let at = ready_again(&mut app);
+    key(&mut app, "esc", at);
     assert_eq!(answers(&link), [ApprovalChoice::Deny]);
 }
 
@@ -2173,7 +2200,8 @@ fn a_trust_question_that_does_not_fit_cannot_be_trusted_from_there() {
     );
     key(&mut app, "y", at);
     assert!(link.script().answers.is_empty());
-    key(&mut app, "x", at + dialog::GRACE);
+    let at = ready_again(&mut app);
+    key(&mut app, "x", at);
     assert_eq!(
         std::mem::take(&mut link.script().answers),
         [(
@@ -2258,10 +2286,11 @@ fn a_question_is_answered_by_the_digit_of_its_choice_or_left_unanswered() {
                 .any(|row| row.contains("esc leaves it unanswered")),
             "{rows:#?}"
         );
-        // A digit with no choice does nothing.
+        // A digit with no choice answers nothing: it types into the editor.
         key(&mut app, "9", at);
         assert!(link.script().answers.is_empty());
-        key(&mut app, binding, at + dialog::GRACE);
+        let at = ready_again(&mut app);
+        key(&mut app, binding, at);
         assert_eq!(
             std::mem::take(&mut link.script().answers),
             [(
