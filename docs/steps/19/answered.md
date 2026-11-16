@@ -223,3 +223,14 @@ The same pull request's second and last round: a reviewer read the fixes above a
 
 **Written down, not changed:** the look after a check whose stop overwrote its result has no break of its own (its test needs an enforcing sandbox, which the desk's machine has not).
 
+
+## Measured
+
+On the desktop, a release build, medians. The rows are in [performance-budgets.md](../../performance-budgets.md), "Latency the harness adds".
+
+| What | Proposed budget | Measured |
+|---|---|---|
+| The stage when no check runs, from `Deciding` to `Finishing` | ≤ 50 µs | About 30 µs: the loop's share 0.49 µs, the hop to the blocking pool for the look at the project's files 23 µs, the look and choosing 6.4 µs |
+| Choosing a round's checks: the profile's look (nothing changed) and choosing, 40 entries | ≤ 1 ms | 6.4 µs |
+| A turn that changed no file | Nothing measurable | One comparison: the stage is not entered |
+| What the harness adds to each check | Stated, not budgeted | A command's own: its start (≤ 5 ms on Linux, as step 11 measured), the look for what it changed, and the looks at protected paths (step 26's, marked over what is wanted) |
