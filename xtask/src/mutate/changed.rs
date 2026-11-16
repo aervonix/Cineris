@@ -61,7 +61,7 @@ pub(crate) trait Sources {
     /// The file as it was at the reference; `None` when it was not there.
     fn old(&self, path: &str) -> Option<String>;
     /// The file as it is; `None` when it is gone.
-    fn new(&self, path: &str) -> Option<String>;
+    fn now(&self, path: &str) -> Option<String>;
     /// The Rust files now under `directory`, as paths of the repository.
     fn rust_files(&self, directory: &str) -> Vec<String>;
 }
@@ -344,7 +344,7 @@ impl<'a> Crates<'a> {
                 }
             }
             for path in &now {
-                if let Some(text) = sources.new(path) {
+                if let Some(text) = sources.now(path) {
                     add(path, &text);
                 }
                 if touched.contains(path)
@@ -400,6 +400,20 @@ fn placed(entry: &str) -> Placed {
     }
 }
 
+/// The breaks of `chosen` the working tree's diff from `reference` can
+/// affect, in the repository at `root`: what `--changed` does. `known` is
+/// every break of `mutations/`.
+pub(crate) fn since(
+    root: &Path,
+    reference: &str,
+    known: &[Break],
+    chosen: &[Break],
+) -> Result<Selection> {
+    let git = Git::open(root, reference)?;
+    let files = git.changed_files()?;
+    Ok(select(known, chosen, &files, &git))
+}
+
 /// The repository at `root`, and the commit a diff is from.
 pub(crate) struct Git<'a> {
     root: &'a Path,
@@ -421,7 +435,12 @@ impl<'a> Git<'a> {
                 root.display()
             ));
         }
-        if reference.is_empty() || reference.starts_with('-') {
+        if reference.is_empty() {
+            return Err(
+                "`--changed` needs a branch, a tag or a commit, not an empty text".to_owned(),
+            );
+        }
+        if reference.starts_with('-') {
             return Err(format!(
                 "`--changed {reference}`: a branch, a tag or a commit, not an option"
             ));
@@ -476,7 +495,7 @@ impl Sources for Git<'_> {
         crate::owner_guard::git(self.root, &["show", &format!("{}:{path}", self.commit)]).ok()
     }
 
-    fn new(&self, path: &str) -> Option<String> {
+    fn now(&self, path: &str) -> Option<String> {
         std::fs::read_to_string(self.root.join(path)).ok()
     }
 
@@ -535,7 +554,7 @@ mod tests {
             self.was.get(path).cloned()
         }
 
-        fn new(&self, path: &str) -> Option<String> {
+        fn now(&self, path: &str) -> Option<String> {
             self.now.get(path).cloned()
         }
 
@@ -667,6 +686,23 @@ mod tests {
                 .iter()
                 .any(|(id, reason)| id == "demo/a" && matches!(reason, Reason::Test(_)))
         );
+        // A file deleted, nothing of its name left anywhere: it is found by
+        // where it was.
+        let deleted = Files::default()
+            .same("mutations/demo.breaks", &format!("{A}\n{B}"))
+            .edited(
+                "crates/demo/src/old_tests.rs",
+                Some("fn first_test() {}"),
+                None,
+            )
+            .same("crates/demo/src/other.rs", "fn second_test() {}");
+        assert_eq!(
+            chosen(&deleted, &["crates/demo/src/old_tests.rs"], &all()),
+            [(
+                "demo/a".to_owned(),
+                Reason::Test("tests::first_test".to_owned())
+            )]
+        );
         // Moved with its file: the old name's text is the old one's.
         let moved = Files::default()
             .same("mutations/demo.breaks", &format!("{A}\n{B}"))
@@ -743,6 +779,13 @@ mod tests {
         assert_eq!(placed("tests::*"), Placed::Nowhere);
         assert_eq!(placed("*"), Placed::Nowhere);
         // The binary of an entry is not part of the name.
+        assert_eq!(
+            placed("cortex-core::it sys_x"),
+            Placed::Word {
+                word: "sys_x".to_owned(),
+                prefix: false
+            }
+        );
         assert_eq!(
             placed("cortex-llm::it openai_chat::endpoints::an_url"),
             Placed::Word {
@@ -959,14 +1002,15 @@ mod tests {
             "pub fn a() {}\n"
         );
         assert_eq!(opened.old("crates/demo/src/new.rs"), None);
-        assert_eq!(opened.new("crates/demo/src/b.rs"), None);
+        assert_eq!(opened.now("crates/demo/src/b.rs"), None);
         assert!(
             opened
                 .rust_files("crates/demo")
                 .contains(&"crates/demo/src/new.rs".to_owned())
         );
         let known = lists(&[("demo", &format!("{A}\n{B}"))]);
-        let got = select(&known, &known, &files, &opened);
+        let got = super::since(&root, "HEAD", &known, &known).unwrap();
+        assert_eq!(got, select(&known, &known, &files, &opened));
         assert_eq!(
             got.chosen
                 .iter()
@@ -976,9 +1020,14 @@ mod tests {
         );
 
         // A reference that is no commit is an error, never "nothing changed".
-        for bad in ["no-such-branch", "-x", ""] {
+        for (bad, said) in [
+            ("no-such-branch", "is not a commit of this repository"),
+            ("-x", "not an option"),
+            ("", "not an empty text"),
+        ] {
             let error = super::Git::open(&root, bad).err().unwrap();
             assert!(error.contains("--changed"), "{bad}: {error}");
+            assert!(error.contains(said), "{bad}: {error}");
         }
         let error = super::Git::open(&root, "no-such-branch").err().unwrap();
         assert!(
