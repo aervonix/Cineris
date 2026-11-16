@@ -64,6 +64,13 @@ use std::time::Duration;
 use crate::clock::Clock;
 use crate::rng::{Rng, SystemRng};
 
+/// The point of [`write_atomic`] where its new content is complete in its
+/// temporary file and the target has not been touched: the moment before
+/// the rename. A test holds it (`crate::hook`) to look at the file while a
+/// write is half done, and to change it.
+pub const BEFORE_THE_RENAME: &str =
+    "write_atomic: the new content is in its temporary file, before the rename";
+
 /// How an atomic write behaves.
 #[derive(Debug, Clone)]
 pub struct AtomicWriteOptions {
@@ -262,6 +269,7 @@ pub fn write_atomic(
     // Closed before the rename: Windows will not rename an open file.
     drop(file);
     let finished = prepared.and_then(|()| {
+        crate::hook::point(BEFORE_THE_RENAME);
         replace_with_retry(
             || fs::rename(&temporary, &target),
             |error| in_use(error, &target),

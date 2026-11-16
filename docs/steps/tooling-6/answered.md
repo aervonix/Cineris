@@ -90,7 +90,7 @@ $0.002281 in all, against a budget of 5 US cents. The spend ledger before: 11 ca
 | Question or addition | Answer |
 |---|---|
 | Two read-only shell-guard checks (`git status --short; echo $?`, and a `for` loop over `git log`). | Both refused by Claude Code's own worktree check, not a permission rule: commits stay as before (plain separate commands, script files, `replace --script`). |
-| Optional additions from the step 16 review's retrospective. | Done: `scratch-test` narrows by a filterset after `--`; `mutate --file PATH`; `mutate` starts with one job when the disk is busy. Filed: a reviewer's kit ([a-reviewers-kit](../../outstanding/a-reviewers-kit.md)). `scratch-test` already reads a tree without `.git` as `mutate` does; the testing page now says so. |
+| Optional additions from the step 16 review's retrospective. | Done: `scratch-test` narrows by a filterset after `--`; `mutate --file PATH`; `mutate` starts with one job when the disk is busy. Filed: a reviewer's kit (written in the seventh tooling step: [a reviewer's kit](../../testing-and-ci.md#a-reviewers-kit)). `scratch-test` already reads a tree without `.git` as `mutate` does; the testing page now says so. |
 | `rx`'s own I/O-pressure line. | `rx` covers its runs; the commands' own check (item 2) is for wherever they run. |
 
 ## The independent reviews

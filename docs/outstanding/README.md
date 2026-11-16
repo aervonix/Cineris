@@ -142,7 +142,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### The tooling and CI
 
-- [a-reviewers-kit](a-reviewers-kit.md): The step 16 review's techniques (two cores on one world, a FIFO for a stalled disk, an address-space limit, throwaway breaks) are not written down yet. Owner: a later tooling step.
 - [caught-by-names-checked-only-at-the-desk](caught-by-names-checked-only-at-the-desk.md): `check` in CI keeps no list of tests, so it does not check `caught-by` names. Owner: the owner.
 - [a-retried-tests-standard-error-in-the-report](a-retried-tests-standard-error-in-the-report.md): `xtask` reads a retried test's standard error from its first attempt, not the last. Owner: a later tooling step.
 - [actionlint-in-the-checks](actionlint-in-the-checks.md): The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary. Owner: the owner.

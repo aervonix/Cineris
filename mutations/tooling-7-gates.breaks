@@ -1,0 +1,200 @@
+# The seventh tooling step, gates: the points library code marks for a test
+# to hold (`cortex_base::hook`, `cortex_testkit::hold`), their rule in
+# `cargo xtask rules`, the race test of `write_atomic` that uses one, and
+# the stalled file of the reviewer's kit. Written with the code, and run
+# with `cargo xtask mutate tooling-7-gates`.
+
+# ------------------------------------------------------------- the points
+
+[break] a-point-never-stops
+rule: A thread that reaches a point a test holds stops there.
+file: crates/cortex-base/src/hook.rs
+find: arrive(name);
+replace:
+packages: cortex-base, cortex-testkit
+caught-by:
+    hook::enabled::tests::a_thread_stops_at_a_held_point_until_the_hold_releases_it
+    hook::tests::a_hold_stops_a_thread_of_the_library_until_the_test_lets_it_go
+    cortex-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
+
+[break] a-release-does-not-release
+rule: Releasing a hold lets every thread stopped at its point go on.
+file: crates/cortex-base/src/hook.rs
+in: Hold::release
+find: lock(&self.shared.state).released = true;
+replace: lock(&self.shared.state).released = false;
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_thread_stops_at_a_held_point_until_the_hold_releases_it
+    hook::enabled::tests::the_nth_arrival_is_the_one_that_stops
+
+[break] a-dropped-hold-does-not-release
+rule: A hold that is dropped lets go what it stopped, so that a failing test never leaves a thread stopped.
+file: crates/cortex-base/src/hook.rs
+in: Hold::drop
+find: self.release();
+replace:
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_dropped_hold_releases_what_it_stopped
+
+[break] one-let-go-lets-every-thread-go
+rule: `let_one_go` lets one stopped thread go and keeps the others.
+file: crates/cortex-base/src/hook.rs
+in: Shared::arrive
+find: state.permits -= 1;
+replace:
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::one_thread_is_let_go_and_the_others_stay
+
+[break] the-first-arrival-stops-in-place-of-the-nth
+rule: With `skipping(n)` the first n arrivals pass and the next one stops.
+file: crates/cortex-base/src/hook.rs
+in: Shared::arrive
+find: state.arrivals <= state.skip
+replace: state.arrivals < state.skip
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::the_nth_arrival_is_the_one_that_stops
+
+[break] two-holds-of-one-point-live-together
+rule: A second hold of a point waits for the first to end, and fails within its bound when it does not.
+file: crates/cortex-base/src/hook.rs
+in: Hold::with_limit
+find: while registry.holds.iter().any(|hold| hold.point == point)
+replace: while false
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_second_hold_that_waits_too_long_fails_and_does_not_hang
+
+# --------------------------------------------------------- every wait is bounded
+
+[break] a-stopped-thread-has-no-bound
+rule: A thread stopped at a point goes on by itself when the hold's bound has passed, and the hold says so.
+file: crates/cortex-base/src/hook.rs
+in: Shared::arrive
+find: .wait_timeout_while(state, self.limit, |state| {
+replace: .wait_timeout_while(state, Duration::MAX, |state| {
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::the_bound_lets_a_thread_go_on_and_says_so
+
+[break] the-wait-for-the-library-has-no-bound
+rule: The test's wait for the library to reach a point ends at its limit and says whether it did.
+file: crates/cortex-base/src/hook.rs
+in: Hold::wait_reached_times
+find: .wait_timeout_while(state, limit, |state| state.stops < stops)
+replace: .wait_timeout_while(state, Duration::MAX, |state| state.stops < stops)
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_wait_for_a_point_nothing_reaches_ends_at_its_bound
+
+[break] the-wait-for-a-thread-to-go-on-has-no-bound
+rule: The test's wait for a thread to go on ends at its limit too.
+file: crates/cortex-base/src/hook.rs
+in: Hold::wait_stopped
+find: .wait_timeout_while(state, limit, |state| state.waiting.len() != stopped)
+replace: .wait_timeout_while(state, Duration::MAX, |state| state.waiting.len() != stopped)
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_wait_for_a_point_nothing_reaches_ends_at_its_bound
+
+# ------------------------------------------------------ the test kit's side
+
+[break] the-timeout-report-leaves-out-a-stopped-thread
+rule: The timeout report names the threads that a hold has stopped at a library point.
+file: crates/cortex-testkit/src/watch.rs
+in: waits
+find: cortex_base::hook::stopped().into_iter()
+replace: Vec::<cortex_base::hook::Stopped>::new().into_iter()
+packages: cortex-testkit
+caught-by:
+    hold::tests::the_report_of_a_test_that_runs_out_of_time_names_a_thread_stopped_at_a_point
+
+[break] a-point-that-never-came-says-nothing-of-the-points-that-did
+rule: A test whose point never comes fails with the points the library did reach, so that a misspelled name is found.
+file: crates/cortex-testkit/src/hold.rs
+in: Hold::reach_within
+find: seen()
+replace: Vec::<&'static str>::new()
+packages: cortex-testkit
+caught-by:
+    hold::tests::a_point_nobody_reaches_fails_with_the_points_that_were_reached
+
+# ------------------------------------------------------------ the rule in `rules`
+
+[break] a-normal-dependency-turns-test-hooks-on
+rule: Only a dev-dependency, or the test kit, turns a `test-hooks` feature on; `cortex-base`'s included.
+file: xtask/src/rules/crate_graph.rs
+in: check_test_hooks
+find: dependency.kind != DepKind::Dev
+replace: false
+packages: xtask
+caught-by:
+    rules::crate_graph::tests::a_crate_turns_its_own_test_hooks_on_for_its_tests_through_a_dev_dependency_on_itself
+    rules::crate_graph::tests::test_hooks_are_turned_on_by_dev_dependencies_only
+
+[break] a-crate-may-depend-on-itself-in-production
+rule: Only a dev-dependency on the crate itself is no edge: a normal one is refused like any edge the table does not allow.
+file: xtask/src/rules/crate_graph.rs
+in: check_edges
+find: if to == name && dependency.kind == DepKind::Dev {
+replace: if to == name {
+packages: xtask
+caught-by:
+    rules::crate_graph::tests::a_crate_turns_its_own_test_hooks_on_for_its_tests_through_a_dev_dependency_on_itself
+
+# ------------------------------------------------------------ the race test
+
+[break] a-write-truncates-the-target-before-the-rename
+rule: A reader sees the old content or the new, never a mixture: the target is not touched until the rename.
+file: crates/cortex-base/src/atomic.rs
+in: write_atomic
+find: let prepared = (|| {
+replace: let _ = fs::write(&target, b""); let prepared = (|| {
+packages: cortex-base
+caught-by:
+    cortex-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
+
+[break] a-new-file-appears-empty-before-its-content
+rule: A file that is created is not there until its content is complete: the name appears at the rename.
+file: crates/cortex-base/src/atomic.rs
+in: write_atomic
+find: let (temporary, mut file) =
+replace: if existing.is_none() { let _ = fs::write(&target, b""); } let (temporary, mut file) =
+packages: cortex-base
+caught-by:
+    cortex-base::it atomic::a_file_that_is_created_is_not_there_until_its_content_is_complete
+
+[break] the-rename-comes-before-its-point
+rule: The point is where the content is complete and the rename has not happened: a reader at it sees the old content.
+file: crates/cortex-base/src/atomic.rs
+in: write_atomic
+find: crate::hook::point(BEFORE_THE_RENAME);
+replace: crate::hook::point(BEFORE_THE_RENAME); let _ = fs::rename(&temporary, &target);
+packages: cortex-base
+caught-by:
+    cortex-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
+
+# ------------------------------------------------------------ the stalled file
+
+[break] a-stalled-file-is-an-ordinary-file
+rule: A stalled file is a FIFO, so that opening it waits.
+file: crates/cortex-testkit/src/stalled.rs
+in: stalled_file
+find: .arg(path)
+replace: .arg("--version")
+packages: cortex-testkit
+caught-by:
+    stalled::tests::sys_a_stalled_file_is_a_fifo_and_holds_an_opener_until_it_is_released
+
+[break] a-stalled-file-is-never-released
+rule: Releasing a stalled file lets the opener that waits go on.
+file: crates/cortex-testkit/src/stalled.rs
+in: Stalled::release
+find: if let Ok(mut other_end) = File::open(path) {
+replace: if let Ok(mut other_end) = File::open("/dev/null") {
+packages: cortex-testkit
+caught-by:
+    stalled::tests::sys_a_stalled_file_is_a_fifo_and_holds_an_opener_until_it_is_released
