@@ -35,9 +35,26 @@ pub(crate) fn check(file: &str, bytes: &[u8]) -> Vec<Violation> {
 
 /// The home-directory paths in `bytes`: where each starts, and the text up to
 /// the end of the user's directory name.
-fn find(bytes: &[u8]) -> Vec<(usize, String)> {
+pub(crate) fn find(bytes: &[u8]) -> Vec<(usize, String)> {
+    find_in(bytes, false)
+}
+
+/// [`find`], for a built binary (`cargo xtask size`, in `shipped.rs`). Its
+/// strings are packed end to end with nothing between them, so a path can
+/// follow a name's last letter: `…/lib.rs/home/ada/…`. Here a Unix root
+/// counts wherever it is.
+pub(crate) fn find_in_binary(bytes: &[u8]) -> Vec<(usize, String)> {
+    find_in(bytes, true)
+}
+
+fn find_in(bytes: &[u8], packed: bool) -> Vec<(usize, String)> {
     let mut found = Vec::new();
     for start in 0..bytes.len() {
+        // Every root starts with one of these: most bytes are passed over
+        // here, which matters in a binary of megabytes.
+        if !matches!(bytes[start], b'/' | b':') {
+            continue;
+        }
         let rest = &bytes[start..];
         let previous = start.checked_sub(1).map(|index| bytes[index]);
 
@@ -47,7 +64,7 @@ fn find(bytes: &[u8]) -> Vec<(usize, String)> {
         {
             // "/home/" in the middle of a longer path or a URL is something
             // else: "site.example/home/page", "/mnt/data/home/".
-            if previous.is_some_and(is_name_byte) {
+            if !packed && previous.is_some_and(is_name_byte) {
                 continue;
             }
             root.len()

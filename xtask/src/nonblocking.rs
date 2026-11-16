@@ -12,14 +12,12 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::Result;
-use crate::steps;
-use crate::workspace;
+use crate::{runs, shipped, steps, workspace};
 
 /// The package whose binary is shipped.
 const BINARY_PACKAGE: &str = "cortex-cli";
-/// The profile published binaries are built with (decision 0012). The size
-/// budget is defined on it.
-const PROFILE: &str = "dist";
+/// The profile the binary is built and measured in.
+const PROFILE: &str = shipped::PROFILE;
 const MEBIBYTE: f64 = 1024.0 * 1024.0;
 
 /// The size budget for a target, in bytes, from docs/performance-budgets.md
@@ -82,14 +80,141 @@ fn parse_tree(tree: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// `cargo xtask size [--check] [--target TRIPLE]`
+/// The size the `main` workflow last recorded for a target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MainSize {
+    bytes: u64,
+    /// The run that recorded it.
+    run: u64,
+    /// The commit it was built from, when the record names one.
+    commit: Option<String>,
+}
+
+/// The artifact the `main` workflow keeps a target's record in.
+fn record_name(target: &str) -> String {
+    format!("size-{target}")
+}
+
+/// The record's size and commit, from the JSON `size` writes.
+fn parse_record(text: &str) -> Result<(u64, Option<String>)> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| format!("a size record: {error}"))?;
+    let bytes = value
+        .get("bytes")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("a size record with no `bytes`")?;
+    let commit = value
+        .get("commit")
+        .and_then(serde_json::Value::as_str)
+        .map(|commit| commit.chars().take(7).collect());
+    Ok((bytes, commit))
+}
+
+/// The size the `main` workflow last recorded for `target`, through `gh`:
+/// the newest of its finished runs on the main branch that kept a record.
+/// A run whose size job failed over the budget kept one too.
+fn main_size(target: &str) -> Result<MainSize> {
+    let name = record_name(target);
+    let run = runs::latest_main_run_of("main", "completed", &[name.as_str()])?;
+    let directory =
+        runs::artifact_dir(run, &name)?.ok_or_else(|| format!("run {run} kept no `{name}`"))?;
+    let file = directory.join(format!("{target}.json"));
+    let text = fs::read_to_string(&file)
+        .map_err(|error| format!("could not read {}: {error}", file.display()))?;
+    let (bytes, commit) = parse_record(&text)?;
+    Ok(MainSize { bytes, run, commit })
+}
+
+/// Bytes as mebibytes, for a person.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a binary's size in bytes is far below 2^52, where f64 stops being exact"
+)]
+fn mebibytes(bytes: u64) -> f64 {
+    bytes as f64 / MEBIBYTE
+}
+
+/// A difference in bytes as kilobytes of 1,024 bytes, as the sizes are
+/// given in mebibytes.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a difference between two binaries' sizes is far below 2^52"
+)]
+fn kibibytes(bytes: i128) -> f64 {
+    bytes as f64 / 1024.0
+}
+
+/// What `size` reports: the job summary's table, and the line it fails
+/// with when the binary is over its budget.
+#[derive(Debug, PartialEq, Eq)]
+struct Report {
+    summary: String,
+    over: Option<String>,
+}
+
+/// The report of one target's binary. `main` is the size the `main`
+/// workflow last recorded, when it was asked for: `Some(Err)` says why it
+/// could not be read, which is shown and fails nothing.
+fn report(target: &str, bytes: u64, crates: usize, main: Option<&Result<MainSize>>) -> Report {
+    let limit = budget(target);
+    let (megabytes, limit_megabytes) = (mebibytes(bytes), mebibytes(limit));
+    let room = if bytes <= limit {
+        format!("{:.2} MB left", mebibytes(limit - bytes))
+    } else {
+        format!("**{:.2} MB over**", mebibytes(bytes - limit))
+    };
+    let mut summary = format!(
+        "### Binary size and crate count\n\n\
+         | Target | Profile | Bytes | MB | Budget | Room | Crates |\n\
+         |---|---|---:|---:|---:|---|---:|\n\
+         | `{target}` | `{PROFILE}` | {bytes} | {megabytes:.2} | {limit_megabytes:.0} MB | {room} | {crates} |\n\n"
+    );
+    match main {
+        None => {}
+        Some(Ok(main)) => {
+            let difference = i128::from(bytes) - i128::from(main.bytes);
+            let at = main
+                .commit
+                .as_ref()
+                .map_or_else(String::new, |commit| format!(" at {commit}"));
+            summary.push_str(&format!(
+                "Against `main`'s last recorded size, {} bytes (run {}{at}): **{difference:+} \
+                 bytes** ({:+.1} KB).\n\n",
+                main.bytes,
+                main.run,
+                kibibytes(difference)
+            ));
+        }
+        Some(Err(error)) => {
+            summary.push_str(&format!(
+                "`main`'s last recorded size could not be read: {error}\n\n"
+            ));
+        }
+    }
+    let over = (bytes > limit).then(|| {
+        format!(
+            "the {target} binary is {bytes} bytes ({megabytes:.2} MB), over its budget of \
+             {limit_megabytes:.0} MB by {} bytes (docs/performance-budgets.md, \"Binary size\"). \
+             Find what grew, or raise the question: the budget is not loosened quietly.",
+            bytes - limit
+        )
+    });
+    if let Some(over) = &over {
+        summary.push_str(&format!("**Over budget:** {over}\n\n"));
+    }
+    Report { summary, over }
+}
+
+/// `cargo xtask size [--check] [--target TRIPLE] [--against-main]`
 pub(crate) fn size(arguments: &[String]) -> Result<()> {
     let mut check = false;
+    let mut against_main = false;
     let mut target = None;
     let mut arguments = arguments.iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--check" => check = true,
+            "--against-main" => against_main = true,
             "--target" => {
                 target = Some(
                     arguments
@@ -98,7 +223,12 @@ pub(crate) fn size(arguments: &[String]) -> Result<()> {
                         .clone(),
                 );
             }
-            _ => return Err("usage: cargo xtask size [--check] [--target TRIPLE]".to_owned()),
+            _ => {
+                return Err(
+                    "usage: cargo xtask size [--check] [--target TRIPLE] [--against-main]"
+                        .to_owned(),
+                );
+            }
         }
     }
     let target = match target {
@@ -106,16 +236,7 @@ pub(crate) fn size(arguments: &[String]) -> Result<()> {
         None => host_target()?,
     };
 
-    steps::cargo(&[
-        "build",
-        "--locked",
-        "--profile",
-        PROFILE,
-        "--package",
-        BINARY_PACKAGE,
-        "--target",
-        &target,
-    ])?;
+    shipped::build(Some(&target))?;
 
     let metadata = workspace::metadata(&workspace::root())?;
     let executable = if target.contains("windows") {
@@ -133,18 +254,29 @@ pub(crate) fn size(arguments: &[String]) -> Result<()> {
         .len();
     let crates = crates_in_build(&target)?.len();
     let limit = budget(&target);
-
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a binary's size in bytes is far below 2^52, where f64 stops being exact"
-    )]
-    let (megabytes, limit_megabytes) = (bytes as f64 / MEBIBYTE, limit as f64 / MEBIBYTE);
     println!(
-        "\n{target}, `{PROFILE}` profile\n  binary   {bytes} bytes ({megabytes:.2} MB; budget {limit_megabytes:.0} MB)\n  crates   {crates}"
+        "\n{target}, `{PROFILE}` profile\n  binary   {bytes} bytes ({:.2} MB; budget {:.0} MB)\n  crates   {crates}",
+        mebibytes(bytes),
+        mebibytes(limit)
     );
-    steps::append_job_summary(&format!(
-        "### Binary size and crate count\n\n| Target | Profile | Bytes | MB | Budget | Crates |\n|---|---|---:|---:|---:|---:|\n| `{target}` | `{PROFILE}` | {bytes} | {megabytes:.2} | {limit_megabytes:.0} MB | {crates} |\n\n"
-    ));
+    let main = against_main.then(|| main_size(&target));
+    if let Some(main) = &main {
+        match main {
+            Ok(main) => println!(
+                "  main     {} bytes (run {}): {:+} bytes",
+                main.bytes,
+                main.run,
+                i128::from(bytes) - i128::from(main.bytes)
+            ),
+            Err(error) => println!("  main     not read: {error}"),
+        }
+    }
+    let paths = shipped::check_file(&binary);
+    let report = report(&target, bytes, crates, main.as_ref());
+    steps::append_job_summary(&report.summary);
+    if let Err(message) = &paths {
+        steps::append_job_summary(&format!("**Home paths:** {message}\n\n"));
+    }
 
     // The record, for the workflow to keep as an artifact.
     let record = serde_json::json!({
@@ -162,14 +294,12 @@ pub(crate) fn size(arguments: &[String]) -> Result<()> {
     fs::write(&file, format!("{record:#}\n"))
         .map_err(|error| format!("could not write {}: {error}", file.display()))?;
 
-    if check && bytes > limit {
-        return Err(format!(
-            "the {target} binary is {megabytes:.2} MB, over its budget of {limit_megabytes:.0} MB \
-             (docs/performance-budgets.md, \"Binary size\"). Find what grew, or raise the \
-             question: the budget is not loosened quietly."
-        ));
+    // A home path fails every run, measured or checked: it is never right.
+    paths?;
+    match report.over {
+        Some(over) if check => Err(over),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// `cargo xtask unused`
@@ -206,7 +336,7 @@ pub(crate) fn advisories() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{budget, parse_tree};
+    use super::*;
 
     #[test]
     fn each_crate_in_the_tree_is_counted_once() {
@@ -226,6 +356,84 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
         let crates = parse_tree(tree);
         assert_eq!(crates.len(), 7, "{crates:?}");
         assert!(crates.contains("serde_derive v1.0.229"));
+    }
+
+    const LINUX: &str = "x86_64-unknown-linux-musl";
+    const WINDOWS: &str = "x86_64-pc-windows-msvc";
+
+    #[test]
+    fn a_binary_within_its_budget_shows_its_room_and_fails_nothing() {
+        let report = report(LINUX, 12_000_000, 180, None);
+        assert_eq!(report.over, None);
+        assert!(
+            report
+                .summary
+                .contains("| `x86_64-unknown-linux-musl` | `dist` | 12000000 | 11.44 | 16 MB | 4.56 MB left | 180 |"),
+            "{}",
+            report.summary
+        );
+        assert!(!report.summary.contains("main"), "{}", report.summary);
+    }
+
+    #[test]
+    fn a_binary_over_its_budget_fails_with_a_line_that_says_by_how_much() {
+        let limit = budget(WINDOWS);
+        let report = report(WINDOWS, limit + 351_744, 180, None);
+        let over = report.over.expect("over the budget");
+        assert!(
+            over.starts_with("the x86_64-pc-windows-msvc binary is 19226112 bytes (18.34 MB), over its budget of 18 MB by 351744 bytes"),
+            "{over}"
+        );
+        assert!(
+            report.summary.contains("**0.34 MB over**"),
+            "{}",
+            report.summary
+        );
+        assert!(report.summary.contains(&format!("**Over budget:** {over}")));
+        // One byte at the budget is within it.
+        assert_eq!(super::report(WINDOWS, limit, 180, None).over, None);
+    }
+
+    #[test]
+    fn the_difference_from_mains_last_size_is_signed() {
+        let main = Ok(MainSize {
+            bytes: 12_100_000,
+            run: 43_811_142_390,
+            commit: Some("c225d64".to_owned()),
+        });
+        let smaller = report(LINUX, 12_000_000, 180, Some(&main)).summary;
+        assert!(
+            smaller.contains(
+                "12100000 bytes (run 43811142390 at c225d64): **-100000 bytes** (-97.7 KB)"
+            ),
+            "{smaller}"
+        );
+        let larger = report(LINUX, 12_102_048, 180, Some(&main)).summary;
+        assert!(larger.contains("**+2048 bytes** (+2.0 KB)"), "{larger}");
+        // A record that could not be read is said, and fails nothing.
+        let unread = Err("gh: not signed in".to_owned());
+        let report = report(LINUX, 12_000_000, 180, Some(&unread));
+        assert!(
+            report
+                .summary
+                .contains("could not be read: gh: not signed in")
+        );
+        assert_eq!(report.over, None);
+    }
+
+    #[test]
+    fn a_size_record_is_read_back() {
+        let text = "{\n  \"target\": \"x\",\n  \"bytes\": 16258408,\n  \"commit\": \"c225d64aaaabbbb\"\n}\n";
+        assert_eq!(
+            parse_record(text).unwrap(),
+            (16_258_408, Some("c225d64".to_owned()))
+        );
+        assert_eq!(
+            parse_record("{\"bytes\": 1, \"commit\": null}").unwrap(),
+            (1, None)
+        );
+        assert!(parse_record("{\"crates\": 1}").is_err());
+        assert_eq!(record_name(LINUX), "size-x86_64-unknown-linux-musl");
     }
 
     #[test]
