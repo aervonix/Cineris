@@ -294,9 +294,14 @@ pub(crate) fn size(arguments: &[String]) -> Result<()> {
     fs::write(&file, format!("{record:#}\n"))
         .map_err(|error| format!("could not write {}: {error}", file.display()))?;
 
-    // A home path fails every run, measured or checked: it is never right.
+    verdict(paths, report.over, check)
+}
+
+/// How `size` ends: a home path fails every run, measured or checked, as it
+/// is never right; a binary over its budget fails a run with `--check`.
+fn verdict(paths: Result<()>, over: Option<String>, check: bool) -> Result<()> {
     paths?;
-    match report.over {
+    match over {
         Some(over) if check => Err(over),
         _ => Ok(()),
     }
@@ -419,6 +424,20 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
                 .contains("could not be read: gh: not signed in")
         );
         assert_eq!(report.over, None);
+    }
+
+    #[test]
+    fn a_home_path_fails_every_run_and_the_budget_only_a_check() {
+        let paths = || Err::<(), _>("holds paths of the machine".to_owned());
+        let over = || Some("over its budget".to_owned());
+        assert!(verdict(paths(), None, false).is_err());
+        assert!(verdict(paths(), None, true).is_err());
+        assert_eq!(
+            verdict(Ok(()), over(), true),
+            Err("over its budget".to_owned())
+        );
+        assert_eq!(verdict(Ok(()), over(), false), Ok(()));
+        assert_eq!(verdict(Ok(()), None, true), Ok(()));
     }
 
     #[test]
