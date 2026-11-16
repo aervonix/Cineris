@@ -678,6 +678,7 @@ pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<
 /// nothing is handed over.
 fn gone(error: io::Error) -> io::Result<Ready> {
     if super::ended_by().is_some() {
+        super::hung_up_while_ending();
         return Ok(Ready::Woken);
     }
     if super::hang_up() {

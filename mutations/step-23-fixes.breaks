@@ -49,6 +49,15 @@ os: linux
 caught-by:
     cortex-term::it handoff::sys_a_sighup_handled_on_another_thread_as_the_read_finds_the_end_is_the_same_end
 
+[break] the-terminal-gone-during-an-end-is-not-a-hang-up
+rule: The terminal going away under a read while the program already ends for a signal handed over (a SIGTERM's end, then the window closed) is noted as a hang-up, so the SIGHUP that follows is that same end and does not kill the program part-way through it.
+file: crates/cortex-term/src/sys/unix.rs
+in: gone
+find: super::hung_up_while_ending();
+replace:
+caught-by:
+    cortex-term::it handoff::sys_a_sighup_after_the_terminal_went_away_during_a_sigterms_end_is_that_end
+
 [break] leaving-puts-back-the-default-handlers
 rule: While signals are handed to the program, leaving the terminal keeps the handlers of the signals that end it until signal_ended: one that comes while the program ends is handed over, not the default action's.
 file: crates/cortex-term/src/sys/unix.rs

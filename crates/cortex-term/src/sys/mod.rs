@@ -218,6 +218,18 @@ pub(crate) fn hand_over(code: u8) -> bool {
 /// follows a hang-up is the same end, not a second signal.
 static HUNG_UP: AtomicBool = AtomicBool::new(false);
 
+/// The terminal went away under a read while the program was already
+/// ending for a signal handed over: nothing changes in that end, but the
+/// SIGHUP that follows the hang-up is now that same end, not a second
+/// signal that kills the program part-way through it (since the third pull
+/// request of step 23's review fixes: a SIGTERM's end, then the window
+/// closed). A second signal a person sends still ends it at once.
+pub(crate) fn hung_up_while_ending() {
+    if HAND_OFF.load(Ordering::SeqCst) {
+        HUNG_UP.store(true, Ordering::SeqCst);
+    }
+}
+
 /// The terminal went away under a read. While signals are handed to the
 /// program that is SIGHUP's end, exit code 129 (since the review of step
 /// 23). `true` when the program is to end now (for this, or for a signal
