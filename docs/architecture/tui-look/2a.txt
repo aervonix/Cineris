@@ -13,6 +13,8 @@
      31         - run: cargo test --workspace
      32 +       - run: cargo clippy --workspace -- -D warnings
 
+  Allowing it for longer allows: writing /work/parser/.github/workflows/ci.yml
+
   y Allow once   s Allow this session   a Always allow here   n Deny   e Deny with a note
 
-  esc denies · ctrl+o shows it whole                                         opus-5.5 high · fast
+  ⢿ 12s  esc denies · ctrl+o shows it whole                                  opus-5.5 high · fast

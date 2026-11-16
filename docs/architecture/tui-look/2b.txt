@@ -16,4 +16,4 @@
 
   y Run once outside the sandbox   n Deny
 
-  esc denies · ctrl+o shows it whole                                         opus-5.5 high · fast
+  ⣽ 7s  esc denies · ctrl+o shows it whole                                   opus-5.5 high · fast

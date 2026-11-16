@@ -423,8 +423,11 @@ impl Compose<'_> {
         height: usize,
         session: Option<SessionState>,
         request: ServerRequest,
+        running: Option<Duration>,
     ) {
-        self.lines(app_dialog(spec, background, height, session, request));
+        self.lines(app_dialog(
+            spec, background, height, session, request, running,
+        ));
         assert_eq!(
             self.rows.len(),
             height,
@@ -500,9 +503,9 @@ fn effort_picker() -> Menu {
 }
 
 /// The request of screen 2a: an edit of a protected file, with its reason,
-/// which may be allowed for longer.
+/// which may be allowed for longer, and the rule that would add.
 fn ci_edit() -> ApprovalRequest {
-    request(
+    let mut request = request(
         "edit",
         "Edit .github/workflows/ci.yml",
         ApprovalDetail::Diff(DiffDetail {
@@ -520,7 +523,14 @@ fn ci_edit() -> ApprovalRequest {
             omitted: None,
         }),
         vec!["CI configuration is protected, so a change to it always asks.".to_owned()],
-    )
+    );
+    // What "this session" and "here" would add, as the core offers it for a
+    // protected file: writing that one file, named by its whole path.
+    request.adds = vec![AddedRule {
+        effect: Effect::Write,
+        pattern: "/work/parser/.github/workflows/ci.yml".to_owned(),
+    }];
+    request
 }
 
 /// The request of screen 2b: a command that needs the network, to run
@@ -719,6 +729,7 @@ fn app_dialog(
     height: usize,
     session: Option<SessionState>,
     request: ServerRequest,
+    running: Option<Duration>,
 ) -> Vec<Line> {
     let core = Core::default();
     let start = Start {
@@ -774,14 +785,35 @@ fn app_dialog(
         ));
         drain(&mut app);
     }
+    // A question asked in the middle of a turn: the turn began when the
+    // session did, and the question comes `running` into it, so that the
+    // hint row shows the spinner and the turn's time before the dialog's
+    // keys, as the application draws it (the owner's word of 2026-11-16).
+    let asked = match running {
+        Some(into) => {
+            core.script()
+                .inbound
+                .push_back(Inbound::Event(cortex_protocol::SessionEvent {
+                    session_id: SessionId::from(SESSION),
+                    seq: 1,
+                    turn_id: Some(TurnId::from("t_3")),
+                    event: cortex_protocol::event::Event::TurnStarted(
+                        cortex_protocol::event::TurnStarted {},
+                    ),
+                }));
+            drain(&mut app);
+            began + into
+        }
+        None => began,
+    };
     core.script()
         .inbound
         .push_back(Inbound::Request(RequestId::from(1), request));
-    drain(&mut app);
+    while app.drain(asked, 64).more {}
     // The dialog's first frame, its answers not shown yet; then the frame
     // the loop draws when it is ready for keys.
-    let _ = app.frame(began);
-    app.drawn(began);
+    let _ = app.frame(asked);
+    app.drawn(asked);
     let ready = app.deadline().expect("the dialog's answers are due");
     let (_, live, _) = app.frame(ready);
     app.drawn(ready);
@@ -910,16 +942,19 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
             }));
             screen.transcript(&mut transcript, 0);
             let (height, request) = if spec.id == "2a" {
-                (18, ci_edit())
+                (20, ci_edit())
             } else {
                 (19, publish_outside())
             };
+            // Asked in the middle of the turn, its time running.
+            let into = Duration::from_secs(if spec.id == "2a" { 12 } else { 7 });
             screen.dialog(
                 spec,
                 background,
                 height,
                 Some(session()),
                 ServerRequest::Approval(request),
+                Some(into),
             );
         }
         // The trust question, asked as the session opens, before anything
@@ -931,6 +966,7 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
             TRUST_HEIGHT,
             None,
             ServerRequest::Trust(trust_question()),
+            None,
         ),
         // The undo's question, after the turn's answer.
         "2d" => {
@@ -942,6 +978,7 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
                 UNDO_HEIGHT,
                 Some(session()),
                 ServerRequest::Question(undo_question()),
+                None,
             );
         }
         "3a" | "3b" => {
