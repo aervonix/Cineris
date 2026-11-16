@@ -452,12 +452,11 @@ mod tests {
             };
             let segments: Vec<&str> = one.test.name.split("::").collect();
             let function = format!("fn {}(", segments[segments.len() - 1]);
-            let files: Vec<std::path::PathBuf> = if target.is_empty() {
-                // A unit test: some file of the library's.
+            let all_of = |top: std::path::PathBuf| {
                 let mut found = Vec::new();
-                let mut stack = vec![crate_root.join("src")];
+                let mut stack = vec![top];
                 while let Some(folder) = stack.pop() {
-                    for entry in std::fs::read_dir(&folder).unwrap().flatten() {
+                    for entry in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
                         let path = entry.path();
                         if path.is_dir() {
                             stack.push(path);
@@ -467,12 +466,23 @@ mod tests {
                     }
                 }
                 found
+            };
+            let files: Vec<std::path::PathBuf> = if target.is_empty() || target.starts_with("bin/")
+            {
+                // A unit test, of the library or of a binary: some file of
+                // the crate's sources.
+                all_of(crate_root.join("src"))
             } else {
                 let folder = crate_root.join("tests").join(target);
-                vec![
-                    folder.join(format!("{}.rs", segments[0])),
-                    folder.join(segments[0]).join("mod.rs"),
-                ]
+                if segments.len() == 1 {
+                    // A test at the top of the binary's own file.
+                    vec![folder.join("main.rs")]
+                } else {
+                    vec![
+                        folder.join(format!("{}.rs", segments[0])),
+                        folder.join(segments[0]).join("mod.rs"),
+                    ]
+                }
             };
             let there = files.iter().any(|file| {
                 std::fs::read_to_string(file).is_ok_and(|text| text.contains(&function))
