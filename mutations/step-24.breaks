@@ -264,3 +264,12 @@ find: *lock(&self.live) = live;
 replace: let _ = live;
 caught-by:
     cortex-core::it verify::a_reload_of_verify_reaches_the_next_round
+
+[break] the-load-judges-trust-again
+rule: The load uses the trust just judged: a change of the trust store between the judgement and the load is the next look's.
+file: crates/cortex-core/src/reload.rs
+in: load
+find: let options = config.options_with(trusted.rules, asked.profile.as_deref(), keep_choices);
+replace: let now = assemble::judge(inner, config.state.as_ref(), &config.root, &config.options_with(true, asked.profile.as_deref(), keep_choices)).rules.unwrap_or(trusted.rules); let options = config.options_with(now, asked.profile.as_deref(), keep_choices);
+caught-by:
+    cortex-core::it reload::the_load_uses_the_trust_just_judged

@@ -514,3 +514,87 @@ fn an_artifact_is_read_back_whole_and_one_not_there_is_refused() {
         front.close().await;
     });
 }
+
+/// The reload judges trust first and loads with what it judged: held
+/// between the two, nothing of the project's new rules is in force, and the
+/// trust store changed there (the new rules approved) does not reach the
+/// load already judged; the next look sees the store's change and loads
+/// with it (the review of step 24's design: trust judged first).
+#[test]
+fn the_load_uses_the_trust_just_judged() {
+    let world = World::new("reload_judged_first", [says("Done.")]);
+    let (store, key) = trust_store(&world);
+    store
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_rules(&[allow_github()])],
+        )
+        .unwrap();
+    world.project_config(ALLOW_GITHUB);
+    let core = world.core();
+    let judged = cortex_testkit::Hold::new(cortex_core::TRUST_JUDGED);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        world.project_config(&format!("{ALLOW_GITHUB}\n{ALLOW_CURL}"));
+        // The session's own reload, held as it has judged trust.
+        let mut reloading = std::pin::pin!(reload(
+            &front,
+            ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                ..ConfigReloadParams::default()
+            },
+        ));
+        judged.drive_until_reached(reloading.as_mut()).await;
+        // Judged, not loaded: the new rule is nowhere in force.
+        let rules = value(&front, "permissions.rules")
+            .await
+            .unwrap_or(Value::Null)
+            .to_string();
+        assert!(!rules.contains("curl"), "in force before the load: {rules}");
+        // The new rules approved while the reload is held.
+        let curl = Rule {
+            effect: Effect::Exec,
+            pattern: "curl *".to_owned(),
+            action: RuleAction::Allow,
+        };
+        store
+            .approve(&key, &[Definition::of_rules(&[allow_github(), curl])])
+            .unwrap();
+        judged.release();
+        let result = reloading.await;
+        assert!(
+            result
+                .notes
+                .iter()
+                .any(|note| note.contains("rules have changed")),
+            "{result:?}"
+        );
+        let rules = value(&front, "permissions.rules")
+            .await
+            .unwrap_or(Value::Null)
+            .to_string();
+        assert!(
+            !rules.contains("curl"),
+            "the load did not use the trust it judged: {rules}"
+        );
+        // The next look sees the store's change, judges again, and loads
+        // with that.
+        let next = reload(
+            &front,
+            ConfigReloadParams {
+                changed_only: true,
+                ..ConfigReloadParams::default()
+            },
+        )
+        .await;
+        assert!(next.errors.is_empty(), "{next:?}");
+        let rules = value(&front, "permissions.rules")
+            .await
+            .unwrap_or(Value::Null)
+            .to_string();
+        assert!(rules.contains("curl"), "the approval was not seen: {rules}");
+        assert_eq!(state_of(&front).await.trust, Some(TrustStanding::Trusted));
+        front.close().await;
+    });
+}
