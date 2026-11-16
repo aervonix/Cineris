@@ -1557,6 +1557,14 @@ impl Core {
                 overwrite = edited;
             }
         }
+        // Files put back are files changed: a test that failed before the
+        // rewind and passes after it has not flipped. Counted before the
+        // files are touched: the work below goes on to its end though the
+        // client that asked for it has gone, and may put some files back
+        // and then fail.
+        if restore_files && let Some(knowledge) = &live.knowledge {
+            knowledge.file_changed();
+        }
 
         let log = Arc::clone(&live.log);
         let hooks = Arc::clone(&live.hooks);
@@ -1607,11 +1615,6 @@ impl Core {
             plan: live.board.get(),
             by: Actor::Harness,
         }));
-        // Files put back are files changed: a test that failed before the
-        // rewind and passes after it has not flipped.
-        if restore_files && let Some(knowledge) = &live.knowledge {
-            knowledge.file_changed();
-        }
         if !not_restored.is_empty() {
             live.hooks.tell(format!(
                 "These files could not be put back as they were: {}.",

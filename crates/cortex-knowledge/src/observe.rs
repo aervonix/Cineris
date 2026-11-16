@@ -142,13 +142,37 @@ fn assignment(word: &str) -> bool {
     })
 }
 
+/// What may follow a script's class after a `:`: the part of the tests,
+/// or the way they are run. `test:unit` is a test run; `test:publish` is
+/// whatever the project made it.
+const VARIANTS: [&str; 14] = [
+    "unit",
+    "integration",
+    "e2e",
+    "ci",
+    "all",
+    "fast",
+    "slow",
+    "lib",
+    "node",
+    "browser",
+    "types",
+    "coverage",
+    "strict",
+    "check",
+];
+
 /// A script's or a target's name as a class: `test`, `test:unit`, `lint`,
-/// `build`. The name is the word itself, or the word before its first
-/// `:`. A name that only begins like one (`test-and-deploy`,
-/// `build_release`, `test.mk`) is not classed: it says nothing of what
-/// else it does.
+/// `build`. The name is the word itself, or the word and, after each `:`,
+/// one of [`VARIANTS`]. A name that only begins like one
+/// (`test-and-deploy`, `build_release`, `test.mk`, `test:publish`) is not
+/// classed: it says nothing of what else it does.
 fn script(name: &str) -> Option<Purpose> {
-    let stem = name.split(':').next().unwrap_or(name);
+    let mut parts = name.split(':');
+    let stem = parts.next()?;
+    if !parts.all(|part| VARIANTS.contains(&part)) {
+        return None;
+    }
     match stem {
         "test" | "tests" | "spec" => Some(Purpose::Test),
         "lint" | "check" | "typecheck" | "clippy" | "vet" => Some(Purpose::Check),
@@ -157,24 +181,16 @@ fn script(name: &str) -> Option<Purpose> {
     }
 }
 
-/// The one class of every word of `words` that names something to do: not
-/// an option, a number or an assignment. `None` when one of them has no
-/// class, or two differ: `make test deploy` is not a test run, and
-/// neither is `make -C build deploy`, whatever `-C` takes. `empty` when
-/// there is no such word.
-fn all_of(
-    words: &[&str],
+/// The one class of every word of `words`, each a target or a goal.
+/// `None` when one of them has no class, or two differ: `make test
+/// deploy` is not a test run. `empty` when there is no word.
+fn all_of<'a>(
+    words: impl IntoIterator<Item = &'a str>,
     class: impl Fn(&str) -> Option<Purpose>,
     empty: Option<Purpose>,
 ) -> Option<Purpose> {
     let mut found = None;
     for word in words {
-        if word.starts_with('-')
-            || word.chars().all(|character| character.is_ascii_digit())
-            || assignment(word)
-        {
-            continue;
-        }
         let purpose = class(word)?;
         if found.is_some_and(|found| found != purpose) {
             return None;
@@ -184,14 +200,69 @@ fn all_of(
     found.or(empty)
 }
 
+/// The targets of a `make`, `just`, `ninja` or `task` line, or `None` for
+/// a line with anything else in it. Only what is known to change nothing
+/// of what runs is passed over: `-j` and its number, `-k`, `-s`, `-B`
+/// and their long names, and `-C` with its directory. An assignment
+/// (`SHELL=./x.sh`), another makefile (`-f`), `--eval` and every other
+/// option can make any target do anything.
+fn targets<'a>(rest: &[&'a str]) -> Option<Vec<&'a str>> {
+    let mut targets = Vec::new();
+    let mut words = rest.iter().copied().peekable();
+    while let Some(word) = words.next() {
+        match word {
+            "-k" | "-s" | "-B" | "--keep-going" | "--silent" | "--quiet" | "--always-make" => {}
+            "-j" | "--jobs" => {
+                // Its number, when it is given as a word of its own.
+                if words
+                    .peek()
+                    .is_some_and(|next| next.chars().all(|digit| digit.is_ascii_digit()))
+                {
+                    words.next();
+                }
+            }
+            "-C" | "--directory" => {
+                words.next()?;
+            }
+            _ if word
+                .strip_prefix("-j")
+                .or_else(|| word.strip_prefix("--jobs="))
+                .is_some_and(|count| {
+                    !count.is_empty() && count.chars().all(|digit| digit.is_ascii_digit())
+                }) => {}
+            _ if word.starts_with('-') || assignment(word) => return None,
+            _ => targets.push(word),
+        }
+    }
+    Some(targets)
+}
+
+/// Whether an option of the line names something to run: `-exec=./x.sh`,
+/// `--script-shell`, `--init-script`, `--eval`, a wrapper. No table can
+/// say what a tool does with one, so such a line is not classed.
+fn runs_something_else(word: &str) -> bool {
+    word.starts_with('-')
+        && ["exec", "shell", "script", "eval", "wrapper", "command"]
+            .iter()
+            .any(|named| word.contains(named))
+}
+
 /// What a line of plain words is for, when the table knows its program:
 /// a build, a test run or a check. `None` for everything else, which is
 /// not observed.
 ///
-/// The table errs towards `None`. Where a program takes a sub-command,
-/// that is the first word after the program, so that an option's argument
-/// is never read as one (`mvn -pl test deploy`). Where it takes several
-/// targets or goals, every one must class the same.
+/// **The table errs towards `None`,** and refuses real lines for it
+/// (`./gradlew build -x test`, `tox -e py311`, `npm run test-unit`): a
+/// line that is not observed is one the user writes an entry for, and a
+/// line wrongly observed is listed for the model as the project's own.
+///
+/// - Where a program takes a sub-command, that is the first word after
+///   it, a few options that take no value apart, so that an option's
+///   argument is never read as one (`pnpm --filter test publish`).
+/// - Where it takes several targets or goals, every one must class the
+///   same. For `gradle` and `mvn` an option's argument is read as a goal
+///   too, which only refuses more.
+/// - A line with an option that names something to run is not classed.
 #[must_use]
 pub fn classify(line: &str) -> Option<Purpose> {
     let mut words = line.split(' ').skip_while(|word| assignment(word));
@@ -203,16 +274,28 @@ pub fn classify(line: &str) -> Option<Purpose> {
         .find_map(|ending| name.strip_suffix(ending))
         .unwrap_or(&name);
     let rest: Vec<&str> = words.collect();
+    if rest.iter().any(|word| runs_something_else(word)) {
+        return None;
+    }
     // The sub-command: the first word, when it is not an option.
     let sub = rest.first().copied().filter(|word| !word.starts_with('-'));
     let has = |flag: &str| rest.contains(&flag);
     match name {
         "cargo" => {
-            // `cargo +nightly test`.
-            let mut after = rest
-                .iter()
-                .copied()
-                .skip_while(|word| word.starts_with('+'));
+            // `cargo +nightly --locked test`.
+            let mut after = rest.iter().copied().skip_while(|word| {
+                word.starts_with('+')
+                    || matches!(
+                        *word,
+                        "--locked"
+                            | "--offline"
+                            | "--frozen"
+                            | "-q"
+                            | "--quiet"
+                            | "-v"
+                            | "--verbose"
+                    )
+            });
             match after.next()? {
                 "test" | "t" => Some(Purpose::Test),
                 "nextest" => (after.next()? == "run").then_some(Purpose::Test),
@@ -226,14 +309,23 @@ pub fn classify(line: &str) -> Option<Purpose> {
                 _ => None,
             }
         }
-        "make" | "gmake" | "just" | "ninja" | "task" => all_of(&rest, script, Some(Purpose::Build)),
-        "npm" | "pnpm" | "yarn" | "bun" => match sub? {
-            "test" | "t" => Some(Purpose::Test),
-            "run" | "run-script" => script(rest.get(1)?),
-            // `yarn lint`, `pnpm build`: a script run by its name.
-            other if name != "npm" => script(other),
-            _ => None,
-        },
+        "make" | "gmake" | "just" | "ninja" | "task" => {
+            all_of(targets(&rest)?, script, Some(Purpose::Build))
+        }
+        "npm" | "pnpm" | "yarn" | "bun" => {
+            // `pnpm -r test`.
+            let mut after = rest
+                .iter()
+                .copied()
+                .skip_while(|word| matches!(*word, "-r" | "--recursive" | "-s" | "--silent"));
+            match after.next()? {
+                "test" | "t" => Some(Purpose::Test),
+                "run" | "run-script" => script(after.next()?),
+                // `yarn lint`, `pnpm build`: a script run by its name.
+                other if name != "npm" && !other.starts_with('-') => script(other),
+                _ => None,
+            }
+        }
         "go" => match sub? {
             "test" => Some(Purpose::Test),
             "build" => Some(Purpose::Build),
@@ -246,14 +338,12 @@ pub fn classify(line: &str) -> Option<Purpose> {
         // With an environment or a session named, they run whatever that
         // is called: `tox -e release`.
         "tox" | "nox" => rest.is_empty().then_some(Purpose::Test),
-        "python" | "python3" | "py" => {
-            let at = rest.iter().position(|word| *word == "-m")?;
-            match *rest.get(at + 1)? {
-                "pytest" | "unittest" => Some(Purpose::Test),
-                "mypy" | "ruff" | "flake8" | "pylint" | "pyright" => Some(Purpose::Check),
-                _ => None,
-            }
-        }
+        // `-m` first: after a file's name it is the file's own argument.
+        "python" | "python3" | "py" => match (*rest.first()?, *rest.get(1)?) {
+            ("-m", "pytest" | "unittest") => Some(Purpose::Test),
+            ("-m", "mypy" | "ruff" | "flake8" | "pylint" | "pyright") => Some(Purpose::Check),
+            _ => None,
+        },
         "mypy" | "pyright" | "flake8" | "pylint" | "eslint" | "shellcheck" | "rubocop"
         | "golangci-lint" => Some(Purpose::Check),
         "ruff" => (sub? == "check").then_some(Purpose::Check),
@@ -263,32 +353,55 @@ pub fn classify(line: &str) -> Option<Purpose> {
         } else {
             Purpose::Build
         }),
-        "dotnet" | "swift" | "zig" | "mix" | "deno" => match sub? {
+        // `zig build` takes steps, as `make` takes targets.
+        "zig" => match sub? {
             "test" => Some(Purpose::Test),
-            "build" | "compile" => Some(Purpose::Build),
-            "lint" | "check" if name == "deno" => Some(Purpose::Check),
+            "build" => all_of(
+                rest.iter()
+                    .copied()
+                    .skip(1)
+                    .filter(|word| !word.starts_with('-')),
+                script,
+                Some(Purpose::Build),
+            ),
             _ => None,
         },
-        "gradle" | "gradlew" | "mvn" | "mvnw" => {
-            // `clean` beside a goal changes nothing of what the goal is.
-            let goals: Vec<&str> = rest
-                .iter()
-                .copied()
-                .filter(|word| *word != "clean")
-                .collect();
-            all_of(
-                &goals,
-                |goal| match goal {
-                    "test" | "verify" => Some(Purpose::Test),
-                    "build" | "assemble" | "compile" | "package" => Some(Purpose::Build),
-                    "check" | "lint" => Some(Purpose::Check),
-                    _ => None,
-                },
-                None,
-            )
+        "dotnet" | "swift" | "mix" | "deno" => {
+            // An MSBuild target: `dotnet build -t:Deploy`.
+            if rest.iter().any(|word| {
+                ["-t:", "/t:", "-target:", "/target:"]
+                    .iter()
+                    .any(|target| word.to_ascii_lowercase().starts_with(target))
+            }) {
+                return None;
+            }
+            match sub? {
+                "test" => Some(Purpose::Test),
+                "build" | "compile" => Some(Purpose::Build),
+                "lint" | "check" if name == "deno" => Some(Purpose::Check),
+                _ => None,
+            }
         }
-        // A named target is whatever the project calls it: `install`.
-        "cmake" => (has("--build") && !has("--target") && !has("-t")).then_some(Purpose::Build),
+        "gradle" | "gradlew" | "mvn" | "mvnw" => all_of(
+            // `clean` beside a goal changes nothing of what the goal is.
+            rest.iter()
+                .copied()
+                .filter(|word| !word.starts_with('-') && *word != "clean"),
+            |goal| match goal {
+                "test" | "verify" => Some(Purpose::Test),
+                "build" | "assemble" | "compile" | "package" => Some(Purpose::Build),
+                "check" | "lint" => Some(Purpose::Check),
+                _ => None,
+            },
+            None,
+        ),
+        // A named target is whatever the project calls it (`install`),
+        // and what follows `--` goes to the tool underneath.
+        "cmake" => (has("--build")
+            && !rest
+                .iter()
+                .any(|word| *word == "--" || *word == "-t" || word.starts_with("--target")))
+        .then_some(Purpose::Build),
         _ => None,
     }
 }
@@ -332,10 +445,14 @@ impl Watch {
         }
         // The directory reaches the prompt beside the line, and is held to
         // the line's rule: a folder can be named anything.
-        let plain_directory = run
-            .cwd
-            .as_deref()
-            .is_none_or(|cwd| cwd.len() <= MAX_LINE && cwd.chars().all(plain));
+        let plain_directory = run.cwd.as_deref().is_none_or(|cwd| {
+            // No colon: the store refuses a directory that could name
+            // a drive, and the observation would never be kept.
+            cwd.len() <= MAX_LINE
+                && cwd
+                    .chars()
+                    .all(|character| plain(character) && character != ':')
+        });
         if !plain_directory {
             return Vec::new();
         }
@@ -449,8 +566,10 @@ mod tests {
             ("cargo +nightly test", Some(Test)),
             // The sub-command is the first word: an option's argument is
             // never read as one.
-            ("cargo --locked test", None),
+            ("cargo --locked test", Some(Test)),
+            ("cargo +nightly -q build", Some(Build)),
             ("cargo --config test publish", None),
+            ("cargo --manifest-path test publish", None),
             ("cargo xtask deploy", None),
             ("cargo xtask test --profile fast", Some(Test)),
             ("cargo xtask ci", Some(Check)),
@@ -468,7 +587,40 @@ mod tests {
             ("make deploy", None),
             ("make clean", None),
             ("make -j 8 test", Some(Test)),
-            ("make CC=clang test", Some(Test)),
+            ("make --jobs=8 -k test", Some(Test)),
+            ("make -C build test", Some(Test)),
+            // What can make any target do anything (found by the second
+            // review): an assignment, another makefile, `--eval`.
+            ("make CC=clang test", None),
+            ("make SHELL=./deploy.sh test", None),
+            ("make test SHELL=./deploy.sh", None),
+            ("make --eval=test:deploy test", None),
+            ("make -fdeploy.mk", None),
+            ("make -f deploy.mk test", None),
+            ("make -C", None),
+            ("just --justfile deploy.just test", None),
+            // An option that names something to run.
+            ("go test -exec=./deploy.sh ./...", None),
+            ("go build -toolexec ./x ./...", None),
+            ("npm test --script-shell=./deploy.sh", None),
+            ("./gradlew --init-script=deploy.gradle build", None),
+            // A script's variant is one of a few words.
+            ("npm run test:e2e", Some(Test)),
+            ("npm run test:publish", None),
+            ("task build:push", None),
+            ("pnpm -r test", Some(Test)),
+            ("pnpm -r --filter test publish", None),
+            ("python deploy.py -m pytest", None),
+            ("python -W error -m pytest", None),
+            ("zig build", Some(Build)),
+            ("zig build test", Some(Test)),
+            ("zig build deploy", None),
+            ("zig build run", None),
+            ("dotnet build -t:Deploy", None),
+            ("dotnet build /T:Deploy", None),
+            ("cmake --build . -- install", None),
+            ("cmake --build . --target=install", None),
+            ("./gradlew build -x test", None),
             ("make test check-all", None),
             // Every target must class the same, whatever an option takes
             // (found by the independent review).
@@ -571,6 +723,7 @@ mod tests {
             "a\nb",
             "$(id)",
             "a\"b",
+            "a:b",
         ] {
             let mut watch = Watch::new();
             let mut there = run("cargo test", Ending::Succeeded);
