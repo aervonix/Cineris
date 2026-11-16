@@ -153,7 +153,7 @@ Showing that the tests bite
 
 On the runners, without a pull request (the `try` workflow runs this)
   try --command 'COMMAND [ARGS]' [--profile ci|release|dist] [--count N]
-      [--load N] [--cores K] [--filter 'EXPR; EXPR'] [--against REF]
+      [--load N] [--cores K] [--filter 'EXPR; EXPR'] [--against REF] [--label NAME]
       [--commit SHA] [--dry-run]
                     One of test, stress, startup, perf, ci or mutate, as the
                     workflow's inputs ask: `try --help` has the rules. `perf
@@ -205,9 +205,10 @@ Before a push
                     and run `cargo xtask ci` there. This worktree and branch
                     are not touched. `combine --help` has the rest.
   branch commit-records --branch BRANCH --message MESSAGE FILE...
-                    Commit records (docs/**/*.md, mutations/*.breaks), as the
-                    working tree has them, to a branch no worktree has checked
-                    out, in an index of its own: the working tree and the
+                    Commit records (docs/steps/**/*.md, docs/outstanding/*.md,
+                    mutations/*.breaks), as the working tree has them, to a
+                    branch no worktree is using and whose copy of each is
+                    HEAD's, in an index of its own: the working tree and the
                     branch checked out are not touched. Pushes nothing.
   branch fold COMMIT [--last] [--base REF]
   branch to-end COMMIT [--base REF]
