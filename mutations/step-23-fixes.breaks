@@ -19,6 +19,35 @@ find: if signal == libc::SIGHUP && super::hung_up_already(129) {
 replace: if false {
 caught-by:
     cortex-term::it handoff::sys_a_second_sighup_is_the_same_end
+    cortex-term::it handoff::sys_a_sighup_handled_on_another_thread_as_the_read_finds_the_end_is_the_same_end
+
+[break] the-hang-up-asked-before-the-hand-over
+rule: A SIGHUP handled on one thread while the loop's read finds the terminal gone on another is the hang-up's same end: the handler asks whether the terminal hung up only once it finds the hand-over taken, not before it puts the terminal back, when the read can take the hand-over in between.
+file: crates/cortex-term/src/sys/unix.rs
+in: on_ending
+find:
+    emergency();
+    if signal != libc::SIGABRT && super::hand_over(128 + u8::try_from(signal).unwrap_or(0)) {
+        unsafe { libc::alarm(WATCHDOG_SECONDS) };
+        wake();
+        return;
+    }
+    if signal == libc::SIGHUP && super::hung_up_already(129) {
+        return;
+    }
+replace:
+    if signal == libc::SIGHUP && super::hung_up_already(129) {
+        return;
+    }
+    emergency();
+    if signal != libc::SIGABRT && super::hand_over(128 + u8::try_from(signal).unwrap_or(0)) {
+        unsafe { libc::alarm(WATCHDOG_SECONDS) };
+        wake();
+        return;
+    }
+os: linux
+caught-by:
+    cortex-term::it handoff::sys_a_sighup_handled_on_another_thread_as_the_read_finds_the_end_is_the_same_end
 
 [break] leaving-puts-back-the-default-handlers
 rule: While signals are handed to the program, leaving the terminal keeps the handlers of the signals that end it until signal_ended: one that comes while the program ends is handed over, not the default action's.
@@ -1354,30 +1383,3 @@ find: self.history_items.drain(..older);
 replace: self.history_items.drain(..older.min(0));
 caught-by:
     app::tests::sessions::a_long_historys_read_keeps_only_the_last_pages_worth_of_ids
-[break] the-hang-up-asked-before-the-hand-over
-rule: A SIGHUP handled on one thread while the loop's read finds the terminal gone on another is the hang-up's same end: the handler asks whether the terminal hung up only once it finds the hand-over taken, not before it puts the terminal back, when the read can take the hand-over in between.
-file: crates/cortex-term/src/sys/unix.rs
-in: on_ending
-find:
-    emergency();
-    if signal != libc::SIGABRT && super::hand_over(128 + u8::try_from(signal).unwrap_or(0)) {
-        unsafe { libc::alarm(WATCHDOG_SECONDS) };
-        wake();
-        return;
-    }
-    if signal == libc::SIGHUP && super::hung_up_already(129) {
-        return;
-    }
-replace:
-    if signal == libc::SIGHUP && super::hung_up_already(129) {
-        return;
-    }
-    emergency();
-    if signal != libc::SIGABRT && super::hand_over(128 + u8::try_from(signal).unwrap_or(0)) {
-        unsafe { libc::alarm(WATCHDOG_SECONDS) };
-        wake();
-        return;
-    }
-os: linux
-caught-by:
-    cortex-term::it handoff::sys_a_sighup_handled_on_another_thread_as_the_read_finds_the_end_is_the_same_end
