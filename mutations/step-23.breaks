@@ -1004,3 +1004,13 @@ replace: if !closed {
 packages: cortex-core
 caught-by:
     asking::a_question_whose_client_went_away_ends_as_no_answer
+
+[break] a-changed-word-cut-at-its-change
+rule: Of a replaced line, the whole changed words are bold, and the punctuation and spaces around them plain (the owner, 2026-11-16).
+file: crates/cortex-tui/src/app/tools.rs
+in: changed
+find: if words.is_empty() { of(Piece::Mark) } else { words }
+replace: { let mut all = words; all.extend(of(Piece::Mark)); all.sort_by_key(|range| range.start); all }
+packages: cortex-tui
+caught-by:
+    app::tools::tests::whole_changed_words_are_bold_and_what_is_around_them_plain
