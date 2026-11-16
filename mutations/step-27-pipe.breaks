@@ -8,15 +8,15 @@
 # ------------------------------------------------------- the pipe's security
 
 [break] pipe-label-lets-a-lower-process-write
-rule: The pipe is labelled at the server's integrity with no write up: a process below it cannot open the pipe to write.
+rule: The pipe is labelled at the server's integrity with no write up: a process below it cannot open the pipe to write. Read back from the pipe: no open of a lower process can see it alone, since no read up keeps every open out (CreateFileW asks to read a file's attributes whatever else it asks), so no write up is the second guard.
 file: crates/cortex-rpc/src/socket/windows.rs
 in: description
 in-string: ML;;NWNR;;;S-1-16
 replace: ML;;NR;;;S-1-16
 os: windows
 caught-by:
-    cortex-rpc::it pipe::a_client_below_the_servers_integrity_is_kept_out
     cortex-rpc::it pipe::the_pipe_admits_the_user_alone_at_the_servers_integrity
+    cortex-rpc socket::sys::tests::the_descriptor_admits_the_user_alone_and_labels_the_pipe_at_the_servers_level
 
 [break] pipe-label-lets-a-lower-process-read
 rule: The pipe's label has no read up as well: a process below the server's integrity cannot open the pipe to read, where it could hold a connection it never writes on and so is never checked.
@@ -30,7 +30,7 @@ caught-by:
     cortex-rpc::it pipe::the_pipe_admits_the_user_alone_at_the_servers_integrity
 
 [break] pipe-access-list-admits-everyone
-rule: The pipe's access list allows the user alone: another user cannot open it.
+rule: The pipe's access list allows the user alone: another user cannot open it. Read back from the pipe: the two-user test cannot see it alone on a runner, where the label keeps the second user, at medium integrity, out of the elevated test's pipe as well.
 file: crates/cortex-rpc/src/socket/windows.rs
 in: description
 in-string: D:P(A;;GA;;;{user})S:
@@ -38,7 +38,7 @@ replace: D:P(A;;GA;;;{user})(A;;GRGW;;;WD)S:
 os: windows
 caught-by:
     cortex-rpc::it pipe::the_pipe_admits_the_user_alone_at_the_servers_integrity
-    cortex-rpc::it pipe::sys_another_user_cannot_open_the_pipe
+    cortex-rpc socket::sys::tests::the_descriptor_admits_the_user_alone_and_labels_the_pipe_at_the_servers_level
 
 [break] pipe-access-list-not-protected
 rule: The pipe's access list is protected from inheritance: it holds the entry it was made with and nothing else.
