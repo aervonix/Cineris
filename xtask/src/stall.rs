@@ -337,8 +337,51 @@ impl Observed {
         Record {
             elapsed_ms,
             full_us: self.after.full_total.saturating_sub(self.before.full_total),
+            tiers: EVERY_TIER,
         }
     }
+}
+
+/// The tiers a test run measured, as the bits of [`Record::tiers`]: the
+/// job's first run (tiers 1 and 2), its second (tier 3), or a run of all.
+pub(crate) const UNIT_AND_INTEGRATION: u8 = 0b011;
+/// The job's second run: the system tests.
+pub(crate) const SYSTEM: u8 = 0b100;
+/// A run of every tier.
+pub(crate) const EVERY_TIER: u8 = 0b111;
+
+/// The bit of `tier` in [`Record::tiers`].
+pub(crate) fn tier_bit(tier: crate::tiers::Tier) -> u8 {
+    match tier {
+        crate::tiers::Tier::Unit => 0b001,
+        crate::tiers::Tier::Integration => 0b010,
+        crate::tiers::Tier::System => 0b100,
+    }
+}
+
+/// `tiers` as a record writes it: their numbers, `1,2`.
+fn tiers_text(tiers: u8) -> String {
+    crate::tiers::Tier::ALL
+        .iter()
+        .enumerate()
+        .filter(|(_, tier)| tiers & tier_bit(**tier) != 0)
+        .map(|(index, _)| (index + 1).to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The tiers of a record's `tiers=1,2`; `None` for anything else.
+fn parse_tiers(text: &str) -> Option<u8> {
+    let mut tiers = 0;
+    for number in text.split(',') {
+        tiers |= match number {
+            "1" => 0b001,
+            "2" => 0b010,
+            "3" => 0b100,
+            _ => return None,
+        };
+    }
+    (tiers != 0).then_some(tiers)
 }
 
 #[expect(
@@ -365,6 +408,9 @@ fn percent(stalled: f64, run: f64) -> f64 {
 pub(crate) struct Record {
     pub(crate) elapsed_ms: u64,
     pub(crate) full_us: u64,
+    /// The tiers the run measured ([`tier_bit`]): a stall excuses theirs
+    /// alone.
+    pub(crate) tiers: u8,
 }
 
 /// Where the records of a CI run in the tree at `root` are kept: beside its
@@ -383,25 +429,33 @@ pub(crate) fn append_record(path: &Path, record: &Record) -> crate::Result<()> {
         .map_err(|error| format!("could not open {}: {error}", path.display()))?;
     writeln!(
         file,
-        "elapsed_ms={} full_us={}",
-        record.elapsed_ms, record.full_us
+        "elapsed_ms={} full_us={} tiers={}",
+        record.elapsed_ms,
+        record.full_us,
+        tiers_text(record.tiers)
     )
     .map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
-/// The records in a file's text. A line that is not one is left out.
+/// The records in a file's text. A line that is not one is left out, and
+/// so are its tiers' excuse: a run with no record is judged. A line with no
+/// `tiers` is of every tier.
 pub(crate) fn parse_records(text: &str) -> Vec<Record> {
     text.lines()
         .filter_map(|line| {
-            let field = |name: &str| {
+            let word = |name: &str| {
                 line.split_whitespace()
-                    .find_map(|word| word.strip_prefix(name)?.strip_prefix('='))?
-                    .parse()
-                    .ok()
+                    .find_map(|word| word.strip_prefix(name)?.strip_prefix('='))
+            };
+            let field = |name: &str| word(name)?.parse().ok();
+            let tiers = match word("tiers") {
+                None => EVERY_TIER,
+                Some(text) => parse_tiers(text)?,
             };
             Some(Record {
                 elapsed_ms: field("elapsed_ms")?,
                 full_us: field("full_us")?,
+                tiers,
             })
         })
         .collect()
@@ -423,17 +477,27 @@ pub(crate) struct Stalled {
     pub(crate) stalled_seconds: f64,
     /// The runs' time, in seconds.
     pub(crate) run_seconds: f64,
+    /// The tiers those runs measured ([`tier_bit`]): the ones not judged.
+    pub(crate) tiers: u8,
 }
 
 impl Stalled {
-    /// What the tier check says in place of its verdict.
+    /// Whether `tier` is still held to its budget: it was not measured by a
+    /// run that stalled.
+    pub(crate) fn judges(&self, tier: crate::tiers::Tier) -> bool {
+        self.tiers & tier_bit(tier) == 0
+    }
+
+    /// What the tier check says in place of the verdict of the tiers it
+    /// does not judge.
     pub(crate) fn message(&self) -> String {
+        let tiers = tiers_text(self.tiers).replace(',', ", ");
         format!(
             "not judged: the machine stalled. Every task waited on I/O for {:.1} s of the test \
              runs' {:.0} s ({:.0}%, from {PRESSURE_FILE}; a run is taken to have stalled at \
-             {STALLED_SHARE:.0}%), so the tiers' times are the disk's as much as the tests', and \
-             no tier is held to its budget. Run the tests again when the machine is quiet. CI's \
-             runners are always judged.",
+             {STALLED_SHARE:.0}%), so the times of the tiers they ran ({tiers}) are the disk's \
+             as much as the tests', and those tiers are not held to their budgets; any other \
+             is. Run the tests again when the machine is quiet. CI's runners are always judged.",
             self.stalled_seconds, self.run_seconds, self.share
         )
     }
@@ -446,14 +510,36 @@ impl Stalled {
 /// judged, whatever the pressure: the budgets are the pull request's, a
 /// hosted runner's disk is its own, and a verdict that moved with a reading
 /// nobody can check there would be a loophole. Elsewhere, a run that
-/// stalled for [`STALLED_SHARE`] or more of its time is not judged, and one
-/// with no record (the pressure could not be read, or nothing wrote one) is.
+/// stalled for [`STALLED_SHARE`] or more of its time does not have the
+/// tiers it ran judged, and one with no record (the pressure could not be
+/// read, or nothing wrote one) is. The records of one set of tiers (a run
+/// and its re-run) are one run; a stall in the system tests' run leaves
+/// tiers 1 and 2, from another run, judged.
 pub(crate) fn judge(in_actions: bool, records: &[Record]) -> Option<Stalled> {
     if in_actions {
         return None;
     }
-    let elapsed_ms: u64 = records.iter().map(|record| record.elapsed_ms).sum();
-    let full_us: u64 = records.iter().map(|record| record.full_us).sum();
+    let mut runs: Vec<(u8, u64, u64)> = Vec::new();
+    for record in records {
+        match runs.iter_mut().find(|run| run.0 == record.tiers) {
+            Some(run) => {
+                run.1 += record.elapsed_ms;
+                run.2 += record.full_us;
+            }
+            None => runs.push((record.tiers, record.elapsed_ms, record.full_us)),
+        }
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "milliseconds of a run, in seconds to a tenth"
+    )]
+    let stalled = |(_, elapsed_ms, full_us): &(u8, u64, u64)| {
+        percent(micros_to_seconds(*full_us), *elapsed_ms as f64 / 1e3) >= STALLED_SHARE
+    };
+    let stalled: Vec<&(u8, u64, u64)> = runs.iter().filter(|run| stalled(run)).collect();
+    let tiers = stalled.iter().fold(0, |tiers, run| tiers | run.0);
+    let elapsed_ms: u64 = stalled.iter().map(|run| run.1).sum();
+    let full_us: u64 = stalled.iter().map(|run| run.2).sum();
     #[expect(
         clippy::cast_precision_loss,
         reason = "milliseconds of a run, in seconds to a tenth"
@@ -461,10 +547,11 @@ pub(crate) fn judge(in_actions: bool, records: &[Record]) -> Option<Stalled> {
     let run_seconds = elapsed_ms as f64 / 1e3;
     let stalled_seconds = micros_to_seconds(full_us);
     let share = percent(stalled_seconds, run_seconds);
-    (share >= STALLED_SHARE).then_some(Stalled {
+    (tiers != 0).then_some(Stalled {
         share,
         stalled_seconds,
         run_seconds,
+        tiers,
     })
 }
 
@@ -526,6 +613,7 @@ pub(crate) fn explain(
 mod tests {
     use std::time::Duration;
 
+    use super::{EVERY_TIER, SYSTEM, UNIT_AND_INTEGRATION};
     use super::{
         Observed, Pressure, Record, Stalled, append_record, explain, find, find_cases, instant_ms,
         judge, parse_pressure, read_pressure_from, read_pressure_with, read_records,
@@ -787,7 +875,8 @@ mod tests {
             run.record(),
             Record {
                 elapsed_ms: 312_000,
-                full_us: 30_200_000
+                full_us: 30_200_000,
+                tiers: EVERY_TIER,
             }
         );
         // A run that took no time stalled for none of it, and counters that
@@ -801,6 +890,7 @@ mod tests {
         let record = |full_s: u64, elapsed_s: u64| Record {
             elapsed_ms: elapsed_s * 1000,
             full_us: full_s * 1_000_000,
+            tiers: EVERY_TIER,
         };
         // Judged under the threshold, not judged at it, and over.
         assert_eq!(judge(false, &[record(9, 100)]), None);
@@ -817,6 +907,51 @@ mod tests {
         assert!((both.share - 22.0).abs() < 1e-9);
         assert!((both.stalled_seconds - 22.0).abs() < 1e-9);
         assert!((both.run_seconds - 100.0).abs() < 1e-9);
+        assert_eq!(both.tiers, EVERY_TIER);
+    }
+
+    #[test]
+    fn a_stall_excuses_the_tiers_of_the_run_that_stalled_and_no_other() {
+        let run = |full_s: u64, elapsed_s: u64, tiers: u8| Record {
+            elapsed_ms: elapsed_s * 1000,
+            full_us: full_s * 1_000_000,
+            tiers,
+        };
+        use crate::tiers::Tier;
+        // Tiers 1 and 2 quiet for 200 s, the system tests stalled 35 s of
+        // 100: together 11.7%, but only tier 3 is excused.
+        let stalled = judge(
+            false,
+            &[run(0, 200, UNIT_AND_INTEGRATION), run(35, 100, SYSTEM)],
+        )
+        .expect("the system tests' run stalled");
+        assert_eq!(stalled.tiers, SYSTEM);
+        assert!(stalled.judges(Tier::Unit) && stalled.judges(Tier::Integration));
+        assert!(!stalled.judges(Tier::System));
+        assert!((stalled.share - 35.0).abs() < 1e-9);
+        assert!(
+            stalled.message().contains("the tiers they ran (3)"),
+            "{}",
+            stalled.message()
+        );
+        // A run and its re-run are one run: 6 s of 50 and 6 s of 50 is 12%.
+        let rerun = judge(
+            false,
+            &[
+                run(6, 50, UNIT_AND_INTEGRATION),
+                run(6, 50, UNIT_AND_INTEGRATION),
+            ],
+        )
+        .expect("12% of the run and its re-run");
+        assert_eq!(rerun.tiers, UNIT_AND_INTEGRATION);
+        // Neither run stalled: everything judged.
+        assert_eq!(
+            judge(
+                false,
+                &[run(9, 100, UNIT_AND_INTEGRATION), run(9, 100, SYSTEM)]
+            ),
+            None
+        );
     }
 
     #[test]
@@ -825,6 +960,7 @@ mod tests {
             share: 34.4,
             stalled_seconds: 41.3,
             run_seconds: 120.0,
+            tiers: EVERY_TIER,
         }
         .message();
         assert!(
@@ -849,10 +985,12 @@ mod tests {
         let first = Record {
             elapsed_ms: 1500,
             full_us: 250,
+            tiers: UNIT_AND_INTEGRATION,
         };
         let second = Record {
             elapsed_ms: 99,
             full_us: 0,
+            tiers: SYSTEM,
         };
         let missing = read_records(&path);
         append_record(&path, &first).unwrap();
@@ -860,7 +998,8 @@ mod tests {
         let both = read_records(&path);
         std::fs::write(
             &path,
-            "garbage\nelapsed_ms=1 full_us=2\nelapsed_ms=x full_us=2\n",
+            "garbage\nelapsed_ms=1 full_us=2\nelapsed_ms=x full_us=2\nelapsed_ms=1 full_us=2 \
+             tiers=4\n",
         )
         .unwrap();
         let tolerant = read_records(&path);
@@ -871,7 +1010,8 @@ mod tests {
             tolerant,
             [Record {
                 elapsed_ms: 1,
-                full_us: 2
+                full_us: 2,
+                tiers: EVERY_TIER,
             }]
         );
     }

@@ -19,19 +19,20 @@ caught-by:
 rule: A run that stalled for a tenth of its time or more is not judged: the threshold is inclusive.
 file: xtask/src/stall.rs
 in: judge
-find: share >= STALLED_SHARE
-replace: share > STALLED_SHARE
+find: *elapsed_ms as f64 / 1e3) >= STALLED_SHARE
+replace: *elapsed_ms as f64 / 1e3) > STALLED_SHARE
 caught-by:
     stall::tests::a_run_that_stalled_for_a_tenth_of_its_time_is_not_judged_away_from_ci
 
-[break] only-the-first-test-run-is-counted-for-the-tiers
-rule: The tier check reads both test runs, and a re-run: their stall times and their times are added.
+[break] only-the-first-record-of-a-run-is-counted-for-the-tiers
+rule: The tier check adds the records of one run and its re-run: their stall times and their times are added.
 file: xtask/src/stall.rs
 in: judge
-find: records.iter().map(|record| record.full_us).sum()
-replace: records.first().map_or(0, |record| record.full_us)
+find: run.2 += record.full_us;
+replace: run.2 += 0;
 caught-by:
     stall::tests::a_run_that_stalled_for_a_tenth_of_its_time_is_not_judged_away_from_ci
+    stall::tests::a_stall_excuses_the_tiers_of_the_run_that_stalled_and_no_other
 
 [break] the-threshold-is-half-the-run
 rule: A run is taken to have stalled when every task waited on I/O for a tenth of its time, as mutate's busy disk is.
@@ -281,19 +282,11 @@ replace: None
 caught-by:
     tiers::tests::a_stalled_run_is_not_judged_at_a_desk_and_is_on_ci_whatever_the_pressure
 
-[break] a-run-not-judged-goes-on-to-fail-a-tier
-rule: A run that is not judged neither passes nor fails a budget. The early return after the tables is the second of two guards: the tables of such a run are made with no mark, so no tier is over budget and the verdicts after it would find none; the return also keeps the start-cost warning and the runner line from being said of a run whose times are the disk's, which only the printed output shows.
-file: xtask/src/tiers.rs
-in: check_report_with
-find: if stalled.is_some() {
-replace: if false {
-expect: survives
-
 [break] a-run-not-judged-marks-its-tiers
 rule: A run that is not judged has no mark on a tier, over budget or far over it.
 file: xtask/src/tiers.rs
 in: summarise_marked
-find: verdict(above_start, budget).filter(|_| marked)
+find: verdict(above_start, budget).filter(|_| marked(tier))
 replace: verdict(above_start, budget)
 caught-by:
     tiers::tests::a_run_that_is_not_judged_has_no_mark_on_any_tier
@@ -306,3 +299,13 @@ find: workspace::forget_report(&crate::stall::record_path(root))
 replace: Ok(())
 caught-by:
     checks::tests::what_the_pressure_said_of_an_earlier_run_is_forgotten_with_its_reports
+
+[break] a-stall-of-one-run-excuses-every-tier
+rule: A stall excuses only the tiers of the test run that stalled: a stall of the system tests' run leaves tiers 1 and 2 judged (the step's review).
+file: xtask/src/stall.rs
+in: judge
+find: match runs.iter_mut().find(|run| run.0 == record.tiers) {
+replace: match runs.iter_mut().next() {
+caught-by:
+    stall::tests::a_stall_excuses_the_tiers_of_the_run_that_stalled_and_no_other
+    tiers::tests::a_stall_of_the_system_tests_run_leaves_the_unit_tier_judged
