@@ -25,8 +25,10 @@ mod files;
 mod learned;
 mod levels;
 mod measure;
+mod narrowed;
 mod real_paths;
 mod trust;
+mod working_directory;
 
 use std::sync::Arc;
 

@@ -38,6 +38,7 @@ mod knowledge;
 mod lifecycle;
 mod plan;
 mod provider;
+mod redecide;
 mod sandbox;
 mod secrets;
 mod settings;

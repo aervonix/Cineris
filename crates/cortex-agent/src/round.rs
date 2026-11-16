@@ -29,7 +29,35 @@
 //! - once the policy has said to stop the turn, nothing the model wrote
 //!   after the refused call starts, and nothing more is asked. A call it
 //!   wrote before the refused one, and that was allowed, still starts:
-//!   the turn stops at the refused call, in the model's order.
+//!   the turn stops at the refused call, in the model's order;
+//! - a call waits for every call it conflicts with that is running, a
+//!   later one too: a call decided again may be scheduled otherwise than
+//!   it was at first.
+//!
+//! # Deciding again
+//!
+//! A call is decided when it is planned, which can be before an earlier
+//! call of the same response has run: `ln -s . d` and then a copy to
+//! `d/.bashrc` would be judged as the file system was before the link.
+//! So a call that has not started is **planned and decided again** as soon
+//! as the round looks at what may start, if since it was decided a call
+//! that may have changed the file system has finished
+//! ([`Footprint::may_change`]), or the policy's rules have narrowed
+//! ([`Policy::narrowed`]). Each decision is dated by both counts when its
+//! planning starts ([`Dated`]), so a change made while the plan was being
+//! worked out is after it. The new decision is acted on as the first was.
+//! Until it is in, the call is one whose plan is not known yet: nothing
+//! after it that could conflict with it starts, and no question after it
+//! is put.
+//!
+//! Two rules keep the model's order when a decision changes:
+//!
+//! - while a call that may change the file system runs, and an answer may
+//!   be to stop the turn, a later call with side effects waits for every
+//!   earlier call that has not started: decided again when the running
+//!   call ends, such a call may need an answer, which may be a stop;
+//! - a call planned again onto other paths, which a call written after it
+//!   has already used, does not run: its result says so.
 //!
 //! # Exactly one result
 //!
@@ -127,6 +155,13 @@ struct Footprint {
     /// [`Plan::conflicts_with`].
     shadow: Plan,
     side_effects: bool,
+    /// Whether its run may have changed the file system: an effect that is
+    /// not a read (a command, a write, an extension's tool), or scheduling
+    /// that is not read-only. A command the policy found only reads does
+    /// not: every part of it is on the table of commands that only read,
+    /// none of which makes a link. Nor does a call that changes only the
+    /// session (`plan`, `remember`).
+    may_change: bool,
     /// Every path an effect names.
     paths: Vec<AbsPath>,
     /// The files it reads one by one: what the table of seen files may
@@ -152,6 +187,8 @@ impl Footprint {
             side_effects: plan.has_side_effects()
                 || plan.changes_session()
                 || !matches!(plan.concurrency, Concurrency::ReadOnly),
+            may_change: plan.has_side_effects()
+                || !matches!(plan.concurrency, Concurrency::ReadOnly),
             paths: Vec::new(),
             reads: Vec::new(),
             writes: Vec::new(),
@@ -168,6 +205,15 @@ impl Footprint {
         }
         footprint
     }
+}
+
+/// What a call's decision was made against: the round's count of finished
+/// calls that may have changed the file system, and the policy's count of
+/// narrowings, both read when its planning started.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Dated {
+    changes: u64,
+    narrowed: u64,
 }
 
 /// Whether any path of one list is a path of the other, or lies inside
@@ -251,6 +297,12 @@ struct Call {
     ran: bool,
     /// When things happened to it.
     times: CallTimes,
+    /// What its last decision was made against.
+    decided: Dated,
+    /// While it is planned again: the paths its earlier plan named.
+    replanned: Option<Vec<AbsPath>>,
+    /// Whether a later plan of it names other paths than an earlier one.
+    moved: bool,
 }
 
 /// A run from a response that was thrown away, kept in case the next
@@ -315,6 +367,9 @@ pub(crate) struct Round {
     asking: Option<(u64, AbortHandle)>,
     /// The stop, once the policy has stopped the turn.
     stopped: Option<Stopped>,
+    /// How many calls that may have changed the file system have finished:
+    /// what a decision is dated by ([`Dated`]).
+    changes: u64,
     next_token: u64,
 }
 
@@ -365,7 +420,16 @@ impl Round {
             draining: Vec::new(),
             asking: None,
             stopped: None,
+            changes: 0,
             next_token: 0,
+        }
+    }
+
+    /// What a decision made now is made against.
+    fn now_dated(&self) -> Dated {
+        Dated {
+            changes: self.changes,
+            narrowed: self.env.policy.narrowed(),
         }
     }
 
@@ -536,6 +600,7 @@ impl Round {
         let mut call = self.new_call(index, call_id, &name, arguments, key, ids);
         match self.env.tools.get(&name) {
             Some(tool) => {
+                call.decided = self.now_dated();
                 self.plan(&call, &tool);
                 call.tool = Some(tool);
             }
@@ -595,7 +660,61 @@ impl Round {
             shown: false,
             ran: false,
             times: CallTimes::default(),
+            decided: Dated::default(),
+            replanned: None,
+            moved: false,
         }
+    }
+
+    /// Whether the call at `position` was decided before something that
+    /// could change its answer: a call that may have changed the file
+    /// system finished, or the policy's rules narrowed. `narrowed` is the
+    /// policy's count now.
+    fn is_stale(&self, position: usize, narrowed: u64) -> bool {
+        self.calls[position].decided
+            != Dated {
+                changes: self.changes,
+                narrowed,
+            }
+    }
+
+    /// Plans the call at `position` again and shows the new plan to the
+    /// policy: it was decided before something that could change the
+    /// answer. Until the report comes it is a call whose plan is not known
+    /// yet, so nothing after it that could conflict with it starts, and no
+    /// question after it is put. The report is taken as the first was
+    /// ([`planned`](Self::planned)), and its decision acted on.
+    fn decide_again(&mut self, position: usize, narrowed: u64) {
+        let changes = self.changes;
+        let call = &mut self.calls[position];
+        call.decided = Dated { changes, narrowed };
+        // A call that was planned has its tool.
+        let Some(tool) = call.tool.clone() else {
+            return;
+        };
+        call.state = CallState::Pending;
+        call.replanned = call.footprint.take().map(|footprint| footprint.paths);
+        let call = &self.calls[position];
+        self.plan(call, &tool);
+    }
+
+    /// The call at `position` was planned again onto other paths, and a
+    /// call the model wrote after it has already used one of them: run
+    /// now, it would act after that call, against the model's order.
+    fn moved_under_a_later_call(&mut self, position: usize) {
+        let call = &mut self.calls[position];
+        call.state = CallState::Pending;
+        let (token, name) = (call.token, call.name.clone());
+        self.settle_with(
+            token,
+            &name,
+            ToolResult::error(
+                "This call did not run: since it was planned, a path it names has come to lead \
+                 somewhere else, which a call written after it has already used. Nothing was \
+                 changed. Make the call again if it is still wanted.",
+            ),
+            ToolStatOutcome::Failed,
+        );
     }
 
     /// Starts the task that plans a call and shows the plan to the policy.
@@ -606,6 +725,7 @@ impl Round {
         let session = self.env.session.clone();
         let turn = self.turn.clone();
         let call_id = call.call_id.clone();
+        let item = call.item_id.clone();
         let arguments = call.arguments.clone();
         let name = call.name.clone();
         let cx = self.run_cx(call.cancel.clone());
@@ -623,6 +743,7 @@ impl Round {
                         session: &session,
                         turn: &turn,
                         call_id: &call_id,
+                        item: &item,
                         spec: tool.spec(),
                         arguments: &arguments,
                         plan: &plan,
@@ -729,19 +850,25 @@ impl Round {
         let Some(position) = self.position(token) else {
             return;
         };
-        if matches!(decision, Decision::AllowReadOnly) {
+        let only_reads = matches!(decision, Decision::AllowReadOnly);
+        if only_reads {
             // The policy has analysed the call and knows it changes
             // nothing: it runs beside others. Its effects stay as declared,
             // so a call with an `exec` effect still waits for the response
             // to end.
             plan.concurrency = Concurrency::ReadOnly;
         }
-        let call = &self.calls[position];
+        let call = &mut self.calls[position];
         if !matches!(call.state, CallState::Pending) || call.footprint.is_some() {
             // It already has its plan, or its result.
             return;
         }
-        let footprint = Footprint::of(&plan);
+        let mut footprint = Footprint::of(&plan);
+        footprint.may_change &= !only_reads;
+        if let Some(earlier) = call.replanned.take() {
+            call.moved |= earlier != footprint.paths;
+        }
+        let call = &self.calls[position];
         // A kept run of another call that touched the same files is not what
         // the model was shown: it goes before this call can meet what it
         // left behind. A kept run of this same call stays, to be used when
@@ -767,7 +894,8 @@ impl Round {
                 let now = self.now();
                 let call = &mut self.calls[position];
                 call.state = CallState::Ready(plan);
-                call.times.ready = Some(now);
+                // A call decided again was allowed when it was first.
+                call.times.ready.get_or_insert(now);
             }
             Decision::Ask => self.calls[position].state = CallState::NeedsAnswer(plan),
             Decision::Deny { reason } => {
@@ -914,6 +1042,16 @@ impl Round {
                 debug_assert!(false, "a call has exactly one result");
                 return;
             }
+            // A call that ran and may have changed the file system: every
+            // call decided before now is decided again when its turn comes.
+            if call.ran
+                && call
+                    .footprint
+                    .as_ref()
+                    .is_some_and(|footprint| footprint.may_change)
+            {
+                self.changes += 1;
+            }
             let item = self.item(&call.item_id, &call.call_id, &call.name, result, duration);
             if !call.shown {
                 self.emit_started(call);
@@ -998,6 +1136,18 @@ impl Round {
                 (false, None)
             }
         };
+        // A call that has not started, decided before something that could
+        // change its answer, is decided again now, whatever its turn.
+        let narrowed = self.env.policy.narrowed();
+        for position in 0..self.calls.len() {
+            if matches!(
+                self.calls[position].state,
+                CallState::Ready(_) | CallState::NeedsAnswer(_)
+            ) && self.is_stale(position, narrowed)
+            {
+                self.decide_again(position, narrowed);
+            }
+        }
         self.ask_next(open_call);
 
         let stop_may_answer = self.env.policy.answers_may_stop();
@@ -1006,6 +1156,16 @@ impl Round {
             .iter()
             .filter(|call| matches!(call.state, CallState::Running))
             .count();
+        // A call that may change the file system is running: when it ends,
+        // every call that has not started is decided again. A call started
+        // below counts from then on (found by `stress`).
+        let mut changing = self.calls.iter().any(|call| {
+            matches!(call.state, CallState::Running)
+                && call
+                    .footprint
+                    .as_ref()
+                    .is_some_and(|footprint| footprint.may_change)
+        });
         for position in 0..self.calls.len() {
             if running >= self.env.max_parallel {
                 break;
@@ -1034,6 +1194,16 @@ impl Round {
                 {
                     return true;
                 }
+                // So may an earlier call that has not started, once a
+                // running call that may change the file system ends and it
+                // is decided again.
+                if footprint.side_effects
+                    && stop_may_answer
+                    && changing
+                    && matches!(earlier.state, CallState::Ready(_))
+                {
+                    return true;
+                }
                 // An earlier call that is not planned yet could turn out to
                 // conflict.
                 earlier
@@ -1041,13 +1211,37 @@ impl Round {
                     .as_ref()
                     .is_none_or(|other| other.shadow.conflicts_with(&footprint.shadow))
             });
+            // A call decided again may be scheduled otherwise than it was:
+            // it waits for a call it now conflicts with that is running, a
+            // later one too. In the ordinary order no later call that
+            // conflicts with an earlier one has started.
+            let waits_for_running = self.calls[position + 1..].iter().any(|later| {
+                matches!(later.state, CallState::Running)
+                    && later
+                        .footprint
+                        .as_ref()
+                        .is_some_and(|other| other.shadow.conflicts_with(&footprint.shadow))
+            });
             let waits_for_discarded = self
                 .draining
                 .iter()
                 .any(|run| overlap(&run.paths, &footprint.paths));
-            if waits_for_earlier || waits_for_discarded {
+            if waits_for_earlier || waits_for_running || waits_for_discarded {
                 continue;
             }
+            let used_later = call.moved
+                && self.calls[position + 1..].iter().any(|later| {
+                    later.ran
+                        && later
+                            .footprint
+                            .as_ref()
+                            .is_some_and(|other| other.shadow.conflicts_with(&footprint.shadow))
+                });
+            if used_later {
+                self.moved_under_a_later_call(position);
+                continue;
+            }
+            changing |= footprint.may_change;
             self.start(position);
             running += 1;
         }
@@ -1060,6 +1254,10 @@ impl Round {
     /// an answer gets a result that says it did not run. This is the one
     /// place that happens, whether the call was waiting its turn when the
     /// stop came or was planned after it.
+    ///
+    /// A call decided before something that could change its answer has
+    /// been decided again by then ([`pump`](Self::pump)): the question is
+    /// about the call as it is now.
     fn ask_next(&mut self, open_call: Option<u32>) {
         if self.asking.is_some() {
             return;
@@ -1099,6 +1297,7 @@ impl Round {
         let session = self.env.session.clone();
         let turn = self.turn.clone();
         let call_id = call.call_id.clone();
+        let item = call.item_id.clone();
         let arguments = call.arguments.clone();
         let name = call.name.clone();
         let cancel = call.cancel.clone();
@@ -1117,6 +1316,7 @@ impl Round {
                     session: &session,
                     turn: &turn,
                     call_id: &call_id,
+                    item: &item,
                     spec: tool.spec(),
                     arguments: &arguments,
                     plan: &plan,

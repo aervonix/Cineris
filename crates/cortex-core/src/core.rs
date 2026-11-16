@@ -1439,9 +1439,9 @@ impl Core {
             Op::PermissionsRevoke(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
-                let engine = live.policy.engine();
+                let policy = Arc::clone(&live.policy);
                 Self::blocking(move || {
-                    engine.revoke(&params.ids).map_err(|failure| {
+                    policy.revoke(&params.ids).map_err(|failure| {
                         error(ErrorKind::Internal, "store_failed", failure.to_string())
                     })
                 })

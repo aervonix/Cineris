@@ -41,7 +41,7 @@ use cortex_protocol::methods::{
     ApprovalChoice, ApprovalDetail, ApprovalRequest, ApprovalResponse, CommandDetail, DiffDetail,
     ServerRequest, ServerResponse, TargetDetail, ToolDetail,
 };
-use cortex_protocol::{CallId, TurnId};
+use cortex_protocol::{CallId, ItemId, TurnId};
 use cortex_session::KeepGate;
 use cortex_tools::{BoxFuture, Effect, NetworkTarget, ReadGate};
 
@@ -64,9 +64,120 @@ pub struct PermissionDenial {
     pub reason: String,
 }
 
+/// The point inside a change of the approvals, with the engine in force
+/// taken and nothing changed yet: a test holds a revoke or a record there.
+pub(crate) const CHANGING_APPROVALS: &str = "core.policy.changing-approvals";
+
+/// The point where another engine is about to be put in force, with the
+/// lock held.
+pub(crate) const REPLACING: &str = "core.policy.replacing";
+
+/// The engine in force, and what changes it beside the calls it decides:
+/// another engine put in force for a change of level, approvals recorded
+/// and taken back, and a turn stopped. A learned command turned on or off
+/// at run time (step 17's wiring) is one more such change: it takes the
+/// lock too, and a change of level reads the session's learned commands
+/// under it, so that neither loses the other.
+///
+/// A change of level makes its engine, writes the new lease to the log,
+/// and only then puts the engine in force. An approval recorded or taken
+/// back in between reached the old engine alone, and was lost (found by
+/// the reviews of the re-decide step of step 12). So the new engine takes
+/// over what changed in the old one when it is put in force, and a record,
+/// a revoke and a replacement hold one lock, `changing`, so that none of
+/// them works on an engine another is replacing.
+pub(crate) struct EngineInForce {
+    engine: RwLock<Arc<Engine>>,
+    /// What [`Policy::narrowed`] adds to the engine in force's own count:
+    /// the counts of the engines it replaced, one for each replacement, and
+    /// one for each stop. Changed with the engine's lock held for writing,
+    /// or only ever added to, and read with it held for reading, so the sum
+    /// only grows.
+    beside: std::sync::atomic::AtomicU64,
+    changing: Mutex<()>,
+}
+
+impl EngineInForce {
+    pub(crate) fn new(engine: Engine) -> Self {
+        Self {
+            engine: RwLock::new(Arc::new(engine)),
+            beside: std::sync::atomic::AtomicU64::new(0),
+            changing: Mutex::new(()),
+        }
+    }
+
+    /// The engine in force.
+    pub(crate) fn get(&self) -> Arc<Engine> {
+        Arc::clone(&self.engine.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// How many times the rules in force have narrowed: [`Policy::narrowed`].
+    pub(crate) fn narrowed(&self) -> u64 {
+        let in_force = self.engine.read().unwrap_or_else(PoisonError::into_inner);
+        self.beside.load(std::sync::atomic::Ordering::Acquire) + in_force.narrowed()
+    }
+
+    /// Counts a stop of the turn as a narrowing: every call of the turn
+    /// that has not started is decided again, and the policy answers it
+    /// with the stop, whatever the command that stopped it was (found by
+    /// the review of the re-decide step: a command the engine found only
+    /// reads does not count as a change, and its look may still stop the
+    /// turn).
+    pub(crate) fn stop(&self) {
+        self.beside
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+
+    /// Puts `engine` in force. It takes over the approvals of the engine in
+    /// force ([`Engine::keep_approvals_of`]) as they are now, not as they
+    /// were when `engine` was made. That counts as a narrowing,
+    /// whichever way the level went: a change of level is rare, and a call
+    /// decided before it is decided again by the new engine, at a cost of
+    /// microseconds.
+    pub(crate) fn replace(&self, engine: Engine) {
+        let _changing = self.changing.lock().unwrap_or_else(PoisonError::into_inner);
+        cortex_base::hook::point(REPLACING);
+        let mut in_force = self.engine.write().unwrap_or_else(PoisonError::into_inner);
+        engine.keep_approvals_of(&in_force);
+        self.beside
+            .fetch_add(in_force.narrowed() + 1, std::sync::atomic::Ordering::AcqRel);
+        *in_force = Arc::new(engine);
+    }
+
+    /// Takes approvals back from the engine in force, by id. Writing the
+    /// project's file blocks: call this off the core thread.
+    pub(crate) fn revoke(
+        &self,
+        ids: &[cortex_protocol::ids::ApprovalId],
+    ) -> Result<usize, cortex_policy::ApprovalError> {
+        let _changing = self.changing.lock().unwrap_or_else(PoisonError::into_inner);
+        let engine = self.get();
+        cortex_base::hook::point(CHANGING_APPROVALS);
+        engine.revoke(ids)
+    }
+
+    /// Records a person's answer in the engine in force. Writing the
+    /// project's file blocks: call this off the core thread.
+    pub(crate) fn record(
+        &self,
+        question: &Question,
+        choice: &ApprovalChoice,
+    ) -> Result<cortex_policy::Recorded, cortex_policy::ApprovalError> {
+        let _changing = self.changing.lock().unwrap_or_else(PoisonError::into_inner);
+        let engine = self.get();
+        cortex_base::hook::point(CHANGING_APPROVALS);
+        engine.record(question, choice)
+    }
+}
+
 /// One session's engine, adapted.
 pub(crate) struct EnginePolicy {
-    engine: RwLock<Arc<Engine>>,
+    in_force: Arc<EngineInForce>,
+    /// The questions a person allowed, each with the call it was about: a
+    /// call decided again whose question and accesses are the same is
+    /// allowed without asking again ("allow once" leaves no rule). Only
+    /// the latest turn's are kept.
+    allowed: Mutex<Vec<Allowed>>,
     clients: Arc<Clients>,
     sink: Arc<SessionSink>,
     hooks: Arc<Hooks>,
@@ -101,6 +212,19 @@ impl std::fmt::Debug for EnginePolicy {
     }
 }
 
+/// A question a person allowed, and the call it was about: the loop's own
+/// id for the call, which is unique in the session (a provider's may
+/// repeat), and every access of the call as it was shown, its paths where
+/// they led and a command's directory included. The question's reasons
+/// name a command by its words, not where it runs: a call planned again
+/// into another directory is another question.
+struct Allowed {
+    turn: TurnId,
+    item: ItemId,
+    accesses: Vec<Access>,
+    question: Question,
+}
+
 /// What a policy is made from.
 pub(crate) struct PolicyParts {
     pub(crate) engine: Engine,
@@ -117,7 +241,8 @@ pub(crate) struct PolicyParts {
 impl EnginePolicy {
     pub(crate) fn new(parts: PolicyParts) -> Self {
         Self {
-            engine: RwLock::new(Arc::new(parts.engine)),
+            in_force: Arc::new(EngineInForce::new(parts.engine)),
+            allowed: Mutex::new(Vec::new()),
             clients: parts.clients,
             sink: parts.sink,
             hooks: parts.hooks,
@@ -139,14 +264,17 @@ impl EnginePolicy {
 
     /// The engine in force.
     pub(crate) fn engine(&self) -> Arc<Engine> {
-        Arc::clone(&self.engine.read().unwrap_or_else(PoisonError::into_inner))
+        self.in_force.get()
     }
 
     /// Stops turn `turn` at its next call: a confined command changed
     /// protected paths, and the user is to look before anything else runs.
+    /// Every call of it that has not started is decided again, and is
+    /// answered with the stop.
     pub(crate) fn stop_turn(&self, turn: u32, reason: String) {
         *self.stopped.lock().unwrap_or_else(PoisonError::into_inner) =
             Some((u64::from(turn), reason));
+        self.in_force.stop();
     }
 
     /// Why turn number `turn` was stopped, if it was.
@@ -174,9 +302,46 @@ impl EnginePolicy {
             .store(sandboxed, std::sync::atomic::Ordering::Release);
     }
 
-    /// Puts another engine in force: the session's level changed.
+    /// Puts another engine in force: the session's level changed
+    /// ([`EngineInForce::replace`]).
     pub(crate) fn replace(&self, engine: Engine) {
-        *self.engine.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(engine);
+        self.in_force.replace(engine);
+    }
+
+    /// Takes approvals back from the engine in force, by id: never from one
+    /// a change of level is replacing ([`EngineInForce::revoke`]). Writing
+    /// the project's file blocks: call this off the core thread.
+    pub(crate) fn revoke(
+        &self,
+        ids: &[cortex_protocol::ids::ApprovalId],
+    ) -> Result<usize, cortex_policy::ApprovalError> {
+        self.in_force.revoke(ids)
+    }
+
+    /// Whether a person allowed `question` for `call`, as it is planned
+    /// now.
+    fn was_allowed(&self, call: &PlannedCall<'_>, question: &Question) -> bool {
+        let allowed = self.allowed.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(earlier) = allowed.iter().find(|allowed| allowed.item == *call.item) else {
+            return false;
+        };
+        earlier.question == *question && Some(&earlier.accesses) == accesses(call).as_ref()
+    }
+
+    /// Remembers that a person allowed `question` for `call`, dropping
+    /// what was allowed in earlier turns.
+    fn remember_allowed(&self, call: &PlannedCall<'_>, question: Question) {
+        let Some(accesses) = accesses(call) else {
+            return;
+        };
+        let mut allowed = self.allowed.lock().unwrap_or_else(PoisonError::into_inner);
+        allowed.retain(|allowed| allowed.turn == *call.turn && allowed.item != *call.item);
+        allowed.push(Allowed {
+            turn: call.turn.clone(),
+            item: call.item.clone(),
+            accesses,
+            question,
+        });
     }
 
     /// The calls refused so far because nobody could be asked.
@@ -385,6 +550,9 @@ impl Policy for EnginePolicy {
         match self.outcome(call) {
             Outcome::Allow { read_only: true } => Decision::AllowReadOnly,
             Outcome::Allow { read_only: false } => Decision::Allow,
+            // The call is decided again, and a person already allowed it
+            // when asked this very question.
+            Outcome::Ask(question) if self.was_allowed(call, &question) => Decision::Allow,
             Outcome::Ask(_) => Decision::Ask,
             Outcome::Deny { reason } => Decision::Deny {
                 reason: Some(reason),
@@ -480,9 +648,12 @@ impl Policy for EnginePolicy {
                 return Verdict::Stop { reason };
             }
 
-            let engine = self.engine();
+            // In the engine in force when it is recorded, never in one a
+            // change of level is replacing.
+            let in_force = Arc::clone(&self.in_force);
             let choice = response.choice.clone();
-            let recorded = tokio::task::spawn_blocking(move || engine.record(&question, &choice));
+            let asked = question.clone();
+            let recorded = tokio::task::spawn_blocking(move || in_force.record(&question, &choice));
             let allowed = match recorded.await {
                 Ok(Ok(recorded)) => recorded.allowed,
                 // The call was approved; what could not be done is keeping
@@ -499,6 +670,9 @@ impl Policy for EnginePolicy {
                 Err(_) => false,
             };
             if allowed {
+                // Decided again before it runs, the call is not asked this
+                // question a second time.
+                self.remember_allowed(&call, asked);
                 Verdict::Allow
             } else {
                 Verdict::Deny {
@@ -526,6 +700,10 @@ impl Policy for EnginePolicy {
         self.fail_on_denial
             || self.stops_from_questions
             || self.sandboxed.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn narrowed(&self) -> u64 {
+        self.in_force.narrowed()
     }
 
     fn read_gate(&self) -> Arc<dyn ReadGate> {
@@ -579,6 +757,7 @@ mod tests {
 
     use cortex_base::PathStyle;
     use cortex_index::Gate;
+    use cortex_policy::{Access, Outcome, Request};
 
     use super::*;
 
@@ -625,5 +804,199 @@ mod tests {
         };
         assert!(!gone.may_index(&first));
         assert!(!gone.for_pass().expect("a gate").may_index(&first));
+    }
+
+    // ------------------------------------------------- the engine in force
+
+    fn path(text: &str) -> AbsPath {
+        AbsPath::parse(text, PathStyle::Posix).expect("a path")
+    }
+
+    /// An engine of a session at `supervised` in `/work/app`, with no rules.
+    fn engine() -> Engine {
+        let workspace = path("/work/app");
+        Engine::start(cortex_policy::Parts {
+            lease_id: cortex_protocol::ids::LeaseId::new("l_1"),
+            level: cortex_protocol::lease::Level::Supervised,
+            rules: Vec::new(),
+            approved: Vec::new(),
+            sandbox_policy: cortex_policy::default_sandbox(&workspace, &[], &[]),
+            sandbox: cortex_policy::SandboxState::Enforcing,
+            models: Vec::new(),
+            budget: cortex_protocol::lease::Budget::default(),
+            limits: cortex_protocol::lease::HardLimits::default(),
+            workspace,
+            home: Some(path("/users/dev")),
+            trusted: true,
+            repository_trusted: true,
+            protected: cortex_policy::Protected::none(),
+            shell: cortex_policy::ShellSyntax::Posix,
+            locate: Arc::new(cortex_policy::Lexical {
+                home: Some(path("/users/dev")),
+            }),
+            store: None,
+            clock: Arc::new(
+                cortex_base::FakeClock::starting_at("2026-11-13T10:00:00Z").expect("a time"),
+            ),
+        })
+        .expect("an engine")
+    }
+
+    /// The question about `cargo build`, which "allow for this session"
+    /// answers with the rule `cargo build *`.
+    fn question(engine: &Engine) -> Question {
+        let accesses = [Access::Exec {
+            command: "cargo build".to_owned(),
+            cwd: path("/work/app"),
+        }];
+        match engine.decide(&Request {
+            tool: "shell",
+            default: cortex_protocol::lease::RuleAction::Ask,
+            accesses: &accesses,
+        }) {
+            Outcome::Ask(question) => question,
+            other => panic!("not a question: {other:?}"),
+        }
+    }
+
+    /// A revoke and a change of engine, at once: the revoke holds the lock
+    /// and has taken the engine in force; the change of engine, made with
+    /// the old engine's approvals as a change of level makes it, is about
+    /// to be put in force. The revoke is not lost.
+    #[test]
+    fn a_revoke_and_a_change_of_engine_do_not_lose_each_other() {
+        let first = engine();
+        first
+            .record(&question(&first), &ApprovalChoice::AllowSession)
+            .expect("recorded");
+        let id = first.approvals()[0].id.clone();
+        let in_force = Arc::new(EngineInForce::new(first));
+        let next = engine();
+        next.keep_approvals_of(&in_force.get());
+        assert_eq!(next.approvals().len(), 1);
+
+        let revoking_held = cortex_testkit::Hold::new(CHANGING_APPROVALS);
+        let revoking = {
+            let in_force = Arc::clone(&in_force);
+            std::thread::spawn(move || in_force.revoke(&[id]))
+        };
+        revoking_held.reach();
+        let replacing = {
+            let in_force = Arc::clone(&in_force);
+            std::thread::spawn(move || in_force.replace(next))
+        };
+        // The change of engine waits for the lock, which the revoke holds.
+        revoking_held.release();
+        assert_eq!(revoking.join().expect("no panic").expect("revoked"), 1);
+        replacing.join().expect("no panic");
+        assert_eq!(
+            in_force.get().approvals(),
+            Vec::new(),
+            "the revoke was lost"
+        );
+    }
+
+    /// The same for an answer being recorded: "allow for this session"
+    /// given while a change of level is being made is kept.
+    #[test]
+    fn an_answer_recorded_while_the_engine_changes_is_kept() {
+        let first = engine();
+        let asked = question(&first);
+        let in_force = Arc::new(EngineInForce::new(first));
+        let next = engine();
+        next.keep_approvals_of(&in_force.get());
+
+        let recording_held = cortex_testkit::Hold::new(CHANGING_APPROVALS);
+        let recording = {
+            let in_force = Arc::clone(&in_force);
+            std::thread::spawn(move || in_force.record(&asked, &ApprovalChoice::AllowSession))
+        };
+        recording_held.reach();
+        let replacing = {
+            let in_force = Arc::clone(&in_force);
+            std::thread::spawn(move || in_force.replace(next))
+        };
+        recording_held.release();
+        assert!(
+            recording
+                .join()
+                .expect("no panic")
+                .expect("recorded")
+                .allowed
+        );
+        replacing.join().expect("no panic");
+        assert_eq!(in_force.get().approvals().len(), 1, "the answer was lost");
+    }
+
+    /// Each change of the engine in force holds the lock while it works, so
+    /// that no other begins meanwhile: held at its point, the lock is taken.
+    #[test]
+    fn each_change_of_the_engine_in_force_holds_the_lock_while_it_works() {
+        let first = engine();
+        let asked = question(&first);
+        let in_force = Arc::new(EngineInForce::new(first));
+        type Change = Box<dyn FnOnce(&EngineInForce) + Send>;
+        let changes: [(&str, &str, Change); 3] = [
+            (
+                "a record",
+                CHANGING_APPROVALS,
+                Box::new(move |in_force: &EngineInForce| {
+                    in_force
+                        .record(&asked, &ApprovalChoice::AllowSession)
+                        .expect("recorded");
+                }),
+            ),
+            (
+                "a revoke",
+                CHANGING_APPROVALS,
+                Box::new(|in_force: &EngineInForce| {
+                    in_force
+                        .revoke(&[cortex_protocol::ids::ApprovalId::new("none")])
+                        .expect("revoked");
+                }),
+            ),
+            (
+                "a replacement",
+                REPLACING,
+                Box::new(|in_force: &EngineInForce| in_force.replace(engine())),
+            ),
+        ];
+        for (what, point, change) in changes {
+            let held = cortex_testkit::Hold::new(point);
+            let working = {
+                let in_force = Arc::clone(&in_force);
+                std::thread::spawn(move || change(&in_force))
+            };
+            held.reach();
+            assert!(
+                in_force.changing.try_lock().is_err(),
+                "{what} does not hold the lock"
+            );
+            held.release();
+            working.join().expect("no panic");
+        }
+    }
+
+    /// The count of narrowings moves for a stop of the turn and for a new
+    /// engine, carries the count of the engine replaced, and only grows.
+    #[test]
+    fn a_stop_and_a_change_of_engine_move_the_count_which_only_grows() {
+        let first = engine();
+        first
+            .record(&question(&first), &ApprovalChoice::AllowSession)
+            .expect("recorded");
+        let id = first.approvals()[0].id.clone();
+        let in_force = EngineInForce::new(first);
+        assert_eq!(in_force.narrowed(), 0);
+        in_force.stop();
+        assert_eq!(in_force.narrowed(), 1, "a stop narrows");
+        in_force.revoke(&[id]).expect("revoked");
+        assert_eq!(in_force.narrowed(), 2, "a revoke narrows");
+        in_force.replace(engine());
+        assert_eq!(
+            in_force.narrowed(),
+            3,
+            "a new engine narrows, and its own count starts again"
+        );
     }
 }

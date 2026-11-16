@@ -782,13 +782,17 @@ replace: if key != "raw" {
 caught-by:
     cortex-session redact::tests::a_key_named_raw_in_somebody_elses_json_is_redacted
 
+# Since the re-decide step of step 12 the engine put in force takes the
+# approvals over again at that moment (`EngineInForce::replace`), so this
+# copy no longer holds the rule alone and its break survives;
+# `step-12-redecide/a-new-engine-keeps-the-approvals-it-was-made-with`
+# breaks the take-over.
 [break] session-approvals-lost-with-the-level
 rule: What was allowed for the session stays allowed when the level changes.
 file: crates/cortex-core/src/core.rs
 find: engine.keep_session_approvals_of(&old);
 replace:
-caught-by:
-    cortex-core::it approvals::what_was_allowed_for_the_session_stays_the_sessions_when_the_level_changes
+expect: survives
 
 [break] session-approvals-become-stored
 rule: What was allowed for the session stays the session's own when the level changes, under ids no later approval gets.
@@ -801,8 +805,10 @@ find:
 replace:
         .collect();
     let engine = assemble::start_engine(parts.clone())?;
-caught-by:
-    cortex-core::it approvals::what_was_allowed_for_the_session_stays_the_sessions_when_the_level_changes
+# The take-over in `EngineInForce::replace` keeps the session's approvals
+# the session's and the stored ones stored, whatever this copy did (the
+# re-decide step of step 12).
+expect: survives
 
 [break] fsmonitor-in-gits-older-parameters
 rule: The monitor is turned off at the end of `GIT_CONFIG_PARAMETERS` too, which git reads after the counted settings.
