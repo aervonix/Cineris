@@ -72,6 +72,22 @@ const LANE_END: Duration = Duration::from_secs(1);
 /// rest is left for the log (the review of step 23's second pull request).
 const SIGNAL_END: Duration = Duration::from_millis(1500);
 
+/// How long the end waits for the log to reach its file: what is left of
+/// the watchdog's 3 s after the history and the core (the review of step
+/// 23: a log writer stuck on its disk held a quit for ever).
+const LOG_END: Duration = Duration::from_millis(400);
+
+/// How often the core's end looks for a signal that came meanwhile.
+const END_LOOK: Duration = Duration::from_millis(50);
+
+/// When the core's end stops waiting: `within` after it `began`, or
+/// [`SIGNAL_END`] after a signal that came while it waited, whichever is
+/// first.
+fn end_deadline(began: Instant, within: Duration, signalled: Option<Instant>) -> Instant {
+    let deadline = began + within;
+    signalled.map_or(deadline, |at| deadline.min(at + SIGNAL_END))
+}
+
 /// Runs the interactive application. Returns the exit code.
 pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     if let Some(flag) = headless_only(&run) {
@@ -161,12 +177,19 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
             (Box::new(link) as Box<dyn Link>, start)
         })
     }));
-    // After a signal the watchdog gives 3 s in all (`SIGNAL_END`).
+    // After a signal the watchdog gives 3 s in all (`SIGNAL_END`); one
+    // that comes while the core ends cuts its wait short alike.
     let signalled = matches!(&ended, Ok(Ok(Exit::Signal(_))));
     core.end(if signalled { SIGNAL_END } else { CORE_END });
     if let Some(log) = &log {
-        log.flush();
+        log.flush_within(LOG_END);
     }
+    // A signal that came after the interface's loop ended is the code the
+    // program ends with: the end it asked for is the one just done.
+    let ended = match (ended, app::signalled()) {
+        (Ok(Ok(Exit::Quit | Exit::Gone(_))), Some(code)) => Ok(Ok(Exit::Signal(code))),
+        (ended, _) => ended,
+    };
     let (code, said) = ending(
         ended,
         CRASH.get().map(PathBuf::as_path),
@@ -824,10 +847,29 @@ impl CoreThread {
     }
 
     /// Ends the core: no more operations, then its shutdown, waited for at
-    /// most [`CORE_END`].
+    /// most `within`, and at most [`SIGNAL_END`] after a signal that comes
+    /// meanwhile, which the watchdog gives 3 s from its coming (the review
+    /// of step 23).
     fn end(mut self, within: Duration) {
         self.ops = None;
-        let _ = self.ended.recv_timeout(within);
+        let began = Instant::now();
+        let mut signalled = None;
+        loop {
+            if signalled.is_none() && app::signalled().is_some() {
+                signalled = Some(Instant::now());
+            }
+            let deadline = end_deadline(began, within, signalled);
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return;
+            }
+            // Looked at again every so often for a signal: the wait itself
+            // cannot be woken by one.
+            match self.ended.recv_timeout(left.min(END_LOOK)) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        }
     }
 }
 
@@ -913,6 +955,28 @@ fn inbound(next: Option<Outgoing>, closed: bool, gone_said: &mut bool) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The core is given its whole time after a quit, and at most
+    /// `SIGNAL_END` from a signal: the one the loop ended for, or one that
+    /// came while the core ended, whose watchdog gives 3 s from its coming
+    /// (the review of step 23).
+    #[test]
+    fn the_cores_end_is_cut_short_by_a_signal() {
+        let began = Instant::now();
+        assert_eq!(end_deadline(began, CORE_END, None), began + CORE_END);
+        let later = began + Duration::from_secs(1);
+        assert_eq!(
+            end_deadline(began, CORE_END, Some(later)),
+            later + SIGNAL_END
+        );
+        // A signal near the end of the wait never lengthens it.
+        let late = began + Duration::from_millis(4900);
+        assert_eq!(end_deadline(began, CORE_END, Some(late)), began + CORE_END);
+        assert!(
+            SIGNAL_END + LOG_END < Duration::from_millis(2000),
+            "the history's 1 s, the core's and the log's wait must fit the watchdog's 3 s"
+        );
+    }
 
     /// A panic of the interface is exit code 1, with the report's place;
     /// the core's end is not skipped for it (`run` ends the core first).

@@ -25,8 +25,8 @@
 
 use std::io;
 use std::ptr;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{FALSE, HANDLE, TRUE, WAIT_OBJECT_0};
@@ -44,7 +44,18 @@ use windows_sys::Win32::System::Threading::{
     CreateEventW, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
 };
 
-use super::{Ready, restore_sequence};
+use super::{RESTORE_MOST, Ready, restore};
+
+/// Held while a frame is written, and by [`emergency`] while it puts the
+/// console back: the console's control handler runs on a thread of its
+/// own, so a frame being written as it comes could otherwise land after the
+/// restore, in a console that is no longer the program's (the review of
+/// step 23). Unix needs none: its handler interrupts the writing thread, or
+/// sends the restore again after a frame that raced it.
+static WRITING: Mutex<()> = Mutex::new(());
+
+/// The longest [`emergency`] waits for a frame being written to finish.
+const WRITE_WAIT: Duration = Duration::from_millis(250);
 
 /// UTF-8, as a console code page.
 const UTF8: u32 = 65001;
@@ -188,12 +199,39 @@ fn restore_modes() {
 
 /// Writes the restore sequence, while virtual-terminal processing is still
 /// on, then puts the modes and code pages back.
+///
+/// A frame being written is let finish first, for at most [`WRITE_WAIT`]:
+/// the restore then lands after it, and a frame written later is refused.
 pub(crate) fn emergency() {
+    let _writing = writing(Some(WRITE_WAIT));
     if !ACTIVE.swap(false, Ordering::SeqCst) {
         return;
     }
-    let _ = write_all(restore_sequence());
+    let mut buffer = [0u8; RESTORE_MOST];
+    let _ = write_all(restore(&mut buffer));
+    super::set_rows_above(0);
     restore_modes();
+}
+
+/// Takes [`WRITING`]: waiting as long as it takes (`None`), or at most
+/// `most`, after which the caller goes on without it.
+fn writing(most: Option<Duration>) -> Option<MutexGuard<'static, ()>> {
+    let Some(most) = most else {
+        return Some(
+            WRITING
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+    };
+    let deadline = Instant::now() + most;
+    loop {
+        match WRITING.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => std::thread::yield_now(),
+            Err(TryLockError::WouldBlock) => return None,
+        }
+    }
 }
 
 unsafe extern "system" fn on_control(event: u32) -> windows_sys::core::BOOL {
@@ -210,7 +248,9 @@ unsafe extern "system" fn on_control(event: u32) -> windows_sys::core::BOOL {
         CTRL_BREAK_EVENT => 143,
         _ => 129,
     };
-    if super::hand_over(code) {
+    // The close that follows a console taken as gone already (`gone`) is
+    // that same end, waited for alike.
+    if super::hand_over(code) || super::hung_up_already(code) {
         wake();
         let ended = ended_event();
         if ended != 0 {
@@ -370,6 +410,7 @@ pub(crate) fn size() -> io::Result<(u16, u16)> {
 /// console that is no longer the program's, or show as text in one whose
 /// virtual-terminal processing is off again.
 pub(crate) fn write(bytes: &[u8]) -> io::Result<()> {
+    let _writing = writing(None);
     if !ACTIVE.load(Ordering::SeqCst) {
         return Err(io::Error::other("the console has been put back"));
     }
@@ -434,12 +475,12 @@ pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<
                     Ready::Timeout
                 });
             }
-            return Err(io::Error::last_os_error());
+            return gone(io::Error::last_os_error());
         }
         let mut count = 0;
         // SAFETY: `count` is a local the call fills.
         if unsafe { GetNumberOfConsoleInputEvents(input, &raw mut count) } == 0 {
-            return Err(io::Error::last_os_error());
+            return gone(io::Error::last_os_error());
         }
         if count == 0 {
             continue;
@@ -458,7 +499,7 @@ pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<
             )
         };
         if ok == 0 {
-            return Err(io::Error::last_os_error());
+            return gone(io::Error::last_os_error());
         }
 
         let before = into.len();
@@ -490,6 +531,43 @@ pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<
         }
     }
 }
+
+/// The console could not be read, `error` saying why. A signal already
+/// handed over is what the program ends for; otherwise, while signals are
+/// handed over, a console that has gone ends the program as its close
+/// would (code 129), with a watchdog of its own, since no close event may
+/// follow (the review of step 23, the twin of Unix's hang-up). The error
+/// stands when nothing is handed over.
+fn gone(error: io::Error) -> io::Result<Ready> {
+    if super::ended_by().is_some() {
+        return Ok(Ready::Woken);
+    }
+    if super::hang_up() {
+        emergency();
+        // The watchdog: the process ends 3 s on unless the program has
+        // ended by then.
+        let watchdog = std::thread::Builder::new()
+            .name("cortex-watchdog".to_owned())
+            .spawn(|| {
+                let ended = ended_event();
+                if ended != 0 {
+                    // SAFETY: the event lives for the life of the process.
+                    unsafe { WaitForSingleObject(ended as HANDLE, 3000) };
+                }
+                if !super::has_ended() {
+                    #[expect(clippy::exit, reason = "the watchdog ends a program that did not")]
+                    std::process::exit(129);
+                }
+            });
+        drop(watchdog);
+        return Ok(Ready::Woken);
+    }
+    Err(error)
+}
+
+/// Puts back what was kept for signals handed to the program: nothing on
+/// Windows, whose console handler stays for the life of the process.
+pub(crate) fn release_signals() {}
 
 /// Adds one UTF-16 unit of a key to `into` as UTF-8, joining the two halves
 /// of a character outside the Basic Multilingual Plane.

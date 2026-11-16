@@ -384,3 +384,26 @@ fn an_event_can_name_its_span_and_the_current_span_is_known() {
     assert_eq!(lines[0]["spans"].as_array().unwrap().len(), 1);
     assert!(lines[1].get("spans").is_none(), "{}", lines[1]);
 }
+
+/// A writer stuck on its disk does not hold an end whose time is bounded:
+/// `flush_within` gives up when its time is out, and says so (the review
+/// of step 23). The limit here is none at all, so nothing waits on time.
+#[test]
+fn a_flush_within_a_limit_gives_up_on_a_stuck_writer() {
+    let mut rig = Rig::new("flush_within");
+    let (subscriber, handle) = start(rig.options.take().unwrap()).unwrap();
+    let hold = crate::hook::Hold::new(super::file::WRITING_A_BATCH);
+    tracing::subscriber::with_default(subscriber, || tracing::warn!("a line"));
+    assert!(
+        hold.wait_reached(Duration::from_secs(5)),
+        "the writer never took the line"
+    );
+    assert!(
+        !handle.flush_within(Duration::ZERO),
+        "a flush with no time left said the line was written"
+    );
+    hold.release();
+    assert!(handle.flush_within(Duration::from_secs(5)));
+    let text = std::fs::read_to_string(rig.dir.join(FILE_NAME)).unwrap();
+    assert!(text.contains("a line"), "{text}");
+}

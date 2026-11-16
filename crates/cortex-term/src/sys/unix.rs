@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
-use super::{Ready, restore_sequence};
+use super::{RESTORE_MOST, Ready, restore};
 
 const STDIN: libc::c_int = 0;
 const STDOUT: libc::c_int = 1;
@@ -112,11 +112,25 @@ pub(crate) fn enter() -> io::Result<()> {
 
 /// Puts the terminal's settings back, and the handlers that were there
 /// before. Safe to call more than once.
+///
+/// While signals are handed to the program, the handlers of the signals
+/// that end it stay until [`release_signals`] (since the review of step
+/// 23): a signal that comes after the terminal is left, while the program
+/// ends (its history, its core) or while an external editor has the
+/// terminal, is still the program's to end, with its watchdog, and not
+/// the default action's, which would end it part-way.
 pub(crate) fn leave() {
     restore_modes();
+    let keep = super::hand_off();
     let mut previous = PREVIOUS.lock().unwrap_or_else(PoisonError::into_inner);
+    let guarding = GUARDING.load(Ordering::SeqCst);
+    let mut kept = Vec::new();
     for (signal, action) in previous.drain(..) {
-        if GUARDING.load(Ordering::SeqCst) && is_interrupt(signal) {
+        if keep && ENDING.contains(&signal) && !(guarding && is_interrupt(signal)) {
+            kept.push((signal, action));
+            continue;
+        }
+        if guarding && is_interrupt(signal) {
             // An interrupt guard lives: its handler stays, and what it puts
             // back when it ends is what was there before the terminal.
             if let Some(entry) = GUARDED
@@ -129,6 +143,22 @@ pub(crate) fn leave() {
             }
             continue;
         }
+        // SAFETY: `action` is what `sigaction` gave back for this signal.
+        unsafe { libc::sigaction(signal, &raw const action, std::ptr::null_mut()) };
+    }
+    *previous = kept;
+}
+
+/// Puts back the handlers [`leave`] kept for signals handed to the program:
+/// it has ended, and is about to exit. Safe to call more than once.
+pub(crate) fn release_signals() {
+    let mut previous = PREVIOUS.lock().unwrap_or_else(PoisonError::into_inner);
+    // Only once the terminal is left: while it is the program's, its
+    // handlers are what put it back.
+    if ACTIVE.load(Ordering::SeqCst) {
+        return;
+    }
+    for (signal, action) in previous.drain(..) {
         // SAFETY: `action` is what `sigaction` gave back for this signal.
         unsafe { libc::sigaction(signal, &raw const action, std::ptr::null_mut()) };
     }
@@ -150,9 +180,12 @@ pub(crate) fn emergency() {
     if !ACTIVE.swap(false, Ordering::SeqCst) {
         return;
     }
-    let bytes = restore_sequence();
-    // SAFETY: the pointer and length are those of a static byte string.
+    let mut buffer = [0u8; RESTORE_MOST];
+    let bytes = restore(&mut buffer);
+    // SAFETY: the pointer and length are those of a buffer on this stack.
     unsafe { libc::write(STDOUT, bytes.as_ptr().cast(), bytes.len()) };
+    // The live region is erased: a restore sent again moves up no more.
+    super::set_rows_above(0);
     if let Some(original) = ORIGINAL.get() {
         // SAFETY: `original` is the complete `termios` the terminal had.
         unsafe { libc::tcsetattr(STDIN, libc::TCSADRAIN, original) };
@@ -221,6 +254,12 @@ extern "C" fn on_resize(_: libc::c_int) {
 }
 
 extern "C" fn on_ending(signal: libc::c_int) {
+    // The terminal hung up, and that was taken as SIGHUP's end already:
+    // this SIGHUP is the same end (the kernel's, or a shell's resent to its
+    // jobs), not a second signal that ends the process at once.
+    if signal == libc::SIGHUP && super::hung_up_already(129) {
+        return;
+    }
     // An interrupt guard lives, or has just ended: the key was for a child,
     // or came as the terminal was taken back from one, and another thread
     // took it while the guard was ending.
@@ -322,18 +361,25 @@ fn install(signal: libc::c_int, handler: extern "C" fn(libc::c_int)) -> io::Resu
     Ok(())
 }
 
+/// Installs the handlers that are not in place: all of them, or, entering
+/// again after [`leave`] kept those of the ending signals, the rest.
 fn install_handlers() -> io::Result<()> {
-    if !PREVIOUS
+    let installed: Vec<libc::c_int> = PREVIOUS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
-        .is_empty()
-    {
-        return Ok(());
-    }
-    install(libc::SIGWINCH, on_resize)?;
-    install(libc::SIGTSTP, on_stop)?;
-    for signal in ENDING {
-        install(signal, on_ending)?;
+        .iter()
+        .map(|(signal, _)| *signal)
+        .collect();
+    let handlers: [(libc::c_int, extern "C" fn(libc::c_int)); 2] =
+        [(libc::SIGWINCH, on_resize), (libc::SIGTSTP, on_stop)];
+    for (signal, handler) in handlers.into_iter().chain(
+        ENDING
+            .into_iter()
+            .map(|signal| (signal, on_ending as extern "C" fn(_))),
+    ) {
+        if !installed.contains(&signal) {
+            install(signal, handler)?;
+        }
     }
     Ok(())
 }
@@ -519,7 +565,8 @@ pub(crate) fn write(bytes: &[u8]) -> io::Result<()> {
     // Put back while this frame was being written, from another thread:
     // the frame may have landed after the restore, so it goes again.
     if !ACTIVE.load(Ordering::SeqCst) {
-        let _ = write_all(restore_sequence());
+        let mut buffer = [0u8; RESTORE_MOST];
+        let _ = write_all(restore(&mut buffer));
     }
     written
 }
@@ -587,7 +634,9 @@ pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<
             // SAFETY: reads into a local buffer of its own length.
             let read = unsafe { libc::read(STDIN, buffer.as_mut_ptr().cast(), buffer.len()) };
             match usize::try_from(read) {
-                Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+                // In raw mode a read gives nothing only when the terminal
+                // has hung up.
+                Ok(0) => return gone(io::ErrorKind::UnexpectedEof.into()),
                 Ok(count) => {
                     into.extend_from_slice(&buffer[..count]);
                     return Ok(Ready::Input);
@@ -598,12 +647,33 @@ pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<
                         error.kind(),
                         io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
                     ) {
-                        return Err(error);
+                        return gone(error);
                     }
                 }
             }
         }
     }
+}
+
+/// The terminal could not be read, `error` saying why: closed (end of
+/// input, EIO), or the connection to it dropped. A signal already handed
+/// over is what the program ends for; otherwise, while signals are handed
+/// over, it ends as SIGHUP's end would have it, with its watchdog (since the
+/// review of step 23): the window or the SSH connection closing reaches the
+/// reader before, or instead of, the hang-up's signal. Then the wait is
+/// woken, and [`super::ended_by`] says the code. The error stands when
+/// nothing is handed over.
+fn gone(error: io::Error) -> io::Result<Ready> {
+    if super::ended_by().is_some() {
+        return Ok(Ready::Woken);
+    }
+    if super::hang_up() {
+        emergency();
+        // SAFETY: `alarm` reads nothing but its argument.
+        unsafe { libc::alarm(WATCHDOG_SECONDS) };
+        return Ok(Ready::Woken);
+    }
+    Err(error)
 }
 
 fn flags() -> Option<Ready> {
@@ -823,6 +893,20 @@ pub(crate) mod pty {
     /// closed it.
     pub(crate) fn is_end(error: &io::Error) -> bool {
         error.raw_os_error() == Some(libc::EIO)
+    }
+
+    /// The seconds left before the watchdog's alarm, 0 when none is set;
+    /// the alarm is left as it was.
+    pub(crate) fn watchdog_left() -> u32 {
+        // SAFETY: `alarm` reads nothing but its argument; the second call
+        // sets back what the first took off.
+        unsafe {
+            let left = libc::alarm(0);
+            if left > 0 {
+                libc::alarm(left);
+            }
+            left
+        }
     }
 
     /// Sends `signal` to process `pid`.

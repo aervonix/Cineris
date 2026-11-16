@@ -146,6 +146,16 @@ pub fn set_vt_output(on: bool) -> io::Result<()> {
     }
 }
 
+/// The seconds left before the watchdog of a signal handed to the program
+/// ends the process ([`Terminal::hand_signals_over`](crate::Terminal::hand_signals_over)):
+/// 0 when none is running. The watchdog is left as it was. Unix only, where
+/// it is the process's alarm.
+#[cfg(unix)]
+#[must_use]
+pub fn watchdog_left() -> u32 {
+    sys::pty::watchdog_left()
+}
+
 /// Ends this process the way an outside request to stop would: on Unix
 /// SIGTERM, on Windows a Ctrl+Break event, which goes to every process on
 /// the console.

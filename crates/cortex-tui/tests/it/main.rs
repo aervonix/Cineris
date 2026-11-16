@@ -30,6 +30,8 @@ mod frames;
 mod input;
 mod perf;
 mod screens;
+#[cfg(unix)]
+mod signals;
 
 use cortex_term::{Event, Key};
 use cortex_tui::complete::Command;
@@ -99,6 +101,8 @@ fn child_entry() {
         std::process::exit(0);
     }
     children::enter();
+    #[cfg(unix)]
+    signals::enter();
 }
 
 /// This binary as the editor demo, with its options, separated by commas.

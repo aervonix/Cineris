@@ -221,7 +221,10 @@ impl Handoff for TerminalHandoff<'_> {
     }
 
     fn reclaim(&mut self) -> io::Result<()> {
-        if self.terminal.is_some() {
+        // A signal came while the editor had the terminal: the program
+        // ends, and the terminal stays the shell's. The loop finds no
+        // terminal, and ends as the signal asks (the review of step 23).
+        if self.terminal.is_some() || cortex_term::signalled().is_some() {
             return Ok(());
         }
         let mut terminal = Terminal::enter(self.overrides)?;
