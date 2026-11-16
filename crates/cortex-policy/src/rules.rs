@@ -418,7 +418,15 @@ impl RuleSet {
         self.rules
             .iter()
             .filter(|compiled| matches(compiled))
-            .max_by_key(|compiled| strength(compiled.rule.rule.action))
+            // Of rules of one strength, the managed configuration's: the
+            // hit says who decided, and an administrator's `ask` binds what
+            // a user's own `ask` would not (the user's own checks).
+            .max_by_key(|compiled| {
+                (
+                    strength(compiled.rule.rule.action),
+                    compiled.rule.source == RuleSource::Managed,
+                )
+            })
             .map(|compiled| Hit {
                 action: compiled.rule.rule.action,
                 by: By::Rule(&compiled.rule),
