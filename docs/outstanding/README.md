@@ -151,7 +151,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [replace-and-the-comments-beside-a-match](replace-and-the-comments-beside-a-match.md): `replace` stacks a `--to`'s doc comment on the file's, and can leave a read-only file's temporary copy on Windows. Owner: a later tooling step.
 - [tests-the-fifth-tooling-step-left-unwritten](tests-the-fifth-tooling-step-left-unwritten.md): Seven behaviours of the fifth tooling step's tools that work and that no test or break holds yet. Owner: a later tooling step.
 - [the-mutate-lock-and-a-forked-child](the-mutate-lock-and-a-forked-child.md): Under plain `cargo test`, `mutate`'s lock can be held a moment by another test's child. Owner: a later tooling step.
-- [the-start-cost-of-a-tier-report](the-start-cost-of-a-tier-report.md): The tier report's start-cost subtraction hides a cost shared by all test processes, with no warning. Owner: a later tooling step.
 - [timeout-report-for-tests-without-the-test-kit](timeout-report-for-tests-without-the-test-kit.md): A test using none of the test kit's waits gets no timeout report, since nextest lacks pre-timeout scripts. Owner: a later tooling step.
 - [typed-values-in-composite-actions](typed-values-in-composite-actions.md): The repo rule against event values in scripts reads `.github/workflows/` only, not composite actions under `.github/actions/`. Owner: a later tooling step.
 

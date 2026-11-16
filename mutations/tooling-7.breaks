@@ -39,3 +39,32 @@ find: None if unit == at =>
 replace: None if unit == at => 1, None if false =>
 caught-by:
     duration::tests::a_range_bound_in_the_wrong_unit_is_refused
+
+# The start cost of a tier report (item 8: the-start-cost-of-a-tier-report).
+
+[break] a-high-start-cost-says-nothing
+rule: A run's start cost above its system's ceiling is a warning: a cost every test process shares is in it.
+file: xtask/src/tiers.rs
+in: start_warning
+find: if sample < SMALL_SAMPLE || start <= ceiling
+replace: if true
+caught-by:
+    tiers::tests::a_start_above_the_ceiling_warns_and_one_below_does_not
+
+[break] the-start-ceiling-of-a-small-run-warns
+rule: A run of too few tests to measure its start says nothing of its start.
+file: xtask/src/tiers.rs
+in: start_warning
+find: sample < SMALL_SAMPLE ||
+replace:
+caught-by:
+    tiers::tests::a_start_above_the_ceiling_warns_and_one_below_does_not
+
+[break] the-windows-ceiling-is-linuxs
+rule: Windows' ceiling is its own: its runners start a test in 6 to 12 ms.
+file: xtask/src/tiers.rs
+in: start_ceiling
+find: Os::Windows => 0.015
+replace: Os::Windows => 0.008
+caught-by:
+    tiers::tests::a_start_above_the_ceiling_warns_and_one_below_does_not

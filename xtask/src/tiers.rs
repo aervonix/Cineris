@@ -171,9 +171,16 @@ pub(crate) fn check_report(report: &Path, os: Os, slowest: usize) -> Result<()> 
     const ADVICE: &str = "Make the tests faster or move the slow ones to a non-blocking tier \
                           (docs/testing-and-ci.md). Budgets are not loosened quietly.";
 
+    let (start, sample) = start_of(&cases);
     if !over.is_empty() {
-        let (start, sample) = start_of(&cases);
         println!("{}", runner_line(os, start, sample));
+    }
+    if let Some(message) = start_warning(os, start, sample) {
+        if in_actions {
+            println!("::warning title=Test start cost high::{message}");
+        } else {
+            println!("warning: {message}");
+        }
     }
     let warned = names(Verdict::OverBudget);
     if !warned.is_empty() {
@@ -251,6 +258,34 @@ pub(crate) fn runner_line(os: Os, start: f64, sample: usize) -> String {
         "runner: {ms:.0} ms runner, {speed}. Compare a change only on runners of the same start, \
          or with both trees on one runner (`try -f against=main`)."
     )
+}
+
+/// The start of a test's process above which a run's report warns: a cost
+/// every test process shares (a larger binary that loads more slowly, a
+/// global initialiser, a heavier harness) rises with the start cost, which
+/// is taken off every test, so the budgets do not see it. Hosted runners
+/// start a test in 3 to 5 ms on Linux and 6 to 12 ms on Windows
+/// (docs/steps/tooling-5/ci.md); these are above the slowest of each.
+pub(crate) fn start_ceiling(os: Os) -> f64 {
+    match os {
+        Os::Linux => 0.008,
+        Os::Windows => 0.015,
+    }
+}
+
+/// The warning for a run whose start cost is above [`start_ceiling`], or
+/// `None`. A run of too few tests to measure its start says nothing: its
+/// quickest tests may do real work.
+pub(crate) fn start_warning(os: Os, start: f64, sample: usize) -> Option<String> {
+    let ceiling = start_ceiling(os);
+    if sample < SMALL_SAMPLE || start <= ceiling {
+        return None;
+    }
+    Some(format!(
+        "the start of a test's process, {:.0} ms, is above {:.0} ms, more than the slowest          runner's: a cost every test process shares (a larger test binary, a global initialiser,          a heavier harness) is in it, and is taken off every test unseen by the budgets. Compare          the start of `main`'s last run, and look for what every test now pays.",
+        1000.0 * start,
+        1000.0 * ceiling,
+    ))
 }
 
 /// A tier fails the job only when it is this many times over its budget.
@@ -547,6 +582,20 @@ fn slowest_markdown(cases: &[TestCase], count: usize) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn a_start_above_the_ceiling_warns_and_one_below_does_not() {
+        assert!(start_warning(Os::Linux, 0.009, 1800).is_some());
+        assert_eq!(start_warning(Os::Linux, 0.008, 1800), None);
+        assert_eq!(start_warning(Os::Linux, 0.004, 1800), None);
+        let windows = start_warning(Os::Windows, 0.016, 1800).unwrap();
+        assert!(windows.contains("16 ms, is above 15 ms"), "{windows}");
+        assert_eq!(start_warning(Os::Windows, 0.015, 1800), None);
+        assert_eq!(start_warning(Os::Windows, 0.012, 1800), None);
+        // Too few tests to know the start: nothing said.
+        assert_eq!(start_warning(Os::Windows, 0.050, SMALL_SAMPLE - 1), None);
+        assert!(start_warning(Os::Windows, 0.050, SMALL_SAMPLE).is_some());
+    }
+
+    #[test]
     fn an_over_budget_run_says_what_its_runner_was() {
         use super::{Os, runner_line};
         let slow = runner_line(Os::Windows, 0.012, 1900);
@@ -569,8 +618,9 @@ mod tests {
     }
 
     use super::{
-        Os, Tier, Totals, Verdict, by_crate, crate_of, crates_markdown, crates_text, markdown,
-        slowest_markdown, slowest_tests, start_cost, summarise, total, verdict,
+        Os, SMALL_SAMPLE, Tier, Totals, Verdict, by_crate, crate_of, crates_markdown, crates_text,
+        markdown, slowest_markdown, slowest_tests, start_cost, start_warning, summarise, total,
+        verdict,
     };
     use crate::junit::tests::case;
     use crate::junit::{self, TestCase};
