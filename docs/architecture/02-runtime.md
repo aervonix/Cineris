@@ -10,6 +10,8 @@
 
 **Blocking work never runs on the core thread.** File I/O, directory walks, regex search, diffing, hashing and syntax highlighting go to the bounded blocking pool (default 8 threads) through one helper that takes a cancellation token. Clippy's disallowed-methods list bans the blocking standard-library calls in the async crates, and a debug-build watchdog logs a warning when the core thread goes more than 20 ms between polls.
 
+**Work that can hang on a disk, and outlive its caller, does not go on the blocking pool.** Dropping a Tokio runtime waits for every task on its blocking pool to end (`spawn_blocking`, and so `Core::blocking` and `cortex_tools::run_blocking`). A read or a flush stuck on a stalled disk, a network file system or a file another process holds, put on the pool, then holds the runtime's end and with it the process's exit, and a time limit on the `await` does not help: the caller stops waiting, and the task is still there. Such work runs on a thread of its own, started with `std::thread::Builder` and not joined, which answers through a one-shot channel that the caller races against its timer. A thread that is not joined dies with the process, so the work must be safe to lose at exit. Since step 16's fixes, the day's limits read what other processes spent this way (`cortex-core/src/day.rs`), and so does the shutdown's flush of the statistics (`cortex-core/src/stats.rs`, `flush`). Work that ends by itself in a bounded time (hashing a file the session just read, planning a call) stays on the pool.
+
 **The UI thread is separate.** The TUI runs on the main thread with its own event loop (see [09-tui.md](09-tui.md)). It talks to the core only through two channels:
 
 | Channel | Direction | Kind | Backpressure |

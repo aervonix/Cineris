@@ -26,6 +26,19 @@ Every tool call is planned before it runs ([05-tools.md](05-tools.md)), and the 
 
 Built-in tools, extension tools and MCP tools all go through the same check. There is no path around it.
 
+**What an answer depends on.** The engine (`cortex_policy::Engine`) answers allow, ask or deny from these and nothing else, so a test that holds them holds the answer, and a review that changes one asks whether the answer should change with it:
+
+- **The call:** the tool's name, its default for a call nothing else decides (`allow` for the built-in tools, `ask` for an extension's or an MCP server's), and every access its plan lists, with its kind and target: a path, or a command line with its working directory, read in the shell's language (POSIX, PowerShell or `cmd.exe`) by the command analysis ("Shell command analysis", below).
+- **The lease:** its level and the scope of what a command may touch ("Leases", below).
+- **The rules,** each with where it came from (the user's configuration, the project's, a flag, a learned command), and whether the project's allow rules apply: the user trusted the project and approved its rules as they are now ("Project trust", below). Whether the project is trusted at all decides, separately, whether the git commands that read the repository's own configuration count as commands that only read.
+- **The approvals already given:** the ones stored for the project ("always allow in this project") and the ones held for the session.
+- **The sandbox:** whether it is enforcing, and its write roots. A command that would be asked about unconfined can be allowed confined.
+- **What no level relaxes:** the hard limits, the harness's own files (protected paths) and the files that look like secrets.
+- **Where it is:** the workspace's root and the home directory, for `~` and for what is inside the workspace.
+- **The file system, at the moment of the decision:** a path a call names is followed as the system follows it (links, junctions, case on Windows), so the same call can be answered differently once a link is made. `Lexical` reads paths as text and is for tests that grant nothing.
+
+The engine's clock only dates an approval as it is given, and its store only keeps one: neither changes an answer, though the approval they record changes the next ones. A lease's budget and its end are held by the loop, not by the engine's answer. `cargo xtask decide` prints the answer for a command with the inputs set by its flags ([../testing-and-ci.md](../testing-and-ci.md), "Asking the permission engine").
+
 ## Autonomy: one model
 
 How much the agent may do without asking is described by one model. It covers a single session, a time-limited piece of delegated work, and a Coordinator team ([17-coordinator.md](17-coordinator.md)). There is no separate "permission mode", "lease" and "team level": every session holds a **lease**, and every lease has a **level**. The owner asked for this on 2026-11-12 ([decision 0026](../decisions/0026-one-autonomy-model.md)).
