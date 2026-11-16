@@ -57,6 +57,13 @@ struct Drawn {
     boxes: Vec<(usize, usize)>,
 }
 
+impl Viewer {
+    /// Whether a search is being typed.
+    pub(super) fn searching(&self) -> bool {
+        self.typing.is_some()
+    }
+}
+
 impl App {
     /// Opens the viewer at the latest tool box, or at the box `n`, counted
     /// from one, opened (`/view n`).

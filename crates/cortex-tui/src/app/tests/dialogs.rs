@@ -228,11 +228,9 @@ fn a_repeat_the_terminal_marks_never_answers() {
         app.terminal(&TermEvent::Repeat(y), at);
     }
     assert!(answers(&link).is_empty(), "a repeat answered");
-    // A key held down whose press no dialog took is typing: the first
-    // repeat is dropped and hides the answers, and the rest, the dialog no
-    // longer taking keys, go on to the editor as typing; the answers wait
-    // a quiet second after the last.
-    assert_eq!(app.input().editor().expanded(), "yyyy");
+    // A key held down whose press no dialog took is typing: its repeats go
+    // on to the editor, and the answers wait a quiet second after the last.
+    assert_eq!(app.input().editor().expanded(), "yyyyy");
     assert!(!answers_shown(&mut app, ready + Duration::from_millis(600)));
     let again = wake(&mut app).expect("the answers again");
     assert_eq!(again, ready + Duration::from_millis(400 + 33 * 4) + QUIET);
@@ -768,4 +766,58 @@ fn a_typing_key_the_dialog_has_no_use_for_goes_to_the_editor() {
     let ready = wake(&mut app).expect("the answers again");
     press(&mut app, "ctrl+b", ready + Duration::from_millis(400));
     assert!(answers_shown(&mut app, ready + Duration::from_millis(400)));
+}
+
+// The follow-up review of these fixes: the row offers only what is taken,
+// and reading, answering one dialog after another, and coming back from the
+// viewer each need one key.
+
+/// A global key (`Ctrl+T` looks at the round) and then the answer: the row
+/// offered it, and it is taken.
+#[test]
+fn a_key_the_row_offers_soon_after_a_global_key_is_taken() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    press(&mut app, "ctrl+t", ms(now, 2000));
+    assert!(answers_shown(&mut app, ms(now, 2200)), "the row offers y");
+    press(&mut app, "y", ms(now, 2200));
+    assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
+}
+
+/// Two approvals answered one after the other: an answer key pressed
+/// before the second's row is drawn is not typed into the hidden editor.
+#[test]
+fn an_answer_key_before_the_next_dialogs_row_is_not_typed() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    link.give(Inbound::Request(RequestId::Number(8), approval("c_8")));
+    drain(&mut app, now);
+    press(&mut app, "y", ms(now, 1000));
+    assert_eq!(answers(&link).len(), 1);
+    press(&mut app, "y", ms(now, 1700));
+    assert!(answers(&link).is_empty(), "the second answered unseen");
+    assert_eq!(
+        app.input().editor().expanded(),
+        "",
+        "an answer key was typed"
+    );
+    let ready = wake(&mut app).expect("the second's answers");
+    press(&mut app, "y", ready + Duration::from_millis(400));
+    assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
+}
+
+/// `Ctrl+O`, the request read whole, `Esc`, then `y` once the dialog's
+/// grace after its return has passed: one key answers.
+#[test]
+fn ctrl_o_then_esc_then_one_key_answers() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    press(&mut app, "ctrl+o", ms(now, 1000));
+    assert!(app.viewing());
+    press(&mut app, "pagedown", ms(now, 3000));
+    press(&mut app, "esc", ms(now, 6000));
+    assert!(!app.viewing());
+    assert!(answers_shown(&mut app, ms(now, 6500)), "the row is back");
+    press(&mut app, "y", ms(now, 6500));
+    assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }

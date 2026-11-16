@@ -201,6 +201,8 @@ fn sys_quitting_from_the_viewer_leaves_the_main_screen_clean() {
     let mut plain = start("plain");
     plain.send(b"\x03\x03");
     plain.wait_exit(LIMIT);
+    // The process's last output can still be on its way when it has ended.
+    plain.wait_for(LIMIT, "the result", |t| t.shows("RESULT"));
     let plain_screen = shown(&plain);
 
     let mut viewer = start("viewer");
@@ -208,6 +210,7 @@ fn sys_quitting_from_the_viewer_leaves_the_main_screen_clean() {
     viewer.wait_for(LIMIT, "the viewer", |t| t.modes().alternate);
     viewer.send(b"\x03\x03");
     viewer.wait_exit(LIMIT);
+    viewer.wait_for(LIMIT, "the result", |t| t.shows("RESULT"));
     let viewer_screen = shown(&viewer);
     assert!(
         !viewer.screen().modes().alternate,

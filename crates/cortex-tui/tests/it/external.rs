@@ -239,7 +239,9 @@ fn sys_a_missing_editor_is_not_found_and_never_hands_the_terminal_over() {
 /// application's to end (its handlers stay past leaving the terminal): the
 /// editor finishes, the terminal is not taken back, and the program ends as
 /// the signal asks, its prompt's folder removed (the review of step 23).
-#[cfg(unix)]
+/// Linux only: the editor waits for the application to take the signal by
+/// its `/proc` status.
+#[cfg(target_os = "linux")]
 #[test]
 fn sys_a_signal_while_the_editor_runs_leaves_the_terminal_to_the_shell() {
     let scratch = cortex_testkit::Scratch::outside("cortex-tui-external", "signal");
@@ -262,6 +264,7 @@ fn sys_a_signal_while_the_editor_runs_leaves_the_terminal_to_the_shell() {
     let report = scratch.read_text("report.txt");
     for line in [
         "signal sent: yes",
+        "signal taken: yes",
         "taken back: NO",
         "ending: Some(143)",
         "temporary folder empty: yes",

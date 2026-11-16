@@ -87,14 +87,22 @@ fn play(case: &str) {
         .expect("draw");
     // Waits for the signal, as the application's loop does.
     let code = loop {
-        if let Err(error) = terminal.next(None) {
-            // The terminal went away, and that was not taken as SIGHUP's end.
-            report(&format!("a read failed: {error}"));
-            #[expect(clippy::exit, reason = "the child ends when it has said so")]
-            std::process::exit(0);
-        }
+        let read = terminal.next(None);
+        // A signal handed over: what came after it (a reply to a query,
+        // which a write then answers) may have failed, the terminal put back.
         if let Some(code) = terminal.ending() {
             break code;
+        }
+        if let Err(error) = read {
+            // The terminal went away, and that was not taken as SIGHUP's end.
+            let said = format!("a read failed: {error}");
+            if case == "eof" {
+                report(&said);
+            } else {
+                write_terminal(&format!("{said}\r\n"));
+            }
+            #[expect(clippy::exit, reason = "the child ends when it has said so")]
+            std::process::exit(0);
         }
     };
     let left = cortex_term::pty::watchdog_left();
@@ -169,8 +177,11 @@ fn sys_a_signal_handed_over_sets_the_watchdog_and_erases_the_whole_region() {
         .find(|row| row.contains(HANDED))
         .unwrap_or_else(|| panic!("the child never said: {status}\n{}", screen.dump()));
     assert!(
-        said.contains("handed over 143, the watchdog at 3 s")
-            || said.contains("handed over 143, the watchdog at 2 s"),
+        // Set at 3 s by the hand-over; a loaded machine may take a second
+        // or two to ask.
+        ["3", "2", "1"]
+            .iter()
+            .any(|left| said.contains(&format!("handed over 143, the watchdog at {left} s"))),
         "{said}"
     );
     for row in ROWS {
@@ -267,8 +278,11 @@ fn sys_a_terminal_that_goes_away_under_a_read_is_sighups_end() {
         std::thread::yield_now();
     };
     assert!(
-        said.contains("handed over 129, the watchdog at 3 s")
-            || said.contains("handed over 129, the watchdog at 2 s"),
+        // Set at 3 s by the hand-over; a loaded machine may take a second
+        // or two to ask.
+        ["3", "2", "1"]
+            .iter()
+            .any(|left| said.contains(&format!("handed over 129, the watchdog at {left} s"))),
         "{said}"
     );
 }

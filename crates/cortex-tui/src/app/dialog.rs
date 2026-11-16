@@ -21,20 +21,18 @@
 //! - **After an answer:** the dialog after one a key answered is ready no
 //!   sooner than [`REPEAT`] after that key, so that the key held a little
 //!   long, or pressed twice, never answers a dialog not seen yet.
-//! - **The pause:** a key read less than [`GRACE`] after the key before it
-//!   carries on the typing, whatever the dialog shows; it goes on to the
-//!   editor, and so hides the answers again.
 //! - **No repeat:** a key held down never answers. A repeat the terminal
 //!   marks ([`Event::Repeat`](cortex_term::Event::Repeat), from the
 //!   enhanced keyboard protocol's event types, for the keys with no text,
-//!   and win32 input, for all) is dropped, and so is the same key as the
-//!   one before it within [`REPEAT`] when that one was typing, not a key a
-//!   dialog took: where the terminal does not mark repeats (the keys that
-//!   type text, under the enhanced protocol too), a key held from before
-//!   the dialog came looks like that ([`super::App`] tells). The quiet and
-//!   the wait after an answer keep such a key from ever being taken.
-//! - **Keys read together** were typed together, and none of them answers
-//!   ([`super::App::burst`]).
+//!   and win32 input, for all) goes where its press went: the editor for
+//!   typing, nowhere for a key a dialog took. Where the terminal does not
+//!   mark them (the keys that type text, under the enhanced protocol too),
+//!   a repeat is the same key again within [`REPEAT`], and the quiet keeps
+//!   it from being taken: each repeat that reaches the editor holds the
+//!   dialog a second more ([`QUIET`] is at least [`REPEAT`]), and after an
+//!   answer the next dialog waits [`REPEAT`].
+//! - **Keys read together** were typed together: they are input no dialog
+//!   took, and none of them answers ([`super::App::burst`]).
 //!
 //! In the ordinary case (the dialog shows, the person reads it and presses
 //! one key) the answers come [`GRACE`] after the dialog, and one key
@@ -102,6 +100,10 @@ pub(crate) const QUIET: Duration = Duration::from_millis(1000);
 /// about 500 ms), then every 25 to 50 ms.
 pub(crate) const REPEAT: Duration = Duration::from_millis(1000);
 
+// The quiet covers a key held down where the terminal does not mark its
+// repeats: each repeat holds the dialog for longer than the gap to the next.
+const _: () = assert!(QUIET.as_millis() >= REPEAT.as_millis());
+
 /// The fewest rows a dialog's detail is given.
 const LEAST_DETAIL: usize = 2;
 
@@ -155,8 +157,8 @@ pub(crate) struct Dialog {
     pub(crate) asks: Asks,
     /// When its first frame was written.
     pub(crate) shown: Option<Instant>,
-    /// When input last reached the editor while the dialog was up: it is
-    /// ready [`QUIET`] after.
+    /// When input no dialog took was last read, while the dialog was up or
+    /// just before it came: it is ready [`QUIET`] after.
     typed: Option<Instant>,
     /// The earliest it can be ready: [`REPEAT`] after a key that answered
     /// the dialog before it, so that the key held a little long, or pressed
@@ -254,8 +256,9 @@ impl Dialog {
         self.cache = None;
     }
 
-    /// Input reached the editor at `at` while the dialog was up: it is
-    /// ready only [`QUIET`] after, and answers it showed are hidden.
+    /// Input no dialog took was read at `at`, while the dialog was up or
+    /// just before it came: it is ready only [`QUIET`] after, and answers it
+    /// showed are hidden.
     pub(crate) fn typed(&mut self, at: Instant) {
         self.typed = Some(self.typed.map_or(at, |typed| typed.max(at)));
         self.hide_answers();
@@ -308,14 +311,6 @@ impl Dialog {
         self.answers_drawn && self.ready_at().is_some_and(|ready| at >= ready)
     }
 
-    /// Whether a key read at `at` may answer the dialog, the key before it
-    /// having been read at `previous`: once it takes keys, and after a
-    /// pause.
-    fn takes_keys_at(&self, at: Instant, previous: Option<Instant>) -> bool {
-        self.takes_keys(at)
-            && previous.is_none_or(|previous| at.saturating_duration_since(previous) >= GRACE)
-    }
-
     /// What `Esc` (and the other keys of `deny`) gives: deny, not now, or no
     /// answer.
     fn refusal(&self) -> ServerResponse {
@@ -349,8 +344,8 @@ impl Dialog {
         &mut self,
         key: Key,
         at: Instant,
-        previous: Option<Instant>,
         repeat: bool,
+        after_taken: bool,
         keymap: &KeyMap,
     ) -> Keyed {
         // A global action is the application's whenever it comes: `Ctrl+C`
@@ -392,12 +387,16 @@ impl Dialog {
             };
         }
         let action = keymap.lookup(&[Context::Dialog], key);
-        // A key held down answers nothing, and once the dialog takes keys
-        // it goes nowhere: its first press went where it went.
+        // A key held down never answers: it goes where its first press
+        // went, the editor for typing, nowhere for a key a dialog took.
         if repeat && self.takes_keys(at) {
-            return Keyed::Nothing;
+            return if after_taken {
+                Keyed::Nothing
+            } else {
+                Keyed::Pass
+            };
         }
-        if !self.takes_keys_at(at, previous) {
+        if !self.takes_keys(at) {
             // Showing the request whole answers nothing: it is the
             // dialog's once its first frame is up.
             if action == Some(Action::ShowWhole)
@@ -408,8 +407,10 @@ impl Dialog {
                 return Keyed::ShowWhole;
             }
             // Typing goes on where it was going; the dialog's own keys that
-            // type nothing (`Esc`) do nothing yet.
-            return if typed(key).is_none() && action.is_some_and(dialogs) {
+            // type nothing (`Esc`) do nothing yet, and nor do its answer keys
+            // right after a key a dialog took (approving one dialog after
+            // another quickly is not typing into the hidden editor).
+            return if action.is_some_and(dialogs) && (typed(key).is_none() || after_taken) {
                 Keyed::Nothing
             } else {
                 Keyed::Pass
