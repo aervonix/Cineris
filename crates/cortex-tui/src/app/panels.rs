@@ -254,6 +254,10 @@ struct Slot {
     /// The first row of its list in view, while it is cut.
     scroll: usize,
     ready: Readiness,
+    /// Its operations sent and not yet answered: while one is on its way,
+    /// what its keys would change is computed from what it shows, which
+    /// may be out of date.
+    waiting: usize,
 }
 
 /// What [`Panels::layout`] drew.
@@ -295,6 +299,7 @@ impl Panels {
             seen: None,
             scroll: 0,
             ready: Readiness::default(),
+            waiting: 0,
         });
         (self.slots.len() - 1) as u64
     }
@@ -320,15 +325,24 @@ impl Panels {
         self.open.contains(&id)
     }
 
+    /// `id`'s name, as a command finds it.
+    pub(crate) fn name(&self, id: u64) -> Option<&'static str> {
+        self.slot(id).map(|slot| slot.panel.name())
+    }
+
     /// Every panel sees `seen`; each opens or closes as it says. The panels
     /// that closed.
     pub(crate) fn seen(&mut self, seen: &Seen<'_>) -> Vec<u64> {
         let mut closed = Vec::new();
         for at in 0..self.slots.len() {
+            if matches!(seen, Seen::Left) {
+                self.slots[at].waiting = 0;
+            }
             let show = self.slots[at].panel.seen(seen);
             if self.apply(at as u64, show) {
                 closed.push(at as u64);
             }
+            self.observe(at as u64);
         }
         closed
     }
@@ -339,7 +353,38 @@ impl Panels {
             return false;
         };
         let show = slot.panel.result(result);
-        self.apply(id, show)
+        let closed = self.apply(id, show);
+        self.observe(id);
+        closed
+    }
+
+    /// An operation of `id`'s went to the core.
+    pub(crate) fn sent(&mut self, id: u64) {
+        if let Some(slot) = self.slot_mut(id) {
+            slot.waiting += 1;
+        }
+    }
+
+    /// An operation of `id`'s was answered, or failed.
+    pub(crate) fn answered(&mut self, id: u64) {
+        if let Some(slot) = self.slot_mut(id) {
+            slot.waiting = slot.waiting.saturating_sub(1);
+        }
+    }
+
+    /// Whether an operation of `id`'s is on its way.
+    pub(crate) fn waiting(&self, id: u64) -> bool {
+        self.slot(id).is_some_and(|slot| slot.waiting > 0)
+    }
+
+    /// After a change, an open `id`'s focus follows its item, and the
+    /// readiness starts again if the focused item is not the one last seen
+    /// there: a key read before the next frame acts on nothing it was not
+    /// shown.
+    fn observe(&mut self, id: u64) {
+        if self.is_open(id) {
+            self.follow(id);
+        }
     }
 
     /// Opens or closes `id` as `show` says. Whether it closed.
@@ -423,7 +468,10 @@ impl Panels {
     }
 
     /// Keeps `id`'s focus on the item it was on, by its id, when the list
-    /// changed; on the nearest place when that item is gone.
+    /// changed; on the nearest place when that item is gone. When what has
+    /// the focus is not what was seen there (its item went, or changed),
+    /// the readiness starts again, at once: a key read before the next
+    /// frame acts on nothing the person was not shown.
     fn follow(&mut self, id: u64) {
         let Some(slot) = self.slot_mut(id) else {
             return;
@@ -440,7 +488,14 @@ impl Panels {
             slot.focus = found;
         }
         slot.focus = slot.focus.min(items.saturating_sub(1));
-        slot.focus_id = slot.panel.item(slot.focus).map(|key| key.id);
+        let now = slot.panel.item(slot.focus);
+        slot.focus_id = now.as_ref().map(|key| key.id.clone());
+        // What has the focus changed under it, from outside: whatever the
+        // person was about to press was meant for what was there.
+        if now != slot.seen {
+            slot.ready.hide();
+            slot.seen = now;
+        }
     }
 
     /// Whether `id` takes a key that changes something at `at`.
@@ -573,10 +628,15 @@ impl Panels {
             laid.focused = Some(id);
         }
         if shown_others && folded > 0 {
+            // The key is named only when it reaches a panel folded there.
+            let reached = others[..folded]
+                .iter()
+                .any(|(id, _)| laid.reachable.contains(id));
             let key = keymap
                 .keys_of(Action::FocusNext)
                 .into_iter()
                 .next()
+                .filter(|_| reached)
                 .map(name);
             laid.lines
                 .push(views::folded(folded, key.as_deref(), draw.width, draw.look));
@@ -593,15 +653,9 @@ impl Panels {
                 laid.drawn.push(id);
             }
         }
-        // The focused panel was drawn first in the ring's order: the ring
-        // goes through the panels as drawn, the folded ones (drawn when
-        // focused) first, where their row is.
-        laid.reachable.sort_by_key(|id| {
-            self.open
-                .iter()
-                .position(|open| open == id)
-                .unwrap_or(usize::MAX)
-        });
+        // `reachable` is in the order the panels opened, which is the order
+        // they are drawn in: the ring goes through them so, the folded ones
+        // (drawn when focused) first, where their row is.
         laid
     }
 
@@ -622,17 +676,13 @@ impl Panels {
 
     /// `id` drawn focused in at most `room` rows: its first rows, then as
     /// much of the rest as fits around its focused item, a dim `… N more`
-    /// row in the place of what is cut at either end. A change of the
-    /// focused item from outside starts its readiness again.
+    /// row in the place of what is cut at either end. (A change of the
+    /// focused item from outside started its readiness again when it was
+    /// seen: [`follow`](Self::follow).)
     fn scrolled(&mut self, id: u64, room: usize, draw: &Draw<'_>) -> Vec<Line> {
         let Some(slot) = self.slot_mut(id) else {
             return Vec::new();
         };
-        let now = slot.panel.item(slot.focus);
-        if now != slot.seen {
-            slot.ready.hide();
-            slot.seen = now;
-        }
         let rows = slot.panel.expanded(slot.focus, draw);
         let head = rows.iter().take_while(|row| row.item.is_none()).count();
         let (top, body) = rows.split_at(head);

@@ -221,18 +221,18 @@ impl App {
         if !menu && self.rows > LEAST_ROWS {
             let spacer = live == 0 && !self.transcript.ends_blank();
             let room = room.saturating_sub(live.min(LIVE_KEPT) + 1 + usize::from(spacer));
-            let focused = match self.input.focus().focused() {
+            // The focused panel is drawn whole, and so is the one whose
+            // item is being edited in the input box, the item shown.
+            let whole = match self.input.focus().focused() {
                 Target::Panel(id) => Some(id),
-                Target::Input | Target::ToolBox(_) => None,
+                Target::Input | Target::ToolBox(_) => self.item_edit.as_ref().map(|(id, _)| *id),
             };
             let draw = Draw {
                 width,
                 look: &self.look,
                 tick: self.tick,
             };
-            let laid = self
-                .panels
-                .layout(room, focused, &draw, self.input.keymap());
+            let laid = self.panels.layout(room, whole, &draw, self.input.keymap());
             if !laid.lines.is_empty() {
                 if spacer {
                     block.push(Line::new());
@@ -244,8 +244,18 @@ impl App {
             self.panel_drawn = laid.focused;
         }
         self.input.focus_mut().update(boxes, &reachable);
-        if !matches!(self.input.focus().focused(), Target::Panel(_)) {
+        if self.panel_drawn.map(Target::Panel) != Some(self.input.focus().focused()) {
             self.panel_drawn = None;
+        }
+        // A panel a command asked for that this window cannot draw focused
+        // took the focus for nothing: what happened is said.
+        if let Some(id) = self.summoned.take()
+            && !reachable.contains(&id)
+        {
+            let name = self.panels.name(id).unwrap_or("panel");
+            self.say(&format!(
+                "There is no room for the {name} panel in this window: make it taller."
+            ));
         }
         block
     }
@@ -272,57 +282,68 @@ impl App {
             Ok(()) => {
                 self.input.focus_mut().focus(Target::Panel(id));
                 self.panels.focused(id);
+                self.summoned = Some(id);
             }
             Err(sentence) => self.say(&sentence),
         }
     }
 
+    /// Whether `key`, read at `at` (`repeat` when the terminal marked it
+    /// one), is a key held down after a panel took it: the same key again
+    /// within the repeat window. It goes where its press went, nowhere,
+    /// whatever has the focus now: a held `x` that closed the review types
+    /// nothing into the prompt.
+    pub(super) fn panel_holds(&mut self, key: Key, at: Instant, repeat: bool) -> bool {
+        let Some((held, last)) = self.panel_held else {
+            return false;
+        };
+        if held != key || !(repeat || at.saturating_duration_since(last) < REPEAT) {
+            return false;
+        }
+        self.panel_held = Some((key, at));
+        self.last_key = Some(LastKey { typing: false });
+        true
+    }
+
     /// A key while the panel `id` has the focus, read at `at`; `repeat`
-    /// when the terminal marked it a key held down.
+    /// when the terminal marked it a key held down. A key held down after
+    /// one the panel took never reaches here ([`panel_holds`]).
+    ///
+    /// [`panel_holds`]: Self::panel_holds
     pub(super) fn panel_key(&mut self, id: u64, key: Key, at: Instant, repeat: bool) -> bool {
         // Any key a dialog did not take holds one that comes next.
         self.untaken = Some(at);
+        self.panel_held = None;
         if !self.panels.is_open(id) {
             self.input.focus_mut().to_input();
             self.last_key = Some(LastKey { typing: true });
             self.panel_untaken = Some(at);
             return self.edit_with(key, at);
         }
-        let action = self.input.keymap().lookup(&self.input.contexts(), key);
-        let Some(action) = action.filter(|action| action.is_panel_key()) else {
-            self.panel_held = None;
-            // Moving, `Enter` and `Esc` are the panel's, at once; a global
-            // key is the application's; a key that types goes to the
-            // editor, and the focus with it.
-            let moving = matches!(
-                action,
-                Some(
-                    Action::FocusUp
-                        | Action::FocusDown
-                        | Action::FocusNext
-                        | Action::FocusReturn
-                        | Action::FocusActivate
-                )
-            );
+        // Moving, `Enter` and `Esc` are the panel's, at once; a global key
+        // is the application's; a key that types goes to the editor, and
+        // the focus with it. The input gives a panel's own keys back as
+        // `Outcome::Panel`, for the panel to take or pass on.
+        let moving = matches!(
+            self.input.keymap().lookup(&self.input.contexts(), key),
+            Some(
+                Action::FocusUp
+                    | Action::FocusDown
+                    | Action::FocusNext
+                    | Action::FocusReturn
+                    | Action::FocusActivate
+            )
+        );
+        let outcome = self.input.handle(&TermEvent::Key(key));
+        let Outcome::Panel(_, action) = outcome else {
             if !moving && typed(key).is_some() {
                 self.panel_untaken = Some(at);
                 self.panels.typed(at);
             }
             self.last_key = Some(LastKey { typing: !moving });
-            let outcome = self.input.handle(&TermEvent::Key(key));
             self.outcome(outcome, at);
             return true;
         };
-        // A key held down never acts: it goes where its press went.
-        if let Some((held, last)) = self.panel_held
-            && held == key
-            && (repeat || at.saturating_duration_since(last) < REPEAT)
-        {
-            self.panel_held = Some((key, at));
-            self.last_key = Some(LastKey { typing: false });
-            return true;
-        }
-        self.panel_held = None;
         let ready = action == Action::FocusClose || self.panels.ready(id, at);
         if repeat || !ready {
             return self.panel_passed(key, at);
@@ -332,6 +353,14 @@ impl App {
         if act == Act::Pass {
             return self.panel_passed(key, at);
         }
+        // While a change of the panel's is on its way, what it shows may be
+        // out of date, and a change computed from it may be wrong (a second
+        // reorder from the order before the first): the key is taken, and
+        // nothing is sent.
+        let act = match act {
+            Act::Send(_) if self.panels.waiting(id) => Act::Taken,
+            act => act,
+        };
         self.panel_held = Some((key, at));
         self.taken = Some(at);
         self.last_key = Some(LastKey { typing: false });
@@ -365,6 +394,7 @@ impl App {
                 let ticket = self.link.send(op);
                 self.pending
                     .insert(ticket, Pending::Panel { session, panel: id });
+                self.panels.sent(id);
             }
             Act::Edit { text, hint, edit } => {
                 self.item_edit = Some((id, edit));

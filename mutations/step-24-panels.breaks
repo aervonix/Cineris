@@ -30,11 +30,12 @@ caught-by:
 [break] a-held-panel-key-acts-again
 rule: A key held down never acts on a panel: the same key again within the repeat window of one the panel took goes where its press went, nowhere.
 file: crates/cortex-tui/src/app/state/panel.rs
-in: App::panel_key
-find: && (repeat || at.saturating_duration_since(last) < REPEAT)
-replace: && repeat
+in: App::panel_holds
+find: !(repeat || at.saturating_duration_since(last) < REPEAT)
+replace: !repeat
 caught-by:
     app::tests::panels::a_held_key_keys_read_together_and_a_paste_never_act
+    app::tests::panels::a_held_x_that_closed_the_review_types_nothing
 
 [break] a-marked-repeat-acts-on-a-panel
 rule: A repeat the terminal marks never acts on a panel, whatever key came before it.
@@ -140,15 +141,16 @@ caught-by:
     app::tests::panels::the_grace_starts_again_with_a_new_key_map
 
 [break] a-changed-focused-row-keeps-the-readiness
-rule: When the focused row changes from outside, the panel's grace starts again: a key meant for what was there never acts on what is there now.
+rule: When the focused row changes from outside, the panel's grace starts again as the change is seen, not at the next frame: a key meant for what was there, read before that frame, never acts on what is there now (the independent review, finding 1).
 file: crates/cortex-tui/src/app/panels.rs
-in: Panels::scrolled
+in: Panels::follow
 find:
     if now != slot.seen {
         slot.ready.hide();
 replace:
     if now != slot.seen {
 caught-by:
+    app::tests::panels::a_key_read_after_the_focused_item_went_and_before_a_frame_does_not_act
     app::tests::panels::the_grace_starts_again_when_the_focused_row_changes
     app::tests::panels::the_focus_stays_on_its_item_when_the_plan_changes_under_it
 
@@ -517,3 +519,95 @@ replace: let path = file.path.clone();
 caught-by:
     view::review::tests::hostile_paths_commands_folders_and_notes_are_drawn_visible
     app::tests::panels::hostile_plan_items_and_paths_are_drawn_visible_in_the_frame
+
+# ------------------------------------- the independent review's findings
+
+[break] a-held-key-types-once-its-panel-lost-the-focus
+rule: A key held down after a panel took it goes nowhere, though the panel it acted on closed or gave the input the focus: a held `x` that closed the review types nothing into the prompt (finding 5).
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find:
+    if self.panel_holds(*key, at, repeat) {
+        return true;
+    }
+replace:
+caught-by:
+    app::tests::panels::a_held_x_that_closed_the_review_types_nothing
+
+[break] an-item-edit-sends-its-line-breaks
+rule: An item is one line: the line breaks and tabs a paste or the external editor brought into an item edit are sent as spaces, which the core takes, and the text typed is not lost to its refusal (finding 2).
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::edited
+find: .map(|c| if c.is_control() { ' ' } else { c })
+replace: .map(|c| c)
+caught-by:
+    app::tests::panels::a_pasted_line_break_in_an_item_edit_saves_one_line
+
+[break] the-folded-row-offers-a-key-that-reaches-nothing
+rule: The folded row names the key that moves the focus only when it reaches a panel folded there (finding 3).
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::layout
+find: .filter(|_| reached)
+replace: .filter(|_| reached || true)
+caught-by:
+    app::panels::tests::the_oldest_collapsed_panels_fold_into_one_row_and_with_no_room_nothing_is_drawn
+    app::tests::panels::slash_plan_in_a_window_with_no_room_for_it_says_so
+
+[break] slash-plan-with-no-room-says-nothing
+rule: A panel a command asked for that the window cannot draw focused says so, rather than take the focus for nothing (finding 3).
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_block
+find: && !reachable.contains(&id)
+replace: && false
+caught-by:
+    app::tests::panels::slash_plan_in_a_window_with_no_room_for_it_says_so
+
+[break] a-notice-of-a-session-not-open-reaches-the-panels
+rule: Only the events of the session open here reach the panels: the notices of one that failed to open are said, and open no review (finding 4).
+file: crates/cortex-tui/src/app/state.rs
+in: App::event
+find:
+    if self.is_open(&event.session_id) {
+        self.panels_event(&event.event);
+    }
+replace: self.panels_event(&event.event);
+caught-by:
+    app::tests::panels::a_notice_of_a_session_that_did_not_open_opens_no_panel
+
+[break] an-edit-on-its-way-lets-the-next-be-computed-from-an-old-plan
+rule: While a change of a panel's is on its way, a key's change computed from what the panel shows, which the first will change, is not sent (finding 6).
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_key
+find: Act::Send(_) if self.panels.waiting(id) => Act::Taken
+replace: Act::Send(_) if false => Act::Taken
+caught-by:
+    app::tests::panels::an_edit_on_its_way_holds_the_next_until_it_is_answered
+
+[break] an-answer-does-not-end-the-wait
+rule: A panel's operation answered, or failed, is no longer on its way: the next key's change is sent.
+file: crates/cortex-tui/src/app/state.rs
+in: App::done
+find: self.panels.answered(*panel);
+replace:
+caught-by:
+    app::tests::panels::an_edit_on_its_way_holds_the_next_until_it_is_answered
+    app::tests::panels::each_plan_key_sends_its_edit_to_the_session
+
+[break] the-panels-block-is-not-drawn
+rule: The panels are drawn in the frame, their rows with what came from outside made visible: the frame's hostile-text test finds the rows, not only nothing wrong (finding 7).
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_block
+find: block.extend(laid.lines);
+replace:
+caught-by:
+    app::tests::panels::hostile_plan_items_and_paths_are_drawn_visible_in_the_frame
+    app::tests::panels::the_plan_opens_by_itself_collapsed_without_the_focus
+
+[break] the-plan-collapses-while-its-item-is-edited
+rule: While an item is edited in the input box, its panel stays drawn whole, the item shown (finding 9).
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_block
+find: Target::Input | Target::ToolBox(_) => self.item_edit.as_ref().map(|(id, _)| *id)
+replace: Target::Input | Target::ToolBox(_) => None
+caught-by:
+    app::tests::panels::the_plan_stays_drawn_whole_while_its_item_is_edited
