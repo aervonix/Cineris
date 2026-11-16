@@ -178,6 +178,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [timeout-report-for-tests-without-the-test-kit](timeout-report-for-tests-without-the-test-kit.md): A test using none of the test kit's waits gets no timeout report, since nextest lacks pre-timeout scripts. Owner: a later tooling step.
 - [typed-values-in-composite-actions](typed-values-in-composite-actions.md): The repo rule against event values in scripts reads `.github/workflows/` only, not composite actions under `.github/actions/`. Owner: a later tooling step.
 - [the-pr-size-jobs-rough-edges](the-pr-size-jobs-rough-edges.md): `ci-wait` counts `pr-size` with the blocking jobs. Owner: a tooling step.
+- [windows-tiers-one-and-two-two-at-a-time](windows-tiers-one-and-two-two-at-a-time.md): Windows' tiers 1 and 2 two at a time in place of the owner's three: 21% off the integration tier for 5.8 s of its run's wall time, measured again by the ninth tooling step. Owner: the owner.
 
 ### Windows
 
