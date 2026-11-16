@@ -1055,19 +1055,26 @@ pub(crate) async fn update(
     // once: an accepted command stops asking, and one turned off asks.
     let sessions: Vec<Arc<crate::core::Live>> = core.sessions_of(&key);
     let snapshot = Arc::new(updated.snapshot);
-    for live in &sessions {
-        if let Some(knowledge) = &live.knowledge {
-            knowledge.took(&snapshot);
-            knowledge.updated(&updated.changed, &updated.removed);
-            if promoted {
-                knowledge.touched_shared_file();
-            }
-        }
-    }
-    Ok(ProjectEntriesResult {
+    let result = ProjectEntriesResult {
         entries: updated.changed.iter().map(Entry::to_wire).collect(),
         problems: snapshot.problems().to_vec(),
+    };
+    // On the blocking pool: handing a session its rules looks at the
+    // files, and reads them again when another change came in between.
+    Core::blocking(move || {
+        for live in &sessions {
+            if let Some(knowledge) = &live.knowledge {
+                knowledge.took(&snapshot);
+                knowledge.updated(&updated.changed, &updated.removed);
+                if promoted {
+                    knowledge.touched_shared_file();
+                }
+            }
+        }
+        Ok(())
     })
+    .await?;
+    Ok(result)
 }
 
 #[cfg(test)]

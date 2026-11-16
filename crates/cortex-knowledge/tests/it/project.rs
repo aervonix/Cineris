@@ -216,6 +216,79 @@ fn an_invalid_shared_file_is_reported_and_what_was_read_before_is_kept() {
     assert_eq!(world.shared_text(), "version = 1\n[[entry]\n");
 }
 
+/// While the shared file cannot be read, what an earlier reading held of
+/// it stands in: for the prompt, and for none of the safe list. The file
+/// as it is now may be the one an accepted command was taken out of, and
+/// the earlier reading is handed on from one load to the next for as long
+/// as the file stays unreadable (found by the focused read of the rules'
+/// hand-over).
+#[test]
+fn a_shared_file_that_cannot_be_read_puts_none_of_its_commands_on_the_safe_list() {
+    let world = World::new(scratch!("project_shared_stands_in"));
+    world.write_shared(TEAM);
+    let project = world.project();
+    let held = project.load(None);
+    let lint = held.entries()[0].id.clone();
+    let accepted = project
+        .update(
+            &[change(lint.as_str(), EntryAction::Accept)],
+            &[],
+            Some(&held),
+        )
+        .unwrap()
+        .snapshot;
+    assert_eq!(unasked(&world, &accepted), ["cargo clippy"]);
+
+    // The file is unreadable: a merge left its marks in it, say.
+    world.write_shared("version = 1\n[[entry]\n");
+    let after = project.load(Some(&accepted));
+    assert_eq!(
+        in_use(&world, &after),
+        [lint.as_str()],
+        "the prompt keeps it"
+    );
+    assert_eq!(unasked(&world, &after), Vec::<String>::new());
+    assert!(
+        after.problems()[0].contains("none of its commands runs without asking"),
+        "{:?}",
+        after.problems()
+    );
+    // Handed on, load after load, and through a change to the store.
+    let again = project.load(Some(&after));
+    assert_eq!(unasked(&world, &again), Vec::<String>::new());
+    let changed = project
+        .update(
+            &[],
+            &[NewEntry {
+                kind: cortex_protocol::project::EntryKind::Fact,
+                text: "The docs are in docs/.".to_owned(),
+                command: None,
+                check: None,
+            }],
+            Some(&again),
+        )
+        .unwrap()
+        .snapshot;
+    assert_eq!(unasked(&world, &changed), Vec::<String>::new());
+    assert_eq!(in_use(&world, &changed).len(), 2);
+    // A command of the user's own store is not held back for it.
+    let mine = project
+        .update(&[], &[new_command("cargo test")], Some(&changed))
+        .unwrap()
+        .snapshot;
+    assert_eq!(unasked(&world, &mine), ["cargo test"]);
+
+    // Put right, with the command gone: it is gone from both.
+    world.write_shared("version = 1\n");
+    let right = project.load(Some(&mine));
+    assert_eq!(unasked(&world, &right), ["cargo test"]);
+    assert!(!in_use(&world, &right).contains(&lint.as_str().to_owned()));
+    // Put right with the command there: it runs without asking again.
+    world.write_shared(TEAM);
+    let back = project.load(Some(&right));
+    assert_eq!(unasked(&world, &back), ["cargo test", "cargo clippy"]);
+}
+
 /// The shared file is read only as a regular file in a directory of the
 /// workspace itself: a link is not followed to another file.
 #[test]

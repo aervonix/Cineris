@@ -80,8 +80,8 @@ caught-by:
 rule: While the private store cannot be read as it is, the state in its place feeds the prompt and never the safe list.
 file: crates/cortex-knowledge/src/project.rs
 in: Snapshot::runs_unasked
-find: !degraded && entry.runs_unasked(now)
-replace: (degraded || true) && entry.runs_unasked(now)
+find: !degraded && !(shared_stands_in && entry.scope == Scope::Shared)
+replace: (degraded || true) && !(shared_stands_in && entry.scope == Scope::Shared)
 caught-by:
     cortex-knowledge::it store::an_invalid_store_is_reported_and_never_written_over
     cortex-knowledge::it store::a_session_keeps_what_it_had_when_an_edit_goes_wrong
@@ -406,8 +406,8 @@ caught-by:
 rule: The snapshot a change gives back holds the store's stamp from while the lock was held, so another process's change right after it shows at the next look.
 file: crates/cortex-knowledge/src/project.rs
 in: Project::after
-find: false, private_stamp, shared_stamp
-replace: false, self.store.stamp(), shared_stamp
+find: (false, shared_stands_in), private_stamp
+replace: (false, shared_stands_in), self.store.stamp()
 caught-by:
     cortex-knowledge::it store::a_change_made_by_another_right_after_ours_is_seen
 
@@ -1149,4 +1149,13 @@ find: if !once.contains(&id) {
 replace: if true {
 caught-by:
     cortex-cli::bin/cortex project_view::tests::ids_given_twice_are_one_change
+
+[break] a-shared-file-that-cannot-be-read-keeps-its-commands-on-the-safe-list
+rule: While the shared file cannot be read, what an earlier reading held of it feeds the prompt and none of the safe list.
+file: crates/cortex-knowledge/src/project.rs
+in: Snapshot::runs_unasked
+find: && !(shared_stands_in && entry.scope == Scope::Shared)
+replace:
+caught-by:
+    cortex-knowledge::it project::a_shared_file_that_cannot_be_read_puts_none_of_its_commands_on_the_safe_list
 

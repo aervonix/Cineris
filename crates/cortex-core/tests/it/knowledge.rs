@@ -1683,6 +1683,9 @@ fn sys_a_snapshot_another_change_overtook_does_not_put_a_rule_back() {
             landed.reach();
             landed.release();
             look.release();
+            // The decision went on because it was let go, not because its
+            // hold ran out before the older snapshot had arrived.
+            assert_eq!(look.timed_out(), 0);
         });
         assert_eq!(
             turn_denying(&front, "again").await,
@@ -1690,6 +1693,11 @@ fn sys_a_snapshot_another_change_overtook_does_not_put_a_rule_back() {
             "the command that was turned off ran without asking"
         );
         beside.join().unwrap();
+        assert_eq!(
+            late.timed_out(),
+            0,
+            "the older snapshot was let go, not let through"
+        );
         front.close().await;
     });
 }
