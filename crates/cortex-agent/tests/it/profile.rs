@@ -409,3 +409,84 @@ fn a_compaction_builds_the_prompt_with_the_profile_as_it_is_and_replays_no_older
         "the resumed history begins with the one sent before"
     );
 }
+
+/// A resume whose prompt the harness would now build otherwise (here: its
+/// tools changed) begins an epoch and keeps its history. A notice of an
+/// older profile in that history comes after the new prompt, and says it
+/// replaces what came before: so the profile as it is now is said again
+/// after it, and is the last word (found by the independent read of the
+/// trust path).
+#[test]
+fn a_resume_into_a_new_epoch_says_the_profile_again_after_an_older_notice() {
+    let world = World::new(
+        "profile_resume_new_epoch",
+        [
+            says("One."),
+            says("Two."),
+            says("Three."),
+            says("Four."),
+            says("Five."),
+        ],
+    );
+    let source = Scripted::new(ONE);
+    let rig = with_profile(&world, &source).start(&world);
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+        // A command is learned: told as a notice.
+        source.set(TWO);
+        rig.prompt("second");
+        rig.events.turns(2).await;
+    });
+    assert_eq!(told(&rig), [format!("{PROFILE_CHANGED}\n\n{TWO}")]);
+
+    // Another process, with other tools, after the user turned that
+    // command off again: the profile is ONE.
+    let mut again = with_profile(&world, &Scripted::new(ONE));
+    again.memory = rig.store.clone();
+    again.toolbox = Some(world.toolbox().with(cortex_tools::ReadTool::new()));
+    let resumed = again.start(&world);
+    world.run(async {
+        resumed.prompt("third");
+        resumed.events.turns(1).await;
+        resumed.prompt("fourth");
+        resumed.events.turns(2).await;
+    });
+    let epochs = resumed.store.epochs();
+    assert_eq!(epochs.len(), 2);
+    assert_eq!(epochs[1].reason, Some(EpochReason::Resume));
+    assert_eq!(epochs[1].profile, Some(ContentHash::of(ONE.as_bytes())));
+    // Said again once, when the epoch began, and not at the turn after.
+    assert_eq!(
+        told(&resumed),
+        [
+            format!("{PROFILE_CHANGED}\n\n{TWO}"),
+            format!("{PROFILE_CHANGED}\n\n{ONE}"),
+        ]
+    );
+    let last = world.provider.requests().last().unwrap().clone();
+    assert!(last.system.ends_with(ONE), "{}", last.system);
+    let notices: Vec<String> = last
+        .messages
+        .iter()
+        .map(text)
+        .filter(|text| text.contains(PROFILE_CHANGED))
+        .collect();
+    assert_eq!(notices.len(), 2);
+    assert!(
+        notices[1].ends_with(ONE),
+        "the last word is the profile as it is"
+    );
+
+    // Read again, the session knows what it said: nothing more is told.
+    let mut once_more = with_profile(&world, &Scripted::new(ONE));
+    once_more.memory = resumed.store.clone();
+    once_more.toolbox = Some(world.toolbox().with(cortex_tools::ReadTool::new()));
+    let third = once_more.start(&world);
+    world.run(async {
+        third.prompt("fifth");
+        third.events.turns(1).await;
+    });
+    assert_eq!(third.store.epochs().len(), 2);
+    assert_eq!(told(&third).len(), 2);
+}

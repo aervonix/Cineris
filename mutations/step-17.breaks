@@ -748,10 +748,10 @@ caught-by:
 rule: Every session of the project in the process takes an update at once: an accepted command stops asking, and one turned off asks.
 file: crates/cortex-core/src/knowledge.rs
 in: update
-find: knowledge.took(&updated.snapshot);
+find: knowledge.took(&snapshot);
 replace:
 caught-by:
-    cortex-core::it knowledge::sys_a_command_seen_to_succeed_twice_is_learned_told_and_runs_unasked_once_accepted
+    cortex-core::it knowledge::sys_a_command_accepted_while_a_turn_runs_stops_asking_at_once
 
 [break] a-proposal-with-a-credential-is-stored
 rule: A proposal that holds what looks like a credential is refused.
@@ -830,4 +830,77 @@ find: [UserOnly, Restart] pub learn
 replace: [Preference, Restart] pub learn
 caught-by:
     cortex-config::it trust::every_key_has_a_trust_class
+
+# ------------------------------------ after the read of the trust path
+
+[break] the-look-before-a-command-asks-the-shared-snapshot
+rule: Before a command is decided the files are compared with the snapshot this session's rules were made from, not the one the project's sessions share.
+file: crates/cortex-core/src/knowledge.rs
+in: Knowledge::before_command
+find: given.from.as_ref().is_some_and(|from| self.project.is_current(from))
+replace: self.peek().is_some_and(|shared| self.project.is_current(&shared))
+caught-by:
+    cortex-core::it knowledge::sys_a_command_turned_off_elsewhere_asks_though_another_session_read_the_files_first
+
+[break] an-expired-rule-stays-until-the-next-turn
+rule: An accepted command whose entry expires while a turn runs asks at its next run.
+file: crates/cortex-core/src/knowledge.rs
+in: Knowledge::before_command
+find: .is_some_and(|until| until <= self.project.now())
+replace: .is_some_and(|_| false)
+caught-by:
+    cortex-core::it knowledge::sys_an_accepted_command_that_expires_while_a_turn_runs_asks
+
+[break] the-rules-are-handed-over-outside-their-lock
+rule: A new engine is given the learned rules while they are held, so a change that comes at the same moment cannot be overtaken by the older list.
+file: crates/cortex-core/src/knowledge.rs
+in: regive
+find: let rules = given.rules.clone();
+replace: let rules = given.rules.clone(); drop(given); let mut given = Given::default();
+caught-by:
+    cortex-core knowledge::tests::the_rules_are_handed_to_a_new_engine_while_they_are_held
+
+[break] a-refused-list-leaves-the-rules-held
+rule: A list of learned rules the engine refuses leaves none held: none is in force.
+file: crates/cortex-core/src/knowledge.rs
+in: regive
+find: given.rules.clear();
+replace:
+caught-by:
+    cortex-core knowledge::tests::the_rules_are_handed_to_a_new_engine_while_they_are_held
+
+[break] a-credential-in-a-proposals-check-is-stored
+rule: A proposal's check is looked at for a credential as its text is: it is kept in the store, and promoted with the entry.
+file: crates/cortex-core/src/knowledge.rs
+find: || check.as_ref().is_some_and(|check| check_holds(check, &|text| self.finds_secret(text)))
+replace:
+caught-by:
+    cortex-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
+
+[break] a-credential-in-evidence-is-promoted
+rule: Everything of an entry that the repository's file would hold is looked at for a credential before a promote.
+file: crates/cortex-core/src/knowledge.rs
+in: update
+find: && entry_holds(entry, &finds)
+replace: && finds(&entry.text)
+caught-by:
+    cortex-core::it knowledge::an_entry_with_a_credential_in_its_evidence_is_not_promoted
+
+[break] a-checks-command-is-not-looked-at
+rule: Every text of a check is looked at for a credential.
+file: crates/cortex-core/src/knowledge.rs
+in: check_holds
+find: Check::Command { command } => finds(command)
+replace: Check::Command { .. } => false
+caught-by:
+    cortex-core knowledge::tests::every_text_of_an_entry_that_a_file_keeps_is_looked_at_for_a_credential
+    cortex-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
+
+[break] a-new-prompt-is-followed-by-an-older-profile
+rule: A resume that begins an epoch over a history holding a notice of an older profile says the profile again, so that the older one is not the last word.
+file: crates/cortex-agent/src/turn/epochs.rs
+find: if self.context.history.tells_a_profile() {
+replace: if false {
+caught-by:
+    cortex-agent::it profile::a_resume_into_a_new_epoch_says_the_profile_again_after_an_older_notice
 

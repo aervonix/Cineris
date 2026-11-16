@@ -1,6 +1,6 @@
 //! Measurements for the rows of `docs/performance-budgets.md`: loading
-//! both files, the look for a change, rendering section 5, and one change
-//! to the store. Run by hand, in a release build:
+//! both files, the look for a change, rendering section 5, one change to
+//! the store, and what the observer adds to a `shell` call. Run by hand, in a release build:
 //! `cargo xtask scratch-test`'s neighbour for a test that is checked in,
 //! `cargo test --release -p cortex-knowledge --test it perf_ -- --ignored
 //! --nocapture --test-threads 1`, or on a runner with `try`'s
@@ -108,6 +108,61 @@ fn perf_loading_looking_and_rendering() {
         println!(
             "{name}: one change (lock, read, write flushed, good copy, read back): median {median:?}, 95th {high:?}"
         );
+    }
+}
+
+/// What the observer adds to a `shell` call, on the call's own path: the
+/// watch's look at the line, and the snapshot's answer to "could this
+/// change the store". Storing what was learned is off that path.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn perf_observing_a_command() {
+    use cortex_knowledge::{Ending, Run, Watch};
+
+    for (name, entries, shared) in [("typical", 40, 10), ("at the caps", 500, 200)] {
+        let world = World::new(scratch!("perf_observe"));
+        fill(&world, entries, shared);
+        let project = world.project();
+        let snapshot = project.load(None);
+        let now = world.now();
+        let run = |command: &str| Run {
+            command: command.to_owned(),
+            cwd: Some("crates/part-0".to_owned()),
+            ending: Ending::Succeeded,
+            duration_ms: 4_000,
+            changed: false,
+            confined: true,
+            read_only: false,
+        };
+        for (what, line) in [
+            (
+                "a line that is not a build, test or check",
+                "git status --short",
+            ),
+            (
+                "a line the observer does not take",
+                "grep -rn \"fn main\" src | head -5",
+            ),
+            (
+                "a command the store knows and confirmed today",
+                "cargo nextest run -p part-0 --no-fail-fast",
+            ),
+            (
+                "a command the store does not know",
+                "cargo clippy --workspace --all-targets",
+            ),
+        ] {
+            let run = run(line);
+            let mut watch = Watch::new();
+            let (median, high) = timed(20_000, || {
+                watch
+                    .see(&run, None)
+                    .iter()
+                    .filter(|learnt| snapshot.wants(learnt, now))
+                    .count()
+            });
+            println!("{name}: observe {what}: median {median:?}, 95th {high:?}");
+        }
     }
 }
 

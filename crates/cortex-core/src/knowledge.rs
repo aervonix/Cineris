@@ -25,10 +25,20 @@
 //!
 //! # One place holds a session's learned rules
 //!
-//! [`Knowledge`] keeps the rules it last gave the engine. A change of
-//! level makes a new engine, which is given them again from here
-//! ([`Knowledge::reapply`]); nothing else holds them, so a command the
-//! user turned off cannot come back with a new engine.
+//! [`Knowledge`] keeps the rules it last gave the engine, with the
+//! snapshot they were made from. A change of level makes a new engine,
+//! which is given them again from here ([`Knowledge::reapply`]); nothing
+//! else holds them, so a command the user turned off cannot come back
+//! with a new engine. They are changed, and handed to an engine, only
+//! under their own lock: two changes at once leave the engine with the
+//! later one's rules, and this module knowing which those are.
+//!
+//! Before each command is decided the session asks whether the two files
+//! are still as **its own rules' snapshot** read them, and whether the
+//! first of the entries behind the rules has expired. Not the snapshot
+//! the project's sessions share: another session of the project may have
+//! read the files again since, and this session's engine was not given
+//! that reading's rules.
 //!
 //! # Only this project's store
 //!
@@ -73,7 +83,60 @@ use crate::store::Hooks;
 /// files as they were last read.
 #[derive(Debug, Default)]
 pub(crate) struct Shared {
-    snapshot: Mutex<Option<Snapshot>>,
+    snapshot: Mutex<Option<Arc<Snapshot>>>,
+}
+
+/// The learned rules a session's engine has, and what they were made from.
+#[derive(Default)]
+struct Given {
+    /// The rules the engine was last given: the one place they are held.
+    rules: Vec<Rule>,
+    /// The snapshot they were made from. The look before a command asks
+    /// whether the files are still as this one read them.
+    from: Option<Arc<Snapshot>>,
+    /// When the first of the entries behind the rules expires.
+    until: Option<cortex_base::UtcTime>,
+}
+
+/// Hands the rules of `given` to `set`, **while holding them**: a change
+/// of the rules that comes at the same moment waits, and then gives the
+/// same engine its own. Handed over outside the lock, the older list could
+/// arrive last, and a command just turned off would be back on an engine
+/// that this module believes has no rule. A list that is refused leaves no
+/// rule held.
+fn regive<E>(given: &Mutex<Given>, set: impl FnOnce(Vec<Rule>) -> Result<(), E>) -> Result<(), E> {
+    let mut given = lock(given);
+    let rules = given.rules.clone();
+    let outcome = set(rules);
+    if outcome.is_err() {
+        given.rules.clear();
+    }
+    outcome
+}
+
+/// Whether a text of `check` holds what `finds` takes for a credential.
+fn check_holds(check: &Check, finds: &dyn Fn(&str) -> bool) -> bool {
+    match check {
+        Check::Exists { path } => finds(path),
+        Check::Contains { path, pattern } => finds(path) || finds(pattern),
+        Check::Command { command } => finds(command),
+    }
+}
+
+/// Whether a text of `entry` that is kept in a file holds what `finds`
+/// takes for a credential: its text, its evidence, its command line and
+/// directory, and its check.
+fn entry_holds(entry: &Entry, finds: &dyn Fn(&str) -> bool) -> bool {
+    finds(&entry.text)
+        || entry.evidence.as_deref().is_some_and(finds)
+        || entry
+            .command
+            .as_ref()
+            .is_some_and(|command| finds(&command.run) || command.cwd.as_deref().is_some_and(finds))
+        || entry
+            .check
+            .as_ref()
+            .is_some_and(|check| check_holds(check, finds))
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -122,9 +185,9 @@ pub(crate) struct Knowledge {
     on_read: Option<crate::repo_map::Probe>,
     /// What this session's commands have shown so far.
     watch: Mutex<Watch>,
-    /// The learned rules the engine was last given: the one place they are
-    /// held.
-    learned: Mutex<Vec<Rule>>,
+    /// The learned rules the engine was last given, and what they were
+    /// made from: the one place they are held.
+    learned: Mutex<Given>,
     /// What the user was told already, so that each thing is said once.
     told: Mutex<BTreeSet<String>>,
 }
@@ -163,7 +226,7 @@ impl Knowledge {
             shared_file: parts.shared_file,
             on_read: parts.on_read,
             watch: Mutex::new(Watch::new()),
-            learned: Mutex::new(Vec::new()),
+            learned: Mutex::new(Given::default()),
             told: Mutex::new(BTreeSet::new()),
         }
     }
@@ -183,21 +246,21 @@ impl Knowledge {
     }
 
     /// The snapshot every session of the project last read, if any has.
-    fn peek(&self) -> Option<Snapshot> {
+    fn peek(&self) -> Option<Arc<Snapshot>> {
         lock(&self.shared.snapshot).clone()
     }
 
     /// The project's knowledge as it is now: read again when either file
     /// changed since the last read, with every entry past its expiry
     /// marked. Blocks.
-    fn refresh(&self) -> Snapshot {
+    fn refresh(&self) -> Arc<Snapshot> {
         if let Some(probe) = &self.on_read {
             probe();
         }
         let held = self.peek();
         let mut snapshot = match held {
             Some(held) if self.project.is_current(&held) => held,
-            held => self.project.load(held.as_ref()),
+            held => Arc::new(self.project.load(held.as_deref())),
         };
         if snapshot.has_lapsed(self.project.now()) {
             match self.project.lapse(Some(&snapshot)) {
@@ -212,7 +275,7 @@ impl Knowledge {
                         ));
                     }
                     self.updated(&lapsed.changed, &[]);
-                    snapshot = lapsed.snapshot;
+                    snapshot = Arc::new(lapsed.snapshot);
                 }
                 // The entry is out of use by the clock already; the mark
                 // waits for a store that can be written.
@@ -228,8 +291,8 @@ impl Knowledge {
     /// Takes `snapshot` as the project's knowledge now: every session of
     /// the project in this process sees it, and this session's engine is
     /// given the rules that follow from it.
-    pub(crate) fn took(&self, snapshot: &Snapshot) {
-        *lock(&self.shared.snapshot) = Some(snapshot.clone());
+    pub(crate) fn took(&self, snapshot: &Arc<Snapshot>) {
+        *lock(&self.shared.snapshot) = Some(Arc::clone(snapshot));
         for problem in snapshot.problems() {
             self.tell_once(problem.clone());
         }
@@ -238,34 +301,47 @@ impl Knowledge {
 
     /// Gives the engine one exact allow rule for each command of
     /// `snapshot` that the user accepted, in place of the ones it had.
-    fn give_rules(&self, snapshot: &Snapshot) {
+    fn give_rules(&self, snapshot: &Arc<Snapshot>) {
         let now = self.project.now();
-        let rules: Vec<Rule> = snapshot
-            .runs_unasked(now)
-            .filter_map(|entry| entry.command.as_ref())
-            .filter_map(|command| exact_command_rule(&command.run, self.syntax))
-            .collect();
-        let mut learned = lock(&self.learned);
-        if *learned == rules {
+        let mut rules = Vec::new();
+        let mut until = None;
+        for entry in snapshot.runs_unasked(now) {
+            let Some(command) = &entry.command else {
+                continue;
+            };
+            let Some(rule) = exact_command_rule(&command.run, self.syntax) else {
+                continue;
+            };
+            rules.push(rule);
+            until = [until, entry.expires].into_iter().flatten().min();
+        }
+        let mut given = lock(&self.learned);
+        // Whatever the rules, they are this snapshot's from now on.
+        given.from = Some(Arc::clone(snapshot));
+        given.until = until;
+        if given.rules == rules {
             return;
         }
         let engine = self.policy.engine();
         match engine.set_learned(rules.clone()) {
-            Ok(()) => *learned = rules,
+            Ok(()) => given.rules = rules,
             Err(errors) => {
                 // No learned rule is in force then.
-                learned.clear();
+                given.rules.clear();
                 self.tell_once(format!(
                     "The project's accepted commands could not be given to the permission \
                      engine, so each asks before it runs: {}",
-                    errors
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join("; ")
+                    visible(
+                        &errors
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    )
                 ));
             }
         }
+        drop(given);
         let waiting = engine
             .withheld()
             .iter()
@@ -282,9 +358,10 @@ impl Knowledge {
     /// Gives the engine in force the learned rules again: after a change
     /// of level made a new one.
     pub(crate) fn reapply(&self) {
-        let rules = lock(&self.learned).clone();
-        if let Err(errors) = self.policy.engine().set_learned(rules) {
-            lock(&self.learned).clear();
+        let given = regive(&self.learned, |rules| {
+            self.policy.engine().set_learned(rules)
+        });
+        if let Err(errors) = given {
             tracing::warn!(
                 ?errors,
                 "the learned rules could not be given to the new engine"
@@ -293,23 +370,34 @@ impl Knowledge {
     }
 
     /// Before a command is decided: when either of the project's files
-    /// changed since they were read, every learned rule is dropped at
-    /// once, and given again from the files at the next turn's start.
-    /// Another process's `cortex project disable` then takes a command off
-    /// the safe list before its next run, not at the next turn.
+    /// changed since this session's rules were made from them, or the
+    /// first of the entries behind the rules has expired, every learned
+    /// rule is dropped at once, and given again from the files at the next
+    /// turn's start. Another process's `cortex project disable` then takes
+    /// a command off the safe list before its next run, not at the next
+    /// turn.
+    ///
+    /// The files are compared with the snapshot **these rules were made
+    /// from**, not with the one the project's sessions share: another
+    /// session may have read the files again since, and only its own
+    /// engine was given what it read (found by the independent read of the
+    /// trust path).
     pub(crate) fn before_command(&self) {
-        let mut learned = lock(&self.learned);
-        if learned.is_empty() {
+        let mut given = lock(&self.learned);
+        if given.rules.is_empty() {
             return;
         }
         if let Some(probe) = &self.on_read {
             probe();
         }
-        let current = self
-            .peek()
-            .is_some_and(|snapshot| self.project.is_current(&snapshot));
+        let expired = given.until.is_some_and(|until| until <= self.project.now());
+        let current = !expired
+            && given
+                .from
+                .as_ref()
+                .is_some_and(|from| self.project.is_current(from));
         if !current {
-            learned.clear();
+            given.rules.clear();
             if let Err(errors) = self.policy.engine().set_learned(Vec::new()) {
                 tracing::warn!(?errors, "the learned rules could not be taken back");
             }
@@ -378,9 +466,9 @@ impl Knowledge {
     /// Stores one thing the observer saw. Blocks.
     fn learn(&self, learnt: &Learnt) {
         let held = self.peek();
-        match self.project.learn(learnt, held.as_ref()) {
+        match self.project.learn(learnt, held.as_deref()) {
             Ok((outcome, updated)) => {
-                self.took(&updated.snapshot);
+                self.took(&Arc::new(updated.snapshot));
                 self.updated(&updated.changed, &updated.removed);
                 let Some(entry) = updated.changed.first() else {
                     return;
@@ -466,18 +554,25 @@ impl Proposals for Knowledge {
         let kind = Kind::from_wire(&proposal.kind)
             .filter(|kind| matches!(kind, Kind::Fact | Kind::Convention))
             .ok_or_else(|| ProposalError::new("A proposal is a fact or a convention."))?;
-        if self.finds_secret(&proposal.text) || self.finds_secret(&proposal.evidence) {
-            return Err(ProposalError::new(
-                "The entry holds what looks like a credential, so it was not stored. Say it \
-                 without the credential.",
-            ));
-        }
         let check = proposal
             .check
             .as_ref()
             .map(Check::from_wire)
             .transpose()
             .map_err(ProposalError::new)?;
+        // The check too: it is kept in the store, and goes into the
+        // repository's file if the entry is promoted.
+        if self.finds_secret(&proposal.text)
+            || self.finds_secret(&proposal.evidence)
+            || check
+                .as_ref()
+                .is_some_and(|check| check_holds(check, &|text| self.finds_secret(text)))
+        {
+            return Err(ProposalError::new(
+                "The entry holds what looks like a credential, so it was not stored. Say it \
+                 without the credential.",
+            ));
+        }
         let held = self.peek();
         let stored = self.project.propose(
             Proposed {
@@ -487,11 +582,11 @@ impl Proposals for Knowledge {
                 check,
                 session: Some(self.session.clone()),
             },
-            held.as_ref(),
+            held.as_deref(),
         );
         match stored {
             Ok((outcome, updated)) => {
-                self.took(&updated.snapshot);
+                self.took(&Arc::new(updated.snapshot));
                 self.updated(&updated.changed, &updated.removed);
                 Ok(match outcome {
                     cortex_knowledge::ProposalOutcome::Stored => ProposalOutcome::Stored,
@@ -705,10 +800,15 @@ pub(crate) async fn update(
         for new in &params.add {
             if !matches!(new.kind, EntryKind::Unknown(_))
                 && (finds(&new.text)
-                    || new
-                        .command
-                        .as_ref()
-                        .is_some_and(|command| finds(&command.command)))
+                    || new.command.as_ref().is_some_and(|command| {
+                        finds(&command.command) || command.cwd.as_deref().is_some_and(finds)
+                    })
+                    || new.check.as_ref().is_some_and(|check| {
+                        [&check.path, &check.pattern, &check.command]
+                            .into_iter()
+                            .flatten()
+                            .any(|text| finds(text))
+                    }))
             {
                 return Err(credential("An entry to add"));
             }
@@ -719,22 +819,20 @@ pub(crate) async fn update(
             }
         }
         if promoted {
-            let snapshot = project.load(held.as_ref());
+            // Everything of the entry that the repository's file would
+            // hold: its evidence and its check with its text.
+            let snapshot = project.load(held.as_deref());
             for change in &params.changes {
                 if change.action == EntryAction::Promote
                     && let Some(entry) = snapshot.find(&change.id)
-                    && (finds(&entry.text)
-                        || entry
-                            .command
-                            .as_ref()
-                            .is_some_and(|command| finds(&command.run)))
+                    && entry_holds(entry, &finds)
                 {
                     return Err(credential("An entry to promote"));
                 }
             }
         }
         project
-            .update(&params.changes, &params.add, held.as_ref())
+            .update(&params.changes, &params.add, held.as_deref())
             .map_err(|failure| refused(&failure))
     })
     .await?;
@@ -742,9 +840,10 @@ pub(crate) async fn update(
     // Every session of the project in this process takes what follows at
     // once: an accepted command stops asking, and one turned off asks.
     let sessions: Vec<Arc<crate::core::Live>> = core.sessions_of(&key);
+    let snapshot = Arc::new(updated.snapshot);
     for live in &sessions {
         if let Some(knowledge) = &live.knowledge {
-            knowledge.took(&updated.snapshot);
+            knowledge.took(&snapshot);
             knowledge.updated(&updated.changed, &updated.removed);
             if promoted {
                 knowledge.touched_shared_file();
@@ -753,6 +852,99 @@ pub(crate) async fn update(
     }
     Ok(ProjectEntriesResult {
         entries: updated.changed.iter().map(Entry::to_wire).collect(),
-        problems: updated.snapshot.problems().to_vec(),
+        problems: snapshot.problems().to_vec(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, reason = "a test fails by panicking")]
+
+    use super::*;
+
+    fn rule(line: &str) -> Rule {
+        exact_command_rule(line, ShellSyntax::Posix).unwrap()
+    }
+
+    /// A change of level gives the new engine the learned rules while it
+    /// holds them. Handed over after the lock was let go, the list of a
+    /// moment ago could arrive after a `disable`'s empty one, and the
+    /// command would run unasked on an engine believed to have no rule
+    /// (found by the independent read of the trust path).
+    #[test]
+    fn the_rules_are_handed_to_a_new_engine_while_they_are_held() {
+        let given = Mutex::new(Given {
+            rules: vec![rule("cargo test")],
+            from: None,
+            until: None,
+        });
+        let handed = regive(&given, |rules| {
+            assert_eq!(rules, [rule("cargo test")]);
+            assert!(
+                given.try_lock().is_err(),
+                "another change of the rules could come between the copy and the hand-over"
+            );
+            Ok::<(), ()>(())
+        });
+        assert_eq!(handed, Ok(()));
+        assert_eq!(lock(&given).rules, [rule("cargo test")]);
+
+        // A list the engine refuses leaves no rule held: none is in force.
+        assert_eq!(regive(&given, |_| Err(())), Err(()));
+        assert_eq!(lock(&given).rules, Vec::<Rule>::new());
+    }
+
+    #[test]
+    fn every_text_of_an_entry_that_a_file_keeps_is_looked_at_for_a_credential() {
+        let finds = |text: &str| text.contains("SECRET");
+        let entry = |change: &dyn Fn(&mut Entry)| {
+            let mut entry = Entry::written(
+                EntryId::new("k_1"),
+                cortex_knowledge::Scope::Private,
+                Kind::Command,
+                "Runs the tests.",
+            );
+            entry.command = Some(cortex_knowledge::Command {
+                purpose: Purpose::Test,
+                run: "cargo test".to_owned(),
+                cwd: Some("crates/app".to_owned()),
+                usual_ms: None,
+                read_only: false,
+            });
+            change(&mut entry);
+            entry
+        };
+        assert!(!entry_holds(&entry(&|_| {}), &finds));
+        let with: [&dyn Fn(&mut Entry); 8] = [
+            &|entry| entry.text = "SECRET".to_owned(),
+            &|entry| entry.evidence = Some("SECRET".to_owned()),
+            &|entry| entry.command.as_mut().unwrap().run = "SECRET".to_owned(),
+            &|entry| entry.command.as_mut().unwrap().cwd = Some("SECRET".to_owned()),
+            &|entry| {
+                entry.check = Some(Check::Exists {
+                    path: "SECRET".to_owned(),
+                });
+            },
+            &|entry| {
+                entry.check = Some(Check::Contains {
+                    path: "SECRET".to_owned(),
+                    pattern: "x".to_owned(),
+                });
+            },
+            &|entry| {
+                entry.check = Some(Check::Contains {
+                    path: "x".to_owned(),
+                    pattern: "SECRET".to_owned(),
+                });
+            },
+            &|entry| {
+                entry.check = Some(Check::Command {
+                    command: "curl -H SECRET".to_owned(),
+                });
+            },
+        ];
+        for (index, change) in with.into_iter().enumerate() {
+            assert!(entry_holds(&entry(change), &finds), "case {index}");
+        }
+    }
 }
