@@ -605,6 +605,13 @@ impl Routes {
             self.in_flight.fetch_add(1, Ordering::SeqCst);
             return Route::Lane { write: true };
         }
+        // The workspace's files are asked for only once an open has
+        // answered, and depend on no write after it: they never wait in the
+        // lane, behind a fork's close of the session it forked (the
+        // re-review of step 23's second pull request).
+        if matches!(op, Op::WorkspaceFiles(_)) {
+            return Route::Beside;
+        }
         if self.in_flight.load(Ordering::SeqCst) > 0 {
             Route::Lane { write: false }
         } else {
@@ -612,10 +619,43 @@ impl Routes {
         }
     }
 
+    /// A write the lane is running, counted as done when what this gives is
+    /// dropped: once it has answered, and also if it panicked.
+    fn running(&self, write: bool) -> Running {
+        Running {
+            routes: write.then(|| self.clone()),
+        }
+    }
+
     /// A write the lane ran is done.
     fn written(&self) {
         self.in_flight.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// A write under way in the lane: done when dropped.
+struct Running {
+    routes: Option<Routes>,
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let Some(routes) = &self.routes {
+            routes.written();
+        }
+    }
+}
+
+/// The answer to an operation that could not be handed to the core.
+fn core_gone(ticket: Ticket) -> Inbound {
+    Inbound::Done(
+        ticket,
+        Err(ErrorData::new(
+            ErrorKind::Internal,
+            "core_gone",
+            "The core has stopped.",
+        )),
+    )
 }
 
 /// Whether an operation only reads, and so may run beside the ordered ones.
@@ -693,10 +733,9 @@ impl CoreThread {
                         let routes = routes.clone();
                         tokio::spawn(async move {
                             while let Some((ticket, op, write)) = written.recv().await {
+                                let running = routes.running(write);
                                 let result = core.handle(client.id, op).await.map_err(|e| *e);
-                                if write {
-                                    routes.written();
-                                }
+                                drop(running);
                                 push(&done, Inbound::Done(ticket, result));
                                 wake.wake();
                             }
@@ -705,7 +744,16 @@ impl CoreThread {
                     while let Some((ticket, op)) = lane.recv().await {
                         let route = routes.route(&op);
                         if let Route::Lane { write } = route {
-                            let _ = writes.send((ticket, op, write));
+                            // A lane task that is gone answers nothing: what
+                            // it is sent is answered here, as the link
+                            // answers what it cannot send.
+                            if writes.send((ticket, op, write)).is_err() {
+                                if write {
+                                    routes.written();
+                                }
+                                push(&thread_done, core_gone(ticket));
+                                thread_slot.wake();
+                            }
                         } else {
                             let core = core.clone();
                             let (done, wake) = (Arc::clone(&thread_done), thread_slot.clone());
@@ -893,11 +941,10 @@ mod tests {
         assert_eq!(code, exit::USAGE);
     }
 
-    /// A queue the core closed is the end of the connection, said once,
-    /// after what was in it.
     /// A read runs beside the lane while no write is under way, and after
     /// the writes sent before it while one is: a list after a revoke sees
-    /// the revoke.
+    /// the revoke. The workspace's files never wait in the lane, and a write
+    /// is done when its run is dropped, whether it answered or panicked.
     #[test]
     fn a_read_after_a_write_waits_for_it_and_one_alone_runs_beside() {
         use cortex_protocol::methods::{PermissionsRevokeParams, SessionRef};
@@ -915,10 +962,29 @@ mod tests {
         });
         assert_eq!(routes.route(&revoke), Route::Lane { write: true });
         assert_eq!(routes.route(&list()), Route::Lane { write: false });
-        routes.written();
+        let files = Op::WorkspaceFiles(cortex_protocol::methods::WorkspaceFilesParams {
+            session_id: session.clone(),
+            limit: None,
+        });
+        assert_eq!(
+            routes.route(&files),
+            Route::Beside,
+            "files waited in the lane"
+        );
+        drop(routes.running(true));
+        assert_eq!(routes.route(&list()), Route::Beside);
+        // A run that panics is done all the same.
+        let _ = routes.route(&revoke);
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _running = routes.running(true);
+            panic!("a write that panics");
+        }));
+        assert!(panicked.is_err());
         assert_eq!(routes.route(&list()), Route::Beside);
     }
 
+    /// A queue the core closed is the end of the connection, said once,
+    /// after what was in it.
     #[test]
     fn a_closed_queue_is_the_end_of_the_connection_said_once() {
         let mut said = false;

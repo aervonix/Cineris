@@ -1628,10 +1628,14 @@ impl Core {
             ServerRequest::Question(question.clone())
         });
         let answered = self.inner.options.cancel.race(answer).await;
-        let resolution = if self.inner.clients.close(&id) {
-            Resolution::Cancelled
-        } else {
+        // Answered only when an answer came: a request withdrawn because its
+        // askers left is closed already, and was not answered (the
+        // re-review of step 23's second pull request).
+        let closed = self.inner.clients.close(&id);
+        let resolution = if !closed && matches!(answered, Some(Ok(_))) {
             Resolution::Answered
+        } else {
+            Resolution::Cancelled
         };
         live.handle.emit(Event::RequestResolved(RequestResolved {
             request_id: id,

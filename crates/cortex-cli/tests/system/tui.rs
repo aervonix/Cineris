@@ -878,6 +878,11 @@ fn sys_a_signal_ends_the_application_gracefully_with_its_code() {
     let pid = child_status(&session)
         .and_then(|status| status_field(&status, "Pid:"))
         .expect("the binary's process");
+    // No core dump: the default action would write one wherever dumps are
+    // on (a desk's systemd-coredump), costing time and disk each run.
+    let _ = Command::new("prlimit")
+        .args(["--core=0", "--pid", pid.as_str()])
+        .status();
     let sent = Command::new("kill")
         .args(["-ABRT".to_owned(), pid])
         .status()

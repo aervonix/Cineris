@@ -721,8 +721,8 @@ caught-by:
 rule: The operations that change a session run on a task of their own, so that the end of the interface is never behind the one in progress.
 file: crates/cortex-cli/src/interactive.rs
 in: CoreThread::start
-find: let _ = writes.send((ticket, op, write));
-replace: { if write { routes.written(); } push(&thread_done, Inbound::Done(ticket, core.handle(client.id, op).await.map_err(|e| *e))); thread_slot.wake(); }
+find: if writes.send((ticket, op, write)).is_err() {
+replace: if { let running = routes.running(write); push(&thread_done, Inbound::Done(ticket, core.handle(client.id, op).await.map_err(|e| *e))); drop(running); thread_slot.wake(); false } {
 packages: cortex-cli
 caught-by:
     cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
@@ -964,3 +964,43 @@ replace: if ends_with_askers && !reached && asked.is_empty() {
 packages: cortex-core
 caught-by:
     clients::tests::a_request_put_to_askers_already_gone_ends_at_once
+
+[break] a-deadline-under-the-viewer
+rule: Under the viewer no dialog is drawn, so none of its times is due: the loop sleeps.
+file: crates/cortex-tui/src/app/state.rs
+in: App::deadline
+find: if self.viewing() {
+replace: if self.viewing() && self.dialogs.is_empty() {
+packages: cortex-tui
+caught-by:
+    app::tests::a_viewer_opened_over_a_dialog_in_its_grace_leaves_nothing_due
+
+[break] a-viewer-key-not-the-last-key
+rule: A key in the viewer is the key before the next, so that typing that goes on as it closes answers no dialog.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: self.last_key = Some(at);
+replace: let _ = at;
+packages: cortex-tui
+caught-by:
+    app::tests::a_key_straight_after_the_viewer_closes_does_not_answer
+
+[break] files-wait-in-the-lane
+rule: The workspace's files never wait in the core thread's lane.
+file: crates/cortex-cli/src/interactive.rs
+in: Routes::route
+find: if matches!(op, Op::WorkspaceFiles(_)) {
+replace: if matches!(op, Op::WorkspaceFiles(_)) && self.in_flight.load(Ordering::SeqCst) == 0 {
+packages: cortex-cli
+caught-by:
+    interactive::tests::a_read_after_a_write_waits_for_it_and_one_alone_runs_beside
+
+[break] a-withdrawn-question-called-answered
+rule: A question is resolved as answered only when an answer came; one withdrawn because its askers left is cancelled.
+file: crates/cortex-core/src/core.rs
+in: Core::put_them_back
+find: if !closed && matches!(answered, Some(Ok(_))) {
+replace: if !closed {
+packages: cortex-core
+caught-by:
+    asking::a_question_whose_client_went_away_ends_as_no_answer

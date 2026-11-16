@@ -329,3 +329,13 @@ An independent reviewer read the whole of the second pull request before it was 
 | A profile the project defines that fails to load only when selected might fail every open | Not so: a project's profiles are checked when its files are loaded, and one that cannot be read refuses the file at every open, as before this step |
 | 09 said the history is read after the first frame | It is read from the start, beside the start-up; 09 says so |
 
+A second reviewer then read the fixes alone. What it found, and what each changed:
+
+| Finding | Changed |
+|---|---|
+| On `--fork`, `workspace/files` still waited in the lane, behind the close of the session forked | The workspace's files never wait in the lane: they are asked for only once an open has answered |
+| A lane task that panicked would leave its write counted for good, and every later read unanswered | A write is done when its run is dropped, panic or not; what cannot be handed to the lane is answered as the core gone |
+| No test held the viewer's deadline or its last key | `a_viewer_opened_over_a_dialog_in_its_grace_leaves_nothing_due`, `a_key_straight_after_the_viewer_closes_does_not_answer` |
+| A question withdrawn because its askers left was resolved as answered | Answered only when an answer came |
+| The abort test made a real core dump | The binary's core limit is set to nothing first |
+
