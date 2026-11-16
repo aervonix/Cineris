@@ -89,8 +89,12 @@ fn told(front: &Front) -> Vec<VerificationNotice> {
         .collect()
 }
 
+/// One notice of a round: its phase, and each check's line and how it
+/// ended.
+type Told = (VerificationPhase, Vec<(String, Option<CheckOutcome>)>);
+
 /// The lines a round started with, and how each ended.
-fn rounds(front: &Front) -> Vec<(VerificationPhase, Vec<(String, Option<CheckOutcome>)>)> {
+fn rounds(front: &Front) -> Vec<Told> {
     told(front)
         .into_iter()
         .map(|notice| {
