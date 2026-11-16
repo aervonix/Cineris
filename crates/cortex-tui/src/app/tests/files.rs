@@ -320,11 +320,12 @@ fn perf_a_keys_frame_through_the_loop() {
 }
 
 /// A `workspace/files` that fails (the core's walk, a session closed under
-/// it) says why, once, and the next `@` asks for the list again: it does not
-/// say "listing" for the rest of the program (the review of the fixes after
-/// step 23).
+/// it) says why once, and its `@` menu says the files could not be listed:
+/// frames drawn while that menu is open ask nothing more (a failure that
+/// lasts was a request, an error and a frame over and over). The next `@`
+/// asks again, once.
 #[test]
-fn a_failed_file_listing_says_why_and_is_asked_again_on_the_next_at() {
+fn a_failed_file_listing_says_why_once_and_the_next_at_asks_again() {
     let now = Instant::now();
     let (mut app, link) = app(now);
     opened(&mut app, &link, now);
@@ -338,23 +339,43 @@ fn a_failed_file_listing_says_why_and_is_asked_again_on_the_next_at() {
         Err(ErrorData::new(
             ErrorKind::Internal,
             "store_failed",
-            "The workspace's files could not be listed.",
+            "The walk of the workspace failed.",
         )),
     ));
     drain(&mut app, now);
     let mut seen = Vec::new();
-    let _ = screen(&mut app, now, &mut seen);
-    key(&mut app, "backspace", now);
-    let _ = screen(&mut app, now, &mut seen);
-    type_text(&mut app, "@", now);
-    let _ = screen(&mut app, now, &mut seen);
+    for _ in 0..4 {
+        let _ = screen(&mut app, now, &mut seen);
+        let asked = files_asked(&link);
+        assert!(
+            asked.is_empty(),
+            "asked again with the menu open: {asked:#?}"
+        );
+    }
+    let menu = app.input().menu().cloned().expect("the file menu");
+    assert_eq!(menu.empty, Empty::Unlisted);
     let live = screen(&mut app, now, &mut seen);
-    let again = files_asked(&link);
-    assert_eq!(again.len(), 1, "{again:#?}");
-    let all = [seen, live].concat().join("\n");
+    assert!(
+        live.iter().any(|line| line.contains("could not be listed")),
+        "{live:#?}"
+    );
+    let all = [seen.clone(), live].concat().join("\n");
     assert_eq!(
-        all.matches("could not be listed").count(),
+        all.matches("walk of the workspace failed").count(),
         1,
         "said once: {all}"
     );
+
+    key(&mut app, "backspace", now);
+    let _ = screen(&mut app, now, &mut seen);
+    assert!(files_asked(&link).is_empty(), "asked with no `@`");
+    type_text(&mut app, "@", now);
+    let mut again = Vec::new();
+    for _ in 0..3 {
+        let _ = screen(&mut app, now, &mut seen);
+        again.extend(files_asked(&link));
+    }
+    assert_eq!(again.len(), 1, "{again:#?}");
+    let menu = app.input().menu().cloned().expect("the file menu");
+    assert_eq!(menu.empty, Empty::Listing);
 }

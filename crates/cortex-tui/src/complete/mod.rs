@@ -157,6 +157,9 @@ pub enum Empty {
     NoMatch,
     /// The caller has not handed over the workspace's paths yet.
     Listing,
+    /// The workspace's paths could not be listed (since the fixes of the
+    /// review of step 23).
+    Unlisted,
 }
 
 /// A menu: its rows, which is selected, and which are in view.

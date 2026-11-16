@@ -909,6 +909,7 @@ impl CoreThread {
             done: Arc::clone(&self.done),
             slot: self.slot.clone(),
             next: 0,
+            ahead: None,
             gone_said: false,
         }
     }
@@ -949,6 +950,9 @@ struct InProcess {
     done: Done,
     slot: Slot,
     next: u64,
+    /// The events and requests still to be given before the result that is
+    /// ready: see [`take`].
+    ahead: Option<usize>,
     /// Whether the end of the connection was told.
     gone_said: bool,
 }
@@ -986,17 +990,47 @@ impl Link for InProcess {
     }
 
     fn next(&mut self) -> Option<Inbound> {
-        if let Some(done) = self
-            .done
+        take(
+            &self.done,
+            &self.queue,
+            &mut self.ahead,
+            &mut self.gone_said,
+        )
+    }
+}
+
+/// What the link gives next: a result that is ready only after the events
+/// and requests that were queued when it was first seen (the review of step
+/// 23's fixes), so that a history read's result never overtakes the events
+/// it holds, which the application then takes while it reads and filters.
+/// Only those: a stream of events that goes on does not hold the result
+/// back. `ahead` counts them down; with no result ready, the queue in
+/// order.
+fn take(
+    done: &Done,
+    queue: &EventQueue,
+    ahead: &mut Option<usize>,
+    gone_said: &mut bool,
+) -> Option<Inbound> {
+    let ready = !done
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .is_empty();
+    if ready {
+        let owed = ahead.get_or_insert_with(|| queue.len());
+        if *owed > 0 {
+            *owed -= 1;
+            if let Some(next) = queue.try_next() {
+                return inbound(Some(next), false, gone_said);
+            }
+        }
+        *ahead = None;
+        return done
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .pop_front()
-        {
-            return Some(done);
-        }
-        let next = self.queue.try_next();
-        inbound(next, self.queue.is_closed(), &mut self.gone_said)
+            .pop_front();
     }
+    inbound(queue.try_next(), queue.is_closed(), gone_said)
 }
 
 /// What the link gives for what the client's queue gave: an event, a
@@ -1199,6 +1233,83 @@ mod tests {
             routes.route(&list),
             Route::Beside,
             "a write is counted for good"
+        );
+    }
+
+    fn event(seq: u64, event: cortex_protocol::event::Event) -> cortex_protocol::SessionEvent {
+        cortex_protocol::SessionEvent {
+            session_id: SessionId::from("s_a"),
+            seq,
+            turn_id: None,
+            event,
+        }
+    }
+
+    fn seq_of(inbound: Option<Inbound>) -> Option<u64> {
+        match inbound {
+            Some(Inbound::Event(event)) => Some(event.seq),
+            Some(Inbound::Done(Ticket(ticket), _)) => Some(1000 + ticket),
+            _ => None,
+        }
+    }
+
+    fn read_result() -> Inbound {
+        Inbound::Done(
+            Ticket(7),
+            Ok(cortex_protocol::methods::OpResult::SessionRead(
+                cortex_protocol::methods::SessionReadResult {
+                    items: Vec::new(),
+                    incomplete: Vec::new(),
+                    next_cursor: None,
+                    seq: 9,
+                },
+            )),
+        )
+    }
+
+    /// A turn begun after the open, at a call when the read is taken: its
+    /// `turn.started` and items were queued before the read's result, and
+    /// come before it, so the application holds them while it reads and
+    /// takes the turn as running (the review of step 23's fixes found the
+    /// result given first: the call cut off, and its result in a second
+    /// box).
+    #[test]
+    fn a_result_comes_after_the_events_queued_ahead_of_it() {
+        use cortex_protocol::event::{Event, TurnStarted};
+        let queue = EventQueue::new(64, true);
+        let done: Done = Arc::new(Mutex::new(VecDeque::new()));
+        let (mut ahead, mut said) = (None, false);
+        queue.push(event(6, Event::TurnStarted(TurnStarted {})));
+        queue.push(event(7, Event::TurnStarted(TurnStarted {})));
+        queue.push(event(9, Event::TurnStarted(TurnStarted {})));
+        push(&done, read_result());
+        let mut order = Vec::new();
+        while let Some(seq) = seq_of(take(&done, &queue, &mut ahead, &mut said)) {
+            order.push(seq);
+        }
+        assert_eq!(order, [6, 7, 9, 1007]);
+    }
+
+    /// Only what was queued when the result was first seen comes before
+    /// it: events that keep coming do not hold it back.
+    #[test]
+    fn events_that_keep_coming_do_not_hold_a_result_back() {
+        use cortex_protocol::event::{Event, TurnStarted};
+        let queue = EventQueue::new(64, true);
+        let done: Done = Arc::new(Mutex::new(VecDeque::new()));
+        let (mut ahead, mut said) = (None, false);
+        queue.push(event(1, Event::TurnStarted(TurnStarted {})));
+        queue.push(event(2, Event::TurnStarted(TurnStarted {})));
+        push(&done, read_result());
+        let mut order = Vec::new();
+        for seq in 3..8 {
+            order.push(seq_of(take(&done, &queue, &mut ahead, &mut said)));
+            queue.push(event(seq, Event::TurnStarted(TurnStarted {})));
+        }
+        assert_eq!(
+            order,
+            [Some(1), Some(2), Some(1007), Some(3), Some(4)],
+            "the result after the two queued before it"
         );
     }
 

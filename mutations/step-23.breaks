@@ -213,7 +213,7 @@ caught-by:
 rule: Of the events held while the history was read, those it already holds (seq up to the read's) are dropped.
 file: crates/cortex-tui/src/app/state.rs
 in: ReadMark::holds
-find: None => event.seq <= self.seq
+find: None => self.whole && event.seq <= self.seq
 replace: None => false
 caught-by:
     app::tests::a_resumed_session_draws_its_history_then_what_came_after

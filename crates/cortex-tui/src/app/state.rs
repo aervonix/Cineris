@@ -90,8 +90,8 @@ enum Pending {
     /// A page of this stored session's history, to draw while it is the
     /// one being read.
     History(SessionId),
-    /// The workspace's files, for `@` completion.
-    Files,
+    /// The workspace's files of this session, for `@` completion.
+    Files(SessionId),
 }
 
 /// The last key read, for the dialogs' rules (`super::dialog`).
@@ -502,11 +502,11 @@ impl App {
             self.files_listing = true;
             let ticket = self.link.send(Op::WorkspaceFiles(
                 cortex_protocol::methods::WorkspaceFilesParams {
-                    session_id: session,
+                    session_id: session.clone(),
                     limit: None,
                 },
             ));
-            self.pending.insert(ticket, Pending::Files);
+            self.pending.insert(ticket, Pending::Files(session));
         }
         if let Some(search) = &self.file_search
             && let Some(query) = self.input.take_file_query()
@@ -1115,6 +1115,8 @@ impl App {
             // A result for a session left meanwhile is not this one's.
             (Pending::Undo(id) | Pending::Set(id) | Pending::Config(_, id), _)
                 if !self.is_open(&id) => {}
+            // The next session's first `@` asks for its own.
+            (Pending::Files(id), _) if !self.is_open(&id) => self.files_listing = false,
             (Pending::History(id), _) if !(self.reading && self.is_open(&id)) => {}
             (Pending::Undo(_), Ok(OpResult::SessionUndo(result))) => {
                 self.session = Some(result.session);
@@ -1135,7 +1137,7 @@ impl App {
             (Pending::History(id), Ok(OpResult::SessionRead(page))) => {
                 self.history_read(id, page, now);
             }
-            (Pending::Files, Ok(OpResult::WorkspaceFiles(files))) => {
+            (Pending::Files(_), Ok(OpResult::WorkspaceFiles(files))) => {
                 // Listed and matched on a thread of their own: at the
                 // core's cap either takes longer than a key's budget. With no
                 // thread, on the key's path. The paths are moved into the
@@ -1149,16 +1151,18 @@ impl App {
                     Err(paths) => self.input.set_files(paths),
                 }
             }
-            // What was drawn before the page that failed is dealt with as a
-            // whole read's.
-            // Asked again on the next `@`.
-            (Pending::Files, Err(error)) => {
+            // The `@` menu says why, and the next one asks again; this one
+            // asks nothing more.
+            (Pending::Files(_), Err(error)) => {
                 self.files_listing = false;
+                self.input.files_unlisted();
                 self.error(&error);
             }
+            // What the pages before the one that failed drew is dealt with
+            // as a read's, but nothing is taken for cut off.
             (Pending::History(id), Err(error)) => {
                 let seq = self.history_seq;
-                self.read_ended(id, seq, now);
+                self.read_ended(id, seq, false, now);
                 self.error(&error);
             }
             (_, Err(error)) => self.error(&error),
@@ -1357,26 +1361,39 @@ impl App {
                 );
             }
         }
+        // An item that still gets events is among the last the read drew:
+        // only those are kept, not every id of a long history.
+        let older = self
+            .history_items
+            .len()
+            .saturating_sub(HISTORY_PAGE as usize);
+        self.history_items.drain(..older);
         self.history_seq = Some(page.seq);
         if let Some(cursor) = page.next_cursor {
             self.read_history(session, Some(cursor));
             return;
         }
-        self.read_ended(session, Some(page.seq), now);
+        self.read_ended(session, Some(page.seq), true, now);
+    }
+
+    /// How many items the read in progress keeps the ids of.
+    #[cfg(test)]
+    pub(super) fn history_kept(&self) -> usize {
+        self.history_items.len()
     }
 
     /// The read of `session`'s history has ended, its last page read at
-    /// `seq` (none when its first page failed). Whether a turn ran at the
-    /// read is decided, and the events held meanwhile follow, but for those
-    /// the read already holds; so do those taken after it, which the link
-    /// may give after the read's result though they were queued before it.
-    fn read_ended(&mut self, session: SessionId, seq: Option<u64>, now: Instant) {
+    /// `seq` (none when its first page failed), `whole` when no page failed.
+    /// Whether a turn ran at the read is decided, and the events held
+    /// meanwhile follow, but for those the read already holds; so do those
+    /// taken after it, which a link may give after the read's result though
+    /// they were queued before it.
+    fn read_ended(&mut self, session: SessionId, seq: Option<u64>, whole: bool, now: Instant) {
         self.reading = false;
         self.history_seq = None;
-        // An item that still gets events is among the last the read drew.
-        let items = std::mem::take(&mut self.history_items);
-        let recent = items.len().saturating_sub(HISTORY_PAGE as usize);
-        let drawn: HashMap<String, Option<u64>> = items.into_iter().skip(recent).collect();
+        let drawn: HashMap<String, Option<u64>> = std::mem::take(&mut self.history_items)
+            .into_iter()
+            .collect();
         let held = std::mem::take(&mut self.held);
         // Whether a turn was running when the read was taken: an item in
         // progress says so, and else this session's turn events held up to
@@ -1405,14 +1422,16 @@ impl App {
             // A turn this client did not start (another's, or one begun
             // before the open) is running: `Enter` steers it.
             self.start_running(now);
-        } else {
-            // A call the history holds with no result was cut off.
+        } else if whole {
+            // A call the history holds with no result was cut off. With a
+            // page missing, its result may be on that page.
             self.mapper.turn_done(&mut self.transcript, now);
         }
         self.read_mark = seq.map(|seq| ReadMark {
             session,
             seq,
             drawn,
+            whole,
         });
         for event in held {
             self.event(event, now);
@@ -1783,12 +1802,16 @@ struct ReadMark {
     /// The last page's worth of the items it drew: `None` for one drawn
     /// whole, the `seq` of its page for one drawn in progress.
     drawn: HashMap<String, Option<u64>>,
+    /// No page failed: an item it does not hold, of before its `seq`, came
+    /// to nothing. With a page missing, it may be on that page.
+    whole: bool,
 }
 
 impl ReadMark {
     /// Whether the read already drew `event`: of an item it drew whole, any;
     /// of one it drew in progress, those up to its page's `seq`; of any
-    /// other item, those up to the read's (an item that came to nothing).
+    /// other item, those up to the read's (an item that came to nothing),
+    /// when no page failed.
     fn holds(&self, event: &SessionEvent) -> bool {
         if event.session_id != self.session {
             return false;
@@ -1799,7 +1822,7 @@ impl ReadMark {
         match self.drawn.get(id) {
             Some(None) => true,
             Some(Some(seq)) => event.seq <= *seq,
-            None => event.seq <= self.seq,
+            None => self.whole && event.seq <= self.seq,
         }
     }
 }

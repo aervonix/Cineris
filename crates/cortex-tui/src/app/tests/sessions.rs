@@ -859,3 +859,184 @@ fn a_history_whose_page_fails_part_way_draws_nothing_twice() {
     assert!(all.contains("could not be read"), "{all}");
     assert!(app.running(), "the item in progress says a turn runs");
 }
+
+// ------------------------ the follow-up review of the fixes after step 23
+
+/// A history whose second page fails: what the pages before it did not
+/// hold may be on the missing one, so its events are shown, and a call with
+/// no result there is not taken for cut off: its result ends it in its box.
+#[test]
+fn a_history_whose_page_fails_part_way_shows_what_it_does_not_hold_and_cuts_nothing_off() {
+    let now = Instant::now();
+    let (mut app, link) = app_opening(now, None, Open::Resume(SessionId::from("s_a")));
+    let (read, _) = resumed(&mut app, &link, "s_a", "claude-opus-5-5", now);
+    link.give(ev(
+        "s_a",
+        8,
+        Event::ItemCompleted(ItemCompleted {
+            item: answer("i_9", vec![Part::text("Said on the missing page.\n")]),
+        }),
+    ));
+    drain(&mut app, now);
+    link.give(Inbound::Done(
+        read,
+        Ok(OpResult::SessionRead(SessionReadResult {
+            items: vec![
+                user("i_1", "check it"),
+                answer("i_2", vec![shell_call("c_1")]),
+            ],
+            incomplete: Vec::new(),
+            next_cursor: Some("500".to_owned()),
+            seq: 9,
+        })),
+    ));
+    drain(&mut app, now);
+    let next = ticket(&link.take_sent(), |op| matches!(op, Op::SessionRead(_)));
+    link.give(Inbound::Done(
+        next,
+        Err(ErrorData::new(
+            ErrorKind::Internal,
+            "store_failed",
+            "The session's log could not be read.",
+        )),
+    ));
+    drain(&mut app, now);
+    link.give(ev(
+        "s_a",
+        10,
+        Event::ItemCompleted(ItemCompleted {
+            item: shell_result("i_3", "c_1", ToolOutcome::Success),
+        }),
+    ));
+    drain(&mut app, now);
+    let all = everything(&mut app, now);
+    let joined = all.join("\n");
+    assert!(joined.contains("Said on the missing page."), "{joined}");
+    let runs = runs(&all);
+    assert_eq!(runs.len(), 1, "{all:#?}");
+    assert!(runs[0].contains('\u{2713}'), "{all:#?}");
+}
+
+/// A turn begun after the open is at a call when the read is taken; its
+/// `turn.started` and items come before the read's result, as the binary's
+/// link gives them (the follow-up review of step 23's fixes): the turn is
+/// taken as running, and the call's result ends it in one box.
+#[test]
+fn a_call_of_a_turn_begun_after_the_open_ends_in_one_box() {
+    let now = Instant::now();
+    let (mut app, link) = app_opening(now, None, Open::Resume(SessionId::from("s_a")));
+    let (read, _) = resumed(&mut app, &link, "s_a", "claude-opus-5-5", now);
+    let call = answer("i_2", vec![shell_call("c_1")]);
+    link.give(ev("s_a", 6, Event::TurnStarted(TurnStarted {})));
+    link.give(ev(
+        "s_a",
+        7,
+        Event::ItemCompleted(ItemCompleted {
+            item: user("i_1", "check it"),
+        }),
+    ));
+    link.give(ev(
+        "s_a",
+        9,
+        Event::ItemCompleted(ItemCompleted { item: call.clone() }),
+    ));
+    link.give(Inbound::Done(
+        read,
+        Ok(read_result(vec![user("i_1", "check it"), call], &[], 10)),
+    ));
+    link.give(ev(
+        "s_a",
+        11,
+        Event::ItemStarted(ItemStarted {
+            item_id: ItemId::from("i_3"),
+            kind: ItemKind::ToolResult,
+            tool: Some("shell".to_owned()),
+            call_id: Some(CallId::from("c_1")),
+        }),
+    ));
+    link.give(ev(
+        "s_a",
+        12,
+        Event::ItemCompleted(ItemCompleted {
+            item: shell_result("i_3", "c_1", ToolOutcome::Success),
+        }),
+    ));
+    drain(&mut app, now);
+    assert!(app.running());
+    let all = everything(&mut app, now);
+    let runs = runs(&all);
+    assert_eq!(runs.len(), 1, "{all:#?}");
+    assert!(runs[0].contains('\u{2713}'), "{all:#?}");
+}
+
+/// A listing of A's files that comes back once the person has left A for B
+/// is not taken for B: B's first `@` asks for B's own.
+#[test]
+fn a_file_listing_of_the_session_left_is_not_taken_for_the_next() {
+    let now = Instant::now();
+    let (mut app, link) = app_opening(now, None, Open::Resume(SessionId::from("s_a")));
+    let (read, _) = resumed(&mut app, &link, "s_a", "claude-opus-5-5", now);
+    link.give(Inbound::Done(read, Ok(read_result(Vec::new(), &[], 5))));
+    drain(&mut app, now);
+    let _ = link.take_sent();
+    type_text(&mut app, "@", now);
+    let _ = app.frame(now);
+    let listing = ticket(&link.take_sent(), |op| matches!(op, Op::WorkspaceFiles(_)));
+    key(&mut app, "backspace", now);
+    pick_second_session(&mut app, &link, now);
+    let open_b = ticket(
+        &link.take_sent(),
+        |op| matches!(op, Op::SessionOpen(o) if o.session_id == SessionId::from("s_b")),
+    );
+    link.give(Inbound::Done(
+        listing,
+        Ok(OpResult::WorkspaceFiles(
+            cortex_protocol::methods::WorkspaceFilesResult {
+                paths: vec!["of_a.rs".to_owned()],
+                truncated: false,
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    link.give(Inbound::Done(
+        open_b,
+        Ok(OpResult::SessionOpen(SessionResult {
+            session: state_of("s_b", "claude-opus-5-5"),
+        })),
+    ));
+    drain(&mut app, now);
+    let read_b = ticket(&link.take_sent(), |op| matches!(op, Op::SessionRead(_)));
+    link.give(Inbound::Done(read_b, Ok(read_result(Vec::new(), &[], 5))));
+    drain(&mut app, now);
+    type_text(&mut app, "@", now);
+    let _ = app.frame(now);
+    let sent = link.take_sent();
+    assert!(
+        sent.iter().any(|(_, op)| matches!(
+            op,
+            Op::WorkspaceFiles(p) if p.session_id == SessionId::from("s_b")
+        )),
+        "{sent:#?}"
+    );
+}
+
+/// A long history's read keeps the ids of the last page's worth of items,
+/// not every item it has drawn.
+#[test]
+fn a_long_historys_read_keeps_only_the_last_pages_worth_of_ids() {
+    let now = Instant::now();
+    let (mut app, link) = app_opening(now, None, Open::Resume(SessionId::from("s_a")));
+    let (read, _) = resumed(&mut app, &link, "s_a", "claude-opus-5-5", now);
+    let items: Vec<Item> = (0..700).map(|n| user(&format!("i_{n}"), "asked")).collect();
+    link.give(Inbound::Done(
+        read,
+        Ok(OpResult::SessionRead(SessionReadResult {
+            items,
+            incomplete: Vec::new(),
+            next_cursor: Some("700".to_owned()),
+            seq: 9,
+        })),
+    ));
+    drain(&mut app, now);
+    assert_eq!(app.history_kept(), 500, "a page of history is 500 items");
+}

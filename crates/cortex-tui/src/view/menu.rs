@@ -149,6 +149,7 @@ fn rows(menu: &Menu, look: &Look, width: usize, lines: &mut Vec<Line>) {
 fn empty_text(menu: &Menu, look: &Look) -> String {
     match (menu.empty, &menu.kind) {
         (Empty::Listing, _) => format!("listing the workspace's files{}", look.glyphs.ellipsis),
+        (Empty::Unlisted, _) => "the workspace's files could not be listed".to_owned(),
         (Empty::NoMatch, Kind::Files { .. }) => "no file matches".to_owned(),
         (Empty::NoMatch, Kind::Commands) => "no command matches".to_owned(),
         (Empty::NoMatch, Kind::Picker(_)) => "nothing matches".to_owned(),
