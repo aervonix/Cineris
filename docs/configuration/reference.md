@@ -242,8 +242,8 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `rpc.approval_timeout` | length of time, 0s to 1d | `"10m"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | restart | How long an approval waits for a client's answer before it is a denial (`"0s"`: for as long as it takes). The terminal UI is not a server and sets none. |
-| `rpc.stalled_client` | length of time, 1s to 1h | `"30s"` | tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only | restart | How long a client may take nothing the server sends while whole events wait for it past its queue, before its connection is closed. The session goes on. |
+| `rpc.approval_timeout` | length of time, 0s to 1d | `"10m"` | user only | restart | How long an approval waits for a client's answer before it is a denial (`"0s"`: for as long as it takes). The terminal UI is not a server and sets none. |
+| `rpc.stalled_client` | length of time, 1s to 1h | `"30s"` | user only | restart | How long a client may take nothing the server sends while whole events wait for it past its queue, before its connection is closed. The session goes on. |
 
 ## Reserved sections
 

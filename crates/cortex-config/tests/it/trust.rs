@@ -109,7 +109,9 @@ fn the_documented_classes_hold() {
         // A project may define a profile and may not select one.
         "profile",
         "log.level",
-        "rpc.*",
+        // The RPC server's waits, read once when it starts.
+        "rpc.approval_timeout",
+        "rpc.stalled_client",
         // The program that runs every command, and how it is started.
         "shell.program",
         "shell.args",

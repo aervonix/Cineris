@@ -919,7 +919,7 @@
             "maximum": 86400000,
             "minimum": 0
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cortex-trust": "user only"
         },
         "stalled_client": {
           "default": "30s",
@@ -931,7 +931,7 @@
             "maximum": 3600000,
             "minimum": 1000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cortex-trust": "user only"
         }
       },
       "type": "object"

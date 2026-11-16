@@ -118,7 +118,8 @@ terminal.keyboard                  user only
 terminal.color                     user only
 terminal.hyperlinks                user only
 terminal.unicode                   user only
-rpc.*                              user only
+rpc.approval_timeout               user only
+rpc.stalled_client                 user only
 hooks.*                            runs code
 extensions.*                       runs code
 skills.*                           user only

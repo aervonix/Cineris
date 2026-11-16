@@ -44,6 +44,9 @@ use crate::signals::{self, Interrupt};
 /// the interactive mode's end does.
 const END: Duration = Duration::from_secs(5);
 
+/// How long the end waits for the last lines to reach standard output.
+const LAST_LINES: Duration = Duration::from_secs(1);
+
 /// Runs the server. Returns the exit code.
 pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
     if let Some(flag) = serve.run_only() {
@@ -224,7 +227,7 @@ fn core_thread(
                 );
             }
         };
-        let transport = match Transport::blocking(io::stdin(), io::stdout()) {
+        let (transport, written) = match Transport::blocking(io::stdin(), io::stdout()) {
             Ok(transport) => transport,
             Err(error) => {
                 eprintln!("{name}: standard I/O could not be served: {error}");
@@ -237,6 +240,12 @@ fn core_thread(
         options.stalled_client = stalled_client;
         let ended = cortex_rpc::serve_one(core, transport, options, stop, ending).await;
         tracing::info!(?ended, "the server ended");
+        // The last lines (a `shutdown`'s answer) are out before the process
+        // ends, unless the reader stopped reading: the server's end has its
+        // own bound, which this is inside.
+        if !written.wait(LAST_LINES) {
+            tracing::warn!("standard output was not read to the end");
+        }
         exit::COMPLETED
     })
 }

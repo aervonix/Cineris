@@ -358,9 +358,13 @@ impl Connection {
             self.shared.core.disconnect(client.id).await;
         }
         if let Some(lane) = self.dispatcher.as_mut().and_then(Dispatcher::close)
-            && within(&self.shared.options.timer, self.shared.options.lane_end, lane)
-                .await
-                .is_none()
+            && within(
+                &self.shared.options.timer,
+                self.shared.options.lane_end,
+                lane,
+            )
+            .await
+            .is_none()
         {
             tracing::warn!("the connection's last operation did not end in time");
         }
@@ -788,7 +792,9 @@ async fn send(
     queue: Option<&EventQueue>,
 ) -> Result<(), Ended> {
     let options = &shared.options;
-    let look = LOOK.min(options.stalled_client).max(Duration::from_millis(1));
+    let look = LOOK
+        .min(options.stalled_client)
+        .max(Duration::from_millis(1));
     let mut sending = pin!(output.send(line));
     let began = options.clock.monotonic();
     loop {

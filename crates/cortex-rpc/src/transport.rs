@@ -66,7 +66,9 @@ impl Transport {
 
     /// A transport over two blocking streams, each served by a thread of its
     /// own that is not joined: standard input and output for `serve
-    /// --stdio`.
+    /// --stdio`. With it, a way to wait until everything sent has been
+    /// written ([`Written`]): the process must not end with its last line
+    /// still in the writing thread's hands.
     ///
     /// # Errors
     ///
@@ -74,7 +76,7 @@ impl Transport {
     pub fn blocking(
         reader: impl Read + Send + 'static,
         writer: impl Write + Send + 'static,
-    ) -> io::Result<Self> {
+    ) -> io::Result<(Self, Written)> {
         let (chunks, input) = mpsc::channel(CHUNKS);
         // One line waits while the thread writes the one before it: the
         // connection's writer knows a client that stopped reading within a
@@ -83,10 +85,33 @@ impl Transport {
         std::thread::Builder::new()
             .name("cortex-rpc-in".to_owned())
             .spawn(move || read_into(reader, &chunks))?;
+        let (finished, written) = std::sync::mpsc::channel::<()>();
         std::thread::Builder::new()
             .name("cortex-rpc-out".to_owned())
-            .spawn(move || write_from(writer, lines))?;
-        Ok(Self { input, output })
+            .spawn(move || {
+                write_from(writer, lines);
+                // Dropped when the last line is written: the waiter is told.
+                drop(finished);
+            })?;
+        Ok((Self { input, output }, Written(written)))
+    }
+}
+
+/// Says when a blocking stream's writing thread has written everything it
+/// was sent, which is once the transport's output is dropped and the
+/// lines before it are out.
+#[derive(Debug)]
+pub struct Written(std::sync::mpsc::Receiver<()>);
+
+impl Written {
+    /// Waits at most `limit` for the last line to be written. False when
+    /// the time ran out first: a reader that stopped reading holds it.
+    #[must_use]
+    pub fn wait(&self, limit: std::time::Duration) -> bool {
+        matches!(
+            self.0.recv_timeout(limit),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) | Ok(())
+        )
     }
 }
 
@@ -116,7 +141,11 @@ fn read_into(mut reader: impl Read, chunks: &mpsc::Sender<io::Result<Vec<u8>>>) 
 /// fails, which is how it learns the stream has closed.
 fn write_from(mut writer: impl Write, mut lines: mpsc::Receiver<Vec<u8>>) {
     while let Some(line) = lines.blocking_recv() {
-        if writer.write_all(&line).and_then(|()| writer.flush()).is_err() {
+        if writer
+            .write_all(&line)
+            .and_then(|()| writer.flush())
+            .is_err()
+        {
             return;
         }
     }
@@ -140,9 +169,9 @@ mod tests {
     }
 
     /// A writer that hands each write to the test.
-    struct Written(std::sync::mpsc::Sender<Vec<u8>>);
+    struct Writes(std::sync::mpsc::Sender<Vec<u8>>);
 
-    impl Write for Written {
+    impl Write for Writes {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             let _ = self.0.send(bytes.to_vec());
             Ok(bytes.len())
@@ -156,7 +185,7 @@ mod tests {
     fn a_blocking_stream_is_read_to_its_end_and_lines_are_written_whole() {
         let (writes, written) = std::sync::mpsc::channel();
         let reader = Pieces(vec![b"ab".to_vec(), b"c\n".to_vec()].into());
-        let mut transport = Transport::blocking(reader, Written(writes)).unwrap();
+        let (mut transport, done) = Transport::blocking(reader, Writes(writes)).unwrap();
         let mut read = Vec::new();
         while let Some(chunk) = transport.input.blocking_recv() {
             read.extend(chunk.unwrap());
@@ -164,5 +193,8 @@ mod tests {
         assert_eq!(read, b"abc\n");
         transport.output.blocking_send(b"{}\n".to_vec()).unwrap();
         assert_eq!(written.recv().unwrap(), b"{}\n");
+        // Once the output is let go, the thread is done with every line.
+        drop(transport.output);
+        assert!(done.wait(std::time::Duration::from_secs(60)));
     }
 }
