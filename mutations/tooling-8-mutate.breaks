@@ -1,0 +1,381 @@
+# The eighth tooling step's `mutate` part: `--changed REF`, the `in-string`
+# key, the jobs' binding answer that the time is up, and the check of the
+# names of a break of the other system's code by the words of the source.
+
+# ------------------------------------------------------------- --changed
+
+[break] changed-ignores-the-breaks-file
+rule: A break whose `file` the diff touches is chosen by `--changed`.
+file: xtask/src/mutate/changed.rs
+in: select
+find: } else if touched.contains(&one.file) {
+replace: } else if false {
+caught-by:
+    mutate::changed::tests::a_break_is_chosen_by_its_file_and_only_that_break
+
+[break] changed-ignores-a-break-new-in-its-list
+rule: A break that is new or changed in its list is chosen by `--changed`, whatever the diff touches.
+file: xtask/src/mutate/changed.rs
+in: select
+find: } else if !before.contains(&one.definition()) {
+replace: } else if false {
+caught-by:
+    mutate::changed::tests::a_break_is_chosen_when_it_is_new_or_changed_in_its_list_and_not_when_only_its_rule_is
+
+[break] changed-ignores-the-build-settings
+rule: A change to the workspace's manifest, lock file or nextest configuration chooses every break.
+file: xtask/src/mutate/changed.rs
+in: select
+find: let settings = SETTINGS.iter().find(|file| touched.contains(**file));
+replace: let settings: Option<&&str> = None;
+caught-by:
+    mutate::changed::tests::a_change_to_the_builds_settings_chooses_every_break
+
+[break] changed-ignores-a-crates-build-script
+rule: A change to the `Cargo.toml` or `build.rs` of a crate a break runs chooses the break.
+file: xtask/src/mutate/changed.rs
+in: touched_by
+find: ["Cargo.toml", "build.rs"]
+replace: ["build.rs"]
+caught-by:
+    mutate::changed::tests::a_change_to_the_builds_settings_chooses_every_break
+
+[break] changed-reads-only-the-first-crate-of-a-break
+rule: A test of any crate a break runs (`packages`) is one the diff may touch.
+file: xtask/src/mutate/changed.rs
+in: touched_by
+find: packages.iter().map(|name| directory_of(name))
+replace: packages.iter().take(1).map(|name| directory_of(name))
+caught-by:
+    mutate::changed::tests::the_packages_a_break_names_are_the_crates_it_is_judged_in
+
+[break] changed-reads-a-test-by-its-whole-path
+rule: A test is placed by the last segment of its name, since its module path is not a path of files.
+file: xtask/src/mutate/changed.rs
+in: placed
+find: let last = name.rsplit("::").next().unwrap_or(name);
+replace: let last = name;
+caught-by:
+    mutate::changed::tests::a_break_is_chosen_by_a_test_it_names_and_not_by_another
+
+[break] changed-reads-the-binary-as-part-of-the-name
+rule: The binary of a `caught-by` entry is not part of the test's name.
+file: xtask/src/mutate/changed.rs
+in: placed
+find: .map_or(entry, |(_, name)| name.trim());
+replace: .map_or(entry, |(_, _)| entry);
+caught-by:
+    mutate::changed::tests::a_name_that_ends_in_a_star_is_a_beginning
+
+[break] changed-reads-a-star-as-the-whole-word
+rule: An entry that ends in `*` is a beginning of a name.
+file: xtask/src/mutate/changed.rs
+in: touched_by
+find: if prefix {
+replace: if false {
+caught-by:
+    mutate::changed::tests::a_name_that_ends_in_a_star_is_a_beginning
+
+[break] changed-skips-a-name-no-file-has
+rule: A name that no file has cannot be placed, and chooses the break when a file of its crates was touched.
+file: xtask/src/mutate/changed.rs
+in: touched_by
+find: if !found {
+replace: if false {
+caught-by:
+    mutate::changed::tests::a_name_no_file_has_is_chosen_by_any_file_of_the_crates_and_said_so
+
+[break] changed-skips-a-whole-module-pattern
+rule: An entry that ends in `::*` names a whole module and cannot be placed: it chooses the break when a file of its crates was touched.
+file: xtask/src/mutate/changed.rs
+in: touched_by
+find: Placed::Nowhere => return Some(Reason::Unplaced(entry.clone())),
+replace: Placed::Nowhere => {}
+caught-by:
+    mutate::changed::tests::a_name_no_file_has_is_chosen_by_any_file_of_the_crates_and_said_so
+
+[break] changed-forgets-where-a-test-was
+rule: A file's text at the reference is read too: a test that was removed or moved is found by where it was.
+file: xtask/src/mutate/changed.rs
+in: words_of
+find:
+    touched.contains(path)
+    && let Some(text) = sources.old(path)
+replace:
+    false
+    && let Some(text) = sources.old(path)
+caught-by:
+    mutate::changed::tests::a_test_that_was_removed_or_moved_is_touched_by_where_it_was
+
+[break] changed-forgets-a-deleted-file
+rule: A Rust file the diff deleted is read as it was.
+file: xtask/src/mutate/changed.rs
+in: words_of
+find: now.push(path.clone());
+replace:
+caught-by:
+    mutate::changed::tests::a_test_that_was_removed_or_moved_is_touched_by_where_it_was
+
+[break] changed-counts-the-skipped-wrong
+rule: The summary says how many breaks were left.
+file: xtask/src/mutate/changed.rs
+in: summary
+find: let skipped = self.given - self.chosen.len();
+replace: let skipped = self.given;
+caught-by:
+    mutate::changed::tests::the_summary_says_how_many_were_chosen_by_what_and_how_many_left
+
+[break] changed-follows-a-move-to-one-name
+rule: The diff counts both names of a file that was moved.
+file: xtask/src/mutate/changed.rs
+in: changed_files
+find: "--no-renames", "-z"
+replace: "-z"
+caught-by:
+    mutate::changed::tests::sys_a_real_repository_gives_the_files_a_diff_touches_with_both_names_of_a_move
+
+[break] changed-forgets-the-files-git-does-not-know
+rule: A new file git has not been told of is in the diff.
+file: xtask/src/mutate/changed.rs
+in: changed_files
+find: "--others"
+replace: "--deleted"
+caught-by:
+    mutate::changed::tests::sys_a_real_repository_gives_the_files_a_diff_touches_with_both_names_of_a_move
+
+[break] changed-takes-an-option-for-a-reference
+rule: A reference that begins with a dash is refused, not passed to git as an option.
+file: xtask/src/mutate/changed.rs
+in: open
+find: if reference.starts_with('-') {
+replace: if false {
+caught-by:
+    mutate::changed::tests::sys_a_real_repository_gives_the_files_a_diff_touches_with_both_names_of_a_move
+
+[break] changed-needs-no-git-directory
+rule: A tree with no `.git` is told how to have one (`rx --git`), not given a git error.
+file: xtask/src/mutate/changed.rs
+in: open
+find: if !root.join(".git").exists() {
+replace: if false {
+caught-by:
+    mutate::changed::tests::a_tree_with_no_git_is_told_how_to_have_one
+
+[break] changed-takes-the-diff-of-the-wrong-reference
+rule: The diff is from the commit the reference names.
+file: xtask/src/mutate/changed.rs
+in: changed_files
+find: "-z", &self.commit
+replace: "-z", "HEAD"
+caught-by:
+    mutate::changed::tests::sys_a_real_repository_gives_the_files_a_diff_touches_with_both_names_of_a_move
+
+[break] changed-with-a-check-is-allowed
+rule: `--changed` is refused beside `--check`: a check reads every list whole.
+file: xtask/src/mutate/mod.rs
+in: refuse_what_does_not_go_together
+find: if self.mode == Mode::Check {
+replace: if false {
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+[break] changed-with-a-one-off-break-is-allowed
+rule: `--changed` is refused beside `--break`: one break has nothing to choose among.
+file: xtask/src/mutate/mod.rs
+in: refuse_what_does_not_go_together
+find:
+    if self.changed.is_some() {
+        if one_off {
+replace:
+    if self.changed.is_some() {
+        if false {
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+[break] changed-takes-an-option-for-its-value
+rule: `--changed` takes a reference, which is not an option.
+file: xtask/src/mutate/mod.rs
+in: parse
+find: if reference.is_empty() || reference.starts_with('-') {
+replace: if false {
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+# ------------------------------------------------------------- in-string
+
+[break] in-string-searches-the-code
+rule: An `in-string` text is looked for only inside string literals, never in code or comments.
+file: xtask/src/mutate/lex.rs
+in: strings_matching
+find: let Some(content) = string_content(literal) else {
+replace: let Some(content) = Some(0..literal.len()) else {
+caught-by:
+    mutate::lex::tests::a_text_is_found_only_inside_the_string_literals
+
+[break] in-string-takes-the-first-of-several
+rule: An `in-string` text that is in two places is refused, and `occurrence` says which is meant.
+file: xtask/src/mutate/lex.rs
+in: locate_in_strings
+find: (several, None) => Err(Missing::Ambiguous(
+replace:
+    (several, None) => Ok((several[0].clone(), scopes)),
+    (_, None) => Err(Missing::Ambiguous(
+caught-by:
+    mutate::lex::tests::a_text_is_found_only_inside_the_string_literals
+
+[break] in-string-counts-an-occurrence-from-nought
+rule: `occurrence` is counted from 1, across the string literals in source order.
+file: xtask/src/mutate/lex.rs
+in: locate_in_strings
+find: asked.checked_sub(1)
+replace: asked.checked_sub(0)
+caught-by:
+    mutate::lex::tests::a_text_is_found_only_inside_the_string_literals
+
+[break] in-string-reads-an-escaped-quote-as-the-end
+rule: A backslash escapes the character after it, so `\"` does not end a string literal.
+file: xtask/src/mutate/lex.rs
+in: string_content
+find: b'\\' => at += 2,
+replace: b'\\' => at += 1,
+caught-by:
+    mutate::lex::tests::the_text_of_a_string_literal_is_what_is_between_its_quotes
+
+[break] in-string-takes-a-literal-with-anything-after-it
+rule: A string literal's text ends at its closing quote, which must be the last byte of the token.
+file: xtask/src/mutate/lex.rs
+in: string_content
+find: (end + 1 + hashes == literal.len()).then_some(start..end)
+replace: Some(start..end)
+caught-by:
+    mutate::lex::tests::the_text_of_a_string_literal_is_what_is_between_its_quotes
+
+[break] in-string-allows-a-replacement-that-is-not-one-string
+rule: A break's `replace` must leave the literal one string: a quote that no backslash escapes would end it.
+file: xtask/src/mutate/mod.rs
+in: locate
+find: && !is_one_string(&text)
+replace: && false
+caught-by:
+    mutate::tests::an_in_string_that_would_not_leave_one_string_or_change_nothing_is_refused
+
+[break] in-string-allows-a-change-that-is-none
+rule: A break whose `replace` is the text it replaces changes nothing, and is refused.
+file: xtask/src/mutate/mod.rs
+in: locate
+find: if source[range.clone()] == one.replace {
+replace: if false {
+caught-by:
+    mutate::tests::an_in_string_that_would_not_leave_one_string_or_change_nothing_is_refused
+
+[break] in-string-is-compared-as-the-word-and-not-the-literal
+rule: Two breaks that make the same change are refused whichever key made it: an `in-string` is compared as the literal it changes.
+file: xtask/src/mutate/mod.rs
+in: check
+find: Some((literal, text)) => change_of(source, code, &literal, &text),
+replace: Some(_) => change_of(source, code, &range, &one.replace),
+caught-by:
+    mutate::tests::an_in_string_that_makes_the_change_of_another_break_is_refused_as_a_copy
+
+[break] in-string-ends-in-a-comma-that-is-the-formatters
+rule: A comma at the end of an `in-string` is text, not a comma that `rustfmt` moves.
+file: xtask/src/mutate/mod.rs
+in: preflight
+find: if !one.in_string && ends_in_a_layout_comma(&one.find) {
+replace: if ends_in_a_layout_comma(&one.find) {
+caught-by:
+    mutate::tests::a_comma_at_the_end_of_an_in_string_is_text_and_not_a_layout_comma
+
+[break] in-string-and-find-are-allowed-together
+rule: A break has a `find` or an `in-string`, not both.
+file: xtask/src/mutate/list.rs
+in: parse
+find: if let Some((find_line, _)) = draft.take("find") {
+replace: if let Some((find_line, _)) = None::<(usize, ())> {
+caught-by:
+    mutate::list::tests::an_in_string_stands_for_a_find_and_the_two_do_not_go_together
+
+[break] in-string-is-not-in-what-a-result-is-kept-for
+rule: A break's `in-string` is part of what its result is kept for: an `in-string` and a `find` of one text are two breaks.
+file: xtask/src/mutate/list.rs
+in: definition
+find: if self.in_string {
+replace: if false {
+caught-by:
+    mutate::list::tests::an_in_string_stands_for_a_find_and_the_two_do_not_go_together
+
+[break] in-string-option-is-read-as-a-find
+rule: `--in-string` of a one-off break is the text to change inside a string, not a `find`.
+file: xtask/src/mutate/mod.rs
+in: parse
+find: "--in-string" => one.in_string = Some(value),
+replace: "--in-string" => one.find = Some(value),
+caught-by:
+    mutate::tests::a_break_given_with_an_in_string_is_checked_like_one_of_a_list
+
+[break] in-string-one-off-is-a-find
+rule: A one-off break given with `--in-string` is an in-string break.
+file: xtask/src/mutate/list.rs
+in: to_break
+find: in_string: self.in_string.is_some()
+replace: in_string: false
+caught-by:
+    mutate::tests::a_break_given_with_an_in_string_is_checked_like_one_of_a_list
+
+[break] in-string-is-not-found-again-by-fix-in
+rule: `--fix-in` looks for an `in-string` text in the literals of the file, not for code.
+file: xtask/src/mutate/list.rs
+in: find_everywhere
+find: lex::strings_everywhere(source, tokens, &self.find)
+replace: lex::find_everywhere(source, tokens, &self.find)
+caught-by:
+    mutate::fix::tests::a_text_in_a_string_moved_into_another_item_is_found_by_its_text
+
+# --------------------------------------------------------------- the jobs
+
+[break] jobs-take-a-piece-without-the-lock
+rule: A job takes its next piece under the lock the run's thread asks the time under, so no job takes one after the answer "up" is written down.
+file: xtask/src/mutate/jobs.rs
+in: for_each
+find: let _claiming = claim.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+replace: let _claiming = ();
+caught-by:
+    mutate::jobs::tests::no_job_starts_a_piece_once_the_time_is_up
+
+[break] jobs-ask-the-time-without-the-lock
+rule: The run's thread asks the time and writes the answer down under the lock a job takes a piece under.
+file: xtask/src/mutate/jobs.rs
+in: for_each
+find: let _asking = claim.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+replace: let _asking = ();
+caught-by:
+    mutate::jobs::tests::no_job_starts_a_piece_once_the_time_is_up
+
+# ---------------------------------------------- names of the other system's
+
+[break] other-system-names-are-found-by-source-skipped
+rule: The names of a break of the other system's code are looked for in the words of the source.
+file: xtask/src/mutate/names.rs
+in: check
+find: checked.problems.extend(problems);
+replace:
+caught-by:
+    mutate::names::tests::a_renamed_test_of_the_other_systems_code_is_found_without_a_windows_build
+
+[break] other-system-names-are-never-missing
+rule: A name that is a word of no Rust file of the crates is a test that was renamed or removed.
+file: xtask/src/mutate/names.rs
+in: by_source
+find: if !found {
+replace: if false {
+caught-by:
+    mutate::names::tests::a_renamed_test_of_the_other_systems_code_is_found_without_a_windows_build
+
+[break] other-system-names-are-looked-for-in-the-source-as-a-whole-word-only
+rule: A name that ends in `*` is the beginning of a word of the source.
+file: xtask/src/mutate/names.rs
+in: by_source
+find: of_crate.iter().any(|known| known.starts_with(word))
+replace: of_crate.contains(word)
+caught-by:
+    mutate::names::tests::the_names_of_a_break_of_the_other_systems_code_are_looked_for_in_the_words_of_the_source

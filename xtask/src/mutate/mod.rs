@@ -609,10 +609,8 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     // the rest were left without a verdict.
     let mut reasons = BTreeMap::new();
     if let Some(reference) = &request.changed {
-        let git = changed::Git::open(&root, reference)?;
-        let files = git.changed_files()?;
         let known = list::load_all(&root)?;
-        let selection = changed::select(&known, &chosen, &files, &git);
+        let selection = changed::since(&root, reference, &known, &chosen)?;
         println!("{}", selection.summary(reference));
         reasons = selection.reasons();
         chosen = selection.breaks();
@@ -2477,7 +2475,7 @@ replace: overloaded;
                 ("crates/demo/src/lib.rs", STRINGS),
             ],
         );
-        assert_eq!(check(&root, &[one.clone()]), [] as [String; 0]);
+        assert_eq!(check(&root, std::slice::from_ref(&one)), [] as [String; 0]);
         let _ = std::fs::remove_dir_all(&root);
         // The same words with `--find` are another break.
         let plain = given(&[
