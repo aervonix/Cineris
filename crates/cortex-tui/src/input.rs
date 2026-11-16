@@ -130,6 +130,10 @@ pub struct Input {
     /// The `@` or `/` whose menu `Esc` closed: it stays closed until the
     /// text asks again somewhere else.
     dismissed: Option<Trigger>,
+    /// Where the `@` is whose menu the workspace's files could not be
+    /// listed for: it says so, and asks for them no more, until the text
+    /// has no `@` menu there.
+    unlisted: Option<usize>,
     focus: Ring,
     running: bool,
     send_mode: SendMode,
@@ -157,6 +161,7 @@ impl Input {
             command_filter: Filter::new(),
             menu: None,
             dismissed: None,
+            unlisted: None,
             focus: Ring::new(),
             running: false,
             send_mode: SendMode::Steer,
@@ -300,10 +305,24 @@ impl Input {
     pub fn wants_files(&self) -> bool {
         self.files.is_none()
             && self.elsewhere.is_none()
-            && self
-                .menu
-                .as_ref()
-                .is_some_and(|menu| matches!(menu.kind, Kind::Files { .. }))
+            && self.menu.as_ref().is_some_and(|menu| match menu.kind {
+                Kind::Files { start } => self.unlisted != Some(start),
+                _ => false,
+            })
+    }
+
+    /// The workspace's files could not be listed: the open `@` menu says
+    /// so, and [`wants_files`](Self::wants_files) is false until the text
+    /// has no `@` menu there; a later one asks again.
+    pub fn files_unlisted(&mut self) {
+        if let Some(menu) = self.menu.as_mut()
+            && let Kind::Files { start } = menu.kind
+        {
+            self.unlisted = Some(start);
+            if menu.rows.is_empty() {
+                menu.empty = Empty::Unlisted;
+            }
+        }
     }
 
     /// Hands the `@` filtering out (since step 23): each query the text asks
@@ -893,6 +912,9 @@ impl Input {
         }
         let trigger = complete::trigger(self.editor.text(), self.editor.cursor());
         let file_menu = matches!(trigger, Some(Trigger::File { .. }));
+        if !matches!(&trigger, Some(Trigger::File { start, .. }) if self.unlisted == Some(*start)) {
+            self.unlisted = None;
+        }
         if !file_menu && let Some(elsewhere) = self.elsewhere.as_mut() {
             // No `@` menu now: one asked for again later is filtered again.
             elsewhere.asked = None;
@@ -938,6 +960,9 @@ impl Input {
                     complete::rows(&mut self.file_filter, files, query, |_| String::new()),
                     Empty::NoMatch,
                 ),
+                None if self.unlisted == Some(*start) => {
+                    (Kind::Files { start: *start }, Vec::new(), Empty::Unlisted)
+                }
                 None => (Kind::Files { start: *start }, Vec::new(), Empty::Listing),
             },
             Trigger::Command { query } => {

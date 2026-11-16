@@ -1156,10 +1156,10 @@ find:
         // A turn this client did not start (another's, or one begun
         // before the open) is running: `Enter` steers it.
         self.start_running(now);
-    } else {
+    } else if whole {
 replace:
     if running {
-    } else {
+    } else if whole {
 caught-by:
     app::tests::sessions::enter_steers_a_turn_found_running_at_the_read
 
@@ -1270,11 +1270,11 @@ caught-by:
     app::tests::sessions::an_error_of_the_session_left_is_not_shown_in_the_next
 
 [break] a-failed-page-replays-everything
-rule: A history whose page fails part-way ends as a whole read does: what it drew is not drawn again, and whether a turn runs is decided.
+rule: A history whose page fails part-way ends as a read does: what it drew is not drawn again, and whether a turn runs is decided.
 file: crates/cortex-tui/src/app/state.rs
 in: App::done
-find: self.read_ended(id, seq, now);
-replace: self.read_ended(id, None, now);
+find: self.read_ended(id, seq, false, now);
+replace: self.read_ended(id, None, false, now);
 caught-by:
     app::tests::sessions::a_history_whose_page_fails_part_way_draws_nothing_twice
 
@@ -1282,7 +1282,76 @@ caught-by:
 rule: A workspace/files that fails is asked again on the next @.
 file: crates/cortex-tui/src/app/state.rs
 in: App::done
-find: self.files_listing = false;
-replace: self.files_listing = true;
+find:
+    self.files_listing = false;
+    self.input.files_unlisted();
+replace:
+    self.files_listing = true;
+    self.input.files_unlisted();
 caught-by:
-    app::tests::files::a_failed_file_listing_says_why_and_is_asked_again_on_the_next_at
+    app::tests::files::a_failed_file_listing_says_why_once_and_the_next_at_asks_again
+
+[break] a-failed-listing-is-asked-at-every-frame
+rule: An @ menu whose files could not be listed asks for them no more while it is open, and says why.
+file: crates/cortex-tui/src/input.rs
+in: Input::wants_files
+find: Kind::Files { start } => self.unlisted != Some(start)
+replace: Kind::Files { .. } => true
+caught-by:
+    app::tests::files::a_failed_file_listing_says_why_once_and_the_next_at_asks_again
+
+[break] a-result-overtakes-the-events-queued-ahead-of-it
+rule: The in-process link gives a ready result only after the events and requests queued when it was first seen.
+file: crates/cortex-cli/src/interactive.rs
+in: take
+find: let owed = ahead.get_or_insert_with(|| queue.len());
+replace: let owed = ahead.get_or_insert(0);
+packages: cortex-cli
+caught-by:
+    interactive::tests::a_result_comes_after_the_events_queued_ahead_of_it
+
+[break] events-that-keep-coming-hold-a-result-back
+rule: Only the events queued when a result was first seen come before it: a stream that goes on does not hold it back.
+file: crates/cortex-cli/src/interactive.rs
+in: take
+find: let owed = ahead.get_or_insert_with(|| queue.len());
+replace: let owed = ahead.insert(queue.len());
+packages: cortex-cli
+caught-by:
+    interactive::tests::events_that_keep_coming_do_not_hold_a_result_back
+
+[break] a-failed-page-drops-what-it-does-not-hold
+rule: After a page fails part-way, events of an item the pages read do not hold are shown: it may be on the missing page.
+file: crates/cortex-tui/src/app/state.rs
+in: ReadMark::holds
+find: None => self.whole && event.seq <= self.seq
+replace: None => event.seq <= self.seq
+caught-by:
+    app::tests::sessions::a_history_whose_page_fails_part_way_shows_what_it_does_not_hold_and_cuts_nothing_off
+
+[break] a-failed-page-cuts-calls-off
+rule: After a page fails part-way, no call is taken for cut off: its result may be on the missing page.
+file: crates/cortex-tui/src/app/state.rs
+in: App::read_ended
+find: } else if whole {
+replace: } else if true {
+caught-by:
+    app::tests::sessions::a_history_whose_page_fails_part_way_shows_what_it_does_not_hold_and_cuts_nothing_off
+
+[break] a-listing-of-the-session-left-is-taken
+rule: A workspace/files result for a session left meanwhile is not taken for the one open now, whose first @ asks for its own.
+file: crates/cortex-tui/src/app/state.rs
+in: App::done
+find: (Pending::Files(id), _) if !self.is_open(&id) => self.files_listing = false
+replace: (Pending::Files(id), _) if false => self.files_listing = false
+caught-by:
+    app::tests::sessions::a_file_listing_of_the_session_left_is_not_taken_for_the_next
+
+[break] a-read-keeps-every-id
+rule: A history's read keeps the ids of the last page's worth of items it drew, not every one.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find: self.history_items.drain(..older);
+replace: self.history_items.drain(..older.min(0));
+caught-by:
+    app::tests::sessions::a_long_historys_read_keeps_only_the_last_pages_worth_of_ids
