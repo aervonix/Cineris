@@ -327,7 +327,6 @@ dependencies = [
  "cortex-base",
  "cortex-config",
  "cortex-core",
- "cortex-llm",
  "cortex-protocol",
  "cortex-testkit",
  "cortex-tools",

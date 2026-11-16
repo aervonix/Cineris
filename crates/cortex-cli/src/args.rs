@@ -1329,4 +1329,86 @@ mod tests {
             Some("sessions")
         );
     }
+
+    fn serve_of(words: &[&str]) -> Serve {
+        match parse_words(words) {
+            Ok(Command::Serve(serve)) => *serve,
+            other => panic!("{words:?} is not a server: {other:?}"),
+        }
+    }
+
+    /// `serve` takes `--stdio` and a run's flags that set the core up, as a
+    /// run reads them; a run's own flags are refused by name.
+    #[test]
+    fn serve_takes_the_cores_flags_and_refuses_a_runs_own() {
+        let serve = serve_of(&[
+            "serve",
+            "--stdio",
+            "--profile",
+            "review",
+            "-c",
+            "retry.attempts=3",
+            "--model",
+            "m",
+            "--permission-mode",
+            "read-only",
+            "--allow",
+            "exec:cargo test *",
+            "--trust-project",
+            "--log-level",
+            "debug",
+        ]);
+        assert!(serve.stdio);
+        assert_eq!(serve.run.common.profile.as_deref(), Some("review"));
+        assert_eq!(serve.run.allow, ["exec:cargo test *"]);
+        assert!(serve.run.trust_project);
+        assert_eq!(serve.run.log_level.as_deref(), Some("debug"));
+        assert!(
+            serve
+                .run
+                .common
+                .settings
+                .iter()
+                .any(|(key, value, _)| key == "model.main" && value == "m")
+        );
+        assert_eq!(serve.run_only(), None);
+
+        for (words, flag) in [
+            (&["serve", "--stdio", "-p"][..], "-p"),
+            (&["serve", "--stdio", "fix", "it"], "a prompt"),
+            (&["serve", "--stdio", "--output", "json"], "--output"),
+            (&["serve", "--stdio", "--include-deltas"], "--include-deltas"),
+            (&["serve", "--stdio", "--continue"], "--continue"),
+            (&["serve", "--stdio", "--resume", "s_1"], "--resume"),
+            (&["serve", "--stdio", "--fork", "s_1"], "--fork"),
+            (&["serve", "--stdio", "--no-session"], "--no-session"),
+            (&["serve", "--stdio", "--fail-on-denial"], "--fail-on-denial"),
+            (&["serve", "--stdio", "--max-requests", "3"], "--max-requests"),
+            (&["serve", "--stdio", "--max-cost", "1"], "--max-cost"),
+            (&["serve", "--stdio", "--max-time", "1m"], "--max-time"),
+        ] {
+            assert_eq!(serve_of(words).run_only(), Some(flag), "{words:?}");
+        }
+        // The same key set with -c is not the flag.
+        assert_eq!(
+            serve_of(&["serve", "--stdio", "-c", "limits.turn.requests=3"]).run_only(),
+            None
+        );
+    }
+
+    #[test]
+    fn serve_needs_a_transport_and_has_its_help() {
+        let Err(UsageError(message)) = parse_words(&["serve"]) else {
+            panic!("a server with no transport was read");
+        };
+        assert!(message.contains("--stdio"), "{message}");
+        assert_eq!(
+            parse_words(&["serve", "--help"]),
+            Ok(Command::Help(Topic::Serve))
+        );
+        assert_eq!(
+            parse_words(&["serve", "--stdio", "-h"]),
+            Ok(Command::Help(Topic::Serve))
+        );
+    }
 }

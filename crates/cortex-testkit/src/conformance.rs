@@ -1,0 +1,892 @@
+//! The conformance scenarios of the RPC server: the same steps through
+//! every carrier, and what each client was sent, compared
+//! (`docs/architecture/11-rpc-protocol.md`, "One contract, two carriers";
+//! `docs/steps/27/answered.md`, "The design, before building", point 6).
+//!
+//! **A scenario is data:** its workspace's files, the scripted model's
+//! replies (an Anthropic stream each, which the scripted SSE server sends),
+//! and its steps: send an operation, answer the next request the server
+//! puts, wait for an event of a type. [`scenarios`] is the one list; a later
+//! step adds a scenario there, and every carrier runs it.
+//!
+//! **A carrier** is a way to the core ([`Carrier`]): in process (the test
+//! binary's own, over `Core::handle` and the client's queue), the RPC
+//! connection over the transport's in-memory ends, or the real binary's
+//! `cortex serve --stdio`. The last two speak lines of JSON-RPC, which
+//! [`Lines`] speaks for them. The carriers in process are the test
+//! binaries': this crate cannot see the core.
+//!
+//! **What is compared** ([`Transcript`]): the result of each operation and
+//! every event the steps took, in order, with ids numbered by their first
+//! appearance, times and durations taken out, paths under the scenario's
+//! folder written from it, and runs of deltas of one item and kind joined
+//! into one: merging depends on how fast a reader is, so where a stream is
+//! cut differs between carriers, and nothing else may. Events that arrive
+//! while an operation's result is awaited are kept for the steps that wait
+//! for events, and those no step took are not compared, so the transcript
+//! does not depend on timing. Each carrier's `seq` is checked to increase,
+//! and [`Lines`] checks that no event at or below a `session/read`'s `seq`
+//! arrives after the read's result.
+
+#![expect(
+    clippy::result_large_err,
+    clippy::large_enum_variant,
+    reason = "a test's carrier hands each result and event to the test once, whole: a box would \
+              only add an allocation"
+)]
+
+use std::collections::{BTreeMap, VecDeque};
+
+use cortex_protocol::SessionEvent;
+use cortex_protocol::jsonrpc::{Message, Request, RequestId, Response};
+use cortex_protocol::methods::{
+    ApprovalChoice, ApprovalResponse, ClientCapabilities, ClientRole, ConfigGetParams, Empty,
+    InitializeParams, Op, OpResult, PROTOCOL_VERSION, PeerInfo, ServerNotification,
+    ServerRequest, ServerResponse, SessionListParams, SessionNewParams, SessionReadParams,
+    SessionRef, SessionRewindParams, TurnInterruptParams, TurnStartParams, UsageReportParams,
+    WorkspaceFilesParams,
+};
+use cortex_protocol::{ErrorData, ErrorKind, ItemId, SessionId};
+use serde_json::{Map, Value, json};
+
+use crate::server::ServerReply;
+
+/// The model the scenarios' configuration names, and the replies say.
+pub const MODEL: &str = "claude-opus-5-5";
+
+/// Anthropic streams, as the scripted SSE server sends them.
+pub mod anthropic {
+    use serde_json::{Value, json};
+
+    use super::MODEL;
+    use crate::server::ServerReply;
+
+    fn start() -> Value {
+        json!({"type": "message_start", "message": {"model": MODEL, "id": "msg_test",
+            "type": "message", "role": "assistant", "content": [], "stop_reason": null,
+            "usage": {"input_tokens": 20, "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0, "output_tokens": 1}}})
+    }
+
+    fn end(stop: &str) -> [Value; 2] {
+        [
+            json!({"type": "message_delta", "delta": {"stop_reason": stop},
+                "usage": {"output_tokens": 12}}),
+            json!({"type": "message_stop"}),
+        ]
+    }
+
+    /// Events as an Anthropic stream writes them.
+    #[must_use]
+    pub fn body(events: &[Value]) -> Vec<u8> {
+        let mut body = String::new();
+        for event in events {
+            body.push_str("event: ");
+            body.push_str(event["type"].as_str().unwrap_or("message"));
+            body.push_str("\ndata: ");
+            body.push_str(&event.to_string());
+            body.push_str("\n\n");
+        }
+        body.into_bytes()
+    }
+
+    fn text_block(index: usize, pieces: &[&str]) -> Vec<Value> {
+        let mut events = vec![json!({"type": "content_block_start", "index": index,
+            "content_block": {"type": "text", "text": ""}})];
+        for piece in pieces {
+            events.push(json!({"type": "content_block_delta", "index": index,
+                "delta": {"type": "text_delta", "text": piece}}));
+        }
+        events.push(json!({"type": "content_block_stop", "index": index}));
+        events
+    }
+
+    /// The model says `pieces`, one delta each, and ends its turn.
+    #[must_use]
+    pub fn text(pieces: &[&str]) -> ServerReply {
+        let mut events = vec![start()];
+        events.extend(text_block(0, pieces));
+        events.extend(end("end_turn"));
+        ServerReply::sse().send(body(&events))
+    }
+
+    /// The model thinks `thought`, then says `pieces`, and ends its turn.
+    #[must_use]
+    pub fn thinking_then_text(thought: &str, pieces: &[&str]) -> ServerReply {
+        let mut events = vec![
+            start(),
+            json!({"type": "content_block_start", "index": 0,
+                "content_block": {"type": "thinking", "thinking": ""}}),
+            json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": thought}}),
+            json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "signature_delta", "signature": "c2lnbmVk"}}),
+            json!({"type": "content_block_stop", "index": 0}),
+        ];
+        events.extend(text_block(1, pieces));
+        events.extend(end("end_turn"));
+        ServerReply::sse().send(body(&events))
+    }
+
+    /// The model calls `tool` with `input`, its arguments in two pieces.
+    #[must_use]
+    pub fn tool(id: &str, tool: &str, input: &Value) -> ServerReply {
+        let arguments = input.to_string();
+        let middle = arguments.len() / 2;
+        let middle = (middle..arguments.len())
+            .find(|at| arguments.is_char_boundary(*at))
+            .unwrap_or(arguments.len());
+        let mut events = vec![
+            start(),
+            json!({"type": "content_block_start", "index": 0,
+                "content_block": {"type": "tool_use", "id": id, "name": tool, "input": {}}}),
+        ];
+        for piece in [&arguments[..middle], &arguments[middle..]] {
+            events.push(json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": piece}}));
+        }
+        events.push(json!({"type": "content_block_stop", "index": 0}));
+        events.extend(end("tool_use"));
+        ServerReply::sse().send(body(&events))
+    }
+
+    /// The model begins to say `piece` and then sends nothing more, until
+    /// the request is given up.
+    #[must_use]
+    pub fn text_that_stalls(piece: &str) -> ServerReply {
+        let mut events = vec![start()];
+        let block = text_block(0, &[piece]);
+        // The block is never stopped: the stream stalls inside it.
+        events.extend(block.into_iter().take(2));
+        ServerReply::sse()
+            .send(body(&events))
+            .hang_until_closed(&crate::Gate::new())
+    }
+}
+
+/// What a step may use of what came before it.
+#[derive(Debug, Clone, Default)]
+pub struct Ctx {
+    /// The scenario's workspace, as the server's machine names it.
+    pub workspace: String,
+    /// The session the scenario opened last.
+    pub session: Option<SessionId>,
+    /// The items that completed, in order.
+    pub items: Vec<ItemId>,
+}
+
+impl Ctx {
+    /// The session, which a step after `session/new` may rely on.
+    ///
+    /// # Panics
+    ///
+    /// When no session was opened.
+    #[must_use]
+    pub fn session(&self) -> SessionId {
+        self.session
+            .clone()
+            .expect("a step that needs a session comes after one is opened")
+    }
+
+    /// `{ session_id }` of the session.
+    #[must_use]
+    pub fn session_ref(&self) -> SessionRef {
+        SessionRef {
+            session_id: self.session(),
+        }
+    }
+}
+
+/// Makes an operation from what came before.
+pub type MakeOp = Box<dyn Fn(&Ctx) -> Op + Send + Sync>;
+
+/// Answers a request.
+pub type MakeAnswer = Box<dyn Fn(&ServerRequest) -> ServerResponse + Send + Sync>;
+
+/// One step of a scenario.
+pub enum Step {
+    /// Sends an operation, and keeps its result.
+    Call(MakeOp),
+    /// Takes events until a request comes, and answers it.
+    Answer(MakeAnswer),
+    /// Takes events until one of this type (`turn.completed`).
+    Until(&'static str),
+}
+
+impl std::fmt::Debug for Step {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Call(_) => f.write_str("Call"),
+            Self::Answer(_) => f.write_str("Answer"),
+            Self::Until(event) => write!(f, "Until({event})"),
+        }
+    }
+}
+
+/// A scenario.
+#[derive(Debug)]
+pub struct Scenario {
+    /// Its name, for a failure's message.
+    pub name: &'static str,
+    /// The workspace's files: a path relative to it, and the text.
+    pub files: Vec<(&'static str, &'static str)>,
+    /// The scripted model's replies, in order.
+    pub model: Vec<ServerReply>,
+    /// The steps.
+    pub steps: Vec<Step>,
+}
+
+fn call(make: impl Fn(&Ctx) -> Op + Send + Sync + 'static) -> Step {
+    Step::Call(Box::new(make))
+}
+
+fn answer(make: impl Fn(&ServerRequest) -> ServerResponse + Send + Sync + 'static) -> Step {
+    Step::Answer(Box::new(make))
+}
+
+fn new_session() -> Step {
+    call(|ctx| {
+        Op::SessionNew(SessionNewParams {
+            workspace: ctx.workspace.clone(),
+            settings: cortex_protocol::session::SessionSettings::default(),
+            title: None,
+            config: Map::new(),
+            ephemeral: false,
+        })
+    })
+}
+
+fn prompt(text: &'static str) -> Step {
+    call(move |ctx| {
+        Op::TurnStart(TurnStartParams {
+            session_id: ctx.session(),
+            input: vec![cortex_protocol::Part::text(text)],
+            delivery: None,
+        })
+    })
+}
+
+fn read() -> Step {
+    call(|ctx| {
+        Op::SessionRead(SessionReadParams {
+            session_id: ctx.session(),
+            item_id: None,
+            limit: None,
+            cursor: None,
+        })
+    })
+}
+
+fn close() -> Step {
+    call(|ctx| Op::SessionClose(ctx.session_ref()))
+}
+
+/// The path of a file the agent may not write without asking.
+const PROTECTED: &str = ".github/workflows/ci.yml";
+
+/// Every scenario, in the order they run.
+#[must_use]
+pub fn scenarios() -> Vec<Scenario> {
+    vec![
+        Scenario {
+            name: "a turn that thinks and answers",
+            files: vec![("README.md", "# app\n")],
+            model: vec![anthropic::thinking_then_text(
+                "The user greets.",
+                &["Hello", ", there", "."],
+            )],
+            steps: vec![
+                new_session(),
+                prompt("hello"),
+                Step::Until("session.idle"),
+                read(),
+                close(),
+            ],
+        },
+        Scenario {
+            name: "a call approved once",
+            files: vec![],
+            model: vec![
+                anthropic::tool(
+                    "c1",
+                    "write",
+                    &json!({"path": PROTECTED, "content": "on: push\n"}),
+                ),
+                anthropic::text(&["Written."]),
+            ],
+            steps: vec![
+                new_session(),
+                prompt("set up CI"),
+                answer(|_| {
+                    ServerResponse::Approval(ApprovalResponse {
+                        choice: ApprovalChoice::AllowOnce,
+                        note: None,
+                    })
+                }),
+                Step::Until("session.idle"),
+                read(),
+                close(),
+            ],
+        },
+        Scenario {
+            name: "a call denied with a note",
+            files: vec![],
+            model: vec![
+                anthropic::tool(
+                    "c1",
+                    "write",
+                    &json!({"path": PROTECTED, "content": "on: push\n"}),
+                ),
+                anthropic::text(&["Understood."]),
+            ],
+            steps: vec![
+                new_session(),
+                prompt("set up CI"),
+                answer(|_| {
+                    ServerResponse::Approval(ApprovalResponse {
+                        choice: ApprovalChoice::Deny,
+                        note: Some("not today".to_owned()),
+                    })
+                }),
+                Step::Until("session.idle"),
+                read(),
+                close(),
+            ],
+        },
+        Scenario {
+            name: "an interrupt mid-stream",
+            files: vec![],
+            model: vec![anthropic::text_that_stalls("Let me")],
+            steps: vec![
+                new_session(),
+                prompt("think hard"),
+                Step::Until("item.delta"),
+                call(|ctx| Op::TurnInterrupt(TurnInterruptParams::new(ctx.session()))),
+                Step::Until("session.idle"),
+                read(),
+                close(),
+            ],
+        },
+        Scenario {
+            name: "a rewind to the first prompt",
+            files: vec![],
+            model: vec![anthropic::text(&["One."]), anthropic::text(&["Two."])],
+            steps: vec![
+                new_session(),
+                prompt("first"),
+                Step::Until("session.idle"),
+                prompt("second"),
+                Step::Until("session.idle"),
+                call(|ctx| {
+                    Op::SessionRewind(SessionRewindParams {
+                        session_id: ctx.session(),
+                        to: ctx.items[1].clone(),
+                        restore_files: false,
+                    })
+                }),
+                read(),
+                close(),
+            ],
+        },
+        Scenario {
+            name: "the reads of the method table",
+            files: vec![("src/main.rs", "fn main() {}\n")],
+            model: vec![],
+            steps: vec![
+                new_session(),
+                call(|_| Op::ModelsList(Empty {})),
+                call(|_| Op::ConfigGet(ConfigGetParams::default())),
+                call(|ctx| Op::PermissionsList(ctx.session_ref())),
+                call(|ctx| Op::PlanGet(ctx.session_ref())),
+                call(|ctx| Op::UsageGet(ctx.session_ref())),
+                call(|ctx| {
+                    Op::UsageReport(UsageReportParams {
+                        range: cortex_protocol::usage::UsageRange::Session,
+                        group_by: Vec::new(),
+                        session_id: Some(ctx.session()),
+                        project: None,
+                    })
+                }),
+                call(|ctx| {
+                    Op::WorkspaceFiles(WorkspaceFilesParams {
+                        session_id: ctx.session(),
+                        limit: None,
+                    })
+                }),
+                call(|_| Op::McpStatus(Empty {})),
+                call(|_| Op::ExtensionsStatus(Empty {})),
+                call(|ctx| {
+                    Op::SessionList(SessionListParams {
+                        workspace: Some(ctx.workspace.clone()),
+                        ..SessionListParams::default()
+                    })
+                }),
+                call(|ctx| {
+                    Op::SessionOpen(SessionRef {
+                        session_id: SessionId::new(format!("{}-not-there", ctx.session())),
+                    })
+                }),
+                close(),
+            ],
+        },
+    ]
+}
+
+/// What the server sent that is not a result.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Inbound {
+    /// An event of a session the client has open.
+    Event(SessionEvent),
+    /// A request to answer.
+    Request(RequestId, ServerRequest),
+}
+
+/// A way to the core: in process, or over the wire.
+pub trait Carrier {
+    /// Sends an operation and waits for its result. Events and requests
+    /// that come meanwhile are kept for [`next`](Self::next).
+    ///
+    /// # Errors
+    ///
+    /// The operation's error.
+    fn call(&mut self, op: Op) -> Result<OpResult, ErrorData>;
+
+    /// The next event or request, waiting for one. `None` when the
+    /// connection ended.
+    fn next(&mut self) -> Option<Inbound>;
+
+    /// Answers a request.
+    fn respond(&mut self, id: RequestId, response: ServerResponse);
+}
+
+/// The client's side of the handshake every carrier sends first: a `user`
+/// client that answers everything and wants deltas.
+#[must_use]
+pub fn initialize() -> InitializeParams {
+    InitializeParams {
+        protocol_version: PROTOCOL_VERSION,
+        min_protocol_version: None,
+        client: PeerInfo {
+            name: "conformance".to_owned(),
+            version: "0".to_owned(),
+        },
+        role: ClientRole::User,
+        capabilities: ClientCapabilities {
+            approvals: true,
+            questions: true,
+            trust: true,
+            deltas: true,
+            experimental: Vec::new(),
+        },
+    }
+}
+
+/// What a scenario left on one carrier, normalised for comparing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transcript(pub Vec<Value>);
+
+/// Runs `scenario` on `carrier`, with the scenario's workspace at
+/// `workspace` (as the server's machine names it). Each text of `known`
+/// (the scenario's folder, the scripted server's address) is written as
+/// the name given with it wherever it appears.
+///
+/// # Panics
+///
+/// When a step cannot be taken: the connection ended, or an event's `seq`
+/// did not increase.
+pub fn run(
+    scenario: &Scenario,
+    carrier: &mut dyn Carrier,
+    workspace: &str,
+    known: &[(&str, &str)],
+) -> Transcript {
+    let mut ctx = Ctx {
+        workspace: workspace.to_owned(),
+        ..Ctx::default()
+    };
+    let mut kept = Vec::new();
+    let mut last_seq: BTreeMap<SessionId, u64> = BTreeMap::new();
+    let mut take = |carrier: &mut dyn Carrier, ctx: &mut Ctx, kept: &mut Vec<Value>| {
+        let next = carrier
+            .next()
+            .unwrap_or_else(|| panic!("{}: the connection ended", scenario.name));
+        match next {
+            Inbound::Event(event) => {
+                let last = last_seq.entry(event.session_id.clone()).or_insert(0);
+                assert!(
+                    event.seq > *last,
+                    "{}: `seq` went from {} to {}",
+                    scenario.name,
+                    last,
+                    event.seq
+                );
+                *last = event.seq;
+                if let cortex_protocol::event::Event::ItemCompleted(completed) = &event.event
+                    && let Some(id) = completed.item.id()
+                {
+                    ctx.items.push(ItemId::new(id));
+                }
+                let value = serde_json::to_value(&event).unwrap_or(Value::Null);
+                let kind = value["type"].as_str().unwrap_or_default().to_owned();
+                kept.push(json!({"event": value}));
+                Some((kind, None))
+            }
+            Inbound::Request(id, request) => {
+                kept.push(json!({"request": request.params().unwrap_or(Value::Null)}));
+                Some((String::new(), Some((id, request))))
+            }
+        }
+    };
+    for step in &scenario.steps {
+        match step {
+            Step::Call(make) => {
+                let op = make(&ctx);
+                let method = op.method();
+                let result = carrier.call(op);
+                if let Ok(OpResult::SessionNew(opened) | OpResult::SessionOpen(opened)) = &result {
+                    ctx.session = Some(opened.session.session_id.clone());
+                }
+                kept.push(match result {
+                    Ok(result) => json!({"method": method, "result": result.result().unwrap_or(Value::Null)}),
+                    Err(error) => json!({"method": method, "error": serde_json::to_value(error).unwrap_or(Value::Null)}),
+                });
+            }
+            Step::Answer(make) => loop {
+                if let Some((_, Some((id, request)))) = take(carrier, &mut ctx, &mut kept) {
+                    carrier.respond(id, make(&request));
+                    break;
+                }
+            },
+            Step::Until(kind) => loop {
+                if let Some((taken, _)) = take(carrier, &mut ctx, &mut kept)
+                    && taken == *kind
+                {
+                    break;
+                }
+            },
+        }
+    }
+    Transcript(normalise(&kept, known))
+}
+
+/// Numbers ids by their first appearance, takes out times, durations and
+/// `seq`, writes each text of `known` as its name, and joins runs of
+/// deltas of one item and kind.
+#[must_use]
+pub fn normalise(entries: &[Value], known: &[(&str, &str)]) -> Vec<Value> {
+    // Every id first, in the order they appear: the id of a session, a
+    // turn or an item is also written inside other text (a session's
+    // temporary folder is named for it).
+    let mut names = Names::default();
+    for entry in entries {
+        learn(entry, &mut names, None);
+    }
+    let mut out: Vec<Value> = Vec::new();
+    for entry in entries {
+        let entry = rename(entry, &mut names, known, None);
+        // A delta that follows a delta of the same item and kind is added
+        // to it.
+        if let (Some(last), Some(delta)) = (out.last_mut(), delta_of(&entry))
+            && let Some(before) = delta_of(last)
+            && before.0 == delta.0
+            && before.1 == delta.1
+        {
+            join(last, &entry);
+            continue;
+        }
+        out.push(entry);
+    }
+    out
+}
+
+fn delta_of(entry: &Value) -> Option<(String, String)> {
+    let event = entry.get("event")?;
+    if event.get("type")?.as_str()? != "item.delta" {
+        return None;
+    }
+    Some((
+        event.get("item_id")?.as_str()?.to_owned(),
+        event.get("delta")?.get("kind")?.as_str()?.to_owned(),
+    ))
+}
+
+/// Adds the text of `next`'s delta to `last`'s, field by field.
+fn join(last: &mut Value, next: &Value) {
+    let (Some(Value::Object(into)), Some(Value::Object(from))) = (
+        last.pointer_mut("/event/delta"),
+        next.pointer("/event/delta"),
+    ) else {
+        return;
+    };
+    for (key, value) in from {
+        if key == "kind" {
+            continue;
+        }
+        if let (Some(Value::String(into)), Value::String(more)) = (into.get_mut(key), value) {
+            into.push_str(more);
+        }
+    }
+}
+
+/// The ids seen, each with its number; and those of a kind that is also
+/// written inside other text.
+#[derive(Debug, Default)]
+struct Names {
+    numbers: BTreeMap<String, String>,
+    inside: Vec<String>,
+}
+
+impl Names {
+    fn of(&mut self, id: &str) -> String {
+        let next = format!("#{}", self.numbers.len() + 1);
+        self.numbers.entry(id.to_owned()).or_insert(next).clone()
+    }
+}
+
+/// Numbers each id `value` holds that `names` does not know yet.
+fn learn(value: &Value, names: &mut Names, key: Option<&str>) {
+    match value {
+        Value::Object(map) => {
+            for (key, value) in map {
+                learn(value, names, Some(key));
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                learn(value, names, key);
+            }
+        }
+        Value::String(text) if key.is_some_and(|key| key == "id" || key.ends_with("_id")) => {
+            names.of(text);
+            if key.is_some_and(|key| key.ends_with("_id")) && !names.inside.contains(text) {
+                names.inside.push(text.clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn rename(value: &Value, names: &mut Names, known: &[(&str, &str)], key: Option<&str>) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut out = Map::new();
+            for (key, value) in map {
+                if key == "seq" || key.ends_with("_at") || key.ends_with("_ms") {
+                    continue;
+                }
+                out.insert(key.clone(), rename(value, names, known, Some(key)));
+            }
+            Value::Object(out)
+        }
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| rename(value, names, known, key))
+                .collect(),
+        ),
+        Value::String(text) => {
+            let is_id = key.is_some_and(|key| key == "id" || key.ends_with("_id"));
+            if is_id {
+                return Value::String(names.of(text));
+            }
+            let mut text = text.clone();
+            for (from, to) in known {
+                if !from.is_empty() {
+                    text = text.replace(from, to);
+                }
+            }
+            // An id of a session, a turn or an item inside other text, the
+            // longest first.
+            let mut inside: Vec<String> = names.inside.clone();
+            inside.sort_by_key(|id| std::cmp::Reverse(id.len()));
+            for id in inside {
+                if id.len() >= 8 && text.contains(id.as_str()) {
+                    let name = names.of(&id);
+                    text = text.replace(id.as_str(), &name);
+                }
+            }
+            Value::String(text)
+        }
+        other => other.clone(),
+    }
+}
+
+/// A message read: a response with its id, or something else the server
+/// sent.
+type Read = Result<(RequestId, Result<Value, ErrorData>), Inbound>;
+
+/// A JSON-RPC client over lines: the RPC connection's in-memory ends, or
+/// the real binary's standard input and output.
+pub struct Lines {
+    send: Box<dyn FnMut(Vec<u8>) + Send>,
+    receive: Box<dyn FnMut() -> Option<Vec<u8>> + Send>,
+    next_id: i64,
+    /// Events and requests that came while a result was awaited.
+    kept: VecDeque<Inbound>,
+    /// For each session, the `seq` of the last read's result: no event at
+    /// or below it may come after it.
+    fences: BTreeMap<SessionId, u64>,
+}
+
+impl std::fmt::Debug for Lines {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Lines").finish_non_exhaustive()
+    }
+}
+
+impl Lines {
+    /// A client that writes a line with `send` and waits for one with
+    /// `receive` (`None` at the end of the stream).
+    #[must_use]
+    pub fn new(
+        send: impl FnMut(Vec<u8>) + Send + 'static,
+        receive: impl FnMut() -> Option<Vec<u8>> + Send + 'static,
+    ) -> Self {
+        Self {
+            send: Box::new(send),
+            receive: Box::new(receive),
+            next_id: 0,
+            kept: VecDeque::new(),
+            fences: BTreeMap::new(),
+        }
+    }
+
+    /// Sends `initialize`, and returns its result.
+    ///
+    /// # Errors
+    ///
+    /// The server's refusal.
+    pub fn initialize(&mut self, params: InitializeParams) -> Result<OpResult, ErrorData> {
+        self.call(Op::Initialize(params))
+    }
+
+    /// Writes one message as a line.
+    pub fn write(&mut self, message: &Message) {
+        let mut line = serde_json::to_vec(message).unwrap_or_default();
+        line.push(b'\n');
+        (self.send)(line);
+    }
+
+    /// Writes raw bytes, as they are.
+    pub fn write_raw(&mut self, bytes: &[u8]) {
+        (self.send)(bytes.to_vec());
+    }
+
+    /// Ends what the client sends, and goes on reading: the end of the
+    /// server's input.
+    pub fn end_input(&mut self) {
+        self.send = Box::new(|_| {});
+    }
+
+    /// The next message the server wrote, read as one. `None` at the end.
+    ///
+    /// # Panics
+    ///
+    /// When a line is not a JSON-RPC message: standard output carries
+    /// nothing else.
+    pub fn read(&mut self) -> Option<Message> {
+        let line = (self.receive)()?;
+        let text = String::from_utf8_lossy(&line);
+        let text = text.trim_end_matches(['\n', '\r']);
+        Some(serde_json::from_str::<Message>(text).unwrap_or_else(|error| {
+            panic!("the server wrote a line that is not a JSON-RPC message ({error}): {text:?}")
+        }))
+    }
+
+    fn inbound(&mut self, message: Message) -> Option<Read> {
+        match message {
+            Message::Response(Response { id, result }) => {
+                let id = id?;
+                Some(Ok((
+                    id,
+                    result.map_err(|error| {
+                        error.error_data().unwrap_or_else(|| {
+                            ErrorData::new(ErrorKind::Internal, "jsonrpc", error.message)
+                        })
+                    }),
+                )))
+            }
+            Message::Notification(notification) => {
+                match ServerNotification::from_wire(notification) {
+                    Ok(ServerNotification::Event(event)) => {
+                        if let Some(fence) = self.fences.get(&event.session_id) {
+                            assert!(
+                                event.seq > *fence,
+                                "event {} came after a read's result at {fence}",
+                                event.seq
+                            );
+                        }
+                        Some(Err(Inbound::Event(*event)))
+                    }
+                    _ => None,
+                }
+            }
+            Message::Request(Request { id, method, params }) => {
+                let request = ServerRequest::from_wire(&method, params)
+                    .unwrap_or_else(|error| panic!("a request the client cannot read: {error}"));
+                Some(Err(Inbound::Request(id, request)))
+            }
+        }
+    }
+}
+
+impl Carrier for Lines {
+    fn call(&mut self, op: Op) -> Result<OpResult, ErrorData> {
+        self.next_id += 1;
+        let id = RequestId::Number(self.next_id);
+        let method = op.method();
+        let read_session = match &op {
+            Op::SessionRead(params) => Some(params.session_id.clone()),
+            _ => None,
+        };
+        let request = op.to_request(id.clone()).unwrap_or_else(|error| {
+            panic!("`{method}` cannot be written: {error}");
+        });
+        self.write(&Message::Request(request));
+        loop {
+            let message = self
+                .read()
+                .unwrap_or_else(|| panic!("the connection ended before `{method}` was answered"));
+            match self.inbound(message) {
+                Some(Ok((answered, result))) => {
+                    assert_eq!(answered, id, "a response to a request not sent");
+                    let result = result.and_then(|value| {
+                        OpResult::from_wire(method, value).map_err(|error| {
+                            ErrorData::new(ErrorKind::Internal, "unreadable", error.to_string())
+                        })
+                    });
+                    if let (Ok(OpResult::SessionRead(read)), Some(session)) =
+                        (&result, read_session.clone())
+                    {
+                        self.fences.insert(session, read.seq);
+                    }
+                    return result;
+                }
+                Some(Err(inbound)) => self.kept.push_back(inbound),
+                None => {}
+            }
+        }
+    }
+
+    fn next(&mut self) -> Option<Inbound> {
+        if let Some(kept) = self.kept.pop_front() {
+            return Some(kept);
+        }
+        loop {
+            let message = self.read()?;
+            match self.inbound(message) {
+                Some(Err(inbound)) => return Some(inbound),
+                Some(Ok((id, _))) => panic!("a response to `{id}`, which was not awaited"),
+                None => {}
+            }
+        }
+    }
+
+    fn respond(&mut self, id: RequestId, response: ServerResponse) {
+        let result = response.result().unwrap_or(Value::Null);
+        self.write(&Message::Response(Response {
+            id: Some(id),
+            result: Ok(result),
+        }));
+    }
+}

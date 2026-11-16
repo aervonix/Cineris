@@ -42,6 +42,7 @@ mod names;
 mod runs;
 #[cfg(target_os = "linux")]
 mod sandbox;
+mod serve;
 mod signals;
 mod tools;
 mod tui;
