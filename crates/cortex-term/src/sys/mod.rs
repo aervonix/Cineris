@@ -29,32 +29,40 @@ pub enum Ready {
     Timeout,
 }
 
-/// Which keyboard reporting was turned on, so that putting the terminal
-/// back turns it off: [`KEYBOARD`] and [`WIN32`] as bits.
+/// Which keyboard reporting was turned on, and whether the alternate screen
+/// is, so that putting the terminal back turns them off: [`KEYBOARD`],
+/// [`WIN32`] and [`ALTERNATE`] as bits.
 static PROTOCOLS: AtomicU8 = AtomicU8::new(0);
 /// The enhanced keyboard protocol.
 const KEYBOARD: u8 = 1;
 /// Windows Terminal's win32 input mode.
 const WIN32: u8 = 2;
+/// The alternate screen, while the viewer is open (since step 23).
+const ALTERNATE: u8 = 4;
 
 /// What puts the terminal's own state back after a panic, a signal or a
 /// console event, when the presenter could not finish: ends a frame that was
-/// cut short, resets the style, erases from the cursor's row down (the rest
-/// of the live region, so a message printed next is not mixed into it),
-/// turns off what was turned on, and turns automatic wrap back on. The raw-mode or console-mode half is the
-/// system's. One for each set of keyboard reporting that may be on, indexed
-/// by [`PROTOCOLS`].
-const RESTORE: [&[u8]; 4] = [
+/// cut short, resets the style, leaves the alternate screen if it is on (the
+/// main screen comes back as it was), erases from the cursor's row down (the
+/// rest of the live region, so a message printed next is not mixed into
+/// it), turns off what was turned on, and turns automatic wrap back on. The
+/// raw-mode or console-mode half is the system's. One for each set of
+/// keyboard reporting and screen that may be on, indexed by [`PROTOCOLS`].
+const RESTORE: [&[u8]; 8] = [
     b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
     b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[<u\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
     b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
     b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[<u\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
+    b"\x1b[?2026l\x1b[0m\x1b[?1049l\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
+    b"\x1b[?2026l\x1b[0m\x1b[?1049l\r\x1b[J\x1b[<u\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
+    b"\x1b[?2026l\x1b[0m\x1b[?1049l\r\x1b[J\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
+    b"\x1b[?2026l\x1b[0m\x1b[?1049l\r\x1b[J\x1b[<u\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
 ];
 
 /// The restore sequence for the terminal's state now. Async-signal-safe:
 /// one atomic load.
 pub(crate) fn restore_sequence() -> &'static [u8] {
-    RESTORE[usize::from(PROTOCOLS.load(Ordering::SeqCst) & 3)]
+    RESTORE[usize::from(PROTOCOLS.load(Ordering::SeqCst) & 7)]
 }
 
 fn set(bit: u8, on: bool) {
@@ -73,6 +81,11 @@ pub(crate) fn set_keyboard(on: bool) {
 /// Records whether the win32 input mode is on.
 pub(crate) fn set_win32(on: bool) {
     set(WIN32, on);
+}
+
+/// Records whether the alternate screen is on.
+pub(crate) fn set_alternate(on: bool) {
+    set(ALTERNATE, on);
 }
 
 #[cfg(test)]

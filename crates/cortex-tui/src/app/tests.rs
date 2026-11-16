@@ -18,8 +18,10 @@ use cortex_protocol::methods::{
     Op, OpResult, ServerRequest, ServerResponse, SessionResult, TurnInterruptResult,
     TurnStartResult,
 };
-use cortex_protocol::model::ModelRole;
-use cortex_protocol::session::{RoleState, SandboxStatus, SessionSettings, SessionState};
+use cortex_protocol::model::{ModelInfo, ModelRole};
+use cortex_protocol::session::{
+    RoleState, SandboxStatus, SessionSettings, SessionState, SessionSummary,
+};
 use cortex_protocol::{
     CallId, ErrorData, ErrorKind, Item, ItemId, ModelId, ProviderId, SessionEvent, SessionId,
     Speed, Timestamp, TurnId,
@@ -1161,17 +1163,17 @@ fn a_command_not_in_this_build_is_said_and_not_sent() {
     let (mut app, link) = app(now);
     opened(&mut app, &link, now);
     let _ = link.take_sent();
-    type_text(&mut app, "/model opus", now);
+    type_text(&mut app, "/rewind 3", now);
     key(&mut app, "esc", now);
     key(&mut app, "enter", now);
     assert!(turn_start(&link.take_sent()).is_empty());
-    assert_eq!(app.input().editor().expanded(), "/model opus");
+    assert_eq!(app.input().editor().expanded(), "/rewind 3");
     let mut scrollback = Vec::new();
     let _ = screen(&mut app, now, &mut scrollback);
     assert!(
         scrollback
             .iter()
-            .any(|line| line.contains("/model is not in this build yet")),
+            .any(|line| line.contains("/rewind is not in this build yet")),
         "{scrollback:#?}"
     );
 }
@@ -2112,4 +2114,447 @@ fn a_question_with_no_choices_is_answered_in_words() {
             })
         )]
     );
+}
+
+/// The models the core lists: one with levels and a fast speed, one with
+/// neither.
+fn models() -> Vec<ModelInfo> {
+    serde_json::from_value(serde_json::json!([
+        {"id": "claude-opus-5-5", "provider": "anthropic", "display_name": "Claude Opus 5.5",
+         "protocol": "anthropic-messages", "context_window": 1_000_000, "max_output": 128_000,
+         "reasoning": {"kind": "levels", "levels": ["low", "medium", "high", "max"],
+                       "default": "medium"},
+         "capabilities": {"strict_tools": true, "mid_conversation_system": true,
+                          "structured_output": true},
+         "speeds": [{"speed": "fast", "label": "Fast mode", "effect": "faster_output",
+                     "when_unavailable": "error", "separate_limit": true,
+                     "shares_cache": false, "preview": false}]},
+        {"id": "some-open-model", "provider": "local", "display_name": "Some open model",
+         "protocol": "openai-chat", "context_window": 32768, "max_output": 8192,
+         "reasoning": {"kind": "none"},
+         "capabilities": {"strict_tools": false, "mid_conversation_system": false,
+                          "structured_output": false}}
+    ]))
+    .expect("models")
+}
+
+/// An opened application that has had the core's list of models.
+fn with_models(now: Instant) -> (App, Scripted) {
+    let (mut app, link) = app(now);
+    let _ = app.frame(now);
+    app.drawn(now);
+    let mut sent = link.take_sent();
+    let open = sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::SessionNew(_)))
+        .map(|(ticket, _)| *ticket)
+        .expect("the open");
+    link.give(Inbound::Done(
+        open,
+        Ok(OpResult::SessionNew(SessionResult { session: state() })),
+    ));
+    drain(&mut app, now);
+    sent.extend(link.take_sent());
+    if let Some((ticket, _)) = sent.iter().find(|(_, op)| matches!(op, Op::ModelsList(_))) {
+        link.give(Inbound::Done(
+            *ticket,
+            Ok(OpResult::ModelsList(
+                cortex_protocol::methods::ModelsListResult { models: models() },
+            )),
+        ));
+        drain(&mut app, now);
+    }
+    (app, link)
+}
+
+/// Types a command and sends it: the command menu takes the first `Enter`.
+fn run_command(app: &mut App, line: &str, now: Instant) {
+    type_text(app, line, now);
+    key(app, "esc", now);
+    key(app, "enter", now);
+}
+
+/// The settings the last `session/set` sent.
+fn last_set(link: &Scripted) -> SessionSettings {
+    link.take_sent()
+        .into_iter()
+        .rev()
+        .find_map(|(_, op)| match op {
+            Op::SessionSet(params) => Some(params.settings),
+            _ => None,
+        })
+        .expect("a session/set")
+}
+
+fn notices(app: &mut App, now: Instant) -> String {
+    let mut scrollback = Vec::new();
+    let live = screen(app, now, &mut scrollback);
+    [scrollback, live].concat().join("\n")
+}
+
+#[test]
+fn help_lists_every_command_and_the_keys() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    run_command(&mut app, "/help", now);
+    let all = notices(&mut app, now);
+    for name in [
+        "compact",
+        "config",
+        "copy",
+        "effort",
+        "help",
+        "mode",
+        "model",
+        "new",
+        "permissions",
+        "quit",
+        "sessions",
+        "status",
+        "theme",
+        "undo",
+        "view",
+    ] {
+        assert!(all.contains(&format!("/{name}")), "/{name}: {all}");
+    }
+    assert!(all.contains("enter         submit"), "{all}");
+    assert!(all.contains("ctrl+t        toggle round"), "{all}");
+}
+
+#[test]
+fn model_picks_from_the_core_list_and_sets_the_main_model() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    run_command(&mut app, "/model", now);
+    let menu = app.input().menu().cloned().expect("the picker");
+    assert_eq!(menu.rows.len(), 2);
+    assert!(menu.rows[0].label.contains("claude-opus-5-5"));
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    let settings = last_set(&link);
+    let main = &settings.roles[&ModelRole::Main];
+    assert_eq!(main.model, Some(ModelId::from("some-open-model")));
+    assert_eq!(main.provider, Some(ProviderId::from("local")));
+}
+
+/// `/effort` lists the model's levels, and its fast mode toggles with
+/// `Tab` where the model offers it: each a `session/set`.
+#[test]
+fn effort_picks_a_level_and_tab_toggles_fast_mode() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    // The session's main model is claude-opus-5-5, which has both.
+    run_command(&mut app, "/effort", now);
+    let menu = app.input().menu().cloned().expect("the picker");
+    let labels: Vec<&str> = menu.rows.iter().map(|row| row.label.as_str()).collect();
+    assert_eq!(labels, ["low", "medium", "high", "max"]);
+    assert_eq!(menu.current, Some(2), "high is in effect");
+    let toggle = menu.toggle.expect("fast mode, which the model offers");
+    assert_eq!(toggle.label, "fast mode");
+    assert!(!toggle.on);
+    key(&mut app, "tab", now);
+    assert_eq!(last_set(&link).speed, Some(Speed::Fast));
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    let settings = last_set(&link);
+    assert_eq!(
+        settings.roles[&ModelRole::Main].effort,
+        Some("max".to_owned())
+    );
+}
+
+#[test]
+fn effort_on_a_model_with_no_levels_says_so() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    let mut open_model = state();
+    if let Some(main) = open_model.roles.get_mut(&ModelRole::Main) {
+        main.model = ModelId::from("some-open-model");
+    }
+    link.give(event(Event::SessionUpdated(
+        cortex_protocol::event::SessionUpdated {
+            session: open_model,
+        },
+    )));
+    drain(&mut app, now);
+    run_command(&mut app, "/effort", now);
+    assert!(app.input().menu().is_none());
+    assert!(
+        notices(&mut app, now).contains("no levels of effort"),
+        "the reply"
+    );
+}
+
+#[test]
+fn mode_picks_a_level() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    run_command(&mut app, "/mode", now);
+    let menu = app.input().menu().cloned().expect("the picker");
+    assert_eq!(menu.rows.len(), 5);
+    assert_eq!(menu.current, Some(1), "supervised");
+    key(&mut app, "up", now);
+    key(&mut app, "enter", now);
+    assert_eq!(last_set(&link).level, Some(Level::ReadOnly));
+}
+
+/// `/sessions` lists this workspace's sessions; picking another closes
+/// this one and opens it.
+#[test]
+fn sessions_switches_to_another_session() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    run_command(&mut app, "/sessions", now);
+    let (ticket, params) = link
+        .take_sent()
+        .into_iter()
+        .find_map(|(ticket, op)| match op {
+            Op::SessionList(params) => Some((ticket, params)),
+            _ => None,
+        })
+        .expect("the list");
+    assert_eq!(params.workspace.as_deref(), Some("/work/app"));
+    let summary = |id: &str, title: &str| SessionSummary {
+        session_id: SessionId::from(id),
+        workspace: "/work/app".to_owned(),
+        title: Some(title.to_owned()),
+        created_at: Timestamp::from("2026-11-15T09:00:00Z"),
+        updated_at: Timestamp::from("2026-11-15T09:30:00Z"),
+        parent: None,
+        model: None,
+        turns: 1,
+    };
+    link.give(Inbound::Done(
+        ticket,
+        Ok(OpResult::SessionList(
+            cortex_protocol::methods::SessionListResult {
+                sessions: vec![
+                    summary(SESSION, "this one"),
+                    summary("s_other", "the lexer"),
+                ],
+                next_cursor: None,
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    let menu = app.input().menu().cloned().expect("the picker");
+    assert_eq!(menu.rows[1].label, "the lexer");
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    let sent = link.take_sent();
+    assert!(
+        sent.iter().any(|(_, op)| matches!(
+            op,
+            Op::SessionClose(close) if close.session_id == SessionId::from(SESSION)
+        )),
+        "{sent:#?}"
+    );
+    assert!(
+        sent.iter().any(|(_, op)| matches!(
+            op,
+            Op::SessionOpen(open) if open.session_id == SessionId::from("s_other")
+        )),
+        "{sent:#?}"
+    );
+}
+
+#[test]
+fn undo_sends_session_undo_and_says_what_it_did() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    run_command(&mut app, "/undo", now);
+    let (ticket, params) = link
+        .take_sent()
+        .into_iter()
+        .find_map(|(ticket, op)| match op {
+            Op::SessionUndo(params) => Some((ticket, params)),
+            _ => None,
+        })
+        .expect("session/undo");
+    assert!(params.restore_files);
+    link.give(Inbound::Done(
+        ticket,
+        Ok(OpResult::SessionUndo(SessionResult { session: state() })),
+    ));
+    drain(&mut app, now);
+    assert!(notices(&mut app, now).contains("The last turn is undone"));
+}
+
+/// `/permissions` lists the stored approvals; `Delete` revokes the
+/// selected one and the list comes again.
+#[test]
+fn permissions_lists_the_approvals_and_delete_revokes_one() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    run_command(&mut app, "/permissions", now);
+    let (ticket, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::PermissionsList(_)))
+        .expect("the list");
+    let approval: cortex_protocol::methods::StoredApproval =
+        serde_json::from_value(serde_json::json!({
+            "id": "ap_1",
+            "rule": {"effect": "exec", "match": "cargo test *", "action": "allow"},
+            "scope": "project",
+            "created_at": "2026-11-15T09:00:00Z"
+        }))
+        .expect("an approval");
+    link.give(Inbound::Done(
+        ticket,
+        Ok(OpResult::PermissionsList(
+            cortex_protocol::methods::PermissionsListResult {
+                approvals: vec![approval],
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    let menu = app.input().menu().cloned().expect("the picker");
+    assert!(menu.rows[0].label.contains("allow exec cargo test *"));
+    key(&mut app, "delete", now);
+    let sent = link.take_sent();
+    assert!(
+        sent.iter().any(|(_, op)| matches!(
+            op,
+            Op::PermissionsRevoke(revoke) if revoke.ids.len() == 1
+        )),
+        "{sent:#?}"
+    );
+    assert!(
+        sent.iter()
+            .any(|(_, op)| matches!(op, Op::PermissionsList(_))),
+        "listed again: {sent:#?}"
+    );
+}
+
+#[test]
+fn status_shows_the_session_and_the_limits_in_force() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    run_command(&mut app, "/status", now);
+    let (ticket, params) = link
+        .take_sent()
+        .into_iter()
+        .find_map(|(ticket, op)| match op {
+            Op::ConfigGet(params) => Some((ticket, params)),
+            _ => None,
+        })
+        .expect("config/get");
+    assert_eq!(params.keys, ["limits"]);
+    let config = serde_json::json!({"limits": {"turn": {"requests": 20, "time": null}}});
+    link.give(Inbound::Done(
+        ticket,
+        Ok(OpResult::ConfigGet(
+            cortex_protocol::methods::ConfigGetResult {
+                config: config.as_object().cloned().unwrap_or_default(),
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    let all = notices(&mut app, now);
+    for shown in [
+        "model      claude-opus-5-5",
+        "mode       supervised",
+        "sandbox    off",
+        "limits     limits.turn.requests = 20",
+        "mcp        none",
+    ] {
+        assert!(all.contains(shown), "{shown}: {all}");
+    }
+    assert!(!all.contains("limits.turn.time"), "an unset limit: {all}");
+}
+
+#[test]
+fn config_shows_the_configuration_in_effect() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    run_command(&mut app, "/config", now);
+    let (ticket, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::ConfigGet(_)))
+        .expect("config/get");
+    let config =
+        serde_json::json!({"model": {"main": "claude-opus-5-5"}, "tui": {"prose_width": 80}});
+    link.give(Inbound::Done(
+        ticket,
+        Ok(OpResult::ConfigGet(
+            cortex_protocol::methods::ConfigGetResult {
+                config: config.as_object().cloned().unwrap_or_default(),
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    let all = notices(&mut app, now);
+    assert!(all.contains("model.main = \"claude-opus-5-5\""), "{all}");
+    assert!(all.contains("tui.prose_width = 80"), "{all}");
+}
+
+#[test]
+fn copy_puts_the_last_answer_on_the_clipboard() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    run_command(&mut app, "/copy", now);
+    assert!(app.take_effects().is_empty(), "nothing to copy yet");
+    link.give(event(Event::ItemCompleted(ItemCompleted {
+        item: Item::AssistantMessage(AssistantMessageItem {
+            id: ItemId::from("i_9"),
+            parts: vec![Part::text("The answer.\n")],
+            stop_reason: Some(StopReason::End),
+            raw_stop: None,
+            stop_detail: None,
+            truncated: false,
+            origin: None,
+            usage: None,
+            error: None,
+            created_at: None,
+        }),
+    })));
+    drain(&mut app, now);
+    run_command(&mut app, "/copy", now);
+    assert_eq!(
+        app.take_effects(),
+        [Effect::Copy("The answer.\n".to_owned())]
+    );
+}
+
+#[test]
+fn theme_picks_a_theme_for_the_run() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    assert_eq!(app.theme(), ThemeChoice::Auto);
+    run_command(&mut app, "/theme", now);
+    let menu = app.input().menu().cloned().expect("the picker");
+    assert_eq!(menu.rows.len(), 3);
+    key(&mut app, "down", now);
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    assert_eq!(app.theme(), ThemeChoice::Light);
+    let _ = link;
+}
+
+/// `/view` opens the viewer over everything committed so far; it scrolls
+/// and `q` closes it.
+#[test]
+fn view_shows_the_session_full_screen_and_q_closes_it() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    let _ = app.frame(now);
+    run_command(&mut app, "/view", now);
+    assert!(app.viewing());
+    let rows = text(&app.viewer_frame(10, 80, now));
+    assert_eq!(rows.len(), 10);
+    assert!(
+        rows.iter().any(|row| row.contains("Cortex-Harness")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.last()
+            .is_some_and(|row| row.contains("q or esc closes"))
+    );
+    key(&mut app, "home", now);
+    key(&mut app, "q", now);
+    assert!(!app.viewing());
+    let _ = link;
 }

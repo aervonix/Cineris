@@ -283,6 +283,17 @@ fn check(action: Action, key: &str) {
             press(&mut input, key);
             assert_eq!(input.menu().unwrap().filter, "m", "{context}");
         }
+        Action::PickerRemove => {
+            let mut input = input();
+            input.open_picker(effort(false));
+            press(&mut input, "down");
+            assert_eq!(
+                press(&mut input, key),
+                Outcome::Removed("effort".to_owned(), 3),
+                "{context}"
+            );
+            assert!(input.menu().is_some(), "{context}: the picker stays open");
+        }
         Action::ToggleFast => {
             let mut input = input();
             input.open_picker(effort(true));

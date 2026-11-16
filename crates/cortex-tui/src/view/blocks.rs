@@ -69,6 +69,20 @@ pub fn notice(text: &str, width: usize, look: &Look) -> Vec<Line> {
     )
 }
 
+/// What a command shows: `·` and its title, then each of its lines as it
+/// is, two columns in, dim, cut to the width rather than wrapped, so that
+/// what lines up still does.
+#[must_use]
+pub fn listing(title: &str, lines: &[String], width: usize, look: &Look) -> Vec<Line> {
+    let muted = look.theme.style(Token::Muted);
+    let mut out = notice(title, width, look);
+    for line in lines {
+        let row = Line::plain("  ").with(Span::new(clean(line).replace('\n', " "), muted));
+        out.push(crate::layout::cut(&row, width, look.glyphs.ellipsis));
+    }
+    out
+}
+
 /// An error: `✗` and a sentence in the error colour, then a dim sentence on
 /// what to do next, two columns in.
 #[must_use]

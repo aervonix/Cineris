@@ -49,6 +49,7 @@ use std::time::{Duration, Instant};
 use crate::caps::{Capabilities, Overrides, Platform};
 use crate::inline::Sink;
 use crate::input::{Decoder, Event, Reply};
+use crate::line::Line;
 use crate::sys::{self, Ready};
 
 /// How long a lone ESC waits for the rest of a sequence before it is taken
@@ -86,6 +87,10 @@ const KEYBOARD_OFF: &[u8] = b"\x1b[<u";
 /// Turns Windows Terminal's win32 input mode on, and off.
 const WIN32_ON: &[u8] = b"\x1b[?9001h";
 const WIN32_OFF: &[u8] = b"\x1b[?9001l";
+
+/// The alternate screen on, and off: the main screen comes back as it was.
+const ALTERNATE_ON: &[u8] = b"\x1b[?1049h";
+const ALTERNATE_OFF: &[u8] = b"\x1b[?1049l";
 
 /// Wakes a terminal that is waiting in [`Terminal::next`], from any thread.
 #[derive(Clone)]
@@ -277,6 +282,8 @@ pub struct Terminal<D: Device = System> {
     /// When the decoder last had input while inside a paste or a sequence
     /// being dropped: it gives up on it once [`OPEN_WAIT`] has passed.
     open_since: Option<Instant>,
+    /// Whether the alternate screen is on (the viewer).
+    alternate: bool,
 }
 
 impl Terminal<System> {
@@ -342,6 +349,7 @@ impl<D: Device> Terminal<D> {
             pending_since: None,
             answered: false,
             open_since: None,
+            alternate: false,
         })
     }
 
@@ -365,6 +373,73 @@ impl<D: Device> Terminal<D> {
     #[must_use]
     pub fn waker(&self) -> Waker {
         self.device.waker()
+    }
+
+    /// Turns the alternate screen on or off: the viewer's full screen, which
+    /// leaves the main screen, its scrollback and the live region as they
+    /// were (since step 23). While it is on, an emergency restore leaves it
+    /// too, and so does putting the terminal back.
+    ///
+    /// # Errors
+    ///
+    /// When the terminal cannot be written to.
+    pub fn alternate(&mut self, on: bool) -> io::Result<()> {
+        if on == self.alternate {
+            return Ok(());
+        }
+        self.alternate = on;
+        sys::set_alternate(on);
+        self.device
+            .write(if on { ALTERNATE_ON } else { ALTERNATE_OFF })
+    }
+
+    /// Whether the alternate screen is on.
+    #[must_use]
+    pub fn is_alternate(&self) -> bool {
+        self.alternate
+    }
+
+    /// Draws `lines` as the whole screen, from its top, each cut to `width`
+    /// columns, in one write: the viewer's frame on the alternate screen.
+    /// The cursor is hidden; what is below the last line is erased.
+    ///
+    /// # Errors
+    ///
+    /// When the terminal cannot be written to.
+    pub fn draw_screen(&mut self, lines: &[Line], width: usize) -> io::Result<()> {
+        let target = crate::render::Target::of(&self.caps);
+        let mut out = Vec::new();
+        if self.caps.sync {
+            out.extend_from_slice(crate::inline::SYNC_BEGIN);
+        }
+        out.extend_from_slice(b"\x1b[?25l\x1b[H");
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                out.extend_from_slice(b"\r\n");
+            }
+            crate::render::line(&mut out, line, width, target);
+            out.extend_from_slice(b"\x1b[0m\x1b[K");
+        }
+        out.extend_from_slice(b"\x1b[J");
+        if self.caps.sync {
+            out.extend_from_slice(b"\x1b[?2026l");
+        }
+        self.device.write(&out)
+    }
+
+    /// Puts `text` on the clipboard of the terminal the program runs in,
+    /// through its clipboard sequence (OSC 52), which reaches it over SSH
+    /// too (since step 23, `/copy`). A terminal that does not take the
+    /// sequence ignores it.
+    ///
+    /// # Errors
+    ///
+    /// When the terminal cannot be written to.
+    pub fn copy(&mut self, text: &str) -> io::Result<()> {
+        let mut bytes = b"\x1b]52;c;".to_vec();
+        bytes.extend_from_slice(&base64(text.as_bytes()));
+        bytes.push(0x07);
+        self.device.write(&bytes)
     }
 
     /// Whether events already read wait to be given: a key with another
@@ -534,6 +609,11 @@ impl<D: Device> Terminal<D> {
             self.drain_replies();
         }
         let mut end = Vec::new();
+        if self.alternate {
+            self.alternate = false;
+            sys::set_alternate(false);
+            end.extend_from_slice(ALTERNATE_OFF);
+        }
         if self.keyboard {
             end.extend_from_slice(KEYBOARD_OFF);
         }
@@ -578,6 +658,34 @@ impl<D: Device> Terminal<D> {
             }
         }
     }
+}
+
+/// `bytes` in the standard base64 alphabet, padded: what the clipboard
+/// sequence carries.
+fn base64(bytes: &[u8]) -> Vec<u8> {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [
+            chunk[0],
+            chunk.get(1).copied().unwrap_or(0),
+            chunk.get(2).copied().unwrap_or(0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(ALPHABET[(n >> 18) as usize & 63]);
+        out.push(ALPHABET[(n >> 12) as usize & 63]);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63]
+        } else {
+            b'='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63]
+        } else {
+            b'='
+        });
+    }
+    out
 }
 
 impl<D: Device> Sink for Terminal<D> {
@@ -659,6 +767,73 @@ mod tests {
             base: Some(Instant::now()),
             ..Script::default()
         }
+    }
+
+    #[test]
+    fn copy_sends_the_clipboard_sequence_with_the_text_in_base64() {
+        let device = script(&[]);
+        let written = device.written.clone();
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        written.lock().unwrap().clear();
+        terminal.copy("hi there").unwrap();
+        assert_eq!(&*written.lock().unwrap(), b"\x1b]52;c;aGkgdGhlcmU=\x07");
+        assert_eq!(base64(b"a"), b"YQ==");
+        assert_eq!(base64(b"ab"), b"YWI=");
+        assert_eq!(base64(b"abc"), b"YWJj");
+        assert_eq!(base64("é".as_bytes()), b"w6k=");
+    }
+
+    /// The viewer's alternate screen is left when the terminal is put back,
+    /// and by the emergency restore while it is on, and only then.
+    #[test]
+    fn the_alternate_screen_is_left_by_the_end_and_by_an_emergency() {
+        let leaves = |bytes: &[u8]| {
+            bytes
+                .windows(ALTERNATE_OFF.len())
+                .any(|w| w == ALTERNATE_OFF)
+        };
+        let device = script(&[]);
+        let written = device.written.clone();
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert!(!leaves(sys::restore_sequence()));
+        terminal.alternate(true).unwrap();
+        assert!(terminal.is_alternate());
+        assert!(written.lock().unwrap().ends_with(ALTERNATE_ON));
+        assert!(leaves(sys::restore_sequence()));
+        terminal.leave().unwrap();
+        assert!(
+            written
+                .lock()
+                .unwrap()
+                .ends_with(&[ALTERNATE_OFF, END].concat())
+        );
+        assert!(!leaves(sys::restore_sequence()));
+    }
+
+    #[test]
+    fn a_screen_is_drawn_from_its_top_with_what_is_below_erased() {
+        let device = script(&[]);
+        let written = device.written.clone();
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        written.lock().unwrap().clear();
+        terminal
+            .draw_screen(&[Line::plain("first"), Line::plain("second")], 20)
+            .unwrap();
+        let out = String::from_utf8(written.lock().unwrap().clone()).unwrap();
+        let first = out.find("first").expect("the first line");
+        let second = out.find("second").expect("the second line");
+        assert!(
+            out.find("\x1b[H").is_some_and(|home| home < first),
+            "{out:?}"
+        );
+        assert!(
+            first < second && out[first..second].contains("\r\n"),
+            "{out:?}"
+        );
+        assert!(
+            out.ends_with("\x1b[J") || out.contains("\x1b[J\x1b[?2026l"),
+            "{out:?}"
+        );
     }
 
     #[test]

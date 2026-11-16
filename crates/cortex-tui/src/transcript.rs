@@ -46,6 +46,14 @@ pub enum Block {
     Round(Round),
     /// A notice.
     Notice(String),
+    /// What a command shows (`/status`, `/config`, `/help`): a title, then
+    /// its lines as they are, each cut to the width (since step 23).
+    Listing {
+        /// The first line, after a `·`.
+        title: String,
+        /// The lines under it.
+        lines: Vec<String>,
+    },
     /// An error, and what to do next.
     Error {
         /// What went wrong.
@@ -96,7 +104,7 @@ impl Block {
         match self {
             Self::Header(_) => Kind::Header,
             Self::User(_) => Kind::User,
-            Self::Notice(_) => Kind::Notice,
+            Self::Notice(_) | Self::Listing { .. } => Kind::Notice,
             _ => Kind::Other,
         }
     }
@@ -288,6 +296,7 @@ fn draw(block: &Block, placement: Placement, tick: usize, width: usize, look: &L
         Block::Answer(_) => Vec::new(),
         Block::Round(round) => view::round(round, placement, tick, width, look),
         Block::Notice(text) => view::notice(text, width, look),
+        Block::Listing { title, lines } => view::listing(title, lines, width, look),
         Block::Error { message, hint } => view::error(message, hint.as_deref(), width, look),
         Block::Summary { took, tokens, cost } => {
             view::turn_summary(*took, *tokens, cost.as_deref(), width, look)

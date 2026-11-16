@@ -99,6 +99,10 @@ pub enum Outcome {
     PickerClosed(String),
     /// A picker's toggle changed: its name, and the new state.
     Toggled(String, bool),
+    /// A picker's selected row is to be removed: the picker's name, and
+    /// the row's index among the rows it was opened with. The picker stays
+    /// open; the caller opens it again with the rows that are left.
+    Removed(String, usize),
     /// An action that has no meaning where the keyboard is now.
     Ignored(Action),
 }
@@ -569,6 +573,13 @@ impl Input {
                     Outcome::Changed
                 }
                 _ => Outcome::Ignored(action),
+            },
+            Action::PickerRemove => match self.menu.as_ref() {
+                Some(menu) => match (&menu.kind, menu.picked()) {
+                    (Kind::Picker(name), Some(index)) => Outcome::Removed(name.clone(), index),
+                    _ => Outcome::Ignored(action),
+                },
+                None => Outcome::Ignored(action),
             },
             Action::ToggleFast => match self.menu.as_mut() {
                 Some(Menu {
