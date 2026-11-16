@@ -34,6 +34,10 @@ pub(crate) const NO_PLAN: &str = "There is no plan yet: the model makes one with
 /// What `Enter` does in an item edit of the plan's, as the hint row says.
 const SAVES: &str = "saves the item";
 
+/// The most characters an item's text holds: the core refuses more
+/// (`cortex-tools`'s `MAX_PLAN_TEXT`, which this crate may not name).
+pub(crate) const ITEM_TEXT: usize = 400;
+
 /// The plan panel. See the [module documentation](self).
 #[derive(Debug, Default)]
 pub(crate) struct PlanPanel {
@@ -264,7 +268,12 @@ impl Panel for PlanPanel {
         if text.is_empty() {
             return Act::Taken;
         }
-        match edit.action {
+        // Longer than an item holds, as a paste can make it: cut, and said,
+        // rather than refused by the core with the text lost.
+        let cut = text.chars().count() > ITEM_TEXT;
+        let text: String = text.chars().take(ITEM_TEXT).collect();
+        let text = text.trim_end();
+        let act = match edit.action {
             Action::FocusEdit if text == item.text => Act::Taken,
             Action::FocusEdit => Self::update(
                 session,
@@ -281,6 +290,16 @@ impl Panel for PlanPanel {
                 }),
             ),
             _ => Act::Taken,
+        };
+        match act {
+            Act::Send(op) if cut => Act::SendAndSay(
+                op,
+                format!(
+                    "The item was cut to its first {ITEM_TEXT} characters, the most an item of \
+                     the plan holds."
+                ),
+            ),
+            act => act,
         }
     }
 }

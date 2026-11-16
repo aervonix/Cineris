@@ -195,10 +195,37 @@ impl App {
         }
         match self.input.focus().focused() {
             Target::Panel(id) if self.panel_drawn == Some(id) => {
-                Some(self.panels.hint(id, self.input.keymap()))
+                let mut keys = self.panels.hint(id, self.input.keymap());
+                if self.panel_dropped == Some(id) && self.panel_waiting(id) {
+                    keys.insert(0, "the last change is still being made".to_owned());
+                }
+                Some(keys)
             }
             _ => None,
         }
+    }
+
+    /// Whether an operation `id` sent in the session open is on its way:
+    /// what its keys would change is computed from what it shows, which the
+    /// answer may change. Read from what the application waits for, so that
+    /// an answer for a session left is no answer of the open one's.
+    pub(super) fn panel_waiting(&self, id: u64) -> bool {
+        self.pending.values().any(|pending| {
+            matches!(pending, Pending::Panel { session, panel }
+                if *panel == id && self.is_open(session))
+        })
+    }
+
+    /// The rows the panels themselves have of `room` under `live` rows of
+    /// the transcript: none in a small window; less the live rows kept,
+    /// the blank row after the block, and the one before it when nothing
+    /// live is above it.
+    pub(super) fn panel_rows(&self, room: usize, live: usize) -> usize {
+        if self.rows <= LEAST_ROWS {
+            return 0;
+        }
+        let spacer = live == 0 && !self.transcript.ends_blank();
+        room.saturating_sub(live.min(LIVE_KEPT) + 1 + usize::from(spacer))
     }
 
     /// The panels' block for a live region that leaves them `room` rows
@@ -220,7 +247,7 @@ impl App {
         // No room at all: a small window, or a menu open.
         if !menu && self.rows > LEAST_ROWS {
             let spacer = live == 0 && !self.transcript.ends_blank();
-            let room = room.saturating_sub(live.min(LIVE_KEPT) + 1 + usize::from(spacer));
+            let room = self.panel_rows(room, live);
             // The focused panel is drawn whole, and so is the one whose
             // item is being edited in the input box, the item shown.
             let whole = match self.input.focus().focused() {
@@ -247,16 +274,6 @@ impl App {
         if self.panel_drawn.map(Target::Panel) != Some(self.input.focus().focused()) {
             self.panel_drawn = None;
         }
-        // A panel a command asked for that this window cannot draw focused
-        // took the focus for nothing: what happened is said.
-        if let Some(id) = self.summoned.take()
-            && !reachable.contains(&id)
-        {
-            let name = self.panels.name(id).unwrap_or("panel");
-            self.say(&format!(
-                "There is no room for the {name} panel in this window: make it taller."
-            ));
-        }
         block
     }
 
@@ -278,14 +295,32 @@ impl App {
         let Some(id) = self.panels.find(name) else {
             return;
         };
-        match self.panels.summon(id) {
-            Ok(()) => {
-                self.input.focus_mut().focus(Target::Panel(id));
-                self.panels.focused(id);
-                self.summoned = Some(id);
-            }
-            Err(sentence) => self.say(&sentence),
+        if let Err(sentence) = self.panels.summon(id) {
+            self.say(&sentence);
+            return;
         }
+        // No panel takes the focus from a dialog: the panel is open, for
+        // `Ctrl+P` once the dialog is answered.
+        if !self.dialogs.is_empty() {
+            return;
+        }
+        // One this window cannot draw focused would take the focus for
+        // nothing: that is said now, in the command's own frame, from the
+        // rows the last frame gave the panels.
+        let draw = Draw {
+            width: self.width.max(1),
+            look: &self.look,
+            tick: self.tick,
+        };
+        if self.panels.rows_to_focus(id, &draw) > self.panel_room {
+            let name = self.panels.name(id).unwrap_or("panel");
+            self.say(&format!(
+                "There is no room for the {name} panel in this window: make it taller."
+            ));
+            return;
+        }
+        self.input.focus_mut().focus(Target::Panel(id));
+        self.panels.focused(id);
     }
 
     /// Whether `key`, read at `at` (`repeat` when the terminal marked it
@@ -294,13 +329,18 @@ impl App {
     /// whatever has the focus now: a held `x` that closed the review types
     /// nothing into the prompt.
     pub(super) fn panel_holds(&mut self, key: Key, at: Instant, repeat: bool) -> bool {
-        let Some((held, last)) = self.panel_held else {
+        let Some((held, last, marked_only)) = self.panel_held else {
             return false;
         };
-        if held != key || !(repeat || at.saturating_duration_since(last) < REPEAT) {
+        let again = if marked_only {
+            repeat
+        } else {
+            repeat || at.saturating_duration_since(last) < REPEAT
+        };
+        if held != key || !again {
             return false;
         }
-        self.panel_held = Some((key, at));
+        self.panel_held = Some((key, at, marked_only));
         self.last_key = Some(LastKey { typing: false });
         true
     }
@@ -353,20 +393,36 @@ impl App {
         if act == Act::Pass {
             return self.panel_passed(key, at);
         }
-        // While a change of the panel's is on its way, what it shows may be
-        // out of date, and a change computed from it may be wrong (a second
-        // reorder from the order before the first): the key is taken, and
-        // nothing is sent.
-        let act = match act {
-            Act::Send(_) if self.panels.waiting(id) => Act::Taken,
-            act => act,
-        };
-        self.panel_held = Some((key, at));
         self.taken = Some(at);
         self.last_key = Some(LastKey { typing: false });
         self.input.disarm_quit();
+        // While a change of the panel's is on its way, what it shows may be
+        // out of date, and a change computed from it may be wrong (a second
+        // reorder from the order before the first): the key is taken,
+        // nothing is sent, and the hint row says why. It is no key held: the
+        // same key again, once the answer has come, acts.
+        if matches!(act, Act::Send(_) | Act::SendAndSay(..)) && self.panel_waiting(id) {
+            self.panel_dropped = Some(id);
+            return true;
+        }
+        // After a key that began an item edit, what is typed is the item's:
+        // only a repeat the terminal marks is taken for the key held.
+        let marked_only = matches!(act, Act::Edit { .. });
+        self.panel_held = Some((key, at, marked_only));
         self.panel_act(id, act);
         true
+    }
+
+    /// Sends `op` for the panel `id` in the session open, its result the
+    /// panel's while that session is open.
+    fn panel_send(&mut self, id: u64, op: cortex_protocol::methods::Op) {
+        let Some(session) = self.session.as_ref().map(|state| state.session_id.clone()) else {
+            return;
+        };
+        let ticket = self.link.send(op);
+        self.pending
+            .insert(ticket, Pending::Panel { session, panel: id });
+        self.panel_dropped = None;
     }
 
     /// A panel's key it did not take: one that types goes to the editor,
@@ -386,15 +442,12 @@ impl App {
     fn panel_act(&mut self, id: u64, act: Act) {
         match act {
             Act::Pass | Act::Taken => {}
-            Act::Send(op) => {
-                let Some(session) = self.session.as_ref().map(|state| state.session_id.clone())
-                else {
-                    return;
-                };
-                let ticket = self.link.send(op);
-                self.pending
-                    .insert(ticket, Pending::Panel { session, panel: id });
-                self.panels.sent(id);
+            Act::Send(op) => self.panel_send(id, op),
+            // 5: an item the plan cut to what it holds is sent, and the cut
+            // said.
+            Act::SendAndSay(op, sentence) => {
+                self.panel_send(id, op);
+                self.say(&sentence);
             }
             Act::Edit { text, hint, edit } => {
                 self.item_edit = Some((id, edit));

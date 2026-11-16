@@ -127,6 +127,9 @@ pub(crate) enum Act {
     /// [`Panel::result`] while its session is the one open, and whose
     /// error is told with the core's sentence.
     Send(Op),
+    /// Taken: send this operation, and say this, as a notice (what an item
+    /// edit's text lost to fit).
+    SendAndSay(Op, String),
     /// Taken: edit `text` in the prompt's own editor (`Input::begin_item_edit`),
     /// the hint row saying `enter {hint}`; the text is handed to
     /// [`Panel::edited`] with `edit`.
@@ -254,10 +257,6 @@ struct Slot {
     /// The first row of its list in view, while it is cut.
     scroll: usize,
     ready: Readiness,
-    /// Its operations sent and not yet answered: while one is on its way,
-    /// what its keys would change is computed from what it shows, which
-    /// may be out of date.
-    waiting: usize,
 }
 
 /// What [`Panels::layout`] drew.
@@ -299,7 +298,6 @@ impl Panels {
             seen: None,
             scroll: 0,
             ready: Readiness::default(),
-            waiting: 0,
         });
         (self.slots.len() - 1) as u64
     }
@@ -335,9 +333,6 @@ impl Panels {
     pub(crate) fn seen(&mut self, seen: &Seen<'_>) -> Vec<u64> {
         let mut closed = Vec::new();
         for at in 0..self.slots.len() {
-            if matches!(seen, Seen::Left) {
-                self.slots[at].waiting = 0;
-            }
             let show = self.slots[at].panel.seen(seen);
             if self.apply(at as u64, show) {
                 closed.push(at as u64);
@@ -358,23 +353,10 @@ impl Panels {
         closed
     }
 
-    /// An operation of `id`'s went to the core.
-    pub(crate) fn sent(&mut self, id: u64) {
-        if let Some(slot) = self.slot_mut(id) {
-            slot.waiting += 1;
-        }
-    }
-
-    /// An operation of `id`'s was answered, or failed.
-    pub(crate) fn answered(&mut self, id: u64) {
-        if let Some(slot) = self.slot_mut(id) {
-            slot.waiting = slot.waiting.saturating_sub(1);
-        }
-    }
-
-    /// Whether an operation of `id`'s is on its way.
-    pub(crate) fn waiting(&self, id: u64) -> bool {
-        self.slot(id).is_some_and(|slot| slot.waiting > 0)
+    /// The fewest rows `id` is drawn in when it takes the focus, on the
+    /// item its focus starts on.
+    pub(crate) fn rows_to_focus(&self, id: u64, draw: &Draw<'_>) -> usize {
+        self.least(id, false, draw)
     }
 
     /// After a change, an open `id`'s focus follows its item, and the
