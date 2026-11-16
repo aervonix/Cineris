@@ -340,3 +340,5 @@ A second reviewer then read the fixes alone. What it found, and what each change
 | A question withdrawn because its askers left was resolved as answered | Answered only when an answer came |
 | The abort test made a real core dump | The binary's core limit is set to nothing first |
 
+The diff's rule (the owner's answer above) was read by a reviewer of its own. It found that every token counted the same in the comparison, so punctuation could outweigh a word that stayed and make it bold (`A,,,B` against `A,B,,,` bolded `B`); that "punctuation alone" was decided for each line, not the pair; that lines too long to compare are real in this repository; and that marks, viramas and joiners cut words of some scripts. Words are now compared with words alone and punctuation only when the pair changed no word, tokens follow grapheme clusters, the bound applies to what is left between the lines' common start and end, and 09-tui says what a line too long to compare shows. It also found that the round's view draws a line holding a tab without its bold: an [open item](../../outstanding/diff-emphasis-on-a-line-with-a-tab.md) for step 32.
+

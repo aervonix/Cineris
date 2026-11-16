@@ -1008,9 +1008,39 @@ caught-by:
 [break] a-changed-word-cut-at-its-change
 rule: Of a replaced line, the whole changed words are bold, and the punctuation and spaces around them plain (the owner, 2026-11-16).
 file: crates/cortex-tui/src/app/tools.rs
-in: changed
-find: if words.is_empty() { of(Piece::Mark) } else { words }
-replace: { let mut all = words; all.extend(of(Piece::Mark)); all.sort_by_key(|range| range.start); all }
+in: emphasise
+find: for piece in [Piece::Word, Piece::Mark] {
+replace: for piece in [Piece::Mark, Piece::Word] {
 packages: cortex-tui
 caught-by:
     app::tools::tests::whole_changed_words_are_bold_and_what_is_around_them_plain
+
+[break] punctuation-outweighs-a-word
+rule: A diff's words are compared by themselves, so that punctuation never outweighs a word that stayed.
+file: crates/cortex-tui/src/app/tools.rs
+in: emphasise
+find: .filter(|(_, kind)| *kind == piece)
+replace: .filter(|(_, kind)| *kind != Piece::Space && piece != Piece::Space)
+packages: cortex-tui
+caught-by:
+    app::tools::tests::a_word_that_stayed_is_never_bold_whatever_the_punctuation_does
+
+[break] a-long-line-not-trimmed
+rule: Two lines are compared by what is left once their common start and end are taken off.
+file: crates/cortex-tui/src/app/tools.rs
+in: changed
+find: let start = (0..a.len().min(b.len())).take_while(|&i| same(i, i)).count();
+replace: let start = 0;
+packages: cortex-tui
+caught-by:
+    app::tools::tests::a_long_line_is_compared_by_what_is_left_between_its_common_ends
+
+[break] a-word-cut-inside-its-cluster
+rule: A diff's tokens are cut by grapheme clusters, so that a mark or a joiner stays with what it joins.
+file: crates/cortex-tui/src/app/tools.rs
+in: tokens
+find: let first = cluster.chars().next().unwrap_or(' ');
+replace: let first = cluster.chars().last().unwrap_or(' ');
+packages: cortex-tui
+caught-by:
+    app::tools::tests::a_word_of_any_script_is_bold_whole
