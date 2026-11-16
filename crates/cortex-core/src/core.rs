@@ -1417,7 +1417,11 @@ impl Core {
                 // The start of a turn is one of the moments the files are
                 // looked at (08-configuration, "How changes are noticed"):
                 // a prompt that steers a running turn starts none.
-                if live.handle.turn_state() == cortex_agent::TurnState::Idle {
+                // Asked as a prompt decides: a turn a prompt has started
+                // and the loop has not picked up yet holds the session too,
+                // and a look then would let it end before this prompt
+                // queues behind it.
+                if !live.handle.turn_running() {
                     crate::reload::at_turn_start(self, &live).await;
                 }
                 // Refused with `history_changing` while a rewind is under
@@ -2051,7 +2055,7 @@ impl Core {
             live.knowledge
                 .as_ref()
                 .is_some_and(|knowledge| knowledge.key == *key)
-                && live.handle.turn_state() != cortex_agent::TurnState::Idle
+                && live.handle.turn_running()
         })
     }
 

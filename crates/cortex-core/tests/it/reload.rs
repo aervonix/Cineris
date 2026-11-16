@@ -1204,3 +1204,43 @@ fn trust_taken_away_with_a_part_that_fails_still_gives_the_epoch_its_keys() {
         front.close().await;
     });
 }
+
+/// A prompt that queues behind a turn another prompt started, which the
+/// loop has not picked up yet, does not look at the files: the turn holds
+/// the session already, and a look would let it end before this prompt
+/// queues (found by a stress run: the second prompt started a turn of its
+/// own). The look is the next idle start's.
+#[test]
+fn a_prompt_queued_behind_a_turn_not_yet_begun_does_not_look() {
+    let world = World::new("reload_queued_no_look", [says("One."), says("Two.")]);
+    world.user_config("");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("first").await;
+        world.user_config("[retry]\nattempts = 2\n");
+        let queued = front
+            .op(Op::TurnStart(cortex_protocol::methods::TurnStartParams {
+                session_id: front.session.clone(),
+                input: vec![cortex_protocol::message::Part::text("second")],
+                delivery: Some(cortex_protocol::item::Delivery::Queue),
+            }))
+            .await
+            .expect("the second prompt is accepted");
+        assert!(
+            matches!(
+                queued,
+                OpResult::TurnStart(ref started)
+                    if started.disposition == cortex_protocol::methods::Disposition::Queued
+            ),
+            "{queued:?}"
+        );
+        assert_ne!(
+            value(&front, "retry.attempts").await,
+            Some(2.into()),
+            "the queued prompt looked"
+        );
+        front.turns(2).await;
+        front.close().await;
+    });
+}
