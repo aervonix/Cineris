@@ -328,6 +328,7 @@ dependencies = [
  "cortex-config",
  "cortex-core",
  "cortex-protocol",
+ "cortex-rpc",
  "cortex-testkit",
  "cortex-tools",
  "serde",

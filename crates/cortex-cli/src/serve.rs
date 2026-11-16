@@ -31,7 +31,7 @@ use std::time::Duration;
 use cortex_base::{CancelToken, SharedTimer};
 use cortex_config::{Env, LoadOptions};
 use cortex_core::{Core, TokioTimer};
-use cortex_rpc::{ServeOptions, Transport};
+use cortex_rpc::{ListenOptions, Listener, Place, ServeOptions, Transport};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::args::Serve;
@@ -46,6 +46,25 @@ const END: Duration = Duration::from_secs(5);
 
 /// How long the end waits for the last lines to reach standard output.
 const LAST_LINES: Duration = Duration::from_secs(1);
+
+/// The most clients a socket serves at once.
+const MOST_CLIENTS: usize = 64;
+
+/// How long a socket's connection may go without `initialize`.
+const INITIALIZE_WITHIN: Duration = Duration::from_secs(10);
+
+/// What a server serves over.
+enum Over {
+    /// Standard input and output: one client.
+    Stdio,
+    /// A local socket: at the place named, or the default in the runtime
+    /// directory given.
+    Socket {
+        named: Option<String>,
+        runtime: Option<std::path::PathBuf>,
+        quiet: bool,
+    },
+}
 
 /// Runs the server. Returns the exit code.
 pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
@@ -76,6 +95,14 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
     let rpc = &loaded.settings.rpc;
     options.approval_timeout = approval_timeout(rpc);
     let stalled_client = rpc.stalled_client;
+    let over = match serve.socket.clone() {
+        None => Over::Stdio,
+        Some(named) => Over::Socket {
+            named,
+            runtime: env.get("XDG_RUNTIME_DIR").map(std::path::PathBuf::from),
+            quiet: serve.run.quiet,
+        },
+    };
 
     let stop = CancelToken::new();
     let ending = CancelToken::new();
@@ -90,7 +117,7 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
         .spawn(move || {
             let code = core_thread(
                 options,
-                stalled_client,
+                (stalled_client, over),
                 (&core_stop, &core_ending),
                 &ready,
                 name,
@@ -212,11 +239,11 @@ async fn poll_either(first: impl Future<Output = ()>, second: impl Future<Output
     .await;
 }
 
-/// The core thread: a runtime, the core, and the one connection. Returns
-/// the exit code.
+/// The core thread: a runtime, the core, and its connections. Returns the
+/// exit code.
 fn core_thread(
     options: cortex_core::CoreOptions,
-    stalled_client: Duration,
+    (stalled_client, over): (Duration, Over),
     (stop, ending): (&CancelToken, &CancelToken),
     ready: &std::sync::mpsc::Receiver<()>,
     name: &str,
@@ -246,6 +273,59 @@ fn core_thread(
         // Nothing is read before the signals are watched; a main thread
         // that could not watch them has let the channel go.
         let _ = ready.recv();
+        let timer: SharedTimer = Arc::new(TokioTimer);
+        let mut serving = ServeOptions::new(timer);
+        serving.stalled_client = stalled_client;
+        let Over::Socket {
+            named,
+            runtime,
+            quiet,
+        } = over
+        else {
+            return serve_stdio(core, serving, (stop, ending), name).await;
+        };
+        let own_folder = named.is_none();
+        let place = match named {
+            Some(named) => Place::named(&named),
+            None => match Place::default_for(runtime.as_deref()) {
+                Ok(place) => place,
+                Err(error) => {
+                    eprintln!("{name}: the default place to serve at is not known: {error}");
+                    core.shutdown().await;
+                    return exit::USAGE;
+                }
+            },
+        };
+        let listen = ListenOptions {
+            own_folder,
+            ..ListenOptions::default()
+        };
+        let listener = match Listener::bind(&place, &listen) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!("{name}: {}", crate::visible(&error.to_string()));
+                core.shutdown().await;
+                return exit::USAGE;
+            }
+        };
+        if !quiet {
+            eprintln!("{name}: serving at {place}");
+        }
+        serving.initialize_within = Some(INITIALIZE_WITHIN);
+        cortex_rpc::serve_socket(core, listener, serving, MOST_CLIENTS, stop, ending).await;
+        tracing::info!("the server ended");
+        exit::COMPLETED
+    })
+}
+
+/// `serve --stdio`: the one connection over standard input and output.
+async fn serve_stdio(
+    core: Core,
+    serving: ServeOptions,
+    (stop, ending): (&CancelToken, &CancelToken),
+    name: &str,
+) -> u8 {
+    {
         let (transport, written) = match Transport::blocking(io::stdin(), io::stdout()) {
             Ok(transport) => transport,
             Err(error) => {
@@ -254,10 +334,7 @@ fn core_thread(
                 return exit::INTERNAL;
             }
         };
-        let timer: SharedTimer = Arc::new(TokioTimer);
-        let mut options = ServeOptions::new(timer);
-        options.stalled_client = stalled_client;
-        let ended = cortex_rpc::serve_one(core, transport, options, stop, ending).await;
+        let ended = cortex_rpc::serve_one(core, transport, serving, stop, ending).await;
         tracing::info!(?ended, "the server ended");
         // The last lines (a `shutdown`'s answer) are out before the process
         // ends, unless the reader stopped reading: the server's end has its
@@ -266,7 +343,7 @@ fn core_thread(
             tracing::warn!("standard output was not read to the end");
         }
         exit::COMPLETED
-    })
+    }
 }
 
 /// The core's approval time limit from `rpc.approval_timeout`: `"0s"` is no

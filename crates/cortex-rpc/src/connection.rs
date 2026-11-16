@@ -102,6 +102,10 @@ pub struct ServeOptions {
     pub requests_end: Duration,
     /// How long the end waits to write what is already queued.
     pub drain: Duration,
+    /// How long a connection may go without `initialize` before it is
+    /// closed: for a socket, which anyone of the user's may open and leave
+    /// open. `None` for standard I/O, whose one client started the server.
+    pub initialize_within: Option<Duration>,
 }
 
 impl ServeOptions {
@@ -120,6 +124,7 @@ impl ServeOptions {
             lane_end: Duration::from_secs(1),
             requests_end: Duration::from_secs(2),
             drain: Duration::from_secs(2),
+            initialize_within: None,
         }
     }
 }
@@ -151,6 +156,8 @@ pub enum Ended {
     Flooded,
     /// The client asked the server to stop (`shutdown`).
     Shutdown,
+    /// It never said `initialize` within [`ServeOptions::initialize_within`].
+    Silent,
     /// The server stopped it.
     Stopped,
 }
@@ -353,6 +360,12 @@ pub struct Connection {
     shutdown: Option<RequestId>,
     /// The role the client said in `initialize`.
     role: Option<ClientRole>,
+    /// The server's own end, which a `shutdown` begins: for a socket's
+    /// connection, apart from the connection's own end. `None`: the two
+    /// are one (standard I/O).
+    server_ending: Option<CancelToken>,
+    /// When the connection began, on the core's clock.
+    began: Duration,
 }
 
 impl std::fmt::Debug for Connection {
@@ -385,6 +398,7 @@ impl Connection {
             draining: AtomicBool::new(false),
         });
         let writer = tokio::spawn(write(Arc::clone(&shared), transport.output));
+        let began = shared.options.clock.monotonic();
         Self {
             shared,
             input: transport.input,
@@ -394,7 +408,15 @@ impl Connection {
             writer_done: false,
             shutdown: None,
             role: None,
+            server_ending: None,
+            began,
         }
+    }
+
+    /// The end a client's `shutdown` begins, when it is the server's and
+    /// not only this connection's: one of a socket's connections.
+    pub fn set_server_ending(&mut self, ending: CancelToken) {
+        self.server_ending = Some(ending);
     }
 
     /// The client, once it has said `initialize`.
@@ -480,8 +502,33 @@ impl Connection {
                 }
                 Poll::Pending
             });
+            // A connection that has not said `initialize` has until its
+            // bound to say it.
+            let silent_after = self
+                .shared
+                .options
+                .initialize_within
+                .filter(|_| self.dispatcher.is_none())
+                .map(|within| {
+                    let gone = self
+                        .shared
+                        .options
+                        .clock
+                        .monotonic()
+                        .saturating_sub(self.began);
+                    within.saturating_sub(gone)
+                });
+            let next = async {
+                match silent_after {
+                    Some(left) => within(&self.shared.options.timer, left, next).await,
+                    None => Some(next.await),
+                }
+            };
             let Some(step) = stop.race(next).await else {
                 return Ended::Stopped;
+            };
+            let Some(step) = step else {
+                return Ended::Silent;
             };
             match step {
                 Step::Writer(ended) => {
@@ -717,7 +764,7 @@ impl Connection {
         // Only a role the core lets end it: a refused `shutdown` must not
         // start the bound on an end that is not coming.
         if matches!(self.role, Some(ClientRole::User | ClientRole::Supervisor)) {
-            ending.cancel();
+            self.server_ending.as_ref().unwrap_or(ending).cancel();
         }
         match self
             .shared
@@ -818,6 +865,15 @@ async fn until(notify: &Notify, done: impl Fn() -> bool) {
         }
         notified.await;
     }
+}
+
+/// `future`, or `None` once `limit` has passed on `timer`, for the server.
+pub(crate) async fn within_public<F: Future>(
+    timer: &SharedTimer,
+    limit: Duration,
+    future: F,
+) -> Option<F::Output> {
+    within(timer, limit, future).await
 }
 
 /// `future`, or `None` once `limit` has passed on `timer`.
