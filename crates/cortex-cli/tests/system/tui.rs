@@ -500,3 +500,77 @@ fn sys_a_never_survives_a_restart_and_permissions_trust_clears_it() {
     let listed = machine.run(&["permissions", "list"]);
     assert!(listed.stdout.contains("not trusted"), "{}", listed.stdout);
 }
+
+/// Types a slash command and sends it: the command menu takes the first
+/// `Enter`, the second sends. (`Esc` to close the menu would come with the
+/// `Enter` in one read, which is `Alt+Enter`, a new line.)
+fn command(session: &mut Session, line: &str) {
+    type_text(session, line);
+    session.send(b"\r\r");
+}
+
+/// A session is resumed with its history drawn, and its next turn has the
+/// whole conversation.
+#[test]
+fn sys_a_session_is_resumed_with_its_history_drawn() {
+    let phases = Phases::new("sys_a_session_is_resumed_with_its_history_drawn");
+    let machine = Machine::new("tui_resume");
+    machine.reply_text("The first answer.");
+    machine.reply_text("The second answer.");
+    let mut session = machine.tui(&["the first question"]);
+    first_frame(&mut session, &phases);
+    wait_shows(&mut session, "The first answer.");
+    quit(&mut session, &phases);
+
+    phases.mark("resumed");
+    let mut session = machine.tui(&["--continue"]);
+    first_frame(&mut session, &phases);
+    // Drawn from the session's history, on a screen that never showed it.
+    wait_shows(&mut session, "the first question");
+    wait_shows(&mut session, "The first answer.");
+    type_text(&mut session, "the second question\r");
+    wait_shows(&mut session, "The second answer.");
+    let requests = machine.server.requests();
+    assert_eq!(requests.len(), 2, "{requests:#?}");
+    let second = body(&requests[1]);
+    assert!(
+        second.contains("the first question") && second.contains("The first answer."),
+        "{second}"
+    );
+    quit(&mut session, &phases);
+}
+
+/// `/undo` puts back what the last turn changed. A file the person edited
+/// since is asked about first, and "Put them back" overwrites it.
+#[test]
+fn sys_undo_asks_about_a_file_edited_since_and_puts_it_back() {
+    let phases = Phases::new("sys_undo_asks_about_a_file_edited_since_and_puts_it_back");
+    let machine = Machine::new("tui_undo");
+    let notes = machine.workspace.join("notes.txt");
+    machine.reply_tool(
+        "toolu_1",
+        "write",
+        &json!({"path": "notes.txt", "content": "after\n"}),
+    );
+    machine.reply_text("Written.");
+    let mut session = machine.tui(&["--allow", "write notes.txt", "change the notes"]);
+    first_frame(&mut session, &phases);
+    wait_shows(&mut session, "Written.");
+    // The turn made the file.
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), "after\n");
+
+    phases.mark("undo");
+    // The person changes the file after the turn.
+    std::fs::write(&notes, "after, and mine\n").unwrap();
+    command(&mut session, "/undo");
+    wait_shows(&mut session, "notes.txt");
+    wait_shows(&mut session, "1 Put them back");
+    session.send(b"1");
+    wait_shows(&mut session, "The last turn is undone");
+    assert!(
+        !notes.exists(),
+        "the file the undone turn made is still there"
+    );
+
+    quit(&mut session, &phases);
+}
