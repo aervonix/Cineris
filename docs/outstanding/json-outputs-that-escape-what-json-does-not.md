@@ -1,8 +1,0 @@
-`usage`, `stats` and `sessions` with `--json` print an escape that is not JSON's for a character that acts unseen.
-
-- Area: cortex-cli
-- Owner: a fix session for `cortex-cli`
-
-| Item | Who | When |
-|---|---|---|
-| **`--json` outputs that are not JSON when a text holds a character that acts unseen.** `cortex usage --json`, `cortex stats show --json` and `cortex sessions list --json` print their JSON through the binary's `visible`, which writes a bidirectional control, a tag character or a C1 control as `\u{202e}`: safe at a terminal, and not a JSON escape, so a consumer's parser refuses the line. It needs such a character in a session's title, a project's path or a model's name. `cortex project list --json` (step 17) escapes them as JSON does (`\u202e`, in two halves above the basic plane: `project_view::json_line` in `cortex-cli`), which is both safe and JSON. Found by the independent review of step 17's third pull request, which saw the two ways side by side. The fix is to print the other three through the same function; it is not step 17's code. | A fix session for `cortex-cli`, or the next step that changes one of those commands | Before a tool is built that reads those outputs |

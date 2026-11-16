@@ -545,6 +545,13 @@ fn a_trusted_folder_that_became_a_repository_is_asked_about_git() {
             },
             "{answer}"
         );
+        // `cortex permissions trust` in a repository trusts its git with
+        // the rest, and says so.
+        if answer == "not now" {
+            let trusted = later.trust_project(&project).unwrap();
+            assert!(trusted.git && trusted.was_trusted);
+            assert!(store.project(&key).unwrap().git_trusted());
+        }
     }
 }
 

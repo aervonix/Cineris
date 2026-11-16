@@ -877,9 +877,11 @@ rule: The shell tool is given the answer about the repository's trust: in a trus
 file: crates/cortex-core/src/assemble.rs
 find:
         repository_trusted,
+        start: start.clone(),
     };
 replace:
         repository_trusted: false,
+        start: start.clone(),
     };
 caught-by:
     cortex-core::it shell::sys_undo_puts_back_what_a_command_changed_where_git_still_has_it
@@ -890,9 +892,11 @@ rule: The shell tool follows the user's trust alone: a change to the project's r
 file: crates/cortex-core/src/assemble.rs
 find:
         repository_trusted,
+        start: start.clone(),
     };
 replace:
         repository_trusted: rules_trusted,
+        start: start.clone(),
     };
 caught-by:
     cortex-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw
@@ -922,8 +926,8 @@ caught-by:
 rule: A project is trusted for its rules only while they are the ones the user saw.
 file: crates/cortex-core/src/assemble.rs
 in: trust
-find: if stored.project_rules_approved(&pinned_rules(&peek.current(), &with_profile)?) {
-replace: if true || stored.project_rules_approved(&pinned_rules(&peek.current(), &with_profile)?) {
+find: if stored.project_rules_approved(&rules) {
+replace: if true || stored.project_rules_approved(&rules) {
 caught-by:
     cortex-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw
 
@@ -932,10 +936,10 @@ rule: A project whose rules changed has its settings that need trust held back.
 file: crates/cortex-core/src/assemble.rs
 in: trust
 find:
-    } else {
+    let rules_declined = stored.rules_declined(&rules);
         let (loaded, watched) = made(load(false)?);
 replace:
-    } else {
+    let rules_declined = stored.rules_declined(&rules);
         let (loaded, watched) = made(load(true)?);
 caught-by:
     cortex-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw

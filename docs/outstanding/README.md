@@ -42,12 +42,9 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cortex-cli
 
 - [headless-details-left-open](headless-details-left-open.md): Six small gaps in headless mode: dropped early notices, error records, `files_changed` matching, Windows close, untested signals. Owner: step 27 or step 32.
-- [history-has-no-size-limit](history-has-no-size-limit.md): The prompt history has no limit in bytes for an entry or the file; a pasted log is stored expanded and read at every start. Owner: step 25, with the owner.
-- [json-outputs-that-escape-what-json-does-not](json-outputs-that-escape-what-json-does-not.md): `usage`, `stats` and `sessions` with `--json` print an escape that is not JSON's for a character that acts unseen. Owner: a fix session for `cortex-cli`.
 - [reading-a-key-at-a-terminal](reading-a-key-at-a-terminal.md): `cortex auth login` refuses a terminal because reading a key without echo needs the terminal layer. Owner: step 25.
 - [shell-completions](shell-completions.md): Completions should come from an `xtask` command over the `FLAGS` table; the table exists, the command does not. Owner: step 34.
 - [the-binary-near-its-size-budget](the-binary-near-its-size-budget.md): After step 33's size fix the binary has about 5 MB left on each system (Windows 13.19 of 18 MiB, Linux 11.33 of 16), with extensions and MCP to come; each pull request shows its size. Open until a step-34 build passes on both. Owner: step 34.
-- [the-workspace-root-is-the-working-directory](the-workspace-root-is-the-working-directory.md): Every binary takes the working directory as the workspace root, where 08 says the nearest ancestor with `.cortex/` or `.git`. Owner: the owner.
 
 ### cortex-config
 
@@ -74,7 +71,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [the-maps-files-of-recent-sessions](the-maps-files-of-recent-sessions.md): The map's ranking by the files of recent sessions has its seam (`RecentFiles`) and no source: step 16's tool records name no files. Owner: the step that has the statistics record files.
 - [the-shell-version-after-a-shell-update](the-shell-version-after-a-shell-update.md): The first session after a shell is installed or updated has no shell version in its prompt, so the next resume is a `resume` epoch. Owner: step 33.
 - [the-top-of-a-tree-past-the-listing-cap](the-top-of-a-tree-past-the-listing-cap.md): A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree. Owner: a later index step, or step 33.
-- [trust-question-corners](trust-question-corners.md): "Never" on a rules-changed question takes all the project's trust away, git's included; git can be trusted unshown for a folder trusted before `git init`. Owner: the owner, then step 27 or a trust step.
 - [what-start-up-opens-traced](what-start-up-opens-traced.md): The blocking check that start-up opens no file outside an allow-list does not exist; the index's part is checked with a held gate. Owner: the next start-up step, or step 33.
 
 ### cortex-index

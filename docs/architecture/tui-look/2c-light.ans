@@ -3,11 +3,13 @@
 [0m  [0;90mTrusting it turns on what its files ask for:[0m
 [0m    [0;90mgit      [0;38;2;122;60;251mGit may read this repository's own configuration, which can name programs for git to[0m
 [0m             [0;38;2;122;60;251mrun: it is how the harness sees what a command changed, and reads the repository's[0m
-[0m    [0;90m… 4 more lines are not shown, so it cannot be trusted from here: `cortex[0m
-[0m    [0;90mpermissions trust` lists them all[0m
+[0m             [0;38;2;122;60;251mstate.[0m
+[0m    [0;90mrule     [0;38;2;122;60;251mallow write .github/**[0m
+[0m    [0;90mrule     [0;38;2;122;60;251mallow exec make deploy (profile ci)[0m
+[0m    [0;90msetting  [0;38;2;122;60;251mmodel.main = "claude-haiku-5-5" (it can raise what you spend)[0m
 [0m
-[0m  [0;1;38;2;122;60;251mn[0m Not now   [0;1;38;2;122;60;251mx[0m Never for this project[0m
-[0m  [0;90mNot now leaves them off and asks again at the next start. Never leaves them[0m
-[0m  [0;90moff and does not ask again; `cortex permissions trust` lifts it.[0m
+[0m  [0;1;38;2;122;60;251my[0m Trust it   [0;1;38;2;122;60;251mn[0m Not now   [0;1;38;2;122;60;251mx[0m Never for this project[0m
+[0m  [0;90mTrust it turns these on; not now asks again at the next start; never asks no[0m
+[0m  [0;90mmore, until `cortex permissions trust`.[0m
 
 [0m  [0;90mesc is not now · ctrl+o shows it whole[0m                                                           [0m

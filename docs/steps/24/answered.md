@@ -192,7 +192,7 @@ Each moves from `NOT_YET` into `COMMANDS` with its test.
 | [a-promote-while-a-confined-command-runs](../../outstanding/a-promote-while-a-confined-command-runs.md) | **Most of it** (PR 1) | The core refuses a promote while a session of the project runs a turn. Left: another process's promote during a command, with the item's recommendation. |
 | [the-item-an-entry-was-learned-from](../../outstanding/the-item-an-entry-was-learned-from.md) | **Left** | The panel shows the session and the date, and offers no way to open the item. |
 | `an-epoch-read-without-its-variants` (closed in step 24) | **Closes** (PR 1) | When a session is resumed, an epoch with no variants is fixed to the variants in force then and recorded in the session's state, so the next request and the next `epoch` entry carry them; a reload changes variants only at the compaction that takes them (point 1). |
-| [the-workspace-root-is-the-working-directory](../../outstanding/the-workspace-root-is-the-working-directory.md) | **Left** for the owner | A reload uses the root the session was opened with. |
+| `the-workspace-root-is-the-working-directory` (closed in the follow-ups of step 23) | **Left** for the owner | A reload uses the root the session was opened with. |
 | `a-managed-ask-and-the-users-own-check` | **Settled by the owner** on `main` (tooling 10's #86): a managed `ask` holds back the user's own check | Nothing of this step's: `/verify` sends `verify/run`, whose turn the core checks. |
 
 **Left by this step, added to `docs/outstanding/`:** `user-theme-files` (point 5), `reload-now-begins-an-epoch` (08's `/reload --now`: the `NextEpoch` keys wait for the next compaction meanwhile), and `the-files-a-command-changed` (point 9, departure 4).

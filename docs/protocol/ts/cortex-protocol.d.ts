@@ -1612,6 +1612,8 @@ export interface SessionListResult {
 export interface SessionNewParams {
   /** Configuration overrides for this session, as the configuration file would have them. They rank as command-line flags do. */
   config?: { [key: string]: unknown };
+  /** Where the session's commands start when they name no directory: an absolute path inside `workspace` (the directory the person started the harness in, below the root it found). Absent: the root. Kept in the session's log, so that a resumed session starts there too (since the follow-ups of step 23). */
+  cwd?: string | null;
   /** Whether to keep the session in memory only, with no log. */
   ephemeral?: boolean;
   /** The settings to start with. Anything absent comes from configuration. */
@@ -2043,6 +2045,8 @@ export interface TrustRequest {
   resources: Array<TrustResource>;
   /** The session. */
   session_id: SessionId;
+  /** The project is trusted already, and the question is about what is new in it: its rules changed (each resource marked `changed`), or git, now that it is a repository. `never` is not an answer to it; `keep` is (since the follow-ups of step 23). */
+  trusted?: boolean;
   /** The project's workspace root. */
   workspace: string;
 }
@@ -2064,6 +2068,8 @@ export type TrustResourceKind = "rules" | "hook" | "extension" | "mcp_server" | 
 
 /** The answer to `trust/request`. */
 export interface TrustResponse {
+  /** With `trusted` false, to a question about a project trusted already (the request's `trusted`): keep trusting it as it was, without what is new, and remember that, so that what is new is not asked about again while it stays as it is (since the follow-ups of step 23). An answer with `keep` and `trusted` or `never`, `keep` to a project not trusted, or `never` to one trusted, is refused (`invalid_answer`). */
+  keep?: boolean;
   /** With `trusted` false: remember the refusal, so that the project is not asked about at later starts either (since step 23). It is kept beside the trusted projects, and `cortex permissions trust` lifts it. An answer with both `trusted` and `never` is refused (`invalid_answer`), and the question stays open. */
   never?: boolean;
   /** Whether the resources listed may be used. */

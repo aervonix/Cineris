@@ -1116,8 +1116,8 @@ caught-by:
 
 [break] the-json-line-passes-what-acts-unseen
 rule: `--json` prints one line of JSON with nothing in it that acts unseen at a terminal.
-file: crates/cortex-cli/src/project_view.rs
-in: json_line
+file: crates/cortex-cli/src/json.rs
+in: line
 find: if cortex_base::acts_unseen(character) {
 replace: if false {
 caught-by:

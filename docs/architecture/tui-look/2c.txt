@@ -3,11 +3,13 @@
   Trusting it turns on what its files ask for:
     git      Git may read this repository's own configuration, which can name programs for git to
              run: it is how the harness sees what a command changed, and reads the repository's
-    … 4 more lines are not shown, so it cannot be trusted from here: `cortex
-    permissions trust` lists them all
+             state.
+    rule     allow write .github/**
+    rule     allow exec make deploy (profile ci)
+    setting  model.main = "claude-haiku-5-5" (it can raise what you spend)
 
-  n Not now   x Never for this project
-  Not now leaves them off and asks again at the next start. Never leaves them
-  off and does not ask again; `cortex permissions trust` lifts it.
+  y Trust it   n Not now   x Never for this project
+  Trust it turns these on; not now asks again at the next start; never asks no
+  more, until `cortex permissions trust`.
 
   esc is not now · ctrl+o shows it whole
