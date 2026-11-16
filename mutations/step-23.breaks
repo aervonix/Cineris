@@ -954,3 +954,13 @@ replace:
 packages: cortex-cli
 caught-by:
     history::tests::a_prompt_after_another_process_compacts_the_file_is_kept
+
+[break] a-request-to-askers-gone-waits
+rule: A request that ends with its askers, put when none of them is connected, is dropped at once, so that whoever waits is told.
+file: crates/cortex-core/src/clients.rs
+in: Clients::put
+find: if ends_with_askers && !reached {
+replace: if ends_with_askers && !reached && asked.is_empty() {
+packages: cortex-core
+caught-by:
+    clients::tests::a_request_put_to_askers_already_gone_ends_at_once
