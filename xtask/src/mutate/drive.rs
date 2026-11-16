@@ -95,6 +95,8 @@ pub(crate) struct Baseline {
     tested: Tested,
     /// What happened to the known flakes, to be said.
     notes: Vec<String>,
+    /// How many known flakes passed on their second run.
+    again: usize,
 }
 
 /// After the tests of `packages` ran with nothing broken: when every test
@@ -111,6 +113,7 @@ fn known_flakes_again(
     let unchanged = |tested| Baseline {
         tested,
         notes: Vec::new(),
+        again: 0,
     };
     let Tested::Ran(cases) = &tested else {
         return Ok(unchanged(tested));
@@ -129,7 +132,11 @@ fn known_flakes_again(
             "Not run again: {} other test(s) failed beside the known flake(s).",
             failing.len() - flakes.len()
         ));
-        return Ok(Baseline { tested, notes });
+        return Ok(Baseline {
+            tested,
+            notes,
+            again: 0,
+        });
     }
     let tests: Vec<Test> = flakes.iter().map(|flake| flake.test.clone()).collect();
     notes.push(format!(
@@ -144,10 +151,15 @@ fn known_flakes_again(
                 "Their second run ended with no verdict, so they count as failed: {}",
                 note.lines().next().unwrap_or_default()
             ));
-            return Ok(Baseline { tested, notes });
+            return Ok(Baseline {
+                tested,
+                notes,
+                again: 0,
+            });
         }
     };
     let mut merged = cases.clone();
+    let mut again_passed = 0;
     for test in &tests {
         let second = again
             .iter()
@@ -164,6 +176,7 @@ fn known_flakes_again(
             flaky::says(verdict)
         ));
         if let Some(second) = second.filter(|_| verdict == Second::Passed) {
+            again_passed += 1;
             for case in merged
                 .iter_mut()
                 .filter(|case| case.binary == test.binary && case.name == test.name)
@@ -175,6 +188,7 @@ fn known_flakes_again(
     Ok(Baseline {
         tested: Tested::Ran(merged),
         notes,
+        again: again_passed,
     })
 }
 
@@ -394,7 +408,9 @@ impl Runner for CargoRunner {
     }
 
     fn test_only(&mut self, tree: &Path, packages: &[String], filter: &str) -> Result<Tested> {
-        self.run_tests(tree, packages, &["-E".to_owned(), filter.to_owned()])
+        // Once: no retry, whatever the profile gives the test.
+        let extra = ["-E", filter, "--retries", "0"].map(str::to_owned);
+        self.run_tests(tree, packages, &extra)
     }
 }
 
@@ -1268,11 +1284,7 @@ fn take_baseline(
     for note in &baseline.notes {
         say(note);
     }
-    let again = baseline
-        .notes
-        .iter()
-        .filter(|note| note.ends_with(flaky::says(Second::Passed)))
-        .count();
+    let again = baseline.again;
     let cases = match baseline.tested {
         Tested::Ran(cases) => cases,
         Tested::Stalled(note) => {
@@ -1514,6 +1526,8 @@ replace: \"inside\"
         /// unless `flaky_fails_alone`: a flake.
         flaky: Option<&'static str>,
         flaky_fails_alone: bool,
+        /// The run of the flake alone stalls.
+        flaky_alone_stalls: bool,
         /// How many test runs of a broken tree fail without a verdict, as
         /// a run does when the machine gets in its way.
         runs_to_lose: usize,
@@ -1608,6 +1622,11 @@ replace: \"inside\"
         fn test_only(&mut self, _tree: &Path, packages: &[String], filter: &str) -> Result<Tested> {
             self.asked
                 .push(format!("test only {} {filter}", packages.join(",")));
+            if self.flaky_alone_stalls {
+                return Ok(Tested::Stalled(
+                    "STALL: 3 tests timed out within 90 ms of each other".to_owned(),
+                ));
+            }
             Ok(Tested::Ran(
                 self.flaky
                     .iter()
@@ -1731,6 +1750,20 @@ replace: \"inside\"
                 .asked
                 .iter()
                 .any(|asked| asked.starts_with("test only"))
+        );
+
+        // Its second run stalls: no verdict, so it counts as failed.
+        let run = Run::new("flake-stalls");
+        let mut runner = Pretend {
+            flaky: Some("tests::unrelated"),
+            flaky_alone_stalls: true,
+            ..Pretend::default()
+        };
+        let (finished, said) = run_with(&run, &list, &with_flake("tests::unrelated"), &mut runner);
+        assert!(finished.unwrap_err().contains("fail with nothing broken"));
+        assert!(
+            said.contains("ended with no verdict, so they count as failed"),
+            "{said}"
         );
 
         // Not listed: never run again.

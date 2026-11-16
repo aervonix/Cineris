@@ -267,9 +267,14 @@ pub(crate) fn filtersets(arguments: &[String]) -> (Option<String>, Vec<String>) 
             }
             continue;
         }
+        // `-E=X`, `--filterset=X`, and the short form joined, `-EX`.
         let joined = NAMES
             .iter()
-            .find_map(|name| word.strip_prefix(&format!("{name}=")));
+            .find_map(|name| word.strip_prefix(&format!("{name}=")))
+            .or_else(|| {
+                word.strip_prefix("-E")
+                    .filter(|value| !value.is_empty() && !value.starts_with('='))
+            });
         match joined {
             Some(value) => found.push(value.to_owned()),
             None => rest.push(word.clone()),
@@ -365,9 +370,13 @@ fn run_steps_with(
 /// summary page.
 fn run_with_rerun(run: &[String], root: &Path, tiers: u8) -> Result<()> {
     use crate::stall::rerun;
+    // How each run ended, by nextest's exit status: a known flake is run
+    // again only when every run so far failed by its tests failing.
+    let codes = std::cell::RefCell::new(Vec::new());
     let mut exec = |arguments: &[String]| {
         let watch = crate::stall::Watch::start();
-        let result = steps::cargo(arguments);
+        let (result, code) = steps::cargo_code(arguments);
+        codes.borrow_mut().push(code);
         rerun::Attempt {
             result,
             observed: watch.observe(),
@@ -400,12 +409,17 @@ fn run_with_rerun(run: &[String], root: &Path, tiers: u8) -> Result<()> {
     if let Some(warning) = warning {
         println!("warning: {warning}");
     }
+    let refusal = crate::flaky::refusal_in_ci(std::env::var_os("GITHUB_ACTIONS").as_deref())
+        .or_else(|| crate::flaky::refusal_by_codes(&codes.borrow()));
     let flakes = crate::flaky::after_failure(
         run,
         &workspace::nextest_report(root, "ci"),
-        error,
+        crate::flaky::Before {
+            error,
+            refusal,
+            already: &outcome.ran_again,
+        },
         &listed,
-        !crate::flaky::in_ci(),
         &mut exec,
         &mut |line| println!("{line}"),
     );
@@ -1114,6 +1128,12 @@ mod tests {
             Some("a")
         );
         assert_eq!(super::filtersets(&strings(&["x"])), (None, strings(&["x"])));
+        // The short form joined to its value, as nextest takes it: a filter
+        // left beside one that names a test exactly would run more.
+        assert_eq!(
+            super::filtersets(&strings(&["-Etest(/x/)", "-E=b", "y"])),
+            (Some("(test(/x/)) or (b)".to_owned()), strings(&["y"]))
+        );
     }
 
     #[test]

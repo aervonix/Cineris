@@ -70,6 +70,22 @@ pub(crate) fn cargo<S: AsRef<OsStr>>(arguments: &[S]) -> Result<()> {
     cargo_with(arguments, &[])
 }
 
+/// [`cargo`], with the exit status of the command too: `None` when it
+/// could not be started or ended by a signal.
+pub(crate) fn cargo_code(arguments: &[String]) -> (Result<()>, Option<i32>) {
+    let shown = arguments.join(" ");
+    println!("$ cargo {shown}");
+    let status = Command::new(workspace::cargo())
+        .args(arguments)
+        .current_dir(workspace::root())
+        .status();
+    match status {
+        Ok(status) if status.success() => (Ok(()), status.code()),
+        Ok(status) => (Err(format!("`cargo {shown}` failed")), status.code()),
+        Err(error) => (Err(format!("could not run cargo {shown}: {error}")), None),
+    }
+}
+
 /// [`cargo`], with environment variables set for the command.
 pub(crate) fn cargo_with<S: AsRef<OsStr>>(
     arguments: &[S],

@@ -262,15 +262,98 @@ replace: if false {
 caught-by:
     flaky::tests::a_test_that_is_not_listed_is_never_run_again
 
-[break] flaky-ci-runs-it-again
-rule: Where nothing is to be run again (CI), a known flake is named and not run.
+[break] flaky-a-refusal-runs-it-again
+rule: Where nothing is to be run again (CI, or a run that ended other than by failed tests), a known flake is named and not run.
 file: xtask/src/flaky.rs
 in: after_failure
-find: if !rerun {
-occurrence: 1
-replace: if false {
+find: if let Some(refusal) = &refusal {
+replace: if let Some(refusal) = &None::<String> {
 caught-by:
     flaky::tests::in_ci_a_known_flake_is_named_and_nothing_is_run_again
+    flaky::tests::a_run_that_ended_other_than_by_failed_tests_runs_nothing_again
+
+[break] flaky-ci-is-only-the-word-true
+rule: Under GitHub Actions, set to anything, nothing is run again, as `xtask` reads the variable everywhere else.
+file: xtask/src/flaky.rs
+in: refusal_in_ci
+find: github_actions.map(
+replace: github_actions.filter(|value| *value == "true").map(
+caught-by:
+    flaky::tests::under_github_actions_set_at_all_nothing_is_run_again
+
+[break] flaky-ci-runs-again
+rule: Under GitHub Actions nothing is run again.
+file: xtask/src/flaky.rs
+in: refusal_in_ci
+find: github_actions.map(|_| "CI's blocking jobs run nothing again".to_owned())
+replace: github_actions.and(None)
+caught-by:
+    flaky::tests::under_github_actions_set_at_all_nothing_is_run_again
+
+[break] flaky-any-exit-status-explains
+rule: A run of nextest that ended other than with failed tests (100) refuses a known flake's second run.
+file: xtask/src/flaky.rs
+in: refusal_by_codes
+find: !matches!(code, Some(0 | TESTS_FAILED))
+replace: code.is_none()
+caught-by:
+    flaky::tests::a_run_that_ended_other_than_by_failed_tests_runs_nothing_again
+
+[break] flaky-a-third-run-after-the-stall
+rule: A known flake already run again after a stall is not run a third time.
+file: xtask/src/flaky.rs
+in: after_failure
+find: .partition(|flake| already.contains(&flake.test));
+replace: .partition(|_| false);
+caught-by:
+    flaky::tests::a_known_flake_already_run_again_after_a_stall_is_not_run_a_third_time
+
+[break] flaky-the-one-run-may-retry
+rule: A known flake's second run is one run: nextest gives it no retry.
+file: xtask/src/flaky.rs
+in: once
+find: once.splice(at..at, ["--retries".to_owned(), "0".to_owned()]);
+replace:
+caught-by:
+    flaky::tests::the_one_run_has_no_retry_and_keeps_what_follows_the_dashes
+    flaky::tests::a_known_flake_that_passes_its_second_run_lets_the_run_pass
+
+[break] flaky-a-joined-filter-stays
+rule: A run's filters are all taken out, the short form joined to its value too, so that a second run names the flake alone.
+file: xtask/src/checks.rs
+in: filtersets
+find: word.strip_prefix("-E")
+replace: word.strip_prefix("-E\u{0}")
+caught-by:
+    checks::tests::a_filterset_given_narrows_each_run_and_is_not_added_beside_it
+    flaky::tests::the_one_run_has_no_retry_and_keeps_what_follows_the_dashes
+
+[break] flaky-stress-strict-runs-it
+rule: `stress --strict` runs nothing again.
+file: xtask/src/stress.rs
+in: known_flakes
+find: if request.strict {
+replace: if false {
+caught-by:
+    stress::tests::known_flakes_are_run_once_more_counted_and_never_beside_another_kind_of_failure
+
+[break] flaky-stress-any-exit-status
+rule: `stress` runs nothing again when its nextest ended other than with failed tests.
+file: xtask/src/stress.rs
+in: known_flakes
+find: if let Some(refusal) = flaky::refusal_by_codes(&[code]) {
+replace: if let Some(refusal) = None::<String> {
+caught-by:
+    stress::tests::known_flakes_are_run_once_more_counted_and_never_beside_another_kind_of_failure
+
+[break] flaky-stress-nextests-status-of-the-second-run
+rule: A known flake's second run in `stress` passes only when nextest succeeded too.
+file: xtask/src/stress.rs
+in: known_flakes
+find: let ok = succeeded && verdict == Verdict::Passed;
+replace: let ok = verdict == Verdict::Passed;
+caught-by:
+    stress::tests::known_flakes_are_run_once_more_counted_and_never_beside_another_kind_of_failure
 
 [break] flaky-a-failed-second-command-passes
 rule: A second run whose command failed fails the run, whatever its report says.
@@ -347,8 +430,17 @@ caught-by:
 [break] flaky-mutate-not-counted
 rule: `mutate` counts the known flakes that passed on their second run.
 file: xtask/src/mutate/drive.rs
-in: take_baseline
-find: .filter(|note| note.ends_with(flaky::says(Second::Passed)))
-replace: .filter(|_| false)
+in: known_flakes_again
+find: again_passed += 1;
+replace:
 caught-by:
     mutate::drive::tests::a_known_flake_that_fails_with_nothing_broken_is_run_again_once_and_the_run_goes_on
+
+[break] flaky-mutate-a-stalled-second-run-passes
+rule: In `mutate`'s baseline, a known flake whose second run ended with no verdict counts as failed.
+file: xtask/src/mutate/drive.rs
+in: known_flakes_again
+find: Tested::Stalled(note) | Tested::Broken(note) | Tested::DoesNotCompile(note) =>
+replace: Tested::Stalled(_) => cases.iter().map(|case| TestCase { failed: false, ..case.clone() }).collect(), Tested::Broken(note) | Tested::DoesNotCompile(note) =>
+caught-by:
+    mutate::drive::tests::a_known_flake_that_fails_again_or_beside_another_failure_stops_the_run

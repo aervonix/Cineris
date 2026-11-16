@@ -170,9 +170,10 @@ impl Request {
         command
     }
 
-    /// One run of the tests `filter` chooses, in place of the request's own
-    /// filters, with the rest of what the request gives nextest.
-    fn once_command(&self, filter: &str) -> Vec<String> {
+    /// One run of `tests`, in place of the request's own filters, with the
+    /// rest of what the request gives nextest and no retry
+    /// ([`flaky::once`]).
+    fn once_command(&self, tests: &[rerun::Test]) -> Vec<String> {
         let mut command: Vec<String> = ["nextest", "run", "--profile", "stress"]
             .map(str::to_owned)
             .to_vec();
@@ -181,7 +182,7 @@ impl Request {
         }
         command.extend(crate::workspace::implied_features(&self.packages));
         command.extend(self.rest.iter().cloned());
-        rerun::with_filter(&command, filter)
+        flaky::once(&command, tests)
     }
 }
 
@@ -256,7 +257,29 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         print!("\n{stalled}");
     }
     let excused = if summary.failing > 0 {
-        known_flakes(&request, &root, &report, &xml, &cases)?
+        let (listed, warning) = flaky::listed(&root);
+        if let Some(warning) = warning {
+            println!("\nwarning: {warning}");
+        }
+        let mut run_once = |arguments: &[String], seed: u64| -> Result<bool> {
+            Command::new(workspace::cargo())
+                .args(arguments)
+                .env(SEED, seed.to_string())
+                .env_remove(FIRST_SEED)
+                .current_dir(&root)
+                .status()
+                .map(|status| status.success())
+                .map_err(|error| format!("could not run cargo nextest: {error}"))
+        };
+        known_flakes(
+            &request,
+            &listed,
+            status.code(),
+            (&report, &xml),
+            &cases,
+            &mut run_once,
+            &mut |line| println!("{line}"),
+        )?
     } else {
         0
     };
@@ -285,54 +308,57 @@ fn flakes_to_run(cases: &[TestCase], listed: &[Listed], first_seed: u64) -> Vec<
 }
 
 /// The known flakes that failed on some repeat, named, and each run once
-/// more under the seed it first failed with: how many passed. Nothing is
-/// run with `--strict`. The stress run's report is left as it was.
+/// more under the seed it first failed with (`run_once` runs the arguments
+/// with the seed, and says whether nextest succeeded): how many passed.
+/// Nothing is run with `--strict`, nor when the stress run's nextest ended
+/// in another way than with failed tests (`code`), which its report's
+/// failures would not explain. The report at `report` is left as the
+/// stress run wrote it (`xml`).
 fn known_flakes(
     request: &Request,
-    root: &std::path::Path,
-    report: &std::path::Path,
-    xml: &str,
+    listed: &[Listed],
+    code: Option<i32>,
+    (report, xml): (&std::path::Path, &str),
     cases: &[TestCase],
+    run_once: &mut dyn FnMut(&[String], u64) -> Result<bool>,
+    say: &mut dyn FnMut(&str),
 ) -> Result<usize> {
-    let (listed, warning) = flaky::listed(root);
-    if let Some(warning) = warning {
-        println!("\nwarning: {warning}");
-    }
-    let flakes = flakes_to_run(cases, &listed, request.first_seed);
+    let flakes = flakes_to_run(cases, listed, request.first_seed);
     if flakes.is_empty() {
         return Ok(0);
     }
-    println!();
+    say("");
     for (flake, _) in &flakes {
-        println!("{}", flaky::named(flake));
+        say(&flaky::named(flake));
     }
     if request.strict {
-        println!("--strict: not run again, so each counts as a failure of this run.");
+        say("--strict: not run again, so each counts as a failure of this run.");
+        return Ok(0);
+    }
+    if let Some(refusal) = flaky::refusal_by_codes(&[code]) {
+        say(&format!(
+            "Not run again: {refusal}. Each counts as a failure of this run."
+        ));
         return Ok(0);
     }
     let mut passed = 0;
     for (flake, seed) in &flakes {
-        let filter = rerun::filter(std::slice::from_ref(&flake.test));
-        let arguments = request.once_command(&filter);
-        println!(
+        let arguments = request.once_command(std::slice::from_ref(&flake.test));
+        say(&format!(
             "Running {} {} once more, under seed {seed}, the first it failed with:\n$ {SEED}={seed} \
              cargo {}",
             flake.test.binary,
             flake.test.name,
             arguments.join(" ")
-        );
-        let status = Command::new(workspace::cargo())
-            .args(&arguments)
-            .env(SEED, seed.to_string())
-            .env_remove(FIRST_SEED)
-            .current_dir(root)
-            .status()
-            .map_err(|error| format!("could not run cargo nextest: {error}"))?;
+        ));
+        // A report the run before left must not be read as this run's.
+        workspace::forget_report(report)?;
+        let succeeded = run_once(&arguments, *seed)?;
         let verdict = std::fs::read_to_string(report).map_or(Verdict::Missing, |second| {
             rerun::verdicts(std::slice::from_ref(&flake.test), &second)[0]
         });
-        let ok = status.success() && verdict == Verdict::Passed;
-        println!(
+        let ok = succeeded && verdict == Verdict::Passed;
+        say(&format!(
             "  {} {} {}",
             flake.test.binary,
             flake.test.name,
@@ -341,17 +367,17 @@ fn known_flakes(
             } else {
                 "passed, but nextest failed: counted as a failure"
             }
-        );
+        ));
         passed += usize::from(ok);
     }
     // The report the summary pointed at is the stress run's.
     std::fs::write(report, xml)
         .map_err(|error| format!("could not write {} back: {error}", report.display()))?;
-    println!(
+    say(&format!(
         "{passed} of {} known flake(s) passed when run once more, and are not counted as \
          failures of this run; a known flake that failed again is.",
         flakes.len()
-    );
+    ));
     Ok(passed)
 }
 
@@ -989,13 +1015,141 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
         ]))
         .unwrap();
         assert!(request.strict);
+        let test = crate::stall::rerun::Test {
+            binary: "cortex-agent::it".to_owned(),
+            name: "a::b".to_owned(),
+        };
         assert_eq!(
-            request
-                .once_command("(binary_id(=cortex-agent::it) and test(=a::b))")
-                .join(" "),
+            request.once_command(&[test]).join(" "),
             "nextest run --profile stress -p cortex-agent --run-ignored all -E \
-             (binary_id(=cortex-agent::it) and test(=a::b))"
+             (binary_id(=cortex-agent::it) and test(=a::b)) --retries 0"
         );
+    }
+
+    /// `known_flakes` on the cases of `report()` (two tests of `a`, each
+    /// failing once) with `listed` known, a first run that ended with
+    /// `code`, and a run once more that writes `second` and ends as
+    /// `succeeds`: how many it excused, what it ran and what it said, and
+    /// the report it left.
+    fn flakes_with(
+        label: &str,
+        listed_names: &[&str],
+        code: Option<i32>,
+        strict: bool,
+        second: &str,
+        succeeds: bool,
+    ) -> (usize, Vec<String>, String, String) {
+        let folder =
+            std::env::temp_dir().join(format!("xtask-stress-{label}-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let report_path = folder.join("junit.xml");
+        let xml = report();
+        std::fs::write(&report_path, &xml).unwrap();
+        let mut words = vec!["-p", "cortex-agent"];
+        if strict {
+            words.push("--strict");
+        }
+        let request = Request::parse(&strings(&words)).unwrap();
+        let listed: Vec<crate::flaky::Listed> = listed_names
+            .iter()
+            .map(|name| listed("cortex-agent::it", name))
+            .collect();
+        let mut ran = Vec::new();
+        let mut said = String::new();
+        let excused = super::known_flakes(
+            &request,
+            &listed,
+            code,
+            (&report_path, &xml),
+            &junit::parse(&xml),
+            &mut |arguments, seed| {
+                ran.push(format!("{seed}: {}", arguments.join(" ")));
+                std::fs::write(&report_path, second).unwrap();
+                Ok(succeeds)
+            },
+            &mut |line| {
+                said.push_str(line);
+                said.push('\n');
+            },
+        )
+        .unwrap();
+        let left = std::fs::read_to_string(&report_path).unwrap();
+        let _ = std::fs::remove_dir_all(&folder);
+        assert_eq!(left, xml, "the stress run's report is put back");
+        (excused, ran, said, left)
+    }
+
+    fn one_case(name: &str, failed: bool) -> String {
+        let failure = if failed {
+            "<failure>again</failure>"
+        } else {
+            ""
+        };
+        format!(
+            "<testsuites><testsuite name=\"cortex-agent::it\"><testcase name=\"{name}\" classname=\"cortex-agent::it\" \
+             time=\"0.1\">{failure}</testcase></testsuite></testsuites>"
+        )
+    }
+
+    #[test]
+    fn known_flakes_are_run_once_more_counted_and_never_beside_another_kind_of_failure() {
+        let names: Vec<String> = junit::parse(&report())
+            .iter()
+            .filter(|case| case.failed)
+            .map(|case| case.name.clone())
+            .collect();
+        let first = names[0].as_str();
+        // Listed, passes once more: excused, run under its seed, said.
+        let (excused, ran, said, _) = flakes_with(
+            "passes",
+            &[first],
+            Some(100),
+            false,
+            &one_case(first, false),
+            true,
+        );
+        assert_eq!(excused, 1, "{said}");
+        assert_eq!(ran.len(), 1, "{ran:?}");
+        assert!(ran[0].contains(&format!("test(={first})")) && ran[0].contains("--retries 0"));
+        assert!(said.contains("passed when run again"), "{said}");
+        // It fails again; or nextest fails though its report says it passed.
+        let (excused, _, said, _) = flakes_with(
+            "again",
+            &[first],
+            Some(100),
+            false,
+            &one_case(first, true),
+            false,
+        );
+        assert_eq!(excused, 0, "{said}");
+        let (excused, _, said, _) = flakes_with(
+            "status",
+            &[first],
+            Some(100),
+            false,
+            &one_case(first, false),
+            false,
+        );
+        assert_eq!(excused, 0, "{said}");
+        assert!(said.contains("but nextest failed"), "{said}");
+        // --strict, or a stress run that ended other than by failed tests:
+        // nothing is run.
+        for (label, code, strict) in [("strict", Some(100), true), ("code", Some(104), false)] {
+            let (excused, ran, said, _) =
+                flakes_with(label, &[first], code, strict, &one_case(first, false), true);
+            assert_eq!((excused, ran.len()), (0, 0), "{label}: {said}");
+            assert!(said.contains("counts as a failure"), "{label}: {said}");
+        }
+        // Not listed: nothing at all.
+        let (excused, ran, said, _) = flakes_with(
+            "unlisted",
+            &[],
+            Some(100),
+            false,
+            &one_case(first, false),
+            true,
+        );
+        assert_eq!((excused, ran.len(), said.as_str()), (0, 0, ""));
     }
 
     #[test]

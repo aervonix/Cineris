@@ -16,7 +16,7 @@ Item 2: a list of known flaky tests that the tools read. One sentence a line.
 - **`stress`, `ci` away from CI and `mutate`'s baseline** name a listed test that failed, with its item, run it again once by its binary and its name exactly, and go on when that run passes.
   A listed test that fails its second run, a second run whose command failed or whose report lacks it, and every test that is not listed still fail.
   A test that is not listed is never run again.
-- **`ci`:** after each of its two test runs, and after the stall's re-run, the listed tests among what still failed are run again in one run.
+- **`ci`:** after each of its two test runs, and after the stall's re-run, the listed tests among what still failed are run again in one run, with no retry; not one the stall's re-run already ran, and nothing when a run ended other than with failed tests.
   The report keeps the second run's cases (`junit::replace_cases`), so the tier check reads their real times, and the job's summary page has a table of each flake, its item and its second run.
 - **CI's blocking jobs run nothing again.** Under GitHub Actions (`GITHUB_ACTIONS=true`) `ci` names the listed tests that failed, on the log and the summary page, and fails as it did.
   That is the only change to what CI does: a line of output and a table, and no change to what passes.
@@ -41,11 +41,29 @@ At the desk, with a throwaway test that fails the first time it runs under a tag
 
 ## Tests and breaks
 
-- `flaky::tests`: a listed flake that passes its second run; one that fails again; a failure that is not listed, alone (nothing is run or said) and beside a flake (the flake alone is run, the run still fails); CI (named, nothing run, the report as it was); a second run with no report (the first put back), without the flake, or whose command failed; matching by binary and name exactly; every mark names a test that is there.
-- `stress::tests`: which failing tests are run once more and under which seed (a retry counts; a test not listed, or listed and passing, does not); the command of the run once more; what a known flake that passed excuses, and what it does not; `--strict`.
-- `mutate::drive::tests`: a pretend runner's baseline with a flake that passes alone, fails again, fails beside another failure, or is not listed.
-- **Not reached by a test:** the line of `checks.rs` that passes `!in_ci()` (a break of it fails no test; the CI run above shows it), `stress`'s start of cargo for the run once more, and the real runner's `test_only` (both shown by the runs above).
+- `flaky::tests`: a listed flake that passes its second run; one that fails again; a failure that is not listed, alone (nothing is run or said) and beside a flake (the flake alone is run, the run still fails); CI (named, nothing run, the report as it was), and `GITHUB_ACTIONS` set to anything; a run that ended other than with failed tests; a flake already run again after a stall; a second run with no report (the first put back), without the flake, or whose command failed; the one run's arguments; matching by binary and name exactly; every mark names a test where its binary and module put it.
+- `stress::tests`: which failing tests are run once more and under which seed (a retry counts; a test not listed, or listed and passing, does not); the command of the run once more; what a known flake that passed excuses, and what it does not; `known_flakes` with a pretend run (passed, failed again, nextest failed though the report passed, `--strict`, an exit status other than 100, not listed).
+- `mutate::drive::tests`: a pretend runner's baseline with a flake that passes alone, fails again, stalls, fails beside another failure, or is not listed.
+- `checks::tests`: a joined `-E` filter is taken out of a run's arguments.
+- **Not reached by a test:** `ci`'s call that reads `GITHUB_ACTIONS` and the runs' exit statuses (the functions it calls are tested; the CI run above shows it), `stress`'s start of cargo for the run once more, and the real runner's `test_only` (both shown by the runs above).
 - Breaks: the `flaky-*` breaks of `mutations/tooling-10.breaks`. `tooling-5/stress-reports-a-pass-for-a-failed-run` was moved to the code as it is now.
+
+## The review
+
+An independent reviewer read the whole diff against the specification, and confirmed its two bugs with scratch tests. Each finding, and what was done:
+
+- **A known flake in a stall's cluster got a third run** (bug: the stall's re-run timed it out again, and the flake re-run then ran it again and passed the step).
+  Fixed: the stall's re-run says which tests it ran again (`rerun::Outcome::ran_again`), and a known flake among them is not run a third time (`a_known_flake_already_run_again_after_a_stall_is_not_run_a_third_time`; break `flaky-a-third-run-after-the-stall`).
+- **A stall re-run whose command failed was hidden by a flake that passed** (bug), and its general form: a run that ended for another reason than its tests, which a report's failures do not explain.
+  Fixed: `ci` keeps each run's exit status, and runs no flake again unless every run so far ended with failed tests (100) or passed; `stress` the same with its own run's status (`refusal_by_codes`; `a_run_that_ended_other_than_by_failed_tests_runs_nothing_again`, the `known_flakes` test; breaks `flaky-any-exit-status-explains`, `flaky-stress-any-exit-status`).
+- **The "once" could retry inside itself** (a `timing_sensitive` test has a retry in every profile): every second run now has `--retries 0` (`flaky::once`; break `flaky-the-one-run-may-retry`).
+- **A joined short filter (`-Etest(/x/)`) stayed beside the flake's exact one,** running other tests again: `checks::filtersets`, which the stall's re-run uses too, takes the joined form out (break `flaky-a-joined-filter-stays`).
+- **The CI guard was untested, and read `GITHUB_ACTIONS=true` where the rest of `xtask` reads it set at all:** it is a function of the value now, set at all, with a test and two breaks. The call that reads the environment stays glue.
+- **`stress` and `mutate` on a `try` runner run a known flake again,** so the items' advice to stress a flake on a runner needed `--strict`: the two items say so, and "Known flakes" does.
+- **`stress`'s run once more, `--strict` and the report written back were untested:** `known_flakes` takes the run as a function now, and is tested with a pretend one (passes, fails again, nextest fails though its report passed, `--strict`, an exit status other than 100, not listed); it forgets the old report before each run once more.
+- **`mutate`'s second run that stalls was untested,** and its count of flakes that passed was read from its notes' words: a pretend runner's knob stalls it, and the count is carried (`flaky-mutate-a-stalled-second-run-passes`, `flaky-mutate-not-counted`).
+- **The marks' check required a list, and found a function anywhere in the crate:** it now accepts no marks, and looks for an integration binary's test in the file of its first module (`every_known_flake_names_a_test_where_its_binary_and_module_put_it`).
+- **Left, as within the specification:** `stress` excuses a known flake that passed once more whatever its rate of failure in the run (the rate is printed); a stall during `mutate`'s second run of a flake stops the run, where a stall of the first run is run again with one job (the safe side).
 
 ## Left open
 

@@ -249,6 +249,9 @@ pub(crate) struct Outcome {
     pub(crate) records: Vec<Record>,
     /// For the job's summary page, when tests were run again.
     pub(crate) summary: Option<String>,
+    /// The tests that were run again: a known flake among them is not run
+    /// a third time (`crate::flaky`).
+    pub(crate) ran_again: Vec<Test>,
 }
 
 /// Runs `args` with `exec`, and when it fails and [`decide`] says so, runs
@@ -267,12 +270,14 @@ pub(crate) fn run(
             result: Ok(()),
             records,
             summary: None,
+            ran_again: Vec::new(),
         };
     };
     let failed_as_it_was = |records, error: String| Outcome {
         result: Err(error),
         records,
         summary: None,
+        ran_again: Vec::new(),
     };
     let Ok(first_report) = std::fs::read_to_string(report) else {
         return failed_as_it_was(records, first_error);
@@ -340,6 +345,7 @@ fn rerun(
             result: Err(format!("{first_error}; {why}")),
             records: Vec::new(),
             summary: None,
+            ran_again: plan.tests.clone(),
         }
     };
     let Ok(second_report) = std::fs::read_to_string(report) else {
@@ -398,6 +404,7 @@ fn rerun(
             result: Ok(()),
             records,
             summary,
+            ran_again: plan.tests.clone(),
         };
     }
     say(&format!("The step fails: {}.", problems.join("; ")));
@@ -405,6 +412,7 @@ fn rerun(
         result: Err(format!("{first_error}; {}", problems.join("; "))),
         records,
         summary,
+        ran_again: plan.tests.clone(),
     }
 }
 

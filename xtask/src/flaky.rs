@@ -99,9 +99,33 @@ pub(crate) fn find<'a>(listed: &'a [Listed], binary: &str, name: &str) -> Option
         .find(|one| one.test.binary == binary && one.test.name == name)
 }
 
-/// Whether this runs under GitHub Actions, where nothing is run again.
-pub(crate) fn in_ci() -> bool {
-    std::env::var_os("GITHUB_ACTIONS").is_some_and(|value| value == "true")
+/// Why nothing may be run again, given the value of `GITHUB_ACTIONS`:
+/// under GitHub Actions, CI's blocking jobs run nothing again. Set at all
+/// is set, as `xtask` reads it everywhere else (the tier check, the job's
+/// summary page).
+pub(crate) fn refusal_in_ci(github_actions: Option<&std::ffi::OsStr>) -> Option<String> {
+    github_actions.map(|_| "CI's blocking jobs run nothing again".to_owned())
+}
+
+/// nextest's exit status when tests failed, and nothing else went wrong.
+pub(crate) const TESTS_FAILED: i32 = 100;
+
+/// Why nothing may be run again, given how each run so far ended (nextest's
+/// exit status): when one ended in another way than with failed tests
+/// (a setup script, a build, a crash), its report's failures do not
+/// explain it, and a known flake that passed would hide it. A run that
+/// passed (0) is no reason.
+pub(crate) fn refusal_by_codes(codes: &[Option<i32>]) -> Option<String> {
+    let other = codes
+        .iter()
+        .find(|code| !matches!(code, Some(0 | TESTS_FAILED)))?;
+    Some(match other {
+        Some(code) => format!(
+            "a run of nextest ended with exit status {code}, not {TESTS_FAILED} (tests failed), \
+             which its report's failures do not explain"
+        ),
+        None => "a run of nextest ended by a signal, or could not be started".to_owned(),
+    })
 }
 
 /// The line that names a listed test that failed.
@@ -140,21 +164,39 @@ pub(crate) struct Outcome {
     pub(crate) summary: Option<String>,
 }
 
-/// After a run of `args` that failed with `error`, its report at `report`:
-/// the listed tests among its failures named, and, unless `rerun` is
-/// false (in CI), run again once with `exec`. The run then passes only
-/// when its report, with each such test's case replaced by the second
-/// run's, holds no failed case, the second run's command succeeded, and
-/// every test run again passed. Nothing else is run again.
+/// What is known of a run's failure before its known flakes are seen to.
+pub(crate) struct Before<'a> {
+    /// How the run failed.
+    pub(crate) error: String,
+    /// Why nothing may be run again, if so: CI, or a run that ended in
+    /// another way than with failed tests, which a report's failures do
+    /// not explain (a setup script, a crash of the runner).
+    pub(crate) refusal: Option<String>,
+    /// The tests already run again once, after a stall: a known flake
+    /// among them is not run a third time.
+    pub(crate) already: &'a [Test],
+}
+
+/// After a run of `args` that failed (`before`), its report at `report`:
+/// the listed tests among its failures named, and, unless something
+/// refuses it, those not already run again are run again once with
+/// `exec`. The run then passes only when its report, with each such
+/// test's case replaced by the second run's, holds no failed case, the
+/// second run's command succeeded, and every test run again passed.
+/// Nothing else is run again.
 pub(crate) fn after_failure(
     args: &[String],
     report: &Path,
-    error: String,
+    before: Before<'_>,
     listed: &[Listed],
-    rerun: bool,
     exec: &mut dyn FnMut(&[String]) -> Attempt,
     say: &mut dyn FnMut(&str),
 ) -> Outcome {
+    let Before {
+        error,
+        refusal,
+        already,
+    } = before;
     let failed_as_it_was = |error: String| Outcome {
         result: Err(error),
         summary: None,
@@ -169,9 +211,18 @@ pub(crate) fn after_failure(
     for flake in &flakes {
         say(&named(flake));
     }
-    if !rerun {
+    let (stale, fresh): (Vec<&Listed>, Vec<&Listed>) = flakes
+        .iter()
+        .partition(|flake| already.contains(&flake.test));
+    for flake in &stale {
         say(&format!(
-            "Not run again: CI's blocking jobs run nothing again. {} known flake(s) failed{}.",
+            "  {} {} was run again after the stall already, and failed: not run a third time",
+            flake.test.binary, flake.test.name
+        ));
+    }
+    if let Some(refusal) = &refusal {
+        say(&format!(
+            "Not run again: {refusal}. {} known flake(s) failed{}.",
             flakes.len(),
             if others > 0 {
                 format!(", and {others} other test(s)")
@@ -181,21 +232,29 @@ pub(crate) fn after_failure(
         ));
         return Outcome {
             result: Err(error),
-            summary: Some(summary(&flakes, None, others, false)),
+            summary: Some(summary(&fresh, &stale, None, others, Some(refusal))),
         };
     }
+    if fresh.is_empty() {
+        return Outcome {
+            result: Err(error),
+            summary: Some(summary(&fresh, &stale, None, others, None)),
+        };
+    }
+    let others = others + stale.len();
+    let flakes = fresh;
     let tests: Vec<Test> = flakes.iter().map(|flake| flake.test.clone()).collect();
     say(&format!(
         "Running the {} known flake(s) again, once. A flake that fails again, and every other \
          failure ({others}), still fails this step.",
         tests.len()
     ));
-    let second = exec(&rerun::with_filter(args, &rerun::filter(&tests)));
+    let second = exec(&once(args, &tests));
     let put_back = |why: &str| {
         let _ = std::fs::write(report, &first_report);
         Outcome {
             result: Err(format!("{error}; {why}")),
-            summary: Some(summary(&flakes, None, others, true)),
+            summary: Some(summary(&flakes, &stale, None, others, None)),
         }
     };
     let Ok(second_report) = std::fs::read_to_string(report) else {
@@ -244,7 +303,7 @@ pub(crate) fn after_failure(
     {
         problems.push(format!("the run of the known flakes failed: {why}"));
     }
-    let summary = Some(summary(&flakes, Some(&verdicts), others, true));
+    let summary = Some(summary(&flakes, &stale, Some(&verdicts), others, None));
     if problems.is_empty() {
         say(&format!(
             "The {} known flake(s) passed when run again, and nothing else failed: the step \
@@ -273,21 +332,50 @@ pub(crate) fn says(verdict: Verdict) -> &'static str {
     }
 }
 
-/// What a summary page says of the known flakes that failed.
-fn summary(flakes: &[&Listed], verdicts: Option<&[Verdict]>, others: usize, rerun: bool) -> String {
+/// The arguments of the one run of `tests`, from the run's own: its
+/// filters replaced by one that names the tests exactly, and no retry, so
+/// that "once" is one run whatever nextest's profile gives the test.
+pub(crate) fn once(args: &[String], tests: &[Test]) -> Vec<String> {
+    let mut once = rerun::with_filter(args, &rerun::filter(tests));
+    let at = once
+        .iter()
+        .position(|argument| argument == "--")
+        .unwrap_or(once.len());
+    once.splice(at..at, ["--retries".to_owned(), "0".to_owned()]);
+    once
+}
+
+/// What a summary page says of the known flakes that failed: those run
+/// again (`fresh`) with their verdicts, those already run again after a
+/// stall, and why nothing was run, if so.
+fn summary(
+    fresh: &[&Listed],
+    stale: &[&Listed],
+    verdicts: Option<&[Verdict]>,
+    others: usize,
+    refusal: Option<&str>,
+) -> String {
     let mut text = String::from("### Known flakes that failed\n\n");
-    if !rerun {
-        text.push_str("Not run again: CI's blocking jobs run nothing again.\n\n");
+    if let Some(refusal) = refusal {
+        text.push_str(&format!("Not run again: {refusal}.\n\n"));
     }
     text.push_str("| Test | Item | Second run |\n|---|---|---|\n");
-    for (index, flake) in flakes.iter().enumerate() {
+    for (index, flake) in fresh.iter().enumerate() {
         let second = match verdicts.and_then(|verdicts| verdicts.get(index)) {
             Some(verdict) => says(*verdict),
-            None if rerun => "none: the second run failed before it",
+            None if refusal.is_none() => "none: the second run failed before it",
             None => "not run",
         };
         text.push_str(&format!(
             "| `{} {}` | `{}` | {second} |\n",
+            flake.test.binary,
+            flake.test.name,
+            flake.file()
+        ));
+    }
+    for flake in stale {
+        text.push_str(&format!(
+            "| `{} {}` | `{}` | already run again after the stall, and failed: not a third time |\n",
             flake.test.binary,
             flake.test.name,
             flake.file()
@@ -342,42 +430,136 @@ mod tests {
         }
     }
 
-    /// A known flake whose test was renamed or removed would be run again
-    /// by nobody: each one the open items name is a function of its crate.
+    /// A known flake whose test was renamed or removed, or named with the
+    /// wrong binary or module, would match no failure: each one the open
+    /// items name is a function of its crate, and one of an integration
+    /// binary (`::it`) is in the file of its first module there.
     #[test]
-    fn every_known_flake_names_a_test_its_crate_has() {
+    fn every_known_flake_names_a_test_where_its_binary_and_module_put_it() {
         let root = crate::workspace::root();
         let (listed, warning) = super::listed(&root);
         assert_eq!(warning, None);
-        assert!(!listed.is_empty(), "the open items name no flaky test");
         for one in &listed {
-            let package = one.test.binary.split("::").next().unwrap();
-            let function = one.test.name.rsplit("::").next().unwrap();
-            let folder = if package == "xtask" {
+            let (package, target) = one
+                .test
+                .binary
+                .split_once("::")
+                .unwrap_or((one.test.binary.as_str(), ""));
+            let crate_root = if package == "xtask" {
                 root.join("xtask")
             } else {
                 root.join("crates").join(package)
             };
-            let mut stack = vec![folder];
-            let mut found = false;
-            while let Some(folder) = stack.pop() {
-                for entry in std::fs::read_dir(&folder).unwrap().flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        stack.push(path);
-                    } else if path.extension().is_some_and(|ending| ending == "rs") {
-                        let text = std::fs::read_to_string(&path).unwrap_or_default();
-                        found |= text.contains(&format!("fn {function}("));
+            let segments: Vec<&str> = one.test.name.split("::").collect();
+            let function = format!("fn {}(", segments[segments.len() - 1]);
+            let files: Vec<std::path::PathBuf> = if target.is_empty() {
+                // A unit test: some file of the library's.
+                let mut found = Vec::new();
+                let mut stack = vec![crate_root.join("src")];
+                while let Some(folder) = stack.pop() {
+                    for entry in std::fs::read_dir(&folder).unwrap().flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            stack.push(path);
+                        } else {
+                            found.push(path);
+                        }
                     }
                 }
-            }
+                found
+            } else {
+                let folder = crate_root.join("tests").join(target);
+                vec![
+                    folder.join(format!("{}.rs", segments[0])),
+                    folder.join(segments[0]).join("mod.rs"),
+                ]
+            };
+            let there = files.iter().any(|file| {
+                std::fs::read_to_string(file).is_ok_and(|text| text.contains(&function))
+            });
             assert!(
-                found,
-                "{} names {}, and its crate has no `fn {function}`",
+                there,
+                "{} names `{} {}`, and `{function}` is not where that binary and module put it",
                 one.file(),
+                one.test.binary,
                 one.test.name
             );
         }
+    }
+
+    #[test]
+    fn a_known_flake_already_run_again_after_a_stall_is_not_run_a_third_time() {
+        let flake = Test {
+            binary: "cx::it".to_owned(),
+            name: "trust::sys_flaky".to_owned(),
+        };
+        let ran = ran_after(
+            "third",
+            &report(&[FLAKE, FINE]),
+            Some(&report(&[FLAKE_PASSES])),
+            Ok(()),
+            None,
+            std::slice::from_ref(&flake),
+        );
+        assert!(ran.outcome.result.is_err());
+        assert!(ran.commands.is_empty(), "{:?}", ran.commands);
+        assert!(ran.said.contains("not run a third time"), "{}", ran.said);
+        assert!(
+            ran.outcome
+                .summary
+                .unwrap()
+                .contains("already run again after the stall")
+        );
+    }
+
+    #[test]
+    fn a_run_that_ended_other_than_by_failed_tests_runs_nothing_again() {
+        assert_eq!(super::refusal_by_codes(&[Some(100), Some(0)]), None);
+        assert_eq!(super::refusal_by_codes(&[]), None);
+        for codes in [&[Some(100), Some(104)][..], &[Some(101)], &[None]] {
+            let refusal = super::refusal_by_codes(codes).expect("a refusal");
+            let ran = ran(
+                "codes",
+                &report(&[FLAKE, FINE]),
+                Some(&report(&[FLAKE_PASSES])),
+                Ok(()),
+                Some(&refusal),
+            );
+            assert!(ran.outcome.result.is_err(), "{codes:?}");
+            assert!(ran.commands.is_empty(), "{codes:?}: {:?}", ran.commands);
+            assert!(
+                ran.said.contains("Not run again: a run of nextest ended"),
+                "{}",
+                ran.said
+            );
+        }
+    }
+
+    #[test]
+    fn under_github_actions_set_at_all_nothing_is_run_again() {
+        use std::ffi::OsStr;
+        assert_eq!(super::refusal_in_ci(None), None);
+        for value in ["true", "1", ""] {
+            assert!(
+                super::refusal_in_ci(Some(OsStr::new(value))).is_some(),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_one_run_has_no_retry_and_keeps_what_follows_the_dashes() {
+        let args: Vec<String> = ["nextest", "run", "-Etest(/x/)", "--", "--nocapture"]
+            .map(str::to_owned)
+            .to_vec();
+        let test = Test {
+            binary: "cx".to_owned(),
+            name: "a".to_owned(),
+        };
+        assert_eq!(
+            super::once(&args, &[test]).join(" "),
+            "nextest run -E (binary_id(=cx) and test(=a)) --retries 0 -- --nocapture"
+        );
     }
 
     #[test]
@@ -441,7 +623,19 @@ mod tests {
         first: &str,
         second: Option<&str>,
         second_ends: Result<(), String>,
-        rerun: bool,
+        refusal: Option<&str>,
+    ) -> Ran {
+        ran_after(label, first, second, second_ends, refusal, &[])
+    }
+
+    /// [`ran`], with tests already run again after a stall.
+    fn ran_after(
+        label: &str,
+        first: &str,
+        second: Option<&str>,
+        second_ends: Result<(), String>,
+        refusal: Option<&str>,
+        already: &[Test],
     ) -> Ran {
         let folder: PathBuf =
             std::env::temp_dir().join(format!("xtask-flaky-{label}-{}", std::process::id()));
@@ -467,9 +661,12 @@ mod tests {
         let outcome = after_failure(
             &args,
             &report,
-            "`cargo nextest run` failed".to_owned(),
+            super::Before {
+                error: "`cargo nextest run` failed".to_owned(),
+                refusal: refusal.map(str::to_owned),
+                already,
+            },
             &listed(),
-            rerun,
             &mut exec,
             &mut |line| {
                 said.borrow_mut().push_str(line);
@@ -497,14 +694,14 @@ mod tests {
             &report(&[FLAKE, FINE]),
             Some(&report(&[FLAKE_PASSES])),
             Ok(()),
-            true,
+            None,
         );
         assert_eq!(ran.outcome.result, Ok(()), "{}", ran.said);
         // Only the flake is run again, by its binary and its name, in place
         // of the run's own filter.
         assert_eq!(
             ran.commands,
-            ["nextest run -E (binary_id(=cx::it) and test(=trust::sys_flaky))"]
+            ["nextest run -E (binary_id(=cx::it) and test(=trust::sys_flaky)) --retries 0"]
         );
         assert!(
             ran.said.contains(
@@ -542,7 +739,7 @@ mod tests {
             &report(&[FLAKE, FINE]),
             Some(&report(&[FLAKE])),
             Err("`cargo nextest run` failed".to_owned()),
-            true,
+            None,
         );
         let error = ran.outcome.result.unwrap_err();
         assert!(
@@ -561,7 +758,7 @@ mod tests {
             &report(&[("cx", "other", true), FINE]),
             Some(&report(&[])),
             Ok(()),
-            true,
+            None,
         );
         assert!(ran_alone.outcome.result.is_err());
         assert!(ran_alone.commands.is_empty(), "{:?}", ran_alone.commands);
@@ -575,7 +772,7 @@ mod tests {
             &report(&[FLAKE, ("cx", "other", true)]),
             Some(&report(&[FLAKE_PASSES])),
             Ok(()),
-            true,
+            None,
         );
         assert_eq!(ran.commands.len(), 1);
         assert!(!ran.commands[0].contains("other"), "{:?}", ran.commands);
@@ -594,7 +791,7 @@ mod tests {
             &report(&[FLAKE, FINE]),
             Some(&report(&[FLAKE_PASSES])),
             Ok(()),
-            false,
+            Some("CI's blocking jobs run nothing again"),
         );
         assert!(ran.outcome.result.is_err());
         assert!(ran.commands.is_empty(), "{:?}", ran.commands);
@@ -605,20 +802,25 @@ mod tests {
             ran.said
         );
         assert_eq!(junit::failed(&ran.left).len(), 1, "the report is as it was");
-        assert!(ran.outcome.summary.unwrap().contains("| not run |"));
+        let summary = ran.outcome.summary.unwrap();
+        assert!(summary.contains("| not run |"), "{summary}");
+        assert!(
+            summary.contains("Not run again: CI's blocking jobs run nothing again."),
+            "{summary}"
+        );
     }
 
     #[test]
     fn a_second_run_that_is_missing_or_whose_command_failed_fails_the_run() {
         // No report: the first is put back.
         let first = report(&[FLAKE, FINE]);
-        let ran_gone = ran("gone", &first, None, Ok(()), true);
+        let ran_gone = ran("gone", &first, None, Ok(()), None);
         let error = ran_gone.outcome.result.unwrap_err();
         assert!(error.contains("left no report"), "{error}");
         assert_eq!(ran_gone.left, first);
 
         // The flake missing from the second run's report.
-        let ran_missing = ran("missing", &first, Some(&report(&[FINE])), Ok(()), true);
+        let ran_missing = ran("missing", &first, Some(&report(&[FINE])), Ok(()), None);
         assert!(ran_missing.outcome.result.is_err());
         assert!(
             ran_missing.said.contains("NOT IN THE REPORT"),
@@ -632,7 +834,7 @@ mod tests {
             &first,
             Some(&report(&[FLAKE_PASSES])),
             Err("nextest: a setup script failed".to_owned()),
-            true,
+            None,
         );
         let error = ran_failed.outcome.result.unwrap_err();
         assert!(
