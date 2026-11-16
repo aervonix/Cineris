@@ -681,10 +681,9 @@ file: crates/cortex-tui/src/app/state.rs
 in: App::done
 find: self.opened(result.session, false, now);
 replace: self.opened(result.session, true, now);
-packages: cortex-tui, cortex-cli
+packages: cortex-tui
 caught-by:
     app::tests::a_new_session_reads_no_history
-    cortex-cli::system tui::sys_a_never_survives_a_restart_and_permissions_trust_clears_it
 
 [break] the-list-ordered-by-creation
 rule: `session/list` gives the session used last first, across projects, not the one made last.
@@ -869,3 +868,33 @@ packages: cortex-tui
 caught-by:
     app::tests::at_completes_from_the_workspace_files_the_core_lists
     app::tests::at_the_cap_a_keys_frame_never_waits_for_the_file_match
+
+[break] a-dialog-shown-under-the-viewer
+rule: A dialog is shown by the inline screen's frame alone: under the viewer its grace has not begun.
+file: crates/cortex-tui/src/app/state.rs
+in: App::drawn
+find: if self.viewing() {
+replace: if self.viewing() && at < self.began {
+packages: cortex-tui
+caught-by:
+    app::tests::a_dialog_that_comes_under_the_viewer_waits_for_the_inline_screen
+
+[break] a-read-overtakes-a-write
+rule: A read sent while a write is under way runs after it, in the lane: it sees every write sent before it.
+file: crates/cortex-cli/src/interactive.rs
+in: Routes::route
+find: if self.in_flight.load(Ordering::SeqCst) > 0 {
+replace: if self.in_flight.load(Ordering::SeqCst) > usize::MAX - 1 {
+packages: cortex-cli
+caught-by:
+    interactive::tests::a_read_after_a_write_waits_for_it_and_one_alone_runs_beside
+
+[break] the-workspace-walk-unbounded
+rule: The walk for `workspace/files` stops once it has met its bound of files, and says there were more.
+file: crates/cortex-tools/src/walk.rs
+in: files_met
+find: if found.len() >= most {
+replace: if found.len() >= usize::MAX {
+packages: cortex-tools
+caught-by:
+    walk::tests::the_workspace_walk_stops_at_its_bound_and_says_there_were_more

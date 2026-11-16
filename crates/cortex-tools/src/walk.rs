@@ -443,24 +443,43 @@ pub(crate) fn shown_path(root_shown: &str, relative: &str) -> String {
     }
 }
 
+/// How many files [`workspace_files`] meets, at most, for each it keeps.
+const SEEN_PER_KEPT: usize = 4;
+
 /// The files of a workspace, for a front end's file completion
 /// (`workspace/files`, since step 23): their paths under `root` with `/`
 /// between names, the most recently changed first, as the ignore rules, the
 /// hidden-file rule and `gate` leave them, at most `limit`. Says whether
 /// there were more. Blocks: it walks the tree on several threads, as
-/// `search` and `list` do.
+/// `search` and `list` do. The walk stops once it has met four times
+/// `limit` files, so that a tree of millions (a home directory) costs a
+/// bounded time and memory: the newest are then the newest of those.
 #[must_use]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "the walk blocks, and runs on the blocking pool: each file's time is asked as it is met"
-)]
 pub fn workspace_files(
     root: &ResolvedPath,
     gate: &dyn ReadGate,
     cancel: &CancelToken,
     limit: usize,
 ) -> (Vec<String>, bool) {
+    let most = limit.saturating_mul(SEEN_PER_KEPT).max(1);
+    files_met(root, gate, cancel, limit, most)
+}
+
+/// [`workspace_files`], stopping once `most` files have been met.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the walk blocks, and runs on the blocking pool: each file's time is asked as it is met"
+)]
+fn files_met(
+    root: &ResolvedPath,
+    gate: &dyn ReadGate,
+    cancel: &CancelToken,
+    limit: usize,
+    most: usize,
+) -> (Vec<String>, bool) {
     let found: Mutex<Vec<(std::time::SystemTime, String)>> = Mutex::new(Vec::new());
+    let stopped = std::sync::atomic::AtomicBool::new(false);
+    let enough = cancel.child();
     let spec = WalkSpec {
         root,
         max_depth: None,
@@ -468,8 +487,8 @@ pub fn workspace_files(
         glob: None,
         threads: 0,
     };
-    let _ = walk(&spec, gate, cancel, &mut || {
-        let found = &found;
+    let _ = walk(&spec, gate, &enough, &mut || {
+        let (found, enough, stopped) = (&found, &enough, &stopped);
         Box::new(move |entry: &Found<'_>| {
             if entry.kind != EntryKind::File {
                 return;
@@ -477,17 +496,20 @@ pub fn workspace_files(
             let changed = std::fs::symlink_metadata(entry.fs_path)
                 .and_then(|meta| meta.modified())
                 .unwrap_or(std::time::UNIX_EPOCH);
-            found
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push((changed, entry.relative.to_owned()));
+            let mut found = found.lock().unwrap_or_else(PoisonError::into_inner);
+            if found.len() >= most {
+                stopped.store(true, std::sync::atomic::Ordering::SeqCst);
+                enough.cancel();
+                return;
+            }
+            found.push((changed, entry.relative.to_owned()));
         })
     });
     let mut found = found.into_inner().unwrap_or_else(PoisonError::into_inner);
     // Newest first; the path breaks a tie, so that the order is the same
     // whatever order the walk's threads met them in.
     found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    let truncated = found.len() > limit;
+    let truncated = found.len() > limit || stopped.load(std::sync::atomic::Ordering::SeqCst);
     found.truncate(limit);
     (found.into_iter().map(|(_, path)| path).collect(), truncated)
 }
@@ -495,6 +517,37 @@ pub fn workspace_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The walk for `workspace/files` stops once it has met its bound of
+    /// files, and says there were more: a tree of millions costs a bounded
+    /// time and memory.
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test makes its tree with blocking calls"
+    )]
+    fn the_workspace_walk_stops_at_its_bound_and_says_there_were_more() {
+        use cortex_base::{PathOptions, PathResolver, Rng as _, SystemRng};
+        let dir = std::env::temp_dir().join(format!(
+            "cortex-tools-walk-bound-{:016x}",
+            SystemRng::new().next_u64()
+        ));
+        for n in 0..40 {
+            let sub = dir.join(format!("d{n:02}"));
+            std::fs::create_dir_all(&sub).expect("a directory");
+            std::fs::write(sub.join("f.rs"), "x").expect("a file");
+        }
+        let paths = PathResolver::new(&dir, PathOptions::new()).expect("a workspace");
+        let root = paths.resolve(".").expect("the root");
+        let cancel = CancelToken::new();
+        let (all, more) = files_met(&root, &crate::OpenGate, &cancel, 100, 1_000);
+        assert_eq!((all.len(), more), (40, false));
+        let (some, more) = files_met(&root, &crate::OpenGate, &cancel, 100, 3);
+        assert_eq!(some.len(), 3, "{some:?}");
+        assert!(more, "a walk that stopped says there were more");
+        assert!(!cancel.is_cancelled(), "the caller's token is left alone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn matches(pattern: &str, path: &str) -> bool {
         GlobFilter::new(pattern)
