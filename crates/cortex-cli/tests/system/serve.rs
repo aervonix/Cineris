@@ -555,3 +555,53 @@ fn sys_serve_socket_serves_at_the_default_place_and_removes_it() {
     assert!(!path.exists(), "the socket outlived the server");
     drop(errors);
 }
+
+/// `serve --socket NAME` on Windows serves a named pipe of that name, says
+/// where on standard error, serves a client of the user there, and ends at
+/// its `shutdown`. The client writes and reads in turn on one thread: a
+/// pipe opened without overlapped I/O does one at a time.
+#[cfg(windows)]
+#[test]
+fn sys_serve_socket_serves_on_a_named_pipe() {
+    let machine = Machine::new("serve-pipe");
+    let name = format!("cortex-harness-test-{}", std::process::id());
+    let mut server = machine
+        .command(&["serve", "--socket", &name])
+        .spawn()
+        .expect("the binary starts");
+    let mut errors = BufReader::new(server.stderr.take().unwrap());
+    let mut said = String::new();
+    errors.read_line(&mut said).unwrap();
+    let pipe = format!(r"\\.\pipe\{name}");
+    assert!(said.contains(&pipe), "{said}");
+
+    let mut client = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&pipe)
+        .expect("the pipe opens for the user");
+    let mut reader = BufReader::new(client.try_clone().unwrap());
+    let initialize = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": conformance::initialize()});
+    writeln!(client, "{initialize}").unwrap();
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert!(
+        line.contains(r#""id":1"#) && line.contains(r#""result""#),
+        "{line}"
+    );
+    let shutdown =
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": {}});
+    writeln!(client, "{shutdown}").unwrap();
+    loop {
+        line.clear();
+        let read = reader.read_line(&mut line).unwrap();
+        assert!(read > 0, "the pipe closed before shutdown was answered");
+        if line.contains(r#""id":2"#) {
+            assert!(line.contains(r#""result""#), "{line}");
+            break;
+        }
+    }
+    assert_eq!(server.wait().unwrap().code(), Some(0));
+    drop(errors);
+}
