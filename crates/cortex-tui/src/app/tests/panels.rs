@@ -1087,6 +1087,7 @@ fn the_turn_summary_says_the_checks_verdict() {
         version: "0.1.0".to_owned(),
         folder: "~/src/app".to_owned(),
         workspace: WORKSPACE.to_owned(),
+        cwd: None,
         open: Open::New {
             workspace: WORKSPACE.to_owned(),
             settings: SessionSettings::default(),
