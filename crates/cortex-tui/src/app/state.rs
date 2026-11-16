@@ -724,15 +724,11 @@ impl App {
             return;
         };
         match (pending, result) {
-            (
-                Pending::Open,
-                Ok(
-                    OpResult::SessionNew(result)
-                    | OpResult::SessionOpen(result)
-                    | OpResult::SessionFork(result),
-                ),
-            ) => {
-                self.opened(result.session, now);
+            (Pending::Open, Ok(OpResult::SessionNew(result))) => {
+                self.opened(result.session, false, now);
+            }
+            (Pending::Open, Ok(OpResult::SessionOpen(result) | OpResult::SessionFork(result))) => {
+                self.opened(result.session, true, now);
             }
             (Pending::Open, Err(error)) => self.open_failed(Some(&error), now),
             (Pending::ForkFrom(original), Ok(OpResult::SessionOpen(_))) => {
@@ -909,7 +905,9 @@ impl App {
         self.input.external_result(Some(Fragment::text(now)));
     }
 
-    fn opened(&mut self, state: SessionState, now: Instant) {
+    /// A session is open; `stored` when it was opened from the store (a
+    /// resume, a switch, a fork), whose history is then drawn.
+    fn opened(&mut self, state: SessionState, stored: bool, now: Instant) {
         self.opening = false;
         if let Some(original) = self.forked_from.take() {
             let ticket = self.link.send(Op::SessionClose(SessionRef {
@@ -931,7 +929,7 @@ impl App {
         // A stored session's history is drawn under its header before
         // anything that happens next (`docs/architecture/09-tui.md`,
         // "Resume"); its events wait for it.
-        let stored = state.seq > 0;
+        let stored = stored && state.seq > 0;
         let session_id = state.session_id.clone();
         self.session = Some(state);
         if stored {
@@ -999,9 +997,19 @@ impl App {
             // A call the history holds with no result was cut off.
             self.mapper.turn_done(&mut self.transcript, now);
         }
+        // An item's events the read already holds are dropped: the history
+        // drew it. Anything else (the open's notices) is shown.
         let held = std::mem::take(&mut self.held);
         for event in held {
-            if event.seq > page.seq {
+            let of_an_item = matches!(
+                event.event,
+                Event::ItemStarted(_)
+                    | Event::ItemDelta(_)
+                    | Event::ItemCompleted(_)
+                    | Event::ItemResync(_)
+                    | Event::ItemReset(_)
+            );
+            if event.seq > page.seq || !of_an_item {
                 self.event(event, now);
             }
         }

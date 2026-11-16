@@ -195,10 +195,28 @@ caught-by:
 rule: The session's events are held while the app's open is under way, so that its header is the first block.
 file: crates/cortex-tui/src/app/state.rs
 in: App::drain
-find: if self.opening {
-replace: if false {
+find: if self.opening || self.reading {
+replace: if self.reading {
 caught-by:
     app::tests::the_session_is_opened_after_the_first_frame_and_its_header_comes_first
+
+[break] a-resumed-sessions-events-not-held
+rule: While a stored session's history is read its events wait, so that the history comes first, and those it already holds are dropped.
+file: crates/cortex-tui/src/app/state.rs
+in: App::drain
+find: if self.opening || self.reading {
+replace: if self.opening {
+caught-by:
+    app::tests::a_resumed_session_draws_its_history_then_what_came_after
+
+[break] events-the-history-holds-shown-twice
+rule: Of the events held while the history was read, those it already holds (seq up to the read's) are dropped.
+file: crates/cortex-tui/src/app/state.rs
+in: App::history_read
+find: if event.seq > page.seq || !of_an_item {
+replace: if true {
+caught-by:
+    app::tests::a_resumed_session_draws_its_history_then_what_came_after
 
 [break] ctrl-t-flips-the-wrong-way
 rule: Ctrl+T turns the running round's box the other way from what it shows now.
@@ -656,3 +674,14 @@ find: (digit as usize).checked_sub(1)
 replace: Some(digit as usize)
 caught-by:
     app::tests::a_question_is_answered_by_the_digit_of_its_choice_or_left_unanswered
+
+[break] a-new-session-read-as-stored
+rule: Only a session opened from the store has a history to draw: a new one's open is not read back, so that what it said is shown.
+file: crates/cortex-tui/src/app/state.rs
+in: App::opened
+find: let stored = stored && state.seq > 0;
+replace: let stored = state.seq > 0;
+packages: cortex-tui, cortex-cli
+caught-by:
+    app::tests::a_new_session_reads_no_history
+    cortex-cli::system tui::sys_a_never_survives_a_restart_and_permissions_trust_clears_it

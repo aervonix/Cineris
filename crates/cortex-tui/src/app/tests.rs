@@ -2601,7 +2601,28 @@ fn a_resumed_session_draws_its_history_then_what_came_after() {
             )),
         })
     };
-    link.give(notice(4, "already in the history"));
+    // The open's own notice, an answer the history holds, and a notice
+    // after the read.
+    link.give(notice(3, "said at the open"));
+    link.give(Inbound::Event(SessionEvent {
+        session_id: SessionId::from(SESSION),
+        seq: 4,
+        turn_id: None,
+        event: Event::ItemCompleted(ItemCompleted {
+            item: Item::AssistantMessage(AssistantMessageItem {
+                id: ItemId::from("i_3"),
+                parts: vec![Part::text("already in the history\n")],
+                stop_reason: Some(StopReason::End),
+                raw_stop: None,
+                stop_detail: None,
+                truncated: false,
+                origin: None,
+                usage: None,
+                error: None,
+                created_at: None,
+            }),
+        }),
+    }));
     link.give(notice(6, "after the read"));
     drain(&mut app, now);
     let user = Item::UserMessage(UserMessageItem {
@@ -2645,9 +2666,36 @@ fn a_resumed_session_draws_its_history_then_what_came_after() {
     assert!(at("Cortex-Harness") < at("fix the build"));
     assert!(at("fix the build") < at("It builds now."));
     assert!(at("It builds now.") < at("after the read"));
+    assert!(at("said at the open") > at("Cortex-Harness"));
     assert!(
         !all.iter()
             .any(|line| line.contains("already in the history")),
         "{all:#?}"
+    );
+}
+
+/// A new session has no history to read, though its open said something.
+#[test]
+fn a_new_session_reads_no_history() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    let _ = app.frame(now);
+    app.drawn(now);
+    let (open, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::SessionNew(_)))
+        .expect("the open");
+    let mut new = state();
+    new.seq = 3;
+    link.give(Inbound::Done(
+        open,
+        Ok(OpResult::SessionNew(SessionResult { session: new })),
+    ));
+    drain(&mut app, now);
+    let sent = link.take_sent();
+    assert!(
+        !sent.iter().any(|(_, op)| matches!(op, Op::SessionRead(_))),
+        "{sent:#?}"
     );
 }
