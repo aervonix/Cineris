@@ -26,7 +26,7 @@ caught-by:
 [break] the-trust-store-is-not-watched
 rule: The trust store's file is looked at with the configuration's, so trust taken away outside is seen by the next look.
 file: crates/cortex-core/src/reload.rs
-in: look
+in: judge
 find: .is_some_and(|watch| !watch.check().is_empty());
 replace: .is_some_and(|watch| watch.check().is_empty() && false);
 caught-by:
@@ -35,9 +35,9 @@ caught-by:
 [break] trust-is-not-judged-again
 rule: A reload judges the project's trust again and loads with what it judged.
 file: crates/cortex-core/src/reload.rs
-in: look
-find: let rules = judged.rules.unwrap_or(config.trusted.rules);
-replace: let rules = config.trusted.rules;
+in: judge
+find: rules: judged.rules.unwrap_or(config.trusted.rules)
+replace: rules: config.trusted.rules
 caught-by:
     cortex-core::it reload::trust_taken_away_from_outside_is_seen_by_the_next_look
     cortex-core::it reload::an_allow_rule_added_while_trusted_is_not_in_force
@@ -63,7 +63,7 @@ caught-by:
 [break] a-broken-file-is-said-every-time
 rule: A broken file is said once by the looks, and again only when the person asks.
 file: crates/cortex-core/src/reload.rs
-in: look
+in: load
 find: if said && !asked.explicit {
 replace: if said && asked.explicit && false {
 caught-by:
@@ -72,7 +72,7 @@ caught-by:
 [break] a-broken-file-is-not-said-when-asked
 rule: The person who asks (`/reload`) is told a standing error again.
 file: crates/cortex-core/src/reload.rs
-in: look
+in: load
 find: if said && !asked.explicit {
 replace: if said {
 caught-by:
