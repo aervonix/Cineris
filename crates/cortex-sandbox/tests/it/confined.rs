@@ -45,6 +45,28 @@ struct Place {
     scratch: Scratch,
 }
 
+/// A folder with a short path of its own, for a Unix socket: the kernel
+/// holds a socket's path to 108 bytes, and a scratch folder under a long
+/// `TMPDIR` (the copy the desk's `rx` builds in) is too long for one. It is
+/// under `/tmp`, which every Linux has, named for the test and the process,
+/// and removed when dropped.
+struct ShortFolder(PathBuf);
+
+impl ShortFolder {
+    fn new(test: &str) -> Self {
+        let path = PathBuf::from(format!("/tmp/cxs-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("a short folder under /tmp");
+        Self(path)
+    }
+}
+
+impl Drop for ShortFolder {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 impl Place {
     fn new(test: &str) -> Self {
         let scratch = Scratch::outside("cortex-sandbox-confined", test);
@@ -270,7 +292,8 @@ fn sys_with_the_network_off_no_socket_reaches_anything() {
     let tcp = TcpListener::bind("127.0.0.1:0").expect("listen on loopback");
     let tcp6 = TcpListener::bind("[::1]:0").ok();
     let udp = UdpSocket::bind("127.0.0.1:0").expect("a UDP socket on loopback");
-    let unix_path = place.scratch.join("tmp/listener.sock");
+    let short = ShortFolder::new("net");
+    let unix_path = short.0.join("listener.sock");
     let _unix = UnixListener::bind(&unix_path).expect("a Unix socket");
     let abstract_name = format!("cortex-sandbox-test-{}", std::process::id());
     let _abstract = UnixListener::bind_addr(

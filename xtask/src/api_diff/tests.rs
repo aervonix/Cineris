@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{Format, Library, Request, libraries, lock, prepare_base, report, resolve, select};
+use super::{
+    Format, Library, Request, doc_calls, libraries, lock, prepare_base, report, resolve, select,
+};
 use crate::combine::{git, remove_tree};
 use crate::workspace::{Package, Target};
 
@@ -17,7 +19,8 @@ fn a_request_is_read() {
         Request {
             against: None,
             packages: Vec::new(),
-            format: Format::Text
+            format: Format::Text,
+            features: Vec::new(),
         }
     );
     assert_eq!(
@@ -35,7 +38,8 @@ fn a_request_is_read() {
         Request {
             against: Some("v1".to_owned()),
             packages: strings(&["a", "b"]),
-            format: Format::Markdown
+            format: Format::Markdown,
+            features: Vec::new(),
         }
     );
     let joined = Request::parse(&strings(&["--against=origin/main", "--package=c"])).unwrap();
@@ -50,6 +54,80 @@ fn a_request_is_read() {
         let error = Request::parse(&strings(words)).unwrap_err();
         assert!(error.contains(expected), "{words:?}: {error}");
     }
+}
+
+#[test]
+fn features_are_read_with_their_crate() {
+    let pair = |package: &str, feature: &str| (package.to_owned(), feature.to_owned());
+    let request = Request::parse(&strings(&[
+        "-p",
+        "cortex-tui",
+        "--features",
+        "test-kit",
+        "--features=cortex-policy/test-support,cortex-tui/test-kit",
+    ]))
+    .unwrap();
+    assert_eq!(
+        request.features,
+        [
+            pair("cortex-tui", "test-kit"),
+            pair("cortex-policy", "test-support")
+        ]
+    );
+    for (words, expected) in [
+        (&["--features", "test-kit"][..], "which crate's?"),
+        (&["-p", "a", "-p", "b", "--features", "x"], "which crate's?"),
+        (&["--features", "a/"], "a feature is `CRATE/FEATURE`"),
+        (&["--features", "/x"], "a feature is `CRATE/FEATURE`"),
+        (&["--features"], "needs a value"),
+    ] {
+        let error = Request::parse(&strings(words)).unwrap_err();
+        assert!(error.contains(expected), "{words:?}: {error}");
+    }
+}
+
+#[test]
+fn a_feature_is_turned_on_where_its_crate_has_it_and_said_where_it_does_not() {
+    let tui = Library {
+        package: "cortex-tui".to_owned(),
+        json: "cortex_tui".to_owned(),
+        features: strings(&["default", "test-kit"]),
+    };
+    let policy_before = Library {
+        package: "cortex-policy".to_owned(),
+        json: "cortex_policy".to_owned(),
+        features: Vec::new(),
+    };
+    let asked = [
+        ("cortex-tui".to_owned(), "test-kit".to_owned()),
+        ("cortex-policy".to_owned(), "test-support".to_owned()),
+        ("cortex-core".to_owned(), "x".to_owned()),
+    ];
+    let core = Library {
+        package: "cortex-core".to_owned(),
+        json: "cortex_core".to_owned(),
+        features: strings(&["x"]),
+    };
+    let (calls, missing) = doc_calls(&[&core, &tui, &policy_before], &asked);
+    // The crate with a feature on has a call of its own, its feature by its
+    // bare name; the others are documented together, first.
+    assert_eq!(
+        calls,
+        [
+            (strings(&["cortex-policy"]), Vec::new()),
+            (strings(&["cortex-core"]), strings(&["--features", "x"])),
+            (
+                strings(&["cortex-tui"]),
+                strings(&["--features", "test-kit"])
+            ),
+        ]
+    );
+    assert_eq!(missing, ["cortex-policy/test-support"]);
+    // Nothing asked of these crates: one call, no flag at all.
+    assert_eq!(
+        doc_calls(&[&policy_before], &asked[..1]),
+        (vec![(strings(&["cortex-policy"]), Vec::new())], Vec::new())
+    );
 }
 
 fn package(name: &str, kinds: &[&str]) -> Package {
@@ -311,6 +389,7 @@ fn sys_the_real_rustdoc_reports_what_was_added_removed_and_changed() {
         against: Some("HEAD".to_owned()),
         packages: Vec::new(),
         format: Format::Text,
+        features: Vec::new(),
     };
     let text = report(root, &request).unwrap();
     let body: Vec<&str> = text.lines().skip(1).collect();

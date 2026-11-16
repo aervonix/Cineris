@@ -444,3 +444,32 @@ find: Tested::Stalled(note) | Tested::Broken(note) | Tested::DoesNotCompile(note
 replace: Tested::Stalled(_) => cases.iter().map(|case| TestCase { failed: false, ..case.clone() }).collect(), Tested::Broken(note) | Tested::DoesNotCompile(note) =>
 caught-by:
     mutate::drive::tests::a_known_flake_that_fails_again_or_beside_another_failure_stops_the_run
+
+# The smaller items (item 5).
+
+[break] api-diff-features-by-the-crates-name
+rule: `cargo doc` is given a crate's features by their bare names, in a call of its own: `CRATE/FEATURE` turns nothing on for a package documented with `-p`.
+file: xtask/src/api_diff.rs
+in: doc_calls
+find: vec!["--features".to_owned(), on.join(",")]
+replace: vec!["--features".to_owned(), on.iter().map(|feature| format!("{}/{feature}", library.package)).collect::<Vec<_>>().join(",")]
+caught-by:
+    api_diff::tests::a_feature_is_turned_on_where_its_crate_has_it_and_said_where_it_does_not
+
+[break] api-diff-a-missing-feature-is-not-said
+rule: A feature the ref's crate does not have is left off there, and said.
+file: xtask/src/api_diff.rs
+in: doc_calls
+find: missing.push(format!("{package}/{feature}"));
+replace:
+caught-by:
+    api_diff::tests::a_feature_is_turned_on_where_its_crate_has_it_and_said_where_it_does_not
+
+[break] api-diff-a-feature-of-no-crate
+rule: A feature is `CRATE/FEATURE`, both named.
+file: xtask/src/api_diff.rs
+in: Request::parse
+find: !package.is_empty() && !feature.is_empty()
+replace: true
+caught-by:
+    api_diff::tests::features_are_read_with_their_crate

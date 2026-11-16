@@ -53,7 +53,7 @@ Each cost a session hours to find. The details are in [docs/steps/11/](docs/step
 | Run one crate's tests, and build only it | `cargo xtask test -p <crate>` (for `cortex-sandbox` on Linux it turns `backends` on, or its confinement tests are not built) |
 | After a change of behaviour: run a crate's tests and those of every crate that depends on it, directly or not | `cargo xtask test --dependents -p <crate>` (it names the crates it added) |
 | Run one throwaway test file against a crate, registering nothing; in a release build, or its ignored `perf_` tests, for a measurement | `cargo xtask scratch-test <crate> <file>`; `--cargo-profile release` builds it optimised and `--ignored` runs its ignored tests alone, one at a time, with their output |
-| List the public items a change added, removed and changed, with their signatures before and after (for a fix session's report) | `cargo xtask api-diff [--against REF] [-p <crate>]… [--format markdown]`; at the desk `rx --git -- cargo xtask api-diff …` |
+| List the public items a change added, removed and changed, with their signatures before and after (for a fix session's report) | `cargo xtask api-diff [--against REF] [-p <crate>]… [--features <crate>/<feature>,…] [--format markdown]` (`--features` shows a test kit behind one, such as `cortex-tui/test-kit`); at the desk `rx --git -- cargo xtask api-diff …` |
 | See where a test's time goes | `CORTEX_TESTKIT_PROFILE=1 cargo xtask test -p <crate> -E 'test(=<name>)' --no-capture` |
 | Check what a push would send for the owner's details | `cargo xtask owner-guard --unpushed` (the git hook runs it on every push) |
 | Check that every link in the docs leads somewhere, and that the step records are in their places | `cargo xtask links` |

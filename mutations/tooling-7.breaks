@@ -399,7 +399,7 @@ caught-by:
 [break] api-documents-with-the-stable-compiler-alone
 rule: rustdoc's JSON needs unstable options, which the pinned stable toolchain takes with RUSTC_BOOTSTRAP=1.
 file: xtask/src/api_diff.rs
-in: document
+in: document_once
 find: .env("RUSTC_BOOTSTRAP", "1")
 replace: .env("RUSTC_BOOTSTRAP", "0")
 expect: survives

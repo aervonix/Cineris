@@ -124,7 +124,7 @@ pub(crate) const AT_LEAST: usize = 4;
 | `&&` chains: an edit, a build, then `git diff` | `python3 FILE && cargo check …; git diff --stat` | **Refused** | `cargo xtask apply SCRIPT` with `@@ check: build -p CRATE`; then `git diff --stat` alone |
 | `xargs` into git | `git ls-files F \| xargs git log --oneline -1` | **Refused**: "feeds git its arguments from stdin at runtime (xargs/parallel)" | git with its arguments written out: `git log --oneline -1 -- F` |
 | A path holding `.github` | `ls .github/workflows && git status --short`; `git log --oneline -1 -- .github/workflows/try.yml` | **Accepted; not reproduced** | As tried. If refused, give the path to a command of its own |
-| A path or pattern holding `complete` | `grep -c x docs/outstanding/caught-by-names-checked-only-at-the-desk.md && git status --short` | **Accepted** for a path that only holds the letters; the whole word as a pattern is refused (above) | A bracket round one letter: `compl[e]te` |
+| A path or pattern holding `complete` | `grep -c x docs/outstanding/an-undo-after-an-incomplete-look.md && git status --short` | **Accepted** for a path that only holds the letters; the whole word as a pattern is refused (above) | A bracket round one letter: `compl[e]te` |
 | `cargo xtask apply …` then `git status` | `cargo xtask apply --help \| head -3 && git status --short` | **Accepted** | As tried |
 
 ## False positives

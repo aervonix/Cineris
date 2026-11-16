@@ -40,7 +40,8 @@ use crate::combine::{git, remove_tree};
 use crate::workspace::{self, Package};
 
 const USAGE: &str = "\
-usage: cargo xtask api-diff [--against REF] [-p CRATE]... [--format text|markdown]
+usage: cargo xtask api-diff [--against REF] [-p CRATE]... [--features CRATE/FEATURE,...]
+                            [--format text|markdown]
 
 The public items added, removed and changed between REF (`main` when not
 given) and the working tree, by crate, each with its path and its signature
@@ -57,7 +58,13 @@ with RUSTC_BOOTSTRAP=1, in two build directories under target/api-diff/ kept
 between runs. REF is checked out in a clone there; the repository, its refs and
 this worktree are not touched.
 
-  --format markdown   One table for each crate, for a report.";
+  --format markdown   One table for each crate, for a report.
+  --features LIST     Features to turn on when documenting, `CRATE/FEATURE`
+                      separated by commas (a bare FEATURE when one crate is
+                      named): the items behind them, such as cortex-tui's
+                      `test-kit` or cortex-policy's `test-support`, are then
+                      in the API compared. A feature the ref does not have
+                      is left off there, and said.";
 
 /// How the report is written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +79,8 @@ struct Request {
     against: Option<String>,
     packages: Vec<String>,
     format: Format,
+    /// `--features`: each feature with its crate.
+    features: Vec<(String, String)>,
 }
 
 impl Request {
@@ -80,7 +89,9 @@ impl Request {
             against: None,
             packages: Vec::new(),
             format: Format::Text,
+            features: Vec::new(),
         };
+        let mut bare = Vec::new();
         let mut words = arguments.iter();
         while let Some(word) = words.next() {
             let mut value = |name: &str| -> Result<String> {
@@ -94,6 +105,7 @@ impl Request {
             };
             match word.as_str() {
                 "--against" => request.against = Some(value("--against")?),
+                "--features" => bare.push(value("--features")?),
                 "-p" | "--package" => request.packages.push(value(word)?),
                 "--format" => {
                     request.format = match value("--format")?.as_str() {
@@ -112,14 +124,87 @@ impl Request {
                         request.against = Some(package.to_owned());
                     } else if let Some(package) = other.strip_prefix("--package=") {
                         request.packages.push(package.to_owned());
+                    } else if let Some(list) = other.strip_prefix("--features=") {
+                        bare.push(list.to_owned());
                     } else {
                         return Err(format!("unknown argument `{other}`\n\n{USAGE}"));
                     }
                 }
             }
         }
+        for list in &bare {
+            for feature in list.split([',', ' ']).filter(|word| !word.is_empty()) {
+                let named = match feature.split_once('/') {
+                    Some((package, feature)) if !package.is_empty() && !feature.is_empty() => {
+                        (package.to_owned(), feature.to_owned())
+                    }
+                    Some(_) => {
+                        return Err(format!(
+                            "`--features {feature}`: a feature is `CRATE/FEATURE`\n\n{USAGE}"
+                        ));
+                    }
+                    None => match request.packages.as_slice() {
+                        [package] => (package.clone(), feature.to_owned()),
+                        _ => {
+                            return Err(format!(
+                                "`--features {feature}`: which crate's? Write \
+                                 `CRATE/{feature}`, or name one crate with -p\n\n{USAGE}"
+                            ));
+                        }
+                    },
+                };
+                if !request.features.contains(&named) {
+                    request.features.push(named);
+                }
+            }
+        }
         Ok(request)
     }
+}
+
+/// One call of `cargo doc`: its crates, and its `--features` arguments.
+type DocCall = (Vec<String>, Vec<String>);
+
+/// The calls of `cargo doc` that document `libraries` with the features
+/// asked for: one for each crate that has a feature asked for, given as
+/// its bare names (cargo takes `--features CRATE/FEATURE` and turns
+/// nothing on for a package it was asked to document with `-p`: found
+/// when the tenth tooling step tried it), and one for the rest. Each call
+/// is its crates and its `--features` arguments. Also the features asked
+/// for of these crates that this tree's crate does not have, to be said:
+/// a feature the ref does not have yet is left off there.
+fn doc_calls(
+    libraries: &[&Library],
+    features: &[(String, String)],
+) -> (Vec<DocCall>, Vec<String>) {
+    let mut calls = Vec::new();
+    let mut rest = Vec::new();
+    let mut missing = Vec::new();
+    for library in libraries {
+        let mut on = Vec::new();
+        for (package, feature) in features
+            .iter()
+            .filter(|(package, _)| *package == library.package)
+        {
+            if library.features.iter().any(|known| known == feature) {
+                on.push(feature.clone());
+            } else {
+                missing.push(format!("{package}/{feature}"));
+            }
+        }
+        if on.is_empty() {
+            rest.push(library.package.clone());
+        } else {
+            calls.push((
+                vec![library.package.clone()],
+                vec!["--features".to_owned(), on.join(",")],
+            ));
+        }
+    }
+    if !rest.is_empty() {
+        calls.insert(0, (rest, Vec::new()));
+    }
+    (calls, missing)
 }
 
 /// A workspace crate with a library, in one tree.
@@ -254,10 +339,36 @@ const RUSTDOCFLAGS: &str = "-Z unstable-options --output-format json";
 
 /// Documents `libraries` of the tree at `tree` as JSON, building in
 /// `target`. The files are `target/doc/<library>.json`.
-fn document(tree: &Path, target: &Path, libraries: &[&Library], label: &str) -> Result<()> {
-    if libraries.is_empty() {
-        return Ok(());
+fn document(
+    tree: &Path,
+    target: &Path,
+    libraries: &[&Library],
+    features: &[(String, String)],
+    label: &str,
+) -> Result<()> {
+    let (calls, missing) = doc_calls(libraries, features);
+    for feature in &missing {
+        eprintln!("the {label} tree has no feature `{feature}`: documented without it there");
     }
+    for (names, asked) in &calls {
+        let chosen: Vec<&Library> = libraries
+            .iter()
+            .filter(|library| names.contains(&library.package))
+            .copied()
+            .collect();
+        document_once(tree, target, &chosen, asked, label)?;
+    }
+    Ok(())
+}
+
+/// One call of `cargo doc`, for `libraries` with the arguments `asked`.
+fn document_once(
+    tree: &Path,
+    target: &Path,
+    libraries: &[&Library],
+    asked: &[String],
+    label: &str,
+) -> Result<()> {
     let names: Vec<String> = libraries
         .iter()
         .map(|library| library.package.clone())
@@ -284,6 +395,7 @@ fn document(tree: &Path, target: &Path, libraries: &[&Library], label: &str) -> 
         command.args(["-p", name]);
     }
     command.args(&implied);
+    command.args(asked);
     command
         .current_dir(tree)
         .env("CARGO_TARGET_DIR", target)
@@ -364,8 +476,25 @@ fn report(root: &Path, request: &Request) -> Result<String> {
         .iter()
         .filter_map(|name| base_libraries.get(name))
         .collect();
-    document(root, &head_target, &in_head, "working")?;
-    document(&base, &base_target, &in_base, "base")?;
+    // A feature is one of the working tree's, of a crate compared.
+    for (package, feature) in &request.features {
+        if !chosen.contains(package) {
+            return Err(format!(
+                "`--features {package}/{feature}`: `{package}` is not among the crates compared"
+            ));
+        }
+        let known = head_libraries
+            .get(package)
+            .is_some_and(|library| library.features.iter().any(|known| known == feature));
+        if !known {
+            return Err(format!(
+                "`--features {package}/{feature}`: the working tree's `{package}` has no such \
+                 feature"
+            ));
+        }
+    }
+    document(root, &head_target, &in_head, &request.features, "working")?;
+    document(&base, &base_target, &in_base, &request.features, "base")?;
 
     let mut crates = Vec::new();
     for name in &chosen {
