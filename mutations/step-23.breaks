@@ -66,16 +66,16 @@ caught-by:
 rule: A dialog takes no key until its answers have been drawn, a grace after its first frame, whether or not anyone was typing: keys typed before they could see it are the editor's.
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::takes_keys
-find: self.answers_drawn && self.ready_at().is_some_and(|ready| at >= ready)
-replace: self.shown.is_some()
+find: self.ready.takes_keys(at)
+replace: self.ready.shown().is_some()
 caught-by:
     app::dialog::tests::in_its_grace_typing_passes_and_its_own_other_keys_do_nothing
     app::tests::a_window_too_small_for_the_question_and_its_answers_takes_none
 
 [break] typing-carries-on-into-a-dialog
 rule: Typing that carries on through a dialog's arrival never answers it: since the review of step 23 each key it does not take holds it a quiet second (the pause since the key before it was folded into that).
-file: crates/cortex-tui/src/app/dialog.rs
-in: Dialog::ready_at
+file: crates/cortex-tui/src/app/ready.rs
+in: Readiness::ready_at
 find: Some(self.typed.map_or(ready, |typed| ready.max(typed + QUIET)))
 replace: Some(ready)
 caught-by:
@@ -85,7 +85,7 @@ caught-by:
 rule: A dialog draws its answers only once they can be pressed, at the end of its grace.
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::view
-find: let ready = self.ready_at().is_some_and(|ready| now >= ready);
+find: let ready = self.ready.ready(now);
 replace: let ready = true;
 caught-by:
     app::tests::a_dialog_takes_keys_and_shows_its_answers_only_after_its_grace
@@ -164,7 +164,7 @@ caught-by:
 rule: A key read before a dialog's first frame was written never answers it.
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::takes_keys
-find: self.answers_drawn && self.ready_at().is_some_and(|ready| at >= ready)
+find: self.ready.takes_keys(at)
 replace: true
 caught-by:
     app::dialog::tests::in_its_grace_typing_passes_and_its_own_other_keys_do_nothing
@@ -186,8 +186,12 @@ in: App::submit
 find:
     if started {
         self.start_running(at);
+        self.panels_see(&Seen::Prompt);
     }
 replace:
+    if started {
+        self.panels_see(&Seen::Prompt);
+    }
 caught-by:
     app::tests::esc_right_after_enter_interrupts_and_a_second_within_two_seconds_stops_now
 
@@ -352,10 +356,10 @@ caught-by:
 
 [break] answers-counted-as-drawn-unseen
 rule: A dialog's answers count as drawn only once a frame with them has been drawn: a key cannot answer what was not shown, though the grace is over.
-file: crates/cortex-tui/src/app/dialog.rs
-in: Dialog::takes_keys
-find: self.answers_drawn && self.ready_at()
-replace: self.ready_at()
+file: crates/cortex-tui/src/app/ready.rs
+in: Readiness::takes_keys
+find: self.answers_drawn && self.ready(at)
+replace: self.ready(at)
 caught-by:
     app::tests::a_window_too_small_for_the_question_and_its_answers_takes_none
 
@@ -508,8 +512,8 @@ caught-by:
 rule: A dialog too small to show its answers asks for no frame for them: the loop is not kept busy.
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::deadline
-find: if self.answers_drawn || self.unreadable {
-replace: if self.answers_drawn {
+find: if self.ready.answers_drawn() || self.unreadable {
+replace: if self.ready.answers_drawn() {
 caught-by:
     app::tests::a_window_too_small_for_the_question_and_its_answers_takes_none
 

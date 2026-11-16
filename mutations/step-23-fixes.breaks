@@ -167,8 +167,8 @@ caught-by:
 
 [break] typing-through-a-dialog-answers-it
 rule: If anything reached the editor while a dialog was up, it takes no answer, and shows none, until a second with no input.
-file: crates/cortex-tui/src/app/dialog.rs
-in: Dialog::ready_at
+file: crates/cortex-tui/src/app/ready.rs
+in: Readiness::ready_at
 find: Some(self.typed.map_or(ready, |typed| ready.max(typed + QUIET)))
 replace: Some(self.typed.map_or(ready, |_| ready))
 caught-by:
@@ -237,7 +237,7 @@ caught-by:
 
 [break] the-grace-is-short
 rule: A dialog takes no key for 300 ms after its first frame.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cortex-tui/src/app/ready.rs
 find: pub(crate) const GRACE: Duration = Duration::from_millis(300);
 replace: pub(crate) const GRACE: Duration = Duration::from_millis(120);
 caught-by:
@@ -245,8 +245,8 @@ caught-by:
 
 [break] the-grace-is-not-restarted
 rule: After the program is continued (fg) or the external editor gives the terminal back, a dialog starts its grace again.
-file: crates/cortex-tui/src/app/dialog.rs
-in: Dialog::hide
+file: crates/cortex-tui/src/app/ready.rs
+in: Readiness::hide
 find: self.shown = None;
 replace: let _ = ();
 caught-by:
@@ -406,10 +406,10 @@ caught-by:
 
 [break] answers-stay-shown-over-typing
 rule: Input that reaches the editor after the answers were drawn hides them again: the dialog takes no key until a frame has drawn them again.
-file: crates/cortex-tui/src/app/dialog.rs
-in: Dialog::typed
-find: self.hide_answers();
-replace: let _ = ();
+file: crates/cortex-tui/src/app/ready.rs
+in: Readiness::typed
+find: self.hide_answers()
+replace: false
 caught-by:
     app::tests::a_choice_not_on_offer_is_not_taken
     app::tests::a_question_is_answered_by_the_digit_of_its_choice_or_left_unanswered
