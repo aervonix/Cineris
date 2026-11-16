@@ -299,6 +299,7 @@ impl Session {
             (
                 places(
                     &self.root(),
+                    parts.environment.start.as_deref(),
                     parts.user_dir.as_ref(),
                     &parts.settings.instruction_names,
                 ),
@@ -501,6 +502,7 @@ impl Session {
         let parts = &self.context.parts;
         let mut checked = places(
             &root,
+            parts.environment.start.as_deref(),
             parts.user_dir.as_ref(),
             &parts.settings.instruction_names,
         );

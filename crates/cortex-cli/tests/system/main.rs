@@ -262,6 +262,15 @@ impl Machine {
         Run::of(self.command(arguments).output().expect("the binary runs"))
     }
 
+    /// Runs the binary to its end in `dir`, a folder of the workspace.
+    pub fn run_in(&self, dir: &Path, arguments: &[&str]) -> Run {
+        let _running = cortex_testkit::profile::phase("the binary runs to its end");
+        fs::create_dir_all(dir).unwrap();
+        let mut command = self.command(arguments);
+        command.current_dir(dir);
+        Run::of(command.output().expect("the binary runs"))
+    }
+
     /// The server's next answer: a recorded Anthropic fixture of
     /// `cortex-llm`.
     pub fn reply_fixture(&self, name: &str) {

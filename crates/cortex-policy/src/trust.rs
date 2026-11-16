@@ -25,12 +25,14 @@
 //! `trust.toml` in the state directory:
 //!
 //! ```toml
-//! version = 1
+//! version = 2
 //!
 //! [[project]]
 //! key = "9f2c4a1b7d3e…"
 //! root = "~/work/app"
 //! trusted_at = "2026-11-13T10:15:02Z"
+//! git = "trusted"
+//! declined_rules = "0b7c…"
 //!
 //! [[project.pinned]]
 //! kind = "hook"
@@ -56,6 +58,25 @@
 //!   refusing it takes its trust away. A build from before step 23 does not
 //!   know the table, and so reads such a file as trusting nothing, which
 //!   fails safe.
+//! - **Whether git was shown is pinned** (version 2, since the follow-ups
+//!   of step 23, the owner's decision of 2026-11-16): `git = "trusted"`
+//!   when the person trusted the project, or approved what was new in it,
+//!   with git in the list, which it is in a repository; `git = "declined"`
+//!   when they chose to keep trusting it without git. Absent, git was never
+//!   shown, and a trusted folder that has since become a repository is
+//!   asked about again, git new. Until git is trusted it does not read the
+//!   repository's configuration ([`ProjectTrust::git_trusted`]).
+//! - **Rules a person kept trusting the project without** (version 2):
+//!   `declined_rules`, the hash of the project's rules as they were when the
+//!   person answered "keep trusting it, without the new rules". They stay
+//!   held back, and are not asked about again while they are those rules;
+//!   a further change asks again. Approving rules clears it.
+//! - **Versions.** This build writes version 2 and reads 1 and 2. A
+//!   version 1 file is read as it always meant, every project with git
+//!   never shown, and is written as version 2 at its next change. A build
+//!   that reads only version 1 refuses a version 2 file whole, by its
+//!   version (decision 0028's rule: a file a build cannot read in full is
+//!   not read in part), and so trusts nothing until it is updated.
 
 #![allow(
     clippy::disallowed_methods,
@@ -75,8 +96,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::store_lock;
 
-/// The version of the file's format this build writes and reads.
-const VERSION: u32 = 1;
+/// The version of the file's format this build writes.
+const VERSION: u32 = 2;
+
+/// The oldest version this build reads: version 1, which has no record of
+/// git or of declined rules.
+const OLDEST: u32 = 1;
 
 /// The largest file read.
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -273,6 +298,16 @@ struct Pin {
     hash: ContentHash,
 }
 
+/// What a person said of git in a trusted project (version 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum GitAnswer {
+    /// Git was shown and trusted.
+    Trusted,
+    /// Git was shown, and the person kept trusting the project without it.
+    Declined,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Project {
@@ -280,6 +315,14 @@ struct Project {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     root: String,
     trusted_at: Timestamp,
+    /// Absent: git was never shown (and every project of a version 1
+    /// file).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    git: Option<GitAnswer>,
+    /// The project's rules as they were when the person kept trusting it
+    /// without them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    declined_rules: Option<ContentHash>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pinned: Vec<Pin>,
 }
@@ -310,6 +353,8 @@ struct File {
 pub struct ProjectTrust {
     project: Option<Project>,
     refused: bool,
+    /// The file read was of an older version, which kept no record of git.
+    older: bool,
 }
 
 impl ProjectTrust {
@@ -330,6 +375,44 @@ impl ProjectTrust {
     #[must_use]
     pub fn is_refused(&self) -> bool {
         self.refused
+    }
+
+    /// Whether git may read the repository's own configuration: the
+    /// project is trusted, and git was shown and trusted (version 2 of the
+    /// store). A project trusted before git was pinned, or while it was
+    /// not a repository, has not had git shown.
+    #[must_use]
+    pub fn git_trusted(&self) -> bool {
+        self.project
+            .as_ref()
+            .is_some_and(|project| project.git == Some(GitAnswer::Trusted))
+    }
+
+    /// Whether the person kept trusting the project without git: it is not
+    /// asked about again.
+    #[must_use]
+    pub fn git_declined(&self) -> bool {
+        self.project
+            .as_ref()
+            .is_some_and(|project| project.git == Some(GitAnswer::Declined))
+    }
+
+    /// Whether the person kept trusting the project without exactly these
+    /// rules ([`Definition::of_project_rules`]): they stay held back, and
+    /// are not asked about again.
+    #[must_use]
+    pub fn rules_declined(&self, rules: &ProjectRules) -> bool {
+        let definition = Definition::of_project_rules(rules);
+        self.project
+            .as_ref()
+            .is_some_and(|project| project.declined_rules == Some(definition.hash))
+    }
+
+    /// Whether the store was of an older version, which kept no record of
+    /// whether git was shown: a session says why git is asked about again.
+    #[must_use]
+    pub fn from_older_store(&self) -> bool {
+        self.older
     }
 
     /// How a definition stands.
@@ -413,6 +496,7 @@ impl TrustStore {
         let file = self.read()?;
         let refused = file.refused.iter().any(|refused| refused.key == *key);
         Ok(ProjectTrust {
+            older: file.version < VERSION,
             project: file
                 .projects
                 .into_iter()
@@ -423,7 +507,9 @@ impl TrustStore {
 
     /// Trusts a project for exactly these definitions, replacing whatever
     /// was pinned for it before. `root` is the workspace root as it should
-    /// be shown to a person (`~/work/app`).
+    /// be shown to a person (`~/work/app`). `git_shown`: git was in what
+    /// the person was shown (the project is a repository), and so is
+    /// trusted with it.
     ///
     /// # Errors
     ///
@@ -434,31 +520,49 @@ impl TrustStore {
         key: &ProjectKey,
         root: &str,
         definitions: &[Definition],
+        git_shown: bool,
     ) -> Result<ProjectTrust, TrustError> {
         self.update(|file| {
-            file.projects.retain(|project| project.key != *key);
             // Trusting a project the user had refused lifts the refusal.
             file.refused.retain(|refused| refused.key != *key);
-            let project = Project {
-                key: key.clone(),
-                root: root.to_owned(),
-                trusted_at: self.clock.now().to_timestamp(),
-                pinned: pins_of(definitions),
-            };
-            file.projects.push(project.clone());
-            Ok((
-                ProjectTrust {
-                    project: Some(project),
-                    refused: false,
-                },
-                true,
-            ))
+            Ok((self.trusted_in(file, key, root, definitions, git_shown), true))
         })
+    }
+
+    /// Writes into `file` the project trusted for exactly `definitions`.
+    fn trusted_in(
+        &self,
+        file: &mut File,
+        key: &ProjectKey,
+        root: &str,
+        definitions: &[Definition],
+        git_shown: bool,
+    ) -> ProjectTrust {
+        file.projects.retain(|project| project.key != *key);
+        let project = Project {
+            key: key.clone(),
+            root: root.to_owned(),
+            trusted_at: self.clock.now().to_timestamp(),
+            git: git_shown.then_some(GitAnswer::Trusted),
+            declined_rules: None,
+            pinned: pins_of(definitions),
+        };
+        file.projects.push(project.clone());
+        ProjectTrust {
+            project: Some(project),
+            refused: false,
+            older: false,
+        }
     }
 
     /// Approves definitions of a project that is already trusted: new ones,
     /// and changed ones as they are now. Everything else that was pinned
-    /// stays.
+    /// stays. Rules kept out before are no longer when rules are approved
+    /// (a definition of kind `rules` among `definitions`): what is approved
+    /// now is what stands; an approval of git alone leaves them kept out
+    /// (the review of the follow-ups of step 23). `git_shown`: git was in
+    /// what the person was shown, and is trusted now; otherwise what was
+    /// said of git stays.
     ///
     /// # Errors
     ///
@@ -469,6 +573,7 @@ impl TrustStore {
         &self,
         key: &ProjectKey,
         definitions: &[Definition],
+        git_shown: bool,
     ) -> Result<ProjectTrust, TrustError> {
         self.update(|file| {
             let Some(project) = file.projects.iter_mut().find(|project| project.key == *key) else {
@@ -482,13 +587,94 @@ impl TrustStore {
                     .retain(|old| !(old.kind == pin.kind && old.name == pin.name));
                 project.pinned.push(pin);
             }
+            if definitions
+                .iter()
+                .any(|definition| definition.kind == TrustResourceKind::Rules)
+            {
+                project.declined_rules = None;
+            }
+            if git_shown {
+                project.git = Some(GitAnswer::Trusted);
+            }
             Ok((
                 ProjectTrust {
                     project: Some(project.clone()),
                     refused: false,
+                    older: false,
                 },
                 true,
             ))
+        })
+    }
+
+    /// Keeps trusting a project as it was trusted, without what is new in
+    /// it (since the follow-ups of step 23, the owner's decision of
+    /// 2026-11-16): `rules`, its rules as they are now, which stay held back
+    /// and are not asked about while they are these; `git`, git, which does
+    /// not read the repository's configuration and is not asked about
+    /// again. What was trusted before (pins, git) is not touched.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be read, is not understood, or cannot be
+    /// written; or when the project is not trusted.
+    pub fn keep_without(
+        &self,
+        key: &ProjectKey,
+        rules: Option<&Definition>,
+        git: bool,
+    ) -> Result<ProjectTrust, TrustError> {
+        self.update(|file| {
+            let Some(project) = file.projects.iter_mut().find(|project| project.key == *key) else {
+                return Err(self.not_understood(
+                    "the project is not trusted, so it cannot be kept trusted".to_owned(),
+                ));
+            };
+            if let Some(rules) = rules {
+                project.declined_rules = Some(rules.hash);
+            }
+            // Git trusted before stays trusted: only git never shown is
+            // declined.
+            if git && project.git != Some(GitAnswer::Trusted) {
+                project.git = Some(GitAnswer::Declined);
+            }
+            Ok((
+                ProjectTrust {
+                    project: Some(project.clone()),
+                    refused: false,
+                    older: false,
+                },
+                true,
+            ))
+        })
+    }
+
+    /// [`trust`](Self::trust), unless the project was marked never since it
+    /// was looked at: the answer to a project's first question, which a
+    /// never said meanwhile (by another client or process) outranks (the
+    /// review of the follow-ups of step 23). `cortex permissions trust`,
+    /// the person's own command, lifts a never with [`trust`](Self::trust).
+    ///
+    /// # Errors
+    ///
+    /// As [`trust`](Self::trust); and, writing nothing, when the project is
+    /// marked never.
+    pub fn trust_unless_refused(
+        &self,
+        key: &ProjectKey,
+        root: &str,
+        definitions: &[Definition],
+        git_shown: bool,
+    ) -> Result<ProjectTrust, TrustError> {
+        self.update(|file| {
+            if file.refused.iter().any(|refused| refused.key == *key) {
+                return Err(self.not_understood(
+                    "the project was marked never while it was asked about, so it is not \
+                     trusted"
+                        .to_owned(),
+                ));
+            }
+            Ok((self.trusted_in(file, key, root, definitions, git_shown), true))
         })
     }
 
@@ -626,18 +812,36 @@ impl TrustStore {
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let file: File = toml::from_str(text)
             .map_err(|error| self.not_understood(error.message().to_owned()))?;
-        if file.version != VERSION {
+        if !(OLDEST..=VERSION).contains(&file.version) {
             return Err(self.not_understood(format!(
-                "its version is {}, and this version of Cortex-Harness reads version {VERSION}",
+                "its version is {}, and this version of Cortex-Harness reads versions {OLDEST} \
+                 to {VERSION}",
                 file.version
             )));
+        }
+        // A version 1 file has no record of git or of declined rules: one
+        // that says it has is not one this build wrote.
+        if file.version < 2
+            && file
+                .projects
+                .iter()
+                .any(|project| project.git.is_some() || project.declined_rules.is_some())
+        {
+            return Err(self.not_understood(
+                "it is version 1, which has no `git` or `declined_rules`".to_owned(),
+            ));
         }
         Ok(file)
     }
 
     fn write(&self, file: &File) -> Result<(), TrustError> {
+        // Whatever version was read, what is written is this build's.
+        let file = File {
+            version: VERSION,
+            ..file.clone()
+        };
         // The directory was made when the lock was taken.
-        let text = toml::to_string(file).map_err(|error| {
+        let text = toml::to_string(&file).map_err(|error| {
             self.not_understood(format!("it could not be written out: {error}"))
         })?;
         let options = AtomicWriteOptions {
@@ -679,9 +883,12 @@ mod tests {
                 key: ProjectKey::new("k"),
                 root: String::new(),
                 trusted_at: Timestamp::new("2026-11-13T10:00:00Z"),
+                git: None,
+                declined_rules: None,
                 pinned: pins_of(definitions),
             }),
             refused: false,
+            older: false,
         }
     }
 
@@ -698,7 +905,7 @@ mod tests {
         let key = ProjectKey::new("k");
         assert!(!store.project(&key).unwrap().is_refused());
         // Refusing takes trust away.
-        store.trust(&key, "~/app", &[]).unwrap();
+        store.trust(&key, "~/app", &[], false).unwrap();
         store.refuse(&key, "~/app").unwrap();
         let refused = store.project(&key).unwrap();
         assert!(refused.is_refused() && !refused.is_trusted());
@@ -710,7 +917,7 @@ mod tests {
         );
         assert!(again.project(&key).unwrap().is_refused());
         // Trusting lifts it.
-        again.trust(&key, "~/app", &[]).unwrap();
+        again.trust(&key, "~/app", &[], false).unwrap();
         let trusted = again.project(&key).unwrap();
         assert!(trusted.is_trusted() && !trusted.is_refused());
         // Forgetting clears both.
@@ -843,15 +1050,15 @@ mod tests {
         let held = store.update(|_| Ok((is_held(&file), false))).unwrap();
         assert!(held, "the lock is held while the file is changed");
         assert!(!is_held(&file), "and let go after");
-        store.trust(&key, "~/x", &[]).unwrap();
-        store.approve(&key, &[]).unwrap();
+        store.trust(&key, "~/x", &[], false).unwrap();
+        store.approve(&key, &[], false).unwrap();
         assert!(store.revoke(&key).unwrap());
         assert!(!store.project(&key).unwrap().is_trusted());
         assert!(!is_held(&file));
 
         // A lock that cannot be taken stops every change, and no read: so
         // each change takes it. (A directory stands where the lock goes.)
-        store.trust(&key, "~/x", &[]).unwrap();
+        store.trust(&key, "~/x", &[], false).unwrap();
         let lock = crate::store_lock::lock_path(&file);
         std::fs::remove_file(&lock).unwrap();
         std::fs::create_dir(&lock).unwrap();
@@ -864,8 +1071,8 @@ mod tests {
                 "{result:?}"
             );
         };
-        refused(store.trust(&ProjectKey::new("other"), "~/y", &[]).map(drop));
-        refused(store.approve(&key, &[]).map(drop));
+        refused(store.trust(&ProjectKey::new("other"), "~/y", &[], false).map(drop));
+        refused(store.approve(&key, &[], false).map(drop));
         refused(store.revoke(&key).map(drop));
         assert!(store.project(&key).unwrap().is_trusted());
         assert_eq!(store.list().unwrap().len(), 1);

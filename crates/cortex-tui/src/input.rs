@@ -229,7 +229,7 @@ impl Input {
 
     /// The prompt the history search has found, if any.
     #[must_use]
-    pub fn search_found(&self) -> Option<&str> {
+    pub fn search_found(&self) -> Option<&Fragment> {
         let found = self.search.as_ref()?.found()?;
         self.history.get(found)
     }
@@ -848,7 +848,8 @@ impl Input {
                     return Outcome::Ignored(action);
                 };
                 if let Some(entry) = search.found().and_then(|found| self.history.get(found)) {
-                    let fragment = Fragment::text(entry);
+                    // As it was written: a chip comes back a chip.
+                    let fragment = entry.clone();
                     self.editor.set(fragment);
                     self.after_edit();
                 }
@@ -961,8 +962,10 @@ impl Input {
         if self.editor.expanded().trim().is_empty() {
             return Outcome::Nothing;
         }
-        let text = self.editor.take().expanded();
-        self.history.push(&text);
+        let prompt = self.editor.take();
+        let text = prompt.expanded();
+        // Kept as written, chips and all, within history's bounds.
+        self.history.push(&crate::history::kept(&prompt));
         self.steps.reset();
         self.menu = None;
         self.dismissed = None;

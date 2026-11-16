@@ -115,16 +115,34 @@ impl Fragment {
     /// The text with each chip replaced by what it stands for.
     #[must_use]
     pub fn expanded(&self) -> String {
-        expand(&self.text, &self.chips)
+        expand(&self.text, &self.chips, |chip| &chip.content)
+    }
+
+    /// The text with each chip replaced by its label: what the editor
+    /// shows of it, and what a search through history looks in.
+    #[must_use]
+    pub fn shown(&self) -> String {
+        expand(&self.text, &self.chips, |chip| &chip.label)
+    }
+
+    /// A fragment of `text`, whose n-th U+FFFC is the n-th of `chips`:
+    /// one kept whole and read back (the prompt history's file, since the
+    /// follow-ups of step 23). `None` when the marks and the chips do not
+    /// pair up.
+    #[must_use]
+    pub fn with_chips(text: impl Into<String>, chips: Vec<Chip>) -> Option<Self> {
+        let text = text.into();
+        (marks(&text) == chips.len()).then_some(Self { text, chips })
     }
 }
 
-/// `text` with the n-th chip mark replaced by the n-th chip's content.
-pub(crate) fn expand(text: &str, chips: &[Chip]) -> String {
+/// `text` with the n-th chip mark replaced by what `part` gives of the
+/// n-th chip.
+pub(crate) fn expand(text: &str, chips: &[Chip], part: impl Fn(&Chip) -> &str) -> String {
     if chips.is_empty() {
         return text.to_owned();
     }
-    let extra: usize = chips.iter().map(|chip| chip.content.len()).sum();
+    let extra: usize = chips.iter().map(|chip| part(chip).len()).sum();
     let mut out = String::with_capacity(text.len() + extra);
     let mut chips = chips.iter();
     for piece in text.split_inclusive(CHIP) {
@@ -132,7 +150,7 @@ pub(crate) fn expand(text: &str, chips: &[Chip]) -> String {
             Some(before) => {
                 out.push_str(before);
                 if let Some(chip) = chips.next() {
-                    out.push_str(&chip.content);
+                    out.push_str(part(chip));
                 }
             }
             None => out.push_str(piece),
@@ -198,7 +216,7 @@ impl Buffer {
 
     /// The whole text with every chip expanded.
     pub(crate) fn expanded(&self) -> String {
-        expand(&self.text, &self.chips)
+        expand(&self.text, &self.chips, |chip| &chip.content)
     }
 }
 

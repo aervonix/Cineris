@@ -24,6 +24,27 @@ fn a_paste_is_text_never_keys() {
     assert!(input.menu().is_none());
 }
 
+/// A prompt with a large paste is sent whole, kept in history as its chip
+/// cut to the cap, and recalled with `Up` as a chip, not as its text (the
+/// follow-ups of step 23: it was pushed expanded, whole).
+#[test]
+fn a_sent_paste_is_recalled_as_its_chip_kept_within_the_cap() {
+    let mut input = input_with("look at ");
+    let log = "a log line\n".repeat(10_000);
+    paste(&mut input, &log);
+    let Outcome::Submit { text, .. } = input.act(Action::Submit) else {
+        panic!("not sent");
+    };
+    assert_eq!(text, format!("look at {log}"), "sent whole");
+    input.act(Action::Up);
+    let recalled = input.editor().fragment();
+    assert_eq!(recalled.as_str(), "look at \u{FFFC}");
+    let chip = &recalled.chips()[0];
+    assert!(chip.content().len() <= cortex_tui::history::CHIP_KEEP);
+    assert!(log.starts_with(chip.content()));
+    assert_eq!(chip.label(), "[pasted 10,000 lines, first 64 KiB kept]");
+}
+
 #[test]
 fn a_paste_with_a_box_focused_goes_to_the_input() {
     let mut input = input_with("x");

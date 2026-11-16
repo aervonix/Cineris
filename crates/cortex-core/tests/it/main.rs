@@ -519,11 +519,36 @@ impl Front {
         info: ClientInfo,
         settings: SessionSettings,
     ) -> Result<Self, OpError> {
+        Self::start_where(world, core, info, settings, None).await
+    }
+
+    /// A session whose commands start in `cwd`, below the workspace root
+    /// (`session/new`'s `cwd`).
+    pub async fn start_in(world: &World, core: &Core, cwd: &std::path::Path) -> Self {
+        Self::start_where(
+            world,
+            core,
+            ClientInfo::user(),
+            SessionSettings::default(),
+            Some(cwd.to_str().unwrap().to_owned()),
+        )
+        .await
+        .expect("the session starts")
+    }
+
+    async fn start_where(
+        world: &World,
+        core: &Core,
+        info: ClientInfo,
+        settings: SessionSettings,
+        cwd: Option<String>,
+    ) -> Result<Self, OpError> {
         let _opening = cortex_testkit::profile::phase("connect and open a session");
         let client = core.connect(info);
         let open = core.handle(
             client.id,
             Op::SessionNew(SessionNewParams {
+                cwd,
                 workspace: world.workspace.to_str().unwrap().to_owned(),
                 settings,
                 title: None,

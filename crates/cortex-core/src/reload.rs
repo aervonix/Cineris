@@ -96,7 +96,7 @@ pub(crate) struct SessionConfig {
     reported: Option<String>,
     /// The rules of a yes the store could not keep, which trust for this
     /// session only holds to.
-    for_the_run: Option<cortex_policy::Definition>,
+    for_the_run: Option<crate::assemble::ForTheRun>,
     /// What waits for the next epoch as the loop was given it, kept so that
     /// a choice made in the session can take its roles out without building
     /// anything again.
@@ -171,7 +171,7 @@ impl SessionConfig {
         in_force: Arc<Loaded>,
         trusted: Trusted,
         standing: TrustStanding,
-        for_the_run: Option<cortex_policy::Definition>,
+        for_the_run: Option<crate::assemble::ForTheRun>,
         root: AbsPath,
         state: Option<cortex_config::StateDir>,
     ) -> Self {

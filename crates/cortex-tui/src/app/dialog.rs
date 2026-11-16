@@ -131,6 +131,9 @@ struct Shape {
     hidden: bool,
     detail_rows: usize,
     withheld: bool,
+    /// The trust question's line of what each answer does is left out: it
+    /// gives way before the detail, and takes no answer away.
+    unsaid: bool,
 }
 
 /// One dialog. See the [module documentation](self).
@@ -412,14 +415,18 @@ impl Dialog {
                 }
                 _ => unused(key),
             },
-            (Asks::Trust { .. }, action) if drawn(Pick::Act(action)) => match action {
+            (Asks::Trust { request }, action) if drawn(Pick::Act(action)) => match action {
                 Action::AllowOnce => Keyed::Answer(ServerResponse::Trust(TrustResponse {
                     trusted: true,
-                    never: false,
+                    ..TrustResponse::default()
                 })),
+                // The third answer: never, of a project not trusted; keep
+                // trusting it without what is new, of one trusted already
+                // (the follow-ups of step 23).
                 Action::Never => Keyed::Answer(ServerResponse::Trust(TrustResponse {
-                    trusted: false,
-                    never: true,
+                    never: !request.trusted,
+                    keep: request.trusted,
+                    ..TrustResponse::default()
                 })),
                 _ => unused(key),
             },
@@ -489,6 +496,7 @@ impl Dialog {
                     hidden: true,
                     detail_rows: usize::MAX,
                     withheld: false,
+                    unsaid: false,
                 },
                 width,
                 look,
@@ -557,6 +565,7 @@ impl Dialog {
                     answers: shape.answers.clone(),
                     answers_hidden: shape.hidden,
                     detail_rows: shape.detail_rows,
+                    unsaid: shape.unsaid,
                 },
                 width,
                 look,
@@ -599,6 +608,7 @@ impl Dialog {
             hidden: !ready,
             detail_rows: rows.max(LEAST_DETAIL),
             withheld: false,
+            unsaid: false,
         };
         // The note of what a lasting answer would allow gives way first, so
         // that the detail stays whole (no lasting answer is offered then),
@@ -612,6 +622,8 @@ impl Dialog {
             let room = fitted.detail.min(shape.detail_rows);
             if !shape.withheld && self.says_what_lasts() {
                 shape.withheld = true;
+            } else if !shape.unsaid && matches!(self.asks, Asks::Trust { .. }) {
+                shape.unsaid = true;
             } else if room > LEAST_DETAIL {
                 shape.detail_rows = room.saturating_sub(over).max(LEAST_DETAIL);
             } else {
@@ -716,13 +728,13 @@ impl Dialog {
                 }
                 answers
             }
-            Asks::Trust { .. } => {
+            Asks::Trust { request } => {
                 let mut answers = Vec::new();
                 if !clipped {
                     answers.push(act(Action::AllowOnce, "Trust it"));
                 }
                 answers.push(act(Action::Deny, "Not now"));
-                answers.push(act(Action::Never, "Never for this project"));
+                answers.push(act(Action::Never, dialog::third_trust_answer(request)));
                 answers
             }
             Asks::Question { request } if request.choices.is_empty() => vec![

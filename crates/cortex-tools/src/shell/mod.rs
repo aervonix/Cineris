@@ -91,6 +91,11 @@ pub struct ShellConfig {
     /// git ([`ChangeDetector::trusting_the_repository`]). Without trust it
     /// goes by modification times.
     pub repository_trusted: bool,
+    /// Where a command that names no `cwd` runs: a directory relative to
+    /// the workspace root, with `/` between names (the directory the
+    /// person started in, since the follow-ups of step 23). `None`, or one
+    /// that is no longer a directory: the root.
+    pub start: Option<String>,
 }
 
 impl Default for ShellConfig {
@@ -101,6 +106,7 @@ impl Default for ShellConfig {
             env_remove: Vec::new(),
             detect_changes: true,
             repository_trusted: false,
+            start: None,
         }
     }
 }
@@ -339,12 +345,27 @@ fn spec(shell: &Shell, config: &ShellConfig) -> ToolSpec {
     };
     let default_ms = millis(config.timeout);
     let max_ms = millis(config.max_timeout).max(1);
+    // Started at the root, the text is what it always was: the request's
+    // prefix, and so its cache, is unchanged.
+    let (runs_in, cwd_default) = match &config.start {
+        None => (
+            "the workspace root".to_owned(),
+            "The directory to run in. Defaults to the workspace root.".to_owned(),
+        ),
+        Some(start) => {
+            let start = cortex_base::visible(start);
+            (
+                format!("`{start}` (relative to the workspace root)"),
+                format!("The directory to run in. Defaults to `{start}`."),
+            )
+        }
+    };
     ToolSpec::new(
         "shell",
         format!(
             "Run a command in {} on {system}, and get back what it printed (standard output and \
              standard error together, in order) and its exit code.{syntax} The command runs in \
-             the workspace root unless `cwd` names another directory. It has no terminal and no \
+             {runs_in} unless `cwd` names another directory. It has no terminal and no \
              input, so it cannot ask a question: pass the flags that make a tool run without \
              one. It is stopped when it runs longer than `timeout_ms`. Nothing is left running: \
              a process the command starts in the background is stopped when the command exits, \
@@ -362,7 +383,7 @@ fn spec(shell: &Shell, config: &ShellConfig) -> ToolSpec {
                 "cwd": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "The directory to run in. Defaults to the workspace root."
+                    "description": cwd_default
                 },
                 "timeout_ms": {
                     "type": "integer",
@@ -430,9 +451,17 @@ impl Tool for ShellTool {
             .command_line(&arguments.command)
             .map_err(|refusal| ToolError::invalid(refusal.to_string()))?;
         let workspace = cx.paths.resolve(".")?;
-        let cwd = match &arguments.cwd {
-            Some(cwd) => cx.paths.resolve(cwd)?,
-            None => workspace.clone(),
+        let cwd = match (&arguments.cwd, &self.config.start) {
+            (Some(cwd), _) => cx.paths.resolve(cwd)?,
+            // Where the session started, while it is a directory inside
+            // the workspace; the root otherwise.
+            (None, Some(start)) => cx
+                .paths
+                .resolve(start)
+                .ok()
+                .filter(is_directory)
+                .unwrap_or_else(|| workspace.clone()),
+            (None, None) => workspace.clone(),
         };
         if !is_directory(&cwd) {
             return Err(ToolError::invalid(format!(
@@ -947,6 +976,53 @@ mod tests {
         assert!(
             !Arc::ptr_eq(&trusted, &tool.detector(&root)),
             "the detector of a trusted project was kept"
+        );
+    }
+
+    /// Started at the root, the tool's text is what it always was, to the
+    /// byte (the request's prefix and its cache); started below it, the
+    /// text and `cwd`'s say where a command runs (the follow-ups of step
+    /// 23).
+    #[test]
+    fn the_tools_text_names_where_commands_start_only_below_the_root() {
+        let at_root = spec(&Shell::new("bash"), &ShellConfig::default());
+        assert!(
+            at_root.description.contains(
+                "The command runs in the workspace root unless `cwd` names another directory."
+            ),
+            "{}",
+            at_root.description
+        );
+        assert_eq!(
+            at_root.parameters["properties"]["cwd"]["description"],
+            "The directory to run in. Defaults to the workspace root."
+        );
+        let below = spec(
+            &Shell::new("bash"),
+            &ShellConfig {
+                start: Some("src/deep".to_owned()),
+                ..ShellConfig::default()
+            },
+        );
+        assert!(
+            below.description.contains(
+                "The command runs in `src/deep` (relative to the workspace root) unless `cwd` \
+                 names another directory."
+            ),
+            "{}",
+            below.description
+        );
+        assert_eq!(
+            below.parameters["properties"]["cwd"]["description"],
+            "The directory to run in. Defaults to `src/deep`."
+        );
+        // Nothing else differs.
+        assert_eq!(
+            below.description.replace(
+                "`src/deep` (relative to the workspace root)",
+                "the workspace root"
+            ),
+            at_root.description
         );
     }
 

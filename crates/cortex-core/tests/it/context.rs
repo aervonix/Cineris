@@ -293,6 +293,90 @@ fn a_session_resumed_after_a_compaction_begins_from_its_summary() {
     assert_eq!(said[1], "again");
 }
 
+/// A session started below the workspace root (the binaries find the root
+/// by walking up since the follow-ups of step 23) says where its commands
+/// start, reads the instruction files from the root down to there, and a
+/// resumed session keeps both; one started at the root has no such line. A
+/// `cwd` outside the workspace is refused.
+#[test]
+fn a_session_started_below_the_root_says_where_commands_start_and_keeps_it() {
+    let world = World::new(
+        "start_below",
+        [says("One."), says("Two."), says("Three.")],
+    );
+    world.put("AGENTS.md", "Root instructions.");
+    world.put("src/deep/AGENTS.md", "Deep instructions.");
+    let core = world.core();
+    let session = world.run(async {
+        let front = Front::start_in(&world, &core, &world.workspace.join("src/deep")).await;
+        front.turn("go").await;
+        front.close().await;
+        front.session.clone()
+    });
+    let line = "- Commands start in: src/deep (relative to the workspace;";
+    let system = world.provider.requests()[0].system.clone();
+    assert!(system.contains(line), "{system}");
+    assert!(system.contains("Root instructions."), "{system}");
+    assert!(system.contains("Deep instructions."), "{system}");
+    // A second run of the program resumes it: the same.
+    let core = world.core();
+    world.run(async {
+        let client = core.connect(cortex_core::ClientInfo::user());
+        let opened = core
+            .handle(
+                client.id,
+                Op::SessionOpen(SessionRef {
+                    session_id: session.clone(),
+                }),
+            )
+            .await
+            .unwrap();
+        let cortex_protocol::methods::OpResult::SessionOpen(opened) = opened else {
+            panic!("not the result of session/open");
+        };
+        let front = Front {
+            core: core.clone(),
+            client,
+            session: session.clone(),
+            state: opened.session,
+            seen: std::cell::RefCell::default(),
+            answered: std::cell::RefCell::default(),
+            answering: std::cell::RefCell::default(),
+        };
+        front.turn("again").await;
+        front.close().await;
+    });
+    let resumed = world.provider.requests().pop().unwrap();
+    assert!(resumed.system.contains(line), "{}", resumed.system);
+    // Started at the root: no such line, and the deeper file is not read.
+    world.run(async {
+        let front = Front::start(&world, &world.core()).await;
+        front.turn("root").await;
+        front.close().await;
+    });
+    let at_root = world.provider.requests().pop().unwrap();
+    assert!(!at_root.system.contains("Commands start in"), "{}", at_root.system);
+    assert!(!at_root.system.contains("Deep instructions."));
+    // Outside the workspace: refused.
+    let outside = world.run(async {
+        let core = world.core();
+        let client = core.connect(cortex_core::ClientInfo::user());
+        core.handle(
+            client.id,
+            Op::SessionNew(cortex_protocol::methods::SessionNewParams {
+                cwd: Some(world.home.to_str().unwrap().to_owned()),
+                workspace: world.workspace.to_str().unwrap().to_owned(),
+                settings: cortex_protocol::session::SessionSettings::default(),
+                title: None,
+                config: serde_json::Map::new(),
+                ephemeral: true,
+            }),
+        )
+        .await
+    });
+    assert_eq!(outside.expect_err("refused").code, "invalid_cwd");
+}
+
 /// A rule that lets the agent read a directory outside the workspace does
 /// not make a link to it a project's instruction file: the project's are
 /// the project's own.

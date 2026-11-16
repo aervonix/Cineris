@@ -42,6 +42,7 @@ fn request(id: i64, method: &str, params: Value) -> Vec<u8> {
 
 fn new_session(world: &World) -> Op {
     Op::SessionNew(SessionNewParams {
+        cwd: None,
         workspace: world.workspace.to_str().unwrap().to_owned(),
         settings: cortex_protocol::session::SessionSettings::default(),
         title: None,

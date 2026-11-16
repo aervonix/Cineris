@@ -462,6 +462,7 @@ fn a_supervisor_cannot_start_a_session_above_the_level_it_could_set() {
                 .handle(
                     client.id,
                     Op::SessionNew(cortex_protocol::methods::SessionNewParams {
+                        cwd: None,
                         workspace: workspace.to_str().unwrap().to_owned(),
                         settings,
                         title: None,

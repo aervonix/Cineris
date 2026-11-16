@@ -185,6 +185,13 @@ pub struct SessionResult {
 pub struct SessionNewParams {
     /// The workspace root: an absolute path on the server's machine.
     pub workspace: String,
+    /// Where the session's commands start when they name no directory: an
+    /// absolute path inside `workspace` (the directory the person started
+    /// the harness in, below the root it found). Absent: the root. Kept in
+    /// the session's log, so that a resumed session starts there too (since
+    /// the follow-ups of step 23).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     /// The settings to start with. Anything absent comes from configuration.
     #[serde(default)]
     pub settings: SessionSettings,
@@ -1048,6 +1055,12 @@ pub struct TrustRequest {
     pub workspace: String,
     /// What it asks to be trusted with.
     pub resources: Vec<TrustResource>,
+    /// The project is trusted already, and the question is about what is
+    /// new in it: its rules changed (each resource marked `changed`), or
+    /// git, now that it is a repository. `never` is not an answer to it;
+    /// `keep` is (since the follow-ups of step 23).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub trusted: bool,
 }
 
 /// The answer to `trust/request`.
@@ -1064,6 +1077,14 @@ pub struct TrustResponse {
     /// (`invalid_answer`), and the question stays open.
     #[serde(default, skip_serializing_if = "is_false")]
     pub never: bool,
+    /// With `trusted` false, to a question about a project trusted already
+    /// (the request's `trusted`): keep trusting it as it was, without what
+    /// is new, and remember that, so that what is new is not asked about
+    /// again while it stays as it is (since the follow-ups of step 23). An
+    /// answer with `keep` and `trusted` or `never`, `keep` to a project not
+    /// trusted, or `never` to one trusted, is refused (`invalid_answer`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub keep: bool,
 }
 
 // ------------------------------------------------------- the method tables

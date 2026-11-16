@@ -443,6 +443,11 @@ pub struct Header {
     /// Where the session was forked from, if it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<ForkOrigin>,
+    /// Where its commands start when they name no directory: relative to
+    /// the workspace root, with `/` between names. Absent: the root (since
+    /// the follow-ups of step 23; an older log has none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
 }
 
 /// Where a forked session came from.
@@ -1341,6 +1346,7 @@ mod tests {
         round_trip(Body::Session(Header {
             session: "s_1".into(),
             workspace: "/w".into(),
+            start: Some("src/deep".into()),
             harness: "0.0.0".into(),
             forked_from: Some(ForkOrigin {
                 session: "s_0".into(),

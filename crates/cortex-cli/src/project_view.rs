@@ -315,26 +315,6 @@ pub(crate) fn each_once(ids: Vec<EntryId>) -> Vec<EntryId> {
     once
 }
 
-/// A line of JSON made safe at a terminal, and still JSON: every character
-/// that acts unseen (a C1 control, a bidirectional control, a tag
-/// character: JSON's own escaping passes them) is written as a `\u`
-/// escape, in two halves above the basic plane. Such a character can only
-/// be inside a string of the JSON, where the escape means the same.
-pub(crate) fn json_line(json: &str) -> String {
-    let mut line = String::with_capacity(json.len());
-    for character in json.chars() {
-        if cortex_base::acts_unseen(character) {
-            let mut halves = [0_u16; 2];
-            for half in character.encode_utf16(&mut halves) {
-                let _ = write!(line, "\\u{half:04x}");
-            }
-        } else {
-            line.push(character);
-        }
-    }
-    line
-}
-
 #[cfg(test)]
 mod tests {
     use cortex_protocol::ids::Timestamp;
@@ -699,7 +679,7 @@ In use:
     fn the_json_line_is_json_and_shows_what_acts_unseen() {
         let text = "a\u{202e}b\u{9b}2Jc\u{e0041}d\u{1b}[0m \"quoted\" \\ é 日本 😀\u{7f}";
         let value = vec![entry("k_1", EntryKind::Fact, EntryStatus::Active, text)];
-        let line = json_line(&serde_json::to_string(&value).unwrap());
+        let line = crate::json::line(&serde_json::to_string(&value).unwrap());
         assert!(!line.contains('\n'));
         assert!(
             !line.chars().any(cortex_base::acts_unseen),

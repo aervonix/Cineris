@@ -145,6 +145,23 @@ impl Session {
         workspace: &AbsPath,
         options: SessionOptions,
     ) -> Result<Self> {
+        Self::create_starting_in(project, id, workspace, None, options)
+    }
+
+    /// [`create`](Self::create), with where the session's commands start
+    /// when they name no directory: `start`, relative to the workspace root
+    /// with `/` between names ([`Header::start`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`create`](Self::create).
+    pub fn create_starting_in(
+        project: &ProjectSessions,
+        id: SessionId,
+        workspace: &AbsPath,
+        start: Option<String>,
+        options: SessionOptions,
+    ) -> Result<Self> {
         let dir = project
             .session(&id)
             .ok_or_else(|| SessionError::Invalid(format!("`{id}` cannot be a session id")))?;
@@ -160,6 +177,7 @@ impl Session {
                 workspace: workspace.as_str().to_owned(),
                 harness: options.harness.clone(),
                 forked_from: None,
+                start,
             },
             options,
         ))
@@ -941,6 +959,7 @@ impl Log {
                     session: self.header.session.clone(),
                     entry: end,
                 }),
+                start: self.header.start.clone(),
             }),
         };
         let mut content = entry::encode(&header, &*options.redactor)?;

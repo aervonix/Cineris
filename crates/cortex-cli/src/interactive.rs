@@ -99,13 +99,16 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
         return exit::USAGE;
     }
     let env = Env::from_process();
-    let workspace = match std::env::current_dir() {
-        Ok(directory) => directory,
+    // The workspace root, found by walking up; the working directory below
+    // it is where commands start.
+    let here = match crate::workspace::Here::now() {
+        Ok(here) => here,
         Err(error) => {
             eprintln!("{name}: the working directory could not be read: {error}");
             return exit::USAGE;
         }
     };
+    let workspace = here.root.clone();
 
     // The user's configuration: the interface's own settings come from it,
     // and the core is given it rather than reading it again.
@@ -152,6 +155,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     let settings = tui_settings(&loaded.settings.tui, &mut notices);
     let (keymap, errors) = keymap(&loaded.settings.keys);
     notices.extend(errors);
+    notices.extend(here.passed_over_said());
     let overrides = overrides(&loaded.settings.terminal);
     let folder = shown_folder(&workspace, env.home().as_deref());
     let open = open(&run, &workspace);
@@ -171,6 +175,10 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
                 version: crate::VERSION.to_owned(),
                 folder,
                 workspace: root,
+                cwd: here
+                    .cwd
+                    .as_ref()
+                    .map(|cwd| cwd.to_string_lossy().into_owned()),
                 open,
                 prompt,
                 settings,
