@@ -30,6 +30,7 @@ pub mod menu;
 
 // Step 23: the application's dialogs.
 pub mod dialog;
+pub mod viewer;
 
 pub use blocks::{error, listing, notice, reasoning, reasoning_live, turn_summary, user};
 pub use header::{Header, header};

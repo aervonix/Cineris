@@ -23,6 +23,7 @@ use cortex_protocol::{ErrorData, SessionEvent, SessionId, Speed};
 use cortex_term::{Capabilities, Cursor, Event as TermEvent, Line};
 
 mod commands;
+mod viewer;
 
 use commands::{Picker, Shown};
 
@@ -34,7 +35,7 @@ use crate::complete::Command;
 use crate::editor::Fragment;
 use crate::focus::Target;
 use crate::input::{Delivery, Input, Outcome, SendMode};
-use crate::transcript::{Block, Transcript};
+use crate::transcript::{Block, Committed, Transcript};
 use crate::view::{self, Header, Hint, HintRow, Look, RunningKeys};
 
 /// The window in which a second interrupt is "stop now"
@@ -152,14 +153,20 @@ pub struct App {
     caps: Capabilities,
     /// The picker the application opened, and what its rows stand for.
     picker: Option<(String, Picker)>,
-    /// Every line committed to the scrollback so far, for the viewer.
-    kept: Vec<Line>,
+    /// Everything committed to the scrollback so far, for the viewer: each
+    /// finished round kept as a round, which it draws again as a box.
+    kept: Vec<Committed>,
+    /// The time zone the viewer's title says the session's start in,
+    /// read when the viewer first opens.
+    zone: Option<cortex_base::Zone>,
+    /// The first and the last turn the transcript holds, for the viewer's
+    /// title.
+    turns: Option<(u64, u64)>,
     /// A stored session's history is being read: its events wait, and
     /// those it already holds (`seq` up to the read's) are dropped.
     reading: bool,
-    /// The viewer, while it is open: how many rows up from the end it is
-    /// scrolled.
-    viewer: Option<usize>,
+    /// The viewer, while it is open.
+    viewer: Option<viewer::Viewer>,
     /// The person asked for the external editor (`Ctrl+G`).
     editor_wanted: bool,
     /// The settings `/new` opens a session with, and whether it is kept in
@@ -262,6 +269,8 @@ impl App {
             caps: *caps,
             picker: None,
             kept: Vec::new(),
+            zone: None,
+            turns: None,
             viewer: None,
             editor_wanted: false,
             reading: false,
@@ -410,62 +419,6 @@ impl App {
         self.viewer.is_some()
     }
 
-    /// The viewer's screen, `rows` rows of `width` columns: the session as
-    /// committed so far, then what is live, from where it is scrolled, and
-    /// a row of its keys.
-    pub fn viewer_frame(&mut self, rows: usize, width: usize, now: Instant) -> Vec<Line> {
-        let since = now.saturating_duration_since(self.began).as_millis();
-        self.tick = usize::try_from(since / super::SPIN.as_millis()).unwrap_or(0);
-        let mut all = self.kept.clone();
-        all.extend(self.transcript.live(width.max(1), &self.look, self.tick));
-        let body = rows.saturating_sub(1).max(1);
-        let most = all.len().saturating_sub(body);
-        let offset = self.viewer.unwrap_or(0).min(most);
-        self.viewer = Some(offset);
-        let end = all.len() - offset;
-        let start = end.saturating_sub(body);
-        let mut lines: Vec<Line> = all[start..end].to_vec();
-        while lines.len() < body {
-            lines.push(Line::new());
-        }
-        lines.push(Line::styled(
-            format!(
-                "  up down pgup pgdn home end · q or esc closes · {} of {} lines",
-                end,
-                all.len()
-            ),
-            self.look.theme.style(crate::theme::Token::Muted),
-        ));
-        lines
-    }
-
-    /// A key while the viewer is open: it scrolls, or closes it. Global
-    /// keys keep their meaning.
-    fn viewer_key(&mut self, key: cortex_term::Key, at: Instant) -> bool {
-        use cortex_term::KeyCode;
-        if let Some(action @ (crate::keys::Action::Interrupt | crate::keys::Action::Redraw)) =
-            self.input.keymap().lookup(&[], key)
-        {
-            let outcome = self.input.act(action);
-            self.outcome(outcome, at);
-            return true;
-        }
-        let page = self.rows.saturating_sub(2).max(1);
-        let offset = self.viewer.unwrap_or(0);
-        self.viewer = match key.code {
-            KeyCode::Up | KeyCode::Char('k') => Some(offset + 1),
-            KeyCode::Down | KeyCode::Char('j') => Some(offset.saturating_sub(1)),
-            KeyCode::PageUp => Some(offset + page),
-            KeyCode::PageDown => Some(offset.saturating_sub(page)),
-            KeyCode::Home | KeyCode::Char('g') => Some(usize::MAX),
-            KeyCode::End | KeyCode::Char('G') => Some(0),
-            KeyCode::Esc | KeyCode::Char('q') => None,
-            KeyCode::Char('o') if key.mods.contains(cortex_term::Mods::CTRL) => None,
-            _ => Some(offset),
-        };
-        true
-    }
-
     /// When the application must draw again whatever else happens: the end
     /// of an open dialog's grace, when its answers appear, until a frame
     /// with them has been drawn. The time may have passed, and a frame is
@@ -598,7 +551,7 @@ impl App {
             Outcome::Toggled(name, on) => self.toggled(&name, on),
             Outcome::Removed(name, index) => self.removed(&name, index),
             Outcome::PickerClosed(_) => self.picker = None,
-            Outcome::OpenViewer => self.viewer = Some(0),
+            Outcome::OpenViewer => self.open_viewer(None),
             Outcome::ExternalEditor => self.editor_wanted = true,
             _ => {}
         }
@@ -1065,6 +1018,14 @@ impl App {
             if incomplete {
                 continue;
             }
+            // Each prompt began a turn, a queued one too, and a steering
+            // message did not: the history's turns are counted from one.
+            if let cortex_protocol::Item::UserMessage(message) = &item
+                && message.delivery.as_ref() != Some(&ItemDelivery::Steer)
+            {
+                let number = self.turns.map_or(1, |(_, last)| last + 1);
+                self.note_turn(number);
+            }
             self.mapper.event(
                 &mut self.transcript,
                 &Event::ItemCompleted(cortex_protocol::event::ItemCompleted { item }),
@@ -1139,6 +1100,13 @@ impl App {
         }
         match &event.event {
             Event::TurnStarted(_) => {
+                if let Some(number) = event
+                    .turn_id
+                    .as_ref()
+                    .and_then(|turn| turn.as_str().strip_prefix("t_")?.parse().ok())
+                {
+                    self.note_turn(number);
+                }
                 self.had_turn = true;
                 self.start_running(now);
             }
@@ -1223,8 +1191,12 @@ impl App {
             .set_now(now.saturating_duration_since(self.began));
         let boxes = self.mapper.live_rounds(&mut self.transcript);
         self.input.focus_mut().update(&boxes, &[]);
-        let commit = self.transcript.commit(width, &self.look);
-        self.kept.extend(commit.iter().cloned());
+        let parts = self.transcript.commit_parts(width, &self.look);
+        let commit: Vec<Line> = parts
+            .iter()
+            .flat_map(|part| part.lines().iter().cloned())
+            .collect();
+        self.kept.extend(parts);
         let mut live = self.transcript.live(width, &self.look, self.tick);
 
         // The bottom: a dialog in the input box's place, or the input box

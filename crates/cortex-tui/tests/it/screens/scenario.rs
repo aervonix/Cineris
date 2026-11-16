@@ -2,12 +2,15 @@
 //! turn 3 in a Rust workspace, where the agent fixes digit separators in a
 //! lexer, runs the tests, sees one fail, and streams the fix while the user
 //! types a steering message. Each screen is composed from the real views as
-//! the interactive application will compose them: this step's, and step
-//! 21's input box and menus. The rows other steps draw are marked as not
-//! built yet, with the step that builds them.
+//! the interactive application will compose them: step 22's views, step
+//! 21's input box and menus, and step 23's dialogs, placeholder and viewer
+//! frame. The rows other steps draw (the panels) are marked as not built
+//! yet, with the step that builds them.
 
 use std::time::Duration;
 
+use cortex_protocol::methods::{ApprovalDetail, ApprovalRequest, CommandDetail, DiffDetail};
+use cortex_protocol::{CallId, SessionId, TurnId};
 use cortex_term::{ColorDepth, Event, Key, KeyCode, Line};
 use cortex_tui::complete::{Menu, Row as Choice, Toggle};
 use cortex_tui::glyphs::Glyphs;
@@ -18,6 +21,8 @@ use cortex_tui::keys::KeyMap;
 use cortex_tui::markdown::Markdown;
 use cortex_tui::theme::{Rgb, Theme};
 use cortex_tui::transcript::{Block, Reasoning, Transcript};
+use cortex_tui::view::dialog::{Answer, ApprovalView};
+use cortex_tui::view::viewer::{ViewerKeys, ViewerTitle};
 use cortex_tui::view::{
     self, Call, CallState, Change, Detail, DiffLine, Header, Hint, HintRow, Look, Measure,
     Placement, Round, RunningKeys, Speed, Target,
@@ -375,14 +380,45 @@ impl Compose<'_> {
         self.lines(view::input::input(input, self.look, self.width).lines);
     }
 
-    /// The input box empty, where the reference shows what step 21's box
-    /// does not say: its borders, and its row not built.
-    fn input_unsaid(&mut self) {
-        let lines = view::input::input(&prompt("", self.width), self.look, self.width).lines;
-        let [top, _, bottom] = <[Line; 3]>::try_from(lines).expect("an empty box is three rows");
-        self.rows.push(Row::Built(top));
-        self.not_built(1, UNSAID);
-        self.rows.push(Row::Built(bottom));
+    /// The input box empty while a turn runs: its placeholder says typing
+    /// steers the turn, or, with the focus on a box (`Ctrl+P`), it holds
+    /// its mark alone.
+    fn input_running(&mut self, focus_elsewhere: bool) {
+        let mut input = prompt("", self.width);
+        input.set_running(true);
+        if focus_elsewhere {
+            input.focus_mut().update(&[1], &[]);
+            input.focus_mut().advance();
+        }
+        self.input(&input);
+    }
+
+    /// An approval dialog for `request`, every answer on offer, as the
+    /// application draws it: the dialog, then a blank row above the hint.
+    fn approval(&mut self, request: &ApprovalRequest, diff: &[DiffLine], answers: &[(&str, &str)]) {
+        let leaving = view::dialog::outside_sandbox(request);
+        let drawn = view::dialog::approval(
+            request,
+            &ApprovalView {
+                answers: answers
+                    .iter()
+                    .map(|(key, label)| Answer {
+                        key: (*key).to_owned(),
+                        label: (*label).to_owned(),
+                    })
+                    .collect(),
+                answers_hidden: false,
+                diff,
+                detail_rows: usize::MAX,
+                note: None,
+                leaving,
+                withheld: false,
+            },
+            self.width,
+            self.look,
+        );
+        self.lines(drawn.lines);
+        self.rows.push(Row::Built(Line::new()));
     }
 
     /// Step 21's menu, open in `input`, in the hint row's place.
@@ -451,14 +487,109 @@ fn effort_picker() -> Menu {
     )
 }
 
+/// The request of screen 2a: an edit of a protected file, with its reason.
+fn ci_edit() -> ApprovalRequest {
+    request(
+        "edit",
+        "Edit .github/workflows/ci.yml",
+        ApprovalDetail::Diff(DiffDetail {
+            path: ".github/workflows/ci.yml".to_owned(),
+            diff: String::new(),
+            omitted: None,
+        }),
+        vec!["CI configuration is protected, so a change to it always asks.".to_owned()],
+    )
+}
+
+/// Its diff, as the application reads it from the request's.
+fn ci_diff() -> Vec<DiffLine> {
+    let line = |number, change, text: &str, emphasis: Vec<std::ops::Range<usize>>| DiffLine {
+        number,
+        change,
+        text: text.to_owned(),
+        emphasis,
+    };
+    vec![
+        line(
+            29,
+            Change::Same,
+            "      - uses: dtolnay/rust-toolchain@stable",
+            Vec::new(),
+        ),
+        line(
+            30,
+            Change::Removed,
+            "        with: { components: rustfmt }",
+            Vec::new(),
+        ),
+        line(
+            30,
+            Change::Added,
+            "        with: { components: rustfmt, clippy }",
+            std::iter::once(35..43).collect(),
+        ),
+        line(
+            31,
+            Change::Same,
+            "      - run: cargo test --workspace",
+            Vec::new(),
+        ),
+        line(
+            32,
+            Change::Added,
+            "      - run: cargo clippy --workspace -- -D warnings",
+            Vec::new(),
+        ),
+    ]
+}
+
+/// The request of screen 2b: a command that needs the network, to run
+/// outside the sandbox.
+fn publish_outside() -> ApprovalRequest {
+    request(
+        "shell",
+        "Run cargo publish --dry-run -p parser",
+        ApprovalDetail::Command(CommandDetail {
+            command: "cargo publish --dry-run -p parser".to_owned(),
+            cwd: "crates/parser".to_owned(),
+            outside_sandbox: true,
+        }),
+        Vec::new(),
+    )
+}
+
+fn request(
+    tool: &str,
+    summary: &str,
+    detail: ApprovalDetail,
+    reasons: Vec<String>,
+) -> ApprovalRequest {
+    ApprovalRequest {
+        session_id: SessionId::from("s_screens"),
+        turn_id: TurnId::from("t_3"),
+        call_id: CallId::from("c_1"),
+        tool: tool.to_owned(),
+        summary: summary.to_owned(),
+        detail,
+        choices: Vec::new(),
+        reasons,
+        adds: Vec::new(),
+    }
+}
+
+/// The viewer's title in screens 8a and 8b.
+fn viewer_title() -> ViewerTitle {
+    ViewerTitle {
+        folder: "~/src/parser".to_owned(),
+        began: Some("14:02".to_owned()),
+        turns: Some((2, 3)),
+    }
+}
+
 /// What the steering message says.
 const STEER: &str = "also run clippy when that's done";
 
-const UNSAID: &str =
-    "the input box's placeholder while a turn runs, or with the focus elsewhere (not built)";
-const DIALOG: &str = "dialog (step 23)";
 const PANELS: &str = "panels (step 24)";
-const VIEWER: &str = "viewer's title, rules and keys (step 23)";
 
 /// The screen `spec` on `background`.
 pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
@@ -495,7 +626,7 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
                 finished: false,
             }));
             screen.transcript(&mut transcript, 3);
-            screen.input_unsaid();
+            screen.input_running(false);
             screen.hint(&hint(running(3, 3), true));
         }
         "1c" | "1d" => {
@@ -506,7 +637,7 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
             }
             transcript.push(Block::Round(live));
             screen.transcript(&mut transcript, 2);
-            screen.input_unsaid();
+            screen.input_running(false);
             screen.hint(&hint(running(9, 2), true));
         }
         "2a" | "2b" => {
@@ -542,7 +673,25 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
                 "The dry run has to reach crates.io, and the sandbox has no network. I'll ask to run it outside the sandbox."
             }));
             screen.transcript(&mut transcript, 0);
-            screen.not_built(if spec.id == "2a" { 11 } else { 10 }, DIALOG);
+            if spec.id == "2a" {
+                screen.approval(
+                    &ci_edit(),
+                    &ci_diff(),
+                    &[
+                        ("y", "Allow once"),
+                        ("s", "Allow this session"),
+                        ("a", "Always allow here"),
+                        ("n", "Deny"),
+                        ("e", "Deny with a note"),
+                    ],
+                );
+            } else {
+                screen.approval(
+                    &publish_outside(),
+                    &[],
+                    &[("y", "Run once outside the sandbox"), ("n", "Deny")],
+                );
+            }
             screen.hint(&hint(
                 Hint::Keys(vec![
                     "esc denies".to_owned(),
@@ -580,7 +729,7 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
             screen.transcript(&mut transcript, 0);
             screen.not_built(6, PANELS);
             screen.not_built(1, PANELS);
-            screen.input_unsaid();
+            screen.input_running(true);
             screen.hint(&hint(
                 Hint::Running {
                     elapsed: Duration::from_secs(14),
@@ -628,7 +777,7 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
         }
         "8a" | "8b" => {
             let open = spec.id == "8b";
-            screen.not_built(2, VIEWER);
+            screen.lines(view::viewer::title(&viewer_title(), width, &look));
             let blank = || vec![Line::new()];
             screen.lines(view::user(
                 "Run the tests and the formatter before I start on the lexer.",
@@ -715,7 +864,15 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
             );
             lines.extend(whole.commit(width, &look));
             screen.lines(lines);
-            screen.not_built(2, VIEWER);
+            screen.lines(view::viewer::keys(
+                &ViewerKeys::Boxes {
+                    selected: 2,
+                    count: 2,
+                    open,
+                },
+                width,
+                &look,
+            ));
             screen.live_from = 0;
         }
         other => panic!("no screen {other}"),

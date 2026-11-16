@@ -184,7 +184,7 @@ impl App {
                     Menu::picker("theme", rows, current, None),
                 );
             }
-            "view" => self.viewer = Some(0),
+            "view" => self.open_viewer(rest.trim().parse().ok()),
             _ => {}
         }
     }
