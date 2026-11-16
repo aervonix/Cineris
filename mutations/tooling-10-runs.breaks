@@ -34,7 +34,6 @@ caught-by:
 [break] ab-label-is-the-whole-hash
 rule: An A/B's report calls a base given by its hash by the first twelve digits.
 file: xtask/src/try_run.rs
-in: label_of
 find: against[..12].to_owned()
 replace: against.to_owned()
 caught-by:
@@ -167,9 +166,9 @@ caught-by:
 [break] records-to-a-branch-checked-out
 rule: commit-records refuses a branch that a worktree has checked out.
 file: xtask/src/branch.rs
-in: commit_records
-find: *checked == reference
-replace: false
+in: Holds::uses
+find: .and_then(|head| head.strip_prefix("ref: ")) == Some(reference)
+replace: .and_then(|head| head.strip_prefix("ref: ")) == Some("refs/heads/none of them")
 caught-by:
     branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
 
@@ -214,10 +213,11 @@ caught-by:
 [break] rewrite-backup-holds-the-new-tip
 rule: The backup ref holds the branch's old tip.
 file: xtask/src/branch.rs
-in: rewrite
-in-string: create {name} {old}
-replace: create {name} {new}
+in: move_transaction
+in-string: create {backup} {old}
+replace: create {backup} {new}
 caught-by:
+    branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
     branch::tests::sys_records_reach_a_branch_not_checked_out_and_a_fold_rewrites_only_the_current_one
     branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
 
@@ -274,3 +274,124 @@ in: rewrite
 find: index: Some(&copy.0)
 replace: index: None
 expect: survives
+
+# The review's findings.
+
+[break] fold-undo-discards-the-staged-fix
+rule: After a fold of the staged changes, the undo printed is `git reset --soft`, which keeps the fix staged; `--keep` would take it out of the index and the files.
+file: xtask/src/branch.rs
+in: undo
+in-string: git reset --soft {backup}
+replace: git reset --keep {backup}
+caught-by:
+    branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
+
+[break] records-to-a-branch-being-rebased
+rule: A branch another worktree is rebasing (its HEAD detached) is in use, as git branch -f says.
+file: xtask/src/branch.rs
+in: Holds::uses
+find: is(&self.rebase_merge) || is(&self.rebase_apply)
+replace: false
+caught-by:
+    branch::tests::a_branch_a_worktree_has_checked_out_rebases_or_bisects_is_in_use
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] rewrite-a-branch-checked-out-twice
+rule: fold and to-end refuse a branch another worktree also has checked out (worktree add --force), or is rebasing or bisecting.
+file: xtask/src/branch.rs
+in: rewrite
+find: used_elsewhere(&git.dir.join(common), &head_ref, Some(Path::new(own)))
+replace: None::<String>
+caught-by:
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] records-follows-a-link
+rule: commit-records commits a record's own text, and refuses a link, whose target may be outside the repository.
+file: xtask/src/branch.rs
+in: regular_inside
+find: if !kind.is_file()
+replace: if kind.is_dir()
+caught-by:
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] records-through-a-folder-that-leads-out
+rule: commit-records refuses a record reached through a link that leads out of the repository.
+file: xtask/src/branch.rs
+in: regular_inside
+find: real.starts_with(&top)
+replace: real.starts_with(&top) || real.exists()
+caught-by:
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] records-written-over-another-version
+rule: commit-records refuses a record whose copy on the branch is not the one HEAD has: the working file was not written over the branch's version.
+file: xtask/src/branch.rs
+in: not_from_the_branch
+find: if theirs == ours
+replace: if true
+caught-by:
+    branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] rewrite-without-the-tree-check
+rule: The history made again must end at the tree it must (the old tip's, or the staged tree), or nothing is moved.
+file: xtask/src/branch.rs
+in: rewrite
+find: if builder.tree != expected
+replace: if false
+caught-by:
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] rewrite-moves-the-branch-from-wherever-it-is
+rule: The move is from the old tip read at the start: a branch that moved meanwhile is left.
+file: xtask/src/branch.rs
+in: move_transaction
+in-string: update {branch} {new} {old}
+replace: update {branch} {new}
+caught-by:
+    branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
+
+[break] records-takes-a-name-that-is-no-branchs
+rule: commit-records checks the branch's name with git check-ref-format --branch before it looks the branch up.
+file: xtask/src/branch.rs
+in: commit_records
+find: .run(&["check-ref-format", "--branch", &request.branch])
+replace: .run(&["rev-parse", "--sq-quote", &request.branch]).map(|_| request.branch.clone())
+caught-by:
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] records-takes-any-page-of-the-docs
+rule: The records are a step's pages, the items left open and the break lists, not every page of the docs.
+file: xtask/src/branch.rs
+in: record_path
+find: ["docs", "steps", _, .., name] | ["docs", "outstanding", name] => page(name)
+replace: ["docs", .., name] => page(name)
+caught-by:
+    branch::tests::only_a_record_is_committed_and_its_path_is_read_from_the_top
+
+[break] dispatch-labels-the-base-by-its-hash
+rule: A dispatch that resolves --against keeps the ref as typed as the label the report calls the base.
+file: xtask/src/try_run.rs
+in: for_dispatch
+find: let label = inputs.label.get_or_insert_with(|| against.clone());
+replace: let label = &against;
+caught-by:
+    try_run::tests::against_is_resolved_to_its_commit_at_dispatch_and_a_hash_passes_as_it_is
+
+[break] ab-ignores-the-label
+rule: An A/B's report calls the base by the label given, the ref as the user typed it.
+file: xtask/src/try_run.rs
+in: Inputs::label_of
+find: self.label.clone().unwrap_or_else(|| label_of(against))
+replace: label_of(against)
+caught-by:
+    try_run::tests::against_is_resolved_to_its_commit_at_dispatch_and_a_hash_passes_as_it_is
+
+[break] try-result-fails-on-bad-wall-times
+rule: A wall-times file that cannot be read is a note in try-result, not the end of what it prints.
+file: xtask/src/try_result.rs
+in: walls_text
+find: Err(error) => format!("(each side's wall time is not shown: {error})\n")
+replace: Err(error) => panic!("{error}")
+caught-by:
+    try_result::tests::a_wall_times_file_that_cannot_be_read_is_a_note_and_not_a_failure
