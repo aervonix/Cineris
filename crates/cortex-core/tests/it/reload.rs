@@ -890,27 +890,19 @@ fn a_rule_written_between_the_judgement_and_the_load_is_not_in_force() {
     });
 }
 
-/// A model the person chooses while a reload builds from the files is not
-/// put back by that reload: `session/set` waits for it, and its choice is
-/// the last word (the second review of step 24's first part).
+/// A reload never comes between a choice put in force and its record: one
+/// that did would put the files' model over the choice, and every later
+/// reload would take the choice as applied. `session/set` holds the
+/// session's reload lock across both (the second review of step 24's first
+/// part).
 #[test]
-fn a_choice_made_while_a_reload_builds_is_not_undone() {
+fn a_reload_never_comes_between_a_choice_and_its_record() {
     let world = World::new("reload_set_during", [says("Done.")]);
     world.user_config("");
     let core = world.core();
-    let judged = cortex_testkit::Hold::new(cortex_core::TRUST_JUDGED);
+    let kept = cortex_testkit::Hold::new(cortex_core::CHOICE_BEING_KEPT);
     world.run(async {
         let front = Front::start(&world, &core).await;
-        // A change that builds every role's model again, from the files.
-        world.user_config("[retry]\nattempts = 2\n");
-        let mut reloading = std::pin::pin!(reload(
-            &front,
-            ConfigReloadParams {
-                session_id: Some(front.session.clone()),
-                ..ConfigReloadParams::default()
-            },
-        ));
-        judged.drive_until_reached(reloading.as_mut()).await;
         let mut setting = std::pin::pin!(set(
             &front,
             SessionSettings {
@@ -926,24 +918,33 @@ fn a_choice_made_while_a_reload_builds_is_not_undone() {
                 ..SessionSettings::default()
             },
         ));
-        // Polled for longer than its blocking work can make it wait: without
-        // the reload's lock, the choice is made now, and the reload puts the
-        // file's model over it.
-        let mut made = None;
-        for _ in 0..32 {
-            if let std::task::Poll::Ready(result) = crate::poll_once(setting.as_mut()).await {
-                made = Some(result);
+        kept.drive_until_reached(setting.as_mut()).await;
+        // A change that builds every role's model again, from the files.
+        world.user_config("[retry]\nattempts = 2\n");
+        let mut reloading = std::pin::pin!(reload(
+            &front,
+            ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                ..ConfigReloadParams::default()
+            },
+        ));
+        // Polled for longer than its blocking work can make it wait: with
+        // nothing to stop it, it puts the file's model in now.
+        let mut done = None;
+        for _ in 0..128 {
+            if let std::task::Poll::Ready(result) = crate::poll_once(reloading.as_mut()).await {
+                done = Some(result);
                 break;
             }
             crate::settle().await;
         }
-        judged.release();
-        let result = reloading.await;
-        assert!(result.errors.is_empty(), "{result:?}");
-        match made {
-            Some(result) => result.unwrap(),
-            None => setting.await.unwrap(),
+        kept.release();
+        setting.await.unwrap();
+        let result = match done {
+            Some(result) => result,
+            None => reloading.await,
         };
+        assert!(result.errors.is_empty(), "{result:?}");
         assert_eq!(
             state_of(&front).await.roles[&cortex_protocol::model::ModelRole::Main]
                 .model

@@ -1064,7 +1064,7 @@ impl Loaded {
         for key in keys {
             match merge::get(&newer.values, key) {
                 Some(value) => merge::insert(&mut values, key, value.clone()),
-                None => merge::remove(&mut values, key, &newer.values),
+                None => merge::remove(&mut values, key),
             }
             origins.retain(|at, _| !at.is_at_or_under(key));
             entry_origins.retain(|at, _| !at.is_at_or_under(key));

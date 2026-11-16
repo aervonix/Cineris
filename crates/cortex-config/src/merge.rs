@@ -339,11 +339,11 @@ pub(crate) fn insert(table: &mut toml::Table, key: &KeyPath, value: Value) {
 }
 
 /// Takes the value at a key path out, and the tables on the way that it
-/// leaves empty and `kept` does not have: an entry of a named collection
-/// with nothing left in it is gone, not an entry of defaults, unless `kept`
-/// (the configuration the key is taken from) still has it, empty.
-pub(crate) fn remove(table: &mut toml::Table, key: &KeyPath, kept: &toml::Table) {
-    fn go(table: &mut toml::Table, parts: &[String], kept: Option<&toml::Table>) {
+/// leaves empty: an entry of a named collection with nothing left in it is
+/// gone, not an entry of defaults. (A configuration as loaded never has an
+/// empty table: the load drops one as it reads it.)
+pub(crate) fn remove(table: &mut toml::Table, key: &KeyPath) {
+    fn go(table: &mut toml::Table, parts: &[String]) {
         let Some((first, rest)) = parts.split_first() else {
             return;
         };
@@ -351,22 +351,18 @@ pub(crate) fn remove(table: &mut toml::Table, key: &KeyPath, kept: &toml::Table)
             table.remove(first);
             return;
         }
-        let kept = kept.and_then(|kept| match kept.get(first) {
-            Some(Value::Table(next)) => Some(next),
-            _ => None,
-        });
         let emptied = match table.get_mut(first) {
             Some(Value::Table(next)) => {
-                go(next, rest, kept);
+                go(next, rest);
                 next.is_empty()
             }
             _ => false,
         };
-        if emptied && kept.is_none() {
+        if emptied {
             table.remove(first);
         }
     }
-    go(table, key.parts(), Some(kept));
+    go(table, key.parts());
 }
 
 /// Adds an entry to the list at a key path, creating the list.
