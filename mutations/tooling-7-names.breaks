@@ -27,7 +27,7 @@ rule: The line breaks are LF, CR, CRLF, NEL, U+2028 and U+2029, all six.
 file: crates/cortex-testkit/src/hostile.rs
 in: line_breaks
 find: Name::new(Kind::LineBreak, "CRLF", "\r\n").shown("\\r\\n")
-replace:
+replace: one(Kind::LineBreak, "CR again", '\r')
 caught-by:
     cortex-testkit hostile::tests::the_line_breaks_are_the_six_and_only_the_six
 
@@ -126,17 +126,14 @@ caught-by:
 
 # ------------------------------------------------- the tests moved onto it
 
-[break] names-the-tools-show-a-path-as-it-is
-rule: A path the tools show is written with every character that acts unseen as an escape, for every line break of the set and not for one.
-file: crates/cortex-tools/src/args.rs
-in: shown
-find: cortex_base::visible(&text).into_owned()
-replace: text
+[break] names-read-shows-its-path-as-it-is
+rule: A path `read` shows is written with every character that acts unseen as an escape, for every line break of the set and not for one.
+file: crates/cortex-tools/src/read.rs
+in: read_file
+find: let shown = path.shown();
+replace: let shown = path.data();
 caught-by:
-    cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
     cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
-    cortex-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
-    cortex-tools::it outline::a_directory_named_to_start_lines_of_its_own_is_an_escape_in_every_message
 
 [break] names-a-skipped-entrys-error-is-not-escaped
 rule: What the walk says of an entry it could not read names it as an escape, and a line break in it does not cut the reason short.
@@ -182,15 +179,6 @@ find: let _ = write!(text, "  — {}", visible(doc));
 replace: let _ = write!(text, "  — {}", doc);
 caught-by:
     cortex-index outline::tests::an_outline_shows_what_would_act_unseen_as_escapes
-
-[break] names-the-presenter-draws-a-control-character
-rule: Content cannot write an escape sequence: every control character of the hostile set is drawn as a symbol.
-file: crates/cortex-term/src/sanitize.rs
-in: sanitize
-find: _ => out.push(visible(c).unwrap_or(c))
-replace: _ => out.push(c)
-caught-by:
-    cortex-term::it presenter::no_escape_sequence_or_control_character_of_the_hostile_set_is_obeyed
 
 [break] names-unix-refuses-a-windows-device-name
 rule: A Unix path takes every name of the hostile set that Windows keeps for a device, as it takes any other.
