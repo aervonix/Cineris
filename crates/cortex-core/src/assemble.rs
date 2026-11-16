@@ -616,25 +616,35 @@ pub(crate) fn answer_trust(
         TrustAnswer::Yes => {
             let pin = [question.pin.clone()];
             let kept = if question.rules_only {
-                match store.approve(&question.key, &pin) {
-                    // Another process took the project's trust away while
-                    // the question was open: there is nothing to approve,
-                    // and this yes trusts it afresh (the review of step
-                    // 23's fixes). Not a store that could not keep it.
-                    Err(cortex_policy::TrustError::NotUnderstood { .. })
-                        if store
-                            .project(&question.key)
-                            .is_ok_and(|now| !now.is_trusted()) =>
-                    {
-                        store.trust(&question.key, &question.root, &pin)
-                    }
-                    other => other,
-                }
+                store.approve(&question.key, &pin)
             } else {
                 store.trust(&question.key, &question.root, &pin)
             };
             match kept {
                 Ok(_) => self::trust(inner, place.state.as_ref(), &place.root, &place.load),
+                // The project's trust was taken away while the question was
+                // open (revoked, forgotten or refused, by another client or
+                // process): a yes to its changed rules is no yes to the
+                // whole project, nor past a never. Nothing is written, and
+                // the session opens with the trust as it stands now (the
+                // review of step 23's fixes).
+                Err(cortex_policy::TrustError::NotUnderstood { .. })
+                    if question.rules_only
+                        && store
+                            .project(&question.key)
+                            .is_ok_and(|now| !now.is_trusted()) =>
+                {
+                    let mut now =
+                        self::trust(inner, place.state.as_ref(), &place.root, &place.load)?;
+                    now.problem = Some(
+                        "This project's trust changed while you were asked, so your answer was \
+                         not used and nothing of the project that needs trust is used in this \
+                         session. A session opened again asks afresh, unless the project was \
+                         marked never."
+                            .to_owned(),
+                    );
+                    Ok(now)
+                }
                 Err(failure) => trusted_unkept(inner, &place.load, question, &failure),
             }
         }
@@ -1620,7 +1630,7 @@ pub(crate) fn assemble(
         None => PlanBoard::new(),
     });
     let hooks = Arc::new(Hooks::new(Arc::clone(&board)));
-    let sink = Arc::new(SessionSink::default());
+    let sink = Arc::new(SessionSink::new(id.clone()));
 
     // ------------------------------------------------- the shell, if any
     let shell_found = match find_shell(inner, settings, &confine_roots, &mut told) {

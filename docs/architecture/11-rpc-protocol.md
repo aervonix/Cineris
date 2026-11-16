@@ -227,7 +227,7 @@ All events arrive as one notification method.
    "item_id":"i_88","delta":{"kind":"text","text":"The build fails because"}}}
 ```
 
-`seq` increases by one per event per session, and a client reads the events it is sent in that order. A client is not sent every event: deltas it did not ask for are left out, deltas are merged while it is behind (a merged delta has the `seq` of its last part), and deltas are dropped when its queue is full. So a jump in `seq` is not by itself a loss. A loss of deltas is said by `item.resync`, which has the `seq` of the first delta dropped, and no whole event is ever dropped. After a reconnect, the `seq` of the last event a client saw is where `session/read` takes it up.
+`seq` increases by one per event per session, and a client reads the events it is sent in that order. A client is not sent every event: deltas it did not ask for are left out, deltas are merged while it is behind (a merged delta has the `seq` of its last part, and never spans the `seq` a `session/read` of the client gave: [02-runtime.md](02-runtime.md), "Event backpressure"), and deltas are dropped when its queue is full. So a jump in `seq` is not by itself a loss. A loss of deltas is said by `item.resync`, which has the `seq` of the first delta dropped, and no whole event is ever dropped. After a reconnect, the `seq` of the last event a client saw is where `session/read` takes it up.
 
 | Type | Meaning |
 |---|---|
@@ -263,7 +263,7 @@ All events arrive as one notification method.
 
 Each connection has a bounded outbound queue.
 
-1. When it grows, deltas for the same item are merged.
+1. When it grows, deltas for the same item are merged, never across the `seq` the client's last `session/read` gave (since the review of step 23's fixes), so the events after a read hold only what came after it.
 2. If it is still full, deltas for that item are dropped and one `item.resync` is queued.
 3. Completed items, turn events and server requests are never dropped. If they cannot be queued within a time limit, the connection is closed with an error. The session and the turn carry on.
 

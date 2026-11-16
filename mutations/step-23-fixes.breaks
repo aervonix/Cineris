@@ -746,14 +746,23 @@ replace:
 caught-by:
     cortex-core::it asking::an_undos_question_put_as_the_core_ends_is_taken_back
 
-[break] a-yes-after-untrust-is-not-kept
-rule: A yes to a rules-changed question whose project another process untrusted meanwhile trusts it afresh, and is kept.
+[break] a-yes-after-untrust-is-trust-afresh
+rule: A yes to a rules-changed question whose project's trust was taken away meanwhile (revoked or refused) writes nothing and trusts nothing: a never said meanwhile stays.
+file: crates/cortex-core/src/assemble.rs
+in: answer_trust
+find: store.approve(&question.key, &pin)
+replace: store.approve(&question.key, &pin).or_else(|_| store.trust(&question.key, &question.root, &pin))
+caught-by:
+    cortex-core::it trusting::a_yes_after_the_projects_trust_changed_meanwhile_is_not_used
+
+[break] a-yes-after-untrust-is-kept-for-the-session
+rule: A yes to a rules-changed question whose project's trust was taken away meanwhile is not taken as an answer the store could not keep: the session is not trusted for itself.
 file: crates/cortex-core/src/assemble.rs
 in: answer_trust
 find: .is_ok_and(|now| !now.is_trusted())
 replace: .is_ok_and(|_| false)
 caught-by:
-    cortex-core::it trusting::a_yes_after_another_process_untrusted_the_project_trusts_it_afresh
+    cortex-core::it trusting::a_yes_after_the_projects_trust_changed_meanwhile_is_not_used
 
 [break] an-unkept-yes-after-the-rules-changed-trusts-them
 rule: A yes the trust store cannot keep, after the rules changed while the question was open, sets aside what the new rules could loosen.
@@ -789,3 +798,21 @@ find: TrustStanding::ForTheRun =>
 replace: TrustStanding::Trusted =>
 caught-by:
     cortex-tui app::tests::trust_standing::status_says_a_trust_kept_for_now_only_without_naming_one_cause
+
+[break] a-fence-outlives-its-opening
+rule: A client's fence for a session goes when it opens the session again: that opening numbers its events from 1 again.
+file: crates/cortex-core/src/events.rs
+in: SessionSink::subscribe
+find: queue.unfence(&self.session);
+replace:
+caught-by:
+    cortex-core events::tests::a_fence_from_an_earlier_opening_does_not_stop_merging
+
+[break] session-read-does-not-fence
+rule: session/read fences the reading client's queue at the seq it gives, so a delta merged after it holds only what came after it.
+file: crates/cortex-core/src/core.rs
+in: Core::handle
+find: let (seq, progress) = live.sink.snapshot(reader.as_deref());
+replace: let (seq, progress) = live.sink.snapshot(reader.as_deref().filter(|_| false));
+caught-by:
+    cortex-core::it events::a_read_by_a_client_behind_and_the_deltas_after_it_hold_the_answer_once
