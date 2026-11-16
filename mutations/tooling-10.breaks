@@ -114,14 +114,87 @@ replace: if true {
 caught-by:
     rules::layout::tests::a_parts_record_is_named_headed_and_linked
 
-[break] part-record-linked-from-code
-rule: A link to a part's record in fenced code or a comment does not count.
+[break] part-record-linked-by-its-words
+rule: A link to a part's record is read as `links` reads one: in code or a comment it does not count, and `./` or a reference does.
 file: xtask/src/rules/layout.rs
 in: part_record
-find: let text = prose(text);
-replace: let text = text.to_owned();
+find: let targets = super::links::targets(&record, text);
+replace: let targets: BTreeSet<String> = text.split(['(', ')']).map(|word| format!("{STEPS}{folder}/{word}")).collect();
 caught-by:
     rules::layout::tests::a_parts_record_is_named_headed_and_linked
+    rules::layout::tests::a_link_to_a_parts_group_covers_every_part_in_it
+
+[break] part-record-group-link-is-not-enough
+rule: A link to a part's group folder covers every part in it, so that the parts add no line to a shared record.
+file: xtask/src/rules/layout.rs
+in: part_record
+find: targets.contains(&part_path) || targets.contains(&group_path)
+replace: targets.contains(&part_path)
+caught-by:
+    rules::layout::tests::a_link_to_a_parts_group_covers_every_part_in_it
+
+[break] outstanding-a-missing-index-passes
+rule: Open items with no index are found.
+file: xtask/src/rules/layout.rs
+in: check
+find: None if any_item && items_read
+replace: None if false
+caught-by:
+    rules::layout::tests::items_with_no_index_are_found
+
+[break] outstanding-check-writes
+rule: `outstanding --check` compares and writes nothing.
+file: xtask/src/outstanding.rs
+in: write
+find: if check {
+replace: if false {
+caught-by:
+    outstanding::tests::the_command_writes_the_index_and_check_only_compares
+
+[break] outstanding-the-command-reads-every-file
+rule: The command reads the folder's Markdown files alone: a swap file or an image is no item.
+file: xtask/src/outstanding.rs
+in: expected_index
+find: !name.ends_with(".md") ||
+replace:
+caught-by:
+    outstanding::tests::the_command_writes_the_index_and_check_only_compares
+
+[break] outstanding-a-heading-twice-is-not-named
+rule: Any line a merge left twice in the index is named as such, a heading's too.
+file: xtask/src/outstanding.rs
+in: difference
+find: !l.trim().is_empty() && have
+replace: l.starts_with("- [") && have
+caught-by:
+    outstanding::tests::a_line_or_a_heading_twice_is_named_twice
+
+[break] outstanding-a-line-without-its-full-stop
+rule: An item's line ends its sentence before its owner.
+file: xtask/src/outstanding.rs
+in: line
+find: summary.ends_with(['.', '?', '!'])
+replace: true
+caught-by:
+    outstanding::tests::the_index_lists_every_item_once_by_area_then_name
+
+[break] outstanding-a-test-name-of-single-colons
+rule: A flaky test's name is a Rust path, words joined by `::`, so that a filter names it exactly.
+file: xtask/src/outstanding.rs
+in: is_test_name
+find: name.split("::").all(
+replace: name.split(':').filter(|word| !word.is_empty()).all(
+caught-by:
+    outstanding::tests::a_file_out_of_form_is_refused_at_its_line
+
+[break] outstanding-an-owner-of-a-full-stop
+rule: An owner that is only a full stop is empty.
+file: xtask/src/outstanding.rs
+in: parse
+find: let value = value.trim_end_matches('.').trim_end();
+replace: let value = value.trim_end();
+caught-by:
+    outstanding::tests::a_file_out_of_form_is_refused_at_its_line
 
 [break] part-record-any-heading
 rule: A part's record begins with a top-level heading of its own.

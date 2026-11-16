@@ -111,7 +111,7 @@ A generated file that two branches both changed conflicts as text, and a merge o
 
 What it leaves out, and why, `cargo xtask regen --list` prints: the tables of `docs/steps/<step>/ci.md` (they are a CI run's measurements: `ci-times RUN --write`, which needs `gh`); the toolbox and recorded provider fixtures (a recording calls a paid API: `record`); the golden transcript (not edited to make a test pass); `Cargo.lock` and the break lists. A test holds the list to the code: every `CORTEX_UPDATE_*` variable that a test reads is either run by `regen` or named there as left to another command, so a new writing mode cannot be forgotten.
 
-**The open items' index never stops a rebase** (since the tenth tooling step). Every open item is a file of its own, and the index of `docs/outstanding/README.md` is written from them by `cargo xtask outstanding`. Git merges the index line by line, keeping both sides' lines (`merge=union` in `.gitattributes`), so two branches that each added an item rebase without a conflict there. What such a merge can get wrong (a line twice, the line of an item whose file is gone, a line lost, lines out of order) `cargo xtask rules` and `links` find, since they compare the whole page with what the command writes. **After a rebase, the one command is `cargo xtask outstanding`**, then commit the index it wrote; `regen` runs it too.
+**The open items' index never stops a rebase** (since the tenth tooling step). Every open item is a file of its own, and the index of `docs/outstanding/README.md` is written from them by `cargo xtask outstanding`. Git merges the index line by line, keeping both sides' lines (`merge=union` in `.gitattributes`), so two branches that each added an item rebase without a conflict there. What such a merge can get wrong (a line twice, the line of an item whose file is gone, a line lost, lines out of order) `cargo xtask rules` and `links` find, since they compare the whole page with what the command writes. **After a rebase, the one command is `cargo xtask outstanding`**, then commit the index it wrote; `regen` runs it too. Before merging, rebase onto the `main` of the moment and run it, as for any merge: an index that was right on an older `main` may not be on this one.
 
 ## Lints
 
@@ -146,7 +146,7 @@ Clippy treats `#[test]` functions and `#[cfg(test)]` modules as tests. Helper fu
 - **`docs/dependencies.md` and the manifests disagree.**
 - **Anything but a dev-dependency turns on a crate's `test-hooks` or `test-support` feature** (or `cortex-term`'s `pty`, or `cortex-tui`'s `test-kit`): another kind of dependency, a feature of the crate itself (`default` above all), or a feature of another crate that passes it on. The feature holds code for tests, and must not be in a build of the product.
 - **A link inside the repository leads nowhere:** a relative link in a Markdown file to a file that is not there, a `#fragment` that is no heading of the page it names, or a `docs/….md` path in prose, configuration or a code comment that names no file. A heading's name is its text in lower case, without punctuation, with a `-` for each space.
-- **A step's record or an open item is not where the others expect it:** anything in a folder of `docs/steps/` but `answered.md`, `ci.md` and parts' records (`<group>/<part>.md`, each linked from the step's `answered.md` or `ci.md`), a folder name that is not a step's (`07`, `13a`) or a hyphenated name, a first line that is not the heading its kind has, a file of `docs/outstanding/` that is not an item's sentence, its fields (`- Area:`, `- Owner:`, any `- Flaky:`) and the table's header and one row, or an index in `docs/outstanding/README.md` that is not what `cargo xtask outstanding` writes from the items.
+- **A step's record or an open item is not where the others expect it:** anything in a folder of `docs/steps/` but `answered.md`, `ci.md` and parts' records (`<group>/<part>.md`, each linked, itself or its group's folder, from the step's `answered.md` or `ci.md`), a folder name that is not a step's (`07`, `13a`) or a hyphenated name, a first line that is not the heading its kind has, a file of `docs/outstanding/` that is not an item's sentence, its fields (`- Area:`, `- Owner:`, any `- Flaky:`) and the table's header and one row, or an index in `docs/outstanding/README.md` that is not what `cargo xtask outstanding` writes from the items.
 - **`cortex-protocol` depends on anything but serde and serde_json**, other than schemars behind its `schema` feature.
 - **A workflow uses an action that is not pinned by commit hash**; a workflow that runs on pull requests uses a secret or a token that can write; or any job other than the `report` job of a non-blocking workflow has a write permission, or that job has one other than `issues: write`.
 
@@ -183,16 +183,15 @@ Four jobs block a pull request: `lint-linux`, `lint-windows`, `test-linux` and `
 
   An older table is turned into a list when a step next adds to it. A table of short cells that do not grow (budgets, a comparison of figures) stays a table.
 
-- **A step in several pull requests: a record for each part** (since the tenth tooling step). Two parts of one step that both appended to the step's `answered.md` changed the same lines, and the second to merge met a conflict on every rebase. Each part writes its own record instead, `docs/steps/<step>/<group>/<part>.md`: the group names a stage of the step in hyphenated words (`after-review`), and the part names the part (`pr2-trust`). It begins with a heading of its own (`# Step 23, after the review: trust`), may hold the part's CI times beside its answers, and is linked from the step's `answered.md` (or `ci.md`), which the step's own session writes once, so that reading the step's records in order reaches every part:
+- **A step in several pull requests: a record for each part** (since the tenth tooling step). Two parts of one step that both appended to the step's `answered.md` changed the same lines, and the second to merge met a conflict on every rebase. Each part writes its own record instead, `docs/steps/<step>/<group>/<part>.md`: the group names a stage of the step in hyphenated words (`after-review`), and the part names the part (`pr2-trust`). It begins with a heading of its own (`# Step 23, after the review: trust`), and may hold the part's CI times beside its answers. **The step's own session links the group's folder once**, from the step's `answered.md` (or `ci.md`), before the parts start, so that reading the step's records in order reaches every part and no part adds a line to a shared file:
 
   ```markdown
   ## After the review
 
-  - [The first pull request: the dialogs and input](after-review/pr1-dialogs.md)
-  - [The second pull request: trust](after-review/pr2-trust.md)
+  Each pull request of this stage has its record in [after-review/](after-review/).
   ```
 
-  `cargo xtask rules` and `links` accept such a file only in a step's folder, under hyphenated names, with a heading on its first line, and linked from the step's `answered.md` or `ci.md`. [docs/steps/README.md](docs/steps/README.md) has the layout.
+  A link to a part's own file counts too. `cargo xtask rules` and `links` accept such a file only in a step's folder, under hyphenated names, with a heading on its first line, and linked, itself or its group's folder, from the step's `answered.md` or `ci.md`. [docs/steps/README.md](docs/steps/README.md) has the layout.
 
 ## Ground rules
 

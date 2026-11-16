@@ -7,16 +7,21 @@
 //! where the others expect them, under the names and headings they expect:
 //!
 //! - `docs/steps/<step>/answered.md` and `docs/steps/<step>/ci.md`, and
-//!   nothing else in a step's folder. The folder is the step's number in
-//!   two digits with its letter if it has one (`07`, `13a`), or, for work
-//!   that is not a numbered step, a name in lower-case words joined by
-//!   hyphens (`tooling-w5`).
+//!   the records of a step's parts, `docs/steps/<step>/<group>/<part>.md`
+//!   (since the tenth tooling step), and nothing else in a step's folder.
+//!   The folder is the step's number in two digits with its letter if it
+//!   has one (`07`, `13a`), or, for work that is not a numbered step, a
+//!   name in lower-case words joined by hyphens (`tooling-w5`).
 //! - The first line of `answered.md` is `# Answered in step 7, on
 //!   2026-11-13`, and of `ci.md` is `# After step 7: the agent loop`, with
 //!   the step the folder is named for. A folder with a name has the same
-//!   headings with its own words in place of `step 7`.
+//!   headings with its own words in place of `step 7`. A part's record
+//!   begins with a heading of its own, and the step's `answered.md` or
+//!   `ci.md` links it, or its group's folder.
 //! - `docs/outstanding/<item>.md`, named in lower-case words joined by
-//!   hyphens, holds the table's header and one row.
+//!   hyphens, is the item's sentence, its fields and its table of one row
+//!   ([`crate::outstanding`]), and the index `docs/outstanding/README.md`
+//!   is what `cargo xtask outstanding` writes from the items.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -56,45 +61,23 @@ pub(crate) fn check(texts: &BTreeMap<String, String>, names: &BTreeSet<String>) 
             violations.push(Violation::new(file, line, problem));
         }
     }
-    if let Some(found) = texts.get(OUTSTANDING_PAGE) {
-        if items_read {
-            violations.extend(stale_index(texts, &crates, found));
-        } else {
-            violations.push(Violation::new(
-                OUTSTANDING_PAGE,
-                None,
-                "the index is checked once every item's file can be read (above).",
-            ));
-        }
+    let any_item = texts.keys().any(|file| file.starts_with(OUTSTANDING));
+    match texts.get(OUTSTANDING_PAGE) {
+        Some(found) if items_read => violations.extend(stale_index(texts, &crates, found)),
+        Some(_) => violations.push(Violation::new(
+            OUTSTANDING_PAGE,
+            None,
+            "the index is checked once every item's file can be read (above).",
+        )),
+        None if any_item && items_read => violations.push(Violation::new(
+            OUTSTANDING_PAGE,
+            None,
+            "the index of the open items is not there (or git does not track it). Run `cargo \
+             xtask outstanding`, which writes it, and `git add` it.",
+        )),
+        None => {}
     }
     violations
-}
-
-/// `text` without its fenced code blocks and its HTML comments: a link in
-/// either lists nothing.
-fn prose(text: &str) -> String {
-    let mut out = String::new();
-    let mut fenced = false;
-    for line in text.lines() {
-        if line.trim_start().starts_with("```") {
-            fenced = !fenced;
-            continue;
-        }
-        if !fenced {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    let mut kept = String::new();
-    let mut rest = out.as_str();
-    while let Some(at) = rest.find("<!--") {
-        kept.push_str(&rest[..at]);
-        rest = rest[at..]
-            .find("-->")
-            .map_or("", |end| &rest[at + end + 3..]);
-    }
-    kept.push_str(rest);
-    kept
 }
 
 /// The index of [`OUTSTANDING_PAGE`], when it is not what `cargo xtask
@@ -277,14 +260,17 @@ fn part_record(
             ),
         ));
     }
-    let target = format!("{group}/{part}");
+    // The part itself, or its group's folder: a step's own session links
+    // the folder once, and its parts, written at the same time, then add
+    // nothing to a shared file.
+    let group_path = format!("{STEPS}{folder}/{group}");
+    let part_path = format!("{group_path}/{part}");
     let linked = ["answered.md", "ci.md"].iter().any(|record| {
-        texts
-            .get(&format!("{STEPS}{folder}/{record}"))
-            .is_some_and(|text| {
-                let text = prose(text);
-                text.contains(&format!("]({target})")) || text.contains(&format!("]({target}#"))
-            })
+        let record = format!("{STEPS}{folder}/{record}");
+        texts.get(&record).is_some_and(|text| {
+            let targets = super::links::targets(&record, text);
+            targets.contains(&part_path) || targets.contains(&group_path)
+        })
     });
     if linked {
         return None;
@@ -292,9 +278,9 @@ fn part_record(
     Some((
         None,
         format!(
-            "no record of the step links this part: add `[…]({target})` to \
-             `{STEPS}{folder}/answered.md` (or `ci.md`), so that the step's records lead to \
-             every part.\n    {STEPS_PAGE} has the layout."
+            "no record of the step links this part: add a link to its group, `[…]({group}/)`, \
+             to `{STEPS}{folder}/answered.md` (or `ci.md`) once, or to the part itself, so that \
+             the step's records lead to every part.\n    {STEPS_PAGE} has the layout."
         ),
     ))
 }
@@ -561,6 +547,57 @@ mod tests {
                 ],
             );
         }
+    }
+
+    #[test]
+    fn a_link_to_a_parts_group_covers_every_part_in_it() {
+        let heading = "# Answered in step 7, on 2026-11-13\n\n";
+        for link in [
+            "[After the review](after-review/)",
+            "[After the review](after-review)",
+            "[After the review](./after-review/)",
+            "[One](./after-review/one.md)",
+            "[one]: after-review/one.md",
+        ] {
+            let answered = format!("{heading}{link}\n");
+            let found = found(&[
+                ("docs/steps/07/answered.md", &answered),
+                ("docs/steps/07/after-review/one.md", "# One\n"),
+                ("docs/steps/07/after-review/two.md", "# Two\n"),
+            ]);
+            let wanted: &[&str] = if link.contains("one.md") {
+                // A link to one part covers that part alone.
+                &["docs/steps/07/after-review/two.md"]
+            } else {
+                &[]
+            };
+            assert_eq!(found.len(), wanted.len(), "{link}: {found:#?}");
+            for (found, file) in found.iter().zip(wanted) {
+                assert!(found.starts_with(file), "{link}: {found}");
+            }
+        }
+        // In a code span, or to another group, it covers nothing.
+        for link in ["`[After](after-review/)`", "[Other](other-group/)"] {
+            let answered = format!("{heading}{link}\n");
+            let found = found(&[
+                ("docs/steps/07/answered.md", &answered),
+                ("docs/steps/07/after-review/one.md", "# One\n"),
+            ]);
+            assert_one(&found, &["no record of the step links this part"]);
+        }
+    }
+
+    #[test]
+    fn items_with_no_index_are_found() {
+        let flag = item("A flag.", "cortex-tui");
+        assert_one(
+            &found(&[("docs/outstanding/a-flag.md", &flag)]),
+            &[
+                "docs/outstanding/README.md",
+                "is not there",
+                "cargo xtask outstanding",
+            ],
+        );
     }
 
     #[test]
