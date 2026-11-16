@@ -11,6 +11,7 @@
     reason = "an integration test prepares real files, fails by panicking, and a measurement prints"
 )]
 
+mod learn;
 mod measure;
 mod project;
 mod render;
