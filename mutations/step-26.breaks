@@ -130,17 +130,17 @@ caught-by:
 rule: Nothing is confined at `unrestricted`, and the session's state says so.
 file: crates/cortex-core/src/sandbox.rs
 in: SessionSandbox::set_level
-find: let confine = self.launcher.is_some() && *level != Level::Unrestricted;
-replace: let confine = self.launcher.is_some();
+find: let confine = self.made_with.is_some() && *level != Level::Unrestricted;
+replace: let confine = self.made_with.is_some();
 caught-by:
     cortex-core::it sandbox::sys_at_unrestricted_a_command_is_not_confined
 
 [break] commands-never-confined
 rule: Below `unrestricted`, where the sandbox enforces, every command is started through the launcher.
 file: crates/cortex-core/src/sandbox.rs
-in: SessionSandbox::launch
-find: let Some(launcher) = self.launcher.as_ref().filter(|_| self.confines()) else {
-replace: let Some(launcher) = self.launcher.as_ref().filter(|_| false) else {
+in: SessionSandbox::launcher
+find: if !self.confines() {
+replace: if true {
 caught-by:
     cortex-core::it sandbox::sys_commands_are_confined_where_the_sandbox_enforces
 
@@ -397,7 +397,7 @@ caught-by:
 [break] a-change-of-level-leaves-the-sandbox-behind
 rule: A change of level takes the sandbox with it: confined below `unrestricted`, not at it.
 file: crates/cortex-core/src/core.rs
-in: Core::set_level
+in: Core::put_engine
 find: live.sandbox.set_level(&level);
 replace: let _ = &level;
 caught-by:

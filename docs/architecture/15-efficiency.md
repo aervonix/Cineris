@@ -135,7 +135,7 @@ Built in step 7, in the loop ([03-agent-loop.md](03-agent-loop.md), "Streaming" 
 |---|---|---|
 | 1 | Start a call that only reads as soon as its block ends in the stream, while the model is still writing the rest of the response ("Starting tools early", above). | First release. Built in step 7. |
 | 2 | Keep what ran early when a response fails and is retried, and use it again if the retried response asks for the same call. | First release. Built in step 7. |
-| 3 | Warm the file cache for files the user names with `@`. | First release, with the editor's attachments (step 24), which is where a named file is known before the prompt is sent. |
+| 3 | Warm the file cache for files the user names with `@`. | First release, with the editor's attachments (step 24), which is where a named file is known before the prompt is sent. The core's side, `workspace/warm`, is built in step 24's first pull request. |
 | 4 | Predict context from history: which files are read together, which test file goes with which source file. Attach outlines or excerpts before the model asks, inside a token budget. | Later. It needs statistics from real sessions, and a wrong prediction costs tokens. |
 
 Local reads are fast, so steps 1 to 3 save milliseconds. Step 4 is the one that saves whole round trips, which is why it must be driven by evidence.

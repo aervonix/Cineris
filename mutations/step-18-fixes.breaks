@@ -228,8 +228,8 @@ caught-by:
 [break] a-project-may-set-the-maps-wait
 rule: The map's wait is the user's alone: a repository's file must not make the sessions in it wait.
 file: crates/cortex-config/src/schema/sections.rs
-find: [UserOnly, NextEpoch, 0s..=1s]
-replace: [Preference, NextEpoch, 0s..=1s]
+find: [UserOnly, NextSession, 0s..=1s]
+replace: [Preference, NextSession, 0s..=1s]
 caught-by:
     cortex-config::it trust::the_documented_classes_hold
     cortex-config::it trust::every_key_has_a_trust_class
@@ -237,8 +237,8 @@ caught-by:
 [break] the-maps-wait-has-no-bound
 rule: The map's wait is at most one second.
 file: crates/cortex-config/src/schema/sections.rs
-find: [UserOnly, NextEpoch, 0s..=1s]
-replace: [UserOnly, NextEpoch]
+find: [UserOnly, NextSession, 0s..=1s]
+replace: [UserOnly, NextSession]
 caught-by:
     cortex-config validate::tests::a_length_of_time_out_of_range_is_an_error_in_milliseconds
 

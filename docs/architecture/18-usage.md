@@ -75,6 +75,8 @@ The statistics store already records one event per model request. For this view 
 - **Ranges:** the open session's own figures for `session`; today, the week from `usage.week_start` (or the last 7 days with `usage.ranges = "rolling"`), the month from its first day (or the last 30) and everything for `all`. Days are counted in the local zone: `cortex_base::Zone`, from `TZ` or `/etc/localtime` on Linux and from the system on Windows.
 - **Groupings:** any of provider, model, project, source and speed, outermost first, with each row's turns' time when the grouping is of provider, model or project.
 
+Since step 24 the report also says what `cortex stats` says of the files behind it (`notes`): a file that could not be read and was set aside, and lines that could not be read; and `usage.week_start`, `usage.ranges` and `usage.refresh` are read as they are in force when a report or a refresh runs, so a reload changes them at once.
+
 `cortex usage [--range today|week|month|all] [--by G,…] [--project KEY] [--json] [--refresh]` prints it. `cortex stats [show|reset]` shows or deletes the files. Measured: [../performance-budgets.md](../performance-budgets.md).
 
 **If statistics are disabled** (`stats.enabled = false`), the session range still works, from the session itself, and the other ranges say that recording is off. A session with a day's limit is refused (below).

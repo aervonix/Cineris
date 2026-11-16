@@ -134,8 +134,8 @@ caught-by:
 rule: `usage.refresh` is the user's alone: a project's configuration cannot turn the refresh on.
 file: crates/cortex-config/src/schema/sections.rs
 in: UsageSettings
-find: [UserOnly, Restart] pub refresh: Vec<String>
-replace: [Preference, Restart] pub refresh: Vec<String>
+find: [UserOnly, Now] pub refresh: Vec<String>
+replace: [Preference, Now] pub refresh: Vec<String>
 caught-by:
     cortex-config::it trust::the_documented_classes_hold
     cortex-config::it trust::every_key_has_a_trust_class

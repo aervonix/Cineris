@@ -416,7 +416,7 @@ caught-by:
 [break] a-change-of-level-has-no-point-before-its-engine-is-in-force
 rule: A change of level waits at an awaited point after making its engine and writing its lease, before it puts the engine in force.
 file: crates/cortex-core/src/core.rs
-in: Core::set_level
+in: Core::put_engine
 find: cortex_base::hook::await_point!(crate::policy::BEFORE_THE_NEW_LEVEL_IS_IN_FORCE);
 replace:
 caught-by:

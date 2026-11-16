@@ -101,7 +101,7 @@ Its place is the one 03-agent-loop gives it: `Deciding → Verifying` when the m
 
 - **`mode = "ask"`:** the stage runs nothing. A turn that changed files, with checks to run, ends `skipped`, with a `verification` notice that offers them; `verify/run` (point 6) runs them.
 - **`mode = "off"`, or no check known:** nothing runs and nothing is said.
-- **"At once" is honest only with a reload.** The settings are read when a session is put together. The verifier holds them where a reload can replace them, and the loop's `verify_rounds` likewise: step 24's `config/reload` applies them to a running session, as it applies the limits. Its item ([outstanding/config-reload-through-the-core.md](../../outstanding/config-reload-through-the-core.md)) gains `[verify]`.
+- **"At once" is honest only with a reload.** The settings are read when a session is put together. The verifier holds them where a reload can replace them, and the loop's `verify_rounds` likewise: step 24's `config/reload` applies them to a running session, as it applies the limits. Its item (outstanding/config-reload-through-the-core.md (the open item `config-reload-through-the-core`, closed in step 24)) gains `[verify]`.
 
 ### 6. `verify/run` and `/verify`
 

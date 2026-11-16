@@ -177,7 +177,7 @@ An independent review of step 16 found nine defects, four rules no test held, tw
 | `store.rs`: "Both files can be rebuilt (the aggregates)" | **The code:** the aggregates are flushed, and the comment is gone. |
 | `Variants::from_map`: "it is not gone on with" | **The doc:** an epoch read so goes on, as this record's "The full review" says is intended. |
 | 18: "The latest values per provider and credential" | **The doc:** per provider and source; a provider has one credential in use at a time. |
-| `stats.retention` declared to take effect at once, and read when the core starts | **The doc:** declared `restart`. Its twins, read from the user's configuration when the core starts and declared at once, were `usage.week_start`, `usage.ranges` and `usage.refresh`: the same. Step 23's reload ([outstanding](../../outstanding/config-reload-through-the-core.md)) should re-read the four for the core, and declare them at once again. |
+| `stats.retention` declared to take effect at once, and read when the core starts | **The doc:** declared `restart`. Its twins, read from the user's configuration when the core starts and declared at once, were `usage.week_start`, `usage.ranges` and `usage.refresh`: the same. Step 23's reload (outstanding (the open item `config-reload-through-the-core`, closed in step 24)) should re-read the four for the core, and declare them at once again. |
 | Point 1 and `recorder.rs`: dropped *events* | **The doc:** events and limits updates, one count. |
 | "A writer's later lines start a file again"; 14's "Disabled: no file is written" | The first is corrected above. The second holds now that a day's limit is refused with statistics off. |
 
@@ -191,7 +191,7 @@ An independent review of step 16 found nine defects, four rules no test held, tw
 | 4. A forward clock jump prunes and folds early. | Confirmed by reading. Not small: the files hold no date to check the clock against, since a jumped clock stamps its events with the jumped date, and a jump cannot be told from a machine left off for months. | **Filed** for step 33: [a-clock-that-jumps-forward](../../outstanding/a-clock-that-jumps-forward.md). |
 | 5. An unknown range is answered as all time. | Confirmed by reading. | **Fixed:** refused with `unknown_value`. `usage::a_range_this_build_does_not_know_is_refused` |
 | 6. On Windows a reset may leave the file delete-pending. | Settled with the reset fix: the writer lets the file go when it cannot look at it. | The reset test on the Windows runner, below. |
-| 7. An epoch from before step 16 follows the live model's variants. | Confirmed by reading; latent until reload rebuilds role models. | **Filed** for step 24, with what reload must do: [an-epoch-read-without-its-variants](../../outstanding/an-epoch-read-without-its-variants.md). |
+| 7. An epoch from before step 16 follows the live model's variants. | Confirmed by reading; latent until reload rebuilds role models. | **Filed** for step 24, with what reload must do: `an-epoch-read-without-its-variants` (closed in step 24). |
 
 ### Twins looked for
 
@@ -206,7 +206,7 @@ An independent review of step 16 found nine defects, four rules no test held, tw
 - **Step 17:** read the aggregates with `Aggregates::load`; `save` refuses what `load` found unreadable or newer, and the prune in `sync` does nothing then.
 - **The day's limits:** `day::a_line_written_before_the_days_purse_began_counts_once` holds a line of this process's from before its purse (counted once), and `a_line_an_older_build_wrote_counts_as_another_processs` a line with no mark (counted).
 - **Step 23:** `UsageReport` still carries no dropped or unreadable count; `cortex stats` says what the aggregates file was and lists files moved aside (`StatsSummary::aggregates`, `set_aside`). The reload should re-read `stats.retention` and the `[usage]` keys.
-- **Step 24:** [an-epoch-read-without-its-variants](../../outstanding/an-epoch-read-without-its-variants.md).
+- **Step 24:** `an-epoch-read-without-its-variants` (closed in step 24).
 - **Step 44:** the context records are in the raw files only; a jumped clock can prune them early ([outstanding](../../outstanding/a-clock-that-jumps-forward.md)).
 - **Step 45:** request lines now carry `charged_to`; an adapter that indexes our own lines can ignore it.
 
