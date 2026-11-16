@@ -381,3 +381,88 @@ fn a_failed_file_listing_says_why_once_and_the_next_at_asks_again() {
     let menu = app.input().menu().cloned().expect("the file menu");
     assert_eq!(menu.empty, Empty::Listing);
 }
+
+/// The `workspace/warm` operations sent since the last look, taken with
+/// everything else sent.
+fn warmed(link: &Scripted) -> Vec<(Ticket, Vec<String>)> {
+    link.take_sent()
+        .into_iter()
+        .filter_map(|(ticket, op)| match op {
+            Op::WorkspaceWarm(params) => {
+                assert_eq!(params.session_id, SessionId::from(SESSION));
+                Some((ticket, params.paths))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A file chosen from the `@` menu is read ahead by the core, at most 16 a
+/// prompt, and a folder not at all; the core's refusal is not said, since
+/// nothing the person asked for depends on it (step 24, the features
+/// table's prefetch).
+#[test]
+fn a_file_chosen_with_at_is_read_ahead_and_a_refusal_is_not_said() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    type_text(&mut app, "@", now);
+    let _ = app.frame(now);
+    let (ticket, _) = files_asked(&link).into_iter().next().expect("listed");
+    give_files(
+        &mut app,
+        &link,
+        ticket,
+        vec!["src/lexer.rs".to_owned(), "src/".to_owned()],
+        now,
+    );
+    let choose = |app: &mut App, typed: &str| {
+        type_text(app, typed, now);
+        let _ = app.frame(now);
+        assert!(
+            app.wait_for_files(Duration::from_secs(10)),
+            "the worker's rows"
+        );
+        key(app, "tab", now);
+        type_text(app, " ", now);
+    };
+    // The `@` typed first is completed.
+    assert!(
+        app.wait_for_files(Duration::from_secs(10)),
+        "the worker's rows"
+    );
+    type_text(&mut app, "lex", now);
+    let _ = app.frame(now);
+    assert!(app.wait_for_files(Duration::from_secs(10)));
+    key(&mut app, "tab", now);
+    let sent = warmed(&link);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].1, ["src/lexer.rs"]);
+    link.give(Inbound::Done(
+        sent[0].0,
+        Err(ErrorData::new(
+            cortex_protocol::ErrorKind::Usage,
+            "session_not_open",
+            "refused",
+        )),
+    ));
+    drain(&mut app, now);
+    assert!(
+        !notices(&mut app, now).contains("refused"),
+        "a warm's refusal was said"
+    );
+
+    // A folder is not read ahead.
+    choose(&mut app, " @src/");
+    assert!(warmed(&link).is_empty(), "a folder was read ahead");
+
+    // Sixteen in all for one prompt, then none until it is sent.
+    for _ in 0..20 {
+        choose(&mut app, "@lex");
+    }
+    assert_eq!(warmed(&link).len(), 15, "more than 16 for one prompt");
+    key(&mut app, "enter", now);
+    let _ = link.take_sent();
+    choose(&mut app, "@lex");
+    assert_eq!(warmed(&link).len(), 1, "the next prompt reads ahead again");
+}

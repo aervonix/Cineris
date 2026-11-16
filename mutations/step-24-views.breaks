@@ -1,0 +1,101 @@
+# Step 24, its third part: the commands, the views and the panels of
+# usage and the project (docs/steps/24/answered.md, "The design, before
+# building", points 3 to 7).
+
+[break] a-reload-is-said-twice
+rule: What a reload of this application's own did is said once, from its result: the config.changed it also sends is not said again.
+file: crates/cortex-tui/src/app/state.rs
+in: event
+find: if !asked {
+replace: if true {
+caught-by:
+    cortex-tui app::tests::commands::reload_says_what_the_reload_did_once
+
+[break] a-change-found-elsewhere-is-not-said
+rule: What another client's reload, or the core's look before a turn, changed is said as it comes.
+file: crates/cortex-tui/src/app/state.rs
+in: event
+find: if !asked {
+replace: if false {
+caught-by:
+    cortex-tui app::tests::commands::a_change_found_elsewhere_is_said
+
+[break] config-says-no-origin
+rule: /config says where each value came from: its layer, file and line.
+file: crates/cortex-tui/src/app/state/commands.rs
+in: config_shown
+find: let from = origins.get(key).map_or_else(|| "default".to_owned(), origin);
+replace: let from = "default".to_owned();
+caught-by:
+    cortex-tui app::tests::commands::config_says_where_each_value_came_from
+
+[break] the-profile-in-force-is-not-marked
+rule: /profile marks the profile in force among those the session's files define.
+file: crates/cortex-tui/src/app/state/commands.rs
+in: profiles_listed
+find: if Some(name.as_str()) == in_force {
+replace: if false {
+caught-by:
+    cortex-tui app::tests::commands::profile_loads_one_and_lists_them
+
+[break] a-profile-loaded-is-forgotten
+rule: The profile /profile loaded is the one in force from then on.
+file: crates/cortex-tui/src/app/state.rs
+in: reloaded
+find: self.profile = Some(profile);
+replace: drop(profile);
+caught-by:
+    cortex-tui app::tests::commands::profile_loads_one_and_lists_them
+
+[break] context-shares-of-the-limit
+rule: /context gives each part's share of the whole request.
+file: crates/cortex-tui/src/app/state/commands.rs
+in: context
+find: let whole = parts.estimate.max(1);
+replace: let whole = parts.limit.max(1);
+caught-by:
+    cortex-tui app::tests::commands::context_shows_the_last_request_by_part
+
+[break] verify-is-not-in-this-build
+rule: /verify asks the core for the checks, and is not said to be missing.
+file: crates/cortex-tui/src/app/state.rs
+find: ("verify", "Run the project's checks now")
+replace: ("verify-not", "Run the project's checks now")
+caught-by:
+    cortex-tui app::tests::commands::verify_asks_for_the_checks_and_says_why_none_could_run
+    cortex-tui app::tests::help_lists_every_command_and_the_keys
+
+[break] more-than-sixteen-read-ahead
+rule: At most 16 files are read ahead for one prompt, as the core reads.
+file: crates/cortex-tui/src/app/state.rs
+in: warm
+find: if path.ends_with('/') || self.warmed >= WARM_FILES {
+replace: if path.ends_with('/') {
+caught-by:
+    cortex-tui app::tests::files::a_file_chosen_with_at_is_read_ahead_and_a_refusal_is_not_said
+
+[break] a-folder-is-read-ahead
+rule: A folder chosen with @ is not a file to read ahead.
+file: crates/cortex-tui/src/app/state.rs
+in: warm
+find: if path.ends_with('/') || self.warmed >= WARM_FILES {
+replace: if self.warmed >= WARM_FILES {
+caught-by:
+    cortex-tui app::tests::files::a_file_chosen_with_at_is_read_ahead_and_a_refusal_is_not_said
+
+[break] a-warms-refusal-is-said
+rule: A read ahead's refusal is not said: nothing the person asked for depends on it.
+file: crates/cortex-tui/src/app/state.rs
+find: (Pending::Warm, _) => {}
+replace: (Pending::Warm, Ok(_)) => {}
+caught-by:
+    cortex-tui app::tests::files::a_file_chosen_with_at_is_read_ahead_and_a_refusal_is_not_said
+
+[break] a-chosen-file-is-not-read-ahead
+rule: A file chosen from the @ menu is read ahead.
+file: crates/cortex-tui/src/input.rs
+in: accept
+find: Outcome::FileChosen(row.label)
+replace: Outcome::Changed
+caught-by:
+    cortex-tui app::tests::files::a_file_chosen_with_at_is_read_ahead_and_a_refusal_is_not_said
