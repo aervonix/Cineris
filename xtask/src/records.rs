@@ -16,10 +16,12 @@
 //! its level; one it has not is added at the end. Nothing else in the file
 //! is touched.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::Result;
+use crate::compare::{self, Side};
 use crate::junit::{self, TestCase};
 use crate::runs::{self, Measured, RunInfo};
 use crate::tiers::{self, Os, Tier};
@@ -201,6 +203,13 @@ fn os_name(os: Os) -> &'static str {
 pub(crate) struct Sides {
     pub(crate) base: Vec<Vec<TestCase>>,
     pub(crate) head: Vec<Vec<TestCase>>,
+    /// The number of each round kept (counted from 1), in the order of
+    /// `base` and `head`. Empty: they are rounds 1, 2, 3, ….
+    pub(crate) numbers: Vec<usize>,
+    /// The rounds left out of `base` and `head`, one line each: a side
+    /// failed in them, or kept no report. `ab` leaves a round out of its
+    /// comparison for the same reasons.
+    pub(crate) left_out: Vec<String>,
 }
 
 /// What an A/B of one OS came to: each tier's time above the start, and
@@ -212,6 +221,15 @@ pub(crate) struct Compared {
     pub(crate) start: f64,
     /// For each tier, (head, head's tests, base, base's tests).
     pub(crate) tiers: Vec<(Tier, f64, usize, f64, usize)>,
+    /// The rounds that were compared, counted from 1.
+    pub(crate) numbers: Vec<usize>,
+    /// Each side's rounds, and each side's test by test median: what the
+    /// tiers are the totals of, kept for the detail and the rounds' table.
+    pub(crate) base_rounds: Vec<Vec<TestCase>>,
+    pub(crate) head_rounds: Vec<Vec<TestCase>>,
+    pub(crate) base: Vec<TestCase>,
+    pub(crate) head: Vec<TestCase>,
+    pub(crate) left_out: Vec<String>,
 }
 
 /// The rounds both sides finished, or none when there is no such round. A
@@ -224,6 +242,7 @@ pub(crate) fn complete_rounds(mut sides: Sides) -> Option<Sides> {
     }
     sides.base.truncate(rounds);
     sides.head.truncate(rounds);
+    sides.numbers.truncate(rounds);
     Some(sides)
 }
 
@@ -249,12 +268,50 @@ pub(crate) fn compare(os: Os, sides: &Sides) -> Compared {
             )
         })
         .collect();
+    let rounds = sides.head.len().min(sides.base.len());
     Compared {
         os,
-        rounds: sides.head.len().min(sides.base.len()),
+        rounds,
         start,
         tiers,
+        numbers: if sides.numbers.len() == rounds {
+            sides.numbers.clone()
+        } else {
+            (1..=rounds).collect()
+        },
+        base_rounds: sides.base.clone(),
+        head_rounds: sides.head.clone(),
+        base,
+        head,
+        left_out: sides.left_out.clone(),
     }
+}
+
+/// Each round's tier times above the start, and the tiers' times, as the
+/// A/B run printed them (`ab::rounds_table`): the spread of one side is the
+/// noise a difference has to stand out of.
+pub(crate) fn rounds_of(one: &Compared) -> String {
+    crate::ab::rounds_table(&crate::ab::Compared {
+        numbers: one.numbers.clone(),
+        base: one.base_rounds.clone(),
+        head: one.head_rounds.clone(),
+    })
+}
+
+/// What moved in one OS's A/B, below its tier table: the crates and the
+/// tests that moved most, each tier, `top` tests of each (0: none, and no
+/// detail at all).
+pub(crate) fn detail_of(one: &Compared, against: &str, top: usize) -> String {
+    if top == 0 {
+        return String::new();
+    }
+    let side = |label: &str, cases: &[TestCase]| Side {
+        label: label.to_owned(),
+        cases: cases.to_vec(),
+    };
+    let head = side("the PR", &one.head);
+    let base = side(against, &one.base);
+    compare::detail(&head, &base, one.start, top, ("PR", against))
 }
 
 fn signed(change: f64) -> String {
@@ -411,102 +468,407 @@ pub(crate) fn with_section(text: &str, heading: &str, body: &str) -> Result<Stri
     Ok(out)
 }
 
-/// Writes each `(heading, body)` as a section of `file`, all of them or,
-/// when one is refused, none.
-fn write_sections(file: &Path, sections: &[(String, String)]) -> Result<()> {
+/// Where `--write` puts the tables, and what it calls the section.
+///
+/// Without either flag the section is the one the command has always
+/// written: `## On the pull request` for a run's tables, one `## <OS>, both
+/// trees on one runner` for each OS of an A/B, each found by its heading
+/// between the plain marks.
+///
+/// - `--section NAME` makes the tables **one section named NAME**, found
+///   by its own marks, which carry the name. A step that writes several
+///   (the pull request's, then the review's fixes') names each, and writing
+///   one again replaces only that one. Its heading, when it is added, is
+///   `## NAME` (an A/B's two OSes are `###` headings inside it).
+/// - `--heading TEXT` is the heading a section is added with, when it
+///   should not be its name: a dated one, as an older step's page has
+///   (`After the review: the fixes' pull request (#56), 2026-11-15`). Alone,
+///   it is the name too.
+///
+/// A section is added at the end of the page, never inside another; once it
+/// is there, the marks find it wherever it has been moved to, and its
+/// heading may be edited. A page's section of that heading that the tool
+/// did not write (an older page's, by hand, with no marks) is never
+/// written over: it is refused, and the tables go under a heading of their
+/// own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Placing {
+    pub(crate) section: Option<String>,
+    pub(crate) heading: Option<String>,
+}
+
+impl Placing {
+    /// Whether either flag was given.
+    pub(crate) fn is_given(&self) -> bool {
+        self.section.is_some() || self.heading.is_some()
+    }
+
+    /// Refuses a name or a heading that could not be written back and
+    /// found: empty, with a line break, or with what would end a mark.
+    pub(crate) fn check(&self) -> Result<()> {
+        if let Some(section) = &self.section {
+            Self::text_ok("--section", section)?;
+            if section.contains('"') {
+                return Err("`--section` may not hold a double quote: the marks quote it".into());
+            }
+        }
+        if let Some(heading) = &self.heading {
+            Self::text_ok("--heading", heading)?;
+            if heading.starts_with('#') {
+                return Err(
+                    "`--heading` is the heading's text: ci-times writes the `## ` before it".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn text_ok(flag: &str, text: &str) -> Result<()> {
+        if text.trim() != text || text.is_empty() {
+            return Err(format!(
+                "`{flag}` is empty or has white space at either end: `{text}`"
+            ));
+        }
+        if text.contains(['\n', '\r']) || text.contains("-->") {
+            return Err(format!(
+                "`{flag}` is one line and may not hold `-->`: `{text}`"
+            ));
+        }
+        Ok(())
+    }
+
+    /// The section's name and its heading, `default` being the heading the
+    /// command writes under when it is told neither.
+    fn resolve(&self, default: &str) -> (Option<String>, String) {
+        match (&self.section, &self.heading) {
+            (Some(name), heading) => (
+                Some(name.clone()),
+                heading.clone().unwrap_or_else(|| name.clone()),
+            ),
+            (None, Some(heading)) => (Some(heading.clone()), heading.clone()),
+            (None, None) => (None, default.to_owned()),
+        }
+    }
+}
+
+/// What opens and closes a named section's text.
+fn named_marks(name: &str) -> (String, String) {
+    (
+        format!(
+            "<!-- written by cargo xtask ci-times, section \"{name}\": it replaces this up to the \
+             end mark -->"
+        ),
+        format!("<!-- end of what cargo xtask ci-times wrote, section \"{name}\" -->"),
+    )
+}
+
+/// The lines of `lines` that are `mark`, outside a fenced block.
+fn mark_lines(lines: &[&str], mark: &str) -> Vec<usize> {
+    let mut fenced = false;
+    let mut found = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        } else if !fenced && line.trim_end() == mark {
+            found.push(index);
+        }
+    }
+    found
+}
+
+/// `text` with `body` as what `ci-times` wrote in the section called `name`:
+/// found by its marks wherever they are, and replaced between them with
+/// everything else kept. A section that has no marks of that name is added
+/// at the end of the page under `## heading`, unless the page has a heading
+/// of that text already: that one was written by hand, or under the plain
+/// marks, and is refused, as it would lose what it says. Marks that are not
+/// one pair, in order, are refused too.
+pub(crate) fn with_named_section(
+    text: &str,
+    name: &str,
+    heading: &str,
+    body: &str,
+) -> Result<String> {
+    let (open_mark, close_mark) = named_marks(name);
+    let block = format!("{open_mark}\n{}\n\n{close_mark}\n", body.trim_end());
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let opens = mark_lines(&lines, &open_mark);
+    let closes = mark_lines(&lines, &close_mark);
+    match (opens.as_slice(), closes.as_slice()) {
+        ([open], [close]) if open < close => {
+            let mut out: String = lines[..*open].concat();
+            out.push_str(&block);
+            out.push_str(&lines[close + 1..].concat());
+            Ok(out)
+        }
+        ([_], [_]) => Err(format!("the section \"{name}\" has its marks out of order")),
+        ([], []) => {
+            let line = format!("## {heading}");
+            let mut fenced = false;
+            let there = lines
+                .iter()
+                .any(|each| is_heading(each, &mut fenced) && each.trim_end() == line);
+            if there {
+                return Err(format!(
+                    "the heading \"{heading}\" is already there, and ci-times did not write it \
+                     as the section \"{name}\": it would put a second under it, or write over \
+                     what it says. Give the section a heading of its own with `--heading`"
+                ));
+            }
+            let mut out = text.trim_end().to_owned();
+            out.push_str(&format!("\n\n{line}\n\n{block}"));
+            Ok(out)
+        }
+        _ => Err(format!(
+            "the section \"{name}\" has {} opening and {} closing marks: one of each is meant. \
+             Take the extra ones out",
+            opens.len(),
+            closes.len()
+        )),
+    }
+}
+
+/// A section to write: its tables, and where they go.
+pub(crate) struct Section {
+    /// `Some`: a section found by its own marks. `None`: the plain section
+    /// under `heading`.
+    pub(crate) name: Option<String>,
+    pub(crate) heading: String,
+    pub(crate) body: String,
+}
+
+/// Writes each section into `file`, all of them or, when one is refused,
+/// none.
+fn write_sections(file: &Path, sections: &[Section]) -> Result<()> {
     let mut text = std::fs::read_to_string(file)
         .map_err(|error| format!("could not read {}: {error}", file.display()))?;
-    for (heading, body) in sections {
-        text = with_section(&text, heading, body)
-            .map_err(|error| format!("{}: {error}. Nothing was written.", file.display()))?;
+    for section in sections {
+        text = match &section.name {
+            None => with_section(&text, &section.heading, &section.body),
+            Some(name) => with_named_section(&text, name, &section.heading, &section.body),
+        }
+        .map_err(|error| format!("{}: {error}. Nothing was written.", file.display()))?;
     }
     std::fs::write(file, text)
         .map_err(|error| format!("could not write {}: {error}", file.display()))?;
-    for (heading, _) in sections {
-        println!("wrote the section \"{heading}\" of {}", file.display());
+    for section in sections {
+        println!(
+            "wrote the section \"{}\" of {}",
+            section.name.as_ref().unwrap_or(&section.heading),
+            file.display()
+        );
     }
     Ok(())
+}
+
+/// What an A/B run's artifact for one OS held: its reports by side and
+/// round. A round is kept when both sides' reports are there and no test
+/// failed in either; otherwise it is left out, and `left_out` says why, as
+/// `ab` leaves a round out of its own comparison.
+pub(crate) fn sides_of(run: u64, artifact: &str, files: &[PathBuf]) -> Result<Sides> {
+    let mut rounds: BTreeMap<usize, (Option<&PathBuf>, Option<&PathBuf>)> = BTreeMap::new();
+    for path in files {
+        let Some(file) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if let Some((side, round)) = runs::ab_report_name(file) {
+            let entry = rounds.entry(round).or_default();
+            if side == "base" {
+                entry.0 = Some(path);
+            } else {
+                entry.1 = Some(path);
+            }
+        }
+    }
+    if rounds.is_empty() {
+        return Err(format!(
+            "run {run}'s `{artifact}` holds no A/B reports: was it a `try` run with `-f \
+             against=…`?"
+        ));
+    }
+    let read = |path: &PathBuf| -> Result<Vec<TestCase>> {
+        let xml = std::fs::read_to_string(path)
+            .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+        Ok(junit::parse(&xml))
+    };
+    let mut sides = Sides::default();
+    for (round, (base, head)) in rounds {
+        let (Some(base), Some(head)) = (base, head) else {
+            let missing = match (base, head) {
+                (None, None) => "both sides",
+                (None, Some(_)) => "base",
+                _ => "head",
+            };
+            sides
+                .left_out
+                .push(format!("round {round}: {missing} kept no report"));
+            continue;
+        };
+        let (base, head) = (read(base)?, read(head)?);
+        let failed = |name: &str, cases: &[TestCase]| -> Option<String> {
+            let names: Vec<String> = cases
+                .iter()
+                .filter(|case| case.failed)
+                .map(TestCase::id)
+                .collect();
+            (!names.is_empty()).then(|| format!("{name} failed: {}", names.join(", ")))
+        };
+        let reasons: Vec<String> = [failed("base", &base), failed("head", &head)]
+            .into_iter()
+            .flatten()
+            .collect();
+        if !reasons.is_empty() {
+            sides
+                .left_out
+                .push(format!("round {round}: {}", reasons.join("; ")));
+        } else if base.is_empty() || head.is_empty() {
+            sides
+                .left_out
+                .push(format!("round {round}: a report lists no tests"));
+        } else {
+            sides.base.push(base);
+            sides.head.push(head);
+            sides.numbers.push(round);
+        }
+    }
+    Ok(sides)
 }
 
 /// Every A/B report a `try` run kept for `os`: `<side>-round-<n>.xml`,
 /// found anywhere under its artifact, which keeps the runner's paths.
 pub(crate) fn ab_reports(run: u64, os: Os) -> Result<Option<Sides>> {
-    let name = match os {
-        Os::Linux => "try-linux",
-        Os::Windows => "try-windows",
-    };
+    let name = runs::try_artifact_name(os);
     let Some(directory) = runs::artifact_dir(run, name)? else {
         return Ok(None);
     };
-    let mut found: Vec<(String, u32, PathBuf)> = Vec::new();
-    let mut stack = vec![directory];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)
-            .map_err(|error| format!("could not list {}: {error}", dir.display()))?
-            .flatten()
-        {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            let file = entry.file_name().to_string_lossy().into_owned();
-            if let Some((side, round)) = file
-                .strip_suffix(".xml")
-                .and_then(|stem| stem.split_once("-round-"))
-                && let Ok(round) = round.parse()
-                && (side == "base" || side == "head")
-            {
-                found.push((side.to_owned(), round, path));
-            }
-        }
-    }
-    if found.is_empty() {
-        return Err(format!(
-            "run {run}'s `{name}` holds no A/B reports: was it a `try` run with `-f against=…`?"
-        ));
-    }
-    found.sort_by_key(|(side, round, _)| (side.clone(), *round));
-    let mut sides = Sides::default();
-    for (side, _, path) in found {
-        let cases = junit::read(&path)?;
-        if side == "base" {
-            sides.base.push(cases);
-        } else {
-            sides.head.push(cases);
-        }
-    }
-    Ok(Some(sides))
+    sides_of(run, name, &runs::files_under(&directory)?).map(Some)
 }
 
-/// `cargo xtask ci-times --ab RUN [--against REF] [--write FILE]`.
-pub(crate) fn ab_times(run: u64, against: &str, write: Option<&Path>) -> Result<()> {
+/// What `ci-times --ab` and `try-result` print below one OS's tier table of
+/// an A/B: the rounds that were left out and why, and what moved by crate
+/// and by test (`top` tests a tier; 0 prints neither the detail nor the
+/// rounds' table).
+pub(crate) fn ab_detail_text(one: &Compared, against: &str, top: usize) -> String {
+    let mut text = String::new();
+    if top > 0 {
+        let _ = writeln!(text, "{}", rounds_of(one));
+    }
+    if !one.left_out.is_empty() {
+        let _ = writeln!(
+            text,
+            "Rounds left out of the comparison, with the other side's of the same round:"
+        );
+        for line in &one.left_out {
+            let _ = writeln!(text, "  {line}");
+        }
+        text.push('\n');
+    }
+    if top > 0 {
+        let _ = write!(
+            text,
+            "What moved, the PR against {against}, each side's median of {} runs:\n{}",
+            one.rounds,
+            detail_of(one, against, top)
+        );
+    }
+    text
+}
+
+/// The A/B of each OS a `try` run has, as far as any round was finished by
+/// both sides. An OS with none is named in the returned notes, with why.
+pub(crate) fn ab_compared(run: u64) -> Result<(Vec<Compared>, Vec<String>)> {
     let mut compared = Vec::new();
+    let mut notes = Vec::new();
     for os in [Os::Windows, Os::Linux] {
         if let Some(sides) = ab_reports(run, os)? {
+            let left_out = sides.left_out.clone();
             match complete_rounds(sides) {
                 Some(sides) => compared.push(compare(os, &sides)),
-                None => println!(
+                None => notes.push(format!(
                     "run {run}: {} has no round that both sides finished (a test that fails \
-                     ends an A/B run), so it is left out",
-                    os_name(os)
-                ),
+                     ends an A/B round), so it is left out. {}",
+                    os_name(os),
+                    left_out.join("; ")
+                )),
             }
         }
+    }
+    Ok((compared, notes))
+}
+
+/// The sections `--write` puts an A/B's tables in: one for each OS, or,
+/// when the placing names one, the OSes together as `###` parts of it.
+fn ab_sections(run: u64, against: &str, compared: &[Compared], placing: &Placing) -> Vec<Section> {
+    let each = |one: &Compared| (ab_heading(one.os), ab_section(run, against, one));
+    let (name, heading) = placing.resolve("");
+    match name {
+        None => compared
+            .iter()
+            .map(|one| {
+                let (heading, body) = each(one);
+                Section {
+                    name: None,
+                    heading,
+                    body,
+                }
+            })
+            .collect(),
+        Some(name) => {
+            let body = compared
+                .iter()
+                .map(|one| {
+                    let (heading, body) = each(one);
+                    format!("### {heading}\n\n{}", body.trim_end())
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            vec![Section {
+                name: Some(name),
+                heading,
+                body,
+            }]
+        }
+    }
+}
+
+/// `cargo xtask ci-times --ab RUN [--against REF] [--write FILE]
+/// [--section NAME] [--heading TEXT] [--top N]`.
+pub(crate) fn ab_times(
+    run: u64,
+    against: &str,
+    write: Option<&Path>,
+    placing: &Placing,
+    top: usize,
+) -> Result<()> {
+    placing.check()?;
+    if placing.is_given() && write.is_none() {
+        return Err("`--section` and `--heading` say where `--write` puts the tables".to_owned());
+    }
+    let (compared, notes) = ab_compared(run)?;
+    for note in &notes {
+        println!("{note}");
     }
     if compared.is_empty() {
         return Err(format!(
             "run {run} has no A/B round that both sides finished, on any OS"
         ));
     }
-    let sections: Vec<(String, String)> = compared
-        .iter()
-        .map(|one| (ab_heading(one.os), ab_section(run, against, one)))
-        .collect();
-    for (heading, section) in &sections {
-        println!("## {heading}\n\n{section}");
+    let sections = ab_sections(run, against, &compared, placing);
+    for one in &compared {
+        println!(
+            "## {}\n\n{}",
+            ab_heading(one.os),
+            ab_section(run, against, one)
+        );
     }
     println!("{}", pr_ab_section(run, &compared));
+    for one in &compared {
+        println!(
+            "## {}, what moved\n\n{}",
+            os_name(one.os),
+            ab_detail_text(one, against, top)
+        );
+    }
     if let Some(file) = write {
         write_sections(file, &sections)?;
     }
@@ -514,11 +876,28 @@ pub(crate) fn ab_times(run: u64, against: &str, write: Option<&Path>) -> Result<
 }
 
 /// What `ci-times RUN …` prints and, with `--write`, writes.
-pub(crate) fn pr_times(runs: &[Measured], pr: Option<u64>, write: Option<&Path>) -> Result<()> {
+pub(crate) fn pr_times(
+    runs: &[Measured],
+    pr: Option<u64>,
+    write: Option<&Path>,
+    placing: &Placing,
+) -> Result<()> {
+    placing.check()?;
+    if placing.is_given() && write.is_none() {
+        return Err("`--section` and `--heading` say where `--write` puts the tables".to_owned());
+    }
     let section = pr_section(runs, pr);
     println!("## {PR_SECTION}\n\n{section}");
     if let Some(file) = write {
-        write_sections(file, &[(PR_SECTION.to_owned(), section)])?;
+        let (name, heading) = placing.resolve(PR_SECTION);
+        write_sections(
+            file,
+            &[Section {
+                name,
+                heading,
+                body: section,
+            }],
+        )?;
     }
     Ok(())
 }
@@ -620,6 +999,7 @@ mod tests {
                 cases(1.504, 1.004, 3.004),
                 cases(0.004, 1.004, 3.004),
             ],
+            ..Sides::default()
         };
 
         let compared = compare(Os::Windows, &sides);
@@ -724,12 +1104,14 @@ mod tests {
         let ended = Sides {
             base: vec![round()],
             head: vec![],
+            ..Sides::default()
         };
         assert!(complete_rounds(ended).is_none());
         // It ended in the third: two rounds are compared.
         let partly = Sides {
             base: vec![round(), round(), round()],
             head: vec![round(), round()],
+            ..Sides::default()
         };
         let kept = complete_rounds(partly).unwrap();
         assert_eq!((kept.base.len(), kept.head.len()), (2, 2));
@@ -741,5 +1123,356 @@ mod tests {
         assert_eq!(thousands(7), "7");
         assert_eq!(thousands(1525), "1,525");
         assert_eq!(thousands(1_234_567), "1,234,567");
+    }
+
+    /// A page of an older step: no marks, a hand-written section of a
+    /// dated heading, and a table in it.
+    const OLD_PAGE: &str = "# After step 18: the map\n\n## On the pull request\n\nBy hand.\n\n## After the independent review: the fixes' pull request (#56)\n\nMeasured on 2026-11-15.\n\n| Job | Main |\n|---|---|\n| `lint-linux` | 50 s |\n";
+
+    fn named(page: &str, name: &str, heading: &str, body: &str) -> String {
+        with_named_section(page, name, heading, body).unwrap()
+    }
+
+    #[test]
+    fn a_named_section_is_added_at_the_end_with_marks_that_carry_its_name() {
+        let written = named(OLD_PAGE, "fixes", "The fixes, 2026-11-16", "Table one.\n");
+        let (open, close) = named_marks("fixes");
+        assert_eq!(
+            written,
+            format!("{OLD_PAGE}\n## The fixes, 2026-11-16\n\n{open}\nTable one.\n\n{close}\n")
+        );
+        // The older sections are as they were, byte for byte.
+        assert!(written.starts_with(OLD_PAGE), "{written}");
+        assert!(open.contains("section \"fixes\""), "{open}");
+        // A page that ends without a line break gets the same.
+        assert_eq!(
+            named(
+                OLD_PAGE.trim_end(),
+                "fixes",
+                "The fixes, 2026-11-16",
+                "Table one.\n"
+            ),
+            written
+        );
+    }
+
+    #[test]
+    fn writing_a_named_section_again_replaces_only_it_wherever_it_has_gone() {
+        let first = named(OLD_PAGE, "pr", "On the pull request, again", "PR one.");
+        let both = named(&first, "fixes", "The fixes", "Fixes one.");
+        // Each is replaced alone; the other, the notes and the older
+        // sections stay.
+        let noted = both.replace(
+            "\n## The fixes\n",
+            "\nWhat the first runs found.\n\n## The fixes\n",
+        );
+        let again = named(&noted, "pr", "ignored: the section is there", "PR two.");
+        assert_eq!(again, noted.replace("PR one.", "PR two."));
+        let again = named(&again, "fixes", "ignored", "Fixes two.");
+        assert_eq!(
+            again,
+            noted
+                .replace("PR one.", "PR two.")
+                .replace("Fixes one.", "Fixes two.")
+        );
+        // Written twice, it is the same page.
+        assert_eq!(named(&again, "fixes", "ignored", "Fixes two."), again);
+        // The heading may be edited by hand, and the section moved: the
+        // marks are what finds it.
+        let edited = again.replace("## The fixes", "## The fixes' pull request (#56)");
+        let replaced = named(&edited, "fixes", "The fixes", "Fixes three.");
+        assert_eq!(replaced, edited.replace("Fixes two.", "Fixes three."));
+        assert_eq!(replaced.matches("The fixes").count(), 1, "{replaced}");
+    }
+
+    #[test]
+    fn a_named_section_never_writes_over_what_it_did_not_write() {
+        // The older page's hand-written heading, with no marks.
+        let error = with_named_section(
+            OLD_PAGE,
+            "fixes",
+            "After the independent review: the fixes' pull request (#56)",
+            "x",
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("is already there, and ci-times did not write it"),
+            "{error}"
+        );
+        assert!(error.contains("--heading"), "{error}");
+        // A heading the plain marks wrote is not a named section's.
+        let plain = with_section("# T\n", PR_SECTION, "plain").unwrap();
+        assert!(with_named_section(&plain, PR_SECTION, PR_SECTION, "x").is_err());
+        // A heading inside a fenced block is not one, and nor is a mark.
+        let (open, close) = named_marks("n");
+        let fenced = format!("# T\n\n```text\n## Fixes\n{open}\n```\n");
+        let written = named(&fenced, "n", "Fixes", "body");
+        assert!(written.starts_with(&fenced), "{written}");
+        assert_eq!(written.matches(&open).count(), 2, "{written}");
+        assert!(
+            written.ends_with(&format!("{open}\nbody\n\n{close}\n")),
+            "{written}"
+        );
+    }
+
+    #[test]
+    fn marks_that_are_not_one_pair_in_order_are_refused_and_nothing_is_guessed() {
+        let (open, close) = named_marks("n");
+        for (page, expected) in [
+            (format!("# T\n\n{open}\nx\n"), "1 opening and 0 closing"),
+            (format!("# T\n\n{close}\n"), "0 opening and 1 closing"),
+            (
+                format!("# T\n\n{open}\n{open}\nx\n{close}\n"),
+                "2 opening and 1 closing",
+            ),
+            (format!("# T\n\n{close}\nx\n{open}\n"), "out of order"),
+        ] {
+            let error = with_named_section(&page, "n", "N", "y").unwrap_err();
+            assert!(error.contains(expected), "{page:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_placing_decides_the_name_and_the_heading_and_refuses_text_it_could_not_find_again() {
+        let placing = |section: Option<&str>, heading: Option<&str>| Placing {
+            section: section.map(str::to_owned),
+            heading: heading.map(str::to_owned),
+        };
+        assert_eq!(
+            placing(None, None).resolve("Default"),
+            (None, "Default".to_owned())
+        );
+        assert_eq!(
+            placing(Some("fixes"), None).resolve("Default"),
+            (Some("fixes".to_owned()), "fixes".to_owned())
+        );
+        assert_eq!(
+            placing(Some("fixes"), Some("The fixes, 2026-11-16")).resolve("Default"),
+            (Some("fixes".to_owned()), "The fixes, 2026-11-16".to_owned())
+        );
+        // A heading alone is the name too: an older page's way in.
+        assert_eq!(
+            placing(None, Some("Dated")).resolve("Default"),
+            (Some("Dated".to_owned()), "Dated".to_owned())
+        );
+        assert!(!placing(None, None).is_given() && placing(None, Some("x")).is_given());
+        for (given, expected) in [
+            (placing(Some(""), None), "empty"),
+            (placing(Some(" x"), None), "white space"),
+            (placing(Some("a\nb"), None), "one line"),
+            (placing(Some("a --> b"), None), "one line"),
+            (placing(Some("a\"b"), None), "double quote"),
+            (placing(None, Some("## x")), "the `## ` before it"),
+            (placing(None, Some("x\n")), "white space"),
+        ] {
+            let error = given.check().unwrap_err();
+            assert!(error.contains(expected), "{given:?}: {error}");
+        }
+        assert!(
+            placing(Some("The review's fixes"), Some("A: b (#56)"))
+                .check()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_write_into_an_older_page_adds_its_sections_and_changes_nothing_else() {
+        let file = std::env::temp_dir().join(format!("xtask-ci-times-{}.md", std::process::id()));
+        std::fs::write(&file, OLD_PAGE).unwrap();
+        let sections = |body: &str| {
+            vec![Section {
+                name: Some("fixes".to_owned()),
+                heading: "The fixes".to_owned(),
+                body: body.to_owned(),
+            }]
+        };
+        write_sections(&file, &sections("One.")).unwrap();
+        let first = std::fs::read_to_string(&file).unwrap();
+        assert!(first.starts_with(OLD_PAGE), "{first}");
+        write_sections(&file, &sections("Two.")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            first.replace("One.", "Two.")
+        );
+        // All or none: the second of two that is refused leaves the file.
+        let before = std::fs::read_to_string(&file).unwrap();
+        let both = vec![
+            Section {
+                name: Some("other".to_owned()),
+                heading: "Other".to_owned(),
+                body: "x".to_owned(),
+            },
+            Section {
+                name: Some("by-hand".to_owned()),
+                heading: "On the pull request".to_owned(),
+                body: "y".to_owned(),
+            },
+        ];
+        let error = write_sections(&file, &both).unwrap_err();
+        assert!(error.contains("Nothing was written"), "{error}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+        let _ = std::fs::remove_file(file);
+    }
+
+    fn compared_of(os: Os, rounds: usize) -> Compared {
+        let sides = Sides {
+            base: (0..rounds).map(|_| cases(1.004, 2.004, 3.004)).collect(),
+            head: (0..rounds).map(|_| cases(1.504, 1.004, 3.004)).collect(),
+            numbers: (1..=rounds).collect(),
+            left_out: vec!["round 9: head failed: a b".to_owned()],
+        };
+        compare(os, &sides)
+    }
+
+    #[test]
+    fn an_abs_sections_are_one_for_each_os_or_one_named_with_a_part_for_each() {
+        let compared = [compared_of(Os::Windows, 3), compared_of(Os::Linux, 3)];
+        // As ever: a section a heading, between the plain marks.
+        let plain = ab_sections(43, "main", &compared, &Placing::default());
+        let headings: Vec<&str> = plain.iter().map(|each| each.heading.as_str()).collect();
+        assert_eq!(
+            headings,
+            [
+                "Windows, both trees on one runner",
+                "Linux, both trees on one runner"
+            ]
+        );
+        assert!(plain.iter().all(|each| each.name.is_none()));
+        // Named: one section, the OSes as parts of it.
+        let placing = Placing {
+            section: Some("fixes".to_owned()),
+            heading: Some("The fixes' A/B".to_owned()),
+        };
+        let named = ab_sections(43, "main", &compared, &placing);
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].name.as_deref(), Some("fixes"));
+        assert_eq!(named[0].heading, "The fixes' A/B");
+        let body = &named[0].body;
+        assert!(
+            body.starts_with(
+                "### Windows, both trees on one runner\n\n`try` with `-f against=main`"
+            ),
+            "{body}"
+        );
+        assert!(
+            body.contains("\n\n### Linux, both trees on one runner\n\n"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn what_moved_in_an_ab_is_each_tiers_crates_and_tests_with_the_rounds_left_out() {
+        let one = compared_of(Os::Windows, 3);
+        let text = ab_detail_text(&one, "main", 3);
+        assert!(
+            text.contains("Each round, each tier's time above the start"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Rounds left out of the comparison, with the other side's of the same round:\n  round 9: head failed: a b\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("What moved, the PR against main, each side's median of 3 runs:"),
+            "{text}"
+        );
+        // Unit: cortex-base's slow test moved 0.5 s; integration: 1 s faster.
+        assert!(text.contains("tier 1, unit (time above start)"), "{text}");
+        assert!(
+            text.contains("cortex-base  t::slow  (1.000 -> 1.500 s)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("cortex-core::it  a::b  (2.000 -> 1.000 s)"),
+            "{text}"
+        );
+        // System tests did not move: no tier 3 part.
+        assert!(!text.contains("tier 3"), "{text}");
+        // `--top 0` is no detail and no rounds' table, and keeps the list
+        // of rounds left out.
+        let none = ab_detail_text(&one, "main", 0);
+        assert!(none.contains("round 9"), "{none}");
+        assert!(
+            !none.contains("What moved") && !none.contains("Each round"),
+            "{none}"
+        );
+    }
+
+    /// A folder of the test's own, emptied.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("xtask-records-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn report_with(failure: bool) -> String {
+        let failed = if failure {
+            "<failure message=\"boom\" type=\"test failure with exit code 101\">no</failure>"
+        } else {
+            ""
+        };
+        format!(
+            "<testsuites><testsuite name=\"cortex-base\"><testcase name=\"t::a\" classname=\"cortex-base\" time=\"0.010\">{failed}</testcase></testsuite></testsuites>"
+        )
+    }
+
+    #[test]
+    fn a_failed_round_or_a_lone_report_is_left_out_with_its_reason_and_the_rest_keep_their_numbers()
+    {
+        let dir = scratch("sides");
+        let mut files = Vec::new();
+        let mut keep = |name: &str, failure: bool| {
+            let path = dir.join("runner").join("target").join("ab").join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, report_with(failure)).unwrap();
+            files.push(path);
+        };
+        for round in 1..=5 {
+            keep(&format!("base-round-{round}.xml"), round == 3);
+            // Round 4's head report never came.
+            if round != 4 {
+                keep(&format!("head-round-{round}.xml"), round == 1);
+            }
+        }
+        // Not a round's report.
+        std::fs::write(dir.join("try-output.log"), "log").unwrap();
+        files.push(dir.join("try-output.log"));
+
+        let sides = sides_of(7, "try-windows", &files).unwrap();
+
+        // Rounds 2 and 5 were finished by both, and keep their numbers.
+        assert_eq!(sides.numbers, [2, 5]);
+        assert_eq!((sides.base.len(), sides.head.len()), (2, 2));
+        assert_eq!(
+            sides.left_out,
+            [
+                "round 1: head failed: cortex-base t::a",
+                "round 3: base failed: cortex-base t::a",
+                "round 4: head kept no report",
+            ]
+        );
+        let none = sides_of(7, "try-windows", &files[..0]).unwrap_err();
+        assert!(none.contains("holds no A/B reports"), "{none}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_rounds_that_were_compared_keep_their_numbers_in_the_rounds_table() {
+        let sides = Sides {
+            base: vec![cases(1.004, 2.004, 3.004), cases(1.004, 2.004, 3.004)],
+            head: vec![cases(1.504, 2.004, 3.004), cases(1.504, 2.004, 3.004)],
+            numbers: vec![1, 4],
+            left_out: vec![],
+        };
+        let one = compare(Os::Linux, &sides);
+        assert_eq!(one.numbers, [1, 4]);
+        let table = rounds_of(&one);
+        let rounds: Vec<&str> = table
+            .lines()
+            .filter(|line| line.contains("base") || line.contains("head"))
+            .filter_map(|line| line.split_whitespace().next())
+            .collect();
+        assert!(rounds.contains(&"4") && !rounds.contains(&"2"), "{table}");
     }
 }

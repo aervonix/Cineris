@@ -7,7 +7,7 @@
 //! asks for nothing but reads.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
@@ -107,7 +107,7 @@ pub(crate) fn parse_artifacts(listed: &str) -> Result<Vec<(String, bool)>> {
 
 /// A run's artifacts, asked of GitHub. A failure here is an error, never
 /// "no artifacts": the network or the sign-in is not the run.
-fn artifacts(run: u64) -> Result<Vec<(String, bool)>> {
+pub(crate) fn artifacts(run: u64) -> Result<Vec<(String, bool)>> {
     parse_artifacts(&gh(&[
         "api",
         &format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/artifacts?per_page=100"),
@@ -195,6 +195,13 @@ pub(crate) fn run_of(source: &Source, needs: &[&str]) -> Result<Option<u64>> {
 /// directory of its own under `target/xtask-runs/`, and read from there
 /// afterwards. A run's artifacts do not change.
 ///
+/// A run of the `ci` workflow keeps it as `junit-<os>`. A run of the `try`
+/// workflow, which keeps no such artifact, is read from its own,
+/// `try-<os>`: the report of its tests in the `ci` profile
+/// (`target/nextest/ci/junit.xml`, wherever the artifact keeps the runner's
+/// paths). A `try` run that was an A/B holds two trees' reports and no one
+/// report, and is refused: `ci-times --ab` and `try-result` read it.
+///
 /// `None` only when the run made no such report. An expired report, a
 /// download that fails, and a question GitHub does not answer are errors.
 pub(crate) fn junit_of(run: u64, os: Os) -> Result<Option<PathBuf>> {
@@ -204,14 +211,20 @@ pub(crate) fn junit_of(run: u64, os: Os) -> Result<Option<PathBuf>> {
     if report.is_file() {
         return Ok(Some(report));
     }
-    match kept(&artifacts(run)?, name) {
-        Kept::Yes => {}
-        Kept::Never => return Ok(None),
-        Kept::Expired => {
-            return Err(format!(
-                "run {run}'s `{name}` has expired: a run's reports are kept for 14 days"
-            ));
+    let tried = try_artifact_name(os);
+    let tried_directory = download_root().join(run.to_string()).join(tried);
+    if tried_directory.join(".downloaded").is_file() {
+        return report_of_try(run, &tried_directory);
+    }
+    match which_artifact(run, &artifacts(run)?, os)? {
+        None => return Ok(None),
+        Some(chosen) if chosen == tried => {
+            return match artifact_dir(run, tried)? {
+                Some(directory) => report_of_try(run, &directory),
+                None => Ok(None),
+            };
         }
+        Some(_) => {}
     }
     // A partial download from an earlier attempt is not trusted.
     if directory.exists() {
@@ -234,6 +247,24 @@ pub(crate) fn junit_of(run: u64, os: Os) -> Result<Option<PathBuf>> {
             directory.display()
         ))
     }
+}
+
+/// Which of a run's artifacts holds the JUnit report of `os`: the `ci`
+/// workflow's `junit-<os>`, else a `try` run's `try-<os>`; none when the
+/// run kept neither, and an error when the one it kept has expired.
+fn which_artifact(run: u64, listed: &[(String, bool)], os: Os) -> Result<Option<&'static str>> {
+    for name in [artifact_name(os), try_artifact_name(os)] {
+        match kept(listed, name) {
+            Kept::Yes => return Ok(Some(name)),
+            Kept::Expired => {
+                return Err(format!(
+                    "run {run}'s `{name}` has expired: a run's reports are kept for 14 days"
+                ));
+            }
+            Kept::Never => {}
+        }
+    }
+    Ok(None)
 }
 
 /// The directory a run's artifact `name` is downloaded into, under
@@ -280,24 +311,125 @@ fn artifact_name(os: Os) -> &'static str {
     }
 }
 
-/// A report and its label, from wherever `source` says.
-pub(crate) fn report(source: &Source, os: Os) -> Result<(String, Vec<TestCase>)> {
-    match run_of(source, &[artifact_name(os)])? {
-        None => {
-            let Source::File(path) = source else {
-                unreachable!("only a file names no run")
-            };
-            Ok((path.display().to_string(), junit::read(path)?))
+/// The artifact a `try` run keeps for the runner of `os`.
+pub(crate) fn try_artifact_name(os: Os) -> &'static str {
+    match os {
+        Os::Linux => "try-linux",
+        Os::Windows => "try-windows",
+    }
+}
+
+/// Every file under `directory`, in path order: an artifact keeps the
+/// runner's paths, so a report is somewhere in it.
+pub(crate) fn files_under(directory: &Path) -> Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    let mut stack = vec![directory.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)
+            .map_err(|error| format!("could not list {}: {error}", dir.display()))?
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                found.push(path);
+            }
         }
-        Some(run) => {
-            let label = match source {
-                Source::Main => format!("run {run}, the main branch's latest successful"),
-                _ => format!("run {run}"),
+    }
+    found.sort();
+    Ok(found)
+}
+
+/// Whether `path` ends with these folders and file name, compared by name
+/// and not by the system's separator.
+pub(crate) fn ends_with_names(path: &Path, names: &[&str]) -> bool {
+    let parts: Vec<_> = path.components().collect();
+    parts.len() >= names.len()
+        && parts[parts.len() - names.len()..]
+            .iter()
+            .zip(names)
+            .all(|(part, name)| part.as_os_str() == *name)
+}
+
+/// The side and round of an A/B round's report: `base-round-3.xml` is
+/// `("base", 3)`.
+pub(crate) fn ab_report_name(file: &str) -> Option<(&str, usize)> {
+    let (side, round) = file.strip_suffix(".xml")?.split_once("-round-")?;
+    let round = round.parse().ok()?;
+    (side == "base" || side == "head").then_some((side, round))
+}
+
+/// The one report of a downloaded `try-<os>` artifact: its tests in the
+/// `ci` profile. An artifact of an A/B run holds none that is one run's,
+/// and says so.
+fn report_of_try(run: u64, directory: &Path) -> Result<Option<PathBuf>> {
+    let files = files_under(directory)?;
+    let is_ab = |file: &PathBuf| {
+        file.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| ab_report_name(name).is_some())
+    };
+    if files.iter().any(is_ab) {
+        return Err(format!(
+            "run {run} is a `try` A/B run (it kept both trees' reports, round by round): there is \
+             no one report to compare. `cargo xtask ci-times --ab {run}` or `cargo xtask \
+             try-result {run}` read it"
+        ));
+    }
+    Ok(files
+        .into_iter()
+        .find(|file| ends_with_names(file, &["nextest", "ci", "junit.xml"])))
+}
+
+/// A source whose run has been chosen: a report on disk, or a run of the
+/// `ci` or `try` workflow. `main` is chosen once, so that both OSes of a
+/// comparison are read from one run of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Resolved {
+    File(PathBuf),
+    Run { id: u64, main: bool },
+}
+
+/// The artifacts a run of `main` must have kept for every OS of `oses` to be
+/// read from it: one run of `main` for all of them, so that the two OSes of
+/// a comparison are of one commit.
+fn needs_of(oses: &[Os]) -> Vec<&'static str> {
+    oses.iter().map(|os| artifact_name(*os)).collect()
+}
+
+/// `source`'s run, when it names one, chosen so that it kept the report of
+/// every OS in `oses`.
+pub(crate) fn resolve(source: &Source, oses: &[Os]) -> Result<Resolved> {
+    let needs = needs_of(oses);
+    Ok(match source {
+        Source::File(path) => Resolved::File(path.clone()),
+        Source::Run(id) => Resolved::Run {
+            id: *id,
+            main: false,
+        },
+        Source::Main => Resolved::Run {
+            id: latest_main_run(&needs)?,
+            main: true,
+        },
+    })
+}
+
+/// A report and its label, from wherever `source` says, for `os`.
+pub(crate) fn report_of(source: &Resolved, os: Os) -> Result<(String, Vec<TestCase>)> {
+    match source {
+        Resolved::File(path) => Ok((path.display().to_string(), junit::read(path)?)),
+        Resolved::Run { id, main } => {
+            let label = if *main {
+                format!("run {id}, the main branch's latest successful")
+            } else {
+                format!("run {id}")
             };
-            let report = junit_of(run, os)?.ok_or_else(|| {
+            let report = junit_of(*id, os)?.ok_or_else(|| {
                 format!(
-                    "run {run} kept no `{}`: its tests did not run",
-                    artifact_name(os)
+                    "run {id} kept no `{}` or `{}`: its tests did not run",
+                    artifact_name(os),
+                    try_artifact_name(os)
                 )
             })?;
             Ok((label, junit::read(&report)?))
@@ -391,50 +523,111 @@ fn run_info(run: u64) -> Result<RunInfo> {
     ])?)
 }
 
-/// `cargo xtask ci-times <run> [--against <run>|main]`.
-pub(crate) fn ci_times(arguments: &[String]) -> Result<()> {
-    const USAGE: &str =
-        "usage: cargo xtask ci-times <RUN ID> [--against <RUN ID>|main] [--pr N] [--write FILE]
+/// What `ci-times` was asked for.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct TimesRequest {
+    run: Option<String>,
+    ab: Option<String>,
+    against: Option<String>,
+    pr: Option<u64>,
+    write: Option<PathBuf>,
+    placing: crate::records::Placing,
+    /// The tests of each tier that an A/B's detail lists.
+    top: usize,
+}
+
+/// How many of each tier's tests that moved most `ci-times --ab` lists.
+const TIMES_TOP: usize = 8;
+
+const TIMES_USAGE: &str =
+    "usage: cargo xtask ci-times <RUN ID> [--against <RUN ID>|main] [--pr N] [--write FILE]
+                            [--section NAME] [--heading TEXT]
        cargo xtask ci-times --ab <TRY RUN ID> [--against REF] [--write FILE]
+                            [--section NAME] [--heading TEXT] [--top N]
 
 The first writes the section \"On the pull request\" of a step's ci.md (with
 --write), and prints it: which pull request and which main, each job's time,
 and each tier's time above the start against its budget. The second does the
 same for each OS's section \"<OS>, both trees on one runner\" from a try run
-made with -f against=REF, and prints the pull request's CI section from it.
-What it writes goes between two marks, and writing again replaces only that;
-a section of that name it did not write is refused, and nothing is written.";
-    let mut run = None;
-    let mut ab = None;
-    let mut against = None;
-    let mut pr = None;
-    let mut write = None;
-    let mut rest = arguments.iter();
-    while let Some(argument) = rest.next() {
-        let mut value = || {
-            rest.next()
-                .ok_or_else(|| format!("`{argument}` needs a value\n{USAGE}"))
+made with -f against=REF, prints the pull request's CI section from it, and
+prints, for each OS, each tier's crates and tests that moved (--top N tests a
+tier, 8 when not given; 0 prints no detail). What it writes goes between two
+marks, and writing again replaces only that; a section of that name it did not
+write is refused, and nothing is written.
+
+--section NAME makes what it writes one section called NAME, with marks that
+carry the name: a step with several sections (the pull request's, then the
+review's fixes') writes each under its own, and writing one again replaces only
+that. An A/B's two OSes are then `###` parts of it. --heading TEXT is the
+heading a new section is added with, when it should not be its name (a dated
+one); with no --section it is the name too, which is how an older page that has
+no marks gets a section of its own. A section is added at the end of the page.
+A heading of that text that the tool did not write is refused.";
+
+impl TimesRequest {
+    pub(crate) fn parse(arguments: &[String]) -> Result<Self> {
+        let mut request = Self {
+            top: TIMES_TOP,
+            ..Self::default()
         };
-        match argument.as_str() {
-            "--ab" => ab = Some(value()?.clone()),
-            "--against" => against = Some(value()?.clone()),
-            "--pr" => {
-                let text = value()?;
-                pr = Some(
-                    text.parse::<u64>()
-                        .map_err(|_| format!("`--pr {text}`: a number\n{USAGE}"))?,
-                );
+        let mut rest = arguments.iter();
+        while let Some(argument) = rest.next() {
+            let mut value = || {
+                rest.next()
+                    .ok_or_else(|| format!("`{argument}` needs a value\n{TIMES_USAGE}"))
+            };
+            match argument.as_str() {
+                "--ab" => request.ab = Some(value()?.clone()),
+                "--against" => request.against = Some(value()?.clone()),
+                "--pr" => {
+                    let text = value()?;
+                    request.pr = Some(
+                        text.parse::<u64>()
+                            .map_err(|_| format!("`--pr {text}`: a number\n{TIMES_USAGE}"))?,
+                    );
+                }
+                "--top" => {
+                    let text = value()?;
+                    request.top = text
+                        .parse::<usize>()
+                        .map_err(|_| format!("`--top {text}`: a number\n{TIMES_USAGE}"))?;
+                }
+                "--write" => request.write = Some(PathBuf::from(value()?)),
+                "--section" => request.placing.section = Some(value()?.clone()),
+                "--heading" => request.placing.heading = Some(value()?.clone()),
+                "--help" | "-h" => return Err(TIMES_USAGE.to_owned()),
+                other if request.run.is_none() && !other.starts_with('-') => {
+                    request.run = Some(other.to_owned());
+                }
+                other => return Err(format!("`{other}`?\n{TIMES_USAGE}")),
             }
-            "--write" => write = Some(PathBuf::from(value()?)),
-            "--help" | "-h" => return Err(USAGE.to_owned()),
-            other if run.is_none() && !other.starts_with('-') => run = Some(other.to_owned()),
-            other => return Err(format!("`{other}`?\n{USAGE}")),
         }
+        request.placing.check()?;
+        if request.placing.is_given() && request.write.is_none() {
+            return Err(format!(
+                "`--section` and `--heading` say where `--write` puts the tables\n{TIMES_USAGE}"
+            ));
+        }
+        if request.ab.is_some() && (request.run.is_some() || request.pr.is_some()) {
+            return Err(format!("--ab takes a try run alone\n{TIMES_USAGE}"));
+        }
+        Ok(request)
     }
+}
+
+/// `cargo xtask ci-times <run> [--against <run>|main]`.
+pub(crate) fn ci_times(arguments: &[String]) -> Result<()> {
+    let TimesRequest {
+        run,
+        ab,
+        against,
+        pr,
+        write,
+        placing,
+        top,
+    } = TimesRequest::parse(arguments)?;
+    const USAGE: &str = TIMES_USAGE;
     if let Some(ab) = ab {
-        if run.is_some() || pr.is_some() {
-            return Err(format!("--ab takes a try run alone\n{USAGE}"));
-        }
         let Source::Run(id) = Source::parse(&ab) else {
             return Err(format!("`{ab}` is not a run's id\n{USAGE}"));
         };
@@ -442,8 +635,11 @@ a section of that name it did not write is refused, and nothing is written.";
             id,
             against.as_deref().unwrap_or("main"),
             write.as_deref(),
+            &placing,
+            top,
         );
     }
+
     let Some(run) = run else {
         return Err(USAGE.to_owned());
     };
@@ -493,7 +689,7 @@ a section of that name it did not write is refused, and nothing is written.";
             windows: reports[1].take(),
         });
     }
-    crate::records::pr_times(&runs, pr, write.as_deref())
+    crate::records::pr_times(&runs, pr, write.as_deref(), &placing)
 }
 
 /// A run, and its test jobs' reports where they exist.
@@ -666,5 +862,214 @@ The PR's run is 4242, at `0123456`.
 | Tier 3, system (60 s on Linux, 90 s on Windows) | 2.0 s | 2.0 s | 14.2 s |
 "
         );
+    }
+}
+
+#[cfg(test)]
+mod try_artifact_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{
+        Resolved, TimesRequest, ab_report_name, ends_with_names, files_under, needs_of,
+        report_of_try, which_artifact,
+    };
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("xtask-runs-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn keep(root: &Path, relative: &str) {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "x").unwrap();
+    }
+
+    #[test]
+    fn an_ab_reports_name_says_its_side_and_round_and_nothing_else_is_one() {
+        assert_eq!(ab_report_name("base-round-3.xml"), Some(("base", 3)));
+        assert_eq!(ab_report_name("head-round-12.xml"), Some(("head", 12)));
+        for not in [
+            "other-round-1.xml",
+            "base-round-x.xml",
+            "base-round-1.json",
+            "junit.xml",
+            "base-round-.xml",
+        ] {
+            assert_eq!(ab_report_name(not), None, "{not}");
+        }
+    }
+
+    #[test]
+    fn a_path_ends_with_names_whatever_the_separator_or_the_depth() {
+        let path = Path::new("work")
+            .join("repo")
+            .join("target")
+            .join("nextest")
+            .join("ci")
+            .join("junit.xml");
+        assert!(ends_with_names(&path, &["nextest", "ci", "junit.xml"]));
+        assert!(ends_with_names(&path, &["junit.xml"]));
+        assert!(!ends_with_names(&path, &["nextest", "stress", "junit.xml"]));
+        // A folder of that name is not enough: it is the whole tail.
+        assert!(!ends_with_names(&path, &["ci", "nextest", "junit.xml"]));
+        assert!(!ends_with_names(
+            Path::new("junit.xml"),
+            &["ci", "junit.xml"]
+        ));
+    }
+
+    #[test]
+    fn a_try_runs_report_is_found_wherever_the_runners_paths_put_it() {
+        let dir = scratch("try");
+        keep(&dir, "tmp/try-output.log");
+        keep(&dir, "work/repo/target/nextest/stress/junit.xml");
+        keep(&dir, "work/repo/target/nextest/ci/junit.xml");
+        let found = report_of_try(5, &dir).unwrap().unwrap();
+        assert!(
+            ends_with_names(&found, &["nextest", "ci", "junit.xml"]),
+            "{found:?}"
+        );
+        // Files come in path order, whatever the disk's.
+        let files = files_under(&dir).unwrap();
+        let mut sorted = files.clone();
+        sorted.sort();
+        assert_eq!(files, sorted);
+        assert_eq!(files.len(), 3);
+
+        // A run of another command has no such report: none, not an error.
+        let startup = scratch("startup");
+        keep(&startup, "tmp/try-output.log");
+        assert_eq!(report_of_try(6, &startup).unwrap(), None);
+
+        // An A/B run has two trees' rounds and no one report: refused, and
+        // the message says which commands read it.
+        keep(&dir, "work/repo/target/ab/head-round-1.xml");
+        let error = report_of_try(7, &dir).unwrap_err();
+        assert!(error.contains("run 7 is a `try` A/B run"), "{error}");
+        assert!(
+            error.contains("ci-times --ab 7") && error.contains("try-result 7"),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(startup);
+    }
+
+    #[test]
+    fn a_report_is_the_ci_workflows_or_failing_that_a_try_runs_and_an_expired_one_is_an_error() {
+        use crate::tiers::Os;
+        let listed = |names: &[(&str, bool)]| {
+            names
+                .iter()
+                .map(|(name, expired)| ((*name).to_owned(), *expired))
+                .collect::<Vec<_>>()
+        };
+        // A `ci` run: its own report.
+        let ci = listed(&[("junit-linux", false), ("junit-windows", false)]);
+        assert_eq!(
+            which_artifact(1, &ci, Os::Windows).unwrap(),
+            Some("junit-windows")
+        );
+        // A `try` run of Windows alone: Windows' is there and Linux's is not.
+        let tried = listed(&[("try-windows", false)]);
+        assert_eq!(
+            which_artifact(1, &tried, Os::Windows).unwrap(),
+            Some("try-windows")
+        );
+        assert_eq!(which_artifact(1, &tried, Os::Linux).unwrap(), None);
+        // A run that kept nothing (a change of documentation): none.
+        assert_eq!(which_artifact(1, &[], Os::Linux).unwrap(), None);
+        // One that has expired is an error naming it, never "none".
+        let old = listed(&[("junit-linux", true), ("try-windows", true)]);
+        let error = which_artifact(1, &old, Os::Linux).unwrap_err();
+        assert!(error.contains("`junit-linux` has expired"), "{error}");
+        let error = which_artifact(1, &old, Os::Windows).unwrap_err();
+        assert!(error.contains("`try-windows` has expired"), "{error}");
+    }
+
+    #[test]
+    fn a_run_of_main_must_have_kept_every_oses_report_so_that_both_are_of_one_commit() {
+        use crate::tiers::Os;
+        assert_eq!(needs_of(&[Os::Windows]), ["junit-windows"]);
+        assert_eq!(
+            needs_of(&[Os::Linux, Os::Windows]),
+            ["junit-linux", "junit-windows"]
+        );
+    }
+
+    #[test]
+    fn a_report_on_disk_is_resolved_to_itself_and_a_run_to_its_id() {
+        use super::{Source, resolve};
+        assert_eq!(
+            resolve(&Source::File("a.xml".into()), &[crate::tiers::Os::Linux]).unwrap(),
+            Resolved::File("a.xml".into())
+        );
+        assert_eq!(
+            resolve(
+                &Source::Run(9),
+                &[crate::tiers::Os::Linux, crate::tiers::Os::Windows]
+            )
+            .unwrap(),
+            Resolved::Run { id: 9, main: false }
+        );
+    }
+
+    fn strings(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    #[test]
+    fn ci_times_reads_its_sections_and_refuses_what_it_could_not_place() {
+        let request = TimesRequest::parse(&strings(&[
+            "42",
+            "--against",
+            "main",
+            "--pr",
+            "56",
+            "--write",
+            "ci.md",
+            "--section",
+            "fixes",
+            "--heading",
+            "The fixes, 2026-11-16",
+        ]))
+        .unwrap();
+        assert_eq!(request.run.as_deref(), Some("42"));
+        assert_eq!(request.pr, Some(56));
+        assert_eq!(request.placing.section.as_deref(), Some("fixes"));
+        assert_eq!(
+            request.placing.heading.as_deref(),
+            Some("The fixes, 2026-11-16")
+        );
+        let ab = TimesRequest::parse(&strings(&["--ab", "9", "--top", "3"])).unwrap();
+        assert_eq!((ab.ab.as_deref(), ab.top), (Some("9"), 3));
+        assert_eq!(
+            TimesRequest::parse(&strings(&["--ab", "9"])).unwrap().top,
+            8
+        );
+        for (arguments, expected) in [
+            (
+                &["1", "--section", "x"][..],
+                "say where `--write` puts the tables",
+            ),
+            (
+                &["1", "--heading", "x"],
+                "say where `--write` puts the tables",
+            ),
+            (&["1", "--write", "f", "--section", "a\"b"], "double quote"),
+            (
+                &["1", "--write", "f", "--heading", "## x"],
+                "the `## ` before it",
+            ),
+            (&["--ab", "9", "1"], "--ab takes a try run alone"),
+            (&["--ab", "9", "--pr", "1"], "--ab takes a try run alone"),
+            (&["--top", "x"], "`--top x`: a number"),
+            (&["--section"], "needs a value"),
+        ] {
+            let error = TimesRequest::parse(&strings(arguments)).unwrap_err();
+            assert!(error.contains(expected), "{arguments:?}: {error}");
+        }
     }
 }

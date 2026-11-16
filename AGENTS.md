@@ -58,10 +58,11 @@ Each cost a session hours to find. The details are in [docs/steps/11/](docs/step
 | Check that every link in the docs leads somewhere, and that the step records are in their places | `cargo xtask links` |
 | Run exactly what CI runs | `cargo xtask ci` |
 | See each tier's time by crate and its slowest tests, built as CI builds | `cargo xtask ci --tiers` |
-| Compare a branch's tiers with `main`'s, by tier, crate and test | `cargo xtask ci --tiers --compare <run id or junit.xml> --against main` |
+| Compare a branch's tiers with `main`'s, by tier, crate and test | `cargo xtask ci --tiers --compare <run id or junit.xml> --against main`; `--os windows` or `--os both` for Windows' report and Linux's in turn (a `try` run of `test` is a source too) |
 | Tell a change's tier cost from the runner's speed: both refs on one runner, in turn | `gh workflow run try --ref <branch> -f os=windows -f command=test -f against=main`, or `cargo xtask ab --base <other checkout>` |
 | Check this branch on top of the pull requests that merge before it | `cargo xtask combine <pr>…` (`--repo URL --head BRANCH` through `rx`) |
-| Get a run's job and tier tables for `ci.md`, or write them into it | `cargo xtask ci-times <run id> --against main --pr <n> --write docs/steps/<NN>/ci.md`; an A/B's with `--ab <try run id>` |
+| Get a run's job and tier tables for `ci.md`, or write them into it | `cargo xtask ci-times <run id> --against main --pr <n> --write docs/steps/<NN>/ci.md`; an A/B's with `--ab <try run id>` (it prints the crates and tests that moved, `--top N`); a second measurement in the same page under a name of its own with `--section NAME`, and an older page that has no marks gets a section of the heading `--heading "TEXT"` gives (`--write` only) |
+| Read what a `try` run found, for each OS: the A/B's tables, the tiers or the stress summary, every failed test with its message, the end of the log of a job that failed with no report | `cargo xtask try-result <run id> [--os windows]`; through `rx`, `rx -- env GH_REPO=<owner>/<repo> cargo xtask try-result <run id>` |
 | Run tests many times over, each under the next seed | `cargo xtask stress -p <crate> --count 300`, and `--cores 2 --load 6` to make a race show |
 | Break the code on purpose and see which tests fail | `cargo xtask mutate`, two breaks at a time unless `--jobs N` says otherwise; `mutate --check` checks every list without building anything |
 | Edit Rust code by its tokens, so the match survives `rustfmt` | `cargo xtask replace <file> --from '<code>' --to '<code>'`; any other file by its exact text with `--text` |

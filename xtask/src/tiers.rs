@@ -202,6 +202,22 @@ pub(crate) fn check_report(report: &Path, os: Os, slowest: usize) -> Result<()> 
     Err(message)
 }
 
+/// What [`check_report`] prints, as text: the tiers against `os`'s budgets
+/// (a tier over one marked), each tier by crate, and each tier's `slowest`
+/// tests, and for a tier over its budget what the run's start cost says of
+/// its runner. It writes nothing and judges nothing: `try-result` shows a
+/// run's report with it, whatever the verdict.
+pub(crate) fn report_text(cases: &[TestCase], os: Os, slowest: usize) -> String {
+    let (mut text, over) = summarise(cases, os);
+    text.push_str(&crates_text(cases, CRATES_SHOWN));
+    text.push_str(&slowest_tests(cases, slowest));
+    if !over.is_empty() {
+        let (start, sample) = start_of(cases);
+        let _ = writeln!(text, "{}", runner_line(os, start, sample));
+    }
+    text
+}
+
 /// What a run's start cost says about its runner, for a run whose tiers
 /// are over budget: hosted runners differ in speed by a factor of two, and
 /// a slow one reads every tier slow, the unit tier too, with every test as

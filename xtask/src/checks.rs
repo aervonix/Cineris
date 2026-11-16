@@ -2,6 +2,7 @@
 //! `ci test`, so the commands here are the definition of what CI runs
 //! (`docs/testing-and-ci.md`).
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -415,8 +416,9 @@ pub(crate) fn ci(arguments: &[String]) -> Result<()> {
 const CI_USAGE: &str = "usage: cargo xtask ci [lint|test]
        cargo xtask ci --tiers [-p CRATE]... [--top N] [-- NEXTEST ARGUMENT...]
        cargo xtask ci --tiers --from JUNIT.XML [--os linux|windows] [--top N]
-       cargo xtask ci --tiers --compare NEW [--against OLD] [--os linux|windows] [--top N]
-                              NEW and OLD: a JUnit report, a run's id, or `main` (OLD's default)";
+       cargo xtask ci --tiers --compare NEW [--against OLD] [--os linux|windows|both] [--top N]
+                              NEW and OLD: a JUnit report, a run's id (of the `ci` workflow, or a
+                              `try` run of `test`), or `main` (OLD's default)";
 
 /// How many of each tier's slowest tests `ci --tiers` lists when it is not
 /// told.
@@ -433,6 +435,9 @@ struct TiersRequest {
     from: Option<PathBuf>,
     /// The OS the report is from, which decides tier 3's budget.
     os: tiers::Os,
+    /// `--os both`: with `--compare`, each OS's comparison in turn, Linux's
+    /// then Windows', from runs that kept both reports.
+    both: bool,
     /// A report to compare with `against`, in place of running anything.
     compare: Option<Source>,
     /// What `compare` is compared with: the main branch when not given.
@@ -448,12 +453,22 @@ struct TiersRequest {
 }
 
 impl TiersRequest {
+    /// The OSes a comparison is of: both with `--os both`, else the one.
+    fn oses(&self) -> Vec<tiers::Os> {
+        if self.both {
+            vec![tiers::Os::Linux, tiers::Os::Windows]
+        } else {
+            vec![self.os]
+        }
+    }
+
     fn parse(arguments: &[String]) -> Result<Self> {
         let mut request = Self {
             packages: Vec::new(),
             top: TIERS_TOP,
             from: None,
             os: tiers::Os::here(),
+            both: false,
             compare: None,
             against: None,
             rest: Vec::new(),
@@ -495,8 +510,15 @@ impl TiersRequest {
                     request.os = match value("`linux` or `windows`")?.as_str() {
                         "linux" => tiers::Os::Linux,
                         "windows" => tiers::Os::Windows,
+                        "both" => {
+                            request.both = true;
+                            tiers::Os::here()
+                        }
                         other => {
-                            return Err(format!("`--os {other}`: say `linux` or `windows`"));
+                            return Err(format!(
+                                "`--os {other}`: say `linux` or `windows`, or `both` with \
+                                 `--compare`"
+                            ));
                         }
                     };
                 }
@@ -520,6 +542,24 @@ impl TiersRequest {
                     .to_owned(),
             );
         }
+        if request.both {
+            if request.compare.is_none() {
+                return Err(
+                    "`--os both` compares two runs' reports of each OS: it goes with `--compare`"
+                        .to_owned(),
+                );
+            }
+            for source in [&request.compare, &request.against].into_iter().flatten() {
+                if matches!(source, Source::File(_)) {
+                    return Err(
+                        "`--os both` reads both OSes' reports of a run: a report on disk is of \
+                         one OS, so name a run or `main`, or compare the reports one `--os` at \
+                         a time"
+                            .to_owned(),
+                    );
+                }
+            }
+        }
         if os_given && !reads {
             return Err(
                 "`--os` says where a report given with `--from` was made. A run made here is \
@@ -529,6 +569,59 @@ impl TiersRequest {
         }
         Ok(request)
     }
+}
+
+/// `new` compared with `old` for each OS of `oses` in turn, each against its
+/// own OS's budgets. A source is chosen once for all the OSes (`main` is
+/// one run, which kept every report asked for).
+fn compare_reports(new: &Source, old: &Source, oses: &[tiers::Os], top: usize) -> Result<()> {
+    let (new, old) = (runs::resolve(new, oses)?, runs::resolve(old, oses)?);
+    let results: Vec<(tiers::Os, Result<String>)> = oses
+        .iter()
+        .map(|os| {
+            let compared = (|| {
+                let (label, cases) = runs::report_of(&new, *os)?;
+                let new = compare::Side { label, cases };
+                let (label, cases) = runs::report_of(&old, *os)?;
+                let old = compare::Side { label, cases };
+                Ok(compare::compare(&new, &old, *os, top))
+            })();
+            (*os, compared)
+        })
+        .collect();
+    let (text, outcome) = join_comparisons(results);
+    print!("{text}");
+    outcome
+}
+
+/// What each OS's comparison printed, under a heading when there are
+/// several, and how the command ends. One OS whose report cannot be read
+/// does not hide another's comparison: its reason is printed in its
+/// place, and the command fails after the last. With one OS the error is
+/// the error.
+fn join_comparisons(results: Vec<(tiers::Os, Result<String>)>) -> (String, Result<()>) {
+    let several = results.len() > 1;
+    let mut text = String::new();
+    let mut failed = Vec::new();
+    for (index, (os, compared)) in results.into_iter().enumerate() {
+        if several {
+            let _ = writeln!(text, "{}== {os:?} ==\n", if index > 0 { "\n" } else { "" });
+        }
+        match compared {
+            Ok(table) => text.push_str(&table),
+            Err(error) if !several => return (text, Err(error)),
+            Err(error) => {
+                let _ = writeln!(text, "  not compared: {error}");
+                failed.push(format!("{os:?}: {error}"));
+            }
+        }
+    }
+    let outcome = if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("; "))
+    };
+    (text, outcome)
 }
 
 /// `cargo xtask ci --tiers`: what each tier's tests take together, against
@@ -583,12 +676,7 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
         return checked;
     }
     if let (Some(new), Some(old)) = (&request.compare, &request.against) {
-        let (label, cases) = runs::report(new, os)?;
-        let new = compare::Side { label, cases };
-        let (label, cases) = runs::report(old, os)?;
-        let old = compare::Side { label, cases };
-        print!("{}", compare::compare(&new, &old, os, top));
-        return Ok(());
+        return compare_reports(new, old, &request.oses(), top);
     }
     require_nextest()?;
     let mut rest = request.rest.clone();
@@ -639,7 +727,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        CHECK_STEPS, TiersRequest, check, check_step, ci, ci_run, selects_packages, test_command,
+        CHECK_STEPS, TiersRequest, check, check_step, ci, ci_run, join_comparisons,
+        selects_packages, test_command,
     };
     use crate::runs::Source;
     use crate::tiers::Os;
@@ -897,6 +986,7 @@ mod tests {
                 top: 10,
                 from: None,
                 os: Os::here(),
+                both: false,
                 compare: None,
                 against: None,
                 rest: vec![],
@@ -920,6 +1010,7 @@ mod tests {
                 top: 3,
                 from: None,
                 os: Os::here(),
+                both: false,
                 compare: None,
                 against: None,
                 // After `--` nothing is this command's, whatever it looks like.
@@ -935,6 +1026,7 @@ mod tests {
                 top: 10,
                 from: Some(PathBuf::from("junit.xml")),
                 os: Os::Windows,
+                both: false,
                 compare: None,
                 against: None,
                 rest: vec![],
@@ -966,6 +1058,75 @@ mod tests {
             TiersRequest::parse(&strings(&["--compare", "a.xml", "--against", "b.xml"])).unwrap();
         assert_eq!(request.compare, Some(Source::File("a.xml".into())));
         assert_eq!(request.against, Some(Source::File("b.xml".into())));
+    }
+
+    #[test]
+    fn each_oses_comparison_is_printed_in_turn_and_one_failing_hides_no_other() {
+        // One OS: the table as it is, and its error is the error.
+        let (text, outcome) = join_comparisons(vec![(Os::Linux, Ok("table\n".to_owned()))]);
+        assert_eq!((text.as_str(), outcome), ("table\n", Ok(())));
+        let (text, outcome) = join_comparisons(vec![(Os::Windows, Err("no report".to_owned()))]);
+        assert_eq!((text.as_str(), outcome), ("", Err("no report".to_owned())));
+        // Both: each under its name, Linux first.
+        let (text, outcome) = join_comparisons(vec![
+            (Os::Linux, Ok("linux table\n".to_owned())),
+            (Os::Windows, Ok("windows table\n".to_owned())),
+        ]);
+        assert_eq!(
+            text,
+            "== Linux ==\n\nlinux table\n\n== Windows ==\n\nwindows table\n"
+        );
+        assert_eq!(outcome, Ok(()));
+        // Windows' report missing: Linux's table is there, Windows says why,
+        // and the command fails naming it.
+        let (text, outcome) = join_comparisons(vec![
+            (Os::Linux, Ok("linux table\n".to_owned())),
+            (Os::Windows, Err("run 5 kept no `junit-windows`".to_owned())),
+        ]);
+        assert!(text.contains("linux table"), "{text}");
+        assert!(
+            text.contains("== Windows ==\n\n  not compared: run 5 kept no `junit-windows`"),
+            "{text}"
+        );
+        let error = outcome.unwrap_err();
+        assert!(error.starts_with("Windows: run 5 kept no"), "{error}");
+    }
+
+    #[test]
+    fn both_oses_are_compared_from_runs_and_never_from_one_file() {
+        let request = TiersRequest::parse(&strings(&["--compare", "123", "--os", "both"])).unwrap();
+        assert!(request.both);
+        assert_eq!(request.oses(), [Os::Linux, Os::Windows]);
+        assert_eq!(request.against, Some(Source::Main));
+        let request = TiersRequest::parse(&strings(&[
+            "--compare",
+            "123",
+            "--against",
+            "456",
+            "--os",
+            "windows",
+        ]))
+        .unwrap();
+        assert!(!request.both);
+        assert_eq!(request.os, Os::Windows);
+        assert_eq!(request.oses(), [Os::Windows]);
+        for (arguments, expected) in [
+            (
+                &["--os", "both", "--from", "x.xml"][..],
+                "goes with `--compare`",
+            ),
+            (
+                &["--compare", "x.xml", "--os", "both"],
+                "name a run or `main`",
+            ),
+            (
+                &["--compare", "1", "--against", "b.xml", "--os", "both"],
+                "name a run or `main`",
+            ),
+        ] {
+            let error = TiersRequest::parse(&strings(arguments)).unwrap_err();
+            assert!(error.contains(expected), "{arguments:?}: {error}");
+        }
     }
 
     #[test]

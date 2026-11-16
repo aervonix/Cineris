@@ -48,6 +48,7 @@ mod startup;
 mod steps;
 mod stress;
 mod tiers;
+mod try_result;
 mod try_run;
 mod workspace;
 
@@ -75,19 +76,29 @@ Checks and tests
                     and its slowest tests. With --from JUNIT.XML [--os
                     linux|windows], report on a run that was already made:
                     the report a CI job uploads, for example.
-  ci --tiers --compare NEW [--against OLD] [--os linux|windows] [--top N]
+  ci --tiers --compare NEW [--against OLD] [--os linux|windows|both] [--top N]
                     Two runs' tiers side by side, each above its own start
                     cost: by tier, by crate, and the tests that moved most.
                     NEW and OLD are JUnit reports, run ids of the `ci`
-                    workflow (read through gh), or `main`, the main branch's
-                    latest successful run (OLD when it is not given).
+                    workflow or of a `try` run of `test` (read through gh), or
+                    `main`, the main branch's latest successful run (OLD when
+                    it is not given). --os both: each OS's comparison in turn.
   ci-times RUN [--against RUN|main] [--pr N] [--write FILE]
+           [--section NAME] [--heading TEXT]
                     A run's job times and tier times, as tables for a step's
                     ci.md, read through gh; --write puts them in its section
-                    `On the pull request`.
-  ci-times --ab TRY-RUN [--against REF] [--write FILE]
+                    `On the pull request`, or in the one --section names (its
+                    own marks) or --heading adds (for an older page).
+  ci-times --ab TRY-RUN [--against REF] [--write FILE] [--section NAME]
+           [--heading TEXT] [--top N]
                     A try A/B run's tiers on both sides, for each OS's section
-                    `<OS>, both trees on one runner`, and the PR's CI section.
+                    `<OS>, both trees on one runner`, and the PR's CI section,
+                    then each tier's crates and tests that moved, by OS.
+  try-result RUN [--os linux|windows|linux-22.04] [--top N] [--tail N]
+                    What a try run found, in one step: for each OS, the A/B's
+                    tables or the tiers or the stress summary, every failed
+                    test with its message, and for a job that failed with no
+                    report the end of its log. Fails when the run did.
   ci-log RUN|JOB [--job NAME] [--all] [--grep RE] [--context N] [--tail N]
                     A CI job's log through gh, escape codes taken out, for any
                     workflow (the nightly's too): a run's failed jobs, the jobs
@@ -306,6 +317,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "alias" => alias::run(rest),
         "stress" => stress::run(rest),
         "try" => try_run::run(rest),
+        "try-result" => try_result::run(rest),
         "ab" => ab::run(rest),
         "combine" => combine::run(rest),
         "scratch-test" => scratch_test::run(rest),
