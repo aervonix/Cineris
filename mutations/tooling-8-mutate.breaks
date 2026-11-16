@@ -26,8 +26,8 @@ caught-by:
 rule: A change to the workspace's manifest, lock file or nextest configuration chooses every break.
 file: xtask/src/mutate/changed.rs
 in: select
-find: let settings = SETTINGS.iter().find(|file| touched.contains(**file));
-replace: let settings: Option<&&str> = None;
+find: let settings = touched.iter().find(|file| touches_every_build(file));
+replace: let settings: Option<&String> = None;
 caught-by:
     mutate::changed::tests::a_change_to_the_builds_settings_chooses_every_break
 
@@ -379,3 +379,32 @@ find: of_crate.iter().any(|known| known.starts_with(word))
 replace: of_crate.contains(word)
 caught-by:
     mutate::names::tests::the_names_of_a_break_of_the_other_systems_code_are_looked_for_in_the_words_of_the_source
+
+# The review of the second pull request.
+
+[break] changed-a-pattern-is-read-as-a-beginning
+rule: A `caught-by` that ends in `*` is placed nowhere, since a pattern can end inside a module's name, and any file of the break's crates chooses it.
+file: xtask/src/mutate/changed.rs
+in: placed
+find: Some(_) => return Placed::Nowhere,
+replace: Some(name) => (name, true),
+caught-by:
+    mutate::changed::tests::a_name_that_ends_in_a_star_is_placed_nowhere_and_chosen_by_any_file_of_its_crates
+
+[break] changed-a-file-outside-the-known-folders-chooses-nothing
+rule: A touched file outside the folders the rule reads one by one, and not Markdown (the model catalog a build script embeds), chooses every break.
+file: xtask/src/mutate/changed.rs
+in: touches_every_build
+find: || (!KNOWN.iter().any(|folder| path.starts_with(folder))
+replace: || (false
+caught-by:
+    mutate::changed::tests::a_change_to_the_builds_settings_chooses_every_break
+
+[break] changed-a-fixture-of-the-crate-chooses-nothing
+rule: A touched file of a break's crates that is not Rust (a fixture, a snapshot) chooses the break.
+file: xtask/src/mutate/changed.rs
+in: Crates::touched_by
+find: .find(|path| in_directories(path) && !path.ends_with(".rs"))
+replace: .find(|_| false)
+caught-by:
+    mutate::changed::tests::a_file_of_a_breaks_crate_that_is_not_rust_chooses_it
