@@ -1597,6 +1597,7 @@ pub(crate) fn assemble(
             learn: settings.project.learn,
             rounds: rounds.clone(),
             shared_file: root.join(".cortex/profile.toml").ok(),
+            on_read: options.knowledge_read.clone(),
         }))
     });
     if let Some(knowledge) = &knowledge {
