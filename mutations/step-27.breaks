@@ -429,11 +429,20 @@ caught-by:
     cortex-rpc::it socket::an_accept_that_fails_for_want_of_a_resource_is_tried_again
 
 [break] a-peer-whose-parents-cannot-be-read-is-served
-rule: A peer whose line of parents cannot be read (its process, or a parent of it, is gone) is refused.
+rule: A peer whose own process cannot be read (it is gone) is refused.
 file: crates/cortex-rpc/src/socket/unix.rs
 in: line_of
-find: None => return Line::Unknown
-replace: None => return Line::Elsewhere
+find: None if at == pid => return Line::Unknown
+replace: None if at == pid => return Line::Elsewhere
 caught-by:
     cortex-rpc::it socket::sys_a_peer_whose_process_is_gone_is_refused
+
+[break] a-hidden-parent-refuses-the-peer
+rule: Only the peer's own process must be readable: a parent that cannot be read (another user's, hidden by `/proc`) ends the line elsewhere, and the peer is served.
+file: crates/cortex-rpc/src/socket/unix.rs
+in: line_of
+find: None => return Line::Elsewhere
+replace: None => return Line::Unknown
+caught-by:
+    cortex-rpc socket::sys::tests::a_line_of_parents_is_the_servers_elsewhere_or_unknown
 
