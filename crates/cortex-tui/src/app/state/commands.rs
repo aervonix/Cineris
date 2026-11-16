@@ -153,12 +153,17 @@ impl App {
             "status" => self.config_get(Shown::Status),
             "config" => self.config_get(Shown::Config),
             "copy" => {
-                let answer = self.mapper.last_answer().to_owned();
+                let answer = for_clipboard(self.mapper.last_answer());
                 if answer.trim().is_empty() {
                     self.say("There is no answer to copy yet.");
                 } else {
                     self.effects.push(Effect::Copy(answer));
-                    self.say("The last answer is on the clipboard.");
+                    // A terminal does not answer the clipboard sequence:
+                    // whether it took the text cannot be told.
+                    self.say(
+                        "Sent the last answer to the terminal's clipboard (a terminal that does \
+                         not take the clipboard sequence ignores it).",
+                    );
                 }
             }
             "theme" => {
@@ -585,6 +590,20 @@ impl App {
         self.usage = None;
         self.send_open(Open::Resume(session));
     }
+}
+
+/// An answer as `/copy` puts it on the clipboard (since the review of step
+/// 23): pasted into a terminal, a control character in it would be typed
+/// (an escape ending bracketed paste early, and the rest run as keys), so
+/// every one but the line feed and the tab is dropped, a carriage return
+/// before a line feed with them; and what acts unseen is written as its
+/// escape, as the screen shows it (`cortex_term::sanitize`).
+pub(crate) fn for_clipboard(answer: &str) -> String {
+    let typed: String = answer
+        .chars()
+        .filter(|&c| matches!(c, '\n' | '\t') || cortex_term::sanitize::visible(c).is_none())
+        .collect();
+    cortex_term::sanitize(&typed).into_owned()
 }
 
 /// `value` as `key = value` lines, its tables flattened into dotted keys.

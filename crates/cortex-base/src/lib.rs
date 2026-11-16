@@ -93,6 +93,6 @@ pub use rng::{Rng, SeededRng, SystemRng};
 pub use secret::Secret;
 pub use time::{TimeError, UtcTime};
 pub use timer::{SharedTimer, Sleep, Timer};
-pub use visible::{acts_unseen, unescape, visible, visible_keeping};
+pub use visible::{acts_unseen, unescape, visible, visible_keeping, visible_keeping_after};
 pub use watch::{FileStamp, TimedStamp, WatchList};
 pub use zone::{LocalDate, Zone};

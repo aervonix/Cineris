@@ -49,11 +49,12 @@ impl Laid {
                 piece,
                 added: false,
             });
-            // Where the terminal has no links, the address follows the
+            // Where the terminal has no links, or the address may not be one
+            // (`cortex_term::line::linkable`), the address follows the
             // link's text, unless the text is the address.
             if end_of_link
-                && !frame.look.hyperlinks
                 && let Some(url) = link
+                && !(frame.look.hyperlinks && cortex_term::line::linkable(&url))
             {
                 let shown_text: String = placed
                     .iter()

@@ -302,6 +302,37 @@ pub(crate) fn problems(lines: &[Line], width: usize) -> Vec<String> {
                 line.text()
             ));
         }
+        let unseen = unseen(&line.text());
+        if !unseen.is_empty() {
+            found.push(format!(
+                "line {index} holds what acts unseen, {unseen:?}: {:?}",
+                line.text()
+            ));
+        }
+    }
+    found
+}
+
+/// The characters of `text` that act unseen and that `cortex_term::sanitize`
+/// writes as escapes (a bidirectional control, a character of no width, a
+/// tag character, a selector that follows nothing it picks): one in drawn
+/// text skipped `sanitize`. The two joiners, which it keeps, are not.
+pub(crate) fn unseen(text: &str) -> Vec<char> {
+    use cortex_base::visible::is_selector;
+    let mut found = Vec::new();
+    // Whether the character before is one a selector may follow.
+    let mut base = false;
+    for c in text.chars() {
+        let joiner = matches!(c, '\u{200c}' | '\u{200d}');
+        let unseen = if is_selector(c) {
+            !base
+        } else {
+            cortex_base::acts_unseen(c) && !c.is_control() && !joiner
+        };
+        if unseen {
+            found.push(c);
+        }
+        base = !is_selector(c) && !cortex_base::acts_unseen(c);
     }
     found
 }

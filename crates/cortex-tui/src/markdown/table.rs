@@ -153,20 +153,37 @@ fn cell(text: &str, frame: Frame<'_>, header: bool) -> Cell {
     } else {
         Style::PLAIN
     };
-    inline::parse(text, &[])
-        .pieces
-        .iter()
-        .map(|piece| {
-            let span = Span::new(
-                piece.text.replace('\n', " "),
-                piece_style(piece, base, frame, true),
-            );
-            match &piece.link {
-                Some(url) => span.link(url.clone()),
-                None => span,
+    let pieces = inline::parse(text, &[]).pieces;
+    let mut cell = Vec::with_capacity(pieces.len());
+    // The text of the link being drawn, to say whether it is the address.
+    let mut shown = String::new();
+    for (at, piece) in pieces.iter().enumerate() {
+        let span = Span::new(
+            piece.text.replace('\n', " "),
+            piece_style(piece, base, frame, true),
+        );
+        let Some(url) = &piece.link else {
+            cell.push(span);
+            continue;
+        };
+        shown.push_str(span.text());
+        cell.push(span.link(url.clone()));
+        // Where the terminal has no links, or the address may not be one,
+        // the address follows the link's text, as in a paragraph.
+        let last = pieces
+            .get(at + 1)
+            .is_none_or(|next| next.link != piece.link);
+        if last {
+            if !(frame.look.hyperlinks && cortex_term::line::linkable(url)) && shown != *url {
+                cell.push(Span::new(
+                    format!(" ({url})"),
+                    frame.look.theme.style(Token::Muted),
+                ));
             }
-        })
-        .collect()
+            shown.clear();
+        }
+    }
+    cell
 }
 
 fn cell_width(cell: &Cell) -> usize {

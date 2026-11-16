@@ -212,6 +212,41 @@ fn a_resize_while_a_menu_is_open_keeps_every_line_to_the_new_width() {
     }
 }
 
+/// A picker's rows, their notes and its toggle come from outside (a model's
+/// name, a session's title): what acts unseen in them, a bidirectional
+/// override, a zero-width space and a tag character, is drawn as its escape
+/// (the review of step 23).
+#[test]
+fn a_picker_escapes_what_acts_unseen_in_every_part() {
+    const UNSEEN: &str = "\u{202e}\u{200b}\u{e0041}";
+    let look = look();
+    let mut picked = typed("/model");
+    picked.open_picker(Menu::picker(
+        "model",
+        vec![Row::new(
+            format!("label{UNSEEN}"),
+            format!(" detail{UNSEEN}"),
+        )],
+        0,
+        Some(Toggle {
+            label: format!("toggle{UNSEEN}"),
+            on: true,
+            note: format!("note{UNSEEN}"),
+        }),
+    ));
+    let lines = menu(&picked, &look, 120).unwrap();
+    let found = testing::problems(&lines, 120);
+    assert!(found.is_empty(), "{found:#?}");
+    let all: Vec<String> = lines.iter().map(|line| line.text().into_owned()).collect();
+    for field in ["label", "detail", "toggle", "note"] {
+        let escaped = format!("{field}\\u{{202e}}\\u{{200b}}\\u{{e0041}}");
+        assert!(
+            all.iter().any(|row| row.contains(&escaped)),
+            "{field}: {all:#?}"
+        );
+    }
+}
+
 #[test]
 fn the_selected_row_is_marked_in_the_accent_and_drawn_as_the_selection() {
     let look = look();

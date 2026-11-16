@@ -13,7 +13,9 @@
 //! [`text_width`]: the box's inside less the `◆` and its space. The cursor
 //! after a full row that ends a line sits in the box's padding column,
 //! never on its edge. A chip is drawn as its label, muted; a tab as four
-//! spaces; any other control character as the renderer's visible symbol.
+//! spaces; any other control character as the renderer's visible symbol,
+//! and what acts unseen as its escape, in the columns the editor counted
+//! for it.
 
 use cortex_term::{Cursor, Line, Span, Style};
 
@@ -148,14 +150,14 @@ fn text_spans(
 ) -> Vec<Span> {
     let text = editor.text();
     let mut spans = Vec::new();
+    // Each cluster is made safe to show alone, as the editor counts its
+    // columns (`cluster::width`): what acts unseen takes its escape's.
     let mut plain = String::new();
     for (offset, piece) in cluster::clusters(&text[range.clone()]) {
         let at = range.start + offset;
         if piece.starts_with(CHIP) {
             if !plain.is_empty() {
-                spans.push(Span::plain(
-                    cortex_term::sanitize(&std::mem::take(&mut plain)).into_owned(),
-                ));
+                spans.push(Span::plain(std::mem::take(&mut plain)));
             }
             let label = editor
                 .chip_at(at)
@@ -168,11 +170,11 @@ fn text_spans(
         } else if piece == "\t" {
             plain.push_str(&" ".repeat(TAB_WIDTH));
         } else {
-            plain.push_str(piece);
+            plain.push_str(&cluster::drawn(piece));
         }
     }
     if !plain.is_empty() {
-        spans.push(Span::plain(cortex_term::sanitize(&plain).into_owned()));
+        spans.push(Span::plain(plain));
     }
     spans
 }

@@ -25,7 +25,11 @@
 //! reorder a line so that it reads as something else, the characters of no
 //! width, the tag characters, which shadow ASCII unseen, the line and
 //! paragraph separators, and the characters that render as nothing. Text is
-//! escaped once, here, as it is drawn, and stays exact as data. **The
+//! escaped once, here, as it is drawn, and stays exact as data; what a
+//! component makes of it afterwards (the character a markdown entity
+//! stands for) passes through here again, and text that arrives in pieces
+//! goes through [`sanitize_after`], piece by piece, as the whole would
+//! (both since the review of step 23). **The
 //! zero-width joiner and non-joiner are kept:** they join an emoji sequence
 //! and shape Persian and the Indic scripts, and can neither reorder text
 //! nor hide any.
@@ -87,7 +91,18 @@ pub fn visible(c: char) -> Option<char> {
 /// Text with nothing to change is returned as it is, borrowed.
 #[must_use]
 pub fn sanitize(text: &str) -> Cow<'_, str> {
-    match cortex_base::visible_keeping(text, &KEEP) {
+    sanitize_after(None, text)
+}
+
+/// [`sanitize`] of `text` as it reads after `before`, the character just
+/// before it in a longer text (`cortex_base::visible_keeping_after`): text
+/// that arrives in pieces, each given the last character of the piece
+/// before, is shown as the whole text would be. The one exception is a
+/// carriage return that ends a piece, which is shown, where the whole would
+/// drop it before a line feed: a caller keeps it for the next piece.
+#[must_use]
+pub fn sanitize_after(before: Option<char>, text: &str) -> Cow<'_, str> {
+    match cortex_base::visible_keeping_after(before, text, &KEEP) {
         Cow::Borrowed(text) => pictures(text),
         Cow::Owned(escaped) => Cow::Owned(pictures(&escaped).into_owned()),
     }
@@ -167,6 +182,29 @@ mod tests {
         assert_eq!(sanitize("\u{645}\u{200c}\u{6cc}"), "\u{645}\u{200c}\u{6cc}");
         // A selector with nothing to select is an escape.
         assert_eq!(sanitize("\u{fe0f}x"), "\\u{fe0f}x");
+    }
+
+    /// An emoji's selector that comes in the next piece of a stream is kept
+    /// when the piece is given the character before it; a selector after a
+    /// control character, a joiner or nothing is not.
+    #[test]
+    fn a_piece_reads_after_the_character_before_it() {
+        assert_eq!(
+            sanitize_after(Some('\u{26a0}'), "\u{fe0f} red"),
+            "\u{fe0f} red"
+        );
+        assert_eq!(sanitize_after(None, "\u{fe0f} red"), "\\u{fe0f} red");
+        for before in ['\u{1b}', '\t', '\u{200d}', '\u{202e}', '\u{fe0f}'] {
+            assert_eq!(
+                sanitize_after(Some(before), "\u{fe0f}"),
+                "\\u{fe0f}",
+                "{before:?}"
+            );
+        }
+        assert_eq!(
+            sanitize_after(Some('a'), "b\u{1b}\u{202e}"),
+            "b\u{241b}\\u{202e}"
+        );
     }
 
     #[test]

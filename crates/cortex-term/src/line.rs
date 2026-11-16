@@ -12,6 +12,32 @@ use std::borrow::Cow;
 
 use crate::style::Style;
 
+/// Whether `url` may be written as a terminal hyperlink (OSC 8), whose
+/// address the terminal hides behind the text and opens on a click.
+///
+/// Only a web address: `http://` or `https://` (the scheme in any case) and
+/// a host, in printable ASCII, so that it can hold no control character
+/// and nothing a terminal would take for the end of the sequence. Every
+/// other scheme is refused (since the review of step 23), `file:` above
+/// all: `file://server/share/x`, and on Windows `file:////server/share/x`
+/// with no host, sends the account's credentials to that server when
+/// clicked (`docs/security.md`, section 7), and a local file is opened by
+/// whatever the system runs it with. A component shows a refused link's
+/// address in its text instead.
+#[must_use]
+pub fn linkable(url: &str) -> bool {
+    if !url.bytes().all(|byte| (0x21..0x7f).contains(&byte)) {
+        return false;
+    }
+    let Some((scheme, rest)) = url.split_once(':') else {
+        return false;
+    };
+    let web = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
+    web && rest
+        .strip_prefix("//")
+        .is_some_and(|after| !after.is_empty() && !after.starts_with('/'))
+}
+
 /// A run of text in one style.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Span {
@@ -38,14 +64,12 @@ impl Span {
     /// This span as a link to `url`, where the terminal can show links.
     ///
     /// Where it cannot, only the text is shown, so a component that needs
-    /// the address seen puts it in the text as well. An address that holds a
-    /// control character, or anything outside printable ASCII, is not used as
-    /// a link at all: the text is shown alone.
+    /// the address seen puts it in the text as well. An address that is not
+    /// [`linkable`] is not used as a link at all: the text is shown alone.
     #[must_use]
     pub fn link(mut self, url: impl Into<String>) -> Self {
         let url = url.into();
-        let safe = !url.is_empty() && url.bytes().all(|byte| (0x21..0x7f).contains(&byte));
-        self.link = safe.then_some(url);
+        self.link = linkable(&url).then_some(url);
         self
     }
 
@@ -182,6 +206,37 @@ mod tests {
             "https://e.example/\u{7}",
             "é",
         ] {
+            assert_eq!(Span::plain("x").link(bad).url(), None, "{bad:?}");
+        }
+    }
+
+    /// A web address is a link; a share, a local file and every other
+    /// scheme are not, since their address would be hidden behind the text.
+    #[test]
+    fn only_a_web_address_becomes_a_link() {
+        for good in [
+            "http://e.example",
+            "HTTPS://e.example/a#b",
+            "https://[::1]:8080/x",
+        ] {
+            assert!(linkable(good), "{good:?}");
+            assert_eq!(Span::plain("x").link(good).url(), Some(good));
+        }
+        for bad in [
+            "file://host/share/x",
+            "file:////host/share/x",
+            "file:///C:/work/a.exe",
+            "FILE://host/x",
+            "javascript:alert(1)",
+            "mailto:a@e.example",
+            "ssh://e.example",
+            "https:e.example",
+            "https:///e.example",
+            "https://",
+            "e.example/https://x",
+            "README.md",
+        ] {
+            assert!(!linkable(bad), "{bad:?}");
             assert_eq!(Span::plain("x").link(bad).url(), None, "{bad:?}");
         }
     }

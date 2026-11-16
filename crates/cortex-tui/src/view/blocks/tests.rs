@@ -133,9 +133,14 @@ fn the_turn_summary_is_off_unless_asked_for() {
 #[test]
 fn content_is_sanitised_and_never_too_wide() {
     let look = look();
-    let hostile = "a\u{1b}[2Jb\u{9b}c\u{7}\td 漢字👨\u{200d}👩\u{200d}👧 e\u{301} ".repeat(5);
+    // Control characters, and what acts unseen and is not one: a
+    // bidirectional override, a zero-width space and a tag character.
+    let hostile =
+        "a\u{1b}[2Jb\u{9b}c\u{7}\td 漢字👨\u{200d}👩\u{200d}👧 e\u{301} f\u{202e}\u{200b}\u{e0041} "
+            .repeat(5);
     for width in [1, 2, 10, 59, 79, 119] {
-        let mut lines = user(&hostile, width, &look);
+        let mut lines = listing(&hostile, &[hostile.clone(), hostile.clone()], width, &look);
+        lines.extend(user(&hostile, width, &look));
         lines.extend(notice(&hostile, width, &look));
         lines.extend(error(&hostile, Some(&hostile), width, &look));
         lines.extend(reasoning(&hostile, Duration::from_secs(1), width, &look));

@@ -39,13 +39,14 @@ pub struct Layout {
     pub cursor_col: usize,
 }
 
-/// The width of the cluster at `at` in `buffer`: a chip's label is cut to
-/// the row, and is drawn cut to the same width.
+/// The width of the cluster at `at` in `buffer` as the input box draws it
+/// ([`cluster::width`]): a chip's label, made safe to show, is cut to the
+/// row, and is drawn cut to the same width.
 pub(crate) fn cluster_width(buffer: &Buffer, at: usize, cluster: &str, width: usize) -> usize {
     if cluster.starts_with(CHIP) {
-        buffer
-            .chip_at(at)
-            .map_or(1, |chip| chip_width(chip.label(), width))
+        buffer.chip_at(at).map_or(1, |chip| {
+            chip_width(&cortex_term::sanitize(chip.label()), width)
+        })
     } else {
         cluster::width(cluster)
     }

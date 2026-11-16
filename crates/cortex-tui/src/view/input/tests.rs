@@ -138,6 +138,77 @@ fn the_cursor_is_after_the_text_and_never_on_the_edge() {
     }
 }
 
+/// A chip whose label holds what acts unseen is laid out in the columns
+/// its label is drawn in, escaped: the cursor after it is after the text.
+#[test]
+fn a_chip_is_laid_out_as_wide_as_its_label_is_drawn() {
+    let look = look();
+    let mut input = Input::new(KeyMap::defaults(), Box::new(MemoryHistory::new()));
+    input.set_width(text_width(60));
+    let mut fragment = Fragment::text("a ");
+    fragment.push(Fragment::chip(Chip::new("x\ny", "[two\u{200b}\u{202e}]")));
+    fragment.push(Fragment::text(" end"));
+    input.handle(&Event::Paste(String::new()));
+    input.external_result(Some(fragment));
+    let drawn = input_box(&input, &look, 60);
+    let row = drawn.lines[1].text().into_owned();
+    assert!(row.contains("a [two\\u{200b}\\u{202e}] end"), "{row:?}");
+    let end = row.find(" end").expect("the text") + " end".len();
+    assert_eq!(
+        drawn.cursor.col,
+        cortex_base::text::width(&row[..end]),
+        "{row:?}"
+    );
+}
+
+/// What acts unseen is drawn as its escape, and the editor lays it out in
+/// the escape's columns: the cursor stays after the text, and no row is cut
+/// (the review of step 23 found a zero-width space counted as no columns,
+/// the cursor eight columns inside the text, and the row's end cut off).
+#[test]
+fn what_acts_unseen_takes_the_columns_of_its_escape() {
+    let look = look();
+    let text = "\u{fe0f}abc\u{200b}def \u{202e}x a\u{e0041}b \u{ad}z \u{1b}w end\u{26a0}\u{fe0f}";
+    let expected: String = cortex_term::sanitize(text)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(expected.contains("abc\\u{200b}def"), "{expected}");
+    for width in 22..70 {
+        let input = holding(text, width);
+        let drawn = input_box(&input, &look, width);
+        let found = testing::problems(&drawn.lines, width);
+        assert!(found.is_empty(), "width {width}: {found:?}");
+        let rows: Vec<String> = drawn.lines[1..drawn.lines.len() - 1]
+            .iter()
+            .map(|line| {
+                let row = line.text().into_owned();
+                let inside: String = row
+                    .chars()
+                    .skip(RoundedBox::TEXT_COLUMN + MARK_WIDTH)
+                    .collect();
+                inside
+                    .trim_end()
+                    .trim_end_matches('│')
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect();
+        let shown: String = rows
+            .concat()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        assert_eq!(shown, expected, "width {width}: {rows:#?}");
+        let last = &rows[drawn.cursor.row - 1];
+        assert_eq!(
+            drawn.cursor.col,
+            RoundedBox::TEXT_COLUMN + MARK_WIDTH + cortex_base::text::width(last),
+            "width {width}: {rows:#?}"
+        );
+    }
+}
+
 #[test]
 fn the_box_grows_to_eight_rows_and_scrolls_with_the_cursor() {
     let look = look();

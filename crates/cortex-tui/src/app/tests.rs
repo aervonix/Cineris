@@ -37,6 +37,8 @@ use crate::testing::{app_frame, assert_app_frame};
 mod dialogs;
 mod trust_standing;
 
+mod output;
+
 /// What the scripted link has seen, and what it will give.
 #[derive(Debug, Default)]
 pub(crate) struct Script {
