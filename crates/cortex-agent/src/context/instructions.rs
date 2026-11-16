@@ -712,7 +712,12 @@ mod tests {
 
     #[test]
     fn the_user_file_comes_first_then_agents_before_claude() {
-        let found = places(&path("/work/app"), None, Some(&path("/config/cx")), &names());
+        let found = places(
+            &path("/work/app"),
+            None,
+            Some(&path("/config/cx")),
+            &names(),
+        );
         let shown: Vec<&str> = found.iter().map(|place| place.shown.as_str()).collect();
         assert_eq!(
             shown,

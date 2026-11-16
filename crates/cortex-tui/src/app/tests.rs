@@ -2017,10 +2017,7 @@ fn a_trusted_projects_question_offers_to_keep_its_trust_and_not_never() {
                 "{shown}: {rows:#?}"
             );
         }
-        assert!(
-            !rows.iter().any(|row| row.contains("Never")),
-            "{rows:#?}"
-        );
+        assert!(!rows.iter().any(|row| row.contains("Never")), "{rows:#?}");
         key(&mut app, "x", at);
         let given = std::mem::take(&mut link.script().answers);
         assert_eq!(

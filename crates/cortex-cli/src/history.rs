@@ -65,7 +65,10 @@ const FLUSH_WAIT: Duration = Duration::from_secs(1);
 struct Entry {
     project: String,
     prompt: Fragment,
-    /// The bytes of its line, its end included.
+    /// The bytes of its line as this build writes it, its end included:
+    /// within the bounds, whatever wrote the line (an older build's line of
+    /// a pasted log counts as the chip it is kept as, the review of the
+    /// follow-ups of step 23).
     size: usize,
 }
 
@@ -90,11 +93,18 @@ impl Entry {
                 Fragment::with_chips(text, chips)?
             }
         };
+        let project = value.get("project")?.as_str()?.to_owned();
+        // Within the bounds, whatever wrote the line.
+        let prompt = cortex_tui::history::kept(&prompt);
+        let size = if prompt.chips().is_empty() && prompt.as_str() == text {
+            line.len() + 1
+        } else {
+            Self::line(&project, &prompt).len()
+        };
         Some(Self {
-            project: value.get("project")?.as_str()?.to_owned(),
-            // Within the bounds, whatever wrote the line.
-            prompt: cortex_tui::history::kept(&prompt),
-            size: line.len() + 1,
+            project,
+            prompt,
+            size,
         })
     }
 
@@ -122,8 +132,12 @@ impl Entry {
 pub(crate) struct FileHistory {
     /// The project's earlier prompts, oldest first, once the file is read.
     earlier: Arc<OnceLock<Vec<Fragment>>>,
+    /// How many of the earliest of `earlier` are no longer held: dropped
+    /// for the prompts sent since, so that the whole stays within [`KEEP`]
+    /// and [`KEEP_BYTES`] (the review of the follow-ups of step 23).
+    skipped: usize,
     /// The prompts sent in this run, oldest first.
-    sent: Vec<Fragment>,
+    sent: std::collections::VecDeque<Fragment>,
     /// The writer's queue; `None` once it has gone.
     writer: Option<Sender<Fragment>>,
     /// Said when the writer has written everything and ended.
@@ -155,9 +169,32 @@ impl FileHistory {
         };
         Self {
             earlier,
-            sent: Vec::new(),
+            skipped: 0,
+            sent: std::collections::VecDeque::new(),
             writer,
             done,
+        }
+    }
+
+    /// Drops the oldest held until what is held is within [`KEEP`] and
+    /// [`KEEP_BYTES`], the newest always kept.
+    fn bound(&mut self) {
+        let mut held: usize = self
+            .held_earlier()
+            .iter()
+            .chain(self.sent.iter())
+            .map(held_bytes)
+            .sum();
+        while self.len() > 1 && (self.len() > KEEP || held > KEEP_BYTES) {
+            let dropped = if self.skipped < self.earlier().len() {
+                self.skipped += 1;
+                held_bytes(&self.earlier()[self.skipped - 1])
+            } else {
+                self.sent
+                    .pop_front()
+                    .map_or(0, |prompt| held_bytes(&prompt))
+            };
+            held = held.saturating_sub(dropped);
         }
     }
 
@@ -167,18 +204,34 @@ impl FileHistory {
         self.earlier.get().is_some()
     }
 
+    /// The earlier prompts still held.
     fn earlier(&self) -> &[Fragment] {
         self.earlier.get().map_or(&[], Vec::as_slice)
     }
+
+    fn held_earlier(&self) -> &[Fragment] {
+        let earlier = self.earlier();
+        &earlier[self.skipped.min(earlier.len())..]
+    }
+}
+
+/// What a prompt takes in memory: its text and its chips'.
+fn held_bytes(prompt: &Fragment) -> usize {
+    prompt.as_str().len()
+        + prompt
+            .chips()
+            .iter()
+            .map(|chip| chip.content().len() + chip.label().len())
+            .sum::<usize>()
 }
 
 impl HistoryStore for FileHistory {
     fn len(&self) -> usize {
-        self.earlier().len() + self.sent.len()
+        self.held_earlier().len() + self.sent.len()
     }
 
     fn get(&self, index: usize) -> Option<&Fragment> {
-        let earlier = self.earlier();
+        let earlier = self.held_earlier();
         match earlier.get(index) {
             Some(prompt) => Some(prompt),
             None => self.sent.get(index - earlier.len()),
@@ -188,12 +241,13 @@ impl HistoryStore for FileHistory {
     fn push(&mut self, prompt: &Fragment) {
         // Within the bounds, whoever handed it over.
         let prompt = cortex_tui::history::kept(prompt);
-        let newest = self.sent.last().or_else(|| self.earlier().last());
+        let newest = self.sent.back().or_else(|| self.held_earlier().last());
         if cortex_tui::history::is_blank(&prompt) || newest.is_some_and(|newest| *newest == prompt)
         {
             return;
         }
-        self.sent.push(prompt.clone());
+        self.sent.push_back(prompt.clone());
+        self.bound();
         if let Some(writer) = &self.writer
             && writer.send(prompt).is_err()
         {
@@ -639,8 +693,75 @@ mod tests {
                 .sum();
             assert!(bytes <= KEEP_BYTES, "{project}: {bytes}");
         }
-        assert!(written.contains(&format!("\"{} ", n - 1)), "the newest line");
+        assert!(
+            written.contains(&format!("\"{} ", n - 1)),
+            "the newest line"
+        );
         assert!(cortex_base::private::is_private(&path).unwrap());
+    }
+
+    /// An older build's line of a pasted log, megabytes long, counts as the
+    /// chip it is kept as: it neither hides a project's other prompts at a
+    /// start nor empties the file when it is written again (the review of
+    /// the follow-ups of step 23: the bounds counted the line as written).
+    #[test]
+    fn an_older_builds_long_line_counts_as_what_is_kept() {
+        let scratch = Scratch::new("old_long_line");
+        let path = scratch.join("history");
+        let log = "a line of a log\n".repeat(300_000);
+        let mut text = String::from("{\"project\":\"p\",\"text\":\"first\"}\n");
+        text.push_str(&serde_json::json!({"project": "p", "text": log}).to_string());
+        text.push('\n');
+        text.push_str("{\"project\":\"q\",\"text\":\"other\"}\n");
+        // Past the file's bytes, so that it is written again.
+        let filler = "f".repeat(4 * 1024 * 1024);
+        text.push_str(&format!("{{\"project\":\"r\",\"text\":\"{filler}\"}}\n"));
+        assert!(text.len() as u64 > COMPACT_BYTES);
+        std::fs::write(&path, &text).unwrap();
+        let history = FileHistory::open(path.clone(), "p".to_owned());
+        wait_read(&history);
+        assert_eq!(history.len(), 2, "the long line hid the prompt before it");
+        assert_eq!(history.get(0).map(Fragment::as_str), Some("first"));
+        assert!(history.get(1).unwrap().as_str().len() <= cortex_tui::history::TEXT_KEEP + 128);
+        drop(history);
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("\"first\""), "{}", written.len());
+        assert!(written.contains("\"other\""), "{}", written.len());
+    }
+
+    /// What one project holds stays within [`KEEP_BYTES`] with the prompts
+    /// sent in a run, the newest kept (the review of the follow-ups of
+    /// step 23: those sent were held without a bound).
+    #[test]
+    fn the_prompts_sent_in_a_run_are_held_within_the_bounds() {
+        let scratch = Scratch::new("sent_bounds");
+        let path = scratch.join("history");
+        let mut history = FileHistory::open(path, "p".to_owned());
+        wait_read(&history);
+        let paste = "x".repeat(cortex_tui::history::CHIP_KEEP);
+        for n in 0..60 {
+            let chips = (0..4).map(|_| Chip::new(paste.as_str(), "[p]")).collect();
+            history.push(
+                &Fragment::with_chips(format!("{n} \u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}"), chips)
+                    .unwrap(),
+            );
+        }
+        let held: usize = (0..history.len())
+            .map(|index| held_bytes(history.get(index).unwrap()))
+            .sum();
+        assert!(held <= KEEP_BYTES, "{held}");
+        assert!(history.len() < 60);
+        assert!(
+            history
+                .get(history.len() - 1)
+                .unwrap()
+                .as_str()
+                .starts_with("59 ")
+        );
+        for n in 0..KEEP + 5 {
+            history.push(&Fragment::text(format!("short {n}")));
+        }
+        assert_eq!(history.len(), KEEP);
     }
 
     /// A file past [`READ_LIMIT`] (an older build's, with pastes kept
@@ -684,7 +805,9 @@ mod tests {
                 )
                 .unwrap()
             } else {
-                Fragment::text(format!("fix the parser's error on line {n}, and run the tests"))
+                Fragment::text(format!(
+                    "fix the parser's error on line {n}, and run the tests"
+                ))
             };
             let line = Entry::line(&project, &cortex_tui::history::kept(&prompt));
             if (text.len() + line.len()) as u64 > bytes {

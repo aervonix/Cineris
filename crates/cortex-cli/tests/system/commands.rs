@@ -85,6 +85,27 @@ fn sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start() {
     );
     assert_eq!(model_of_a_run(&machine).0, OTHER_MODEL);
 
+    // Run headless from a folder below the root: the root's trust and
+    // configuration apply, the workspace is the root, and commands start
+    // in the folder, which the model is told (the follow-ups of step 23).
+    machine.reply_text("Done.");
+    let below = machine.workspace.join("src");
+    let run = machine.run_in(&below, &["-p", "go", "--output", "jsonl"]);
+    let start = &jsonl(&run.expect_code(0).stdout)[0];
+    assert_eq!(
+        start["model"],
+        OTHER_MODEL,
+        "the root's trust: {}",
+        shown(&run)
+    );
+    assert!(
+        std::path::Path::new(start["workspace"].as_str().unwrap())
+            .ends_with(machine.workspace.file_name().unwrap()),
+        "{start}"
+    );
+    let sent = String::from_utf8(machine.server.requests().last().unwrap().body.clone()).unwrap();
+    assert!(sent.contains("Commands start in: src"), "{sent}");
+
     machine.run(&["permissions", "untrust"]).expect_code(0);
     assert!(trust_line(&machine).ends_with(": not trusted"));
     assert_eq!(model_of_a_run(&machine).0, MODEL);

@@ -374,3 +374,64 @@ find: if total + entry.size > FILE_KEEP_BYTES {
 replace: if false {
 caught-by:
     cortex-cli::bin/cortex history::tests::a_file_past_its_bytes_is_written_again_within_them
+
+# ------------------------------------------------------------ the full review's findings
+
+[break] an-older-line-counted-as-written
+rule: A line's size in the history's bounds is the size of what is kept of it, not of the line an older build wrote.
+file: crates/cortex-cli/src/history.rs
+in: Entry::parse
+find: Self::line(&project, &prompt).len()
+replace: line.len() + 1
+caught-by:
+    cortex-cli::bin/cortex history::tests::an_older_builds_long_line_counts_as_what_is_kept
+
+[break] the-prompts-sent-unbounded
+rule: What a project holds in memory stays within the bounds with the prompts sent in the run.
+file: crates/cortex-cli/src/history.rs
+in: FileHistory::push
+find: self.bound();
+replace: let _ = 0;
+caught-by:
+    cortex-cli::bin/cortex history::tests::the_prompts_sent_in_a_run_are_held_within_the_bounds
+
+[break] a-start-through-a-link-out-taken
+rule: A working directory that leads out of the workspace through a link is not where commands start.
+file: crates/cortex-cli/src/workspace.rs
+in: leads_inside
+find: (Ok(cwd), Ok(root)) => cortex_base::location_within(&cwd, &root)
+replace: (Ok(_), Ok(_)) => true
+os: linux
+caught-by:
+    cortex-cli::bin/cortex workspace::tests::a_start_through_a_link_out_starts_at_the_root_and_says_why
+
+[break] a-command-runs-at-the-root
+rule: A command that names no `cwd` runs where the session started.
+file: crates/cortex-tools/src/shell/mod.rs
+in: ShellTool::plan
+find: .filter(is_directory)
+replace: .filter(|_| false)
+caught-by:
+    cortex-tools::it shell::a_command_with_no_cwd_runs_where_the_session_started
+
+[break] the-shell-not-given-the-start
+rule: The session's shell is given where its commands start.
+file: crates/cortex-core/src/assemble.rs
+in: assemble
+find:
+    repository_trusted,
+            start: start.clone()
+replace:
+    repository_trusted,
+            start: None
+caught-by:
+    cortex-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
+
+[break] headless-starts-at-the-root
+rule: Headless mode run below the root starts its commands where it was run.
+file: crates/cortex-cli/src/headless.rs
+in: session
+find: .and_then(|cwd| cwd.to_str().map(str::to_owned))
+replace: .and_then(|_| None::<String>)
+caught-by:
+    cortex-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start

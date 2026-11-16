@@ -4,8 +4,8 @@
 
 use cortex_term::Event;
 use cortex_tui::complete::{Menu, Row, Toggle};
-use cortex_tui::focus::Target;
 use cortex_tui::editor::Fragment;
+use cortex_tui::focus::Target;
 use cortex_tui::input::{Delivery, Input, Outcome, SendMode};
 use cortex_tui::keys::{ACTIONS, Action, parse};
 
@@ -314,9 +314,17 @@ fn check(action: Action, key: &str) {
             let mut input = input();
             input.act(Action::HistorySearch);
             press(&mut input, key);
-            assert_eq!(input.search_found().map(Fragment::as_str), Some(HISTORY[2]), "{context}");
+            assert_eq!(
+                input.search_found().map(Fragment::as_str),
+                Some(HISTORY[2]),
+                "{context}"
+            );
             press(&mut input, key);
-            assert_eq!(input.search_found().map(Fragment::as_str), Some(HISTORY[1]), "{context}");
+            assert_eq!(
+                input.search_found().map(Fragment::as_str),
+                Some(HISTORY[1]),
+                "{context}"
+            );
         }
         Action::SearchNewer => {
             let mut input = input();
@@ -324,7 +332,11 @@ fn check(action: Action, key: &str) {
             input.act(Action::SearchOlder);
             input.act(Action::SearchOlder);
             press(&mut input, key);
-            assert_eq!(input.search_found().map(Fragment::as_str), Some(HISTORY[2]), "{context}");
+            assert_eq!(
+                input.search_found().map(Fragment::as_str),
+                Some(HISTORY[2]),
+                "{context}"
+            );
         }
         Action::SearchAccept => {
             let mut input = input();
@@ -348,7 +360,11 @@ fn check(action: Action, key: &str) {
             type_text(&mut input, "lexz");
             assert_eq!(input.search_found(), None, "{context}");
             press(&mut input, key);
-            assert_eq!(input.search_found().map(Fragment::as_str), Some(HISTORY[0]), "{context}");
+            assert_eq!(
+                input.search_found().map(Fragment::as_str),
+                Some(HISTORY[0]),
+                "{context}"
+            );
         }
         Action::FocusActivate | Action::FocusReturn | Action::FocusUp | Action::FocusDown => {
             let mut input = input();

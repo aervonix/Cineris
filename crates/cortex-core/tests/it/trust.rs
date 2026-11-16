@@ -295,7 +295,12 @@ fn sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_th
     };
     let (store, key) = trust_store(&world);
     store
-        .trust(&key, "~/work/app", &[Definition::of_rules(&[allow_rule()])], true)
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_rules(&[allow_rule()])],
+            true,
+        )
         .unwrap();
     let (seen, notices) = observe(&world, |_| {});
     assert_eq!(seen, Seen::trusted(), "{notices:?}");
@@ -344,7 +349,12 @@ fn sys_a_repository_whose_git_was_not_shown_gets_nothing_of_git() {
     };
     let (store, key) = trust_store(&world);
     store
-        .trust(&key, "~/work/app", &[Definition::of_rules(&[allow_rule()])], false)
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_rules(&[allow_rule()])],
+            false,
+        )
         .unwrap();
     let (seen, notices) = observe(&world, |_| {});
     assert_eq!(seen, git_not_trusted, "{notices:?}");
@@ -394,7 +404,12 @@ fn a_trusted_project_whose_rules_changed_starts_with_what_only_trust_admits_set_
     let world = World::new("trust_peek", [says("Done.")]);
     let (store, key) = trust_store(&world);
     store
-        .trust(&key, "~/work/app", &[Definition::of_rules(&[allow_rule()])], true)
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_rules(&[allow_rule()])],
+            true,
+        )
         .unwrap();
     world.project_config(
         "[model]\nmain = \"no-such-model\"\nspeed = \"no-such-tier\"\neffort = \

@@ -432,11 +432,7 @@ mod tests {
         for name in cortex_testkit::hostile::all() {
             let text = format!("a{}b", name.text);
             let start = start_line(SessionId::from("s_1"), ModelId::from("m"), text.clone());
-            let event = event_line(&event(
-                1,
-                Some("t_1"),
-                json!({"type": "notice", "kind": "verification", "message": text}),
-            ));
+            let event = event_line(&event(1, Some("t_1"), assistant("i_1", &text)));
             for line in [start, event] {
                 let back = crate::json::tests::parsed(&line);
                 assert!(holds(&back[0], &text), "{}: {line}", name.label);

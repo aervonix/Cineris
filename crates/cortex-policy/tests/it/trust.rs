@@ -105,7 +105,9 @@ fn a_changed_definition_is_disabled_until_it_is_approved_again() {
     );
 
     // The user approves the change, and only that changes.
-    let trust = store.approve(&key, std::slice::from_ref(&edited), false).unwrap();
+    let trust = store
+        .approve(&key, std::slice::from_ref(&edited), false)
+        .unwrap();
     assert_eq!(trust.standing(&edited), Standing::Approved);
     assert_eq!(
         trust.standing(&format),
@@ -326,7 +328,10 @@ fn a_trust_store_that_is_not_understood_trusts_nothing() {
             "{name}: {error}"
         );
         // Trusting through it fails, and leaves it as it was.
-        assert!(store.trust(&key, "~/work/app", &[], false).is_err(), "{name}");
+        assert!(
+            store.trust(&key, "~/work/app", &[], false).is_err(),
+            "{name}"
+        );
         assert!(store.revoke(&key).is_err(), "{name}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), contents, "{name}");
     }
@@ -372,7 +377,12 @@ fn a_projects_rules_are_pinned_with_every_profile_it_defines() {
         profiles: vec![("ci".to_owned(), vec![deploy.clone()])],
     };
     store
-        .trust(&key, "~/work/app", &[Definition::of_project_rules(&shown)], false)
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_project_rules(&shown)],
+            false,
+        )
         .unwrap();
     let trust = store.project(&key).unwrap();
     assert!(trust.project_rules_approved(&shown));
@@ -443,7 +453,11 @@ fn whether_git_was_shown_is_pinned_with_the_trust() {
     store.trust(&other, "~/work/other", &[], true).unwrap();
     assert!(store.project(&other).unwrap().git_trusted());
     // Kept without, a project that is not trusted is refused.
-    assert!(store.keep_without(&ProjectKey::new("ffff"), None, true).is_err());
+    assert!(
+        store
+            .keep_without(&ProjectKey::new("ffff"), None, true)
+            .is_err()
+    );
     let written = std::fs::read_to_string(store.path()).unwrap();
     assert!(written.starts_with("version = 2\n"), "{written}");
     assert!(private::is_private(store.path()).unwrap());
@@ -483,12 +497,22 @@ fn rules_kept_out_are_declined_while_they_are_those_rules() {
     assert!(kept.git_trusted(), "git trusted before stays");
     let again = store.project(&key).unwrap();
     assert!(again.rules_declined(&changed), "across a restart");
-    let further = rules(&[test.clone(), deploy, rule(Effect::Exec, "rm *", RuleAction::Allow)]);
-    assert!(!again.rules_declined(&further), "a further change asks again");
+    let further = rules(&[
+        test.clone(),
+        deploy,
+        rule(Effect::Exec, "rm *", RuleAction::Allow),
+    ]);
+    assert!(
+        !again.rules_declined(&further),
+        "a further change asks again"
+    );
     // Git approved alone (the folder became a repository) leaves the rules
     // kept out (the early review of the follow-ups of step 23).
     let git_alone = store.approve(&key, &[], true).unwrap();
-    assert!(git_alone.rules_declined(&changed), "a git-only yes undid a keep");
+    assert!(
+        git_alone.rules_declined(&changed),
+        "a git-only yes undid a keep"
+    );
     assert!(git_alone.git_trusted());
     // Approving the rules clears the decline.
     let approved = store
@@ -523,7 +547,15 @@ fn a_version_1_store_is_read_with_git_not_shown_and_written_as_version_2() {
     let a = store.project(&ProjectKey::new("aaaa1111")).unwrap();
     assert!(a.git_trusted() && !a.from_older_store());
     let b = store.project(&ProjectKey::new("bbbb2222")).unwrap();
-    assert!(b.is_trusted() && !b.git_trusted(), "the other kept as it was");
-    assert!(store.project(&ProjectKey::new("cccc3333")).unwrap().is_refused());
+    assert!(
+        b.is_trusted() && !b.git_trusted(),
+        "the other kept as it was"
+    );
+    assert!(
+        store
+            .project(&ProjectKey::new("cccc3333"))
+            .unwrap()
+            .is_refused()
+    );
     assert!(private::is_private(&file).unwrap());
 }

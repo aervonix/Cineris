@@ -473,7 +473,10 @@ mod tests {
         let mut steps = Steps::default();
         let recalled = steps.older(&store, Fragment::default()).unwrap();
         assert_eq!(recalled.chips().len(), 1, "recalled as a chip");
-        assert_eq!(recalled.shown(), "see [pasted 3 lines, first 64 KiB kept] please");
+        assert_eq!(
+            recalled.shown(),
+            "see [pasted 3 lines, first 64 KiB kept] please"
+        );
     }
 
     /// The chips of one prompt keep [`CHIP_TEXT_KEEP`] together: one past
@@ -510,7 +513,10 @@ mod tests {
         // Kept again, it is as it was: a file read back, or a recalled
         // prompt sent again, loses nothing more.
         assert_eq!(super::kept(&kept), kept);
-        let chip = with_chips("\u{FFFC}", &[(&"z".repeat(CHIP_KEEP * 2), "[pasted 9 lines]")]);
+        let chip = with_chips(
+            "\u{FFFC}",
+            &[(&"z".repeat(CHIP_KEEP * 2), "[pasted 9 lines]")],
+        );
         let once = super::kept(&chip);
         assert_eq!(super::kept(&once), once);
     }
@@ -519,7 +525,10 @@ mod tests {
     #[test]
     fn a_search_looks_in_labels_not_in_a_chips_text() {
         let mut store = MemoryHistory::new();
-        store.push(&with_chips("fix \u{FFFC}", &[("needle", "[pasted 20 lines]")]));
+        store.push(&with_chips(
+            "fix \u{FFFC}",
+            &[("needle", "[pasted 20 lines]")],
+        ));
         let mut search = Search::new();
         for c in "needle".chars() {
             search.push(&store, c);

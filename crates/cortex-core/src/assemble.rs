@@ -112,10 +112,15 @@ fn start_below(root: &AbsPath, cwd: &Path) -> Result<Option<String>, Box<ErrorDa
     let resolved = resolve_dir(cwd).ok_or_else(outside)?;
     let rest = cortex_base::strip_location_prefix(&resolved.to_fs_path(), &root.to_fs_path())
         .ok_or_else(outside)?;
-    let names: Vec<String> = rest
+    // A name that is not Unicode cannot be said to the model as it is: the
+    // session starts at the root (the review of the follow-ups of step 23).
+    let Some(names) = rest
         .components()
-        .map(|part| part.as_os_str().to_string_lossy().into_owned())
-        .collect();
+        .map(|part| part.as_os_str().to_str().map(str::to_owned))
+        .collect::<Option<Vec<String>>>()
+    else {
+        return Ok(None);
+    };
     Ok((!names.is_empty()).then(|| names.join("/")))
 }
 

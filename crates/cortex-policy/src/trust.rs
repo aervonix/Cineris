@@ -525,7 +525,10 @@ impl TrustStore {
         self.update(|file| {
             // Trusting a project the user had refused lifts the refusal.
             file.refused.retain(|refused| refused.key != *key);
-            Ok((self.trusted_in(file, key, root, definitions, git_shown), true))
+            Ok((
+                self.trusted_in(file, key, root, definitions, git_shown),
+                true,
+            ))
         })
     }
 
@@ -674,7 +677,10 @@ impl TrustStore {
                         .to_owned(),
                 ));
             }
-            Ok((self.trusted_in(file, key, root, definitions, git_shown), true))
+            Ok((
+                self.trusted_in(file, key, root, definitions, git_shown),
+                true,
+            ))
         })
     }
 
@@ -1071,7 +1077,11 @@ mod tests {
                 "{result:?}"
             );
         };
-        refused(store.trust(&ProjectKey::new("other"), "~/y", &[], false).map(drop));
+        refused(
+            store
+                .trust(&ProjectKey::new("other"), "~/y", &[], false)
+                .map(drop),
+        );
         refused(store.approve(&key, &[], false).map(drop));
         refused(store.revoke(&key).map(drop));
         assert!(store.project(&key).unwrap().is_trusted());

@@ -24,17 +24,29 @@ pub(crate) struct Here {
     pub(crate) cwd: Option<PathBuf>,
     /// What was passed over on the way up, said to the person.
     pub(crate) passed_over: Vec<PathBuf>,
+    /// The working directory is below the root by its name but not where
+    /// it leads (a link or a junction on the way to it leads out of the
+    /// workspace), or its name is not Unicode: commands start at the root,
+    /// and the person is told (the review of the follow-ups of step 23).
+    pub(crate) cwd_not_taken: Option<PathBuf>,
 }
 
 impl Here {
     /// Where a run started in `start` is.
     pub(crate) fn of(start: &Path) -> Self {
         let found = cortex_config::find_workspace_root(start);
-        let cwd = (found.root.as_path() != start).then(|| start.to_path_buf());
+        let mut cwd = (found.root.as_path() != start).then(|| start.to_path_buf());
+        let mut cwd_not_taken = None;
+        if let Some(below) = &cwd
+            && !leads_inside(below, &found.root)
+        {
+            cwd_not_taken = cwd.take();
+        }
         Self {
             root: found.root,
             cwd,
             passed_over: found.passed_over,
+            cwd_not_taken,
         }
     }
 
@@ -43,9 +55,11 @@ impl Here {
         Ok(Self::of(&std::env::current_dir()?))
     }
 
-    /// What to tell the person of what was passed over: a line each.
+    /// What to tell the person of what was passed over, and of a working
+    /// directory not taken: a line each.
     pub(crate) fn passed_over_said(&self) -> Vec<String> {
-        self.passed_over
+        let mut said: Vec<String> = self
+            .passed_over
             .iter()
             .map(|path| {
                 format!(
@@ -55,7 +69,32 @@ impl Here {
                     self.root.display()
                 )
             })
-            .collect()
+            .collect();
+        if let Some(cwd) = &self.cwd_not_taken {
+            said.push(format!(
+                "Commands start at the workspace's root `{}`: the working directory `{}` is \
+                 reached through a link that leads out of it, or its name is not Unicode.",
+                self.root.display(),
+                cwd.display()
+            ));
+        }
+        said
+    }
+}
+
+/// Whether `cwd` is Unicode, and leads to a directory inside `root` once
+/// links and junctions are followed, both as the system resolves them
+/// (compared by `cortex_base::location_within`, which takes the canonical
+/// form's prefix off and folds case as the file system does). Where either
+/// cannot be resolved, the core judges it (`session/new` refuses a `cwd`
+/// outside the workspace).
+fn leads_inside(cwd: &Path, root: &Path) -> bool {
+    if cwd.to_str().is_none() {
+        return false;
+    }
+    match (std::fs::canonicalize(cwd), std::fs::canonicalize(root)) {
+        (Ok(cwd), Ok(root)) => cortex_base::location_within(&cwd, &root),
+        _ => true,
     }
 }
 
@@ -69,8 +108,7 @@ mod tests {
     /// working directory for the root).
     #[test]
     fn the_root_is_found_by_walking_up_and_the_folder_is_kept() {
-        let scratch =
-            std::env::temp_dir().join(format!("cortex-cli-here-{}", std::process::id()));
+        let scratch = std::env::temp_dir().join(format!("cortex-cli-here-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&scratch);
         // Resolved, as the working directory the system gives is.
         std::fs::create_dir_all(&scratch).unwrap();
@@ -82,9 +120,55 @@ mod tests {
         assert_eq!(below.root, repo);
         assert_eq!(below.cwd, Some(repo.join("src/deep")));
         assert!(below.passed_over.is_empty());
+        assert!(below.passed_over_said().is_empty());
         let at_root = Here::of(&repo);
         assert_eq!(at_root.root, repo);
         assert_eq!(at_root.cwd, None);
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// A working directory below the root by its name but reached through
+    /// a link out of the workspace starts at the root, and says so; a
+    /// `.cortex` that is a link is passed over, and said (the review of the
+    /// follow-ups of step 23: the first failed the session's open).
+    #[cfg(unix)]
+    #[test]
+    fn a_start_through_a_link_out_starts_at_the_root_and_says_why() {
+        let scratch =
+            std::env::temp_dir().join(format!("cortex-cli-here-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        std::fs::create_dir_all(&scratch).unwrap();
+        let scratch = std::fs::canonicalize(&scratch).unwrap();
+        let repo = scratch.join("repo");
+        std::fs::create_dir_all(repo.join(".cortex")).unwrap();
+        std::fs::create_dir_all(scratch.join("outside/sub")).unwrap();
+        std::os::unix::fs::symlink(scratch.join("outside"), repo.join("lib")).unwrap();
+        let here = Here::of(&repo.join("lib/sub"));
+        assert_eq!(here.root, repo);
+        assert_eq!(here.cwd, None, "a start outside the workspace");
+        assert_eq!(here.cwd_not_taken, Some(repo.join("lib/sub")));
+        let said = here.passed_over_said();
+        assert!(
+            said.iter()
+                .any(|line| line.contains("Commands start at the workspace's root")),
+            "{said:?}"
+        );
+        // A `.cortex` that is a link: passed over, and said.
+        let linked = scratch.join("linked");
+        std::fs::create_dir_all(linked.join("src")).unwrap();
+        std::os::unix::fs::symlink(scratch.join("outside"), linked.join(".cortex")).unwrap();
+        let here = Here::of(&linked.join("src"));
+        assert!(
+            here.passed_over.contains(&linked.join(".cortex")),
+            "{here:?}"
+        );
+        assert!(
+            here.passed_over_said()
+                .iter()
+                .any(|line| line.contains("was not taken as the workspace's")),
+            "{:?}",
+            here.passed_over_said()
+        );
         let _ = std::fs::remove_dir_all(&scratch);
     }
 }
