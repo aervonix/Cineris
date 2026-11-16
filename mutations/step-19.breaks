@@ -342,3 +342,12 @@ find: fields.insert("sandbox".to_owned(), Json::String(line));
 replace: let _ = (fields, line);
 caught-by:
     cortex-tools::it shell::sys_what_the_sandbox_blocked_is_in_the_payload
+
+[break] a-skipped-round-hides-an-earlier-failure
+rule: A round that ran nothing to a result says nothing new: a failure an earlier round of the turn found still stands.
+file: crates/cortex-agent/src/turn.rs
+in: Session::verify
+find: turn.verification.get_or_insert(Verification::Skipped);
+replace: turn.verification = Some(Verification::Skipped);
+caught-by:
+    cortex-agent::it verifying::a_later_round_that_ran_nothing_does_not_hide_an_earlier_failure

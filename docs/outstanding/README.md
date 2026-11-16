@@ -82,6 +82,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-promote-while-a-confined-command-runs](a-promote-while-a-confined-command-runs.md): A promote made while a confined command of the same project runs is taken for a change from outside, and stops that command's turn. Owner: step 24, or a fix session that changes the continuity check.
 - [a-same-size-rewrite-within-a-clock-tick-on-windows](a-same-size-rewrite-within-a-clock-tick-on-windows.md): On Windows a file's stamp is its time and size, so a same-size rewrite within the clock's tick is not seen by the look for a changed profile. Owner: a step that changes `cortex-base`'s `watch`, or step 32.
 - [the-load-of-a-full-profile-on-a-hosted-runner](the-load-of-a-full-profile-on-a-hosted-runner.md): The budget for loading a project's knowledge at its caps is 5 ms by the design note and 5.1 ms on a hosted runner; the row is written as recommended, pending. Owner: the owner.
+- [which-test-of-a-flaky-command-flipped](which-test-of-a-flaky-command-flipped.md): A flaky entry names a command, not the test that flipped, so a check's retry runs the whole command and may call a real failure flaky. Owner: step 52, with its per-ecosystem test selection.
 - [the-item-an-entry-was-learned-from](the-item-an-entry-was-learned-from.md): An entry's source has the session and the date and not the item: the tools' contract gives a tool no call id. Owner: a step that changes the tools' contract, or step 24.
 
 ### cortex-llm

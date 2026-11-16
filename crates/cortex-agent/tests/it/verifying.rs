@@ -57,6 +57,27 @@ fn after_a_failure_the_checks_run_again_only_when_something_changed() {
 }
 
 #[test]
+fn a_later_round_that_ran_nothing_does_not_hide_an_earlier_failure() {
+    let (world, rig) = Rig::one(
+        "verify_skipped_after_failure",
+        [writes("a"), says("Done."), writes("b"), says("Fixed?")],
+    );
+    lock(&rig.verifier.outcomes).extend([
+        VerifyOutcome::Failed {
+            report: "a test failed".to_owned(),
+        },
+        VerifyOutcome::Skipped,
+    ]);
+    turn(&world, &rig);
+    assert_eq!(rounds(&rig), [(1, 1), (2, 2)]);
+    assert_eq!(
+        rig.events.ends()[0].verification,
+        Some(Verification::Failed),
+        "nothing passed since the failure"
+    );
+}
+
+#[test]
 fn a_write_that_found_its_content_there_does_not_send_the_turn_to_the_checks() {
     let (world, rig) = Rig::one(
         "verify_unchanged_write",

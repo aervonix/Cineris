@@ -164,9 +164,9 @@ Specified in [07-sessions-and-context.md](07-sessions-and-context.md). In short:
 
 | Source | First release |
 |---|---|
-| `verify.commands` in configuration | Yes. |
+| `verify.commands` in the user's own configuration | Yes. A project's file may not set it (since step 19): a repository proposes its checks as command entries of its shared profile, which each user accepts by their content hash. |
 | `command` entries of class check and test in the project profile, accepted by the user | Yes. |
-| **Affected-test selection:** only the tests that the changed files can affect | A simple form: the profile can hold a command template that takes changed paths or package names. Per-ecosystem test-impact analysis comes later. |
+| **Affected-test selection:** only the tests that the changed files can affect | Not in the first release: no entry can hold a command template, and `VerifyCx::written` is what step 52's per-ecosystem selection starts from. (This row once promised a simple form here.) |
 
 **Limits and control.**
 
@@ -177,6 +177,18 @@ Specified in [07-sessions-and-context.md](07-sessions-and-context.md). In short:
 - The user can interrupt verification like any other tool.
 
 **Cost.** Verification trades wall-clock time and CPU for fewer broken turns. It runs at the end of a turn, not after every edit, to keep that trade favourable. The owner accepted this resolution on 2026-11-12 (conflict C7 in the [build plan](../build-plan.md)).
+
+**As built in step 19.** The loop's side is [03-agent-loop.md](03-agent-loop.md), "Verification"; the design, its review and the coordinator's answers are in [steps/19/answered.md](../steps/19/answered.md). The core's verifier (`cortex-core`, `verify`):
+
+- **Nothing runs unless the user trusts the project,** whatever chose the check: a check runs the repository's own code at the end of every turn, and nobody is asked. In a project that is not trusted the user is told once a session how to trust it. **Nothing runs at the `read-only` level,** where the engine asks about every command.
+- **The checks** are the user's own `verify.commands`, run in the workspace root, then the profile's command entries of purpose test and check that run unasked (`Snapshot::runs_unasked`: in use, and accepted or written by the user). The same line in the same directory runs once; a round runs at most 8, and says how many it left out.
+- **Each check is planned and decided just before it runs,** its retry too, so its directory is resolved after the checks before it ran, and an entry of the profile is looked up again first: one turned off or lapsed since the round began does not run. The engine is asked about each, and a `deny` or a stop wins. Where it would ask, the user's own line runs (it is the user's word, in a project the user trusts) and an entry of the profile does not. A check never puts a question.
+- **Each runs through the session's own `shell` tool,** as the harness's run: the same runner, launcher (the sandbox), environment, look for what it changed, looks at protected paths before and after (a check that changes one stops the turn), and the round's checkpoint (an undo of the turn puts back what the checks changed). The command observer is told the run was the harness's: it confirms an entry it already holds in use, and learns no new command from it. Where nothing confines commands (Windows, a kernel without Landlock, `sandbox.enabled = false`, `unrestricted`) a check runs unconfined, as the session's commands do, and the user is told once a session ([../security.md](../security.md), section 1).
+- **Its time** is the least of what is left of the round's limit (`verify.round_time`, 2 minutes), the turn's (`verify.turn_time`, 4 minutes, across its rounds), and the turn's and the session's own time limits; and at most `shell.max_timeout`. A check whose usual time (its entry's) is longer than a round's limit, or longer than what is left (10 seconds when it is not known), is skipped with a note. A round's limit can be passed by the stopping of one check (about 9 seconds of graces) and the looks after it.
+- **How a check ended** is read from the shell's payload: passed; failed; **timed out** (a failure for the model only when its usual time is known and less than half what it had; otherwise not taken for the model's doing); **blocked** (the launcher said its confinement stopped it, which the shell now puts in its payload as `sandbox`; not fed back, and the user is told the remedies: fetch once outside the sandbox, or `sandbox.network = "full"`); skipped; not run (refused, or never started). A known flaky test (a `flaky` entry in use with the same line and directory) that fails runs once more; passing then, it is `flaky`, and failing again a failure.
+- **The turn's verdict** is `failed` while a check that failed in the turn has not passed since; `passed` when every chosen check passed or was flaky; `incomplete` when none failed and some did not run to a result; `skipped` when none started.
+- **What the model is told:** the round of how many; each failed check's line, directory, how it ended and its output, shaped by the lines that matter in an equal share of 16 KiB (at least 2 KiB each), **every line of the output escaped by `cortex_base::visible` and begun with `| `**, so nothing a check prints can begin a line of the notice; then a line for each other check. The shell keeps the lines that matter for every check's output, whatever the table of commands classes it as.
+- **`verify.mode`:** `off` runs nothing (and says so once when a project's file turned it off); `ask` runs nothing and sends front ends a `verification` notice that offers the checks.
 
 ### Speculative verification
 
