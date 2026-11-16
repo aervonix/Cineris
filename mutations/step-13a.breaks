@@ -703,7 +703,7 @@ caught-by:
 [break] any-late-client-asked
 rule: Only a client that may answer is put a waiting request when it joins.
 file: crates/cortex-core/src/clients.rs
-find: if self.askable(&[client.0], Kind::of(&open.request)).is_empty() {
+find: if !answers.iter().any(|(each, may)| *each == kind && *may) {
 replace: if false {
 caught-by:
     cortex-core clients::tests::a_user_client_that_joins_is_put_what_is_waiting
