@@ -2526,3 +2526,14 @@ find: chosen.is_empty() && !elsewhere.is_empty()
 replace: false
 caught-by:
     mutate::tests::what_is_left_to_the_other_system_is_said_with_the_command_that_runs_it_there
+
+# The session's set-up on Windows: one resolver at the deepest folder there is.
+
+[break] resolve-dir-takes-no-folder-for-one
+rule: A path that does not exist yet resolves at its deepest existing folder, as it did when a resolver was tried at each level.
+file: crates/cortex-core/src/assemble.rs
+in: resolve_dir
+find: metadata.is_dir()
+replace: metadata.is_file()
+caught-by:
+    assemble::resolve_dir_tests::a_folder_missing_several_levels_deep_resolves_as_it_did
