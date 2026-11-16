@@ -1,0 +1,283 @@
+# The seventh tooling step, the corpus of real code: `cargo xtask corpus`,
+# `cortex_testkit::corpus` and the fetch that `try`'s `perf -p CRATE` makes.
+# Written with the code, and run with `cargo xtask mutate tooling-7-corpus`.
+
+# ----------------------------------------------------------------- the hash
+
+[break] corpus-hash-ignores-the-content
+rule: The hash is of every file's content: a changed byte changes it.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: measure
+find: hash.write(&content);
+replace: let _ = &content;
+caught-by:
+    cortex-testkit corpus::tests::a_changed_byte_is_refused
+    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+
+[break] corpus-hash-ignores-the-path
+rule: The hash is of every file's path: the same bytes under another name are another corpus.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: measure
+find: hash.write(relative.as_bytes());
+replace: let _ = relative;
+caught-by:
+    cortex-testkit corpus::tests::a_file_under_another_name_is_refused
+    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+
+[break] corpus-listing-is-not-sorted
+rule: The files are hashed in the byte order of their paths, the same on every system.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: list
+find: files.sort_unstable();
+replace: files.reverse();
+caught-by:
+    cortex-testkit corpus::tests::the_listing_is_in_the_byte_order_of_the_paths_whatever_the_folder_says
+    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+
+[break] corpus-path-separator-is-the-systems
+rule: A file's path in the hash is written with `/` on every system, or the same corpus would hash differently on Windows.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: list
+find: format!("{prefix}/{name}")
+replace: format!("{prefix}{name}")
+caught-by:
+    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+
+[break] corpus-link-is-followed-as-a-file
+rule: A link is not a file of the corpus: it is refused, not followed.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: list
+find: } else if kind.is_file() {
+replace: } else if !kind.is_dir() {
+caught-by:
+    cortex-testkit corpus::tests::a_link_is_not_followed
+
+# ------------------------------------------------------------- verification
+
+[break] corpus-verify-accepts-any-hash
+rule: A corpus whose hash is not the pin's is refused: a changed byte of the same length, or a file renamed.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: verify
+find: if found.hash != pin.hash {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_changed_byte_is_refused
+    cortex-testkit corpus::tests::a_file_under_another_name_is_refused
+
+[break] corpus-verify-accepts-any-size
+rule: A corpus whose size is not the pin's is refused: a line ending that changed is a different size.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: verify
+find: if found.bytes != pin.bytes {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_line_ending_that_changed_is_refused
+
+[break] corpus-verify-accepts-any-count
+rule: A corpus with a file missing, or one that is not meant to be there, is refused by its count.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: verify
+find: if found.files != pin.files {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_missing_file_is_refused
+    cortex-testkit corpus::tests::an_extra_file_is_refused_even_when_empty
+
+[break] corpus-verify-accepts-a-folder-that-is-not-there
+rule: A corpus that is not there is refused, not measured as empty.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: verify
+find: if !dir.is_dir() {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_folder_that_is_not_there_is_refused
+
+[break] corpus-real-code-checks-the-repositorys-pin-whatever-it-is-asked
+rule: A corpus is checked against the pin it is asked for.
+file: crates/cortex-testkit/src/corpus.rs
+in: try_real_code_in
+find: shared::verify(&folder, pin)
+replace: shared::verify(&folder, &Pin::pinned())
+caught-by:
+    cortex-testkit corpus::tests::a_corpus_that_is_not_fetched_or_not_whole_fails_with_the_command_that_fetches_it
+
+# ----------------------------------------------------------- the pin's text
+
+[break] corpus-pin-takes-a-key-twice
+rule: A pin that gives a key twice is refused.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: Pin::parse
+find: if taken.is_some() {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_pin_is_read_from_its_text_and_a_bad_one_is_refused
+
+[break] corpus-pin-takes-a-short-hash
+rule: A pin's hash is sixteen digits, so that a cut-off line is not taken for a hash.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: parse_hash
+find: if value.len() != 16 {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::a_pin_is_read_from_its_text_and_a_bad_one_is_refused
+
+[break] corpus-folder-name-is-not-sixteen-digits
+rule: The corpus's folder is named by its hash in sixteen hexadecimal digits.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: Pin::name
+find: format!("{:016x}", self.hash)
+replace: format!("{:x}", self.hash)
+caught-by:
+    cortex-testkit corpus::tests::the_folder_of_a_corpus_is_named_by_its_hash
+
+# ----------------------------------------------------- where it is kept
+
+[break] corpus-variable-does-not-win
+rule: CORTEX_CORPUS_DIR names the place to keep corpora, before the system's own.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: cache_root
+find: if let Some(root) = given(ROOT_VARIABLE) {
+replace: if let Some(root) = given(ROOT_VARIABLE).filter(|_| false) {
+caught-by:
+    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+
+[break] corpus-empty-variable-is-a-place
+rule: A variable that is set and empty is not set.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: cache_root
+find: variable(name).filter(|value| !value.is_empty())
+replace: variable(name)
+caught-by:
+    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+
+[break] corpus-relative-variable-is-a-place
+rule: A relative place is refused: it would be another place in every folder the command runs in.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: cache_root
+find: if !root.is_absolute() {
+replace: if false {
+caught-by:
+    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+
+[break] corpus-windows-keeps-it-in-the-home
+rule: On Windows the corpus is kept in the local application data folder, not under `.cache` in the home folder.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: cache_root
+find: let base = if windows {
+replace: let base = if false {
+caught-by:
+    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+
+[break] corpus-relative-cache-folder-is-used
+rule: A cache folder (XDG_CACHE_HOME) that is not absolute is not used.
+file: crates/cortex-testkit/src/corpus/shared.rs
+in: cache_root
+find: .filter(|path| path.is_absolute())
+replace: .filter(|_| true)
+caught-by:
+    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+
+# ------------------------------------------------------------------ fetching
+
+[break] corpus-copies-more-than-rust
+rule: Only the `.rs` files of a crate are copied into the corpus.
+file: xtask/src/corpus.rs
+in: copy_rust_files
+find: entry.path().extension().is_some_and(|ext| ext == "rs")
+replace: entry.path().extension().is_some()
+caught-by:
+    corpus::tests::only_rust_files_are_copied_byte_for_byte_and_dated
+
+[break] corpus-copy-changes-a-byte
+rule: A file is copied byte for byte, line endings included.
+file: xtask/src/corpus.rs
+in: copy_rust_files
+find: file.write_all(&content)
+replace: file.write_all(&content[..content.len() - 1])
+caught-by:
+    corpus::tests::only_rust_files_are_copied_byte_for_byte_and_dated
+
+[break] corpus-copy-keeps-no-date
+rule: Every file of the corpus has the same old date, so that a freshly fetched tree is not one modified a moment ago.
+file: xtask/src/corpus.rs
+in: copy_rust_files
+find: .and_then(|()| file.set_modified(date))
+replace: .and_then(|()| Ok::<(), std::io::Error>(()))
+caught-by:
+    corpus::tests::only_rust_files_are_copied_byte_for_byte_and_dated
+
+[break] corpus-lock-takes-a-package-from-a-repository
+rule: The corpus is crates from a registry, at checksums: a package from a repository is refused.
+file: xtask/src/corpus.rs
+in: registry_packages
+find: if !(source.starts_with("registry+") || source.starts_with("sparse+")) {
+replace: if false {
+caught-by:
+    corpus::tests::the_lock_gives_each_registry_crate_and_refuses_one_from_elsewhere
+
+[break] corpus-fetch-puts-a-wrong-corpus-in-place
+rule: What was made is checked against the pin before it is put in place.
+file: xtask/src/corpus.rs
+in: must_be_the_pin
+find: if measured.as_pin() == *pin {
+replace: if true {
+caught-by:
+    corpus::tests::a_corpus_that_is_not_the_pin_is_refused_and_nothing_is_put_in_place
+
+[break] corpus-fetch-remakes-a-corpus-that-is-there
+rule: A corpus that is there and whole is used as it is, not fetched again.
+file: xtask/src/corpus.rs
+in: ensure
+find: return Ok((folder, measured));
+replace: drop(measured);
+caught-by:
+    corpus::tests::a_corpus_that_is_there_and_whole_is_not_made_again
+
+[break] corpus-fetch-keeps-a-corpus-that-is-not-whole
+rule: A corpus that is there and is not the pin is removed and made again.
+file: xtask/src/corpus.rs
+in: ensure
+find: remove(&folder)?;
+replace: ();
+caught-by:
+    corpus::tests::a_corpus_that_is_not_whole_is_made_again
+
+[break] corpus-fetch-leaves-its-work-folder
+rule: The folder a fetch works in is removed whatever came of it.
+file: xtask/src/corpus.rs
+in: ensure
+find: remove(&work).ok();
+replace: ();
+caught-by:
+    corpus::tests::a_missing_corpus_is_made_checked_and_put_in_place_and_nothing_is_left
+    corpus::tests::a_corpus_that_is_not_the_pin_is_refused_and_nothing_is_put_in_place
+
+[break] corpus-install-puts-nothing-in-place
+rule: A corpus that was made is put in its place.
+file: xtask/src/corpus.rs
+in: install
+find: if fs::rename(made, folder).is_ok() {
+replace: if true {
+caught-by:
+    corpus::tests::a_missing_corpus_is_made_checked_and_put_in_place_and_nothing_is_left
+    corpus::tests::a_corpus_another_fetch_put_in_place_meanwhile_is_kept_if_it_is_whole
+
+# ------------------------------------------------------------------- try
+
+[break] try-fetches-the-corpus-for-every-test-run
+rule: Only a run of the crates' perf tests fetches the corpus: a `test` run does not wait for it.
+file: xtask/src/try_run.rs
+in: reads_the_corpus
+find: pair[1] == "perf"
+replace: pair[1] != "zzz"
+caught-by:
+    try_run::tests::only_the_crates_perf_tests_fetch_the_corpus_of_real_code
+
+[break] try-fetches-no-corpus-for-perf-tests
+rule: `perf -p CRATE` fetches the corpus before it builds anything.
+file: xtask/src/try_run.rs
+in: reads_the_corpus
+find: command.first().is_some_and(|verb| verb == "test")
+replace: command.first().is_some_and(|verb| verb == "perf")
+caught-by:
+    try_run::tests::only_the_crates_perf_tests_fetch_the_corpus_of_real_code

@@ -929,6 +929,12 @@ fn run(arguments: &[String]) -> Result<ExitCode> {
     if let Some(commit) = &plan.inputs.commit {
         check_checkout(commit, &head_commit()?)?;
     }
+    if reads_the_corpus(&plan.command) {
+        // A measurement of real code reads the pinned corpus: the same
+        // bytes on a runner as at a desk. It is fetched, or found in place
+        // and checked, before anything is built.
+        crate::corpus::ensure_for_try()?;
+    }
     crate::steps::append_job_summary(&format!(
         "### `cargo xtask {}`\n\n{}",
         plan.command.join(" "),
@@ -945,6 +951,15 @@ fn run(arguments: &[String]) -> Result<ExitCode> {
     crate::run(first, rest).map(|()| ExitCode::SUCCESS)
 }
 
+/// Whether a command is the crates' ignored `perf_` tests (`perf -p CRATE`),
+/// which may measure the corpus of real code.
+fn reads_the_corpus(command: &[String]) -> bool {
+    command.first().is_some_and(|verb| verb == "test")
+        && command
+            .windows(2)
+            .any(|pair| pair[0] == "--profile" && pair[1] == "perf")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Inputs, check_checkout, plan};
@@ -955,6 +970,42 @@ mod tests {
         Inputs::parse(&arguments)?
             .command()
             .map(|command| command.join(" "))
+    }
+
+    #[test]
+    fn only_the_crates_perf_tests_fetch_the_corpus_of_real_code() {
+        let command = |text: &str| {
+            Inputs::parse(&["--command".to_owned(), text.to_owned()])
+                .unwrap()
+                .command()
+                .unwrap()
+        };
+        assert!(super::reads_the_corpus(&command("perf -p cortex-index")));
+        assert!(super::reads_the_corpus(&command(
+            "perf -p cortex-index warm"
+        )));
+        for other in [
+            "test",
+            "test -p cortex-index",
+            "stress -p cortex-index",
+            "perf --only editor",
+            "startup",
+        ] {
+            let words = if other == "startup" {
+                Inputs::parse(&[
+                    "--command".to_owned(),
+                    other.to_owned(),
+                    "--profile".to_owned(),
+                    "release".to_owned(),
+                ])
+                .unwrap()
+                .command()
+                .unwrap()
+            } else {
+                command(other)
+            };
+            assert!(!super::reads_the_corpus(&words), "{other}");
+        }
     }
 
     #[test]

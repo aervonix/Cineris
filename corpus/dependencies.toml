@@ -1,0 +1,58 @@
+# The crates whose source is the corpus of real code that performance
+# measurements read (docs/testing-and-ci.md, "A tree of real code to measure").
+#
+# This is the body of a manifest's [dependencies] table: `cargo xtask corpus`
+# puts it into a manifest of its own (no library, no workspace) and has cargo
+# fetch what it names and what that needs, all platforms' crates included.
+# The versions that were chosen are in Cargo.lock beside this file, with the
+# checksums cargo verifies each download against; PIN holds the hash of the
+# .rs files that come out. Nothing here is built, committed as code or
+# shipped: the crates are test input, kept outside the repository.
+#
+# The crates are chosen to be what a harness meets in a real project: async
+# runtimes, parsers, code generators, a language runtime, crates of bindings,
+# tests and generated tables, and some files with CRLF line endings, which a
+# harness meets and a tree made for a test does not. To change the corpus,
+# edit this list and run `cargo xtask corpus pin` (add `--update` to take
+# newer versions), then commit this folder. The count, the size and the hash
+# are in PIN.
+tokio = { version = "1", features = ["full"] }
+serde_json = "1"
+regex = "1"
+clap = { version = "4", features = ["derive"] }
+syn = { version = "2", features = ["full", "extra-traits", "visit", "visit-mut", "fold"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+axum = "0.8"
+rayon = "1"
+petgraph = "0.8"
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+jiff = "0.2"
+chrono = "0.4"
+rustls = "0.23"
+zbus = "5"
+nix = "0.31"
+rustix = { version = "1", features = ["all-apis"] }
+object = "0.40"
+schemars = "1"
+derive_more = { version = "2", features = ["full"] }
+futures = "0.3"
+tracing-subscriber = "0.3"
+rhai = "1"
+wasmtime = "50"
+boa_engine = "0.22"
+tower-http = "0.6"
+palette = "0.7"
+uom = "0.36"
+image = "0.25"
+ratatui = "0.30"
+hyper = { version = "1", features = ["full"] }
+tonic = "0.14"
+serde_yaml = "0.9"
+toml = "0.9"
+tokio-tungstenite = "0.28"
+nom = "8"
+pest = "2"
+tracing = "0.1"
+tantivy = "0.25"
+zip = "5"
+tar = "0.4"

@@ -396,20 +396,6 @@ fn memory_kib() -> Option<(u64, u64)> {
     Some((numbers.next()?? / 1024, numbers.next()?? / 1024))
 }
 
-/// Where the cargo registry's sources are: `$CARGO_HOME/registry/src`, or
-/// `~/.cargo/registry/src`.
-fn registry_sources() -> Option<std::path::PathBuf> {
-    let home = std::env::var_os("CARGO_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .map(|home| std::path::PathBuf::from(home).join(".cargo"))
-        })?;
-    let src = home.join("registry").join("src");
-    src.is_dir().then_some(src)
-}
-
 /// The first `want` `.rs` files under `dir`, in name order, name by name.
 fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, want: usize) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -443,12 +429,16 @@ fn tree_file(n: usize) -> String {
 /// (`docs/performance-budgets.md`, "Data paths"), since the independent
 /// review of step 18 found the generated tree about ten times lighter than
 /// real code: a tree of 20,000 files of real Rust code, the first `.rs`
-/// files of the cargo registry's sources in name order
-/// (`CORTEX_PERF_SOURCE` names another directory), a hundred to a
-/// directory. Where the registry holds fewer (a hosted runner's has the
-/// workspace's own dependencies, about 7,300), they are taken again in turn
-/// under other names, so the tree is always the same size. Each file is a
-/// hard link to its source where the two are on one volume (a hosted
+/// files in name order of the **pinned corpus of real code**
+/// (`cortex_testkit::corpus::real_code`: the same bytes on a desk and on a
+/// runner, checked against `corpus/PIN` every time; `cargo xtask corpus
+/// fetch` makes it, and `try`'s `perf -p` runs that first), a hundred to a
+/// directory. `CORTEX_PERF_SOURCE` names another directory to take the files
+/// from instead (a measurement of that, not of the corpus, and not to be
+/// compared with it). Where the source holds fewer files than
+/// `CORTEX_PERF_FILES` asks for (20,000 unless given), they are taken again
+/// in turn under other names, so the tree is always the same size. Each file
+/// is a hard link to its source where the two are on one volume (a hosted
 /// runner), and otherwise a copy dated an hour back.
 ///
 /// It prints the cache's size per file, the cold passes, the warm pass and
@@ -456,12 +446,8 @@ fn tree_file(n: usize) -> String {
 /// writes the cache again), where a warm pass's time goes, and the
 /// process's peak and remaining memory; then the map.
 ///
-/// **On a hosted runner** the registry's sources are there once a build has
-/// fetched the workspace's dependencies, which `try` does before it runs the
-/// tests: `gh workflow run try -f os=windows -f command="perf -p
-/// cortex-index perf_a_tree_of_real_code"`.
-/// With no registry and no `CORTEX_PERF_SOURCE` it says so and measures
-/// nothing.
+/// **On a hosted runner**: `gh workflow run try -f os=windows
+/// -f command="perf -p cortex-index perf_a_tree_of_real_code"`.
 ///
 /// It starts PowerShell on Windows for the memory figures, and takes about
 /// 20 s on a hosted runner: like every measurement here it is ignored, so
@@ -473,13 +459,22 @@ fn tree_file(n: usize) -> String {
 #[ignore = "a measurement, run by hand in a release build: see the module documentation"]
 fn perf_a_tree_of_real_code() {
     let files = number_from_env("CORTEX_PERF_FILES", 20_000);
-    let source = std::env::var_os("CORTEX_PERF_SOURCE")
-        .map(std::path::PathBuf::from)
-        .or_else(registry_sources);
-    let Some(source) = source else {
-        println!("no cargo registry and no CORTEX_PERF_SOURCE: no tree of real code measured");
-        return;
-    };
+    let source = std::env::var_os("CORTEX_PERF_SOURCE").map_or_else(
+        || {
+            let start = Instant::now();
+            let corpus = cortex_testkit::corpus::real_code();
+            let pin = cortex_testkit::corpus::Pin::pinned();
+            println!(
+                "corpus of real code: {} (hash {}, {} files; checked in {:.0} ms)",
+                corpus.display(),
+                pin.name(),
+                pin.files,
+                ms(start.elapsed())
+            );
+            corpus
+        },
+        std::path::PathBuf::from,
+    );
     let mut found = Vec::new();
     rust_files(&source, &mut found, files);
     assert!(!found.is_empty(), "no .rs file under {}", source.display());
