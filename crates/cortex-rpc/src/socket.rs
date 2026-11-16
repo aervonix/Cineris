@@ -7,8 +7,10 @@
 //! reach, a lock beside it for the server's life, and a check of every
 //! peer's credentials before a byte is read. **Windows:** a named pipe
 //! whose access list admits the user alone at the server's integrity, and a
-//! check of each connection's own token. A connection that fails its check
-//! is closed with nothing read from it or written to it.
+//! check of each connection's own token, made on its first data, since
+//! Windows gives a pipe's server the client's token only once it has read
+//! something the client wrote. A connection that fails its check is closed
+//! with nothing served or written to it.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -89,9 +91,10 @@ pub struct ListenOptions {
     /// owner-only when it is missing and held to that, where a folder the
     /// user named is only checked not to be writable by others.
     pub own_folder: bool,
-    /// Test only: the pipe's access list also admits everyone, so that a
-    /// test can show the check of a connection's token refusing another
-    /// user by itself. Off in every server.
+    /// Test only: the pipe's access list also admits everyone, and its
+    /// label is lowered to low integrity, so that a test can show the check
+    /// of a connection's token refusing another user, or a lower integrity,
+    /// by itself. Off in every server.
     #[cfg(feature = "test-hooks")]
     pub widen_access_for_tests: bool,
 }
@@ -119,8 +122,9 @@ pub enum Accepted {
         /// Who it is, for the log.
         peer: String,
     },
-    /// A connection the checks refused, with why: closed with nothing read
-    /// or written. The listener goes on.
+    /// A connection the checks refused, with why: closed with nothing
+    /// served or written (on Windows its first data was read for the check,
+    /// and is dropped with it). The listener goes on.
     Refused(String),
 }
 

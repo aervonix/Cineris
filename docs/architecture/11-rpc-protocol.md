@@ -22,7 +22,7 @@ The requirement from the TUI language decision applies here: a TypeScript client
 | Transport | Start | Framing | Clients | Authentication |
 |---|---|---|---|---|
 | Standard I/O | `cortex serve --stdio` | One JSON object per line, UTF-8, `\n` terminated. A trailing `\r` is tolerated on input. | One. The parent process. | None needed: the parent already controls the process. |
-| Local socket | `cortex serve --socket [PATH]` | The same. | Several at once. | Unix: socket file with owner-only permissions in the runtime directory, and a peer-credential check that the caller is the same user. Windows: a named pipe whose access-control list admits only the current user. |
+| Local socket | `cortex serve --socket [PATH]` | The same. | Several at once. | Unix: socket file with owner-only permissions in the runtime directory, and a peer-credential check that the caller is the same user. Windows: a named pipe whose access-control list admits only the current user, labelled at the server's integrity, and a check of each connection's own token, made on its first data. |
 | WebSocket (after the first release) | `cortex serve --listen 127.0.0.1:PORT` | One JSON object per text frame. | Browsers and remote tools. | See "Network listening" below. |
 
 In `--stdio` mode standard output carries only protocol messages. Logs go to standard error and the log file. Any code path that could print to standard output in this mode is a bug, and a test guards it.
@@ -307,6 +307,12 @@ The server's first part: `cortex serve --stdio` (`cortex-rpc`; `docs/steps/27/an
   - On Unix the place is `$XDG_RUNTIME_DIR/cortex-harness/rpc.sock`, or `/tmp/cortex-harness-<uid>/rpc.sock` without one, in a folder the server makes owner-only and refuses when others can reach it; a path given must be in a folder others cannot write in, or root's with the sticky bit.
   - The socket is `0600`, and a lock beside it is held for the server's life: a second server is refused, and a socket left behind is removed only when nothing answers on it.
   - A peer of another user, by its credentials, and one whose line of parents reaches the server's process (one of the server's own commands) are closed unanswered.
+  - On Windows the place is the named pipe `\\.\pipe\cortex-harness-<the user's SID>` (`cortex_rpc::socket`'s Windows module, [decision 0037](../decisions/0037-the-named-pipe-is-served-from-cortex-rpc-in-one-windows-only-module-that-may-use-unsafe.md)).
+  - Its security is given to the call that makes each instance: owned by the user, an access list that allows the user alone, and a mandatory label at the server's integrity with no write up and no read up.
+  - The first instance refuses a name another process holds, every instance refuses remote clients, and the next instance is made before a connected one is handed on, so the name never lapses.
+  - Each connection is checked on its first data, since Windows lets a pipe's server take the client's token only once it has read what the client wrote (`ERROR_CANNOT_IMPERSONATE` before that, seen on the hosted runners), and the token is that of the client's thread that wrote it.
+  - The check, on a thread of its own: the token's user is the server's, its integrity at least the server's, and it is neither restricted nor an AppContainer's; only then is the client handed on, with its first data first.
+  - A client that writes nothing holds up no other; past 16 of them, the one that has waited longest is closed.
   - The server says where it serves on standard error.
 - **The conformance test** runs one list of scenarios (`cortex_testkit::conformance`) in process, over the connection's in-memory ends, and through the real binary's `serve --stdio`, and compares what the client was sent.
 

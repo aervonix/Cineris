@@ -1411,7 +1411,7 @@ With the `dev` profile's optimised dependencies the cold Windows column would be
   - `unwrap` and `expect` are disallowed outside tests, except where an attribute gives the invariant;
   - `println!` and `eprintln!` are disallowed outside `cortex-cli` and `xtask`, so nothing can write to standard output by accident.
 - An `allow` or `expect` attribute must carry a `reason`. `todo!`, `unimplemented!`, `dbg!` and `std::process::exit` are warnings, and so errors in CI.
-- `unsafe` is denied by default and allowed per module in `cortex-sandbox` and `cortex-term`, where the OS interfaces need it, and in one Windows-only module of `cortex-base`, `private::windows`, which creates files with an access list of their own and reads a file's reparse tag ([decision 0029](decisions/0029-owner-only-files-on-windows.md)). Every block has a safety comment. A new place needs a decision record.
+- `unsafe` is denied by default and allowed per module in `cortex-sandbox` and `cortex-term`, where the OS interfaces need it, and in one Windows-only module of `cortex-base`, `private::windows`, which creates files with an access list of their own and reads a file's reparse tag ([decision 0029](decisions/0029-owner-only-files-on-windows.md)), and in one Windows-only module of `cortex-rpc`, `socket::windows`, which makes the named pipe with its security and checks each client's token ([decision 0037](decisions/0037-the-named-pipe-is-served-from-cortex-rpc-in-one-windows-only-module-that-may-use-unsafe.md)). Every block has a safety comment. A new place needs a decision record.
 - Public items are documented (`missing_docs`).
 - Clippy runs on Linux and on Windows, so that code compiled only for Windows is linted.
 

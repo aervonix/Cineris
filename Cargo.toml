@@ -122,8 +122,9 @@ ignored = [
 
 [workspace.lints.rust]
 # Allowed per module in cortex-sandbox and cortex-term, where the OS
-# interfaces need it, and in one Windows-only module of cortex-base
-# (`private::windows`, which sets access lists; decision 0029). Nowhere else.
+# interfaces need it, in one Windows-only module of cortex-base
+# (`private::windows`, which sets access lists; decision 0029), and in one of
+# cortex-rpc (`socket::windows`, the named pipe; decision 0037). Nowhere else.
 # Every block has a safety comment.
 unsafe_code = "deny"
 # Public items are documented: part of "done" for every step.

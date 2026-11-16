@@ -120,14 +120,15 @@ The reference harnesses load extensions into the agent process with the user's f
 | Mitigation | Effect |
 |---|---|
 | The default transport is standard I/O, reachable only by the parent process. | No exposure. |
-| Local sockets are owner-only, in the per-user runtime directory, with a check that the peer is the same user. Named pipes on Windows admit only the current user. | Other local users cannot connect. |
+| Local sockets are owner-only, in the per-user runtime directory, with a check that the peer is the same user. Named pipes on Windows admit only the current user, at the server's integrity or above, with a check of each connection's own token (step 27). | Other local users cannot connect, and nor can a lower-integrity process of the same user on Windows. |
+| The server refuses its own commands: on Linux a peer whose line of parents reaches the server's process, on Windows a client in the Job Object the server puts itself in at the start, which every process it starts inherits and cannot leave (step 27). | A command the user approved for one purpose cannot connect back as a client to answer its own session's approvals or raise its level. |
 | Network listening is off by default, absent from the first release, loopback-only unless explicitly widened, and always requires a per-launch random token. No unauthenticated mode exists. | Other machines and unauthenticated local programs cannot connect. |
 | `Origin` checking on the WebSocket transport. | A web page cannot use the browser to reach a local server. |
 | Remote use goes through SSH or a TLS proxy. The server does not implement TLS. | No home-grown transport security. |
 | Clients cannot weaken policy. A client may ask for `unrestricted` only of a server started at it (`--permission-mode unrestricted`, or the user's configuration): the server refuses it otherwise, as a session's level and as an override of `permissions.mode` (step 27). Trust is a question put to the person's own front end, a `user` client that declared `trust`, as the terminal UI is asked; a client that did not declare it trusts nothing without `--trust-project`, as a headless run does. Approvals are requested from clients, never assumed. | A client is not more powerful than the user at the terminal. |
 | Input is size-limited and schema-checked. Malformed messages get an error and never crash the server. Outbound queues are bounded. | Denial of service by a client. The protocol decoder is fuzzed. |
 
-**Residual risk.** Any program already running as the user can start its own `cortex` or read the user's files. The RPC server does not change that.
+**Residual risk.** Any program already running as the user can start its own `cortex` or read the user's files. The RPC server does not change that. The refusal of the server's own commands is defence in depth: on Linux a command that detaches itself from its parents escapes it, and the enforcing sandbox, which keeps a confined command from every Unix socket, is the wall; on Windows, which has no sandbox in the first release, a command that has a service start a process for it (the task scheduler, WMI) escapes the job, and the person approving the command is the wall.
 
 ## 6. Supply chain
 
