@@ -188,6 +188,9 @@ pub(crate) struct Serve {
     /// `--stdio`: one client, the process that started the server, over
     /// standard input and output.
     pub(crate) stdio: bool,
+    /// `--socket [PATH]`: several clients, over a local socket (a named
+    /// pipe on Windows); `Some(None)` at the default place.
+    pub(crate) socket: Option<Option<String>>,
     /// The core's flags, read as a run reads them. The ones only a run
     /// takes are refused by name ([`Serve::run_only`]).
     pub(crate) run: Run,
@@ -505,10 +508,24 @@ fn serve(parser: &mut Parser) -> Result<Command, UsageError> {
     let mut serve = Serve::default();
     let mut words: Vec<String> = Vec::new();
     let mut choices = 0;
+    // `--socket` may take the word after it as its place.
+    let mut place_may_follow = false;
     while let Some(argument) = parser.next()? {
+        let follows = std::mem::take(&mut place_may_follow);
         match argument {
             Arg::Short('h') | Arg::Long("help") => return Ok(Command::Help(Topic::Serve)),
             Arg::Long("stdio") => serve.stdio = true,
+            Arg::Long("socket") => {
+                let attached = parser
+                    .optional_value()
+                    .map(|value| value.string())
+                    .transpose()?;
+                place_may_follow = attached.is_none();
+                serve.socket = Some(attached);
+            }
+            Arg::Value(value) if follows => {
+                serve.socket = Some(Some(value.string()?));
+            }
             argument => {
                 let argument = Owned::from(argument);
                 if let Some(command) =
@@ -520,10 +537,20 @@ fn serve(parser: &mut Parser) -> Result<Command, UsageError> {
         }
     }
     serve.run = finish_run(serve.run, &words, choices)?;
-    if !serve.stdio {
-        return Err(UsageError(
-            "serve needs --stdio: the client is the process that started it".to_owned(),
-        ));
+    match (serve.stdio, &serve.socket) {
+        (false, None) => {
+            return Err(UsageError(
+                "serve needs --stdio (one client, the process that started it) or --socket \
+                 [PATH] (several, over a local socket)"
+                    .to_owned(),
+            ));
+        }
+        (true, Some(_)) => {
+            return Err(UsageError(
+                "serve takes --stdio or --socket, not both".to_owned(),
+            ));
+        }
+        _ => {}
     }
     Ok(Command::Serve(Box::new(serve)))
 }
@@ -1411,6 +1438,23 @@ mod tests {
             panic!("a server with no transport was read");
         };
         assert!(message.contains("--stdio"), "{message}");
+        assert!(message.contains("--socket"), "{message}");
+        assert!(parse_words(&["serve", "--stdio", "--socket"]).is_err());
+        assert_eq!(serve_of(&["serve", "--socket"]).socket, Some(None));
+        assert_eq!(
+            serve_of(&["serve", "--socket", "/run/x.sock"]).socket,
+            Some(Some("/run/x.sock".to_owned()))
+        );
+        assert_eq!(
+            serve_of(&["serve", "--socket=/run/x.sock", "--trust-project"]).socket,
+            Some(Some("/run/x.sock".to_owned()))
+        );
+        // A word that does not follow `--socket` is a prompt, which a
+        // server refuses.
+        assert_eq!(
+            serve_of(&["serve", "--socket", "--trust-project", "fix", "it"]).run_only(),
+            Some("a prompt")
+        );
         assert_eq!(
             parse_words(&["serve", "--help"]),
             Ok(Command::Help(Topic::Serve))

@@ -17,12 +17,21 @@ cortex-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Every task of a connection runs on the core thread's runtime (`rt`); the
-# channels to the transport and the wake-ups of the writer (`sync`). The
-# timer is not asked of it: every wait is on `cortex_base::Timer`.
-tokio = { workspace = true, features = ["rt", "sync"] }
+# channels to the transport and the wake-ups of the writer (`sync`); the
+# local socket and the named pipe (`net`) and their halves read and written
+# (`io-util`), both in the build already through the HTTP client. The timer
+# is not asked of it: every wait is on `cortex_base::Timer`.
+tokio = { workspace = true, features = ["rt", "sync", "net", "io-util"] }
 tracing.workspace = true
 
+[features]
+# Test only: a listener whose pipe admits everyone, so that a test shows the
+# check of a connection's token by itself (`ListenOptions`). Turned on by a
+# dev-dependency and by nothing else (`cargo xtask rules`).
+test-hooks = []
+
 [dev-dependencies]
+cortex-rpc = { path = ".", features = ["test-hooks"] }
 cortex-testkit.workspace = true
 # A core for the tests only, as the binary makes one: its configuration's
 # environment (`cortex-config`), and its shell and process runner on the

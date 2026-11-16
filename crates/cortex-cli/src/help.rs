@@ -64,15 +64,25 @@ project you said never to trust is not asked about; `trust` trusts it.
         Topic::Serve => format!(
             "\
 Usage: {name} serve --stdio [OPTIONS]
+       {name} serve --socket [PATH] [OPTIONS]
 
-Serve the RPC protocol to one client, the process that started it: JSON-RPC
-2.0, one message a line, on standard input and output. Standard output
-carries nothing else; the log goes to standard error and the log file. The
-server ends when standard input ends, when the client asks it to
-(`shutdown`), or at a signal; a second signal ends it at once.
+Serve the RPC protocol: JSON-RPC 2.0, one message a line.
+
+With --stdio, to one client, the process that started it, on standard input
+and output. Standard output carries nothing else; the log goes to standard
+error and the log file. The server ends when standard input ends.
+
+With --socket, to several clients at once, over a local socket that only
+you can open (a named pipe on Windows), by default in your runtime
+directory. A session goes on when its client leaves, for `{name} attach` or
+another client to take up.
+
+Either ends when a client asks it to (`shutdown`) or at a signal; a second
+signal ends it at once.
 
 Options:
   --stdio              Serve over standard input and output
+  --socket [PATH]      Serve over a local socket, at PATH or the default
   --profile NAME       Load configuration with the profile NAME
   -c KEY=VALUE         Set a configuration key, as a run would
   --model MODEL        The main model of the sessions it starts
