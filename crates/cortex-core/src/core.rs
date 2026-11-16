@@ -412,6 +412,11 @@ pub(crate) struct Inner {
     /// reports and the statistics read. A reload changes its `Now` keys
     /// (step 24).
     pub(crate) user_config: Mutex<crate::reload::CoreConfig>,
+    /// The files that configuration was read from: locked only by its
+    /// reload, across the reads it makes.
+    pub(crate) user_watched: Mutex<crate::reload::CoreWatched>,
+    /// One reload of the core's own configuration at a time.
+    pub(crate) core_reloading: tokio::sync::Mutex<()>,
     ids: IdGenerator,
     sessions: Mutex<BTreeMap<SessionId, Arc<Live>>>,
     /// What the sessions of each project share of its knowledge: the two
@@ -542,7 +547,9 @@ impl Core {
                 options,
                 clients: Arc::new(Clients::default()),
                 providers,
-                user_config: Mutex::new(crate::reload::CoreConfig::new(load, user, clock)),
+                user_config: Mutex::new(crate::reload::CoreConfig::new(user)),
+                user_watched: Mutex::new(crate::reload::CoreWatched::new(load, clock)),
+                core_reloading: tokio::sync::Mutex::new(()),
                 ids,
                 sessions: Mutex::new(BTreeMap::new()),
                 knowledge: Mutex::new(BTreeMap::new()),
@@ -1438,9 +1445,14 @@ impl Core {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
                 let choices = assemble::settings_overrides(&params.settings);
+                // Under the session's reload lock: a reload building from
+                // the files never puts its models or level over a choice
+                // made while it built (the second review of step 24's
+                // first part).
+                let _one = live.reloading.lock().await;
                 self.set(client, &live, params.settings).await?;
                 // What the person chose outranks the files from now on.
-                crate::reload::chosen(self, &live, choices).await;
+                crate::reload::chosen(&live, choices).await;
                 Ok(OpResult::SessionSet(SessionResult {
                     session: live.handle.state(),
                 }))

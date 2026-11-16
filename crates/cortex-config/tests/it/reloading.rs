@@ -708,3 +708,33 @@ fn taking_a_key_that_went_leaves_no_empty_table() {
     assert_eq!(mix.settings, newer.settings);
     assert!(mix.changes_since(&newer).is_empty());
 }
+
+/// A table the configuration taken from still has, empty, stays: an empty
+/// `[model.roles.fast]` is an entry of defaults there, and so in the mix
+/// (the second review of step 24's first part).
+#[test]
+fn taking_keeps_an_empty_table_the_newer_configuration_has() {
+    let machine = Machine::new("reload_taking_kept_empty");
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"first\"\n\n[model.roles.fast]\nspeed = \"fast\"\n",
+        60,
+    );
+    let (mut live, _clock) = start(&machine);
+    let before = live.current();
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"first\"\n\n[model.roles.fast]\n",
+        30,
+    );
+    let Some(Reload::Applied { changes, .. }) = live.check() else {
+        panic!("expected the change to be applied");
+    };
+    let newer = live.current();
+    let keys: Vec<KeyPath> = changes.iter().map(|change| change.key.clone()).collect();
+    let mix = before.taking(&newer, &keys).unwrap();
+    assert_eq!(mix.settings, newer.settings);
+    assert!(mix.changes_since(&newer).is_empty());
+}

@@ -177,10 +177,6 @@ pub struct Session {
     /// The context record of the request in flight, sent with its
     /// `Request` event.
     pending_context: Option<ContextStat>,
-    /// The models that wait for the epoch a compaction under way begins,
-    /// and whom to tell once it has (step 24's reload): taken from the
-    /// inbox as the compaction began, applied as its epoch is built.
-    epoch_waiting: Option<crate::reconfigure::EpochChange>,
     /// Where the running turn's time has gone (`crate::timing`).
     times: TurnClock,
     /// The budget of each utility role whose requests have taught it
@@ -482,7 +478,6 @@ impl Session {
             manual: false,
             manual_focus: None,
             pending_context: None,
-            epoch_waiting: None,
             times: TurnClock::new(Duration::ZERO),
             role_budgets: std::collections::BTreeMap::new(),
             last_turn: None,

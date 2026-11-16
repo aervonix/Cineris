@@ -21,7 +21,6 @@ find: let mut values = self.values.clone();
 replace: let mut values = newer.values.clone();
 caught-by:
     cortex-config::it reloading::taking_some_keys_keeps_the_rest_as_they_were
-    cortex-core::it reload::a_reload_applies_what_takes_effect_at_once_and_lists_what_waits
 
 [break] the-trust-store-is-not-watched
 rule: The trust store's file is looked at with the configuration's, so trust taken away outside is seen by the next look.
@@ -33,23 +32,24 @@ caught-by:
     cortex-core::it reload::trust_taken_away_from_outside_is_seen_by_the_next_look
 
 [break] trust-is-not-judged-again
-rule: A reload judges the project's trust again and loads with what it judged.
+rule: A reload judges the project's trust again and loads with what it judged. (A new allow rule is also stopped by the load's own check of the pins, so the tests that catch this are the ones where the store changed.)
 file: crates/cortex-core/src/reload.rs
 in: judge
 find: rules: judged.rules.unwrap_or(in_force.rules)
 replace: rules: in_force.rules
 caught-by:
+    cortex-core::it reload::the_load_uses_the_trust_just_judged
     cortex-core::it reload::trust_taken_away_from_outside_is_seen_by_the_next_look
-    cortex-core::it reload::an_allow_rule_added_while_trusted_is_not_in_force
 
 [break] a-changed-rule-is-trusted
-rule: A trusted project whose rules changed since has its rules set aside, as at a start.
+rule: A trusted project whose rules changed since has its rules set aside, as at a start: one judgement, which the look-ahead and the load's check of what it loaded both make.
 file: crates/cortex-core/src/assemble.rs
-in: judge
+in: judge_pins
 find: Ok(pins) if stored.project_rules_approved(&pins) => Judged {
 replace: Ok(_) => Judged {
 caught-by:
     cortex-core::it reload::an_allow_rule_added_while_trusted_is_not_in_force
+    cortex-core::it reload::the_load_uses_the_trust_just_judged
 
 [break] the-turn-start-takes-no-look
 rule: The start of a turn is one of the moments the files are looked at.
@@ -67,7 +67,7 @@ in: load
 find: if said && !asked.explicit && trusted == in_force {
 replace: if said && asked.explicit && false {
 caught-by:
-    cortex-core::it reload::a_broken_file_keeps_the_configuration_and_is_said_once
+    cortex-core::it reload::a_broken_project_file_is_said_once_by_the_looks_and_again_when_asked
 
 [break] a-broken-file-is-not-said-when-asked
 rule: The person who asks (`/reload`) is told a standing error again.
@@ -76,7 +76,7 @@ in: load
 find: if said && !asked.explicit && trusted == in_force {
 replace: if said && trusted == in_force {
 caught-by:
-    cortex-core::it reload::a_broken_file_keeps_the_configuration_and_is_said_once
+    cortex-core::it reload::a_broken_project_file_is_said_once_by_the_looks_and_again_when_asked
 
 [break] a-choice-is-not-kept
 rule: What the person chose in the session outranks the files: it is kept as the session's own.
@@ -85,7 +85,8 @@ in: choose
 find: self.choices.push(choice);
 replace: let _ = choice;
 caught-by:
-    cortex-core::it reload::a_choice_made_in_the_session_outranks_the_files
+    cortex-core::it reload::a_reload_never_undoes_a_model_or_a_level_chosen_in_the_session
+    cortex-core::it reload::a_profile_that_cannot_be_applied_keeps_the_sessions_choices
 
 [break] a-profile-from-anyone
 rule: Only a `user` client chooses a session's profile, which can raise its level.
@@ -99,7 +100,7 @@ caught-by:
 [break] nothing-waits-for-an-epoch
 rule: A key that takes effect at the next epoch waits for it, and is taken when a compaction begins one.
 file: crates/cortex-core/src/reload.rs
-in: install_epoch
+in: give_epoch
 find:
     live.handle.at_next_epoch(Some(EpochChange {
         models,
@@ -132,12 +133,11 @@ caught-by:
 [break] the-slot-is-never-taken
 rule: A compaction takes what waited for the next epoch.
 file: crates/cortex-agent/src/turn/epochs.rs
-in: compacting
-find: self.take_next_epoch();
-replace: let _ = self.manual;
+in: finish_compaction
+find: self.take_epoch_models();
+replace: if false { self.take_epoch_models(); }
 caught-by:
     cortex-agent::it reconfigure::what_waits_for_the_next_epoch_is_taken_by_a_compaction_and_not_before
-    cortex-core::it reload::what_waits_for_the_next_epoch_comes_in_with_a_compaction
 
 [break] reconfigure-is-not-taken
 rule: What a reload changed that applies at once is taken as the next request is prepared.
@@ -289,8 +289,8 @@ caught-by:
 rule: A load trusted is checked against the pins on what it loaded.
 file: crates/cortex-core/src/reload.rs
 in: load
-find: if !approved {
-replace: if approved && !approved {
+find: if again.rules != Some(true) {
+replace: if again.rules != Some(true) && false {
 caught-by:
     cortex-core::it reload::a_rule_written_between_the_judgement_and_the_load_is_not_in_force
 
@@ -343,16 +343,103 @@ caught-by:
 rule: Removing a key removes the tables it leaves empty.
 file: crates/cortex-config/src/merge.rs
 in: remove
-find: if emptied {
-replace: if emptied && false {
+find: if emptied && kept.is_none() {
+replace: if emptied && kept.is_none() && false {
 caught-by:
     cortex-config::it reloading::taking_a_key_that_went_leaves_no_empty_table
 
 [break] the-epoch-is-taken-as-a-compaction-begins
 rule: What waits for the next epoch is taken when the compaction's new epoch builds its prompt, not when a compaction begins.
 file: crates/cortex-agent/src/turn/epochs.rs
-in: take_next_epoch
-find: self.epoch_waiting = Some(change);
-replace: self.epoch_waiting = Some(change); self.take_epoch_models();
+in: compacting
+find: self.manual = false;
+replace: self.manual = false; self.take_epoch_models();
 caught-by:
     cortex-agent::it reconfigure::a_compaction_with_no_new_epoch_leaves_what_waits_waiting
+    cortex-agent::it reconfigure::a_change_withdrawn_after_a_compaction_with_no_epoch_is_never_taken
+
+# Found by the second review of step 24's first part.
+
+[break] a-withdrawn-epoch-change-stays
+rule: A change the core withdraws from what waits for the next epoch is withdrawn, even after a compaction that began no epoch.
+file: crates/cortex-agent/src/session.rs
+in: at_next_epoch
+find: self.shared.lock().next_epoch = change;
+replace: if change.is_some() { self.shared.lock().next_epoch = change; }
+caught-by:
+    cortex-agent::it reconfigure::a_change_withdrawn_after_a_compaction_with_no_epoch_is_never_taken
+
+[break] a-choice-is-made-while-a-reload-builds
+rule: `session/set` holds the session's reload lock, so a reload building from the files never puts its models over a choice.
+file: crates/cortex-core/src/core.rs
+in: handle
+find: let _one = live.reloading.lock().await;
+replace: let _one = ();
+caught-by:
+    cortex-core::it reload::a_choice_made_while_a_reload_builds_is_not_undone
+
+[break] trust-for-the-run-asks-the-store
+rule: A yes the store could not keep holds for the session to the rules the person saw, and the store is not asked.
+file: crates/cortex-core/src/assemble.rs
+in: judge_pins
+find: if let Some(pin) = for_the_run {
+replace: if let Some(pin) = for_the_run.filter(|_| false) {
+caught-by:
+    cortex-core::it trusting::trust_for_this_session_only_holds_through_a_look
+
+[break] a-chosen-model-refuses-the-files-level
+rule: A model chosen in the session, built again by a reload, runs at its own default where the files' reasoning level is not one it has.
+file: crates/cortex-core/src/assemble.rs
+in: models_lenient
+find: if lenient.contains(role)
+replace: if lenient.contains(role) && false
+caught-by:
+    cortex-core::it reload::a_chosen_model_without_the_files_reasoning_level_does_not_refuse_a_reload
+
+[break] trust-gone-is-said-as-changed-rules
+rule: Trust the store took away between the judgement and the load is said as untrusted, with the repository's trust lowered too.
+file: crates/cortex-core/src/reload.rs
+in: load
+find: if again.rules.is_some() {
+replace: if false {
+caught-by:
+    cortex-core::it reload::trust_taken_away_between_the_judgement_and_the_load_is_said_as_untrusted
+
+[break] a-choice-is-not-in-force
+rule: A choice made in the session is taken into the configuration in force.
+file: crates/cortex-core/src/reload.rs
+in: chosen
+find: config.set_in_force(Arc::new(mix));
+replace: drop(mix);
+caught-by:
+    cortex-core::it reload::a_choice_is_in_the_configuration_config_get_answers_with
+
+[break] a-chosen-key-still-waits-for-the-epoch
+rule: A key chosen in the session is taken out of what waits for the next epoch.
+file: crates/cortex-core/src/reload.rs
+in: chosen
+find: kept.keys.retain(|key| !chosen.contains(&key.to_string()));
+replace: let _ = &kept.keys;
+caught-by:
+    cortex-core::it reload::a_choice_takes_its_key_out_of_what_waits_for_the_next_epoch
+
+[break] lowered-trust-drops-the-epoch
+rule: Trust taken away with a part that fails still gives the loop what waits for the next epoch and can be built.
+file: crates/cortex-core/src/reload.rs
+in: apply
+find:
+                    epoch = prepared;
+                    applied = safe;
+replace:
+                    applied = safe;
+caught-by:
+    cortex-core::it reload::trust_taken_away_with_a_part_that_fails_still_gives_the_epoch_its_keys
+
+[break] an-empty-table-the-newer-has-goes
+rule: Removing a key keeps an emptied table the configuration taken from still has.
+file: crates/cortex-config/src/merge.rs
+in: remove
+find: if emptied && kept.is_none() {
+replace: if emptied {
+caught-by:
+    cortex-config::it reloading::taking_keeps_an_empty_table_the_newer_configuration_has

@@ -28,11 +28,10 @@ The first of step 24's three pull requests: `config/reload` through the core, th
 | Rule | Test |
 |---|---|
 | A reload applies what takes effect at once and lists what waits, telling every client once | `cortex-core::it reload::a_reload_applies_what_takes_effect_at_once_and_lists_what_waits` |
-| A broken file keeps the configuration and is said once, again when asked | `reload::a_broken_file_keeps_the_configuration_and_is_said_once` |
+| A broken file keeps the configuration and is said once, again when asked | `reload::a_broken_file_keeps_the_configuration_and_is_said_once` (the user's file, which the core's own configuration says too), `a_broken_project_file_is_said_once_by_the_looks_and_again_when_asked` (the session's alone, with another file changed beside it) |
 | A new allow rule of a trusted project is never in force | `reload::an_allow_rule_added_while_trusted_is_not_in_force` |
 | Trust taken away outside is seen by the next look, and takes what trust gave | `reload::trust_taken_away_from_outside_is_seen_by_the_next_look` |
 | A project's file cannot raise a user-only key or loosen a tighten-only one | `reload::a_reload_keeps_a_projects_file_to_what_it_may_set` |
-| A choice made in the session outranks the files | `reload::a_choice_made_in_the_session_outranks_the_files` |
 | A profile is for one session, by a person | `reload::a_profile_is_chosen_for_one_session_by_a_person` |
 | `config/get` says where each value came from | `reload::config_get_says_where_each_value_came_from` |
 | The start of a turn looks at the files | `reload::a_turn_starts_with_the_files_looked_at` |

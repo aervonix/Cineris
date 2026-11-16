@@ -232,27 +232,19 @@ impl Session {
         }
     }
 
-    /// Takes what waited for the next context epoch, as a compaction begins
-    /// (step 24), and keeps it until the compaction's new epoch builds its
-    /// prompt ([`Self::take_epoch_models`]): a compaction that ends with no
-    /// new epoch (nothing to compact, interrupted, a summary that failed)
-    /// leaves the epoch as it was, and what waited waits for the next one.
-    /// The summary is written by the model of the epoch it summarises, from
-    /// its cache, and chooses what to keep by the settings in force.
-    pub(super) fn take_next_epoch(&mut self) {
-        let Some(change) = self.shared.lock().next_epoch.take() else {
-            return;
-        };
-        self.epoch_waiting = Some(change);
-    }
-
-    /// What waited for this epoch, put in force as its prompt is built: the
-    /// context's settings and the roles' models, and whoever set them told.
-    /// They are in force from here: a compaction that fails after this
-    /// leaves them so (its next request then begins an epoch for a change of
-    /// model).
+    /// What waited for the next context epoch (step 24's reload), taken
+    /// from the inbox and put in force as a compaction's new epoch builds its
+    /// prompt: the context's settings and the roles' models, and whoever set
+    /// them told. Taken here and nowhere earlier: a compaction that ends with
+    /// no new epoch (nothing to compact, interrupted, a summary that failed)
+    /// leaves it in the inbox, where a later reload can still replace or
+    /// withdraw it. The summary is written by the model of the epoch it
+    /// summarises, from its cache, and chooses what to keep by the settings
+    /// in force. What is taken is in force from here: a compaction that
+    /// fails after this leaves it so (its next request then begins an epoch
+    /// for a change of model).
     fn take_epoch_models(&mut self) {
-        let Some(change) = self.epoch_waiting.take() else {
+        let Some(change) = self.shared.lock().next_epoch.take() else {
             return;
         };
         if let Some(context) = change.context {
@@ -1435,9 +1427,6 @@ impl Session {
     pub(super) async fn compacting(&mut self, turn: &mut Turn, prep: Prep) -> Phase {
         self.enter(TurnState::Compacting);
         self.manual = false;
-        // A compaction begins the next epoch: what waited for it is taken
-        // before anything about the new epoch is chosen.
-        self.take_next_epoch();
         let focus = self
             .manual_focus
             .take()

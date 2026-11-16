@@ -200,6 +200,39 @@ fn a_broken_file_keeps_the_configuration_and_is_said_once() {
     });
 }
 
+/// A broken project file, which the core's own configuration does not read
+/// and so does not say for the session, is said once by the looks, even
+/// when another file changes beside it, and again when the person asks.
+#[test]
+fn a_broken_project_file_is_said_once_by_the_looks_and_again_when_asked() {
+    let world = World::new("reload_broken_project", [says("Done.")]);
+    world.user_config("[retry]\nattempts = 3\n");
+    world.project_config("[context]\nauto_compact = true\n");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let look = || {
+            reload(
+                &front,
+                ConfigReloadParams {
+                    changed_only: true,
+                    ..ConfigReloadParams::default()
+                },
+            )
+        };
+        world.project_config("[context\nauto_compact = true\n");
+        let first = look().await;
+        assert_eq!(first.errors.len(), 1, "{first:?}");
+        // Another file changes; the project's is as broken as it was.
+        world.user_config("[retry]\nattempts = 12\n");
+        let second = look().await;
+        assert!(second.errors.is_empty(), "said twice: {second:?}");
+        let asked = reload(&front, ConfigReloadParams::default()).await;
+        assert_eq!(asked.errors, first.errors, "the person asked: said again");
+        front.close().await;
+    });
+}
+
 /// A trusted project whose file gains an allow rule: the rule is never in
 /// force, its rules are set aside until the change is approved, and the
 /// session's standing says so.
@@ -300,35 +333,6 @@ fn a_reload_keeps_a_projects_file_to_what_it_may_set() {
         assert_eq!(value(&front, "limits.turn.cost").await, Some(1.0.into()));
         // Tightening is anyone's: the session's limit is the project's.
         assert_eq!(value(&front, "limits.session.cost").await, Some(0.5.into()));
-        front.close().await;
-    });
-}
-
-/// What the person chose in the session outranks the files: a level set
-/// with `session/set` stays through a reload that changes the file's.
-#[test]
-fn a_choice_made_in_the_session_outranks_the_files() {
-    let world = World::new("reload_choice", [says("Done.")]);
-    world.user_config("");
-    let core = world.core();
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        set(
-            &front,
-            SessionSettings {
-                level: Some(Level::ReadOnly),
-                ..SessionSettings::default()
-            },
-        )
-        .await
-        .unwrap();
-        world.user_config("[permissions]\nmode = \"supervised\"\n\n[retry]\nattempts = 2\n");
-        let result = reload(&front, ConfigReloadParams::default()).await;
-        assert!(
-            !result.applied.contains(&"permissions.mode".to_owned()),
-            "{result:?}"
-        );
-        assert_eq!(state_of(&front).await.level, Level::ReadOnly);
         front.close().await;
     });
 }
@@ -775,9 +779,13 @@ fn two_reloads_of_a_session_never_interleave() {
         // Trust is taken away while the first is held, judged trusted.
         assert!(store.forget(&key).unwrap());
         let mut second = std::pin::pin!(reload(&front, params()));
-        assert!(crate::poll_once(second.as_mut()).await.is_pending());
-        crate::settle().await;
-        assert!(crate::poll_once(second.as_mut()).await.is_pending());
+        // Polled for longer than the inline blocking work of its judgement
+        // can make it wait (8 turns at most): without the one reload at a
+        // time, it reaches the point in that time.
+        for _ in 0..32 {
+            assert!(crate::poll_once(second.as_mut()).await.is_pending());
+            crate::settle().await;
+        }
         assert_eq!(
             judged.arrivals(),
             1,
@@ -877,6 +885,320 @@ fn a_rule_written_between_the_judgement_and_the_load_is_not_in_force() {
         assert_eq!(
             state_of(&front).await.trust,
             Some(TrustStanding::RulesChanged)
+        );
+        front.close().await;
+    });
+}
+
+/// A model the person chooses while a reload builds from the files is not
+/// put back by that reload: `session/set` waits for it, and its choice is
+/// the last word (the second review of step 24's first part).
+#[test]
+fn a_choice_made_while_a_reload_builds_is_not_undone() {
+    let world = World::new("reload_set_during", [says("Done.")]);
+    world.user_config("");
+    let core = world.core();
+    let judged = cortex_testkit::Hold::new(cortex_core::TRUST_JUDGED);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        // A change that builds every role's model again, from the files.
+        world.user_config("[retry]\nattempts = 2\n");
+        let mut reloading = std::pin::pin!(reload(
+            &front,
+            ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                ..ConfigReloadParams::default()
+            },
+        ));
+        judged.drive_until_reached(reloading.as_mut()).await;
+        let mut setting = std::pin::pin!(set(
+            &front,
+            SessionSettings {
+                roles: [(
+                    cortex_protocol::model::ModelRole::Main,
+                    cortex_protocol::session::RoleSettings {
+                        model: Some(cortex_protocol::ModelId::new(crate::OTHER_MODEL)),
+                        ..cortex_protocol::session::RoleSettings::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..SessionSettings::default()
+            },
+        ));
+        // Polled for longer than its blocking work can make it wait: without
+        // the reload's lock, the choice is made now, and the reload puts the
+        // file's model over it.
+        let mut made = None;
+        for _ in 0..32 {
+            if let std::task::Poll::Ready(result) = crate::poll_once(setting.as_mut()).await {
+                made = Some(result);
+                break;
+            }
+            crate::settle().await;
+        }
+        judged.release();
+        let result = reloading.await;
+        assert!(result.errors.is_empty(), "{result:?}");
+        match made {
+            Some(result) => result.unwrap(),
+            None => setting.await.unwrap(),
+        };
+        assert_eq!(
+            state_of(&front).await.roles[&cortex_protocol::model::ModelRole::Main]
+                .model
+                .as_str(),
+            crate::OTHER_MODEL,
+            "the reload put the file's model over the choice"
+        );
+        front.close().await;
+    });
+}
+
+/// A small model with two reasoning levels, of which the files' `xhigh` is
+/// not one.
+const SMALL_MODEL: &str = "[models.small]
+provider = \"anthropic\"
+id = \"small-model\"
+name = \"Small model\"
+protocol = \"anthropic-messages\"
+context_window = 100000
+max_output = 8000
+input = [\"text\"]
+
+[models.small.reasoning]
+levels = [\"low\", \"high\"]
+default = \"low\"
+";
+
+/// A model chosen in the session, which has not the reasoning level the
+/// files carry, runs at its own default when a reload builds it again, as
+/// `session/set` made it: the reload is not refused (the second review of
+/// step 24's first part).
+#[test]
+fn a_chosen_model_without_the_files_reasoning_level_does_not_refuse_a_reload() {
+    let world = World::new("reload_lenient_effort", [says("Done.")]);
+    let base = format!(
+        "[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n\n[model]\nmain = \
+         \"{}\"\neffort = \"xhigh\"\n\n{SMALL_MODEL}",
+        crate::MODEL
+    );
+    world.raw_user_config(&base);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        set(
+            &front,
+            SessionSettings {
+                roles: [(
+                    cortex_protocol::model::ModelRole::Main,
+                    cortex_protocol::session::RoleSettings {
+                        model: Some(cortex_protocol::ModelId::new("small-model")),
+                        ..cortex_protocol::session::RoleSettings::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..SessionSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        world.raw_user_config(&format!("{base}\n[retry]\nattempts = 2\n"));
+        let result = reload(&front, ConfigReloadParams::default()).await;
+        assert!(result.errors.is_empty(), "{result:?}");
+        assert!(
+            result.applied.contains(&"retry.attempts".to_owned()),
+            "{result:?}"
+        );
+        let state = state_of(&front).await;
+        let main = &state.roles[&cortex_protocol::model::ModelRole::Main];
+        assert_eq!(main.model.as_str(), "small-model");
+        assert_eq!(main.effort, None);
+        front.close().await;
+    });
+}
+
+/// Trust the store takes away between the judgement and the load is said
+/// as what it is, not as rules that changed (the second review of step 24's
+/// first part).
+#[test]
+fn trust_taken_away_between_the_judgement_and_the_load_is_said_as_untrusted() {
+    let world = World::new("reload_forgot_between", [says("Done.")]);
+    let (store, key) = trust_store(&world);
+    store
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_rules(&[allow_github()])],
+        )
+        .unwrap();
+    world.project_config(ALLOW_GITHUB);
+    let core = world.core();
+    let judged = cortex_testkit::Hold::new(cortex_core::TRUST_JUDGED);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let mut reloading = std::pin::pin!(reload(
+            &front,
+            ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                ..ConfigReloadParams::default()
+            },
+        ));
+        judged.drive_until_reached(reloading.as_mut()).await;
+        assert!(store.forget(&key).unwrap());
+        judged.release();
+        let result = reloading.await;
+        assert_eq!(
+            state_of(&front).await.trust,
+            Some(TrustStanding::Untrusted),
+            "{result:?}"
+        );
+        assert!(
+            !result
+                .notes
+                .iter()
+                .any(|note| note.contains("have changed")),
+            "{result:?}"
+        );
+        front.close().await;
+    });
+}
+
+/// What the person chose is in the configuration in force: `config/get`
+/// says it (the second review of step 24's first part).
+#[test]
+fn a_choice_is_in_the_configuration_config_get_answers_with() {
+    let world = World::new("reload_choice_in_force", [says("Done.")]);
+    world.user_config("");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        set(
+            &front,
+            SessionSettings {
+                level: Some(Level::ReadOnly),
+                ..SessionSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            value(&front, "permissions.mode").await,
+            Some("read-only".into())
+        );
+        front.close().await;
+    });
+}
+
+/// A model the file sets waits for the next epoch; the person then chooses
+/// one in the session, and the compaction that follows leaves their choice
+/// in force and in the configuration (the second review of step 24's first
+/// part).
+#[test]
+fn a_choice_takes_its_key_out_of_what_waits_for_the_next_epoch() {
+    let world = World::new(
+        "reload_choice_epoch",
+        [says("One."), says("Goal: the summary.")],
+    );
+    world.user_config("");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("one").await;
+        world.raw_user_config(&format!(
+            "[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n\n[model]\nmain = \
+             \"{}\"\n",
+            crate::OTHER_MODEL
+        ));
+        let result = reload(&front, ConfigReloadParams::default()).await;
+        assert!(
+            result.pending.contains(&"model.main".to_owned()),
+            "{result:?}"
+        );
+        set(
+            &front,
+            SessionSettings {
+                roles: [(
+                    cortex_protocol::model::ModelRole::Main,
+                    cortex_protocol::session::RoleSettings {
+                        model: Some(cortex_protocol::ModelId::new(crate::MODEL)),
+                        ..cortex_protocol::session::RoleSettings::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..SessionSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        front
+            .op(Op::SessionCompact(
+                cortex_protocol::methods::SessionCompactParams {
+                    session_id: front.session.clone(),
+                    focus: None,
+                },
+            ))
+            .await
+            .unwrap();
+        front.turns(2).await;
+        assert_eq!(
+            state_of(&front).await.roles[&cortex_protocol::model::ModelRole::Main]
+                .model
+                .as_str(),
+            crate::MODEL
+        );
+        assert_eq!(
+            value(&front, "model.main").await,
+            Some(crate::MODEL.into()),
+            "the configuration took the file's model at the epoch"
+        );
+        front.close().await;
+    });
+}
+
+/// Trust taken away while another part of the reload cannot be built still
+/// gives the loop what waits for the next epoch and can be built: the next
+/// compaction takes it (the second review of step 24's first part).
+#[test]
+fn trust_taken_away_with_a_part_that_fails_still_gives_the_epoch_its_keys() {
+    let world = World::new(
+        "reload_untrust_partial_epoch",
+        [says("One."), says("Goal: the summary.")],
+    );
+    let (store, key) = trust_store(&world);
+    store.trust(&key, "~/work/app", &[]).unwrap();
+    let user = "[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n\n[model]\nmain = \
+                \"no-such-model\"\n";
+    world.raw_user_config(user);
+    world.project_config(&format!("[model]\nmain = \"{}\"\n", crate::MODEL));
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("one").await;
+        world.raw_user_config(&format!("{user}\n[context]\nkeep_recent_tokens = 100\n"));
+        assert!(store.forget(&key).unwrap());
+        let result = reload(&front, ConfigReloadParams::default()).await;
+        assert!(
+            result
+                .pending
+                .contains(&"context.keep_recent_tokens".to_owned()),
+            "{result:?}"
+        );
+        front
+            .op(Op::SessionCompact(
+                cortex_protocol::methods::SessionCompactParams {
+                    session_id: front.session.clone(),
+                    focus: None,
+                },
+            ))
+            .await
+            .unwrap();
+        front.turns(2).await;
+        assert_eq!(
+            value(&front, "context.keep_recent_tokens").await,
+            Some(100.into())
         );
         front.close().await;
     });

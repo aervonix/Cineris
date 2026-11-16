@@ -305,6 +305,10 @@ pub(crate) struct Trust {
     /// reload of the session looks at (step 24). `None` where the trust was
     /// worked out otherwise; the session's first reload then makes it.
     watched: Option<cortex_config::LiveConfig>,
+    /// The rules the person said yes to when the store could not keep the
+    /// yes: trust for this session only holds to them, as the store's pins
+    /// would (the second review of step 24's first part).
+    pub(crate) for_the_run: Option<Definition>,
     /// What went wrong reading the trust store, for the user.
     problem: Option<String>,
     /// What the user has said of the project, for a front end's status.
@@ -732,6 +736,7 @@ fn trusted_unkept(
             repository: true,
             loaded: peek,
             watched: None,
+            for_the_run: Some(question.pin.clone()),
             problem: Some(format!(
                 "Your answer could not be kept, so this project is trusted for this session \
                  only, and will be asked about again: {failure}"
@@ -744,6 +749,7 @@ fn trusted_unkept(
             repository: true,
             loaded: load(false, None)?,
             watched: None,
+            for_the_run: Some(question.pin.clone()),
             problem: Some(format!(
                 "Your answer could not be kept, so this project is trusted for this session \
                  only; its permission rules changed while you were asked, so its settings and \
@@ -806,6 +812,7 @@ fn trust(
             repository: true,
             loaded,
             watched,
+            for_the_run: None,
             problem: None,
             standing: TrustStanding::ForTheRun,
         });
@@ -848,6 +855,7 @@ fn trust(
             repository: false,
             loaded,
             watched,
+            for_the_run: None,
             problem,
             standing,
         });
@@ -876,6 +884,7 @@ fn trust(
             repository: true,
             loaded,
             watched,
+            for_the_run: None,
             problem,
             standing: TrustStanding::Trusted,
         })
@@ -889,6 +898,7 @@ fn trust(
             repository: true,
             loaded,
             watched,
+            for_the_run: None,
             problem: Some(
                 "This project's permission rules have changed since it was trusted, so its \
                  settings and its allow rules are set aside until the change is approved."
@@ -1129,43 +1139,6 @@ pub(crate) fn reloaded_parts(
     parts
 }
 
-/// Whether the project's rules in `loaded`, a configuration loaded with the
-/// project trusted, are the ones the trust store pinned: checked on what a
-/// reload actually loaded, after the judgement that let it load trusted, so
-/// that a file written in between is never in force unchecked (the review
-/// of step 24's first part). `false` when it cannot be told. Blocks.
-pub(crate) fn pins_approved(
-    inner: &Inner,
-    state: Option<&StateDir>,
-    root: &AbsPath,
-    loaded: &Loaded,
-    options: &LoadOptions,
-) -> bool {
-    let Some(state) = state else {
-        return false;
-    };
-    let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
-    let Ok(stored) = store.project(&root.project_key()) else {
-        return false;
-    };
-    if !stored.is_trusted() {
-        return false;
-    }
-    let with_profile = |profile: &str| {
-        let mut options = options.clone();
-        options.trust = cortex_config::ProjectTrust::Trusted;
-        options.profile = Some(profile.to_owned());
-        cortex_config::load(&options).map_err(|failure| {
-            Box::new(ErrorData::new(
-                ErrorKind::Config,
-                "invalid_configuration",
-                failure.render(&inner.options.env),
-            ))
-        })
-    };
-    pinned_rules(loaded, &with_profile).is_ok_and(|pins| stored.project_rules_approved(&pins))
-}
-
 /// The project's trust now, judged as a start judges it (`trust`), and
 /// nothing loaded for it put in force: what step 24's reload decides the
 /// one load it makes with. `rules` is `None` when the project's files could
@@ -1185,6 +1158,63 @@ pub(crate) fn judge(
     state: Option<&StateDir>,
     root: &AbsPath,
     options: &LoadOptions,
+    for_the_run: Option<&Definition>,
+) -> Judged {
+    let peek = |profile: Option<&str>| load_trusted(inner, options, profile);
+    judge_pins(inner, state, root, for_the_run, || {
+        peek(None).and_then(|peeked| pinned_rules(&peeked, &|profile| peek(Some(profile))))
+    })
+}
+
+/// The judgement again, of the rules in `loaded`, a configuration a reload
+/// loaded with the project trusted: checked on what was actually loaded,
+/// after the judgement that let it load trusted, so that a file written in
+/// between is never in force unchecked (the review of step 24's first
+/// part). Its rules are `None` when they cannot be told. Blocks.
+pub(crate) fn judge_loaded(
+    inner: &Inner,
+    state: Option<&StateDir>,
+    root: &AbsPath,
+    loaded: &Loaded,
+    options: &LoadOptions,
+    for_the_run: Option<&Definition>,
+) -> Judged {
+    judge_pins(inner, state, root, for_the_run, || {
+        pinned_rules(loaded, &|profile| {
+            load_trusted(inner, options, Some(profile))
+        })
+    })
+}
+
+/// The configuration loaded with the project trusted, in `profile`.
+fn load_trusted(
+    inner: &Inner,
+    options: &LoadOptions,
+    profile: Option<&str>,
+) -> Result<Loaded, Box<ErrorData>> {
+    let mut options = options.clone();
+    options.trust = cortex_config::ProjectTrust::Trusted;
+    if let Some(profile) = profile {
+        options.profile = Some(profile.to_owned());
+    }
+    cortex_config::load(&options).map_err(|failure| {
+        Box::new(ErrorData::new(
+            ErrorKind::Config,
+            "invalid_configuration",
+            failure.render(&inner.options.env),
+        ))
+    })
+}
+
+/// Judges the project's rules, `pinned` (read only when they are needed),
+/// against what approves them: a yes for this session only, or the trust
+/// store.
+fn judge_pins(
+    inner: &Inner,
+    state: Option<&StateDir>,
+    root: &AbsPath,
+    for_the_run: Option<&Definition>,
+    pinned: impl FnOnce() -> Result<ProjectRules, Box<ErrorData>>,
 ) -> Judged {
     if inner.options.trust_project {
         return Judged {
@@ -1192,6 +1222,35 @@ pub(crate) fn judge(
             repository: true,
             problem: None,
             standing: TrustStanding::ForTheRun,
+        };
+    }
+    if let Some(pin) = for_the_run {
+        // A yes the store could not keep holds for this session to the
+        // rules the person saw, as a pin would: the store, which has no
+        // record of it, is not asked.
+        return match pinned() {
+            Ok(pins) if Definition::of_project_rules(&pins) == *pin => Judged {
+                rules: Some(true),
+                repository: true,
+                problem: None,
+                standing: TrustStanding::ForTheRun,
+            },
+            Ok(_) => Judged {
+                rules: Some(false),
+                repository: true,
+                problem: Some(
+                    "This project's permission rules have changed since you trusted it for this \
+                     session, so its settings and its allow rules are set aside."
+                        .to_owned(),
+                ),
+                standing: TrustStanding::RulesChanged,
+            },
+            Err(_) => Judged {
+                rules: None,
+                repository: true,
+                problem: None,
+                standing: TrustStanding::ForTheRun,
+            },
         };
     }
     let (stored, problem) = match state {
@@ -1223,23 +1282,7 @@ pub(crate) fn judge(
             standing,
         };
     }
-    let peek = |profile: Option<&str>| {
-        let mut options = options.clone();
-        options.trust = cortex_config::ProjectTrust::Trusted;
-        if let Some(profile) = profile {
-            options.profile = Some(profile.to_owned());
-        }
-        cortex_config::load(&options).map_err(|failure| {
-            Box::new(ErrorData::new(
-                ErrorKind::Config,
-                "invalid_configuration",
-                failure.render(&inner.options.env),
-            ))
-        })
-    };
-    let pinned =
-        peek(None).and_then(|peeked| pinned_rules(&peeked, &|profile| peek(Some(profile))));
-    match pinned {
+    match pinned() {
         Ok(pins) if stored.project_rules_approved(&pins) => Judged {
             rules: Some(true),
             repository: true,
@@ -1336,22 +1379,49 @@ pub(crate) fn models(
     settings: &Settings,
     images: &Arc<dyn ImageSource>,
 ) -> Result<Models, Box<ErrorData>> {
+    models_lenient(inner, settings, images, &[])
+}
+
+/// [`models`], where each role of `lenient` whose reasoning level the
+/// model has not runs at the model's own default rather than refuse: a
+/// level nobody asked that model for, carried by the files (a reload's, for
+/// a model chosen in the session; `session/set` does the same).
+pub(crate) fn models_lenient(
+    inner: &Inner,
+    settings: &Settings,
+    images: &Arc<dyn ImageSource>,
+    lenient: &[ModelRole],
+) -> Result<Models, Box<ErrorData>> {
     let env = &inner.options.env;
     let providers = &inner.providers;
     let role = |role: &ModelRole, name: &str| {
         let entry = providers.entry(name, settings.model.provider_for(role))?;
-        providers.role_model(
-            settings,
-            env,
-            entry,
-            settings.model.effort_for(role),
-            // The output limit is the main role's: a utility role's
-            // requests set their own.
-            (*role == ModelRole::Main)
-                .then_some(settings.model.max_output)
-                .flatten(),
-            Arc::clone(images),
-        )
+        let make = |effort| {
+            providers.role_model(
+                settings,
+                env,
+                Arc::clone(&entry),
+                effort,
+                // The output limit is the main role's: a utility role's
+                // requests set their own.
+                (*role == ModelRole::Main)
+                    .then_some(settings.model.max_output)
+                    .flatten(),
+                Arc::clone(images),
+            )
+        };
+        match make(settings.model.effort_for(role)) {
+            Err(refused)
+                if lenient.contains(role)
+                    && matches!(
+                        refused.code.as_str(),
+                        "unknown_effort" | "reasoning_budget_too_large"
+                    ) =>
+            {
+                make(None)
+            }
+            made => made,
+        }
     };
     let Some(main) = settings.model.model_for(&ModelRole::Main) else {
         return Err(error(
@@ -1636,6 +1706,7 @@ pub(crate) fn assemble(
         repository: repository_trusted,
         loaded,
         watched,
+        for_the_run,
         problem,
         standing,
     } = match looked {
@@ -2355,6 +2426,7 @@ pub(crate) fn assemble(
                 repository: repository_trusted,
             },
             standing,
+            for_the_run,
             root.clone(),
             state_dir.clone(),
         ),
