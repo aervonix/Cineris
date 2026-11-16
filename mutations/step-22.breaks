@@ -225,7 +225,7 @@ caught-by:
 rule: Where the terminal has no hyperlinks, a link's text is followed by its address.
 file: crates/cortex-tui/src/markdown/rows.rs
 in: Laid::new
-find: && !frame.look.hyperlinks
+find: && !(frame.look.hyperlinks && cortex_term::line::linkable(&url))
 replace: && false
 caught-by:
     markdown::tests::blocks_are_drawn_as_09_says
@@ -332,8 +332,8 @@ caught-by:
 rule: Text from a model passes through sanitize before it is laid out, when a line's text reaches its paragraph before the line ends too.
 file: crates/cortex-tui/src/markdown/mod.rs
 in: Markdown::partial
-find: let text = sanitize(&self.pending[start..usable]).into_owned();
-replace: let text = self.pending[start..usable].to_owned();
+find: let text = sanitize_after(before, &self.pending[start..usable]).into_owned();
+replace: let text = { let _ = before; self.pending[start..usable].to_owned() };
 caught-by:
     markdown::tests::content_reaches_no_line_unsanitised_and_no_line_is_too_wide
 

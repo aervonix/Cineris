@@ -12,6 +12,8 @@
 //! never holds `\r`), so a boundary is found by reading only the line it is
 //! in.
 
+use std::borrow::Cow;
+
 use cortex_base::text;
 
 /// The character that stands for a chip in the text: U+FFFC, the Object
@@ -190,14 +192,26 @@ pub(crate) fn word_end(text: &str, at: usize) -> usize {
     at
 }
 
+/// A cluster as the input box draws it, made safe to show
+/// (`cortex_term::sanitize`) on its own: a control character as its
+/// symbol, and what acts unseen (a character of no width, a bidirectional
+/// control) as its escape, `\u{200b}`. A tab is the caller's to draw.
+pub(crate) fn drawn(cluster: &str) -> Cow<'_, str> {
+    cortex_term::sanitize(cluster)
+}
+
 /// How many columns a cluster takes in the editor: a tab [`TAB_WIDTH`],
-/// a chip its label's width (the caller knows it), anything else its
-/// width as the terminal draws it.
+/// a chip its label's width (the caller knows it), anything else the width
+/// of what is [`drawn`] (since the review of step 23, which found a
+/// zero-width space counted as no columns and drawn as eight, the cursor
+/// left inside the escape and the row cut).
 pub(crate) fn width(cluster: &str) -> usize {
     if cluster == "\t" {
-        TAB_WIDTH
-    } else {
-        text::grapheme_width(cluster)
+        return TAB_WIDTH;
+    }
+    match drawn(cluster) {
+        Cow::Borrowed(cluster) => text::grapheme_width(cluster),
+        Cow::Owned(shown) => text::width(&shown),
     }
 }
 

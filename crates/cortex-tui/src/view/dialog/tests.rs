@@ -3,6 +3,7 @@
 use cortex_protocol::lease::Effect;
 use cortex_protocol::methods::{
     AddedRule, ApprovalChoice, ApprovalDetail, ApprovalRequest, CommandDetail, DiffDetail,
+    QuestionRequest, TargetDetail, ToolDetail, TrustRequest, TrustResource, TrustResourceKind,
 };
 use cortex_protocol::{CallId, SessionId, TurnId};
 use cortex_term::ColorDepth;
@@ -322,4 +323,134 @@ fn a_diff_line_wider_than_the_window_counts_as_clipped() {
     );
     assert!(drawn.clipped);
     assert!(drawn.lines.iter().all(|row| row.width() <= 80));
+}
+
+/// What acts unseen and is not a control character: a bidirectional
+/// override, a zero-width space and a tag character.
+const UNSEEN: &str = "\u{202e}\u{200b}\u{e0041}";
+
+/// `UNSEEN` as a field holding it after `name` is drawn.
+fn escaped(name: &str) -> String {
+    format!("{name}\\u{{202e}}\\u{{200b}}\\u{{e0041}}")
+}
+
+/// Every row of `drawn` is safe to show, and each of `fields` is drawn
+/// with what acts unseen written as its escape.
+fn shows_escaped(drawn: &Drawn, width: usize, fields: &[&str]) {
+    let found = crate::testing::problems(&drawn.lines, width);
+    assert!(found.is_empty(), "{found:#?}");
+    let all = text(drawn).join("\n");
+    for field in fields {
+        assert!(all.contains(&escaped(field)), "{field}: {all}");
+    }
+}
+
+/// Each field of an approval that comes from outside, the request's
+/// summary, its reasons, a command's folder, a lasting rule's pattern, a
+/// tool's arguments, a target and a diff's path and why it is left out,
+/// is drawn with what acts unseen escaped (the review of step 23: the
+/// hostile tests held only control characters, which the renderer shows
+/// as symbols anyway).
+#[test]
+fn every_field_of_an_approval_escapes_what_acts_unseen() {
+    let look = look();
+    let mut asked = request(command("make", false), &format!("summary{UNSEEN}"));
+    asked.reasons = vec![format!("reason{UNSEEN}")];
+    asked.adds = vec![AddedRule {
+        effect: Effect::Exec,
+        pattern: format!("pattern{UNSEEN}"),
+    }];
+    if let ApprovalDetail::Command(detail) = &mut asked.detail {
+        detail.cwd = format!("cwd{UNSEEN}");
+    }
+    let width = 120;
+    shows_escaped(
+        &approval(&asked, &view(10), width, &look),
+        width,
+        &["summary", "reason", "pattern", "in cwd"],
+    );
+    asked.detail = ApprovalDetail::Tool(ToolDetail {
+        arguments: serde_json::json!({ "path": format!("arguments{UNSEEN}") }),
+    });
+    shows_escaped(
+        &approval(&asked, &view(10), width, &look),
+        width,
+        &["arguments"],
+    );
+    asked.detail = ApprovalDetail::Target(TargetDetail {
+        effect: Effect::Read,
+        target: format!("target{UNSEEN}"),
+    });
+    shows_escaped(
+        &approval(&asked, &view(10), width, &look),
+        width,
+        &["Read target"],
+    );
+    asked.detail = ApprovalDetail::Diff(DiffDetail {
+        path: format!("path{UNSEEN}"),
+        diff: String::new(),
+        omitted: Some(format!("omitted{UNSEEN}")),
+    });
+    shows_escaped(
+        &approval(&asked, &view(10), width, &look),
+        width,
+        &["path", "omitted"],
+    );
+}
+
+/// The trust question's workspace, each resource's detail and a rule's
+/// profile are drawn with what acts unseen escaped.
+#[test]
+fn every_field_of_the_trust_question_escapes_what_acts_unseen() {
+    let request = TrustRequest {
+        session_id: SessionId::from("s_1"),
+        workspace: format!("workspace{UNSEEN}"),
+        resources: vec![
+            TrustResource {
+                kind: TrustResourceKind::Repository,
+                name: "repository".to_owned(),
+                detail: format!("detail{UNSEEN}"),
+                changed: false,
+            },
+            TrustResource {
+                kind: TrustResourceKind::Rules,
+                name: format!("profiles.ci{UNSEEN}.permissions.rules"),
+                detail: format!("rule{UNSEEN}"),
+                changed: false,
+            },
+        ],
+    };
+    let view = TrustView {
+        answers: answers(),
+        answers_hidden: false,
+        detail_rows: 10,
+    };
+    let width = 120;
+    shows_escaped(
+        &trust(&request, &view, width, &look()),
+        width,
+        &["workspace", "detail", "rule", "(profile ci"],
+    );
+}
+
+/// A question of the core's is drawn with what acts unseen escaped.
+#[test]
+fn a_question_escapes_what_acts_unseen() {
+    let request = QuestionRequest {
+        session_id: SessionId::from("s_1"),
+        turn_id: None,
+        question: format!("question{UNSEEN}"),
+        choices: Vec::new(),
+        extension: None,
+    };
+    let view = QuestionView {
+        answers: answers(),
+        ..QuestionView::default()
+    };
+    let width = 120;
+    shows_escaped(
+        &question(&request, &view, width, &look()),
+        width,
+        &["question"],
+    );
 }

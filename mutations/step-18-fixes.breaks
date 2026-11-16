@@ -363,7 +363,7 @@ caught-by:
 [break] a-run-of-variation-selectors-is-kept
 rule: A variation selector is kept only right after a character shown as it is; a run of them carries bytes unseen and is an escape.
 file: crates/cortex-base/src/visible.rs
-in: visible_keeping
+in: visible_keeping_after
 find: let escape = if is_selector(character) { !base } else {
 replace: let escape = if is_selector(character) { false } else {
 caught-by:

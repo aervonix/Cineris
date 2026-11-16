@@ -12,7 +12,11 @@
 //!
 //! **Content passes through `cortex_term::sanitize`** before it is laid out:
 //! text from a model, a tool or a file never reaches a line with a control
-//! character in it.
+//! character in it, nor with a character that acts unseen (a bidirectional
+//! override, a character of no width, a tag character) other than as its
+//! escape. What a view makes of content after that, such as the character
+//! a markdown entity stands for, passes through it again. `testing::problems`
+//! finds either in drawn lines, for the tests of hostile text.
 
 use std::time::Duration;
 

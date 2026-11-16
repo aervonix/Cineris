@@ -597,14 +597,14 @@ impl Parser<'_> {
         } else {
             named_entity(name)?
         };
-        // A control character from an entity is shown as its symbol, as
-        // any other from content is; a tab or a line feed is a space.
+        // The character an entity stands for is made safe as content's
+        // are, after the line was (since the review of step 23, which found
+        // `&#x202E;` drawing a bidirectional override): a control character
+        // is shown as its symbol, and what acts unseen as its escape. A tab
+        // or a line feed is a space.
         let text = match ch {
             '\t' | '\n' => " ".to_owned(),
-            _ => match cortex_term::sanitize::visible(ch) {
-                Some(symbol) => symbol.to_string(),
-                None => ch.to_string(),
-            },
+            _ => cortex_term::sanitize(ch.encode_utf8(&mut [0; 4])).into_owned(),
         };
         let end = at + 1 + semi + 1;
         self.nodes.push(Node::Text {

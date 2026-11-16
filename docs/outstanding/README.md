@@ -147,6 +147,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cortex-tui
 
 - [a-signal-while-the-external-editor-runs](a-signal-while-the-external-editor-runs.md): A signal sent to the program alone while the external editor runs leaves the editor running, and the watchdog ends the program without its graceful end, leaving the prompt's folder. Owner: step 32.
+- [copy-where-the-clipboard-sequence-is-not-taken](copy-where-the-clipboard-sequence-is-not-taken.md): `/copy` cannot tell whether the terminal took OSC 52, and shows no text for copying by hand where it is known not to. Owner: step 25.
 - [editor-cost-on-very-large-text](editor-cost-on-very-large-text.md): The prompt editor lays out all its text on every key; a shortened `@` query refilters all paths. Owner: step 33.
 - [external-editor-test-gaps](external-editor-test-gaps.md): Parts of the external editor (umask, ConPTY modes, failed hand-over, `.cmd` editors, interrupt guard) are untested. Owner: step 32.
 - [highlighted-code-drawn-again](highlighted-code-drawn-again.md): `Markdown::render` draws code plain when a finished answer is redrawn at another width. Owner: step 25.

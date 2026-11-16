@@ -173,9 +173,27 @@ pub fn visible(text: &str) -> Cow<'_, str> {
 /// start no line.
 #[must_use]
 pub fn visible_keeping<'a>(text: &'a str, keep: &[char]) -> Cow<'a, str> {
+    visible_keeping_after(None, text, keep)
+}
+
+/// [`visible_keeping`] of `text` as it reads after `before`, the character
+/// just before it in a longer text: a variation selector at its start is
+/// kept when `before` is a character shown as it is, as it would be in the
+/// whole. Text that arrives in pieces (an answer, streamed) is shown piece
+/// by piece exactly as the whole would be when each piece is given the
+/// last character of the one before it (since the review of step 23, whose
+/// stream drew an emoji's selector that came in the next piece as an
+/// escape).
+#[must_use]
+pub fn visible_keeping_after<'a>(
+    before: Option<char>,
+    text: &'a str,
+    keep: &[char],
+) -> Cow<'a, str> {
     // Whether the character before was shown as it is, and is one a
-    // selector may follow.
-    let mut base = false;
+    // selector may follow. That depends on the character alone, which is
+    // why the last one of the piece before is all a piece needs.
+    let mut base = before.is_some_and(|c| !is_selector(c) && !acts_unseen(c) && !keep.contains(&c));
     let mut escaped = |character: char| {
         let escape = if is_selector(character) {
             !base
@@ -375,6 +393,47 @@ mod tests {
         assert_eq!(visible("\u{FE0F}x"), "\\u{fe0f}x");
         assert_eq!(visible("a\u{200B}\u{FE0F}"), "a\\u{200b}\\u{fe0f}");
         assert_eq!(visible_keeping("\t\u{FE0F}", &['\t']), "\t\\u{fe0f}");
+    }
+
+    /// A text in two pieces, the second escaped after the last character of
+    /// the first, is shown as the whole is: an emoji's selector that comes
+    /// in the next piece is kept, and one that follows nothing shown is not.
+    #[test]
+    fn a_piece_escaped_after_the_one_before_reads_as_the_whole_does() {
+        assert_eq!(
+            visible_keeping_after(Some('\u{26A0}'), "\u{FE0F} red", &[]),
+            "\u{FE0F} red"
+        );
+        assert!(matches!(
+            visible_keeping_after(Some('a'), "\u{FE0F}", &[]),
+            Cow::Borrowed(_)
+        ));
+        for before in [None, Some('\u{200B}'), Some('\u{FE0F}'), Some('\t')] {
+            assert_eq!(
+                visible_keeping_after(before, "\u{FE0F}x", &['\t']),
+                "\\u{fe0f}x",
+                "{before:?}"
+            );
+        }
+        let texts = [
+            "careful \u{26A0}\u{FE0F}\u{FE0F} now",
+            "\u{2764}\u{FE0F}\u{200B}\u{FE0F}\tx\u{FE0F}",
+            "\u{1F600}\u{E0100}\u{202E}\u{E0041}\u{FE0F}\n\u{FE0F}",
+        ];
+        for text in texts {
+            for keep in [&[][..], &['\t', '\n'][..]] {
+                let whole = visible_keeping(text, keep);
+                for (at, _) in text.char_indices().skip(1) {
+                    let (first, second) = text.split_at(at);
+                    let pieces = format!(
+                        "{}{}",
+                        visible_keeping(first, keep),
+                        visible_keeping_after(first.chars().last(), second, keep)
+                    );
+                    assert_eq!(pieces, whole, "{text:?} cut at {at}");
+                }
+            }
+        }
     }
 
     /// What `visible` writes reads back, and nothing else is read: a name

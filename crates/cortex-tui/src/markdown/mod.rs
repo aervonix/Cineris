@@ -30,6 +30,12 @@
 //!   decisions therefore depend on the text alone and not on how it was
 //!   split into pieces: the same text gives the same lines, token by token
 //!   or all at once.
+//! - **Text is sanitised as it is read,** a line whole or, given to a
+//!   paragraph before its line ends, in pieces, each as it reads after the
+//!   last character of the piece before (`cortex_term::sanitize::sanitize_after`):
+//!   an emoji's variation selector that arrives in the next piece is kept,
+//!   as in the whole line, and is not drawn as `\u{fe0f}` (since the review
+//!   of step 23).
 //!
 //! Inline markup is parsed for the paragraph in progress only, from the
 //! first row not yet committed: the text of committed rows is dropped at a
@@ -47,6 +53,7 @@ use std::ops::Range;
 use std::time::Duration;
 
 use cortex_base::text::expand_tabs;
+use cortex_term::sanitize::sanitize_after;
 use cortex_term::{Line, Span, Style, sanitize};
 
 use crate::highlight::{BlockId, Highlighter, Outcome, WAIT};
@@ -103,6 +110,10 @@ pub struct Markdown {
     /// Bytes of the line at the start of `pending` already given to the
     /// open paragraph, when that line was certainly its text.
     taken: Option<usize>,
+    /// The last character of the line at the start of `pending` given to
+    /// the open paragraph and dropped: the rest of the line is sanitised as
+    /// it reads after it, as the whole line would be.
+    before: Option<char>,
     finished: bool,
     containers: Vec<Container>,
     leaf: Option<Leaf>,
@@ -278,6 +289,7 @@ impl Markdown {
             pending: String::new(),
             scanned: 0,
             taken: None,
+            before: None,
             finished: false,
             containers: Vec::new(),
             leaf: None,
@@ -356,6 +368,7 @@ impl Markdown {
             pending: self.pending[..cut].to_owned(),
             scanned: 0,
             taken: self.taken.map(|taken| taken.min(cut)),
+            before: self.before,
             finished: true,
             containers: self.containers.clone(),
             leaf: self.leaf.clone(),
@@ -451,7 +464,7 @@ impl Markdown {
             let raw = raw.strip_suffix('\r').unwrap_or(raw);
             match self.taken.take() {
                 Some(taken) => {
-                    let rest = sanitize(&raw[taken.min(raw.len())..]).into_owned();
+                    let rest = self.rest_of_line(raw, taken);
                     self.paragraph_text(&rest, frame);
                 }
                 None => {
@@ -474,7 +487,7 @@ impl Markdown {
                 let raw = raw.strip_suffix('\r').unwrap_or(&raw);
                 match self.taken.take() {
                     Some(taken) => {
-                        let rest = sanitize(&raw[taken.min(raw.len())..]).into_owned();
+                        let rest = self.rest_of_line(raw, taken);
                         self.paragraph_text(&rest, frame);
                     }
                     None => {
@@ -491,6 +504,16 @@ impl Markdown {
         self.partial(frame);
     }
 
+    /// The rest of a line whose first `taken` bytes the open paragraph has,
+    /// sanitised as it reads after them: an emoji's selector that came after
+    /// its emoji is kept, as in the whole line. The line is over.
+    fn rest_of_line(&mut self, raw: &str, taken: usize) -> String {
+        let taken = taken.min(raw.len());
+        let before = raw[..taken].chars().next_back().or(self.before);
+        self.before = None;
+        sanitize_after(before, &raw[taken..]).into_owned()
+    }
+
     /// Gives the open paragraph what has arrived of a line that is
     /// certainly its text, so that its words are decided as they end.
     fn partial(&mut self, frame: Frame<'_>) {
@@ -503,7 +526,9 @@ impl Markdown {
         match self.taken {
             Some(taken) => {
                 if usable > taken {
-                    let text = sanitize(&self.pending[taken..usable]).into_owned();
+                    let before = self.pending[..taken].chars().next_back().or(self.before);
+                    let text = sanitize_after(before, &self.pending[taken..usable]).into_owned();
+                    self.before = self.pending[..usable].chars().next_back();
                     self.taken = Some(usable);
                     self.paragraph_text(&text, frame);
                 }
@@ -524,7 +549,11 @@ impl Markdown {
                     return;
                 }
                 let start = partial.len() - rest.trim_start_matches([' ', '\t']).len();
-                let text = sanitize(&self.pending[start..usable]).into_owned();
+                // The line's start is sanitised with it when it ends whole:
+                // its text reads after the marks before it.
+                let before = self.pending[..start].chars().next_back();
+                let text = sanitize_after(before, &self.pending[start..usable]).into_owned();
+                self.before = self.pending[..usable].chars().next_back();
                 self.taken = Some(usable);
                 // What `line` does with a line of text, decided from its start.
                 let paragraph = matches!(self.leaf, Some(Leaf::Paragraph(_)));

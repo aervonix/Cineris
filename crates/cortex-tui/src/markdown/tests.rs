@@ -169,6 +169,51 @@ See [the docs](https://e.example/d) and <https://e.example>.
     assert!(span.style().underline);
 }
 
+/// A link to anything but a web address is not a hyperlink, even where the
+/// terminal shows them: its address would be hidden behind its text, and a
+/// share's is where a click sends the account's credentials. It is drawn as
+/// text with its address after it, in a paragraph and in a table.
+#[test]
+fn a_link_that_is_not_a_web_address_shows_its_address() {
+    let mut linked = look();
+    linked.hyperlinks = true;
+    for url in [
+        "file://host/share/x",
+        "file:////host/share/x",
+        "javascript:alert(1)",
+    ] {
+        let text = format!("See [README.md]({url}).\n\n| a |\n|---|\n| [README.md]({url}) |\n");
+        let lines = at_once(&text, 60, &linked);
+        let shown = texts(&lines);
+        assert_eq!(shown[0], format!("◇ See README.md ({url})."), "{shown:#?}");
+        assert!(
+            shown
+                .iter()
+                .any(|row| row.trim_end() == format!("  README.md ({url})")),
+            "{shown:#?}"
+        );
+        let linked_spans = lines
+            .iter()
+            .flat_map(|line| line.spans())
+            .filter(|span| span.url().is_some())
+            .count();
+        assert_eq!(linked_spans, 0, "{url}");
+    }
+    // A web address in a table is a link, and its address is not written.
+    let lines = at_once(
+        "| a |\n|---|\n| [docs](https://e.example/d) |\n",
+        60,
+        &linked,
+    );
+    assert!(texts(&lines).iter().all(|row| !row.contains("e.example")));
+    assert!(
+        lines
+            .iter()
+            .flat_map(|line| line.spans())
+            .any(|span| span.url() == Some("https://e.example/d"))
+    );
+}
+
 #[test]
 fn a_stream_cut_short_ends_what_it_has() {
     let look = look();
@@ -198,7 +243,14 @@ fn a_stream_cut_short_ends_what_it_has() {
 #[test]
 fn content_reaches_no_line_unsanitised_and_no_line_is_too_wide() {
     let look = look();
-    let text = "Escape \u{1b}[31mred\u{1b}[0m and C1 \u{9b}2J and a bell\u{7}.\n\n```\nprintf '\u{1b}]0;title\u{7}'\n\tindented\n```\n\n| k\u{1b} | v |\n|---|---|\n| \u{9b}x | 漢字漢字 |\n";
+    // What acts unseen too, written out and as an entity, which the line's
+    // sanitising cannot see (the review of step 23): in prose, a heading,
+    // code, a table's cell and a link's text.
+    let text = "Escape \u{1b}[31mred\u{1b}[0m and C1 \u{9b}2J and a bell\u{7}.\n\n\
+                Open invoice&#x202E;fdp.exe and &#xE0041;&#xE0042;&#x200B; now \u{202e}x\u{200b}\u{e0041}.\n\n\
+                # Head&#x2066;ing\u{2066}\n\n\
+                ```\nprintf '\u{1b}]0;title\u{7}'\n\tindented\u{202e}\n```\n\n\
+                | k\u{1b} | v&#x202E; |\n|---|---|\n| \u{9b}x | 漢字漢字 [a&#x200B;b](https://e.example) |\n";
     for width in [1, 2, 10, 30, 59, 79, 119] {
         let lines = at_once(text, width, &look);
         let found = problems(&lines, width);
@@ -275,7 +327,54 @@ fn documents() -> Vec<String> {
             .to_owned(),
         "| x |\nnot a delimiter\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\ntext\n".to_owned(),
         "```\nunclosed fence\nwith `ticks` and **marks**".to_owned(),
+        // Selectors after their emoji, and after nothing a selector picks.
+        "Careful \u{26a0}\u{fe0f} the build is red \u{2764}\u{fe0f}\u{fe0f}.\n\n> \u{fe0f}quoted \
+         \u{2714}\u{fe0f}\n- \u{200b}\u{fe0f} item 1\u{fe0f}\u{20e3}\n"
+            .to_owned(),
     ]
+}
+
+/// An emoji's selector that arrives in the next piece of the stream is
+/// drawn as the whole answer draws it, not as `\u{fe0f}` (the review of
+/// step 23).
+#[test]
+fn an_emoji_selector_in_the_next_piece_is_drawn_as_in_the_whole() {
+    let look = look();
+    let text = "Careful \u{26a0}\u{fe0f} the build is red.\n\nNext.\n";
+    let all = at_once(text, 80, &look);
+    assert!(
+        texts(&all)[0].contains("\u{26a0}\u{fe0f} the"),
+        "{:?}",
+        texts(&all)
+    );
+    for cut in ["Careful \u{26a0}", "Careful \u{26a0}\u{fe0f}", "Care"] {
+        let (lines, _) = streamed(Flavor::Answer, &[cut, &text[cut.len()..]], 80, &look);
+        assert_eq!(texts(&lines), texts(&all), "cut after {cut:?}");
+    }
+    // In three pieces: the middle one reaches the paragraph before its line
+    // ends.
+    let pieces = [
+        "Careful \u{26a0}",
+        "\u{fe0f} the",
+        " build is red.\n\nNext.\n",
+    ];
+    let (lines, _) = streamed(Flavor::Answer, &pieces, 80, &look);
+    assert_eq!(texts(&lines), texts(&all));
+    // A line's first piece reads after the marks before its text, as the
+    // whole line does: a selector after a space is kept.
+    let quote = "> quoted\n> \u{fe0f}and more\n";
+    let whole_quote = texts(&at_once(quote, 80, &look));
+    assert!(
+        whole_quote.concat().contains(" \u{fe0f}and"),
+        "{whole_quote:?}"
+    );
+    let (lines, _) = streamed(
+        Flavor::Answer,
+        &["> quoted\n> \u{fe0f}an", "d more\n"],
+        80,
+        &look,
+    );
+    assert_eq!(texts(&lines), whole_quote);
 }
 
 #[test]
@@ -359,10 +458,15 @@ fn random_document(rng: &mut SeededRng) -> String {
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb*",
         "ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc`",
     ];
-    const WORDS: [&str; 18] = [
+    const WORDS: [&str; 21] = [
         // Control characters, which reach no line as they are.
         "\u{7}",
         "\u{1b}[31m",
+        // An emoji and its selector, which a piece may split, and what acts
+        // unseen, written out and as an entity.
+        "\u{26a0}\u{fe0f}",
+        "\u{fe0f}\u{202e}",
+        "&#x200B;&#xFE0F;",
         "word",
         "the",
         "scanner",

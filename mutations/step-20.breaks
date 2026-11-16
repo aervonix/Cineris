@@ -298,7 +298,7 @@ caught-by:
 [break] a-link-address-with-an-escape
 rule: A link's address is used only when it is printable ASCII, so it cannot end the link's sequence early.
 file: crates/cortex-term/src/line.rs
-in: Span::link
+in: linkable
 find: url.bytes().all(|byte| (0x21..0x7f).contains(&byte))
 replace: true
 caught-by:

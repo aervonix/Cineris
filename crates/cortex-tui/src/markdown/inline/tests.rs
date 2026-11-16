@@ -67,6 +67,12 @@ fn escapes_entities_and_breaks() {
     );
     // A control character from an entity is made visible, as content's are.
     assert_eq!(shown("a&#27;b &#0;"), "a\u{241b}b \u{fffd}");
+    // And what acts unseen is its escape, as content's is: an entity does
+    // not bring back what `sanitize` took out of the line.
+    assert_eq!(
+        shown("invoice&#x202E;fdp.exe &#xE0041;&#x200B;&#173; &#x200D;"),
+        "invoice\\u{202e}fdp.exe \\u{e0041}\\u{200b}\\u{ad} \u{200d}"
+    );
     assert_eq!(shown("a\nb"), "a b");
     assert_eq!(shown("a  \nb"), "a\nb");
     assert_eq!(shown("a\\\nb"), "a\nb");
