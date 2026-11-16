@@ -153,6 +153,39 @@ The read runs on the history's own thread, beside the start-up, and the interfac
 | 5. A client from before that answers never to a trusted project's question is refused where it was taken | Kept, and said in [11-rpc-protocol.md](../../../architecture/11-rpc-protocol.md): a never there is what the owner ruled out | (documented) |
 | 6. A start whose name is not Unicode was told to the model with replacement characters | Such a start starts at the root, in the binary and in the core | (the core's `start_below`; the binary's `leads_inside`) |
 
+## CI
+
+The pull request's first green run (43970151315, at `67a9a49`), against `main`'s latest run that kept its reports (`327cfaa`; `main`'s own commit, `a2fb9d2`, had none):
+
+| Job | Main, `327cfaa` | The PR at `67a9a49` |
+|---|---|---|
+| `lint-linux` | 55 s | 57 s |
+| `test-linux` | 104 s | 114 s |
+| `lint-windows` | 88 s | 86 s |
+| `test-windows` | 283 s | 281 s |
+| `pr-size-linux` (blocks nothing) | — | 214 s |
+| `pr-size-windows` (blocks nothing) | — | 367 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `67a9a49` (3 ms) | Windows, main (8 ms) | Windows, `67a9a49` (8 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 12.6 s | 10.2 s | 14.6 s | 15.5 s |
+| Tier 2, integration (40 s) | 34.2 s | 16.8 s | 38.2 s | 41.5 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 21.6 s | 22.9 s | 81.6 s | 83.1 s |
+
+Windows' tier 2 was 41.5 s, over its budget of 40 s (the warning; it fails at 60 s), on a runner other than `main`'s. **A one-runner A/B** (`try` with `against=main`, run 43969493125, five rounds each at 6.0 ms a process start) shows the change's cost apart from the runner's speed:
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 11.7 s (2,526 tests) | 11.7 s (2,504) | +0.0 s | 20 s |
+| 2, integration | 28.7 s (1,480 tests) | 29.7 s (1,469) | −0.9 s | 40 s |
+| 3, system | 64.1 s (186 tests) | 62.9 s (185) | +1.3 s | 90 s |
+
+What moved in tier 1 is `cortex-cli`'s new history tests (+0.92 s together: files of 8 to 16 MiB written and read); tier 3 gains the two system tests (`trust::sys_a_repository_whose_git_was_not_shown_gets_nothing_of_git`, and a headless run from a folder in `commands`). The Windows `try` of the changed crates alone passed (43969451213).
+
+## Stress and breaks
+
+- **Breaks:** `cargo xtask mutate step-23-followups --jobs 2`: 43 breaks, every one caught by the tests its list names (one list corrected: `version-1-kept-on-write` named a test that starts from no file, where a version 1 store cannot show; the two that read one catch it). The sixteen breaks of steps 13a, 17, 23 and 24 that named code this change rewrote were moved to the code as it is (`mutate --check`: every break applies).
+
 ## Left open
 
 To be filled in.
