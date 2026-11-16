@@ -65,6 +65,10 @@ pub fn real_code() -> PathBuf {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests that prepare and spoil folders of real files"
+)]
 mod tests {
     use std::ffi::OsString;
     use std::fs;
