@@ -1617,3 +1617,79 @@ fn the_command_line_lists_and_changes_a_projects_entries() {
         .unwrap();
     assert_eq!(lapsed.status, EntryStatus::Disabled);
 }
+
+/// A reading of the files that another change has overtaken does not put
+/// a rule back. What the observer stores beside a turn hands the session a
+/// snapshot when it is done; here that hand-over is stopped, the user
+/// turns the command off, the next turn reads the files and its command
+/// looks at them, and only then, before the command is decided, does the
+/// older snapshot arrive. The command must still ask (found by the full
+/// review of the second pull request, which the coordinator had fixed
+/// here).
+#[test]
+fn sys_a_snapshot_another_change_overtook_does_not_put_a_rule_back() {
+    use cortex_testkit::Hold;
+
+    let mut world = World::new("knowledge_late_snapshot", []);
+    let line = passing(&world);
+    world.provider = cortex_testkit::ScriptedProvider::new([
+        run("c1", &line),
+        says("One."),
+        run("c2", &line),
+        says("Two."),
+    ]);
+    // The store as it is with the command accepted, and as another
+    // process's `disable` leaves it.
+    let (project, id) = learned(&world, &line);
+    project
+        .update(&[change_of(&id, EntryAction::Accept)], &[], None)
+        .unwrap();
+    let file = store_file(&world, &world.workspace);
+    let accepted = std::fs::read(&file).unwrap();
+    project
+        .update(&[change_of(&id, EntryAction::Disable)], &[], None)
+        .unwrap();
+    let disabled = std::fs::read(&file).unwrap();
+    std::fs::write(&file, &accepted).unwrap();
+    // Two days on, a success of the command is written to the store: its
+    // confirmation, once a day.
+    world
+        .clock
+        .advance(std::time::Duration::from_secs(2 * 24 * 60 * 60));
+    let core = world.core_with(|options| options.trust_project = true);
+    // That write is stopped once it is made, before its snapshot is
+    // handed to the session.
+    let late = Arc::new(Hold::new(cortex_knowledge::project::BEFORE_THE_SNAPSHOT));
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        assert_eq!(front.turn_allowing("test it").await, Vec::<String>::new());
+        let stopped = Arc::clone(&late);
+        tokio::task::spawn_blocking(move || stopped.reach())
+            .await
+            .expect("the confirmation is written, and stopped there");
+        // The user turns the command off, in another process.
+        std::fs::write(&file, &disabled).unwrap();
+
+        // The next turn's command is stopped between its look at the
+        // files and its decision. A thread beside the test then lets the
+        // older snapshot arrive, waits until the engine has what follows
+        // from it, and lets the decision go on.
+        let look = Hold::new(cortex_core::AFTER_THE_LOOK);
+        let older = Arc::clone(&late);
+        let beside = std::thread::spawn(move || {
+            look.reach();
+            let landed = Hold::new(cortex_core::AFTER_THE_RULES);
+            older.release();
+            landed.reach();
+            landed.release();
+            look.release();
+        });
+        assert_eq!(
+            turn_denying(&front, "again").await,
+            ["shell"],
+            "the command that was turned off ran without asking"
+        );
+        beside.join().unwrap();
+        front.close().await;
+    });
+}
