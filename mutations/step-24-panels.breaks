@@ -1,0 +1,521 @@
+# Step 24's second pull request, the panel mechanism and the plan and
+# review panels: their rules broken one at a time, with the tests that must
+# fail. Written with the code.
+
+# ---------------------------------------------------- the readiness rule
+
+# The rule itself is step 23's, and its breaks follow it into
+# `app::ready` (`step-23.breaks`, `step-23-fixes.breaks`). These are the
+# panels' use of it.
+
+[break] a-panel-key-ignores-the-readiness
+rule: A panel's key that changes something is taken only when the panel is ready; until then one that types goes to the editor.
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_key
+find: let ready = action == Action::FocusClose || self.panels.ready(id, at);
+replace: let ready = true;
+caught-by:
+    app::tests::panels::typing_that_runs_on_past_slash_plans_enter_never_skips_an_item
+    app::tests::panels::moving_and_esc_act_at_once_and_a_key_before_the_grace_is_typed
+
+[break] close-waits-for-the-readiness
+rule: `focus.close` changes nothing the person cannot see again, and acts at once, like moving.
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_key
+find: let ready = action == Action::FocusClose || self.panels.ready(id, at);
+replace: let ready = self.panels.ready(id, at);
+caught-by:
+    app::tests::panels::x_closes_the_review_and_enter_opens_the_viewer_at_the_files_box
+
+[break] a-held-panel-key-acts-again
+rule: A key held down never acts on a panel: the same key again within the repeat window of one the panel took goes where its press went, nowhere.
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_key
+find: && (repeat || at.saturating_duration_since(last) < REPEAT)
+replace: && repeat
+caught-by:
+    app::tests::panels::a_held_key_keys_read_together_and_a_paste_never_act
+
+[break] a-marked-repeat-acts-on-a-panel
+rule: A repeat the terminal marks never acts on a panel, whatever key came before it.
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_key
+find: if repeat || !ready {
+replace: if !ready {
+caught-by:
+    app::tests::panels::a_held_key_keys_read_together_and_a_paste_never_act
+
+[break] keys-read-together-do-not-hold-a-panel
+rule: Keys read together were typed together: they hold a focused panel a quiet second, and none of them acts.
+file: crates/cortex-tui/src/app/state.rs
+in: App::not_taken
+find: self.panels.typed(at);
+replace:
+caught-by:
+    app::tests::panels::a_held_key_keys_read_together_and_a_paste_never_act
+
+[break] slash-plans-enter-is-not-typing
+rule: A key that went to the editor, `/plan`'s own `Enter` among them, holds the panel that takes the focus a quiet second, so that typing that runs on past it never acts.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find:
+    != Some(crate::keys::Action::FocusNext)
+    {
+        self.panel_untaken = Some(at);
+    }
+replace:
+    != Some(crate::keys::Action::FocusNext)
+    {}
+caught-by:
+    app::tests::panels::typing_that_runs_on_past_slash_plans_enter_never_skips_an_item
+
+[break] ctrl-p-is-taken-for-typing
+rule: Moving the focus to a panel with `Ctrl+P` is not typing at it: the panel is ready after its grace alone.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: != Some(crate::keys::Action::FocusNext)
+replace: != Some(crate::keys::Action::Interrupt)
+caught-by:
+    app::tests::panels::moving_and_esc_act_at_once_and_a_key_before_the_grace_is_typed
+
+[break] a-panels-first-frame-forgets-the-typing-before-it
+rule: The panel's first frame holds it a quiet second after the input no panel took just before it, as a dialog's does.
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_drawn_at
+find: self.panels.typed(untaken);
+replace:
+caught-by:
+    app::tests::panels::typing_that_runs_on_past_slash_plans_enter_never_skips_an_item
+
+[break] resume-keeps-the-panels-readiness
+rule: After the program is continued (`fg`) a panel's grace starts again.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find:
+    self.panels.restart();
+    false
+replace: false
+caught-by:
+    app::tests::panels::the_grace_starts_again_after_resume
+
+[break] the-external-editor-keeps-the-panels-readiness
+rule: After the external editor gives the terminal back a panel's grace starts again.
+file: crates/cortex-tui/src/app/state.rs
+in: App::edited
+find: self.panels.restart();
+replace:
+caught-by:
+    app::tests::panels::the_grace_starts_again_after_the_external_editor
+
+[break] the-viewer-keeps-the-panels-readiness
+rule: After the viewer a panel's grace starts again. Every key that closes the viewer is input no panel took, which holds the panel a quiet second, longer than its grace: so this restart is not what a test sees, and the break survives.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find:
+    if self.viewer.is_none() {
+        self.panels.restart();
+    }
+replace:
+expect: survives
+
+[break] a-dialog-leaves-the-focus-on-a-panel
+rule: While a dialog is up no panel is drawn and none keeps the focus: a key meant for the dialog never acts on a panel.
+file: crates/cortex-tui/src/app/state.rs
+in: App::request
+find:
+    if matches!(self.input.focus().focused(), Target::Panel(_)) {
+        self.input.focus_mut().to_input();
+    }
+replace:
+caught-by:
+    app::tests::panels::the_grace_starts_again_after_a_dialog
+
+[break] a-new-key-map-keeps-the-panels-readiness
+rule: A new key map starts a panel's grace again: what the person saw offered was the old map's.
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::set_keymap
+find: self.panels.restart();
+replace:
+caught-by:
+    app::tests::panels::the_grace_starts_again_with_a_new_key_map
+
+[break] a-changed-focused-row-keeps-the-readiness
+rule: When the focused row changes from outside, the panel's grace starts again: a key meant for what was there never acts on what is there now.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::scrolled
+find:
+    if now != slot.seen {
+        slot.ready.hide();
+replace:
+    if now != slot.seen {
+caught-by:
+    app::tests::panels::the_grace_starts_again_when_the_focused_row_changes
+    app::tests::panels::the_focus_stays_on_its_item_when_the_plan_changes_under_it
+
+# ------------------------------------------------- the layout and focus
+
+[break] panels-are-drawn-under-a-menu
+rule: With a menu or the history search open there is no room for a panel: none is drawn.
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_block
+find: if !menu && self.rows > LEAST_ROWS {
+replace: if self.rows > LEAST_ROWS {
+caught-by:
+    app::panels::tests::the_live_region_keeps_its_limit_and_a_focused_panel_is_drawn_or_the_input_has_the_focus
+
+[break] panels-take-every-live-row
+rule: Panels never take the transcript's last four live rows: what streams never vanishes under them.
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_block
+find: live.min(LIVE_KEPT)
+replace: live.min(0)
+caught-by:
+    app::panels::tests::the_block_is_set_apart_above_and_below_and_the_live_rows_keep_four
+
+[break] no-blank-row-after-the-block
+rule: The panels' block is followed by a blank row, which sets it apart from the input box (screen 4).
+file: crates/cortex-tui/src/app/state/panel.rs
+in: App::panel_block
+find:
+    block.extend(laid.lines);
+    block.push(Line::new());
+replace: block.extend(laid.lines);
+caught-by:
+    app::tests::panels::the_plan_opens_by_itself_collapsed_without_the_focus
+    app::panels::tests::the_block_is_set_apart_above_and_below_and_the_live_rows_keep_four
+    cortex-tui::it screens::the_views_draw_the_reference_screens
+
+[break] a-focused-panel-that-does-not-fit-keeps-the-focus
+rule: A panel that would not be drawn focused in the room there is cannot have the focus: the panels are laid out as if none had it, and the ring is not given it.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::layout
+find: let focused = focused.filter(|id| laid.reachable.contains(id));
+replace: let focused = focused;
+caught-by:
+    app::panels::tests::a_panel_that_would_not_be_drawn_focused_cannot_be_reached
+
+[break] every-open-panel-is-reachable
+rule: The focus ring is given only the panels that would be drawn focused in the room there is.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::layout
+find: .filter(|(_, rows)| *rows <= room)
+replace:
+caught-by:
+    app::panels::tests::a_panel_that_would_not_be_drawn_focused_cannot_be_reached
+    app::panels::tests::the_oldest_collapsed_panels_fold_into_one_row_and_with_no_room_nothing_is_drawn
+
+[break] the-folded-panels-say-nothing
+rule: The oldest collapsed panels that do not fit fold into one dim row that says how many and the key that reaches them.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::layout
+find: if shown_others && folded > 0 {
+replace: if false {
+caught-by:
+    app::panels::tests::the_oldest_collapsed_panels_fold_into_one_row_and_with_no_room_nothing_is_drawn
+
+[break] the-cut-rows-are-said-with-no-room-for-them
+rule: The focused panel's `… N more` rows are drawn only where the room kept one for them, so the block never passes the live region's limit.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::scrolled
+find: if marked && start > 0 {
+replace: if start > 0 {
+caught-by:
+    app::panels::tests::the_live_region_keeps_its_limit_and_a_focused_panel_is_drawn_or_the_input_has_the_focus
+    app::panels::tests::a_panel_that_would_not_be_drawn_focused_cannot_be_reached
+
+[break] the-scrolled-list-says-nothing-of-what-it-cut
+rule: A focused panel's list cut at an end says how many rows it hides there.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::scrolled
+find:
+    if marked && end < body.len() {
+        lines.push(views::more(body.len() - end, draw.width, draw.look));
+    }
+replace:
+caught-by:
+    app::panels::tests::the_focused_panel_scrolls_to_keep_its_row_with_a_dim_row_at_each_cut_end
+
+[break] the-focus-is-not-kept-on-its-item
+rule: When the list changes under the focus, the focus stays on its item, by its id.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::follow
+find: slot.focus = found;
+replace: let _ = found;
+caught-by:
+    app::tests::panels::the_focus_stays_on_its_item_when_the_plan_changes_under_it
+
+# ---------------------------------------------------------- the input
+
+[break] an-item-edit-sends-a-prompt
+rule: `Enter` in an item edit saves the item: it is never a prompt, and nothing is pushed to the history.
+file: crates/cortex-tui/src/input.rs
+in: Input::act
+find: Action::Submit if self.item_edit.is_some() => {
+replace: Action::Submit if false => {
+caught-by:
+    input::tests::an_item_edit_saves_with_enter_and_brings_the_draft_back_whole
+    app::tests::panels::rewording_and_adding_use_the_prompts_editor_and_send_no_prompt
+
+[break] an-item-edit-loses-the-draft
+rule: Either way an item edit ends, the draft set aside comes back whole.
+file: crates/cortex-tui/src/input.rs
+in: Input::cancel_item_edit
+find: self.editor = edit.draft;
+replace: self.editor = Editor::new();
+caught-by:
+    input::tests::an_item_edit_saves_with_enter_and_brings_the_draft_back_whole
+
+[break] an-item-edit-opens-the-command-menu
+rule: An item being edited is text: `/` and `@` open no menu, so that `Enter` saves it.
+file: crates/cortex-tui/src/input.rs
+in: Input::refresh_menu
+find:
+    if self.item_edit.is_some() {
+        self.menu = None;
+        return;
+    }
+replace:
+caught-by:
+    input::tests::an_item_edit_is_one_line_with_no_menu_and_no_history
+
+[break] a-letter-with-a-box-focused-is-dropped
+rule: A key that types and is not taken while a box or a panel has the focus goes to the editor, and the focus with it.
+file: crates/cortex-tui/src/input.rs
+in: Input::key
+find:
+    if !self.focus.on_input() {
+        return self.pass_to_editor(key);
+    }
+replace:
+    if !self.focus.on_input() {
+        return Outcome::Nothing;
+    }
+caught-by:
+    input::tests::typing_with_a_box_or_a_panel_focused_reaches_the_editor_in_order
+    app::tests::panels::a_letter_with_a_box_or_a_panel_focused_reaches_the_editor
+
+[break] a-panels-letter-with-a-box-focused-is-dropped
+rule: A panel's own key that types, with a box focused, is a key the box does not take: it goes to the editor.
+file: crates/cortex-tui/src/input.rs
+in: Input::key
+find: if matches!(outcome, Outcome::Ignored(ignored) if ignored.is_panel_key())
+replace: if false
+caught-by:
+    input::tests::typing_with_a_box_or_a_panel_focused_reaches_the_editor_in_order
+    cortex-tui::it bindings::every_default_binding_does_its_action
+
+[break] a-panel-is-not-given-its-keys
+rule: A panel's own keys come to the application as `Outcome::Panel` while a panel has the focus.
+file: crates/cortex-tui/src/input.rs
+in: Input::act
+find: target @ Target::Panel(_) => Outcome::Panel(target, action)
+replace: Target::Panel(_) => Outcome::Ignored(action)
+caught-by:
+    cortex-tui::it bindings::every_default_binding_does_its_action
+
+# ------------------------------------------------------- the plan panel
+
+[break] a-plan-all-done-closes-while-the-turn-runs
+rule: A plan with nothing left to do stays open while the turn runs, and goes when it ends.
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::show
+find: (self.finished() && !self.running)
+replace: self.finished()
+caught-by:
+    app::tests::panels::the_plan_stays_all_done_while_the_turn_runs_and_goes_when_it_ends
+
+[break] a-skipped-item-is-left-to-do
+rule: An item skipped is not left to do: a plan of done and skipped items is finished.
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::finished
+find: PlanStatus::Done | PlanStatus::Skipped
+replace: PlanStatus::Done
+caught-by:
+    app::tests::panels::the_plan_stays_all_done_while_the_turn_runs_and_goes_when_it_ends
+
+[break] an-older-plan-replaces-a-newer
+rule: A plan older than the one shown (by its revision) is not taken: a `plan/get` that answers late never undoes an edit.
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::take
+find: if plan.revision < self.plan.revision {
+replace: if false {
+caught-by:
+    app::tests::panels::an_older_plan_never_replaces_a_newer_one
+
+[break] a-stored-session-is-not-asked-for-its-plan
+rule: A session opened from the store is asked for its plan (`plan/get`); a new one has none to ask for.
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::when_opened
+find: stored.then(
+replace: (!stored).then(
+caught-by:
+    app::tests::panels::a_stored_session_asks_for_its_plan_and_a_new_one_does_not
+
+[break] space-removes-the-item
+rule: `space` skips the focused item: it is kept, marked skipped.
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::act
+find: _ => Self::update(session, PlanEdit::Skip(PlanItemRef { id }))
+replace: _ => Self::update(session, PlanEdit::Remove(PlanItemRef { id }))
+caught-by:
+    app::tests::panels::each_plan_key_sends_its_edit_to_the_session
+
+[break] space-skips-a-done-item
+rule: `space` on a done or skipped item does nothing (restoring waits for `PlanEdit::Restore`), and is not typed either.
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::act
+find: PlanStatus::Done | PlanStatus::Skipped => Act::Taken
+replace: PlanStatus::Skipped => Act::Taken
+caught-by:
+    app::tests::panels::space_on_a_done_or_skipped_item_does_nothing_and_is_not_offered
+
+[break] the-hint-offers-space-on-a-done-item
+rule: The hint row offers only what the keys do on the focused item: no `space skips` on a done one.
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::hint
+find: if skips && let Some(skip) = key(Action::FocusSkip) {
+replace: if let Some(skip) = key(Action::FocusSkip) {
+caught-by:
+    app::tests::panels::space_on_a_done_or_skipped_item_does_nothing_and_is_not_offered
+
+[break] move-up-moves-down
+rule: `alt+up` moves the focused item up one.
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::act
+find: self.reorder(focused, focused - 1, session)
+replace: self.reorder(focused, focused + 1, session)
+caught-by:
+    app::tests::panels::each_plan_key_sends_its_edit_to_the_session
+
+[break] an-item-is-added-at-the-end
+rule: `a` adds the new item after the focused one.
+file: crates/cortex-tui/src/app/panels/plan.rs
+in: PlanPanel::edited
+find: after: Some(item.id.clone())
+replace: after: None
+caught-by:
+    app::tests::panels::rewording_and_adding_use_the_prompts_editor_and_send_no_prompt
+
+[break] slash-plan-is-not-a-command
+rule: `/plan` focuses the plan panel, or says there is none; it is never sent to the model.
+file: crates/cortex-tui/src/app/state/commands.rs
+in: App::command
+find: "plan" => self.summon_panel("plan")
+replace: "plan" => {}
+caught-by:
+    app::tests::panels::slash_plan_focuses_the_plan_and_with_no_plan_says_the_model_makes_one
+
+[break] the-focused-plan-item-is-not-the-selection
+rule: The focused item is drawn as the selection: in the accent's tint, in bold (screen 4).
+file: crates/cortex-tui/src/view/plan.rs
+in: plan_item
+find: let text_token = if focused { Token::Selected } else { text_token };
+replace: let text_token = if focused { Token::Text } else { text_token };
+caught-by:
+    view::plan::tests::each_status_and_the_focus_take_screen_fours_tokens
+    view::plan::tests::the_plan_in_every_variant
+    cortex-tui::it screens::the_views_draw_the_reference_screens
+
+[break] a-plan-item-is-drawn-unsanitised
+rule: A plan item's text comes from the model: it is made visible and one line before it is laid out.
+file: crates/cortex-tui/src/view/plan.rs
+in: plan_item
+find: one_line(&item.text)
+replace: item.text.clone()
+caught-by:
+    view::plan::tests::hostile_items_are_drawn_visible_on_one_row_at_every_width
+    app::tests::panels::hostile_plan_items_and_paths_are_drawn_visible_in_the_frame
+
+# ----------------------------------------------------- the review panel
+
+[break] the-review-stays-past-the-next-prompt
+rule: The review closes when the next prompt is sent, in the key's own frame.
+file: crates/cortex-tui/src/app/panels/review.rs
+in: ReviewPanel::seen
+find: Seen::Prompt => Show::Close
+replace: Seen::Prompt => Show::Same
+caught-by:
+    app::tests::panels::the_review_opens_when_the_turn_ends_having_changed_files_and_goes_with_the_next_prompt
+
+[break] a-turn-that-changed-nothing-opens-the-review
+rule: The review opens when a turn ended having changed files, or its checks ran: not after every turn.
+file: crates/cortex-tui/src/app/panels/review.rs
+in: ReviewPanel::seen
+find:
+    if self.has_any() {
+        Show::Open
+    } else {
+        Show::Same
+    }
+replace: Show::Open
+caught-by:
+    app::tests::panels::a_turn_that_changed_nothing_opens_no_review_and_a_new_turn_closes_one
+
+[break] a-failed-edit-is-a-changed-file
+rule: Only an edit or a write that succeeded changed a file.
+file: crates/cortex-tui/src/app/panels/review.rs
+in: ReviewPanel::tool_result
+find:
+    if result.outcome != ToolOutcome::Success {
+        return;
+    }
+replace:
+caught-by:
+    app::tests::panels::the_review_opens_when_the_turn_ends_having_changed_files_and_goes_with_the_next_prompt
+
+[break] enter-opens-the-first-call-of-a-file
+rule: `Enter` on a file opens the viewer at the box of its last call.
+file: crates/cortex-tui/src/app/panels/review.rs
+in: ReviewPanel::tool_result
+find: self.rounds[at] = round;
+replace: let _ = round;
+caught-by:
+    app::tests::panels::x_closes_the_review_and_enter_opens_the_viewer_at_the_files_box
+
+[break] the-summary-says-no-verdict
+rule: The turn summary line says the turn's verdict when its checks ran.
+file: crates/cortex-tui/src/app/state/panel.rs
+in: with_verdict
+find: Verification::Passed => "checks passed"
+replace: Verification::Passed => return cost
+caught-by:
+    app::tests::panels::the_turn_summary_says_the_checks_verdict
+
+[break] a-long-path-loses-its-counts
+rule: A path too long for its row is shortened from its start, so that the file's name and its counts stay.
+file: crates/cortex-tui/src/view/review.rs
+in: file_row
+find: let path = shortened(&path, room, look.glyphs.ellipsis);
+replace: let path = path.clone();
+caught-by:
+    view::review::tests::a_long_path_is_shortened_from_its_start_and_its_counts_stay
+    view::review::tests::the_review_in_every_variant
+
+[break] the-first-row-has-no-totals
+rule: The review's first row sums the files' counts.
+file: crates/cortex-tui/src/view/review.rs
+in: review_header
+find: rest.extend(counts(added, removed, look));
+replace:
+caught-by:
+    view::review::tests::the_first_row_says_the_files_their_counts_and_the_checks
+    app::tests::panels::the_review_opens_when_the_turn_ends_having_changed_files_and_goes_with_the_next_prompt
+
+[break] a-check-command-is-drawn-unsanitised
+rule: A check's command comes from a file a project may write: it is made visible and one line before it is laid out.
+file: crates/cortex-tui/src/view/review.rs
+in: check_row
+find: one_line(&check.command)
+replace: check.command.clone()
+caught-by:
+    view::review::tests::hostile_paths_commands_folders_and_notes_are_drawn_visible
+
+[break] a-changed-path-is-drawn-unsanitised
+rule: A changed file's path comes from the model: it is made visible and one line before it is laid out.
+file: crates/cortex-tui/src/view/review.rs
+in: file_row
+find: let path = one_line(&file.path);
+replace: let path = file.path.clone();
+caught-by:
+    view::review::tests::hostile_paths_commands_folders_and_notes_are_drawn_visible
+    app::tests::panels::hostile_plan_items_and_paths_are_drawn_visible_in_the_frame

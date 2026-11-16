@@ -353,6 +353,43 @@ fn rewording_and_adding_use_the_prompts_editor_and_send_no_prompt() {
 }
 
 #[test]
+fn the_focus_stays_on_its_item_when_the_plan_changes_under_it() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_plan(now);
+    let ready = plan_focused(&mut app, now);
+    let plan = plan_id(&app);
+    press(&mut app, "down", ready);
+    assert_eq!(app.panels().focus_of(plan), 2, "on p3");
+    // The first item goes: p3 is the second now, and keeps the focus, its
+    // content as it was, so the panel stays ready.
+    let mut fewer = screen_plan(2);
+    fewer.items.remove(0);
+    link.give(plan_updated(fewer));
+    drain(&mut app, ready);
+    let _ = live_text(&mut app, ready);
+    assert_eq!(app.panels().focus_of(plan), 1);
+    press(&mut app, "d", ms(ready, 10));
+    assert_eq!(
+        edits(&link),
+        [PlanEdit::Remove(cortex_protocol::project::PlanItemRef {
+            id: PlanItemId::from("p3")
+        })]
+    );
+    // The focused item itself goes: the focus is on the nearest, which the
+    // person has not seen there, and the grace starts again.
+    let mut gone = screen_plan(3);
+    gone.items.retain(|item| item.id.as_str() != "p3");
+    link.give(plan_updated(gone));
+    drain(&mut app, ms(ready, 20));
+    let _ = live_text(&mut app, ms(ready, 20));
+    assert_eq!(app.panels().focus_of(plan), 1, "on p2 now");
+    // Another key than the last (the same one so soon is that key held).
+    press(&mut app, "space", ms(ready, 30));
+    assert!(edits(&link).is_empty(), "not ready: typed");
+    assert_eq!(app.input().editor().expanded(), " ");
+}
+
+#[test]
 fn space_on_a_done_or_skipped_item_does_nothing_and_is_not_offered() {
     let now = Instant::now() + Duration::from_secs(20);
     let (mut app, link) = with_plan(now);
@@ -740,6 +777,23 @@ fn edit_result(call: &str, path: &str, added: u64, removed: u64) -> Inbound {
     }))
 }
 
+/// An edit that failed: it changed nothing.
+fn failed_edit(call: &str, path: &str) -> Inbound {
+    event(Event::ItemCompleted(ItemCompleted {
+        item: Item::ToolResult(ToolResultItem {
+            id: ItemId::from(format!("r_{call}").as_str()),
+            call_id: CallId::from(call),
+            tool: "edit".to_owned(),
+            outcome: ToolOutcome::Error,
+            content: vec![Part::text("The text to replace was not found.")],
+            payload: Some(serde_json::json!({"path": path, "added": 9, "removed": 9})),
+            artifacts: Vec::new(),
+            duration_ms: Some(10),
+            created_at: None,
+        }),
+    }))
+}
+
 fn shell_result(call: &str) -> Inbound {
     event(Event::ItemCompleted(ItemCompleted {
         item: Item::ToolResult(ToolResultItem {
@@ -822,8 +876,9 @@ fn turn_with_changes(now: Instant) -> (App, Scripted) {
         asked("m2", &[("c2", "edit"), ("c3", "shell")]),
         edit_result("c2", "tests/lex.rs", 1, 0),
         shell_result("c3"),
-        asked("m3", &[("c4", "edit")]),
+        asked("m3", &[("c4", "edit"), ("c5", "edit")]),
         edit_result("c4", "src/lex.rs", 2, 2),
+        failed_edit("c5", "src/broken.rs"),
     ] {
         link.give(inbound);
     }
