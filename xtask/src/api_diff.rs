@@ -27,7 +27,7 @@ mod diff;
 mod read;
 
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
@@ -240,27 +240,13 @@ fn prepare_base(root: &Path, base: &Path, commit: &str) -> Result<()> {
     checkout(base)
 }
 
-/// Takes the work for this run; the system's lock goes when the run does.
-fn lock(directory: &Path) -> Result<File> {
-    fs::create_dir_all(directory)
-        .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
-    let path = directory.join("lock");
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
-        .map_err(|error| format!("could not open {}: {error}", path.display()))?;
-    match file.try_lock() {
-        Ok(()) => Ok(file),
-        Err(fs::TryLockError::WouldBlock) => {
-            Err("another `cargo xtask api-diff` is running: wait for it to end".to_owned())
-        }
-        Err(fs::TryLockError::Error(error)) => {
-            Err(format!("could not lock {}: {error}", path.display()))
-        }
-    }
+/// Takes the work for this run, waiting out a moment's hold by a child
+/// another thread forked ([`crate::workspace::lock_for_one_run`]); the
+/// system's lock goes when the run does.
+fn lock(directory: &Path, pause: &mut dyn FnMut(std::time::Duration)) -> Result<File> {
+    crate::workspace::lock_for_one_run(directory, pause, || {
+        "another `cargo xtask api-diff` is running: wait for it to end".to_owned()
+    })
 }
 
 /// The flags rustdoc is given: its JSON, which is unstable.
@@ -354,7 +340,7 @@ fn report(root: &Path, request: &Request) -> Result<String> {
     let commit = resolve(root, request.against.as_deref())?;
     let head_metadata = workspace::metadata(root)?;
     let work = head_metadata.target_directory.join("api-diff");
-    let _lock = lock(&work)?;
+    let _lock = lock(&work, &mut std::thread::sleep)?;
     let base = work.join("base");
     prepare_base(root, &base, &commit)?;
     let base_metadata = workspace::metadata(&base)?;

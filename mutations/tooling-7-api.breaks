@@ -308,10 +308,10 @@ caught-by:
 
 [break] api-runs-two-at-once
 rule: One `api-diff` at a time: a second is refused while the first holds the lock.
-file: xtask/src/api_diff.rs
-in: lock
+file: xtask/src/workspace.rs
+in: lock_for_one_run
 find: match file.try_lock() {
-replace: match Ok::<(), fs::TryLockError>(()) {
+replace: match Ok::<(), TryLockError>(()) {
 caught-by:
     api_diff::tests::a_second_run_is_refused_while_the_first_holds_the_lock
 
