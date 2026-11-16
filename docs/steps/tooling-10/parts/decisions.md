@@ -26,13 +26,14 @@ Each decision of 2026-11-16 below was already built; the records that still call
   Decoding: at least 100 MB/s of the stream on the desktop and 80 MB/s on a runner.
   The item `perf-budgets-for-search-diff-and-decoding` is settled and its file deleted; the eighth tooling step's link to it is plain text now.
 - **The `perf_` tests are held to the runner's figures,** which a desk also meets, since a test cannot tell a desk from a runner.
-  `cortex-tools`' `perf_search_real_code` fails when the rare literal's, the regular expression's or the miss's median is over 400 ms on Linux or 500 ms on Windows (`cfg!(windows)`).
+  `cortex-tools`' `perf_search_real_code` fails when the rare literal's, the regular expression's or the miss's median is over 400 ms on Linux; on Windows it reports them against 500 ms and does not hold them (the review: a runner measured 305 to 320 ms, and Windows runners differ twofold).
   The literal on a line in nearly every file takes about a third longer than the other three, which the budget's figures were measured from, and is reported, not held, so that it does not fail a Windows runner near the line.
   `perf_diffing_a_reread_of_real_code` fails when a changed re-read's median or 95th percentile is over 10 ms.
   `cortex-llm`'s `perf_decoding_a_large_tool_call_of_real_code` fails under 80 MB/s of the stream, and reports the rate as `llm.decode_large_call_real_code_rate`.
 - **Measured on the desktop on 2026-11-16,** a release build through `rx`, all three passing: search 19.7 ms (rare literal), 19.9 ms (regular expression), 18.8 ms (miss) and 25.6 ms (common literal), at the median.
   A changed re-read 0.38 ms at the median and 0.88 ms at the 95th percentile, 0.20 ms unchanged; decoding 7.84 ms, 278 MB/s of the 2.18 MB stream.
   The run: `rx -- cargo xtask test -p cortex-tools -p cortex-llm --cargo-profile release --run-ignored only -E 'test(/perf_search_real_code|perf_diffing_a_reread_of_real_code|perf_decoding_a_large_tool_call_of_real_code/)' --no-capture`.
+- **On the runners** (`try` 43943290230, `perf -p cortex-tools -p cortex-llm`, both systems, all passing): search 85 to 92 ms on Linux and 305 to 320 ms on Windows; a changed re-read 0.47 ms (95th 1.33 ms) on Linux and 0.86 ms (1.91 ms) on Windows; decoding 166 MB/s on Linux and 161 MB/s on Windows.
 - **Step 19's first two questions,** decided as built: `verify.commands` the user's alone (a departure from 08-configuration's row), and the user's own check running unconfined where nothing confines commands.
   Step 19's `answered.md` drops "reversible" and "to the owner" from both, and `security.md` section 1 no longer asks the owner to confirm the trade-off.
 - **The re-decide step's tightening,** deciding every call again, reads included, decided as built in its `answered.md`.
