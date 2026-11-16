@@ -249,6 +249,9 @@ impl Session {
         let built = build(&Sections {
             environment: Some(&parts.environment),
             instructions: &discovered.texts,
+            // The project profile's source is wired in step 17's second
+            // part.
+            profile: None,
             append: parts.append.as_deref(),
             guided: self.model.variants.prompt_style == "guided",
         });
@@ -286,6 +289,7 @@ impl Session {
             reason: Some(reason),
             base: Some(built.base),
             instructions: discovered.marks.clone(),
+            profile: built.profile,
             altered: false,
             variants: Some(self.model.variants.clone()),
         }

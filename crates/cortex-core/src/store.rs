@@ -102,6 +102,7 @@ fn epoch_body(epoch: EpochStart) -> Body {
             .into_iter()
             .map(|(path, hash)| InstructionMark { path, hash })
             .collect(),
+        profile: epoch.profile,
         variants: epoch
             .variants
             .as_ref()
@@ -143,6 +144,7 @@ fn epoch_start(epoch: &Epoch, redacted: bool) -> EpochStart {
             .iter()
             .map(|mark| (mark.path.clone(), mark.hash))
             .collect(),
+        profile: epoch.profile,
         // The hash was taken of the prompt and the tools as they were sent,
         // before the filter: one that no longer matches is of a prompt the
         // log holds masked.
@@ -773,6 +775,7 @@ mod tests {
             reason: Some(EpochReason::Compaction),
             base: Some(cortex_base::ContentHash::of(b"base")),
             instructions: vec![("AGENTS.md".to_owned(), cortex_base::ContentHash::of(b"x"))],
+            profile: Some(cortex_base::ContentHash::of(b"the profile")),
             altered: false,
             variants: None,
         };

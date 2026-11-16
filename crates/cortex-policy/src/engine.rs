@@ -1020,6 +1020,80 @@ impl Engine {
         self.recompile(&mut rules);
     }
 
+    /// Replaces the rules of the project's learned commands
+    /// ([`RuleSource::Learned`]) with `rules`, and compiles the set again.
+    /// The project's profile changes while a session runs: a command is
+    /// accepted, or turned off. Nothing else about the engine changes: how
+    /// a rule is matched, and that an allow of this source waits for the
+    /// project's trust, are as they were. The standing lease keeps the
+    /// rules the session started with, as it does when an approval is
+    /// given.
+    ///
+    /// # Errors
+    ///
+    /// When a rule is anything but `allow exec` (a learned command only
+    /// ever lets a command run), or cannot be compiled. **No learned rule
+    /// is then in force**, the ones from before included: a list that
+    /// cannot be read as a whole may be the one that took a command off.
+    pub fn set_learned(&self, rules: Vec<Rule>) -> Result<(), Vec<RuleError>> {
+        let mut held = self.rules.write().unwrap_or_else(PoisonError::into_inner);
+        held.configured
+            .retain(|rule| rule.source != RuleSource::Learned);
+        let learned: Vec<SourcedRule> = rules
+            .into_iter()
+            .map(|rule| SourcedRule::new(rule, RuleSource::Learned))
+            .collect();
+        let wrong: Vec<RuleError> = learned
+            .iter()
+            .filter(|rule| {
+                rule.rule.effect != Effect::Exec || rule.rule.action != RuleAction::Allow
+            })
+            .map(|rule| RuleError {
+                rule: rule.clone(),
+                problem: "a learned command only ever allows a command".to_owned(),
+            })
+            .collect();
+        let mut with = held.configured.clone();
+        with.extend(learned);
+        let compiled = if wrong.is_empty() {
+            compile(
+                &with,
+                &held.approved,
+                &held.session,
+                &self.workspace,
+                self.home.as_ref(),
+                self.trusted,
+                &self.protected,
+            )
+        } else {
+            Err(wrong)
+        };
+        match compiled {
+            Ok(compiled) => {
+                held.configured = with;
+                held.compiled = compiled;
+                Ok(())
+            }
+            Err(errors) => {
+                // The set without any of them compiled before.
+                self.recompile(&mut held);
+                Err(errors)
+            }
+        }
+    }
+
+    /// The rules of the project's learned commands as the engine holds
+    /// them, the ones set aside for want of trust included.
+    #[must_use]
+    pub fn learned(&self) -> Vec<Rule> {
+        self.read_rules()
+            .configured
+            .iter()
+            .filter(|rule| rule.source == RuleSource::Learned)
+            .map(|rule| rule.rule.clone())
+            .collect()
+    }
+
     fn read_rules(&self) -> std::sync::RwLockReadGuard<'_, Rules> {
         self.rules.read().unwrap_or_else(PoisonError::into_inner)
     }
@@ -3246,12 +3320,7 @@ const SUBCOMMANDS: [(&str, &[&str]); 25] = [
 /// subcommand, with any further words, or the exact line ([`EXACT_LINE`],
 /// [`SUBCOMMANDS`]). `None` when no pattern says that safely.
 fn approval_rule(part: &Part) -> Option<Rule> {
-    let plain = |text: &str| {
-        !text.is_empty()
-            && !text.chars().any(|character| {
-                character.is_whitespace() || matches!(character, '*' | '?' | '[' | ']')
-            })
-    };
+    let plain = plain_word;
     let program = part.words.first()?;
     if !program.is_fixed() || program.home || !plain(&program.text) {
         return None;
@@ -3295,15 +3364,7 @@ fn approval_rule(part: &Part) -> Option<Rule> {
                 !subcommand.is_some_and(|subcommand| covered.contains(&subcommand.text.as_str()))
             });
     let pattern = if exact_line {
-        // The whole line, word for word, and no more.
-        if !part
-            .words
-            .iter()
-            .all(|word| word.is_fixed() && !word.home && plain(&word.text))
-        {
-            return None;
-        }
-        words_of(part).join(" ")
+        exact_line_of(part)?
     } else {
         match subcommand {
             Some(subcommand) => format!("{} {} *", program.text, subcommand.text),
@@ -3313,6 +3374,55 @@ fn approval_rule(part: &Part) -> Option<Rule> {
     Some(Rule {
         effect: Effect::Exec,
         pattern,
+        action: RuleAction::Allow,
+    })
+}
+
+/// Whether a word can stand in an exec pattern as itself: not empty, no
+/// blank (a pattern's words are split at blanks), and none of the
+/// characters a pattern reads as a wildcard.
+fn plain_word(text: &str) -> bool {
+    !text.is_empty()
+        && !text.chars().any(|character| {
+            character.is_whitespace() || matches!(character, '*' | '?' | '[' | ']')
+        })
+}
+
+/// The pattern that matches exactly this simple command, word for word,
+/// and no more. `None` when a word cannot stand in a pattern as itself, is
+/// expanded by the shell, or names the home directory.
+fn exact_line_of(part: &Part) -> Option<String> {
+    part.words
+        .iter()
+        .all(|word| word.is_fixed() && !word.home && plain_word(&word.text))
+        .then(|| words_of(part).join(" "))
+}
+
+/// The allow rule for exactly this command line, word for word: what an
+/// accepted command of the project's profile becomes
+/// (`docs/architecture/14-adaptation.md`, "How entries are used"). It is
+/// written by the writer an approval's exact-line rule uses.
+///
+/// `None`, and so no rule, for a line that is not one simple command the
+/// analysis models: more than one command, a redirection, anything the
+/// shell expands. And for a word a pattern would not read as itself: one
+/// with a blank, or with `*`, `?`, `[` or `]`, which a rule reads as a
+/// wildcard (a last word of `*` alone as "any further words"), so that
+/// "exactly this line" can never come out as "every line like it".
+#[must_use]
+pub fn exact_command_rule(command: &str, syntax: ShellSyntax) -> Option<Rule> {
+    let Analysis::Parts(parts) = analyse(command, syntax) else {
+        return None;
+    };
+    let [part] = parts.as_slice() else {
+        return None;
+    };
+    if !part.redirects.is_empty() {
+        return None;
+    }
+    Some(Rule {
+        effect: Effect::Exec,
+        pattern: exact_line_of(part)?,
         action: RuleAction::Allow,
     })
 }

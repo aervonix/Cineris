@@ -22,7 +22,7 @@ Four rules hold for all of them.
 | Tool call | tool, model, variant ids, outcome (ok, invalid arguments, failed, denied), duration | Tool-schema and edit-format success rates. |
 | Edit | model, edit format, matching tier used, outcome | Choosing the edit format per model. |
 | Turn | model, requests, tool calls, outcome, verification result, whether the user undid it | The quality signal for a set-up. |
-| Command | project, command class (build, test, check), exit status, duration | The project profile, verification planning. |
+| Command | project, command class (build, test, check), exit status, duration | The project profile, verification planning. **Not recorded:** step 16 built no such event, and since step 17 an entry of the profile keeps its own count and usual duration. |
 | Run | from the run engine: task, variant, judge results | Replay and evaluation ([16-run-engine.md](16-run-engine.md)). |
 
 **Where.** Append-only JSON lines in the state directory, one file per month, plus a small aggregates file that is rebuilt from them. The aggregates hold success rates per model and variant, and usage buckets by local day, provider, model, project and billing kind; day buckets fold into month buckets after 400 days, so all-time usage outlives the raw files. The comparison with a database is in [decision 0021](../decisions/0021-local-statistics.md).
@@ -72,6 +72,7 @@ Every entry carries:
 | `confirmed` | When it was last seen to hold. |
 | `expires` | When it stops being used unless confirmed again. User-written entries do not expire. Learned entries get a default by kind (commands 90 days, flaky tests 30, facts and conventions 60). |
 | `check` | Optional. A cheap, read-only test that shows the entry still holds. See "Checked memory" below. |
+| `accepted` | When the user accepted it. An entry the user wrote in their own store counts as accepted; one that became active by itself has none until the user accepts it. |
 
 ### Where it lives
 
@@ -80,13 +81,15 @@ Every entry carries:
 | `<workspace>/.cortex/profile.toml` | Shared with the team through the repository. | The user. The harness writes here only when the user promotes an entry. |
 | `<state dir>/projects/<project key>/knowledge.toml` | Private to this user and machine. | The harness, as it learns. The user, through the review panel or an editor. |
 
-Both are plain TOML that a person can read and edit. The shared file needs no trust to be read: like instruction files, it is text for the model and cannot grant anything. Commands in it are used for verification and for the safe list only after the user has accepted them.
+Both are plain TOML that a person can read and edit.
+
+**Every entry of the shared file is a proposal to each user, until that user accepts it** (the owner's decision of 2026-11-16, in step 17, in place of "it is text for the model, like instruction files"). Nothing of it reaches the prompt, verification or the safe list before. The reasons: the model can write the file (after the approval a protected path asks for), so an unreviewed shared file would be a way round the review of `remember`'s proposals; a cloned repository's file is a stranger's text; and the profile sits in the system prompt under the harness's own heading. The user's acceptance is kept in the private store against the entry's content hash, so an entry that changes is a proposal again, and one command accepts them all. The shared file needs no project trust to be read and listed; a command accepted from it still waits for trust before it runs without asking, as a learned one does.
 
 ### How entries are learned
 
 | Path | What happens | Becomes active |
 |---|---|---|
-| **Observed** | The command observer sees a build, test or check command succeed, or a test flip without a change. | Automatically after two consistent observations, with a notice. The user can undo it. |
+| **Observed** | The command observer sees a build, test or check command succeed, or a test flip without a change. | Automatically after two consistent observations, with a notice. The user can undo it. Active puts it in the prompt and nowhere else: it runs without asking, and is offered to verification, only once the user accepts it. |
 | **Proposed** | The model calls the `remember` tool with a fact or convention and a pointer to the evidence. Or a session-end pass (off by default, and run on the fast model) proposes entries. | Only when the user accepts it in the review panel. |
 | **Written** | The user adds or edits an entry. | Immediately. |
 
@@ -126,10 +129,28 @@ An entry with no check behaves exactly as before.
 
 ### How entries are used
 
-- **In the prompt.** At the start of each context epoch, active entries are rendered into a "project profile" section of the system prompt, inside a token budget (default 1,500), commands first. Expired and disabled entries are left out.
+- **In the prompt.** At the start of each context epoch, active entries are rendered into a "project profile" section of the system prompt, inside a token budget (default 1,500), commands first. Proposed, expired and disabled entries are left out, and so is a shared entry this user has not accepted.
 - **For verification.** `command` entries of class test and check are what automatic verification runs ([15-efficiency.md](15-efficiency.md)).
 - **For permissions.** Accepted `command` entries are the "learned safe list": they run without asking ([06-permissions-and-sandbox.md](06-permissions-and-sandbox.md)).
 - **For the user.** `/project` opens the review panel: entries by kind, with source, age and expiry, and actions to accept, edit, disable, delete, or promote to the shared file. `cortex project` does the same from the command line. (A settings profile, chosen with `/profile`, is a different thing: see [08-configuration.md](08-configuration.md).)
+
+### As built in step 17
+
+`cortex-knowledge`, with the design as it was reviewed and the owner's answers in [steps/17/answered.md](../steps/17/answered.md).
+
+| Part | As built |
+|---|---|
+| **An entry** (`entry`) | Kind, text, status, basis, where it was learned, evidence, the times it was confirmed, expires, was accepted and lapsed, the count of observations, a command (purpose, line, directory, usual duration, whether it only reads) and a check. Three questions decide every use: `in_use` (active and not past its expiry: the prompt), `is_accepted` (the user accepted it, or wrote it in their own store), `runs_unasked` (a command, in use and accepted: the safe list and verification). A text is at most 600 characters; evidence, a command line, a pattern and a path 400; a directory and a check's path are relative to the workspace root and stay below it. |
+| **The private store** (`file`, `store`) | `<state dir>/projects/<project key>/knowledge.toml`, `version = 1`: `[[entry]]` tables, a `[[shared]]` table for each decision about a shared entry (its content hash, `active` or `disabled`, when), and `next`, the number the next new entry's id takes. It is read strictly: a key or a value this build does not know, a newer version, or more than 256 KiB, 500 entries or 1,000 decisions refuses the whole file. An entry a person adds by hand may leave its `id` out. It is written again whole on every change, owner-only and atomically, flushed to the disk, so comments in it are not kept; the file says so in its first lines. |
+| **Ids** | A private entry is `k_<n>` from the file's counter, which never goes down: the id of a deleted entry is not given again, so a change sent from an old listing names the entry the sender was shown or nothing. A shared entry is `s_` and 32 hexadecimal digits of its content hash (its kind, text, command and check): the same on every machine, and another when the entry changes. |
+| **The shared file** | `<workspace>/.cortex/profile.toml`, `version = 1`: `[[entry]]` tables of a kind, a text, and optionally evidence, a command and a check, and nothing else. It is read as a regular file in a `.cortex` that is a directory of the workspace itself: a link at either name is not followed, and the file is then reported and not used. Text that is not TOML, a key outside the entries, a newer version or more than 200 entries refuses the file; **an entry with a key or a value this build does not know is left out alone**, and said, so a team on two builds keeps the entries both understand. An entry that claims a status, a date or an acceptance is left out that way: a repository cannot say that its entry is in use. It is written only by `promote`, which adds one entry to its end and keeps every byte a person wrote. |
+| **A change** (`Store::change`) | Take the lock (`knowledge.toml.lock`, the operating system's), read the file, apply, write. No session writes a copy it held, so two that change the store at once both keep their change. Readers take no lock. A change is all or nothing. |
+| **An invalid file** | Reported, with the line of a syntax error or of the entry at fault, and never written over, moved or deleted: a change is refused until a person puts it right (`project_store_invalid`). What is used in its place is the state from before: what a session already held, or, for a process that starts on it, **the good copy**, `knowledge.toml.good`, which holds the last store this build read or wrote as valid (a load that reads a valid store brings it up to date, so a person's valid edit is what a later typo falls back to). **While the store is invalid the state in its place feeds the prompt and never the safe list:** the file that cannot be read may hold the edit that turned a command off. A store that is not there is empty, and its good copy goes: removing the file is how a user starts again. An invalid shared file is reported, and what a session had read of it stays in use; a process that starts on it uses none of it. |
+| **A user's changes** (`Project::update`) | `accept` makes an entry active and accepted, renews a learned entry's expiry (commands 90 days, flaky tests 30, facts and conventions 60, from now) and, for a shared entry, records the decision for its present hash; `disable` takes it out of use and its acceptance with it; `edit` replaces a private entry's text; `delete` removes a private entry; `promote` moves an entry in use that the user accepted to the shared file, written first and never through a link, and keeps the acceptance; `add` writes an entry of the user's own, active at once and never expiring. A shared entry is edited and removed in its file. |
+| **A model's proposal** (`Project::propose`) | Stored as proposed, a fact or a convention, with its evidence, its check and its session. The same kind and text again is already known, whatever became of the first: waiting, accepted or turned down. At most 50 wait for review. |
+| **Expiry** (`Project::lapse`) | An entry past its expiry is out of use by the clock at once. `lapse` then marks it: disabled, lapsed, and no longer accepted, so a command that lapsed is accepted again before it runs without asking. The user's `accept` brings it back. An entry a person wrote does not expire. |
+| **Section 5** (`render`) | A fixed first line, then `Commands:` (by purpose: build, test, check, format, run), `Conventions:`, `Flaky tests:` and `Facts:`, each entry one list line, in the order the files hold them, the private store's first. Every piece of an entry goes through `cortex_base::visible`. Nothing in it depends on a clock, a count or a duration. The budget is `tokens` at a fixed three bytes a token; entries are taken in order while they fit, and a last line says how many were left out. No entry in use, or a budget that holds none, gives no section. |
+| **The project key** | `AbsPath::project_key` of the resolved workspace root, as for sessions, trust and approvals. A moved workspace has another key, and its store stays under the old one; two worktrees of one repository are two stores; a workspace below a repository's top looks for its own `.cortex/profile.toml`. Nothing is shared across keys. |
 
 ### Compatibility
 

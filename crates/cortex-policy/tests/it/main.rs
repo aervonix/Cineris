@@ -22,6 +22,7 @@ mod commands;
 mod decide;
 mod differential;
 mod files;
+mod learned;
 mod levels;
 mod measure;
 mod real_paths;

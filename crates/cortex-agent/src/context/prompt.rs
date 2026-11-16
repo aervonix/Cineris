@@ -8,7 +8,7 @@
 //! | 2 | Environment facts that do not change during the session | [`Environment`] |
 //! | 3 | Usage notes of the enabled tools | none yet from a tool; [`GUIDED_NOTES`] in the `guided` prompt style (step 16) |
 //! | 4 | Project instructions | the instruction files ([`super::instructions`]) |
-//! | 5 | The project profile | step 17 |
+//! | 5 | The project profile | the text `cortex-knowledge` renders ([`Sections::profile`]), since step 17 |
 //! | 6 | The index of skills, commands and tool sources | steps 28 and 30 |
 //! | 7 | Sections of extensions | step 28 |
 //! | 8 | The user's appended text | `--system-append`, always last |
@@ -122,19 +122,31 @@ pub(crate) struct InstructionText {
 pub(crate) struct Sections<'a> {
     pub(crate) environment: Option<&'a Environment>,
     pub(crate) instructions: &'a [InstructionText],
+    /// Section 5: the project profile, as it is to stand in the prompt.
+    /// It is rendered where the profile is kept (`cortex-knowledge`), with
+    /// every entry's text escaped there. Empty is none.
+    pub(crate) profile: Option<&'a str>,
     pub(crate) append: Option<&'a str>,
     /// The `guided` prompt style: section 3 holds [`GUIDED_NOTES`].
     pub(crate) guided: bool,
 }
 
 /// The system prompt, and the hash of what it is without its instruction
-/// files: an epoch that is read again (a resume, a rewind) goes on as it
-/// was when that hash is the same, and a changed instruction file is told
-/// as a notice.
+/// files and its project profile: an epoch that is read again (a resume, a
+/// rewind) goes on as it was when that hash is the same, and a changed
+/// instruction file or a changed profile is told as a notice.
+///
+/// The profile is outside `base` because it changes between processes: a
+/// command is learned, an entry expires. Inside, every such change would
+/// make the next resume a new epoch, and a new epoch drops the reasoning
+/// of the whole history (the owner's decision of 2026-11-16).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Built {
     pub(crate) system: String,
     pub(crate) base: ContentHash,
+    /// The hash of section 5 as the prompt holds it. `None` with no
+    /// profile.
+    pub(crate) profile: Option<ContentHash>,
 }
 
 /// Builds the system prompt from its sections, in their fixed order.
@@ -153,7 +165,13 @@ pub(crate) fn build(sections: &Sections<'_>) -> Built {
     if let Some(text) = &instructions {
         parts.push(text.clone());
     }
-    // Sections 5 to 7 are later steps'.
+    // Section 5, the project profile.
+    let profile = sections.profile.filter(|text| !text.is_empty());
+    let profile_at = parts.len();
+    if let Some(text) = profile {
+        parts.push(text.to_owned());
+    }
+    // Sections 6 and 7 are later steps'.
     if let Some(append) = sections.append.filter(|text| !text.is_empty()) {
         parts.push(append.to_owned());
     }
@@ -163,12 +181,16 @@ pub(crate) fn build(sections: &Sections<'_>) -> Built {
         if instructions.is_some() && index == instructions_at {
             continue;
         }
+        if profile.is_some() && index == profile_at {
+            continue;
+        }
         hasher.update(&(part.len() as u64).to_le_bytes());
         hasher.update(part.as_bytes());
     }
     Built {
         system,
         base: hasher.finish(),
+        profile: profile.map(|text| ContentHash::of(text.as_bytes())),
     }
 }
 
@@ -211,6 +233,7 @@ mod tests {
         let built = build(&Sections {
             environment: Some(&environment()),
             instructions: &files,
+            profile: None,
             append: Some("Answer in French."),
             guided: false,
         });
@@ -234,6 +257,7 @@ mod tests {
         let built = build(&Sections {
             environment: Some(&environment),
             instructions: &[],
+            profile: None,
             append: None,
             guided: false,
         });
@@ -262,6 +286,7 @@ mod tests {
             build(&Sections {
                 environment: Some(&environment()),
                 instructions: files,
+                profile: None,
                 append,
                 guided: false,
             })
@@ -297,11 +322,78 @@ mod tests {
         let built = build(&Sections {
             environment: Some(&environment()),
             instructions: &[],
+            profile: None,
             append: None,
             guided: false,
         });
         let env = built.system.find("Environment:").unwrap();
         assert!(built.system.find(STAY_IN_PROJECT).unwrap() < env);
+    }
+
+    const PROFILE: &str = "Project profile: what is known.\n\nCommands:\n- test: `cargo test`";
+
+    #[test]
+    fn the_project_profile_is_section_five_after_the_instruction_files() {
+        let files = [InstructionText {
+            path: "AGENTS.md".to_owned(),
+            user: false,
+            text: "Use tabs.".to_owned(),
+        }];
+        let built = build(&Sections {
+            environment: Some(&environment()),
+            instructions: &files,
+            profile: Some(PROFILE),
+            append: Some("Answer in French."),
+            guided: true,
+        });
+        let notes = built.system.find(GUIDED_NOTES).unwrap();
+        let project = built.system.find("## AGENTS.md").unwrap();
+        let profile = built.system.find(PROFILE).unwrap();
+        let append = built.system.find("Answer in French.").unwrap();
+        assert!(notes < project && project < profile && profile < append);
+        // A section of its own: a blank line on each side.
+        assert!(
+            built
+                .system
+                .contains(&format!("Use tabs.\n\n{PROFILE}\n\nAnswer"))
+        );
+        assert_eq!(built.profile, Some(ContentHash::of(PROFILE.as_bytes())));
+    }
+
+    /// The owner's decision of 2026-11-16: the profile changes between
+    /// processes, so it must not decide whether a resumed session goes on
+    /// in its epoch.
+    #[test]
+    fn the_base_hash_leaves_the_project_profile_out() {
+        let with = |profile: Option<&str>, append: Option<&str>| {
+            build(&Sections {
+                environment: Some(&environment()),
+                instructions: &[],
+                profile,
+                append,
+                guided: false,
+            })
+        };
+        let (none, one, two) = (
+            with(None, None),
+            with(Some(PROFILE), None),
+            with(Some("Project profile: other."), None),
+        );
+        assert_ne!(one.system, two.system);
+        assert_ne!(one.system, none.system);
+        assert_eq!(one.base, two.base);
+        assert_eq!(one.base, none.base);
+        assert_ne!(one.profile, two.profile);
+        assert_eq!(none.profile, None);
+        // An empty profile is no profile: no section, no hash.
+        let empty = with(Some(""), None);
+        assert_eq!((empty.system, empty.profile), (none.system.clone(), None));
+        // What comes after it is still in the hash.
+        assert_ne!(one.base, with(Some(PROFILE), Some("more")).base);
+        assert_eq!(
+            with(Some(PROFILE), Some("more")).base,
+            with(None, Some("more")).base
+        );
     }
 
     #[test]
@@ -310,6 +402,7 @@ mod tests {
         let sections = |guided| Sections {
             environment: Some(&environment),
             instructions: &[],
+            profile: None,
             append: None,
             guided,
         };

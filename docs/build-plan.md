@@ -714,7 +714,7 @@ Three tracks start here and touch different crates, so they can run in separate 
 - **Goal and scope.** Running the checks that project-memory entries can carry ([architecture/14-adaptation.md](architecture/14-adaptation.md)): the three check forms, the rules for when a check is due, running in the background inside the sandbox with no writes and no network, updating or disabling the entry, the notice to the user, dropping checks that flip, the model's optional `check` argument to `remember`, checks in the review panel.
 - **Depends on.** 17, 19.
 - **Done when.** A fact whose check fails is disabled, leaves the prompt at the next epoch, and the user sees why and can restore it. A passing check moves the expiry. A check that flips twice is dropped and the entry returns to plain expiry. A `command` check that is not read-only cannot run without the user's approval. Nothing runs at start-up (the start-up test). Checks stop when the session ends.
-- **Must not change.** The memory file format from step 17. The prompt section's stability within an epoch.
+- **Must not change.** The memory file format from step 17, except by a new version: a build that reads version 1 refuses a version 2 file whole and never writes one (the owner, 2026-11-16, [steps/17/answered.md](steps/17/answered.md)). The prompt section's stability within an epoch.
 - **Size.** M. **Parallel.** With 35 to 42, 44 and 45.
 
 ### Step 44: Context profiler

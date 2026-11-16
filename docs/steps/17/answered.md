@@ -1,22 +1,29 @@
-# Step 17: the design, before building
+# Answered in step 17, on 2026-11-16
 
-Written before the code, read by an independent reviewer, and sent to the coordinator. What changed in the building is in [answered.md](answered.md).
+Step 17 builds the project profile and memory: `cortex-knowledge` (entries, the private store and the repository's shared profile, the text of section 5), with what `cortex-policy`, `cortex-agent`, `cortex-session` and `cortex-core` gain for it. This record holds the questions it put to the owner, the design as it was reviewed before it was built, and what changed in the building.
 
-The specification is [architecture/14-adaptation.md](../../architecture/14-adaptation.md), "Project knowledge: profile and memory", with the build plan's step 17 and the "What later steps inherit" lines that name it. Each point below says what is built, and where it departs from those pages.
+The specification is [architecture/14-adaptation.md](../../architecture/14-adaptation.md), "Project knowledge: profile and memory", with the build plan's step 17 and the "What later steps inherit" lines that name it.
 
-**A choice marked "to confirm by measurement" hangs on a number.** It is measured in the first pull request, before anything is built on it, and the result is recorded in `answered.md`.
+## The questions, and the answers
 
-## Questions for the owner
+Three choices of the design change what a feature does, and went to the owner through the coordinator with a recommendation each. All three were answered on 2026-11-16.
 
-Three of the choices below change what a feature does. Each has a recommendation, and the code is built so that the other answer is one predicate away.
+| # | Question | The answer, 2026-11-16 | Recorded in |
+|---|---|---|---|
+| Q1 | **Does text from the repository's shared file reach the prompt before this user accepted it?** 14-adaptation said the shared file "needs no trust to be read: like instruction files, it is text for the model". The step's brief listed that text reaching the prompt before acceptance as a mistake to prevent. | **No (the owner).** Every entry of `.cortex/profile.toml` is `proposed` for each user until that user accepts it. The acceptance is kept in the private store against the entry's content hash, so a changed entry is a proposal again, and one command accepts them all. The reasons given: the model can write the file (after the approval a protected path asks for), so an unreviewed shared file is a way round `remember`'s review; a cloned repository's file is a stranger's text; and section 5 sits in the system prompt under the harness's own heading. | [14-adaptation.md](../../architecture/14-adaptation.md), "Where it lives"; [06-permissions-and-sandbox.md](../../architecture/06-permissions-and-sandbox.md), "Project trust"; [security.md](../../security.md), section 2 |
+| Q2 | **Is an observed command that became active by itself on the safe list?** The owner's decision of 2026-11-12 makes it *active* after two observations. 14-adaptation, 06 and 15-efficiency give the safe list and verification to *accepted* commands. | **No (the coordinator, as the pages already say).** Active puts it in the prompt and nowhere else. It runs without asking, and is offered to verification (step 19, build-plan line 456), only once the user accepts it, or wrote it. The notice that says it became active names the command that accepts it and the one that undoes it. | 14-adaptation, "How entries are used" |
+| Q3 | **A field for the session log:** `profile` in the `epoch` entry, the hash of section 5 as the epoch's prompt holds it, beside `instructions`. Step 15's rule is "the session log format beyond agreed additions". | **Agreed (the coordinator).** Absent means no profile was given; a `model` epoch carries it over. | [07-sessions-and-context.md](../../architecture/07-sessions-and-context.md), "On-disk layout" |
+| | **Step 43's "Must not change: the memory file format"** meets this step's strict reading of the store: step 43 needs fields for a check's state. | **"Except by a new version" (the owner):** a build that reads version 1 refuses a version 2 file whole and never writes one. | [build-plan.md](../../build-plan.md), step 43 |
+| | **The item an entry was learned from** (`learned.item`): `cortex-tools` gives a tool neither its call's id nor its item's. | **An outstanding item (the coordinator);** the tools' API is not changed in this step. | [outstanding](../../outstanding/the-item-an-entry-was-learned-from.md) |
+| | **Two departures from the build plan's hand-off lines:** the observer hooks the core's shell wrapper and does not read the aggregates, which hold no command text; and the core, not `cortex-knowledge`, implements `cortex_tools::Proposals` and `CommandProfile`, since the crate may depend only on the protocol and the base crate. | **Accepted (the coordinator).** The build plan's lines under steps 10, 11 and 16 are corrected. | [build-plan.md](../../build-plan.md) |
 
-| # | Question | Recommendation |
-|---|---|---|
-| Q1 | **Does text from the repository's shared file reach the prompt before this user accepted it?** 14-adaptation says the shared file "needs no trust to be read: like instruction files, it is text for the model". The step's brief lists "text from a repository's shared file … reaching the prompt before the user accepted it" as a mistake to prevent. | **No: a shared entry is `proposed` for each user until that user accepts it.** The model can write `.cortex/profile.toml` (after the approval a protected path asks for), so an unreviewed shared file is a way round `remember`'s review; a cloned repository's file is a stranger's text; and section 5 sits in the system prompt under the harness's own heading. Acceptance is recorded in the private store against the entry's content hash, so a shared entry that changes is proposed again. 14-adaptation's sentence is changed to say so. |
-| Q2 | **Is an observed command that became active by itself on the safe list?** The owner's decision makes it *active* after two observations. 14-adaptation and 06 give the safe list to *accepted* commands. | **No.** Active puts it in the prompt and nowhere else. It runs without asking, and is offered to verification (step 19, build-plan line 456; [15-efficiency.md](../../architecture/15-efficiency.md) gives verification the commands "accepted by the user"), only once the user accepts it (`accept`), or wrote it. The notice that says it became active names the command that accepts it and the one that undoes it. |
-| Q3 | **The session log gains one field:** `profile` in the `epoch` entry, the hash of section 5 as the epoch's prompt holds it, beside `instructions`. Step 15's rule is "the session log format beyond agreed additions". | **Agree the addition.** Without it a resumed session cannot tell what the model was given of the profile except by cutting it out of the stored prompt's text. |
+**The step's design note could not be a file of its own:** a step's folder holds `answered.md` and `ci.md` and nothing else (`cargo xtask links`), so the note is the next section, as step 23's is in its record.
 
-## 1. The two files
+## The design, before building
+
+Written before the code, read by an independent reviewer, and sent to the coordinator. **A choice marked "to confirm by measurement" hangs on a number;** what was measured is under "Measured", below.
+
+### 1. The two files
 
 **The private store** is `<state dir>/projects/<project key>/knowledge.toml` (`StateDir::knowledge_file`, which exists). **The shared file** is `<workspace>/.cortex/profile.toml`.
 
@@ -76,7 +83,7 @@ text = "Errors are returned, never panicked on."
 | **Caps** | Either file: 256 KiB, read with a bound (*to confirm by measurement*: the cap is the size that still loads in 5 ms on the desktop). Private: 500 entries, of which at most 50 are a model's proposals waiting for review. Shared: 200 entries. An entry: a text of 600 characters; evidence, a command, a pattern or a path of 400 (the limits `remember` already has). A file past a cap is invalid, as above. A full store takes no new observation or proposal and says so. |
 | **The project key** | `AbsPath::project_key` of the resolved workspace root, as sessions, trust and approvals are keyed (step 8). **A moved workspace** has another key: its private store is not found, and stays under the old key; the shared file moves with the repository. **Two worktrees of one repository** have two keys and two private stores, and each has the repository's shared file as its own checkout holds it. **Two repositories** have two keys. Nothing is shared across keys: an acceptance in one worktree allows nothing in another. |
 
-## 2. The command observer
+### 2. The command observer
 
 | Point | Choice |
 |---|---|
@@ -92,7 +99,7 @@ text = "Errors are returned, never panicked on."
 | **`CommandProfile`** | `is_build_or_test(command)` is true when the line, made the same way, is an active command entry of class build, test or check, or the table classes it so. It reads the store's snapshot in memory and never waits. |
 | **Where the seams are filled** | `cortex-knowledge` depends on the protocol and the base crate only ([01-workspace.md](../../architecture/01-workspace.md)), so it cannot name `cortex_tools::Proposals` or `CommandProfile`. The core implements both over the store, as it fills every other seam. The build plan's "implements `cortex_tools::Proposals` in `cortex-knowledge`" is changed to say so. A departure. |
 
-## 3. Section 5
+### 3. Section 5
 
 ```
 Project profile: what is known about this project from earlier sessions, each entry
@@ -125,7 +132,7 @@ Facts:
 | **Secrets** | An entry whose line the session's secret filter would change is left out of the section, and said: a masked prompt in the log would make every resume a new epoch. `remember`, `add` and `promote` refuse such a text. |
 | **Fixed for an epoch** | The prompt is built once and sent from the `epoch` entry. Tests, with real protocol bytes (`built_as`): the same system prompt through a steer, an interrupt, a retry, a resume after the store changed, and a change of model; another at a compaction. |
 
-## 4. The learned safe list
+### 4. The learned safe list
 
 | Point | Choice |
 |---|---|
@@ -138,7 +145,7 @@ Facts:
 | **A rejection made by another process** | Before a decision about a command, a session that holds learned rules looks at the two files' stamps (*to confirm by measurement* against the decision's 1 ms). When either changed it drops every learned rule at once, and reads the files again at its next safe boundary. So `cortex project disable` in another terminal takes a command off the safe list before its next run, not at the next turn. |
 | **`promote` and the sandbox's watch** | `.cortex` is a protected path the sandbox looks at around a confined command. The core tells that look about a write `promote` made, so the write does not stop a running turn as a change from outside. |
 
-## 5. The protocol and the commands
+### 5. The protocol and the commands
 
 **Additions, all tolerant** (optional fields and new open-enum values; no new `PROTOCOL_VERSION`):
 
@@ -167,7 +174,7 @@ Facts:
 
 **For step 24's `/project` panel** (build-plan line 524): `project/list`, `project/update` with `add`, `project.updated`, and each entry's `accepted_at`, `observations`, `basis`, `scope` and `check`. It will want a way to edit and delete a shared entry, which this step refuses.
 
-## 6. Budgets
+### 6. Budgets
 
 Rows proposed for [performance-budgets.md](../../performance-budgets.md), "Data paths". **Each is to confirm by measurement** (release build, the desktop, then hosted runners with `try`'s `perf`), on a typical store (40 entries) and one at the caps.
 
@@ -181,7 +188,7 @@ Rows proposed for [performance-budgets.md](../../performance-budgets.md), "Data 
 
 **The start-up path stays untouched.** Making a session reads neither file; the first read is at the first turn's start. A test in `cortex-core` holds it with `cortex_testkit::Untouched`, as the index's does. No existing budget is loosened.
 
-## 7. The cut into three pull requests
+### 7. The cut into three pull requests
 
 | PR | Branch | Holds |
 |---|---|---|
@@ -189,14 +196,14 @@ Rows proposed for [performance-budgets.md](../../performance-budgets.md), "Data 
 | 2 | `worktree-step-17-wiring` | The observer; `remember` on the store; the profile source, the change notice and its replay rule in `cortex-agent`; the core's wiring (`project/*`, `CommandProfile`, the learned rules, the notices, the settings); the start-up and other-project tests. |
 | 3 | `worktree-step-17` | `cortex project`; the remaining measurements; the records and the architecture pages. |
 
-## Settings
+### Settings
 
 | Key | Default | A project's file |
 |---|---|---|
 | `project.learn` | `true` | The user's alone: no class of setting says "a project may turn it off and not on", and one key does not earn a class. |
 | `project.profile_tokens` | `1500`, from 0 to 8,000 | May lower it. |
 
-## Left to later steps
+### Left to later steps (the design)
 
 | What | Whose |
 |---|---|
@@ -209,7 +216,7 @@ Rows proposed for [performance-budgets.md](../../performance-budgets.md), "Data 
 | Fields for a check's state (flips, the last result, an approved command) | Step 43 (line 714) adds them under `version = 2`: a build that reads version 1 refuses a version 2 file whole and never writes one. Its "Must not change: the memory file format" should read "except by a new version"; raised with the coordinator. |
 | A workspace below a repository's top | Has its own key and looks for its own `.cortex/profile.toml`: the repository's, at its top, is not read. Stated in 14-adaptation. |
 
-## After the independent read
+## After the independent read of the design
 
 A reviewer that had not seen the reasoning read this note against the specification and the code before anything was built on it. Its findings, each taken up above:
 
@@ -225,3 +232,17 @@ A reviewer that had not seen the reasoning read this note against the specificat
 | 8 | A profile notice replayed after a compaction would override the new prompt. | Left out of the replay. |
 | 9 to 17 | Secrets in learned text; model-chosen text in the system prompt; holes in the flip rule; a flaky entry hiding real failures; a store filled by entries seen once; a rejection from another process waiting a turn; step 43's room to grow; the item an entry came from; pages this step changes. | Sections 2 to 5 and "Left to later steps". |
 | 18 | The second pull request held most of the risk. | Three small seams moved to the first. |
+
+## Measured
+
+On the desktop, a release build, `perf_` tests of `cortex-knowledge` (`crates/cortex-knowledge/tests/it/measure.rs`), medians of 200 runs or more. The hosted runners' figures are in [ci.md](ci.md).
+
+| What | Proposed budget | Typical store (40 private and 10 shared entries, 18 KB) | At the caps (500 and 200 entries, 247 KB) |
+|---|---|---|---|
+| Load both files, parse and validate | ≤ 1 ms typical, ≤ 5 ms at the caps | 0.20 ms | 2.65 ms |
+| The look for a change, nothing changed | ≤ 50 µs | 0.9 µs | 0.9 µs |
+| Render section 5 at 1,500 tokens | ≤ 100 µs typical, ≤ 1 ms at the caps | 24 µs | 0.30 ms |
+| One change: the lock, the read, the write flushed to the disk, the good copy, the read back | none: off the turn's path | 15 ms | 20 ms |
+
+- **The cap on a file's size stands at 256 KiB:** a store of 255 KB of the longest entries the format takes (243 of them) loads in 0.77 ms, and the 500-entry store above is the slowest a valid file can be.
+- **A change costs a flush to the disk,** as the statistics' aggregates do: it is made on the blocking pool, a few times a session.

@@ -295,7 +295,7 @@ Separate from configuration, in the state directory (`$XDG_STATE_HOME/cortex-har
 | File | Holds |
 |---|---|
 | `trust.toml` | Trusted projects and the hashes of what was trusted. `cortex-policy`'s: one `[[project]]` table per project, read strictly, so that a file this build does not understand in full trusts nothing. |
-| `projects/<project key>/knowledge.toml` | What the harness has learned about a project ([14-adaptation.md](14-adaptation.md)). |
+| `projects/<project key>/knowledge.toml` | What the harness has learned about a project ([14-adaptation.md](14-adaptation.md)). Since step 17, beside it: `knowledge.toml.good`, the last store read or written as valid, and `knowledge.toml.lock`. |
 | `projects/<project key>/index/` | The repository-map cache ([15-efficiency.md](15-efficiency.md)). |
 | `stats/` | Local statistics ([14-adaptation.md](14-adaptation.md)). |
 | `approvals/<project key>.toml` | "Always allow in this project" rules. `cortex-policy`'s: one `[[approval]]` table per rule, read strictly, and only ever an allow. |
