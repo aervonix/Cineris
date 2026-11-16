@@ -766,6 +766,51 @@ pub(crate) mod pty {
         pub(crate) fn kill(&mut self) -> io::Result<()> {
             self.child.kill()
         }
+
+        /// What the kernel does when the terminal hangs up under the
+        /// session that has it: SIGHUP, then SIGCONT (so that a stopped
+        /// program sees the hang-up), to the session's foreground process
+        /// group. The program leads its own session (`setsid` in
+        /// [`spawn`](Self::spawn)), so its process group is its pid.
+        ///
+        /// The kernel's own hang-up, closing every descriptor of the
+        /// terminal's master, cannot be made here: the driver's reader holds
+        /// one, blocked in a read, and a descriptor stays open while a read
+        /// on it does. So the signals are sent as the kernel would; a write
+        /// to the terminal afterwards still succeeds, where after a real
+        /// hang-up it fails.
+        pub(crate) fn hang_up(&mut self) -> io::Result<()> {
+            let group = libc::pid_t::try_from(self.child.id()).map_err(io::Error::other)?;
+            for signal in [libc::SIGHUP, libc::SIGCONT] {
+                // SAFETY: `kill` reads nothing but its arguments; a negative
+                // pid is a process group.
+                match check(unsafe { libc::kill(-group, signal) }) {
+                    Ok(_) => {}
+                    // Everything in the group has gone: nothing to hang up.
+                    Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(())
+        }
+    }
+
+    extern "C" fn hangup_passed_over(_: libc::c_int) {}
+
+    /// Makes this process stay through SIGHUP: a handler that does nothing,
+    /// which, unlike "ignore", a program this one starts does not inherit.
+    pub(crate) fn pass_over_hangup() -> io::Result<()> {
+        let mut action = std::mem::MaybeUninit::<libc::sigaction>::zeroed();
+        // SAFETY: a zeroed `sigaction` is valid plain data; the handler and
+        // the flags are set before the call, which only reads it.
+        unsafe {
+            let action = action.as_mut_ptr();
+            (*action).sa_sigaction = hangup_passed_over as *const () as libc::sighandler_t;
+            (*action).sa_flags = libc::SA_RESTART;
+            libc::sigemptyset(&raw mut (*action).sa_mask);
+            check(libc::sigaction(libc::SIGHUP, action, std::ptr::null_mut()))?;
+        }
+        Ok(())
     }
 
     /// Whether a read error on the master means the other side has gone:

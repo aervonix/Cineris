@@ -29,6 +29,8 @@ use cortex_term::pty::{Pty, is_end};
 
 use crate::vterm::{VTerm, answer};
 
+mod close;
+
 /// One piece of output, as one read returned it.
 #[derive(Debug, Clone)]
 pub struct Chunk {

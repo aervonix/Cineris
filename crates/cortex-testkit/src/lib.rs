@@ -32,7 +32,9 @@
 //! | [`watch`] | What a test was doing when it ran out of time: its waits and its process tree, written to its standard error before nextest stops it. And `CORTEX_TESTKIT_PAUSE_MS`, which widens the scripted server's races on purpose. |
 //! | [`fixture`] | Recorded provider responses: [`Fixture`](fixture::Fixture), the files one is made of, and [`Scrubber`](fixture::Scrubber), which takes credentials and identifiers out of a recording and refuses one that holds the key. |
 //! | [`vterm`] | [`VTerm`]: a virtual terminal, and a [`Report`](vterm::Report) of what each frame did to it. For tests of the presenter, and to parse a program's output. |
-//! | [`pty`] | [`pty::Session`]: a program run in a pseudo-terminal (ConPTY on Windows), its output recorded and parsed, keys typed into it. |
+//! | [`pty`] | [`pty::Session`]: a program run in a pseudo-terminal (ConPTY on Windows), its output recorded and parsed, keys typed into it, and its console closed under it ([`pty::Session::close_console`]). |
+//! | [`exit`] | [`Exit`](exit::Exit) and [`Verdict`](exit::Verdict): how a process ended, read from either system's wording (`exit status: 1`, `exit code: 1`, `signal: 6`, `exit code: 0xc000013a`), so that a test spells none. |
+//! | [`glyphs`] | [`GlyphSets`](glyphs::GlyphSets): match a screen against text spelled once, as a function of the glyph set, when the interface may have drawn the Unicode set or its ASCII stand-ins. |
 //!
 //! # No real waiting
 //!
@@ -54,9 +56,11 @@ pub mod cases;
 pub mod children;
 pub mod corpus;
 pub mod exec;
+pub mod exit;
 pub mod fixture;
 pub mod fixtures;
 pub mod gate;
+pub mod glyphs;
 pub mod hold;
 pub mod hostile;
 pub mod numbers;

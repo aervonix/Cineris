@@ -80,6 +80,24 @@ impl Pty {
         self.0.try_wait()
     }
 
+    /// Closes the terminal under the program while it runs, as a terminal
+    /// window that is closed does: on Windows the pseudo-console is closed
+    /// (`ClosePseudoConsole`), which makes the console host send the program
+    /// a `CTRL_CLOSE_EVENT` and end it when its handler returns; on Unix the
+    /// terminal hangs up, which is SIGHUP and then SIGCONT to the program's
+    /// process group (the kernel's own hang-up cannot be made while the
+    /// driver's reader holds the terminal open, so they are sent as the
+    /// kernel sends them). It does not wait for the program to end: ask
+    /// [`try_wait`](Self::try_wait). Nothing can be typed into the terminal
+    /// on Windows afterwards, and its output ends.
+    ///
+    /// # Errors
+    ///
+    /// When the system refuses.
+    pub fn close_console(&mut self) -> io::Result<()> {
+        self.0.hang_up()
+    }
+
     /// Ends the program at once.
     ///
     /// # Errors
@@ -143,6 +161,27 @@ pub fn terminate_self() -> io::Result<()> {
     #[cfg(windows)]
     {
         sys::pty::signal(std::process::id(), 0)
+    }
+}
+
+/// Makes this process stay through the terminal hanging up (Unix: SIGHUP,
+/// with a handler that does nothing, which the programs it starts do not
+/// inherit), so that a shell can say how its program ended after
+/// [`Pty::close_console`]. Nothing happens on Windows, where
+/// [`ignore_control_events`] does the same for `CTRL_CLOSE_EVENT` (which
+/// still ends the process when the handler returns).
+///
+/// # Errors
+///
+/// When the system refuses.
+pub fn pass_over_hangup() -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        sys::pty::pass_over_hangup()
+    }
+    #[cfg(windows)]
+    {
+        Ok(())
     }
 }
 

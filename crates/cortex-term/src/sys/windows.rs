@@ -579,6 +579,7 @@ pub(crate) mod pty {
     /// A program running in a pseudo-console of its own.
     #[derive(Debug)]
     pub(crate) struct Pty {
+        /// The pseudo-console, or 0 once [`Pty::hang_up`] has closed it.
         console: HPCON,
         input: OwnedHandle,
         output: OwnedHandle,
@@ -774,7 +775,11 @@ pub(crate) mod pty {
         }
 
         pub(crate) fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
-            // SAFETY: the console lives as long as `self`.
+            if self.console == 0 {
+                return Err(io::Error::other("the pseudo-console has been closed"));
+            }
+            // SAFETY: the console lives as long as `self`, or until it is
+            // closed, which is checked above.
             let result = unsafe { ResizePseudoConsole(self.console, coord(cols, rows)) };
             if result < 0 {
                 Err(io::Error::from_raw_os_error(result))
@@ -809,11 +814,41 @@ pub(crate) mod pty {
         }
     }
 
+    impl Pty {
+        /// Closes the pseudo-console while the program runs in it, as a
+        /// terminal window that is closed does: the console host sends the
+        /// program `CTRL_CLOSE_EVENT` and ends it when its handler returns
+        /// or the host's time runs out.
+        ///
+        /// `ClosePseudoConsole` may wait for the host, which waits for the
+        /// program's handler, so it runs on a thread of its own: this
+        /// returns at once, and the program's end is seen with
+        /// [`try_wait`](Self::try_wait). A reader of the output sees its
+        /// end once the console is gone.
+        pub(crate) fn hang_up(&mut self) -> io::Result<()> {
+            let console = std::mem::replace(&mut self.console, 0);
+            if console == 0 {
+                return Ok(());
+            }
+            std::thread::Builder::new()
+                .name("close-pseudo-console".to_owned())
+                .spawn(move || {
+                    // SAFETY: the handle was `self`'s and is taken out of it
+                    // above, so nothing else uses it or closes it again.
+                    unsafe { ClosePseudoConsole(console) };
+                })
+                .map(drop)
+        }
+    }
+
     impl Drop for Pty {
         fn drop(&mut self) {
-            // SAFETY: closed once, here. A reader of the output sees its end
-            // once the console is gone.
-            unsafe { ClosePseudoConsole(self.console) };
+            if self.console != 0 {
+                // SAFETY: closed once, here (a console closed by
+                // `hang_up` is 0). A reader of the output sees its end once
+                // the console is gone.
+                unsafe { ClosePseudoConsole(self.console) };
+            }
         }
     }
 
