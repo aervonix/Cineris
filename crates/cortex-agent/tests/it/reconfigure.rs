@@ -217,3 +217,50 @@ fn a_compaction_with_no_new_epoch_leaves_what_waits_waiting() {
     });
     assert_eq!(told.load(Ordering::SeqCst), 1);
 }
+
+/// What a reload withdrew after a compaction that began no epoch is never
+/// put in force: the slot is read only as an epoch begins, so a change the
+/// core took back (trust taken away, a file put back) stays taken back (the
+/// second review of step 24's first part).
+#[test]
+fn a_change_withdrawn_after_a_compaction_with_no_epoch_is_never_taken() {
+    let world = World::new(
+        "reconfigure_withdrawn",
+        [says("One."), says("Goal: the summary."), says("Two.")],
+    );
+    let rig = Setup::new(&world).start(&world);
+    let told = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&told);
+    let other = ScriptedProvider::new([says("From the withdrawn model.")]);
+    let model = RoleModel::new(Arc::new(other.clone()), fixtures::plain_model());
+    rig.handle.at_next_epoch(Some(EpochChange {
+        models: vec![(ModelRole::Main, model)],
+        context: None,
+        taken: Some(Box::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        })),
+    }));
+    world.run(async {
+        // Nothing to compact yet: no epoch begins.
+        rig.handle.compact(None).map_err(|error| *error).unwrap();
+        rig.events.turns(1).await;
+    });
+    // The core takes the change back.
+    rig.handle.at_next_epoch(None);
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(2).await;
+        rig.handle.compact(None).map_err(|error| *error).unwrap();
+        rig.events.turns(3).await;
+    });
+    assert_eq!(
+        told.load(Ordering::SeqCst),
+        0,
+        "a withdrawn change was taken"
+    );
+    assert!(other.requests().is_empty());
+    assert_eq!(
+        rig.handle.state().roles[&ModelRole::Main].model.as_str(),
+        fixtures::MODEL
+    );
+}

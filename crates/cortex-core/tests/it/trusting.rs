@@ -70,6 +70,17 @@ async fn open(
     info: ClientInfo,
     answer: Answer,
 ) -> (Result<SessionState, OpError>, Vec<TrustRequest>) {
+    let (state, asked, _) = open_as(world, core, info, answer).await;
+    (state, asked)
+}
+
+/// [`open`], with the client that opened it.
+async fn open_as(
+    world: &World,
+    core: &Core,
+    info: ClientInfo,
+    answer: Answer,
+) -> (Result<SessionState, OpError>, Vec<TrustRequest>, Client) {
     let client = core.connect(info);
     let opening = core.handle(
         client.id,
@@ -96,7 +107,7 @@ async fn open(
         OpResult::SessionNew(result) => result.session,
         other => panic!("not the result of session/new: {other:?}"),
     });
-    (state, asked)
+    (state, asked, client)
 }
 
 async fn answering(
@@ -814,5 +825,49 @@ fn a_profile_only_the_project_defines_can_be_selected_and_its_settings_are_shown
             (Some("ci"), "shell.env_remove".to_owned()),
             (Some("review"), "model.main".to_owned())
         ]
+    );
+}
+
+/// A yes the store could not keep holds for the session through the looks
+/// that follow: the store, which has no record of it, does not take it
+/// back (the second review of step 24's first part).
+#[test]
+fn trust_for_this_session_only_holds_through_a_look() {
+    let world = world("trusting_for_the_run_kept");
+    let state = world.dirs().state.unwrap();
+    std::fs::create_dir_all(state.join("trust.toml.lock")).unwrap();
+    let core = world.core();
+    let (state, _, client) = world.run(open_as(&world, &core, ClientInfo::user(), trust_it()));
+    let state = state.expect("a yes the store cannot keep opens the session");
+    assert_eq!(model(&state), OTHER_MODEL);
+    let reloaded = world.run(core.handle(
+        client.id,
+        Op::ConfigReload(cortex_protocol::methods::ConfigReloadParams {
+            session_id: Some(state.session_id.clone()),
+            changed_only: true,
+            ..cortex_protocol::methods::ConfigReloadParams::default()
+        }),
+    ));
+    reloaded.expect("the look answers");
+    let after = world
+        .run(core.handle(
+            client.id,
+            Op::SessionSet(cortex_protocol::methods::SessionSetParams {
+                session_id: state.session_id.clone(),
+                settings: SessionSettings::default(),
+            }),
+        ))
+        .expect("the state answers");
+    let OpResult::SessionSet(after) = after else {
+        panic!("not the result of session/set");
+    };
+    assert_eq!(
+        after.session.trust,
+        Some(cortex_protocol::session::TrustStanding::ForTheRun)
+    );
+    assert_eq!(
+        model(&after.session),
+        OTHER_MODEL,
+        "the look took trust back"
     );
 }
