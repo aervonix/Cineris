@@ -6,22 +6,26 @@ This step added tools and test support: an A/B that leaves out a test failed on 
 
 <!-- written by cargo xtask ci-times: it replaces this up to the end mark -->
 Pull request 59, on `main` at `9baacb6`. "Main" is main's own run at `9baacb6` (run 43786487043).
-The PR's run is 43788764531, at `252a4ce`.
+The PR's run is 43790434698, at `87ee5ef`.
 
-| Job | Main, `9baacb6` | The PR at `252a4ce` |
+| Job | Main, `9baacb6` | The PR at `87ee5ef` |
 |---|---|---|
 | `lint-linux` | 52 s | 46 s |
-| `test-linux` | 116 s | 105 s |
-| `lint-windows` | 76 s | 90 s |
-| `test-windows` | 226 s | 143 s |
+| `test-linux` | 116 s | 109 s |
+| `lint-windows` | 76 s | 87 s |
+| `test-windows` | 226 s | 212 s |
 
-| Time above process start, against the budget | Linux, main (5 ms) | Linux, `252a4ce` (4 ms) | Windows, main (10 ms) | Windows, `252a4ce` (5 ms) |
+| Time above process start, against the budget | Linux, main (5 ms) | Linux, `87ee5ef` (4 ms) | Windows, main (10 ms) | Windows, `87ee5ef` (9 ms) |
 |---|---|---|---|---|
-| Tier 1, unit (20 s) | 13.4 s | 13.8 s | 20.6 s | 8.4 s |
-| Tier 2, integration (40 s) | 22.6 s | 44.9 s | 43.9 s | 17.6 s |
-| Tier 3, system (60 s on Linux, 90 s on Windows) | 16.2 s | 23.8 s | 67.6 s | 54.7 s |
+| Tier 1, unit (20 s) | 13.4 s | 12.3 s | 20.6 s | 12.2 s |
+| Tier 2, integration (40 s) | 22.6 s | 21.1 s | 43.9 s | 25.5 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 16.2 s | 17.6 s | 67.6 s | 77.5 s |
 
 <!-- end of what cargo xtask ci-times wrote -->
+
+- **The first CI run of the pull request** (43788764531, at `252a4ce`) read Linux's integration tier at 44.9 s, over its budget, nearly all of it tests that write files in crates the step did not touch (`cortex-session`'s durability tests 0.4 → 5.4 s): the same three crates against `main` on one Linux runner read 4.1 s on both sides (`try` 43789085254), and this run, on another runner, 21.1 s. Windows read 17.6 s there, on a 5 ms runner.
+- **Windows' system tier** reads 77.5 s here against `main`'s 67.6 s, on runners of 9 and 10 ms; on one runner (below) it moved by +0.8 s. Step 23's first part, on `main` since `9baacb6`, added the pseudo-terminal tests of `cortex-cli` to both sides.
+- **The Windows test job** took 212 s against `main`'s 226 s: three at a time adds about 1.5 s to the run of tiers 1 and 2, and the tiers' tests are quicker.
 
 ## Windows, both trees on one runner
 
