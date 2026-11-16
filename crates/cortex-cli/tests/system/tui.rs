@@ -1608,3 +1608,62 @@ fn perf_idle_memory_in_a_workspace_of_real_code() {
         session.wait_exit(LIMIT);
     }
 }
+
+/// The look and a key binding changed in the user's file while the
+/// application runs take effect after the next key: its frame asks the
+/// core to look at the files, and the reload's `tui.*` and `keys.*` keys
+/// are read again (step 24's hot reload). A file broken after that leaves
+/// both as they were, and `/reload` says why, once.
+#[test]
+fn sys_a_look_and_a_binding_changed_in_the_file_reach_the_next_key() {
+    let phases = Phases::new("sys_a_look_and_a_binding_changed_in_the_file_reach_the_next_key");
+    let machine = Machine::new("tui_hot_reload");
+    machine.reply_text("Sent with the new key.");
+    let mut session = machine.tui(&[]);
+    first_frame(&mut session, &phases);
+    // The glyphs at the start, and the input box's border as the other
+    // set draws it: the header card drawn at the start keeps its own.
+    let unicode = session.screen().shows("╭");
+    let other = if unicode {
+        "+------"
+    } else {
+        "╭──────"
+    };
+
+    phases.mark("the file changed");
+    let glyphs = if unicode { "ascii" } else { "unicode" };
+    machine.user_config(&format!(
+        "tui.glyphs = \"{glyphs}\"\nkeys.editor.submit = [\"f5\"]\n"
+    ));
+    // The first key's frame asks for the look.
+    type_text(&mut session, "hello");
+    session.wait_for(LIMIT, "the look read again", |t| {
+        shows_ever(t, "in force now") && t.shows(other)
+    });
+    // F5 is submit now.
+    session.send(b"\x1b[15~");
+    wait_shows(&mut session, "Sent with the new key.");
+    turn_ended(&mut session);
+
+    phases.mark("the file broken");
+    machine.user_config("tui.glyphs = [\n");
+    // `/reload`, its row of the command menu taken with tab, and sent with
+    // F5 (an esc sent just before F5 would read as alt+F5).
+    type_text(&mut session, "/reload");
+    session.wait_for(LIMIT, "the command menu", |t| {
+        t.shows("Read the configuration files again")
+    });
+    session.send(b"\t");
+    session.wait_for(LIMIT, "the menu closed", |t| {
+        !t.shows("Read the configuration files again")
+    });
+    session.send(b"\x1b[15~");
+    session.wait_for(LIMIT, "the error said", |t| shows_ever(t, "config.toml"));
+    assert!(
+        session.screen().shows(other),
+        "the look changed with a broken file:\n{}",
+        session.screen().dump()
+    );
+
+    quit(&mut session, &phases);
+}

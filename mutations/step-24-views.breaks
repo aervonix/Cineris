@@ -98,3 +98,76 @@ find: Outcome::FileChosen(row.label)
 replace: Outcome::Changed
 caught-by:
     cortex-tui app::tests::files::a_file_chosen_with_at_is_read_ahead_and_a_refusal_is_not_said
+
+[break] no-look-after-a-key
+rule: A key, a paste or the focus regained asks the core to look at the configuration's files after its frame.
+file: crates/cortex-tui/src/app/state.rs
+in: terminal
+find: self.look_wanted(at);
+replace: let _ = at;
+caught-by:
+    cortex-tui app::tests::restyle::a_key_or_the_focus_asks_for_a_look_after_its_frame_at_most_once_a_second
+
+[break] a-look-for-every-key
+rule: The files are looked at at most once a second.
+file: crates/cortex-tui/src/app/state/restyle.rs
+in: look_wanted
+find: .is_none_or(|last| at.saturating_duration_since(last) >= LOOK_EVERY)
+replace: .is_none_or(|_| true)
+caught-by:
+    cortex-tui app::tests::restyle::a_key_or_the_focus_asks_for_a_look_after_its_frame_at_most_once_a_second
+
+[break] a-reload-elsewhere-is-not-restyled
+rule: A reload that applied a key of the look, whoever's it was, reads the look again.
+file: crates/cortex-tui/src/app/state.rs
+in: event
+find: self.restyle_if(&changed.applied);
+replace: let _ = &changed.applied;
+caught-by:
+    cortex-tui app::tests::restyle::a_reload_of_the_look_reads_it_again_and_leaves_the_keys
+    cortex-tui app::tests::restyle::a_binding_reloaded_reaches_the_next_key
+
+[break] the-runs-theme-is-lost
+rule: A theme chosen with /theme for the run stays unless the file's own theme changed.
+file: crates/cortex-tui/src/app/state/restyle.rs
+in: restyled
+find: } else if let Some(picked) = self.theme_picked {
+replace: } else if let Some(picked) = None::<crate::app::ThemeChoice> {
+caught-by:
+    cortex-tui app::tests::restyle::a_theme_chosen_for_the_run_stays_unless_the_files_own_changed
+
+[break] the-keys-replaced-for-the-look
+rule: The key map is replaced only when a binding changed: an open dialog's and the panels' readiness are not restarted for a change of the look.
+file: crates/cortex-tui/src/app/state/restyle.rs
+in: restyled
+find: if keys {
+replace: if true {
+caught-by:
+    cortex-tui app::tests::restyle::a_reload_of_the_look_reads_it_again_and_leaves_the_keys
+
+[break] a-binding-reloaded-is-not-taken
+rule: A binding reloaded is the next key's.
+file: crates/cortex-tui/src/app/state/restyle.rs
+in: restyled
+find: self.set_keymap(keymap);
+replace: drop(keymap);
+caught-by:
+    cortex-tui app::tests::restyle::a_binding_reloaded_reaches_the_next_key
+
+[break] a-look-not-read-is-not-said
+rule: A section that cannot be read again is said, and the old look kept.
+file: crates/cortex-tui/src/app/state/restyle.rs
+in: restyled
+find: self.say(&why);
+replace: drop(why);
+caught-by:
+    cortex-tui app::tests::restyle::a_look_that_cannot_be_read_is_said_and_the_old_one_kept
+
+[break] a-section-reads-nothing
+rule: A section is read from config/get's dotted keys and JSON values.
+file: crates/cortex-config/src/schema/mod.rs
+in: read_section
+find: T::read(&Value::Table(table))
+replace: T::read(&Value::Table(toml::Table::new()))
+caught-by:
+    cortex-config::it reloading::a_section_is_read_from_dotted_keys_and_json_values

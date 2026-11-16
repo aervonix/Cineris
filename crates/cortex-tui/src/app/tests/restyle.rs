@@ -23,7 +23,10 @@ fn restyle(config: &serde_json::Map<String, serde_json::Value>) -> Result<Restyl
         _ => ThemeChoice::Auto,
     };
     let mut table: Vec<(String, Vec<String>)> = Vec::new();
-    if let Some(editor) = config.get("keys.editor").and_then(|value| value.as_object()) {
+    if let Some(editor) = config
+        .get("keys.editor")
+        .and_then(|value| value.as_object())
+    {
         for (action, keys) in editor {
             let keys = keys
                 .as_array()
@@ -92,7 +95,12 @@ fn changed(applied: &[&str]) -> Inbound {
 }
 
 /// The sections the application asked for again, answered with `config`.
-fn answer_sections(app: &mut App, link: &Scripted, config: &[(&str, serde_json::Value)], now: Instant) {
+fn answer_sections(
+    app: &mut App,
+    link: &Scripted,
+    config: &[(&str, serde_json::Value)],
+    now: Instant,
+) {
     let (ticket, op) = link
         .take_sent()
         .into_iter()
@@ -128,16 +136,21 @@ fn a_key_or_the_focus_asks_for_a_look_after_its_frame_at_most_once_a_second() {
     let first = looks(&link);
     assert_eq!(first.len(), 1);
 
-    // Within the second, and while the first is out: none.
-    let soon = now + Duration::from_millis(400);
+    // While the first is out: none.
+    let soon = now + Duration::from_millis(200);
     key(&mut app, "y", soon);
     frame_at(&mut app, soon);
-    assert!(looks(&link).is_empty(), "two looks within a second");
+    assert!(looks(&link).is_empty(), "a look while one is out");
     link.give(Inbound::Done(
         first[0],
         Ok(OpResult::ConfigReload(ConfigReloadResult::default())),
     ));
     drain(&mut app, soon);
+    // Answered, and still within the second: none.
+    let within = now + Duration::from_millis(600);
+    key(&mut app, "z", within);
+    frame_at(&mut app, within);
+    assert!(looks(&link).is_empty(), "two looks within a second");
 
     let later = now + Duration::from_millis(1_100);
     app.terminal(&TermEvent::Focus(true), later);
@@ -205,7 +218,11 @@ fn a_theme_chosen_for_the_run_stays_unless_the_files_own_changed() {
     link.give(changed(&["tui.prose_width"]));
     drain(&mut app, now);
     answer_sections(&mut app, &link, &[("tui.theme", "light".into())], now);
-    assert_eq!(app.settings().theme, ThemeChoice::Dark, "the run's choice was lost");
+    assert_eq!(
+        app.settings().theme,
+        ThemeChoice::Dark,
+        "the run's choice was lost"
+    );
 
     link.give(changed(&["tui.theme"]));
     drain(&mut app, now);
