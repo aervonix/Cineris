@@ -41,3 +41,37 @@ The slowest tests and their starts after it (`try` 43892837490, the same tree as
 Tier 2 is about 38 to 41 s on 9 to 10 ms runners, against the 32 s target. No test change found takes 9 s off it without testing less: the time is a few milliseconds of the operating system's in each of about 1,360 tests (the seventh tooling step found the same). A session's open on Windows, 18 ms against 1.4 ms at a desk, is the largest single share (2.6 s over 143 opens in `cortex-core`), and is product code in `cortex-core`, where other steps are working.
 
 **What would meet it:** tiers 1 and 2 two at a time on Windows, in place of three. On one 6 ms runner it took the integration tier from 28.1 to 22.2 s (−21%) and the unit tier from 13.8 to 9.5 s, for 5.8 s more of the run's wall time (`try` 43884288025, three rounds of each). It reverses the owner's choice of three in the seventh tooling step. **Proposed, pending the owner:** it is on a branch of its own, `worktree-step-02-tooling-9-two`, ready as a one-change pull request ([windows-tiers-one-and-two-two-at-a-time](../../outstanding/windows-tiers-one-and-two-two-at-a-time.md)).
+
+## The tools: what was built, item by item
+
+One line a sentence, in the style this step set for the docs ([CONTRIBUTING.md](../../../CONTRIBUTING.md), "Writing the docs").
+
+- **A hosted-cost estimate at the desk** (item 2):
+  Every place in the workspace that starts a process marks it, `cortex_base::hook::started(program)`, which is nothing in a build without `test-hooks`.
+  With `CORTEX_TESTKIT_STARTS` naming a directory, each process writes down the starts it made, for the test nextest says it runs, and a test's children write for it too.
+  `try -f testkit=starts` keeps them on a runner, and `cargo xtask ci --tiers --like-runner` keeps them at the desk and prints each tier's starts by kind and what the Windows runner would charge for them.
+  The Windows estimate of a test that started processes is its desk time less its starts' desk cost, times its crate's factor for other work, plus each start at the runner's price.
+  `--base DIR` runs and estimates another tree too, and warns when a Windows tier's estimate grows by more than 3 s.
+  The prices were fitted to a 9 ms runner's run of this step's tree (`try` 43892837490): PowerShell 7 0.33 s, Windows PowerShell 0.28 s, a test binary in a role 0.15 s, git 0.037 s, `cmd.exe` 0.026 s, the harness's binary 0.010 s.
+  The work factors of the system tier were measured so that the desk's run of the tree is estimated at the runner's figure, crate by crate: the desk's run (`rx --exclusive`) against the same runner run; the desk's disk stalled in its integration tier (every task waiting on it 73% of the time), which is not read.
+  On that tree the system tier is estimated at 99.6 s, where the runner read 72.8 s: the tests that run on one system only start different processes on each, and `cortex-core`'s Linux-only tests (the sandbox's, the adversary) start more at the desk than its Windows run costs.
+  The tool is for the change a branch makes (`--base`): twelve more shell starts are 3.3 s of Windows' system tier, warned of; step 17's 34 would have been 9.4 s.
+  Documented in testing-and-ci.md, "What a runner would say, from a desk".
+- **The core's rig** (item 3):
+  `front.approval()` fails at once when a turn ends, none is running after it and nothing was asked, naming the turn's outcome, where it waited a minute for nextest.
+  `turn_denying` refuses what is asked, beside `turn_allowing`, both on `turn_answering(text, choose)`; `knowledge.rs`' own copy is gone.
+  `front.told("…")` waits for a notice and gives it back, named in the timeout report while it waits.
+  **Typed outcomes, not a lint:** `front.results()` gives an `Outcome` that fails the test when it is compared with a text no tool outcome has (`"ok"`), so the step 17 mistake fails at once in every core test and needs no rule that reads source text.
+  Documented in testing-and-ci.md, "A reviewer's quick start".
+- **An A/B that survives a test failing on one side only** (item 4):
+  A round in which a side's runs failed only by tests failing is compared without those tests, left out of every round on both sides; a test that failed on one side is listed under `N TEST(S) FAILED ON ONE SIDE ONLY`, and the run is still a failure, naming it.
+  `ci-times --ab` and `try-result` read the rounds by the same rule.
+  Documented in "Two trees on one runner".
+- **`ci-times --pr N`** compares with `main`'s run at the commit the pull request is based on (GitHub's compare of `main` and the run's head), and says when it falls back to `main`'s latest; a matrix job skipped before its matrix was made (`pr-size-${{ matrix.name }}`) has no row.
+- **`pr-size`** names the three crates that grew most when the binary grows by more than 100 KB against `main`'s record, on Linux, from a breakdown of the build against the bytes by crate the `main` workflow's Linux size job now records; the Windows job says the Linux job names them.
+- **`mutate --changed`** ends with exit status 3 when it cannot read the diff (no `.git`, one git cannot read, one whose work tree is another folder, a reference that is no commit), apart from 1, a break left uncaught.
+  The silent failure the coordinator saw in an `rx --side` copy was not reproduced: the copy has no `.git`, which was refused before this step too, but with exit status 1, which a script reads as a break left uncaught.
+- **A dispatched run's id:** `cargo xtask try --dispatch BRANCH --command "…"` checks the inputs as a dry run does, dispatches the workflow and prints the run it made; `try-result` reads a run whose jobs have all ended as finished, whatever the run's own status says.
+- **Docs** (item 5): "A reviewer's quick start" in testing-and-ci.md; the As-built table of step 17 in 14-adaptation.md as a list with one sentence a line, and the rule in CONTRIBUTING.md, "Writing the docs".
+- **`a-time-limit-test-under-load`** (item 6): the runner starts a command before it arms the call's time limit, so under load the test found the family up and the limit not yet armed; the test now waits for the limit as it waits for the family.
+  Settled; its file is deleted.

@@ -1657,14 +1657,6 @@ replace: .filter(|case| !case.failed)
 caught-by:
     records::tests::a_failed_round_or_a_lone_report_is_left_out_with_its_reason_and_the_rest_keep_their_numbers
 
-[break] ab-keeps-a-failed-round
-rule: A round that is left out is in neither side's runs.
-file: xtask/src/records.rs
-in: sides_of
-find: if !reasons.is_empty() {
-replace: if false {
-caught-by:
-    records::tests::a_failed_round_or_a_lone_report_is_left_out_with_its_reason_and_the_rest_keep_their_numbers
 
 [break] ab-renumbers-the-rounds-it-kept
 rule: A round kept has its own number, counted from 1, whatever was left out before it.
@@ -1914,21 +1906,12 @@ caught-by:
 
 # ------------------------------------------------ ab: a test failed on both
 
-[break] ab-takes-a-test-that-failed-on-one-side-for-both
-rule: A test that failed on one side only is a failure of its round: the two sides must name the same failed tests.
-file: xtask/src/ab.rs
-in: failed_on_both
-find: ids(base) != ids(head)
-replace: false
-caught-by:
-    ab::tests::a_test_that_failed_on_one_side_only_is_still_a_failed_round
-
 [break] ab-takes-a-run-that-broke-for-the-tests-failing
 rule: A round is compared past its failed tests only when every failed run failed by its tests.
 file: xtask/src/ab.rs
-in: failed_on_both
-find: if !base.by_tests || !head.by_tests || base.cases.is_empty() || head.cases.is_empty() {
-replace: if base.cases.is_empty() || head.cases.is_empty() {
+in: failed_by_tests
+find: if failure.by_tests && !failure.cases.is_empty() && !failure.tests.is_empty() =>
+replace: if !failure.cases.is_empty() && !failure.tests.is_empty() =>
 caught-by:
     ab::tests::a_failure_that_the_tests_do_not_explain_is_not_a_test_failing_on_both_sides
 
@@ -1951,11 +1934,11 @@ caught-by:
     ab::tests::a_failed_run_names_the_tests_its_report_says_failed
 
 [break] ab-leaves-a-round-with-a-shared-failure-out
-rule: A round in which the same tests failed on both sides is compared, without them.
+rule: A round in which tests failed, and nothing else went wrong, is compared, without them.
 file: xtask/src/ab.rs
 in: comparable
-find: if failed_on_both(round).is_some() => {
-replace: if false => {
+find: _ if failed_by_tests(round).is_some() => (cases_of(&round.base), cases_of(&round.head)),
+replace: _ if false => (cases_of(&round.base), cases_of(&round.head)),
 caught-by:
     ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
 
@@ -1982,25 +1965,25 @@ caught-by:
 rule: A skipped test's message for each side is that side's own.
 file: xtask/src/ab.rs
 in: comparable
-find: base: base.message.clone()
-replace: base: head.message.clone()
+find: && let Some(test) = on_base
+replace: && let Some(test) = on_head
 caught-by:
     ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
 
 [break] ab-lists-a-compared-round-as-failed
-rule: A round that is compared past a shared failure is not listed as a failed round.
+rule: A round that is compared past its failed tests is not listed as a failed round.
 file: xtask/src/ab.rs
 in: failed_rounds
-find: if failed_on_both(round).is_some() {
+find: if failed_by_tests(round).is_some() {
 replace: if false {
 caught-by:
     ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
 
 [break] ab-names-no-skipped-test-when-there-is-none
-rule: With no test failed on both sides there is nothing to say of one.
+rule: With no test failed there is nothing to say of one.
 file: xtask/src/ab.rs
 in: skipped_text
-find: if skipped.is_empty() {
+find: if these.is_empty() {
 replace: if false {
 caught-by:
     ab::tests::a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared
@@ -2366,11 +2349,11 @@ caught-by:
 # ------------------------------------------------------- try: a dry run
 
 [break] try-dry-run-says-nothing-of-testkit
-rule: A dry run says that testkit=profile is not set for an `against` run.
+rule: A dry run says that testkit=profile or testkit=starts is not set for an `against` run.
 file: xtask/src/try_run.rs
 in: plan
-find: inputs.testkit.as_deref() == Some("profile") && inputs.against.is_some()
-replace: inputs.testkit.as_deref() == Some("profile") && inputs.against.is_none()
+find: && inputs.against.is_some()
+replace: && inputs.against.is_none()
 caught-by:
     try_run::tests::a_dry_run_and_the_workflows_other_inputs_are_read
 
@@ -2413,24 +2396,14 @@ caught-by:
     records::tests::a_round_whose_run_broke_is_left_out_whatever_its_report_holds
 
 [break] sides-of-leaves-out-a-round-that-failed-on-both-sides
-rule: A round in which the same tests failed on both sides, and nothing else went wrong, is compared, as `ab` compares it.
+rule: A round in which tests failed, and nothing else went wrong, is compared, as `ab` compares it.
 file: xtask/src/records.rs
 in: sides_of
-find: let both_sided = !base_failed.is_empty() && base_failed == head_failed;
-replace: let both_sided = false;
+find: skipped.extend(base_failed);
+replace: if !base_failed.is_empty() { continue; }
 caught-by:
     records::tests::a_test_that_failed_on_both_sides_is_left_out_of_every_round_and_the_rounds_compared
     try_result::tests::a_test_that_failed_on_both_sides_of_a_job_that_succeeded_is_no_failure_of_the_run
-
-[break] sides-of-takes-a-one-sided-failure-for-both
-rule: A test that failed on one side only fails its round: both sides must have failed the same tests.
-file: xtask/src/records.rs
-in: sides_of
-find: let both_sided = !base_failed.is_empty() && base_failed == head_failed;
-replace: let both_sided = !base_failed.is_empty() || !head_failed.is_empty();
-caught-by:
-    records::tests::a_test_that_failed_on_both_sides_is_left_out_of_every_round_and_the_rounds_compared
-    records::tests::a_failed_round_or_a_lone_report_is_left_out_with_its_reason_and_the_rest_keep_their_numbers
 
 [break] sides-of-keeps-a-both-sided-test-in-the-other-rounds
 rule: A test that failed on both sides is left out of every round's medians, as `ab` leaves it out.
