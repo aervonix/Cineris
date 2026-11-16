@@ -635,21 +635,23 @@ fn the_longest_silent_client_is_closed_to_make_room() {
     );
 }
 
-/// A client below the server's integrity cannot open the pipe, to write or
-/// to read (its label). Where the label lets it in, on the widened pipe,
-/// the check of its token refuses it, and closes it with nothing sent.
+/// A client below the server's integrity cannot open the pipe, to read and
+/// write or to read only (its label). Where the label lets it in, on the
+/// widened pipe, the check of its token refuses it, and closes it with
+/// nothing sent.
 #[test]
 fn a_client_below_the_servers_integrity_is_kept_out() {
     let place = pipe_of("integrity");
     let _listener = bind(&place).unwrap();
     let low = own_token_at(4096);
-    let (writing, reading) = as_token(&low, || {
-        (
+    let opens = as_token(&low, || {
+        [
             open(&place),
             OpenOptions::new().read(true).open(name(&place)),
-        )
+        ]
     });
-    for denied in [writing.unwrap_err(), reading.unwrap_err()] {
+    for opened in opens {
+        let denied = opened.expect_err("a lower client opened the pipe");
         assert_eq!(
             denied.raw_os_error(),
             Some(ERROR_ACCESS_DENIED.cast_signed()),
@@ -763,10 +765,12 @@ fn other_user() -> Result<(OtherUser, OwnedHandle), String> {
     ))
 }
 
-/// Another user cannot open the pipe (its access list), while the test's
-/// own user is served. Against a pipe whose access
-/// list admits everyone, the other user opens it and the check of its token
-/// alone refuses it, closing the connection unanswered.
+/// Another user cannot open the pipe, while the test's own user is served:
+/// its access list keeps the other user out, and so does its label where
+/// the test runs at a higher integrity than the other user's logon (a
+/// runner's administrator, elevated). Against a pipe whose access list
+/// admits everyone and whose label is low, the other user opens it and the
+/// check of its token alone refuses it, closing the connection unanswered.
 ///
 /// It needs an administrator's rights to make the user: where `CI` is set
 /// it must run, and elsewhere it says it was not run and passes.
