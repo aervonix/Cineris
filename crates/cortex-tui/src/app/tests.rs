@@ -708,6 +708,54 @@ fn ctrl_o_shows_the_request_whole_and_esc_returns_to_its_dialog() {
     assert!(!app.viewing());
 }
 
+/// A dialog that comes while the viewer is open is not shown until the
+/// viewer closes: its grace begins with the inline frame that draws it,
+/// nothing is due while the viewer is open (the loop sleeps), and a key typed
+/// just after the viewer closes is typing, not an answer (the review of the
+/// second pull request).
+#[test]
+fn a_dialog_that_comes_under_the_viewer_waits_for_the_inline_screen() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    key(&mut app, "ctrl+o", now);
+    assert!(app.viewing());
+    link.give(Inbound::Request(RequestId::Number(30), approval("c_1")));
+    drain(&mut app, now);
+    // The viewer is drawn, for long past the grace.
+    for step in 0..10 {
+        let at = now + dialog::GRACE * step;
+        let _ = app.viewer_frame(30, 80, at);
+        app.drawn(at);
+        assert_eq!(app.deadline(), None, "nothing is due under the viewer");
+    }
+    let closed = now + dialog::GRACE * 10;
+    key(&mut app, "esc", closed);
+    assert!(!app.viewing());
+    let rows = text(&app.frame(closed).1);
+    app.drawn(closed);
+    assert!(
+        rows.iter().any(|row| row.contains("? Run cargo build?")),
+        "{rows:#?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("y Allow once")),
+        "the answers wait for the grace: {rows:#?}"
+    );
+    // Typing that goes on just after: no answer.
+    key(&mut app, "a", closed + dialog::GRACE / 6);
+    key(&mut app, "y", closed + dialog::GRACE / 3);
+    assert!(
+        answers(&link).is_empty(),
+        "a key typed as the viewer closed answered"
+    );
+    // After the grace, and a pause, a key answers.
+    let later = closed + dialog::GRACE * 3;
+    let _ = app.frame(later);
+    key(&mut app, "y", later + dialog::GRACE * 2);
+    assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
+}
+
 /// Shows a dialog, and draws the frame with its answers as the loop does at
 /// the end of its grace: the time a key may answer it.
 fn shown_dialog(app: &mut App, link: &Scripted, id: i64, now: Instant) -> Instant {
@@ -1877,9 +1925,13 @@ fn a_dialog_is_drawn_again_when_the_look_changes() {
     let after = app.frame(at).1;
     // The dialog's rows say the same; the hint row's separator is the
     // glyph set's, which the new look changed.
-    let dialog = |rows: &[Line]| text(&rows[..rows.len() - 1]);
-    assert_eq!(dialog(&before), dialog(&after));
-    assert_ne!(before, after, "the rows kept the old look");
+    let dialog = |rows: &[Line]| rows[..rows.len() - 1].to_vec();
+    assert_eq!(text(&dialog(&before)), text(&dialog(&after)));
+    assert_ne!(
+        dialog(&before),
+        dialog(&after),
+        "the rows kept the old look"
+    );
 }
 
 /// Keys that come in one read were typed together: none of them answers,

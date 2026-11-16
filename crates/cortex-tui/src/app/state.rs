@@ -339,6 +339,12 @@ impl App {
         if let Some(open) = self.open.take() {
             self.send_open(open);
         }
+        // A dialog is shown by the inline screen's frame alone: under the
+        // viewer it waits, its grace not begun (the review of the second
+        // pull request).
+        if self.viewing() {
+            return;
+        }
         if let Some(dialog) = self.dialogs.front_mut() {
             dialog.drawn(at);
         }
@@ -475,6 +481,10 @@ impl App {
     /// interface sleeps.
     #[must_use]
     pub fn deadline(&self) -> Option<Instant> {
+        // Under the viewer no dialog is drawn, so none of its times is due.
+        if self.viewing() {
+            return None;
+        }
         self.dialogs.front().and_then(Dialog::deadline)
     }
 
@@ -536,6 +546,9 @@ impl App {
         if self.viewer.is_some()
             && let TermEvent::Key(key) = event
         {
+            // A key in the viewer is the key before the next: typing that
+            // goes on as it closes is typing, and answers no dialog.
+            self.last_key = Some(at);
             return self.viewer_key(*key, at);
         }
         match event {

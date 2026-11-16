@@ -30,7 +30,7 @@ use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -574,12 +574,55 @@ impl Drop for GoneGuard {
     }
 }
 
-/// Whether an operation only reads, and so runs beside the ordered ones.
+/// Where an operation runs on the core thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Route {
+    /// On a task of its own, beside the lane.
+    Beside,
+    /// In the lane, in the order sent; `write` when it changes a session.
+    Lane { write: bool },
+}
+
+/// How the core thread orders what it is sent. What changes a session runs
+/// in the lane, one at a time in the order sent. A read runs beside it,
+/// unless a write sent before it is not done yet: then it goes into the
+/// lane after that write, so that a read sees every write sent before it
+/// (`/permissions`' list after a revoke, `/status` after `/model`), as when
+/// the loop ran each write itself (the review of step 23's second pull
+/// request).
+#[derive(Debug, Clone, Default)]
+struct Routes {
+    /// The writes routed and not yet done.
+    in_flight: Arc<AtomicUsize>,
+}
+
+impl Routes {
+    /// Where `op` runs.
+    fn route(&self, op: &Op) -> Route {
+        if !reads(op) {
+            self.in_flight.fetch_add(1, Ordering::SeqCst);
+            return Route::Lane { write: true };
+        }
+        if self.in_flight.load(Ordering::SeqCst) > 0 {
+            Route::Lane { write: false }
+        } else {
+            Route::Beside
+        }
+    }
+
+    /// A write the lane ran is done.
+    fn written(&self) {
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Whether an operation only reads, and so may run beside the ordered ones.
 fn reads(op: &Op) -> bool {
     matches!(
         op,
         Op::SessionList(_)
             | Op::SessionRead(_)
+            | Op::WorkspaceFiles(_)
             | Op::ModelsList(_)
             | Op::ConfigGet(_)
             | Op::PermissionsList(_)
@@ -640,20 +683,28 @@ impl CoreThread {
                     // its own, one at a time in the order sent, so that the
                     // end below is never behind it.
                     let (writes, mut written) =
-                        tokio::sync::mpsc::unbounded_channel::<(Ticket, Op)>();
+                        tokio::sync::mpsc::unbounded_channel::<(Ticket, Op, bool)>();
+                    let routes = Routes::default();
                     let lane_task = {
                         let core = core.clone();
                         let (done, wake) = (Arc::clone(&thread_done), thread_slot.clone());
+                        let routes = routes.clone();
                         tokio::spawn(async move {
-                            while let Some((ticket, op)) = written.recv().await {
+                            while let Some((ticket, op, write)) = written.recv().await {
                                 let result = core.handle(client.id, op).await.map_err(|e| *e);
+                                if write {
+                                    routes.written();
+                                }
                                 push(&done, Inbound::Done(ticket, result));
                                 wake.wake();
                             }
                         })
                     };
                     while let Some((ticket, op)) = lane.recv().await {
-                        if reads(&op) {
+                        let route = routes.route(&op);
+                        if let Route::Lane { write } = route {
+                            let _ = writes.send((ticket, op, write));
+                        } else {
                             let core = core.clone();
                             let (done, wake) = (Arc::clone(&thread_done), thread_slot.clone());
                             tokio::spawn(async move {
@@ -661,8 +712,6 @@ impl CoreThread {
                                 push(&done, Inbound::Done(ticket, result));
                                 wake.wake();
                             });
-                        } else {
-                            let _ = writes.send((ticket, op));
                         }
                     }
                     // The interface is gone, outside the lane: what it was
@@ -844,6 +893,30 @@ mod tests {
 
     /// A queue the core closed is the end of the connection, said once,
     /// after what was in it.
+    /// A read runs beside the lane while no write is under way, and after
+    /// the writes sent before it while one is: a list after a revoke sees
+    /// the revoke.
+    #[test]
+    fn a_read_after_a_write_waits_for_it_and_one_alone_runs_beside() {
+        use cortex_protocol::methods::{PermissionsRevokeParams, SessionRef};
+        let session = cortex_protocol::SessionId::from("s_1");
+        let routes = Routes::default();
+        let list = || {
+            Op::PermissionsList(SessionRef {
+                session_id: session.clone(),
+            })
+        };
+        assert_eq!(routes.route(&list()), Route::Beside);
+        let revoke = Op::PermissionsRevoke(PermissionsRevokeParams {
+            session_id: session.clone(),
+            ids: vec![cortex_protocol::ApprovalId::from("a_1")],
+        });
+        assert_eq!(routes.route(&revoke), Route::Lane { write: true });
+        assert_eq!(routes.route(&list()), Route::Lane { write: false });
+        routes.written();
+        assert_eq!(routes.route(&list()), Route::Beside);
+    }
+
     #[test]
     fn a_closed_queue_is_the_end_of_the_connection_said_once() {
         let mut said = false;
