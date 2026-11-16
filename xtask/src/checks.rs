@@ -191,7 +191,9 @@ fn ci_test_steps() -> Vec<Step> {
             steps::cargo(&build)
         }),
     ];
-    all.extend(run_steps(ci_runs(&[], &[], true)));
+    // The job's own runs run a cluster of timeouts again once when the disk
+    // stalled during the run (`crate::stall::rerun`).
+    all.extend(run_steps(ci_runs(&[], &[], true), true));
     // Each test has its own limit in .config/nextest.toml. This checks
     // what the tests of each tier took together.
     all.push(Step::function("tier budgets", tiers::check_ci_report));
@@ -288,8 +290,14 @@ pub(crate) fn filtersets(arguments: &[String]) -> (Option<String>, Vec<String>) 
 
 /// The steps that run `runs` in this tree, and leave one report of them all
 /// where one run would leave its own.
-fn run_steps(runs: Vec<Vec<String>>) -> Vec<Step> {
-    if runs.len() == 1 {
+///
+/// With `rerun`, a run that fails with a cluster of timeouts while the disk
+/// stalled runs the cluster's tests again, once, and what the pressure said
+/// of each run is kept for the tier check (`crate::stall::rerun`). Without
+/// it a failed run only says that it looks like a stall: `ci --tiers` is a
+/// measurement, and a run of it that stalled is run again by a person.
+fn run_steps(runs: Vec<Vec<String>>, rerun: bool) -> Vec<Step> {
+    if runs.len() == 1 && !rerun {
         return runs
             .into_iter()
             .map(|run| Step::cargo_owned("run tests", run))
@@ -297,16 +305,27 @@ fn run_steps(runs: Vec<Vec<String>>) -> Vec<Step> {
     }
     let names = ["run tiers 1 and 2", "run the system tests"];
     let last = runs.len() - 1;
+    let single = runs.len() == 1;
     runs.into_iter()
         .enumerate()
         .map(|(index, run)| {
-            Step::closure(names[index.min(1)], move || {
-                let watch = crate::stall::Watch::start();
-                let ran = steps::cargo(&run);
+            let name = if single {
+                "run tests"
+            } else {
+                names[index.min(1)]
+            };
+            Step::closure(name, move || {
                 let root = workspace::root();
-                if ran.is_err() {
-                    say_if_stalled(&watch, &workspace::nextest_report(&root, "ci"));
-                }
+                let ran = if rerun {
+                    run_with_rerun(&run, &root)
+                } else {
+                    let watch = crate::stall::Watch::start();
+                    let ran = steps::cargo(&run);
+                    if ran.is_err() {
+                        say_if_stalled(&watch, &workspace::nextest_report(&root, "ci"));
+                    }
+                    ran
+                };
                 if index == last {
                     bring_together(&root)?;
                 } else {
@@ -316,6 +335,40 @@ fn run_steps(runs: Vec<Vec<String>>) -> Vec<Step> {
             })
         })
         .collect()
+}
+
+/// A run of the job's tests in the tree at `root`, run again when
+/// `crate::stall::rerun` says so. What the pressure said of each run is
+/// added to the records the tier check reads, and a re-run is on the job's
+/// summary page.
+fn run_with_rerun(run: &[String], root: &Path) -> Result<()> {
+    use crate::stall::rerun;
+    let mut exec = |arguments: &[String]| {
+        let watch = crate::stall::Watch::start();
+        let result = steps::cargo(arguments);
+        rerun::Attempt {
+            result,
+            observed: watch.observe(),
+        }
+    };
+    let outcome = rerun::run(
+        run,
+        &workspace::nextest_report(root, "ci"),
+        &mut exec,
+        &mut |line| println!("{line}"),
+    );
+    let records = crate::stall::record_path(root);
+    for record in &outcome.records {
+        // A record is a convenience of the tier check: failing to write one
+        // leaves the tiers judged, as they were without the pressure.
+        if let Err(error) = crate::stall::append_record(&records, record) {
+            println!("warning: {error}");
+        }
+    }
+    if let Some(summary) = &outcome.summary {
+        steps::append_job_summary(&format!("{summary}\n"));
+    }
+    outcome.result
 }
 
 /// After a run that failed: says so when its timeouts ended together, the
@@ -337,7 +390,9 @@ fn aside_path(root: &Path) -> PathBuf {
 /// Removes the reports of an earlier run of the job in the tree at `root`.
 pub(crate) fn forget_reports(root: &Path) -> Result<()> {
     workspace::forget_report(&workspace::nextest_report(root, "ci"))?;
-    workspace::forget_report(&aside_path(root))
+    workspace::forget_report(&aside_path(root))?;
+    // What the pressure said of the runs that wrote them.
+    workspace::forget_report(&crate::stall::record_path(root))
 }
 
 /// After a run of the job that is not its last: its report, moved out of
@@ -739,7 +794,7 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
         forget_reports(&workspace::root())?;
         steps::cargo(&build)
     })];
-    all.extend(run_steps(runs));
+    all.extend(run_steps(runs, false));
     all.push(Step::closure("tier budgets", move || {
         let checked = tiers::check_report(&tiers::ci_report_path(), os, top);
         if like_runner {
