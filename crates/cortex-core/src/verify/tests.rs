@@ -728,3 +728,55 @@ fn a_stop_the_retry_met_goes_with_the_result() {
     assert_eq!(flaky.ended, Ended::Flaky);
     assert_eq!(flaky.stop.as_deref(), Some("a hook changed"));
 }
+
+/// What the verifier does before a round when the profile is typical: the
+/// look at the project's two files (nothing changed) and choosing, with
+/// eight checks of the user's and the profile's (step 19). Run by hand:
+/// `cargo test --release -p cortex-core --lib perf_choosing -- --ignored
+/// --nocapture`.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn perf_choosing_a_rounds_checks_from_a_typical_profile() {
+    let mut store = String::from("version = 1\n");
+    for n in 0..40 {
+        let (kind, purpose) = match n % 4 {
+            0 => ("command", "test"),
+            1 => ("command", "check"),
+            2 => ("command", "build"),
+            _ => ("convention", ""),
+        };
+        if kind == "command" {
+            store.push_str(&format!(
+                "\n[[entry]]\nid = \"k_{n}\"\nkind = \"command\"\ntext = \"Command {n}.\"\nstatus = \
+                 \"active\"\ncommand = {{ purpose = \"{purpose}\", run = \"make target{n}\", \
+                 usual_ms = 4200 }}\n"
+            ));
+        } else {
+            store.push_str(&format!(
+                "\n[[entry]]\nid = \"k_{n}\"\nkind = \"convention\"\ntext = \"Rule {n}.\"\nstatus = \
+                 \"active\"\n"
+            ));
+        }
+    }
+    let scratch = Scratch::outside("cortex-core-verify", "perf");
+    let file = scratch.file("knowledge.toml", &store);
+    let clock: SharedClock = Arc::new(FakeClock::starting_at("2026-11-16T10:00:00Z").unwrap());
+    let project = Project::new(file, scratch.dir("work"), clock);
+    let snapshot = project.load(None);
+    let settings = settings(&["cargo test", "cargo clippy"]);
+    let mut times = Vec::new();
+    for _ in 0..2_000 {
+        let start = std::time::Instant::now();
+        assert!(project.is_current(&snapshot));
+        let chosen = choose(&settings, Some((&snapshot, project.now())));
+        std::hint::black_box(&chosen);
+        times.push(start.elapsed());
+    }
+    times.sort();
+    let median = times[times.len() / 2];
+    cortex_testkit::numbers::report("verify.choose_typical", median.as_secs_f64() * 1e6, "us");
+    println!(
+        "look and choose, 40 entries: median {median:?}, slowest {:?}",
+        times[times.len() - 1]
+    );
+}

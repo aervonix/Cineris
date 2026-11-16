@@ -16,7 +16,7 @@ use cortex_protocol::{
 };
 use serde_json::json;
 
-use crate::{Setup, World, says};
+use crate::{Setup, World, calls, says};
 
 /// A history of about 200,000 tokens: 1,000 rounds of a prompt, a
 /// response with reasoning, text and a call, each with its provider's own
@@ -134,6 +134,48 @@ fn measure_prompt_to_request_with_a_long_history() {
         request.messages.len(),
         bytes / 1024,
         times[times.len() / 2],
+        times[times.len() - 1]
+    );
+}
+
+/// What the loop adds to a turn that changed files when no check runs:
+/// from entering `Verifying` to entering `Finishing`, with a verifier that
+/// skips at once (step 19; `docs/performance-budgets.md`).
+#[test]
+#[ignore = "a measurement, run by hand in a release build"]
+fn measure_the_verification_stage_when_no_check_runs() {
+    let world = World::new("measure_verify_stage", []);
+    let rig = Setup::new(&world).start(&world);
+    let turns = 400;
+    for turn in 0..turns {
+        world
+            .provider
+            .push(calls(&[("c1", "write", serde_json::json!({"path": "a"}))]));
+        world.provider.push(says("Done."));
+        world.run(async {
+            rig.prompt(&format!("Change it, {turn}."));
+            rig.events.turns(turn + 1).await;
+        });
+    }
+    let stamps = rig.seen.stamps();
+    let mut times: Vec<Duration> = stamps
+        .windows(2)
+        .filter(|pair| {
+            pair[0].0 == cortex_agent::TurnState::Verifying
+                && pair[1].0 == cortex_agent::TurnState::Finishing
+        })
+        .map(|pair| pair[1].1.duration_since(pair[0].1))
+        .collect();
+    assert_eq!(times.len(), turns);
+    times.sort();
+    let median = times[times.len() / 2];
+    cortex_testkit::numbers::report(
+        "verify.stage_with_no_check",
+        median.as_secs_f64() * 1e6,
+        "us",
+    );
+    println!(
+        "Verifying → Finishing, no check: median {median:?}, slowest {:?}",
         times[times.len() - 1]
     );
 }
