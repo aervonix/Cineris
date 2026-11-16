@@ -2,7 +2,8 @@
 //! on Unix: the restore erases the whole live region, the watchdog is set
 //! when the first signal is handed over, a second signal ends the process
 //! at once but a second SIGHUP is the same end, and the terminal going away
-//! under a read is SIGHUP's end (the review of step 23).
+//! under a read is SIGHUP's end (the review of step 23), even when its
+//! SIGHUP is being handled on another thread as the read finds the end.
 //!
 //! Each case runs in a child of its own in a pseudo-terminal, this test
 //! binary run again: a signal's action is the process's.
@@ -13,7 +14,7 @@ use std::time::Duration;
 use cortex_testkit::role::Role;
 
 /// This binary as a child that plays one case: `watchdog`, `second`,
-/// `sighup-twice` or `eof`.
+/// `sighup-twice`, `eof` or `race`.
 const HANDOFF: Role = Role::new("cxterm-handoff=");
 
 /// The live region's rows the child draws, the cursor left on the last.
@@ -52,6 +53,10 @@ pub(crate) fn enter() {
     let Some(case) = HANDOFF.options() else {
         return;
     };
+    #[cfg(target_os = "linux")]
+    if case == "race" {
+        race::play();
+    }
     #[cfg(unix)]
     play(&case);
     #[cfg(not(unix))]
@@ -297,4 +302,208 @@ fn sys_a_terminal_that_goes_away_under_a_read_is_sighups_end() {
             .any(|left| said.contains(&format!("handed over 129, the watchdog at {left} s"))),
         "{said}"
     );
+}
+
+/// The SIGHUP of a terminal that closes, handled on one thread while the
+/// loop's read finds the terminal gone on another: the kernel sends the
+/// hang-up's signal as the read ends, and hands it to whichever thread does
+/// not block it. The read took the hand-over while the handler was putting
+/// the terminal back, and the handler then found it taken and ended the
+/// process by SIGHUP's default action, part-way through its end, before its
+/// result was said (the hang-up test of `cortex-tui`, a run in a hundred
+/// under load and on hosted runners).
+///
+/// The child holds the handler in its restore's write with a full pipe for
+/// its output, with no timing: the read then finds the end, the loop ends,
+/// and the pipe is let go. The process must live through its handler's end
+/// and end with SIGHUP's code.
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_sighup_handled_on_another_thread_as_the_read_finds_the_end_is_the_same_end() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let scratch = cortex_testkit::Scratch::outside("cortex-term-handoff", "race");
+    let report = scratch.path().join("report.txt");
+    // Not its controlling terminal: the only SIGHUP is the child's own.
+    let mut pty = cortex_term::pty::Pty::spawn_without_control(
+        &super::this_binary(),
+        &HANDOFF.arguments("race"),
+        &[(REPORT.to_owned(), report.display().to_string())],
+        80,
+        24,
+    )
+    .expect("start the child");
+    let deadline = std::time::Instant::now() + LIMIT;
+    let status = loop {
+        if let Some(status) = pty.try_wait().expect("the child's state") {
+            break Some(status);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = pty.kill();
+            break None;
+        }
+        std::thread::yield_now();
+    };
+    let said = std::fs::read_to_string(&report).unwrap_or_default();
+    assert_ne!(
+        status.and_then(|status| status.signal()),
+        Some(libc::SIGHUP),
+        "the SIGHUP that came as the read found the end killed the process: {said}"
+    );
+    assert!(
+        said.contains("handed over 129, and the SIGHUP's handler returned"),
+        "{status:?}: {said}"
+    );
+    assert!(
+        status.is_some_and(|status| status.success()),
+        "{status:?}: {said}"
+    );
+}
+
+/// The child's side of the race: everything is the child's own, with no
+/// timing.
+#[cfg(target_os = "linux")]
+#[allow(
+    unsafe_code,
+    reason = "a child that makes its own pipes, sends a signal to one of its threads, and \
+              reads where that thread waits"
+)]
+mod race {
+    use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+
+    use cortex_term::{Overrides, Terminal};
+
+    use super::{HANDED, LIMIT, report};
+
+    /// The thread that takes the SIGHUP, by its id; 0 until it runs.
+    static TAKER: AtomicI32 = AtomicI32::new(0);
+    /// Set when the taker may end.
+    static STOP: AtomicBool = AtomicBool::new(false);
+
+    fn pipe() -> (libc::c_int, libc::c_int) {
+        let mut fds = [0; 2];
+        // SAFETY: `pipe` fills an array of two descriptors.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "a pipe");
+        (fds[0], fds[1])
+    }
+
+    fn set_blocking(fd: libc::c_int, blocking: bool) {
+        // SAFETY: the flags of a descriptor of this process's own.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            let flags = if blocking {
+                flags & !libc::O_NONBLOCK
+            } else {
+                flags | libc::O_NONBLOCK
+            };
+            libc::fcntl(fd, libc::F_SETFL, flags);
+        }
+    }
+
+    /// Writes to `fd` until not one byte more goes in.
+    fn fill(fd: libc::c_int) {
+        set_blocking(fd, false);
+        let chunk = [b'x'; 4096];
+        for size in [chunk.len(), 1] {
+            // SAFETY: a local buffer and its length, at most.
+            while unsafe { libc::write(fd, chunk.as_ptr().cast(), size) } > 0 {}
+        }
+        set_blocking(fd, true);
+    }
+
+    /// Reads all that `fd` holds.
+    fn drain(fd: libc::c_int) {
+        set_blocking(fd, false);
+        let mut buffer = [0u8; 4096];
+        // SAFETY: a local buffer and its length.
+        while unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len()) } > 0 {}
+    }
+
+    /// The state of thread `tid` of this process (`R`, `S`, `D`...).
+    fn state(tid: i32) -> char {
+        std::fs::read_to_string(format!("/proc/self/task/{tid}/stat"))
+            .ok()
+            .and_then(|stat| {
+                stat.rsplit(')')
+                    .next()
+                    .and_then(|rest| rest.split_whitespace().next())
+                    .and_then(|state| state.chars().next())
+            })
+            .unwrap_or('?')
+    }
+
+    pub(super) fn play() {
+        use std::os::unix::thread::JoinHandleExt as _;
+
+        let mut terminal = Terminal::enter(Overrides::default()).expect("enter the terminal");
+        terminal.hand_signals_over();
+        // The terminal's input becomes a pipe whose writing end this process
+        // closes: the end of input a terminal that closes gives the read.
+        let (input, input_end) = pipe();
+        // Its output becomes a pipe that is full: the handler's restore
+        // waits in its write until the pipe is read.
+        let (output_read, output) = pipe();
+        fill(output);
+        // SAFETY: both descriptors are this process's own; standard input
+        // and output become them.
+        unsafe {
+            libc::dup2(input, 0);
+            libc::dup2(output, 1);
+        }
+        // A thread that never blocks SIGHUP and is never asleep, so that it
+        // is asleep only in the handler's write.
+        let taker = std::thread::spawn(|| {
+            // SAFETY: `gettid` reads nothing.
+            TAKER.store(unsafe { libc::gettid() }, Ordering::SeqCst);
+            while !STOP.load(Ordering::SeqCst) {
+                std::hint::spin_loop();
+            }
+        });
+        let deadline = std::time::Instant::now() + LIMIT;
+        while TAKER.load(Ordering::SeqCst) == 0 {
+            assert!(std::time::Instant::now() < deadline, "the taker never ran");
+            std::thread::yield_now();
+        }
+        let tid = TAKER.load(Ordering::SeqCst);
+        // SAFETY: the thread lives until `STOP`; SIGHUP goes to it alone.
+        let sent = unsafe { libc::pthread_kill(taker.as_pthread_t(), libc::SIGHUP) };
+        assert_eq!(sent, 0, "SIGHUP to the taker");
+        // Asleep: in the handler, putting the terminal back, before it
+        // hands the signal over.
+        while state(tid) != 'S' {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the handler never waited in its write"
+            );
+            std::thread::yield_now();
+        }
+        // The terminal goes away under the loop's read, which takes the
+        // hand-over as SIGHUP's end.
+        // SAFETY: the pipe's writing end, which nothing else uses.
+        unsafe { libc::close(input_end) };
+        let code = loop {
+            let read = terminal.next(Some(LIMIT));
+            if let Some(code) = terminal.ending() {
+                break code;
+            }
+            if let Err(error) = read {
+                report(&format!("a read failed: {error}"));
+                #[expect(clippy::exit, reason = "the child ends when it has said so")]
+                std::process::exit(0);
+            }
+            assert!(std::time::Instant::now() < deadline, "no end was seen");
+        };
+        // The handler's write goes through, and the handler ends: with the
+        // process, if it took the signal as a second one.
+        drain(output_read);
+        STOP.store(true, Ordering::SeqCst);
+        taker.join().expect("the taker");
+        report(&format!(
+            "{HANDED} {code}, and the SIGHUP's handler returned"
+        ));
+        drop(terminal);
+        cortex_term::signal_ended();
+        #[expect(clippy::exit, reason = "the child ends when it has said so")]
+        std::process::exit(0);
+    }
 }

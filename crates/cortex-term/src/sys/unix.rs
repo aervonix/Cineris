@@ -258,12 +258,6 @@ extern "C" fn on_resize(_: libc::c_int) {
 }
 
 extern "C" fn on_ending(signal: libc::c_int) {
-    // The terminal hung up, and that was taken as SIGHUP's end already:
-    // this SIGHUP is the same end (the kernel's, or a shell's resent to its
-    // jobs), not a second signal that ends the process at once.
-    if signal == libc::SIGHUP && super::hung_up_already(129) {
-        return;
-    }
     // An interrupt guard lives, or has just ended: the key was for a child,
     // or came as the terminal was taken back from one, and another thread
     // took it while the guard was ending.
@@ -280,6 +274,17 @@ extern "C" fn on_ending(signal: libc::c_int) {
         // async-signal-safe.
         unsafe { libc::alarm(WATCHDOG_SECONDS) };
         wake();
+        return;
+    }
+    // The terminal hung up, and that was taken as SIGHUP's end already:
+    // this SIGHUP is the same end (the kernel's, or a shell's resent to its
+    // jobs), not a second signal that ends the process at once. Asked only
+    // once the hand-over is found taken, as Windows's handler asks it: the
+    // loop's read can find the terminal gone, and take the hand-over, on
+    // another thread while this one puts the terminal back, and a SIGHUP
+    // asked before that was then taken for a second signal (since the third
+    // pull request of step 23's review fixes).
+    if signal == libc::SIGHUP && super::hung_up_already(129) {
         return;
     }
     // SAFETY: putting the default action back and raising the signal again
