@@ -596,6 +596,9 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     if let Some(said) = left_elsewhere(&elsewhere) {
         println!("{said}");
     }
+    if let Some(refusal) = nothing_run_here(&chosen, &elsewhere) {
+        return Err(refusal);
+    }
     if chosen.is_empty() {
         return Ok(done);
     }
@@ -640,6 +643,19 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
         );
     }
     finished
+}
+
+/// The refusal of a run whose every chosen break is of code only the other
+/// system builds: it would run nothing, and an exit of 0 would read as every
+/// break caught. `None` when a break is run here, or none was chosen.
+fn nothing_run_here(chosen: &[Break], elsewhere: &[Break]) -> Option<String> {
+    (chosen.is_empty() && !elsewhere.is_empty()).then(|| {
+        format!(
+            "every break chosen ({}) is of code only the other system builds, so none was run \
+             here: run them there, as said above. This is not a pass.",
+            elsewhere.len()
+        )
+    })
 }
 
 /// What to say of the breaks this system does not run, and how to run them
@@ -1948,6 +1964,14 @@ replace: 5
             "{said}"
         );
         assert_eq!(super::left_elsewhere(&[]), None);
+
+        // A run of nothing but such breaks is refused: it ran nothing.
+        let refused = super::nothing_run_here(&[], &all).unwrap();
+        assert!(refused.contains("none was run here"), "{refused}");
+        assert!(refused.contains("This is not a pass"), "{refused}");
+        let here = breaks("loop", "[break] b\nrule: r\nfile: f\nfind: x\nreplace: y\n");
+        assert_eq!(super::nothing_run_here(&here, &all), None);
+        assert_eq!(super::nothing_run_here(&[], &[]), None);
     }
 
     #[test]

@@ -2517,3 +2517,12 @@ find: let flag = if flag.starts_with("-P") && !flag.starts_with("--") {
 replace: let flag = if false {
 caught-by:
     try_run::tests::*
+
+[break] mutate-of-other-system-breaks-alone-passes
+rule: A run whose every chosen break is of the other system ran nothing, and fails: an exit of 0 would read as every break caught.
+file: xtask/src/mutate/mod.rs
+in: nothing_run_here
+find: chosen.is_empty() && !elsewhere.is_empty()
+replace: false
+caught-by:
+    mutate::tests::what_is_left_to_the_other_system_is_said_with_the_command_that_runs_it_there

@@ -560,7 +560,7 @@ These are the results the next run forgets and tries again whichever breaks it r
 Run one on a hosted Windows runner: `gh workflow run try --ref <branch> -f os=windows -f command="mutate tooling-7/nofollow-windows-follows-a-reparse-point"`.
 ```
 
-  It is neither a pass nor a failure: it is not counted among the breaks that did what the list expects or did not, and the run's status is as if the break were not there. A run of only such breaks runs nothing and exits 0. (A run on Windows, where `os: windows` is run, the same for a break marked `linux`.)
+  It is neither a pass nor a failure: it is not counted among the breaks that did what the list expects or did not, and the run's status is as if the break were not there. A run whose every chosen break is of the other system runs nothing and **fails**, saying so (since the review of the step: an exit of 0 would read as every break caught). (A run on Windows, where `os: windows` is run, the same for a break marked `linux`.)
 - **Where it is run, it is judged as any break is,** against the tests that system builds: the Windows-only tests of the crate (a `#[cfg(windows)]` module) are in the Windows build and not in the Linux one, so a break of Windows-only code is caught only by a test that is built and run there. `mutations/tooling-7-mutate.breaks` has one as the demonstration: `nofollow-windows-follows-a-reparse-point` makes `cortex-base`'s Windows-only open follow a symbolic link or a junction, and the three Windows-only tests of `nofollow` must fail.
 
 **What it cannot tell.**
