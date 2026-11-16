@@ -283,13 +283,16 @@ The server's first part: `cortex serve --stdio` (`cortex-rpc`; `docs/steps/27/an
 - **The writer takes the next thing to send only once the line before it has gone,** so a slow client's backlog stays in the core's queue, where deltas merge and drop.
 - **The rule that closes a connection:** while a line waits to be written, the writer looks at the client's queue at most once a second, and closes the connection when whole events wait past its capacity and the client has taken no line for `rpc.stalled_client` (30 s), or at once past four times its capacity. The session and its turn go on.
 - **Inbound is bounded and reading never stops for it.**
-  - A request counts from when it is read until its result is written: at most 256, and 64 MiB of their lines.
+  - A request counts from when it is read until its result is written: at most 256, and 64 MiB of their lines, or of their results once a result is larger than its request.
   - A request past either is refused at once (`overloaded`, of kind `limit`), and not run.
-  - Refusals count too, and a client with more unread than that is closed: it sends and does not read.
+  - Refusals, and the answers to `initialize` and `shutdown`, count too, and a client with more of them not yet written than requests may run is closed: it sends and does not read.
+  - Near a bound the reader lets the writer catch up before it reads on, so a client that reads is not taken for one that floods; one that sends far more in one burst than the bounds hold is closed all the same.
   - A line of more than 1 MiB is read on the blocking pool.
 - **`serve --stdio` ends** when standard input ends, at `shutdown`, at a signal, or when its client is gone, stalled or flooding.
-  - In order: the client is disconnected (its questions withdrawn, its sessions ended), its lane's operation waited for at most 1 s, the core shut down, the requests under way waited for at most 2 s, a `shutdown` answered `{}`, and what is queued written for at most 2 s.
-  - The whole end has 5 s; a second signal ends the process at once; the exit code is 0, or 130 or 143 for a signal.
+  - In order: the client is disconnected (its questions withdrawn, its sessions ended), its lane's operation waited for at most 1 s, the core shut down, the requests still running waited for at most 2 s, a `shutdown` answered `{}`, and what is queued written for at most 2 s, its last line out before the exit.
+  - At `shutdown` the core is shut down first, when the request is read, and the rest follows.
+  - The whole end has 5 s, counted from when serving stops (and, at `shutdown`, from before the core's end), since the core's end and the disconnect wait for each session's close, which nothing else bounds; a second signal ends the process at once; the exit code is 0, or 130 or 143 for a signal.
+  - The requests read with a `shutdown`, after it, are answered `shutting_down`.
   - Standard input and output are served by threads that are not joined, and standard output carries nothing but messages.
 - **The approval time limit** is `rpc.approval_timeout`, 10 minutes by default; `"0s"` is none. The terminal UI sets none.
 - **The conformance test** runs one list of scenarios (`cortex_testkit::conformance`) in process, over the connection's in-memory ends, and through the real binary's `serve --stdio`, and compares what the client was sent.

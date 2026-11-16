@@ -86,6 +86,8 @@ struct InProcess {
     bell: Arc<(Mutex<bool>, Condvar)>,
     dispatcher: Dispatcher<u64>,
     results: std::sync::mpsc::Receiver<(u64, Result<OpResult, ErrorData>)>,
+    /// Results that came while another was awaited.
+    early: std::collections::BTreeMap<u64, Result<OpResult, ErrorData>>,
     next: u64,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
 }
@@ -172,6 +174,7 @@ impl InProcess {
             bell,
             dispatcher,
             results,
+            early: std::collections::BTreeMap::new(),
             next: 0,
             stop: Some(stop),
         }
@@ -189,13 +192,21 @@ impl Drop for InProcess {
 }
 
 impl Carrier for InProcess {
-    fn call(&mut self, op: Op) -> Result<OpResult, ErrorData> {
+    fn start(&mut self, op: Op) -> u64 {
         self.next += 1;
-        {
-            let _inside = self.handle.enter();
-            self.dispatcher.send(self.next, op);
+        let _inside = self.handle.enter();
+        self.dispatcher.send(self.next, op);
+        self.next
+    }
+
+    fn finish(&mut self, ticket: u64) -> Result<OpResult, ErrorData> {
+        loop {
+            if let Some(result) = self.early.remove(&ticket) {
+                return result;
+            }
+            let (answered, result) = self.results.recv().unwrap();
+            self.early.insert(answered, result);
         }
-        self.results.recv().unwrap().1
     }
 
     fn next(&mut self) -> Option<Inbound> {
@@ -257,12 +268,17 @@ fn transcript(
 /// binary writes nothing on standard output but messages.
 #[test]
 fn sys_serve_stdio_conforms_to_the_core_in_process() {
-    for (number, scenario) in conformance::scenarios().iter().enumerate() {
-        let in_process = transcript(scenario, &format!("serve-in-{number}"), |machine, run| {
+    // A list for each carrier: a gate a scenario opens is opened for good.
+    let count = conformance::scenarios().len();
+    for number in 0..count {
+        let first = conformance::scenarios().swap_remove(number);
+        let in_process = transcript(&first, &format!("serve-a-{number}"), |machine, run| {
             let mut carrier = InProcess::start(machine);
             run(&mut carrier)
         });
-        let over_stdio = transcript(scenario, &format!("serve-out-{number}"), |machine, run| {
+        let scenario = conformance::scenarios().swap_remove(number);
+        let scenario = &scenario;
+        let over_stdio = transcript(scenario, &format!("serve-b-{number}"), |machine, run| {
             let mut served = serve(machine);
             served
                 .lines

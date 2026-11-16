@@ -47,8 +47,8 @@ pub use reference::reference_page;
 pub use sections::{
     AdaptSettings, CompatSettings, CredentialSettings, KeySettings, LimitSet, LimitSettings,
     LogSettings, ManagedSettings, ModelSettings, PermissionSettings, ProviderSettings,
-    RetrySettings, RoleSettings, SandboxSettings, SessionSettings, Settings, StatsSettings,
-    TerminalSettings, TuiSettings, UsageSettings, VariantSettings, VerifySettings,
+    RetrySettings, RoleSettings, RpcSettings, SandboxSettings, SessionSettings, Settings,
+    StatsSettings, TerminalSettings, TuiSettings, UsageSettings, VariantSettings, VerifySettings,
 };
 pub use types::{
     Bindings, ColorChoice, DensityChoice, EnvText, GlyphChoice, Headers, Profiles, ReasoningShown,

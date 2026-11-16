@@ -74,8 +74,7 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
             }
         };
     let rpc = &loaded.settings.rpc;
-    // `"0s"` is no limit: the approval waits for as long as it takes.
-    options.approval_timeout = (!rpc.approval_timeout.is_zero()).then_some(rpc.approval_timeout);
+    options.approval_timeout = approval_timeout(rpc);
     let stalled_client = rpc.stalled_client;
 
     let stop = CancelToken::new();
@@ -248,4 +247,25 @@ fn core_thread(
         }
         exit::COMPLETED
     })
+}
+
+/// The core's approval time limit from `rpc.approval_timeout`: `"0s"` is no
+/// limit, and the approval waits for as long as it takes.
+fn approval_timeout(rpc: &cortex_config::schema::RpcSettings) -> Option<Duration> {
+    (!rpc.approval_timeout.is_zero()).then_some(rpc.approval_timeout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_approval_time_limit_is_the_settings_and_nothing_is_none() {
+        let mut rpc = cortex_config::schema::RpcSettings::default();
+        assert_eq!(approval_timeout(&rpc), Some(Duration::from_secs(600)));
+        rpc.approval_timeout = Duration::from_secs(90);
+        assert_eq!(approval_timeout(&rpc), Some(Duration::from_secs(90)));
+        rpc.approval_timeout = Duration::ZERO;
+        assert_eq!(approval_timeout(&rpc), None);
+    }
 }
