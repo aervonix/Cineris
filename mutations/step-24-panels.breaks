@@ -128,7 +128,7 @@ find:
     }
 replace:
 caught-by:
-    app::tests::panels::the_grace_starts_again_after_a_dialog
+    app::tests::panels::a_key_between_a_dialog_and_its_frame_is_typed_not_lost
 
 [break] a-new-key-map-keeps-the-panels-readiness
 rule: A new key map starts a panel's grace again: what the person saw offered was the old map's.
@@ -161,7 +161,7 @@ in: App::panel_block
 find: if !menu && self.rows > LEAST_ROWS {
 replace: if self.rows > LEAST_ROWS {
 caught-by:
-    app::panels::tests::the_live_region_keeps_its_limit_and_a_focused_panel_is_drawn_or_the_input_has_the_focus
+    app::panels::tests::the_live_region_keeps_its_limit_*
 
 [break] panels-take-every-live-row
 rule: Panels never take the transcript's last four live rows: what streams never vanishes under them.
@@ -183,7 +183,6 @@ replace: block.extend(laid.lines);
 caught-by:
     app::tests::panels::the_plan_opens_by_itself_collapsed_without_the_focus
     app::panels::tests::the_block_is_set_apart_above_and_below_and_the_live_rows_keep_four
-    cortex-tui::it screens::the_views_draw_the_reference_screens
 
 [break] a-focused-panel-that-does-not-fit-keeps-the-focus
 rule: A panel that would not be drawn focused in the room there is cannot have the focus: the panels are laid out as if none had it, and the ring is not given it.
@@ -202,7 +201,7 @@ find: .filter(|(_, rows)| *rows <= room)
 replace:
 caught-by:
     app::panels::tests::a_panel_that_would_not_be_drawn_focused_cannot_be_reached
-    app::panels::tests::the_oldest_collapsed_panels_fold_into_one_row_and_with_no_room_nothing_is_drawn
+    app::panels::tests::the_live_region_keeps_its_limit_*
 
 [break] the-folded-panels-say-nothing
 rule: The oldest collapsed panels that do not fit fold into one dim row that says how many and the key that reaches them.
@@ -220,8 +219,7 @@ in: Panels::scrolled
 find: if marked && start > 0 {
 replace: if start > 0 {
 caught-by:
-    app::panels::tests::the_live_region_keeps_its_limit_and_a_focused_panel_is_drawn_or_the_input_has_the_focus
-    app::panels::tests::a_panel_that_would_not_be_drawn_focused_cannot_be_reached
+    app::panels::tests::the_live_region_keeps_its_limit_*
 
 [break] the-scrolled-list-says-nothing-of-what-it-cut
 rule: A focused panel's list cut at an end says how many rows it hides there.

@@ -146,6 +146,11 @@ impl Panel for ReviewPanel {
         self.turn.items()
     }
 
+    fn least_rows(&self, focused: usize, _draw: &Draw<'_>) -> usize {
+        // Its first row, and the focused file's or check's one.
+        1 + usize::from(focused < self.turn.items())
+    }
+
     fn item(&self, index: usize) -> Option<ItemKey> {
         if let Some(file) = self.turn.files.get(index) {
             return Some(ItemKey {
