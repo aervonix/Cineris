@@ -765,3 +765,44 @@ fn unrestricted_is_the_servers_command_lines_to_allow() {
         assert_ne!(error.code, "unrestricted_not_allowed");
     }
 }
+
+/// The role a client gives at `initialize` is the one the core holds it to:
+/// an observer may watch a session another client runs, and may not start
+/// one, or a turn in the one it watches.
+#[test]
+fn the_role_given_at_initialize_binds_the_client() {
+    let world = World::new("roles");
+    world.server.push(anthropic::text(&["Hello."]));
+    let core = world.core();
+    let mut user = Wire::connect(&core, world.serve_options());
+    let cortex_protocol::methods::OpResult::SessionNew(opened) = user
+        .lines
+        .call(new_session(&world))
+        .expect("a session opens")
+    else {
+        panic!("not a session");
+    };
+    let session = opened.session.session_id;
+
+    let mut observer = Wire::serve(&core, world.serve_options(), 64);
+    let mut params = conformance::initialize();
+    params.role = cortex_protocol::methods::ClientRole::Observer;
+    observer.lines.initialize(params).expect("initialize");
+    let refused = observer.lines.call(new_session(&world)).unwrap_err();
+    assert_eq!(refused.code, "role_not_allowed");
+    observer
+        .lines
+        .call(Op::SessionOpen(SessionRef {
+            session_id: session.clone(),
+        }))
+        .expect("an observer watches a running session");
+    let refused = observer
+        .lines
+        .call(Op::TurnStart(TurnStartParams {
+            session_id: session,
+            input: vec![Part::text("go")],
+            delivery: None,
+        }))
+        .unwrap_err();
+    assert_eq!(refused.code, "role_not_allowed");
+}
