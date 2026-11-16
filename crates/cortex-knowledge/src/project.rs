@@ -46,7 +46,7 @@ use cortex_protocol::ids::{EntryId, SessionId};
 use cortex_protocol::project as wire;
 
 use crate::entry::{
-    Basis, Check, Entry, Kind, Learned, MAX_TEXT, Scope, Status, command_from_wire,
+    Basis, Check, Entry, Kind, Learned, MAX_TEXT, Scope, Status, command_from_wire, one_spaced,
 };
 use crate::file::{
     MAX_PRIVATE_ENTRIES, PrivateState, Problem, SharedFile, append_shared, parse_shared, shared_id,
@@ -119,7 +119,10 @@ pub type UpdateError = StoreError<ChangeError>;
 pub fn error_code(error: &UpdateError) -> &'static str {
     match error {
         StoreError::Invalid(_) => "project_store_invalid",
-        StoreError::Io { .. } | StoreError::Write(_) => "project_store_unwritable",
+        StoreError::Full(_) => "project_store_full",
+        StoreError::Io { .. } | StoreError::Write(_) | StoreError::Unreadable(_) => {
+            "project_store_unwritable"
+        }
         StoreError::Refused(refused) => refused.code(),
     }
 }
@@ -400,9 +403,17 @@ impl Project {
     }
 
     /// The snapshot after a change to the private store whose state is
-    /// `private`.
-    fn after(&self, private: PrivateState, previous: Option<&Snapshot>) -> Snapshot {
-        let private_stamp = self.store.stamp();
+    /// `private`, and which looked like `private_stamp` while the change
+    /// still held the lock. Taken any later, the stamp could be of another
+    /// process's change beside this one's state, and that change (a command
+    /// turned off) would never be seen.
+    pub(crate) fn after(
+        &self,
+        private: PrivateState,
+        private_stamp: FileStamp,
+        previous: Option<&Snapshot>,
+    ) -> Snapshot {
+        cortex_base::hook::point(BEFORE_THE_SNAPSHOT);
         let shared_stamp = FileStamp::of(&self.shared_file());
         let mut problems = Vec::new();
         let shared = self.shared_or(previous, &mut problems);
@@ -432,7 +443,7 @@ impl Project {
         add: &[wire::NewEntry],
         previous: Option<&Snapshot>,
     ) -> Result<Updated, UpdateError> {
-        let ((changed, removed), private) = self.store.change(|state, now| {
+        let ((changed, removed), private, stamp) = self.store.change(|state, now| {
             let (shared, shared_text) = match self.read_shared() {
                 SharedRead::Absent => (Ok(Vec::new()), None),
                 SharedRead::Entries(shared, text) => (Ok(shared.entries), Some(text)),
@@ -458,12 +469,13 @@ impl Project {
             if work.appended
                 && let Some(text) = &work.shared_text
             {
+                cortex_base::hook::point(BEFORE_THE_SHARED_WRITE);
                 self.write_shared(text)?;
             }
             let touched = !work.changed.is_empty() || !work.removed.is_empty();
             Ok::<_, ChangeError>(((work.changed, work.removed), touched))
         })?;
-        let snapshot = self.after(private, previous);
+        let snapshot = self.after(private, stamp, previous);
         let changed = changed
             .into_iter()
             .filter_map(|id| snapshot.find(&id).cloned())
@@ -499,7 +511,7 @@ impl Project {
                 .map(|previous| previous.shared.clone())
                 .unwrap_or_default(),
         };
-        let ((outcome, id), private) = self.store.change(|state, now| {
+        let ((outcome, id), private, stamp) = self.store.change(|state, now| {
             let text = one_spaced(&proposal.text);
             let known = state
                 .entries
@@ -538,7 +550,7 @@ impl Project {
             state.entries.push(entry);
             Ok(((ProposalOutcome::Stored, Some(id)), true))
         })?;
-        let snapshot = self.after(private, previous);
+        let snapshot = self.after(private, stamp, previous);
         let changed = id
             .and_then(|id| snapshot.find(&id).cloned())
             .into_iter()
@@ -561,7 +573,7 @@ impl Project {
     ///
     /// When the store cannot be read as it is or written.
     pub fn lapse(&self, previous: Option<&Snapshot>) -> Result<Updated, UpdateError> {
-        let (ids, private) = self.store.change(|state, now| {
+        let (ids, private, stamp) = self.store.change(|state, now| {
             let mut ids = Vec::new();
             for entry in &mut state.entries {
                 if entry.status == Status::Active && entry.is_expired(now) {
@@ -574,7 +586,7 @@ impl Project {
             let changed = !ids.is_empty();
             Ok::<_, ChangeError>((ids, changed))
         })?;
-        let snapshot = self.after(private, previous);
+        let snapshot = self.after(private, stamp, previous);
         let changed = ids
             .iter()
             .filter_map(|id| snapshot.find(id).cloned())
@@ -614,6 +626,18 @@ impl Project {
     }
 }
 
+/// The point of a change where the store is written and its lock let go,
+/// before the snapshot that follows is put together: a test holds it
+/// (`cortex_base::hook`) to let another process change the store there.
+pub const BEFORE_THE_SNAPSHOT: &str =
+    "cortex-knowledge: a change is written, before the snapshot that follows it";
+
+/// The point of a `promote` where the shared file has been read and
+/// checked and is about to be written: a test holds it to plant a link
+/// there.
+pub const BEFORE_THE_SHARED_WRITE: &str =
+    "cortex-knowledge: the shared file is read, before it is written";
+
 /// A path as a message names it: its last name.
 fn display_name(path: &Path) -> String {
     path.file_name().map_or_else(
@@ -622,13 +646,7 @@ fn display_name(path: &Path) -> String {
     )
 }
 
-/// A text with its ends trimmed and every run of blanks made one space:
-/// how two texts are compared, and how a new one is kept.
-fn one_spaced(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn room(state: &PrivateState) -> Result<(), ChangeError> {
+pub(crate) fn room(state: &PrivateState) -> Result<(), ChangeError> {
     if state.entries.len() >= MAX_PRIVATE_ENTRIES {
         return Err(ChangeError::Full(format!(
             "this project's store holds {MAX_PRIVATE_ENTRIES} entries, the most it may: delete \
@@ -828,9 +846,7 @@ impl Work<'_> {
         if let Err(problem) = &self.shared {
             return Err(ChangeError::Shared(problem.to_string()));
         }
-        let text = append_shared(self.shared_text.as_deref(), &entry, SHARED_NAME)
-            .map_err(|problem| ChangeError::Shared(problem.to_string()))?;
-        // The entry as the shared file now holds it, and this user's
+        // The entry as the shared file holds it, and this user's
         // acceptance of exactly that.
         let hash = {
             let mut shared = entry.clone();
@@ -839,8 +855,18 @@ impl Work<'_> {
             }
             shared.content_hash()
         };
-        self.shared_text = Some(text);
-        self.appended = true;
+        // A promote that stopped between its two writes left the entry in
+        // the shared file already: this one finishes it, and adds nothing.
+        let there = self
+            .shared
+            .as_ref()
+            .is_ok_and(|entries| entries.iter().any(|held| held.content_hash() == hash));
+        if !there {
+            let text = append_shared(self.shared_text.as_deref(), &entry, SHARED_NAME)
+                .map_err(|problem| ChangeError::Shared(problem.to_string()))?;
+            self.shared_text = Some(text);
+            self.appended = true;
+        }
         self.state.entries.retain(|held| held.id != *id);
         self.state.decide(hash, Status::Active, now);
         self.changed.retain(|changed| changed != id);

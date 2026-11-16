@@ -21,13 +21,21 @@
 //!   store invalid uses the good copy, and says so ([`Loaded::problem`]).
 //!   With neither, nothing is used.
 //! - **Readers take no lock.** The file is replaced in one step, so a
-//!   reader sees the old one or the new one, whole.
+//!   reader sees the old one or the new one, whole. Bringing the good copy
+//!   up to date after a read is tried, and left for the next read when
+//!   another process holds the lock: a load never waits.
+//! - **Nothing is written that could not be read back.** A change that
+//!   would take the file past its size cap is refused
+//!   ([`StoreError::Full`]), and so is one whose text this build would not
+//!   read again: a store written past what the reader takes would be
+//!   refused whole at the next load, its good copy with it.
 //!
 //! The lock is the operating system's, on `knowledge.toml.lock`
 //! (`cortex_base::private::hold_lock`). Everything here blocks.
 
 #![allow(
     clippy::disallowed_methods,
+    clippy::disallowed_types,
     reason = "blocking file calls; the store is read and changed on the blocking pool"
 )]
 
@@ -86,6 +94,16 @@ pub enum StoreError<E> {
     /// The write failed.
     #[error(transparent)]
     Write(#[from] AtomicWriteError),
+    /// The change would take the store past what it may hold. Nothing was
+    /// written.
+    #[error("{0}")]
+    Full(String),
+    /// The change would leave a store this build could not read back.
+    /// Nothing was written.
+    #[error(
+        "the change would leave a store that could not be read again ({0}), so it was not made"
+    )]
+    Unreadable(Problem),
     /// The change itself was refused, and nothing was written.
     #[error("{0}")]
     Refused(E),
@@ -256,7 +274,9 @@ impl Store {
         if !stale {
             return;
         }
-        let Ok(_lock) = private::hold_lock(&self.file) else {
+        // Tried, never waited for: a load must not hang on a writer that
+        // is stuck. The next load tries again.
+        let Some(_lock) = self.try_lock() else {
             return;
         };
         match read_one(&self.file) {
@@ -278,10 +298,36 @@ impl Store {
         }
     }
 
+    /// The store's lock, when it can be had at once. `None` when another
+    /// holds it, or it cannot be opened.
+    fn try_lock(&self) -> Option<Option<std::fs::File>> {
+        let path = private::lock_path(&self.file);
+        match cortex_base::open_regular(&path) {
+            Ok((lock, _)) => match lock.try_lock() {
+                Ok(()) => Some(Some(lock)),
+                Err(std::fs::TryLockError::WouldBlock) => None,
+                // A file system that cannot lock gives no lock, as for a
+                // change.
+                Err(std::fs::TryLockError::Error(error))
+                    if error.kind() == io::ErrorKind::Unsupported =>
+                {
+                    Some(None)
+                }
+                Err(std::fs::TryLockError::Error(_)) => None,
+            },
+            // No change was ever made here, so nobody holds a lock that
+            // does not exist yet: making it waits for no one.
+            Err(OpenError::NotFound) => private::hold_lock(&self.file).ok(),
+            Err(_) => None,
+        }
+    }
+
     /// Changes the store: takes the lock, reads the file, applies `change`
     /// and writes the result, when `change` says it changed anything (the
-    /// second of what it returns). Returns `change`'s answer and the state
-    /// as it now is.
+    /// second of what it returns). Returns `change`'s answer, the state as
+    /// it now is, and what the file looked like while the lock was still
+    /// held: a later change by another process then shows as a change,
+    /// whenever it comes.
     ///
     /// # Errors
     ///
@@ -292,7 +338,7 @@ impl Store {
     pub fn change<T, E>(
         &self,
         change: impl FnOnce(&mut PrivateState, UtcTime) -> Result<(T, bool), E>,
-    ) -> Result<(T, PrivateState), StoreError<E>> {
+    ) -> Result<(T, PrivateState, FileStamp), StoreError<E>> {
         let io_error = |source| StoreError::Io {
             path: self.file.display().to_string(),
             source,
@@ -303,6 +349,14 @@ impl Store {
             change(&mut state, self.clock.now()).map_err(StoreError::Refused)?;
         if changed {
             let text = write_private(&state);
+            if text.len() as u64 > MAX_FILE_BYTES {
+                return Err(StoreError::Full(format!(
+                    "the change would make this project's store {} bytes, and it may be up to \
+                     {MAX_FILE_BYTES}: delete some entries with `cortex project delete`",
+                    text.len()
+                )));
+            }
+            parse_private(&text, STORE_NAME).map_err(StoreError::Unreadable)?;
             let options = AtomicWriteOptions {
                 owner_only: true,
                 follow_links: false,
@@ -324,7 +378,8 @@ impl Store {
                 tracing::warn!(error = %error, "the good copy of the project's store was not written");
             }
         }
-        Ok((answer, state))
+        // Under the lock still: the stamp is of exactly the state returned.
+        Ok((answer, state, self.stamp()))
     }
 }
 

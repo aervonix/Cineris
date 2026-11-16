@@ -187,3 +187,33 @@ command = { purpose = "check", run = "cargo clippy" }
 kind = "convention"
 text = "Every public item is documented."
 "#;
+
+/// Makes a symbolic link at `link` to `target`, a directory's or a file's.
+/// `false` where this machine cannot: on Windows making one needs a
+/// privilege an ordinary account lacks unless Developer Mode is on. The CI
+/// runner has it, and there the link must be made.
+pub(crate) fn link(target: &std::path::Path, link: &std::path::Path, directory: bool) -> bool {
+    #[cfg(unix)]
+    {
+        let _ = directory;
+        std::os::unix::fs::symlink(target, link).unwrap();
+        true
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+        let made = if directory {
+            symlink_dir(target, link)
+        } else {
+            symlink_file(target, link)
+        };
+        match made {
+            Ok(()) => true,
+            Err(error) if std::env::var_os("GITHUB_ACTIONS").is_none() => {
+                println!("skipped: cannot make a symbolic link here ({error})");
+                false
+            }
+            Err(error) => panic!("the CI runner cannot make a symbolic link: {error}"),
+        }
+    }
+}

@@ -444,7 +444,7 @@ impl Entry {
         };
         part("cortex-knowledge entry 1");
         part(self.kind.as_str());
-        part(&self.text);
+        part(&one_spaced(&self.text));
         match &self.command {
             Some(command) => {
                 part("command");
@@ -520,9 +520,9 @@ impl Entry {
             Some(Check::Exists { path }) => inside("check.exists", path)?,
             Some(Check::Contains { path, pattern }) => {
                 inside("check.contains.path", path)?;
-                within("check.contains.pattern", pattern, MAX_DETAIL)?;
+                one_line("check.contains.pattern", pattern)?;
             }
-            Some(Check::Command { command }) => within("check.command", command, MAX_DETAIL)?,
+            Some(Check::Command { command }) => one_line("check.command", command)?,
             None => {}
         }
         if self.basis.is_some() != self.learned.is_some() {
@@ -591,7 +591,7 @@ impl Entry {
 /// # Errors
 ///
 /// A purpose this build does not know.
-pub fn command_from_wire(command: &wire::EntryCommand) -> Result<Command, String> {
+pub fn command_from_wire(command: &wire::NewCommand) -> Result<Command, String> {
     let purpose = Purpose::parse(command.purpose.as_str()).ok_or_else(|| {
         format!(
             "`{}` is not a purpose a command has: build, test, check, format or run",
@@ -601,8 +601,8 @@ pub fn command_from_wire(command: &wire::EntryCommand) -> Result<Command, String
     Ok(Command {
         purpose,
         run: command.command.trim().to_owned(),
-        cwd: normal_dir(command.cwd.as_deref()),
-        usual_ms: command.usual_duration_ms,
+        cwd: checked_dir(command.cwd.as_deref())?,
+        usual_ms: None,
         read_only: command.read_only,
     })
 }
@@ -623,6 +623,37 @@ pub fn normal_dir(dir: Option<&str>) -> Option<String> {
     }
 }
 
+/// A text with its ends trimmed and every run of blanks made one space:
+/// how two texts are compared, how a new one is kept, and how a text is
+/// hashed, so that a line ending a checkout changed is not another entry.
+pub(crate) fn one_spaced(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A directory an entry's command runs in, as a person or a client wrote
+/// it, made the one way an entry keeps it ([`normal_dir`]).
+///
+/// # Errors
+///
+/// A directory that names a place by its root, a drive or the home
+/// directory: it is refused as written, never read as a path below the
+/// workspace.
+pub fn checked_dir(dir: Option<&str>) -> Result<Option<String>, String> {
+    if let Some(dir) = dir {
+        let dir = dir.trim();
+        let mut characters = dir.chars();
+        let rooted = matches!(characters.next(), Some('/' | '\\' | '~'))
+            || matches!(characters.next(), Some(':'));
+        if rooted {
+            return Err(format!(
+                "`cwd` is a directory inside the workspace, relative to its root: `{}` is not",
+                cortex_base::visible(dir)
+            ));
+        }
+    }
+    Ok(normal_dir(dir))
+}
+
 /// A text that is not empty and within its length.
 fn within(name: &str, text: &str, longest: usize) -> Result<(), String> {
     if text.trim().is_empty() {
@@ -633,6 +664,16 @@ fn within(name: &str, text: &str, longest: usize) -> Result<(), String> {
         return Err(format!(
             "`{name}` is {length} characters long, and may be up to {longest}"
         ));
+    }
+    Ok(())
+}
+
+/// A pattern or a command line: within its length, and one line with no
+/// control character.
+fn one_line(name: &str, text: &str) -> Result<(), String> {
+    within(name, text, MAX_DETAIL)?;
+    if text.chars().any(char::is_control) {
+        return Err(format!("`{name}` is one line, with no control character"));
     }
     Ok(())
 }
@@ -780,6 +821,12 @@ mod tests {
             change(&mut other);
             assert_ne!(other.content_hash(), hash, "change {index}");
         }
+        // How its text is spaced and where its lines end is not what it
+        // says: a checkout that changed the line endings has the same
+        // entry, under the same id.
+        let mut spaced = one.clone();
+        spaced.text = "  Runs\r\n the   tests.\n".to_owned();
+        assert_eq!(spaced.content_hash(), hash);
         // A character moved from one part to the next is another entry.
         let mut moved = one.clone();
         moved.text = "Runs the tests.c".to_owned();
@@ -796,7 +843,24 @@ mod tests {
         };
         assert_eq!(good.validate(), Ok(()));
         type Change = fn(&mut Entry);
-        let cases: [(Change, &str); 12] = [
+        let cases: [(Change, &str); 14] = [
+            (
+                |entry| {
+                    entry.check = Some(Check::Command {
+                        command: "cargo --version\nrm -rf x".to_owned(),
+                    });
+                },
+                "`check.command` is one line",
+            ),
+            (
+                |entry| {
+                    entry.check = Some(Check::Contains {
+                        path: "src".to_owned(),
+                        pattern: "a\u{0}b".to_owned(),
+                    });
+                },
+                "`check.contains.pattern` is one line",
+            ),
             (|entry| entry.text = "  ".to_owned(), "`text` is empty"),
             (
                 |entry| entry.text = "x".repeat(MAX_TEXT + 1),
@@ -858,6 +922,32 @@ mod tests {
         assert_eq!(flaky.validate(), Ok(()));
         flaky.command = None;
         assert_eq!(flaky.validate(), Ok(()));
+    }
+
+    #[test]
+    fn a_directory_that_names_a_root_is_refused_as_written() {
+        for rooted in [
+            "/etc",
+            "\\\\server\\share",
+            "\\x",
+            "C:\\Windows",
+            "c:x",
+            "~/notes",
+            " /etc ",
+        ] {
+            let problem = checked_dir(Some(rooted)).unwrap_err();
+            assert!(
+                problem.contains("inside the workspace"),
+                "{rooted}: {problem}"
+            );
+        }
+        assert_eq!(checked_dir(None), Ok(None));
+        assert_eq!(
+            checked_dir(Some("./crates//app/")),
+            Ok(Some("crates/app".to_owned()))
+        );
+        // `..` is not a root: the entry's own check refuses it.
+        assert_eq!(checked_dir(Some("../up")), Ok(Some("../up".to_owned())));
     }
 
     #[test]

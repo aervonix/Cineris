@@ -6,7 +6,7 @@ use cortex_knowledge::{
     Basis, ChangeError, Kind, ProposalOutcome, Proposed, Scope, Status, StoreError, error_code,
 };
 use cortex_protocol::project::{
-    CommandPurpose, EntryAction, EntryChange, EntryCommand, EntryKind, NewEntry,
+    CommandPurpose, EntryAction, EntryChange, EntryKind, NewCommand, NewEntry,
 };
 use cortex_testkit::scratch;
 
@@ -33,11 +33,10 @@ fn new_command(run: &str) -> NewEntry {
     NewEntry {
         kind: EntryKind::Command,
         text: "Runs the linter.".to_owned(),
-        command: Some(EntryCommand {
+        command: Some(NewCommand {
             purpose: CommandPurpose::Check,
             command: run.to_owned(),
             cwd: Some("./tools/".to_owned()),
-            usual_duration_ms: None,
             read_only: false,
         }),
         check: None,
@@ -219,25 +218,29 @@ fn an_invalid_shared_file_is_reported_and_what_was_read_before_is_kept() {
 
 /// The shared file is read only as a regular file in a directory of the
 /// workspace itself: a link is not followed to another file.
-#[cfg(unix)]
 #[test]
 fn a_shared_file_behind_a_link_is_not_read() {
     let world = World::new(scratch!("project_shared_link"));
     let elsewhere = world.scratch.file("elsewhere/profile.toml", TEAM);
     // `profile.toml` as a link.
     world.scratch.dir("work/.cortex");
-    std::os::unix::fs::symlink(&elsewhere, world.scratch.join("work/.cortex/profile.toml"))
-        .unwrap();
+    if !crate::link(
+        &elsewhere,
+        &world.scratch.join("work/.cortex/profile.toml"),
+        false,
+    ) {
+        return;
+    }
     let snapshot = world.load();
     assert!(snapshot.entries().is_empty());
     assert_eq!(snapshot.problems().len(), 1, "{:?}", snapshot.problems());
     // `.cortex` as a link.
     std::fs::remove_dir_all(world.scratch.join("work/.cortex")).unwrap();
-    std::os::unix::fs::symlink(
-        world.scratch.join("elsewhere"),
-        world.scratch.join("work/.cortex"),
-    )
-    .unwrap();
+    assert!(crate::link(
+        &world.scratch.join("elsewhere"),
+        &world.scratch.join("work/.cortex"),
+        true
+    ));
     let snapshot = world.load();
     assert!(snapshot.entries().is_empty());
     assert!(snapshot.problems()[0].contains("`.cortex` is a link"));
@@ -758,14 +761,19 @@ fn only_an_entry_the_user_stands_behind_is_promoted() {
 
 /// The reviewer's case: a repository plants `.cortex/profile.toml` as a
 /// link. A promote must not write through it.
-#[cfg(unix)]
 #[test]
 fn a_promote_does_not_write_through_a_planted_link() {
     let world = World::new(scratch!("project_promote_link"));
     world.write_store(MIXED);
     let target = world.scratch.file("outside/bashrc", "export PATH\n");
     world.scratch.dir("work/.cortex");
-    std::os::unix::fs::symlink(&target, world.scratch.join("work/.cortex/profile.toml")).unwrap();
+    if !crate::link(
+        &target,
+        &world.scratch.join("work/.cortex/profile.toml"),
+        false,
+    ) {
+        return;
+    }
     let project = world.project();
     let error = project
         .update(&[change("k_1", EntryAction::Promote)], &[], None)
@@ -776,11 +784,11 @@ fn a_promote_does_not_write_through_a_planted_link() {
 
     // `.cortex` itself as a link out of the workspace.
     std::fs::remove_dir_all(world.scratch.join("work/.cortex")).unwrap();
-    std::os::unix::fs::symlink(
-        world.scratch.join("outside"),
-        world.scratch.join("work/.cortex"),
-    )
-    .unwrap();
+    assert!(crate::link(
+        &world.scratch.join("outside"),
+        &world.scratch.join("work/.cortex"),
+        true
+    ));
     let error = project
         .update(&[change("k_1", EntryAction::Promote)], &[], None)
         .unwrap_err();
@@ -833,4 +841,133 @@ fn a_change_to_either_file_is_seen_at_the_next_look() {
         .update(&[change("k_3", EntryAction::Accept)], &[], None)
         .unwrap();
     assert!(project.is_current(&updated.snapshot));
+}
+
+/// The write's own guards, which the read's stand in front of: a link put
+/// at the shared file's name, or at `.cortex`, between the read and the
+/// write is not written through either.
+#[test]
+fn a_link_planted_between_the_read_and_the_write_is_not_written_through() {
+    for directory in [false, true] {
+        let world = World::new(scratch!(if directory {
+            "project_promote_race_dir"
+        } else {
+            "project_promote_race_file"
+        }));
+        world.write_store(MIXED);
+        world.write_shared(TEAM);
+        let target = world.scratch.file("outside/bashrc", "export PATH\n");
+        let hold = cortex_testkit::Hold::new(cortex_knowledge::project::BEFORE_THE_SHARED_WRITE);
+        let project = world.project();
+        let promote = std::thread::spawn(move || {
+            project.update(&[change("k_4", EntryAction::Promote)], &[], None)
+        });
+        // The shared file was read and found sound; now it is swapped.
+        hold.reach();
+        let cortex = world.scratch.join("work/.cortex");
+        std::fs::remove_file(cortex.join("profile.toml")).unwrap();
+        let planted = if directory {
+            std::fs::remove_dir(&cortex).unwrap();
+            crate::link(&world.scratch.join("outside"), &cortex, true)
+        } else {
+            crate::link(&target, &cortex.join("profile.toml"), false)
+        };
+        hold.release();
+        let outcome = promote.join().unwrap();
+        if !planted {
+            return;
+        }
+        let error = outcome.unwrap_err();
+        assert_eq!(error_code(&error), "shared_profile_invalid", "{error}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "export PATH\n");
+        assert_eq!(world.scratch.listing("outside"), ["bashrc"]);
+        assert_eq!(world.store_text(), MIXED, "the entry is still the user's");
+    }
+}
+
+/// The cap on a file's size is held when the shared file is written: a
+/// promote that would take it past what every reader takes is refused.
+#[test]
+fn a_promote_that_would_pass_the_shared_files_size_is_refused() {
+    let world = World::new(scratch!("project_promote_size"));
+    let mut team = String::from("version = 1\n");
+    let mut count = 0;
+    while team.len() + 3_200 < 256 * 1024 {
+        count += 1;
+        team.push_str(&format!(
+            "[[entry]]\nkind = \"fact\"\ntext = \"{count} {}\"\nevidence = \"{}\"\n",
+            "\u{4e2d}".repeat(590),
+            "\u{6587}".repeat(400)
+        ));
+    }
+    assert!(count < 200, "the size binds before the count does");
+    // A comment brings it to 500 bytes below the cap, whatever the entries
+    // came to.
+    let padding = 256 * 1024 - 500 - team.len() - 3;
+    team.push_str(&format!("# {}\n", "p".repeat(padding)));
+    world.write_shared(&team);
+    let project = world.project();
+    let added = project
+        .update(
+            &[],
+            &[NewEntry {
+                kind: EntryKind::Convention,
+                text: "\u{5b57}".repeat(600),
+                command: None,
+                check: None,
+            }],
+            None,
+        )
+        .unwrap();
+    let id = added.changed[0].id.clone();
+    let stored = world.store_text();
+    let error = project
+        .update(&[change(id.as_str(), EntryAction::Promote)], &[], None)
+        .unwrap_err();
+    assert_eq!(error_code(&error), "shared_profile_invalid", "{error}");
+    assert!(error.to_string().contains("may be up to 262144"), "{error}");
+    assert_eq!(world.shared_text(), team);
+    assert_eq!(world.store_text(), stored);
+    // Everyone still reads the shared file.
+    assert_eq!(world.load().problems(), Vec::<String>::new());
+}
+
+/// A promote that stopped between its two writes left the entry in both
+/// files. The next promote of it finishes the move, and adds nothing to
+/// the shared file.
+#[test]
+fn a_promote_that_stopped_half_way_is_finished_by_the_next() {
+    let world = World::new(scratch!("project_promote_again"));
+    world.write_store(MIXED);
+    let shared = "version = 1\n[[entry]]\nkind = \"convention\"\ntext = \"Errors are returned, never panicked on.\"\n";
+    world.write_shared(shared);
+    let updated = world
+        .project()
+        .update(&[change("k_4", EntryAction::Promote)], &[], None)
+        .unwrap();
+    assert_eq!(world.shared_text(), shared, "nothing is added twice");
+    assert_eq!(updated.removed, [id("k_4")]);
+    assert!(!world.store_text().contains("Errors are returned"));
+    let entry = &updated.changed[0];
+    assert_eq!((entry.scope, entry.status), (Scope::Shared, Status::Active));
+    assert_eq!(in_use(&world, &updated.snapshot).len(), 3);
+}
+
+/// A directory that names a place by its root is refused as written, in a
+/// file and in a request: it is never read as a path below the workspace.
+#[test]
+fn a_rooted_directory_is_refused_not_reread_as_a_relative_one() {
+    let world = World::new(scratch!("project_rooted_cwd"));
+    for cwd in ["/etc", "\\\\server\\share", "C:\\Windows", "~/x", "../up"] {
+        let mut command = new_command("make");
+        command.command.as_mut().unwrap().cwd = Some(cwd.to_owned());
+        let error = world.project().update(&[], &[command], None).unwrap_err();
+        assert_eq!(error_code(&error), "invalid_entry", "{cwd}: {error}");
+    }
+    world.write_store(
+        "version = 1\n[[entry]]\nkind = \"command\"\ntext = \"x\"\nstatus = \"active\"\ncommand = { purpose = \"run\", run = \"make\", cwd = \"/etc\" }\n",
+    );
+    let snapshot = world.load();
+    assert!(snapshot.entries().is_empty());
+    assert!(snapshot.problems()[0].contains("`cwd` is a directory inside the workspace"));
 }

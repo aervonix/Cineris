@@ -157,6 +157,19 @@ fn the_golden_values_round_trip_exactly() {
                 let params = round_trip::<crate::methods::ProjectUpdateParams>(value);
                 assert_eq!(params.add.len(), 2, "the entries a user writes");
                 assert!(params.changes.is_empty());
+                // An entry the user writes is accepted at once, so it is
+                // read as an enforced value is: a field this build does
+                // not know refuses it, in the entry and in its command.
+                let mut later = entry["value"].clone();
+                later["add"][0]["expires_at"] = "2027-01-01T00:00:00Z".into();
+                assert!(
+                    serde_json::from_value::<crate::methods::ProjectUpdateParams>(later).is_err()
+                );
+                let mut later = entry["value"].clone();
+                later["add"][0]["command"]["only_in"] = "ci".into();
+                assert!(
+                    serde_json::from_value::<crate::methods::ProjectUpdateParams>(later).is_err()
+                );
             }
             Some("ProjectEntriesResult") => {
                 let result = round_trip::<crate::methods::ProjectEntriesResult>(value);

@@ -233,6 +233,26 @@ A reviewer that had not seen the reasoning read this note against the specificat
 | 9 to 17 | Secrets in learned text; model-chosen text in the system prompt; holes in the flip rule; a flaky entry hiding real failures; a store filled by entries seen once; a rejection from another process waiting a turn; step 43's room to grow; the item an entry came from; pages this step changes. | Sections 2 to 5 and "Left to later steps". |
 | 18 | The second pull request held most of the risk. | Three small seams moved to the first. |
 
+## After the review of the first pull request
+
+An independent reviewer read the whole diff of the first pull request (the store, the two files, section 5's text, the policy's two additions, the epoch's profile) against the specification, without the author's reasoning. Its findings, each with the fix and the test that holds it:
+
+| # | Finding | Fix | Held by |
+|---|---|---|---|
+| B1 | **The 256 KiB cap was checked when a file was read and never when one was written.** 243 of the longest entries fill it, well below the cap of 500 entries, so ordinary use could write a store that every later load refused whole, its good copy with it; and a `promote` could do the same to the shared file for a whole team. | `Store::change` refuses a change that would pass the cap (`project_store_full`) and reads its text back before it is written; `append_shared` holds the shared file to the same size. | `store::a_change_that_would_pass_the_size_cap_is_refused_and_the_store_stays_readable`, `project::a_promote_that_would_pass_the_shared_files_size_is_refused`, `file::tests::an_entry_that_would_take_the_shared_file_past_its_size_is_not_added` |
+| B2 | **The snapshot after a change took the store's stamp after the lock was let go.** Another process's change in that moment (a command turned off) was then recorded beside our own state and never seen. | The stamp is taken in `Store::change`, under the lock, and handed on. | `store::a_change_made_by_another_right_after_ours_is_seen`, which holds a point between the two |
+| S1 | **Every load could wait for the lock** (to bring the good copy up to date), though the docs said readers take none: a stuck writer would hang every session. | The lock is tried, and the copy left for the next load when it is held. | `store::a_load_does_not_wait_for_a_writer` |
+| S2 | **A hostile shared file's key names reached `problems` unescaped** (through the parser's own message), and from there clients and the terminal. | Every problem's message, and what is said of an entry left out, goes through `visible`. | `file::tests::a_problem_never_carries_what_acts_unseen` |
+| S3 | **A hand-edited id or counter near the top of 64 bits** overflowed, and in a release build wrapped round to an id in use. | A number past 2^53 refuses the file. | `file::tests::a_number_past_what_an_id_may_hold_refuses_the_file` |
+| S4 | **`project/update`'s `add` was read leniently,** against decision 0028: an entry the user writes is accepted at once. | `NewEntry` and its command (`NewCommand`, a type of its own) refuse a field this build does not know. | `cortex-protocol`'s `tests::the_golden_values_round_trip_exactly` |
+| S5 | **The link rules were tested on Linux only, and the write's own link checks nowhere:** the read's check stood in front of them. | The link tests run on both systems (a symbolic link, made on the Windows runner as `cortex-base`'s are); a test plants a link between the read and the write, at the file and at `.cortex`. | `project::a_link_planted_between_the_read_and_the_write_is_not_written_through`, `a_shared_file_behind_a_link_is_not_read`, `a_promote_does_not_write_through_a_planted_link`, `store::a_link_at_the_store_is_not_followed` |
+
+**From its notes,** fixed with a test each: a private id may not begin `s_` (it would stand in front of a shared entry); a `promote` that stopped between its two writes is finished by the next (`project::a_promote_that_stopped_half_way_is_finished_by_the_next`); a directory that names a root is refused as written, where it had been read as a path below the workspace (`project::a_rooted_directory_is_refused_not_reread_as_a_relative_one`); a check's command and pattern take no control character; an entry's hash is of its text with its blanks made one, so a checkout that changed line endings keeps its ids; and the test of the cut's singular line now always asserts. **Written down, not changed:** the evidence is outside the hash; ids start again after a store is removed; an older server and `add`; PowerShell compares a program's name without regard to case.
+
+**For the second pull request,** from the same notes: learned rules are never passed in `Parts::rules`, where they would enter the standing lease and outlive `set_learned`; and an entry's directory and a check's path are resolved against the workspace by whatever uses them, since the store checks their text only.
+
+The breaks of these rules are in `mutations/step-17.breaks`, under "after the review of the store".
+
 ## Measured
 
 On the desktop, a release build, `perf_` tests of `cortex-knowledge` (`crates/cortex-knowledge/tests/it/measure.rs`), medians of 200 runs or more. The hosted runners' figures are in [ci.md](ci.md).

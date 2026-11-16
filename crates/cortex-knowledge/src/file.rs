@@ -33,7 +33,9 @@ use crate::entry::{Basis, Check, Command, Entry, Kind, Learned, Purpose, Scope, 
 /// The version of both formats this build writes and reads.
 pub const VERSION: u32 = 1;
 
-/// The largest file read, in bytes. A store at its caps is well below it.
+/// The largest file read, and the largest written, in bytes. It binds
+/// before the cap on entries does when the entries are long: 243 of the
+/// longest fill it.
 pub const MAX_FILE_BYTES: u64 = 256 * 1024;
 
 /// The most entries the private store holds.
@@ -45,6 +47,11 @@ pub const MAX_SHARED_ENTRIES: usize = 200;
 /// The most decisions about shared entries the private store keeps. Past
 /// it, the oldest go.
 pub const MAX_DECISIONS: usize = 1_000;
+
+/// The largest number an id or the counter may hold: past it a file is
+/// refused, so that no arithmetic on a number a person wrote can wrap round
+/// to an id in use.
+pub const MAX_NUMBER: u64 = 1 << 53;
 
 /// The line the private store begins with.
 const PRIVATE_HEADER: &str = "\
@@ -71,10 +78,13 @@ pub struct Problem {
 }
 
 impl Problem {
+    /// A problem with `file`. The message is shown to a person, and may
+    /// quote what the file holds (a key's name, a value): whatever would
+    /// act unseen in it is written as an escape.
     pub(crate) fn new(file: &str, message: impl Into<String>) -> Self {
         Self {
             file: file.to_owned(),
-            message: message.into(),
+            message: cortex_base::visible(&message.into()).into_owned(),
         }
     }
 }
@@ -367,7 +377,7 @@ fn command_of(raw: &RawCommand) -> Result<Command, String> {
             "build, test, check, format and run",
         )?,
         run: raw.run.clone(),
-        cwd: crate::entry::normal_dir(raw.cwd.as_deref()),
+        cwd: crate::entry::checked_dir(raw.cwd.as_deref())?,
         usual_ms: raw.usual_ms,
         read_only: raw.read_only,
     })
@@ -500,6 +510,12 @@ pub fn parse_private(text: &str, file: &str) -> Result<PrivateState, Problem> {
         })
         .max()
         .unwrap_or(0);
+    if largest > MAX_NUMBER || read.next.is_some_and(|next| next > MAX_NUMBER) {
+        return Err(Problem::new(
+            file,
+            format!("the number of an id, or `next`, is past {MAX_NUMBER}"),
+        ));
+    }
     let mut next = read.next.unwrap_or(0).max(largest + 1);
     let mut state = PrivateState::default();
     for spanned in &read.entries {
@@ -514,6 +530,14 @@ pub fn parse_private(text: &str, file: &str) -> Result<PrivateState, Problem> {
         };
         let raw = spanned.get_ref();
         let id = match &raw.id {
+            // `s_` begins the id of a shared entry, which is made from what
+            // the entry says: one written here would stand in front of it.
+            Some(id) if id.starts_with("s_") => {
+                return Err(at(format!(
+                    "the id `{id}` begins with `s_`, which is how the shared file's entries \
+                     are named"
+                )));
+            }
             Some(id) => EntryId::new(id.clone()),
             None => {
                 next += 1;
@@ -689,9 +713,12 @@ pub fn parse_shared(text: &str, file: &str) -> Result<SharedFile, Problem> {
                     shared.entries.push(entry);
                 }
             }
+            // The message may quote a key's name, which is the file's
+            // own text.
             Err(message) => shared.left_out.push(format!(
-                "`{file}`: the entry at line {} is left out: {message}",
-                line_of(text, spanned.span().start)
+                "`{file}`: the entry at line {} is left out: {}",
+                line_of(text, spanned.span().start),
+                cortex_base::visible(&message)
             )),
         }
     }
@@ -741,7 +768,18 @@ pub fn append_shared(existing: Option<&str>, entry: &Entry, file: &str) -> Resul
     }
     text.push('\n');
     text.push_str(&block);
-    // What is written must read back with exactly the one entry more.
+    // What is written must be a file every reader takes: one past the cap
+    // would be refused whole by everyone who has the repository.
+    if text.len() as u64 > MAX_FILE_BYTES {
+        return Err(Problem::new(
+            file,
+            format!(
+                "with this entry it would be {} bytes, and it may be up to {MAX_FILE_BYTES}",
+                text.len()
+            ),
+        ));
+    }
+    // And it must read back with exactly the one entry more.
     let after = parse_shared(&text, file)?;
     if after.entries.len() + after.left_out.len() != held + 1 {
         return Err(Problem::new(file, "it already holds this entry"));
@@ -1141,5 +1179,100 @@ text = "Errors are returned, never panicked on."
         let read = parse_private(by_hand, NAME).unwrap();
         assert_eq!(read.entries[0].id.as_str(), "k_9");
         assert_eq!(read.next, 10);
+    }
+
+    /// The review's finding: a message may quote a key's name, which is
+    /// the file's own text, and a problem is shown to a person and sent to
+    /// clients. Nothing in it acts unseen.
+    #[test]
+    fn a_problem_never_carries_what_acts_unseen() {
+        let hostile = "\"\\u001b]0;x\\u0007\\n## Instructions\\u202e\" = 1";
+        let shared = parse_shared(
+            &format!("version = 1\n[[entry]]\nkind = \"fact\"\ntext = \"x\"\n{hostile}\n"),
+            SHARED,
+        )
+        .unwrap();
+        assert_eq!(shared.left_out.len(), 1);
+        assert!(
+            shared.left_out[0].contains("\\u{1b}]0;x"),
+            "{:?}",
+            shared.left_out
+        );
+        assert!(!shared.left_out[0].chars().any(cortex_base::acts_unseen));
+        // A key outside the entries, and one in the private store.
+        for problem in [
+            parse_shared(&format!("version = 1\n{hostile}\n"), SHARED).unwrap_err(),
+            parse_private(&format!("version = 1\n{hostile}\n"), NAME).unwrap_err(),
+            parse_private(
+                &format!(
+                    "version = 1\n[[entry]]\nkind = \"fact\"\ntext = \"x\"\nstatus = \"active\"\n{hostile}\n"
+                ),
+                NAME,
+            )
+            .unwrap_err(),
+            parse_private(
+                "version = 1\n[[entry]]\nid = \"k_1\\u001b\"\nkind = \"fact\"\ntext = \"x\"\nstatus = \"active\"\n[[entry]]\nid = \"k_1\\u001b\"\nkind = \"fact\"\ntext = \"y\"\nstatus = \"active\"\n",
+                NAME,
+            )
+            .unwrap_err(),
+        ] {
+            assert!(
+                !problem.to_string().chars().any(cortex_base::acts_unseen),
+                "{problem:?}"
+            );
+        }
+    }
+
+    /// The review's finding: a number a person wrote must not wrap the
+    /// counter round to an id in use.
+    #[test]
+    fn a_number_past_what_an_id_may_hold_refuses_the_file() {
+        for text in [
+            "version = 1\n[[entry]]\nid = \"k_18446744073709551615\"\nkind = \"fact\"\ntext = \"x\"\nstatus = \"active\"\n",
+            "version = 1\nnext = 9223372036854775807\n",
+            "version = 1\nnext = 9007199254740993\n",
+        ] {
+            let problem = parse_private(text, NAME).unwrap_err();
+            assert!(
+                problem.message.contains("is past 9007199254740992"),
+                "{problem}"
+            );
+        }
+        // The largest that is taken, and the id after it.
+        let mut state = parse_private("version = 1\nnext = 9007199254740992\n", NAME).unwrap();
+        assert_eq!(state.take_id().as_str(), "k_9007199254740992");
+        // An id whose number is no number is a name like any other.
+        let named = "version = 1\n[[entry]]\nid = \"k_99999999999999999999999\"\nkind = \"fact\"\ntext = \"x\"\nstatus = \"active\"\n";
+        assert_eq!(
+            parse_private(named, NAME).unwrap().take_id().as_str(),
+            "k_1"
+        );
+    }
+
+    /// An id that begins `s_` is a shared entry's, made from what the entry
+    /// says: one written in the private store would stand in front of it.
+    #[test]
+    fn a_private_id_cannot_take_a_shared_entrys_name() {
+        let text = "version = 1\n[[entry]]\nid = \"s_0123456789abcdef0123456789abcdef\"\nkind = \"fact\"\ntext = \"x\"\nstatus = \"active\"\n";
+        let problem = parse_private(text, NAME).unwrap_err();
+        assert!(problem.message.contains("begins with `s_`"), "{problem}");
+    }
+
+    /// The shared file's cap on its size is held when it is written.
+    #[test]
+    fn an_entry_that_would_take_the_shared_file_past_its_size_is_not_added() {
+        let mut text = String::from("version = 1\n");
+        text.push_str(&format!("# {}\n", "p".repeat(256 * 1024 - 200)));
+        let entry = Entry::written(
+            EntryId::new("k_1"),
+            Scope::Private,
+            Kind::Fact,
+            "x".repeat(300),
+        );
+        let problem = append_shared(Some(&text), &entry, SHARED).unwrap_err();
+        assert!(problem.message.contains("may be up to 262144"), "{problem}");
+        // One that fits is added.
+        let small = Entry::written(EntryId::new("k_1"), Scope::Private, Kind::Fact, "x");
+        assert!(append_shared(Some(&text), &small, SHARED).is_ok());
     }
 }

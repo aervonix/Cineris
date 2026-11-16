@@ -346,13 +346,14 @@ fn a_store_that_is_too_large_or_not_text_is_invalid() {
 
 /// A link where the store should be is not read through, and not written
 /// through.
-#[cfg(unix)]
 #[test]
 fn a_link_at_the_store_is_not_followed() {
     let world = World::new(scratch!("store_link"));
     let elsewhere = world.scratch.file("elsewhere.toml", MIXED);
     std::fs::create_dir_all(world.store_file().parent().unwrap()).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, world.store_file()).unwrap();
+    if !crate::link(&elsewhere, &world.store_file(), false) {
+        return;
+    }
     let snapshot = world.load();
     assert!(
         snapshot.entries().is_empty(),
@@ -367,4 +368,140 @@ fn a_link_at_the_store_is_not_followed() {
             .file_type()
             .is_symlink()
     );
+}
+
+/// The review's first blocker: the cap on a file's size is held when the
+/// store is written, not only when it is read. A change that would take
+/// the file past it is refused, and the store stays one every load reads.
+#[test]
+fn a_change_that_would_pass_the_size_cap_is_refused_and_the_store_stays_readable() {
+    let world = World::new(scratch!("store_size_cap"));
+    let mut store = String::from("version = 1\n");
+    let mut count = 0;
+    while store.len() < 256 * 1024 - 1_400 {
+        count += 1;
+        store.push_str(&format!(
+            "[[entry]]\nid = \"k_{count}\"\nkind = \"fact\"\ntext = \"{}\"\nstatus = \"active\"\nevidence = \"{}\"\n",
+            "t".repeat(600),
+            "e".repeat(400)
+        ));
+    }
+    world.write_store(&store);
+    let before = world.load();
+    assert_eq!(before.entries().len(), count);
+    assert!(count < 500, "the size binds before the count does");
+
+    let long = cortex_protocol::project::NewEntry {
+        kind: cortex_protocol::project::EntryKind::Fact,
+        text: "u".repeat(600),
+        command: None,
+        check: None,
+    };
+    let project = world.project();
+    let mut refused = None;
+    // A few more of the longest entry: the first that does not fit is
+    // refused, and everything before it is kept.
+    for index in 0..4 {
+        let mut one = long.clone();
+        // Each another entry: the same one twice is refused for that.
+        one.text = format!("{index}{}", "u".repeat(599));
+        match project.update(&[], &[one], None) {
+            Ok(_) => count += 1,
+            Err(error) => {
+                refused = Some(error);
+                break;
+            }
+        }
+    }
+    let refused = refused.expect("the store has a size it does not pass");
+    assert!(matches!(refused, StoreError::Full(_)), "{refused}");
+    assert_eq!(cortex_knowledge::error_code(&refused), "project_store_full");
+    assert!(world.store_text().len() <= 256 * 1024);
+    // Every process still reads it, and its good copy.
+    let after = world.load();
+    assert!(after.problems().is_empty(), "{:?}", after.problems());
+    assert_eq!(after.entries().len(), count);
+    assert_eq!(
+        std::fs::read(world.good_copy()).unwrap(),
+        std::fs::read(world.store_file()).unwrap()
+    );
+    // And a proposal is refused the same way.
+    let error = project
+        .propose(
+            Proposed {
+                kind: Kind::Fact,
+                text: "v".repeat(600),
+                evidence: "w".repeat(400),
+                check: None,
+                session: None,
+            },
+            None,
+        )
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Full(_)), "{error}");
+}
+
+/// The review's second blocker: the snapshot a change gives back holds the
+/// store's stamp from while the change held the lock. Another process's
+/// change, made the moment the lock is let go, is then seen at the next
+/// look, and a command it turned off does not go on running unasked.
+#[test]
+fn a_change_made_by_another_right_after_ours_is_seen() {
+    let world = World::new(scratch!("store_stamp_under_lock"));
+    world.write_store(MIXED);
+    let hold = cortex_testkit::Hold::new(cortex_knowledge::project::BEFORE_THE_SNAPSHOT);
+    let project = world.project();
+    let ours = {
+        let project = project.clone();
+        std::thread::spawn(move || {
+            project
+                .update(&[change("k_3", EntryAction::Accept)], &[], None)
+                .unwrap()
+        })
+    };
+    // Our change is written and its lock let go; its snapshot is not put
+    // together yet.
+    hold.reach();
+    // Another process turns the accepted command off.
+    world
+        .project()
+        .store()
+        .change(|state, _| {
+            state.entries[0].status = Status::Disabled;
+            state.entries[0].accepted = None;
+            Ok::<_, cortex_knowledge::ChangeError>(((), true))
+        })
+        .unwrap();
+    hold.release();
+    let updated = ours.join().unwrap();
+    assert_eq!(
+        unasked(&world, &updated.snapshot),
+        ["cargo test"],
+        "as we wrote it"
+    );
+    assert!(
+        !project.is_current(&updated.snapshot),
+        "the other's change must show at the next look"
+    );
+    let reloaded = project.load(Some(&updated.snapshot));
+    assert_eq!(unasked(&world, &reloaded), Vec::<String>::new());
+}
+
+/// A load never waits for the store's lock: bringing the good copy up to
+/// date is tried, and left for the next load when a writer holds the lock.
+/// A writer that is stuck must not hang every session's turn.
+#[test]
+fn a_load_does_not_wait_for_a_writer() {
+    let world = World::new(scratch!("store_load_no_wait"));
+    // A valid store with no good copy yet, and a writer holding the lock.
+    let held = private::hold_lock(&world.store_file()).unwrap();
+    assert!(held.is_some(), "this file system can lock");
+    world.write_store(MIXED);
+    let snapshot = world.load();
+    assert_eq!(snapshot.entries().len(), 5);
+    assert!(snapshot.problems().is_empty());
+    assert!(!world.good_copy().exists(), "the copy waits for the lock");
+    drop(held);
+    assert_eq!(world.load().entries().len(), 5);
+    assert_eq!(std::fs::read_to_string(world.good_copy()).unwrap(), MIXED);
 }

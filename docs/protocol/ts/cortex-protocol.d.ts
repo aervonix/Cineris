@@ -886,12 +886,24 @@ export interface ModelsListResult {
 /** Whether sandboxed processes may use the network. There is no per-host list. */
 export type NetworkAccess = "off" | "full";
 
-/** An entry the user writes: it is active at once. Added in step 17. */
+/** The command of an entry the user writes. Added in step 17. It is read strictly, as [`NewEntry`] is: the command may come to run without asking. */
+export interface NewCommand {
+  /** The command line. */
+  command: string;
+  /** The directory it runs in, relative to the workspace root. */
+  cwd?: string | null;
+  /** What it is for. */
+  purpose: CommandPurpose;
+  /** Whether it only reads. */
+  read_only?: boolean;
+}
+
+/** An entry the user writes: it is active at once. Added in step 17. **It is read strictly:** a field this build does not know refuses the request (`docs/decisions/0028-enforced-values-fail-closed.md`). An entry the user writes is accepted from the moment it is written, and a command among them becomes an allow rule once the project is trusted: a field that is not understood could be the one that narrows it, such as an expiry. */
 export interface NewEntry {
   /** A test that shows it still holds. */
   check?: EntryCheck | null;
   /** For a `command` entry: the command. */
-  command?: EntryCommand | null;
+  command?: NewCommand | null;
   /** What it is. */
   kind: EntryKind;
   /** The entry in words. */
