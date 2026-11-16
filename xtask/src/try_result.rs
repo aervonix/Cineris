@@ -13,7 +13,7 @@
 //!
 //! - an A/B run's tables: each tier on both sides, each round, the crates
 //!   and the tests that moved, the rounds left out and any tests the run
-//!   skipped;
+//!   skipped, and each side's wall time in each round;
 //! - a `test` run's report of tiers against that OS's budgets;
 //! - a stress run's summary, as the run printed it;
 //! - every failed test with the first lines of its message; and for a job
@@ -37,15 +37,22 @@ use crate::tiers::{self, Os};
 
 const USAGE: &str =
     "usage: cargo xtask try-result RUN [--os linux|windows|linux-22.04] [--top N] [--tail N]
+                               [--queued-warn MIN]
 
 Prints what a `try` run found, from its artifacts: for each OS the run had, an
 A/B run's tables (tiers, each round, the crates and tests that moved, the rounds
-left out, the tests it skipped), a `test` run's tiers against the budgets, or a
+left out, the tests it skipped, each side's wall time in each round), a `test`
+run's tiers against the budgets, or a
 stress run's summary; then each failed test with the first lines of its message,
 and for a job that failed with no failed test in a report, the last lines of its
 log. It exits with an error naming what failed when the run did.
 --top N is the tests a tier lists (8 when not given), --tail N the lines of a
-log (30).";
+log (30).
+
+A run that has not finished is not read. When it has sat queued (or in
+progress with no job started) for longer than --queued-warn MIN minutes (10
+when not given; --queued-limit is the same), it says so: GitHub has not given
+it a runner.";
 
 /// How many tests of a tier an A/B's detail and a report's list show.
 const TOP: usize = 8;
@@ -61,6 +68,8 @@ pub(crate) struct Request {
     pub(crate) os: Option<String>,
     pub(crate) top: usize,
     pub(crate) tail: usize,
+    /// Minutes a run may sit with no job started before it is named.
+    pub(crate) queued_warn: u64,
 }
 
 impl Request {
@@ -71,6 +80,7 @@ impl Request {
             os: None,
             top: TOP,
             tail: TAIL,
+            queued_warn: runs::QUEUED_WARN_MINUTES,
         };
         let mut rest = arguments.iter();
         while let Some(argument) = rest.next() {
@@ -94,6 +104,10 @@ impl Request {
                 }
                 "--top" => request.top = number(value("a number")?, "--top")?,
                 "--tail" => request.tail = number(value("a number")?, "--tail")?,
+                "--queued-warn" | "--queued-limit" => {
+                    request.queued_warn =
+                        runs::queued_warn_minutes(argument, value("a number of minutes")?)?;
+                }
                 "--help" | "-h" => return Err(USAGE.to_owned()),
                 other if run.is_none() && !other.starts_with('-') => {
                     run = Some(
@@ -356,6 +370,8 @@ struct Kept {
     /// A performance A/B's results (`perf-ab/results.json`).
     perf_ab: Option<PathBuf>,
     ab: Vec<PathBuf>,
+    /// An A/B's wall time of each side in each round (`ab/wall-times.json`).
+    walls: Option<PathBuf>,
 }
 
 fn sort_files(files: &[PathBuf]) -> Kept {
@@ -389,6 +405,10 @@ fn sort_files(files: &[PathBuf]) -> Kept {
             })
             .cloned()
             .collect(),
+        walls: files
+            .iter()
+            .find(|file| runs::ends_with_names(file, &["ab", crate::ab::WALL_TIMES_FILE]))
+            .cloned(),
     }
 }
 
@@ -472,6 +492,11 @@ pub(crate) fn job_result(
         }
         if let Some(block) = log_lines.as_deref().and_then(skipped_block) {
             let _ = writeln!(result.text, "{block}\n");
+        }
+        // Kept since the tenth tooling step: an older run has none.
+        if let Some(path) = &kept.walls {
+            let (label, walls) = crate::ab::walls_from_json(&read_text(path)?)?;
+            let _ = writeln!(result.text, "{}", crate::ab::walls_table(&label, &walls));
         }
         let mut by_report: BTreeMap<(usize, String), &PathBuf> = BTreeMap::new();
         for path in &kept.ab {
@@ -603,13 +628,14 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let request = Request::parse(arguments)?;
     let run = request.run;
     let id = run.to_string();
-    let status = parse_status(&runs::gh(&[
+    let viewed = runs::gh(&[
         "run",
         "view",
         &id,
         "--json",
-        "workflowName,status,conclusion,headSha,jobs",
-    ])?)?;
+        "workflowName,status,conclusion,headSha,createdAt,jobs",
+    ])?;
+    let status = parse_status(&viewed)?;
     let jobs = chosen_jobs(&status, request.os.as_deref())?;
     if status.status != "completed" && every_job_ended(&status) {
         println!(
@@ -622,13 +648,10 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             }
         );
     } else if status.status != "completed" {
-        return Err(format!(
-            "run {run} is {}, not finished: `ci-wait --runs {run}` waits for it",
-            if status.status.is_empty() {
-                "not completed"
-            } else {
-                &status.status
-            }
+        return Err(unfinished_text(
+            run,
+            &status.status,
+            runs::queued_note(&viewed, run, runs::now_seconds(), request.queued_warn)?,
         ));
     }
     println!(
@@ -668,6 +691,25 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         problems.push(ended);
     }
     Err(format!("try run {run} failed: {}", problems.join("; ")))
+}
+
+/// What is said of run `run`, which has not finished: its status, how to
+/// wait for it, and `queued`, the line that says it has sat queued with no
+/// jobs past the limit, when it has.
+pub(crate) fn unfinished_text(run: u64, status: &str, queued: Option<String>) -> String {
+    let mut text = format!(
+        "run {run} is {}, not finished: `ci-wait --runs {run}` waits for it",
+        if status.is_empty() {
+            "not completed"
+        } else {
+            status
+        }
+    );
+    if let Some(queued) = queued {
+        text.push('\n');
+        text.push_str(&queued);
+    }
+    text
 }
 
 /// How what was read ended, when not well: the run's conclusion, or with
@@ -787,6 +829,21 @@ mod tests {
     }
 
     #[test]
+    fn an_unfinished_run_says_so_and_names_a_run_that_sat_queued_too_long() {
+        let queued = crate::runs::sat_queued_text(77, "try", 14);
+        let text = super::unfinished_text(77, "queued", Some(queued.clone()));
+        assert_eq!(
+            text,
+            format!("run 77 is queued, not finished: `ci-wait --runs 77` waits for it\n{queued}")
+        );
+        let text = super::unfinished_text(77, "", None);
+        assert_eq!(
+            text,
+            "run 77 is not completed, not finished: `ci-wait --runs 77` waits for it"
+        );
+    }
+
+    #[test]
     fn a_request_is_read_and_a_wrong_one_refused() {
         assert_eq!(
             Request::parse(&strings(&[
@@ -797,11 +854,18 @@ mod tests {
                 run: 77,
                 os: Some("windows".to_owned()),
                 top: 3,
-                tail: 9
+                tail: 9,
+                queued_warn: 10,
             }
         );
         assert_eq!(request().top, 8);
         assert_eq!(request().tail, 30);
+        assert_eq!(
+            Request::parse(&strings(&["1", "--queued-limit", "25"]))
+                .unwrap()
+                .queued_warn,
+            25
+        );
         for (arguments, expected) in [
             (&[][..], "usage: cargo xtask try-result"),
             (&["x"], "is not a run's id"),
@@ -809,6 +873,7 @@ mod tests {
             (&["1", "--top"], "needs a number"),
             (&["1", "--top", "many"], "is not a number"),
             (&["1", "--fast"], "`--fast`?"),
+            (&["1", "--queued-warn", "0"], "`--queued-warn 0`"),
         ] {
             let error = Request::parse(&strings(arguments)).unwrap_err();
             assert!(error.contains(expected), "{arguments:?}: {error}");
@@ -930,6 +995,23 @@ mod tests {
             "tmp/try-output.log",
             "== building the base (origin/main) ==\n1 TEST(S) FAILED ON BOTH SIDES, and are left out:\n  cortex-base text::a (round 1)\n\nnext\n",
         );
+        let wall = |round: usize, base: f64, head: f64| crate::ab::Wall {
+            round,
+            seconds: [base, head],
+            passed: [true, round != 2],
+        };
+        keep(
+            &dir,
+            "work/repo/target/ab/wall-times.json",
+            &crate::ab::walls_json(
+                "origin/main",
+                &[
+                    wall(1, 300.0, 310.0),
+                    wall(2, 280.0, 200.0),
+                    wall(3, 290.0, 305.0),
+                ],
+            ),
+        );
 
         let result = job_result(
             5,
@@ -966,6 +1048,20 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("The log's last lines"), "{text}");
+        // Each side's wall time, round by round, from the file `ab` kept.
+        assert!(
+            text.contains("Each round's wall time") && text.contains("base (origin/main)"),
+            "{text}"
+        );
+        let median = text
+            .lines()
+            .find(|line| line.starts_with("median"))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert_eq!(
+            median.split_whitespace().collect::<Vec<_>>(),
+            ["median", "290.0", "307.5"],
+            "{text}"
+        );
         assert_eq!(
             result.problems,
             [

@@ -572,10 +572,109 @@ pub(crate) fn parse_run(json: &str) -> Result<RunInfo> {
     })
 }
 
+/// How long a run may sit with no job given a runner, in minutes, before
+/// `try --dispatch` and `try-result` say so: `--queued-warn MIN` (or
+/// `--queued-limit MIN`) changes it, as it does for `ci-wait`.
+pub(crate) const QUEUED_WARN_MINUTES: u64 = 10;
+
+/// The longest limit `--queued-warn` takes: a day.
+const QUEUED_WARN_MOST: u64 = 24 * 60;
+
+/// Reads the value of `--queued-warn MIN` (or `--queued-limit MIN`): a
+/// number of minutes from 1 to a day.
+pub(crate) fn queued_warn_minutes(flag: &str, text: &str) -> Result<u64> {
+    text.trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|minutes| (1..=QUEUED_WARN_MOST).contains(minutes))
+        .ok_or_else(|| format!("`{flag} {text}`: a number of minutes from 1 to {QUEUED_WARN_MOST}"))
+}
+
+/// How many minutes a run has sat with no job given a runner, when that is
+/// longer than `limit_minutes`; `None` when it has not, or is not waiting.
+///
+/// A run waits for a runner while its status is `queued` (or `waiting`,
+/// `pending`, `requested`, GitHub's other words for it), or while it is
+/// `in_progress` with no job started: GitHub has marked it running and has
+/// given none of its jobs a runner. `created` and `now` are seconds since
+/// 1970; `jobs_started` counts the jobs that are running or have ended.
+pub(crate) fn sat_queued(
+    status: &str,
+    created: u64,
+    now: u64,
+    jobs_started: usize,
+    limit_minutes: u64,
+) -> Option<u64> {
+    let waiting = match status {
+        "queued" | "waiting" | "pending" | "requested" => true,
+        "in_progress" => jobs_started == 0,
+        _ => false,
+    };
+    let sat = now.saturating_sub(created);
+    (waiting && sat > limit_minutes * 60).then_some(sat / 60)
+}
+
+/// What is said of a run that [`sat_queued`] says has sat too long.
+pub(crate) fn sat_queued_text(run: u64, workflow: &str, minutes: u64) -> String {
+    format!(
+        "run {run} ({workflow}) has sat queued with no jobs for {minutes} min: GitHub has not \
+         given it a runner. Cancel and dispatch it again (gh run cancel {run}), or keep waiting."
+    )
+}
+
+/// How many of the jobs `gh run view --json jobs` lists have been given a
+/// runner: they are running, or have ended.
+pub(crate) fn jobs_started(jobs: &Value) -> usize {
+    jobs.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|job| {
+            matches!(
+                job.get("status").and_then(Value::as_str),
+                Some("in_progress" | "completed")
+            )
+        })
+        .count()
+}
+
+/// What to say of run `run`, as `gh run view RUN --json
+/// workflowName,status,createdAt,jobs` describes it in `json`, when it has
+/// sat queued with no jobs past `limit_minutes` at `now`: `None` when it has
+/// not, or when GitHub gave no time it was made.
+pub(crate) fn queued_note(
+    json: &str,
+    run: u64,
+    now: u64,
+    limit_minutes: u64,
+) -> Result<Option<String>> {
+    let value: Value =
+        serde_json::from_str(json).map_err(|error| format!("gh run view: {error}"))?;
+    let text = |key: &str| value.get(key).and_then(Value::as_str).unwrap_or_default();
+    let Some(created) = seconds_of(text("createdAt")) else {
+        return Ok(None);
+    };
+    let started = value.get("jobs").map_or(0, jobs_started);
+    let workflow = match text("workflowName") {
+        "" => "its workflow",
+        name => name,
+    };
+    Ok(
+        sat_queued(text("status"), created, now, started, limit_minutes)
+            .map(|minutes| sat_queued_text(run, workflow, minutes)),
+    )
+}
+
+/// Seconds since 1970, now.
+pub(crate) fn now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
 /// Seconds since 1970 of a time as GitHub writes it, `2026-11-13T10:02:03Z`.
 /// `0001-01-01T00:00:00Z`, which GitHub writes for a job that never
 /// started, is none.
-fn seconds_of(time: &str) -> Option<u64> {
+pub(crate) fn seconds_of(time: &str) -> Option<u64> {
     let (date, clock) = time.strip_suffix('Z')?.split_once('T')?;
     let mut date = date.split('-').map(|part| part.parse::<i64>().ok());
     let (year, month, day) = (date.next()??, date.next()??, date.next()??);
@@ -949,6 +1048,90 @@ mod tests {
         // A job that never started.
         assert_eq!(seconds_of("0001-01-01T00:00:00Z"), None);
         assert_eq!(seconds_of("yesterday"), None);
+    }
+
+    /// The rule for a run that waits for a runner, at fixed times: no clock
+    /// is read and nothing waits.
+    #[test]
+    fn a_run_that_sat_queued_with_no_jobs_past_the_limit_is_named_and_no_other() {
+        use super::{jobs_started, queued_warn_minutes, sat_queued, sat_queued_text};
+        let created = seconds_of("2026-11-16T10:00:00Z").unwrap();
+        let at = |time: &str| seconds_of(time).unwrap();
+        // Ten minutes is the limit, not past it; a second more is.
+        assert_eq!(
+            sat_queued("queued", created, at("2026-11-16T10:10:00Z"), 0, 10),
+            None
+        );
+        assert_eq!(
+            sat_queued("queued", created, at("2026-11-16T10:10:01Z"), 0, 10),
+            Some(10)
+        );
+        assert_eq!(
+            sat_queued("queued", created, at("2026-11-16T10:42:59Z"), 0, 10),
+            Some(42)
+        );
+        // GitHub's other words for a run that waits.
+        for status in ["waiting", "pending", "requested"] {
+            assert_eq!(
+                sat_queued(status, created, at("2026-11-16T10:30:00Z"), 0, 10),
+                Some(30),
+                "{status}"
+            );
+        }
+        // In progress: only while no job has started.
+        assert_eq!(
+            sat_queued("in_progress", created, at("2026-11-16T10:30:00Z"), 0, 10),
+            Some(30)
+        );
+        assert_eq!(
+            sat_queued("in_progress", created, at("2026-11-16T10:30:00Z"), 1, 10),
+            None
+        );
+        // A finished run, and a limit of the caller's own.
+        assert_eq!(
+            sat_queued("completed", created, at("2026-11-16T11:00:00Z"), 0, 10),
+            None
+        );
+        assert_eq!(
+            sat_queued("queued", created, at("2026-11-16T10:30:00Z"), 0, 45),
+            None
+        );
+        // A clock behind the run's creation is no time at all.
+        assert_eq!(sat_queued("queued", created, created - 600, 0, 10), None);
+        assert_eq!(
+            sat_queued_text(77, "try", 12),
+            "run 77 (try) has sat queued with no jobs for 12 min: GitHub has not given it a \
+             runner. Cancel and dispatch it again (gh run cancel 77), or keep waiting."
+        );
+        let jobs: serde_json::Value = serde_json::from_str(
+            r#"[{"status":"queued"},{"status":"in_progress"},{"status":"completed"},{"status":"waiting"},{}]"#,
+        )
+        .unwrap();
+        assert_eq!(jobs_started(&jobs), 2);
+        // A run as gh describes it: queued, its jobs listed and none given a
+        // runner; then one of them started.
+        let view = r#"{"workflowName":"try","status":"in_progress","createdAt":"2026-11-16T10:00:00Z","jobs":[{"status":"queued"},{"status":"queued"}]}"#;
+        let note = super::queued_note(view, 9, at("2026-11-16T10:15:00Z"), 10).unwrap();
+        assert_eq!(note, Some(sat_queued_text(9, "try", 15)));
+        let one_started = view.replacen("queued", "in_progress", 1);
+        assert_eq!(
+            super::queued_note(&one_started, 9, at("2026-11-16T10:15:00Z"), 10),
+            Ok(None)
+        );
+        assert_eq!(
+            super::queued_note(view, 9, at("2026-11-16T10:05:00Z"), 10),
+            Ok(None)
+        );
+        assert!(super::queued_note("not json", 9, 0, 10).is_err());
+        assert_eq!(queued_warn_minutes("--queued-warn", "25"), Ok(25));
+        for text in ["0", "x", "-3", "1441"] {
+            assert!(
+                queued_warn_minutes("--queued-limit", text)
+                    .unwrap_err()
+                    .contains("`--queued-limit"),
+                "{text}"
+            );
+        }
     }
 
     /// What `gh run view --json …` printed for a run, cut down.

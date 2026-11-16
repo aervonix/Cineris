@@ -19,9 +19,13 @@ usage: cargo xtask try --command 'COMMAND [ARGUMENTS]' [--profile ci|release|dis
                        [--against REF] [--commit SHA] [--dry-run]
                        [--os OS] [--testkit none|profile|starts] [--capture yes|no]
        cargo xtask try --dispatch BRANCH --command '...' [the same inputs]
-                       checks the inputs as a dry run does, dispatches the
+                       [--queued-warn MIN]
+                       checks the inputs as a dry run does, resolves --against
+                       REF to its commit as GitHub has it, dispatches the
                        workflow on BRANCH with them (`gh workflow run try`),
-                       and prints the run's id
+                       prints the run's id, and names any run of the workflow
+                       on BRANCH that has sat queued with no jobs for longer
+                       than MIN minutes (10; --queued-limit is the same)
 
 COMMAND is one of:
   test [-p CRATE]... [FILTER]...   the tests, as the blocking job builds and runs
@@ -68,7 +72,11 @@ test that any of them matches.
 --against REF makes `test` an A/B run: the workflow checks REF out beside the
 branch, and `cargo xtask ab` builds both once and runs them in turn, --count
 rounds (5 when not given), on one runner, then compares them by tier, crate
-and test. It runs with --keep-going: a round in which a test fails is recorded
+and test. --dispatch resolves REF to its full commit hash first, as GitHub has
+it at the dispatch, and passes the hash: a run that waits for a runner still
+compares with the commit REF named when it was dispatched. A full hash is
+passed as it is; a REF GitHub does not know is refused, and nothing is
+dispatched. It runs with --keep-going: a round in which a test fails is recorded
 and left out, the run goes on, and it ends as a failure after the comparison of
 the rounds that finished.
 
@@ -142,6 +150,9 @@ struct Inputs {
     /// `capture no`: a passing test's output is shown (nextest's
     /// `--no-capture`, which runs the tests one at a time).
     show_output: bool,
+    /// With `--dispatch`: the minutes a run of the workflow on the branch
+    /// may sit queued with no jobs before it is named.
+    queued_warn: Option<u64>,
 }
 
 /// The `os` inputs of the workflow.
@@ -294,6 +305,9 @@ impl Inputs {
                     // What is dispatched is checked as a dry run checks it.
                     inputs.dry_run = true;
                 }
+                "--queued-warn" | "--queued-limit" => {
+                    inputs.queued_warn = Some(crate::runs::queued_warn_minutes(flag, value)?);
+                }
                 "--capture" => match value.trim() {
                     "" | "yes" => inputs.show_output = false,
                     "no" => inputs.show_output = true,
@@ -306,6 +320,13 @@ impl Inputs {
                 },
                 other => return Err(format!("unknown flag `{other}`\n\n{USAGE}")),
             }
+        }
+        if inputs.queued_warn.is_some() && inputs.dispatch.is_none() {
+            return Err(
+                "`--queued-warn` goes with `--dispatch`: it is how long a run it finds may sit \
+                 queued"
+                    .to_owned(),
+            );
         }
         if !["ci", "release", "dist"].contains(&inputs.profile.as_str()) {
             return Err(format!(
@@ -924,7 +945,7 @@ impl Inputs {
             "--base",
             AB_BASE,
             "--label",
-            against,
+            &label_of(against),
             "--cargo-profile",
             profile,
         ]
@@ -957,7 +978,7 @@ impl Inputs {
             "--base",
             AB_BASE,
             "--label",
-            against,
+            &label_of(against),
             "--top",
             "20",
             "--keep-going",
@@ -978,6 +999,92 @@ impl Inputs {
         }
         Ok(command)
     }
+}
+
+/// What an A/B run calls the other side in its report: `against` as it was
+/// given, or a full commit hash's first twelve digits (a dispatch passes the
+/// hash it resolved the ref to).
+fn label_of(against: &str) -> String {
+    if commit_hash(against) {
+        against[..12].to_owned()
+    } else {
+        against.to_owned()
+    }
+}
+
+/// `against` as a dispatch passes it: the full commit hash `resolve` gives
+/// for the ref, as GitHub has it now, with the line that says so; a full
+/// hash as it is, with nothing to say. A ref that does not resolve, or that
+/// resolves to anything but a full hash, is an error naming the ref.
+fn resolve_against(
+    against: &str,
+    resolve: impl FnOnce(&str) -> Result<String>,
+) -> Result<(String, Option<String>)> {
+    if commit_hash(against) {
+        return Ok((against.to_owned(), None));
+    }
+    let resolved = resolve(against).map_err(|error| {
+        format!(
+            "`--against {against}` names no commit GitHub has: nothing was dispatched ({error})"
+        )
+    })?;
+    let resolved = resolved.trim();
+    if !commit_hash(resolved) {
+        return Err(format!(
+            "`--against {against}` resolved to `{resolved}`, which is not a full commit hash: \
+             nothing was dispatched"
+        ));
+    }
+    Ok((
+        resolved.to_owned(),
+        Some(format!(
+            "against {against} is {} (resolved at dispatch)",
+            &resolved[..12]
+        )),
+    ))
+}
+
+/// The inputs a dispatch sends: `against` resolved to its commit by
+/// `resolve` ([`resolve_against`]), and the line that says so.
+fn for_dispatch(
+    mut inputs: Inputs,
+    resolve: impl FnOnce(&str) -> Result<String>,
+) -> Result<(Inputs, Option<String>)> {
+    let mut said = None;
+    if let Some(against) = inputs.against.take() {
+        let (resolved, note) = resolve_against(&against, resolve)?;
+        said = note;
+        inputs.against = Some(resolved);
+    }
+    Ok((inputs, said))
+}
+
+/// `reference` as one segment of a URL's path: the characters of a ref's
+/// name that need nothing kept as they are, `/` included (GitHub reads a
+/// branch's slashes in a commit's path), and every other byte escaped.
+fn url_path(reference: &str) -> String {
+    let mut path = String::new();
+    for byte in reference.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
+            path.push(char::from(byte));
+        } else {
+            path.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    path
+}
+
+/// The commit GitHub resolves `reference` to now: what the workflow's
+/// checkout of the ref would take. Asked of GitHub and not of the local
+/// repository: a desk's `main` may be behind GitHub's, and a copy of the
+/// tree with no `.git` (the one `rx` builds in) has none.
+fn github_commit(reference: &str) -> Result<String> {
+    crate::runs::gh(&[
+        "api",
+        &format!("repos/{{owner}}/{{repo}}/commits/{}", url_path(reference)),
+        "--jq",
+        ".sha",
+    ])
 }
 
 /// The crates `words` name, in any of cargo's spellings (`-p x`,
@@ -1029,6 +1136,15 @@ fn plan(arguments: &[String], packages: impl FnOnce() -> Result<Vec<Package>>) -
         ));
     }
     if inputs.dry_run {
+        if inputs.dispatch.is_none()
+            && let Some(against) = inputs.against.as_deref()
+            && !commit_hash(against)
+        {
+            notes.push(format!(
+                "against {against}: `try --dispatch` would resolve it to its commit, as GitHub \
+                 has it then, and pass the hash; a dry run asks GitHub nothing"
+            ));
+        }
         if let Some(testkit @ ("profile" | "starts")) = inputs.testkit.as_deref()
             && inputs.against.is_some()
         {
@@ -1171,6 +1287,58 @@ fn dispatched_runs(branch: &str) -> Result<Vec<u64>> {
         .collect())
 }
 
+/// The runs of `listed` (`gh run list --json databaseId,status,createdAt`)
+/// that may have sat queued with no jobs past `limit_minutes` at `now`: those
+/// not finished and older than the limit. Whether a job of one has started is
+/// asked of each after ([`crate::runs::queued_note`]).
+fn waiting_too_long(listed: &str, now: u64, limit_minutes: u64) -> Result<Vec<u64>> {
+    let value: serde_json::Value =
+        serde_json::from_str(listed).map_err(|error| format!("gh run list: {error}"))?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|run| {
+            let id = run.get("databaseId")?.as_u64()?;
+            let status = run.get("status")?.as_str()?;
+            let created = crate::runs::seconds_of(run.get("createdAt")?.as_str()?)?;
+            crate::runs::sat_queued(status, created, now, 0, limit_minutes).map(|_| id)
+        })
+        .collect())
+}
+
+/// What to say of each run of the `try` workflow on `branch` that has sat
+/// queued with no jobs for longer than `limit_minutes`: the dispatch's own is
+/// new, and an earlier one that GitHub has not given a runner says the new
+/// one may wait as long.
+fn queued_on(branch: &str, limit_minutes: u64) -> Result<Vec<String>> {
+    let listed = crate::runs::gh(&[
+        "run",
+        "list",
+        "--workflow",
+        "try",
+        "--branch",
+        branch,
+        "--limit",
+        "20",
+        "--json",
+        "databaseId,status,createdAt",
+    ])?;
+    let now = crate::runs::now_seconds();
+    let mut notes = Vec::new();
+    for run in waiting_too_long(&listed, now, limit_minutes)? {
+        let viewed = crate::runs::gh(&[
+            "run",
+            "view",
+            &run.to_string(),
+            "--json",
+            "workflowName,status,createdAt,jobs",
+        ])?;
+        notes.extend(crate::runs::queued_note(&viewed, run, now, limit_minutes)?);
+    }
+    Ok(notes)
+}
+
 /// Dispatches the workflow on `branch` with `inputs`, and prints the run it
 /// made: the runs dispatched on the branch are listed before and after, and
 /// the new one is the one this made. GitHub lists a run a few seconds
@@ -1203,6 +1371,17 @@ fn dispatch(branch: &str, inputs: &Inputs) -> Result<()> {
                     made.len()
                 );
             }
+            let limit = inputs
+                .queued_warn
+                .unwrap_or(crate::runs::QUEUED_WARN_MINUTES);
+            match queued_on(branch, limit) {
+                Ok(notes) => {
+                    for note in notes {
+                        println!("{note}");
+                    }
+                }
+                Err(error) => println!("(could not look for runs that sat queued: {error})"),
+            }
             return Ok(());
         }
         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -1230,10 +1409,15 @@ fn run(arguments: &[String]) -> Result<ExitCode> {
     for note in &plan.notes {
         println!("{note}");
     }
-    println!("$ cargo xtask {}", plan.command.join(" "));
-    if let Some(branch) = &plan.inputs.dispatch {
-        return dispatch(branch, &plan.inputs).map(|()| ExitCode::SUCCESS);
+    if let Some(branch) = plan.inputs.dispatch.clone() {
+        let (inputs, said) = for_dispatch(plan.inputs, github_commit)?;
+        if let Some(said) = said {
+            println!("{said}");
+        }
+        println!("$ cargo xtask {}", inputs.command()?.join(" "));
+        return dispatch(&branch, &inputs).map(|()| ExitCode::SUCCESS);
     }
+    println!("$ cargo xtask {}", plan.command.join(" "));
     if plan.inputs.dry_run {
         println!("(a dry run: nothing was built or run)");
         return Ok(ExitCode::SUCCESS);
@@ -1276,7 +1460,10 @@ fn reads_the_corpus(command: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Inputs, check_checkout, dispatch_arguments, new_runs, plan};
+    use super::{
+        Inputs, check_checkout, dispatch_arguments, for_dispatch, label_of, new_runs, plan,
+        resolve_against, url_path, waiting_too_long,
+    };
     use crate::workspace::{DepKind, Dependency, Package};
 
     #[test]
@@ -1345,6 +1532,148 @@ mod tests {
         assert!(said.contains("-f capture=no"), "{said}");
         assert!(said.contains("-f testkit=starts"), "{said}");
         assert!(parse(&["--command", "test", "--dispatch", "a b"]).is_err());
+    }
+
+    #[test]
+    fn against_is_resolved_to_its_commit_at_dispatch_and_a_hash_passes_as_it_is() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let github = |reference: &str| {
+            asked.borrow_mut().push(reference.to_owned());
+            Ok(format!("{HASH}\n"))
+        };
+        assert_eq!(
+            resolve_against("main", github),
+            Ok((
+                HASH.to_owned(),
+                Some("against main is 0123456789ab (resolved at dispatch)".to_owned())
+            ))
+        );
+        assert_eq!(asked.borrow().as_slice(), ["main"]);
+        // A full hash is not asked about.
+        let other = "fedcba9876543210fedcba9876543210fedcba98";
+        assert_eq!(
+            resolve_against(other, |_| Err("not asked".to_owned())),
+            Ok((other.to_owned(), None))
+        );
+        // A ref GitHub does not know, and an answer that is not a hash.
+        let error = resolve_against("no-such-branch", |_| Err("HTTP 422".to_owned())).unwrap_err();
+        assert!(
+            error.contains("`--against no-such-branch` names no commit")
+                && error.contains("nothing was dispatched")
+                && error.contains("HTTP 422"),
+            "{error}"
+        );
+        let error = resolve_against("main", |_| Ok("0123abc".to_owned())).unwrap_err();
+        assert!(error.contains("not a full commit hash"), "{error}");
+        // The workflow and `try` take the hash as `against`, and the report
+        // calls it by its first twelve digits.
+        let command = try_command(&["--command", "test -p x", "--against", HASH]).unwrap();
+        assert!(
+            command.starts_with("ab --base ../ab-base --label 0123456789ab --top 20"),
+            "{command}"
+        );
+        let command = try_command(&["--command", "perf -p x", "--against", HASH]).unwrap();
+        assert!(command.contains("--label 0123456789ab "), "{command}");
+        assert_eq!(label_of("main"), "main");
+        // What is dispatched is the hash, and nothing is when the ref does
+        // not resolve.
+        let inputs = Inputs::parse(
+            &["--command", "test", "--against", "main", "--dispatch", "b"].map(str::to_owned),
+        )
+        .unwrap();
+        let (inputs, said) = for_dispatch(inputs, |_| Ok(HASH.to_owned())).unwrap();
+        assert!(said.is_some_and(|said| said.contains("resolved at dispatch")));
+        let sent = dispatch_arguments("b", &inputs).join(" ");
+        assert!(sent.ends_with(&format!("-f against={HASH}")), "{sent}");
+        let inputs = Inputs::parse(
+            &["--command", "test", "--against", "gone", "--dispatch", "b"].map(str::to_owned),
+        )
+        .unwrap();
+        assert!(for_dispatch(inputs, |_| Err("HTTP 422".to_owned())).is_err());
+        assert_eq!(url_path("step/x-1.2"), "step/x-1.2");
+        assert_eq!(url_path("a#b&c"), "a%23b%26c");
+    }
+
+    #[test]
+    fn a_dry_run_says_it_would_resolve_against_and_asks_nothing() {
+        let arguments = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| (*word).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let planned = plan(
+            &arguments(&["--command", "test", "--dry-run", "--against", "main"]),
+            || Ok(Vec::new()),
+        )
+        .unwrap();
+        assert!(
+            planned
+                .notes
+                .iter()
+                .any(|note| note.contains("against main: `try --dispatch` would resolve it")),
+            "{:?}",
+            planned.notes
+        );
+        // A hash needs no resolving, and a run on the runner says nothing.
+        for words in [
+            &["--command", "test", "--dry-run", "--against", HASH][..],
+            &["--command", "test", "--against", "main"],
+        ] {
+            let planned = plan(&arguments(words), || Ok(Vec::new())).unwrap();
+            assert!(
+                !planned
+                    .notes
+                    .iter()
+                    .any(|note| note.contains("would resolve")),
+                "{words:?}: {:?}",
+                planned.notes
+            );
+        }
+    }
+
+    #[test]
+    fn a_dispatch_takes_a_queued_limit_and_finds_the_runs_that_waited_past_it() {
+        let parse = |words: &[&str]| {
+            Inputs::parse(
+                &words
+                    .iter()
+                    .map(|word| (*word).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        for flag in ["--queued-warn", "--queued-limit"] {
+            let inputs = parse(&["--command", "test", "--dispatch", "b", flag, "25"]).unwrap();
+            assert_eq!(inputs.queued_warn, Some(25), "{flag}");
+        }
+        let error = parse(&["--command", "test", "--queued-warn", "25"]).unwrap_err();
+        assert!(error.contains("goes with `--dispatch`"), "{error}");
+        assert!(parse(&["--command", "test", "--dispatch", "b", "--queued-warn", "0"]).is_err());
+        // Not an input of the workflow: it is not dispatched.
+        let inputs = parse(&[
+            "--command",
+            "test",
+            "--dispatch",
+            "b",
+            "--queued-warn",
+            "25",
+        ])
+        .unwrap();
+        assert!(
+            !dispatch_arguments("b", &inputs)
+                .join(" ")
+                .contains("queued")
+        );
+
+        let now = crate::runs::seconds_of("2026-11-16T11:00:00Z").unwrap();
+        let listed = r#"[
+            {"databaseId":1,"status":"queued","createdAt":"2026-11-16T10:30:00Z"},
+            {"databaseId":2,"status":"queued","createdAt":"2026-11-16T10:55:00Z"},
+            {"databaseId":3,"status":"in_progress","createdAt":"2026-11-16T10:00:00Z"},
+            {"databaseId":4,"status":"completed","createdAt":"2026-11-16T09:00:00Z"}]"#;
+        assert_eq!(waiting_too_long(listed, now, 10), Ok(vec![1, 3]));
+        assert_eq!(waiting_too_long(listed, now, 45), Ok(vec![3]));
+        assert!(waiting_too_long("{", now, 10).is_err());
     }
 
     #[test]
