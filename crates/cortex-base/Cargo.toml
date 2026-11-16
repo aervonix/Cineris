@@ -42,5 +42,16 @@ windows-sys = { workspace = true, features = [
     "Win32_System_Time",
 ] }
 
+[features]
+# Code for tests only: the `Hold` that makes library code stop at a point
+# (`hook`). Without it a point is nothing at all. Only dev-dependencies and
+# the test kit turn it on (`cargo xtask rules`).
+test-hooks = []
+
+[dev-dependencies]
+# This crate's own tests ask for its own `test-hooks`: it cannot depend on the
+# test kit, which depends on it. Not an edge of the crate table.
+cortex-base = { workspace = true, features = ["test-hooks"] }
+
 [lints]
 workspace = true

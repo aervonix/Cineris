@@ -15,6 +15,7 @@
 //! | [`atomic`] | [`write_atomic`]: replace a file's content in one step. |
 //! | [`nofollow`] | [`open_regular`]: open a regular file without following a link and without waiting on a FIFO. |
 //! | [`hash`] | [`ContentHash`]: the hash a piece of content is known by. |
+//! | [`hook`] | [`hook::point`]: a place in library code where a test can make the thread stop, and with the `test-hooks` feature the `Hold` that does it. Nothing at all without the feature. |
 //! | [`private`] | Files and directories that only the current user can open, on Linux and on Windows. |
 //! | [`framing`] | The newline-delimited JSON reader and writer of the RPC protocol. |
 //! | [`watch`] | [`WatchList`]: the modification-time check behind hot-reload. |
@@ -53,6 +54,7 @@ pub mod error;
 pub mod framing;
 pub mod git;
 pub mod hash;
+pub mod hook;
 pub mod id;
 pub mod log;
 pub mod nofollow;

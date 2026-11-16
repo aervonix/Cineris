@@ -11,7 +11,9 @@ doctest = false
 
 [dependencies]
 cortex-protocol.workspace = true
-cortex-base.workspace = true
+# With `test-hooks`: the points library code marks for a test to hold
+# (`cortex_base::hook`, `hold`). Only a build that has the test kit has them.
+cortex-base = { workspace = true, features = ["test-hooks"] }
 # The types and traits only. A test of the real HTTP transport turns the
 # `http` feature on in the crate that owns it.
 cortex-llm.workspace = true

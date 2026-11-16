@@ -1,3 +1,0 @@
-| Item | Who | When |
-|---|---|---|
-| **A reviewer's kit in [testing-and-ci.md](../testing-and-ci.md)** (asked for by the step 16 review's retrospective, through the coordinator, and left by the sixth tooling step, which could not check each claim): two `world.core()`s on one `World` stand in for two processes sharing a state folder; a FIFO stands in for a stalled disk, since it blocks the writer's open; `setrlimit(RLIMIT_AS)` turns a huge allocation into a reproducible abort, nextest giving each test its own process; throwaway breaks (`mutate --file`) show a rule untested. And `cortex_testkit::stalled_file(path)` if it is small. Each technique checked by a test before it is written down. | A later tooling step | Before the next review wave |

@@ -303,6 +303,19 @@ pub(crate) fn waits() -> String {
         })
         .collect();
     drop(entries);
+    // The library's own threads that a test holds at a point: they wait
+    // inside code that knows nothing of the test kit.
+    lines.extend(cortex_base::hook::stopped().into_iter().map(|held| {
+        (
+            held.for_how_long,
+            format!(
+                "  {:>6.1} s  thread `{}`: stopped at the library point `{}`, held by a test until it lets the thread go\n",
+                held.for_how_long.as_secs_f64(),
+                held.thread,
+                held.point
+            ),
+        )
+    }));
     lines.sort_by_key(|line| std::cmp::Reverse(line.0));
     let mut text = String::from("waits, and for how long:\n");
     if lines.is_empty() {

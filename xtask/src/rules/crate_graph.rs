@@ -284,6 +284,14 @@ fn check_edges(package: &Package, violations: &mut Vec<Violation>) {
         if to == TESTKIT && dependency.kind == DepKind::Dev {
             continue;
         }
+        // A crate's own tests ask for its test-only feature by a
+        // dev-dependency on the crate itself (`cortex-base` cannot depend
+        // on the test kit, which depends on it). That adds no edge: it
+        // turns a feature on, for tests only, which `check_test_hooks`
+        // holds to dev-dependencies.
+        if to == name && dependency.kind == DepKind::Dev {
+            continue;
+        }
         if !allowed.contains(&to) {
             let kind = match dependency.kind {
                 DepKind::Normal => "",
@@ -766,6 +774,58 @@ mod tests {
             }],
         );
         assert_one(&messages(&in_a_build_script), &["`test-hooks`"]);
+    }
+
+    #[test]
+    fn a_crate_turns_its_own_test_hooks_on_for_its_tests_through_a_dev_dependency_on_itself() {
+        let hooks = |dependency: Dependency| Dependency {
+            features: vec!["test-hooks".to_owned()],
+            ..dependency
+        };
+        // `cortex-base` cannot depend on the test kit, which depends on it:
+        // its tests ask for `cortex_base::hook`'s points by a
+        // dev-dependency on itself.
+        let own_tests = krate("cortex-base", vec![hooks(dev("cortex-base"))]);
+        assert!(
+            messages(&own_tests).is_empty(),
+            "{:#?}",
+            messages(&own_tests)
+        );
+
+        // The same, as a normal dependency, would be in the product.
+        let in_the_product = messages(&krate("cortex-base", vec![hooks(dep("cortex-base"))]));
+        assert!(
+            in_the_product.iter().any(|message| message
+                .contains("`cortex-base` turns on the `test-hooks` feature of `cortex-base`")),
+            "{in_the_product:#?}"
+        );
+        assert!(
+            in_the_product
+                .iter()
+                .any(|message| message.contains("must not depend on `cortex-base`")),
+            "{in_the_product:#?}"
+        );
+        // A dev-dependency on another crate is judged as any other.
+        let on_another = krate("cortex-base", vec![dev("cortex-llm")]);
+        assert_one(
+            &messages(&on_another),
+            &["`cortex-base` must not depend on `cortex-llm`"],
+        );
+
+        // The test kit turns the points of `cortex-base` on for every crate
+        // that has it as a dev-dependency; any other crate that did so
+        // would put them in the product.
+        let in_the_kit = krate("cortex-testkit", vec![hooks(dep("cortex-base"))]);
+        assert!(
+            messages(&in_the_kit).is_empty(),
+            "{:#?}",
+            messages(&in_the_kit)
+        );
+        let elsewhere = krate("cortex-llm", vec![hooks(dep("cortex-base"))]);
+        assert_one(
+            &messages(&elsewhere),
+            &["`cortex-llm` turns on the `test-hooks` feature of `cortex-base`"],
+        );
     }
 
     #[test]

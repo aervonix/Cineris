@@ -10,6 +10,8 @@
 //! | [`timer`] | [`FakeTimer`]: waits that move the fake clock instead of waiting. |
 //! | [`gate`] | [`Gate`]: how two sides of a test take turns without sleeping. |
 //! | [`hostile`] | The hostile names every test takes its names from: control and format characters, bidirectional controls, line breaks, escape sequences, very long names, Windows device names, and what a file system takes as a file name. The same set on every system. |
+//! | [`hold`] | [`Hold`]: a point of library code (`cortex_base::hook`) that a test makes the library stop at, and lets go. For race tests that need the library to stop between two of its steps. |
+//! | [`stalled`] | [`stalled_file`] (Unix only): a FIFO with nobody at its other end, which stalls whoever opens it, for code that must go on, or give up, when a disk does not answer. |
 //! | [`untouched`] | [`Untouched`]: something the start-up path must not touch (the repository index, the statistics), held while a session opens. |
 //! | [`scratch`] | [`Scratch`]: a directory of a test's own, with files, a git repository when the test needs one, and nothing left behind. |
 //! | [`seed`] | The seed of a test whose order of events is seeded: 0 in an ordinary run, the next one for each repeat of `cargo xtask stress`, and printed so that a failure can be run again. |
@@ -55,6 +57,7 @@ pub mod fixture;
 pub mod fixtures;
 pub mod gate;
 pub mod hostile;
+pub mod hold;
 pub mod phases;
 pub mod profile;
 pub mod protocol;
@@ -66,6 +69,8 @@ pub mod schema;
 pub mod scratch;
 pub mod seed;
 pub mod server;
+#[cfg(unix)]
+pub mod stalled;
 pub mod timer;
 pub mod transport;
 pub mod untouched;
@@ -78,11 +83,14 @@ pub use canary::{Printed, assert_never_printed};
 pub use cortex_base::{Clock, FakeClock, Rng, SeededRng};
 pub use exec::{block_on, join};
 pub use gate::Gate;
+pub use hold::Hold;
 pub use phases::Phases;
 pub use protocol::TestProtocol;
 pub use provider::{Response, ScriptedProvider};
 pub use scratch::Scratch;
 pub use server::{ReceivedRequest, ServerReply, SseServer};
+#[cfg(unix)]
+pub use stalled::{Stalled, stalled_file};
 pub use timer::FakeTimer;
 pub use transport::{Reply, ScriptedTransport};
 pub use untouched::Untouched;

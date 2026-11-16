@@ -1,9 +1,10 @@
 //! Atomic writes on a real file system.
 
 use std::fs;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
+use cortex_base::atomic::BEFORE_THE_RENAME;
+use cortex_base::hook::Hold;
 use cortex_base::{AtomicWriteError, AtomicWriteOptions, FakeClock, write_atomic};
 
 use crate::Scratch;
@@ -119,6 +120,13 @@ fn a_read_only_file_is_refused_and_keeps_its_content() {
     assert_eq!(scratch.listing(""), ["protected.txt"]);
 }
 
+/// A reader meets a write at the one moment it could see a mixture: the new
+/// content is all in its temporary file and the target has not been
+/// touched. The write stops there (`cortex_base::hook`), so the moment is
+/// not a race that a reader has to win: it is looked at, and then the write
+/// goes on and the reader sees the new content. It used to be a reader that
+/// spun on the file while a writer replaced it a hundred times, and saw the
+/// window by chance.
 #[test]
 fn a_reader_sees_the_old_content_or_the_new_and_never_a_mixture() {
     let scratch = Scratch::new("atomic_readers");
@@ -127,43 +135,46 @@ fn a_reader_sees_the_old_content_or_the_new_and_never_a_mixture() {
     let new = vec![b'b'; 80 * 1024];
     fs::write(&target, &old).unwrap();
 
-    let stop = Arc::new(AtomicBool::new(false));
-    let reader = {
-        let (target, stop, old, new) =
-            (target.clone(), Arc::clone(&stop), old.clone(), new.clone());
-        std::thread::spawn(move || {
-            let mut reads = 0u32;
-            let mut torn = 0u32;
-            while !stop.load(Ordering::Relaxed) || reads == 0 {
-                // A read can fail outright while the file is being swapped
-                // on Windows. What it must never do is succeed with part of
-                // one content or a mixture of the two.
-                if let Ok(seen) = fs::read(&target) {
-                    reads += 1;
-                    if seen != old && seen != new {
-                        torn += 1;
-                    }
-                }
+    let hold = Hold::new(BEFORE_THE_RENAME);
+    let limit = Duration::from_secs(5);
+    let (mut replaced, mut reads, mut torn) = (0u32, 0u32, 0u32);
+    for round in 0..4usize {
+        let (before, after) = if round % 2 == 0 {
+            (&old, &new)
+        } else {
+            (&new, &old)
+        };
+        let writer = {
+            let (target, contents) = (target.clone(), after.clone());
+            std::thread::spawn(move || {
+                write_atomic(&target, &contents, &options(), &FakeClock::default())
+            })
+        };
+        assert!(
+            hold.wait_reached_times(round + 1, limit),
+            "round {round}: the write never reached the rename"
+        );
+        // The write has put all of the new content in its temporary file
+        // and has not renamed it: a reader sees the old file, whole, and
+        // the temporary file is beside it.
+        for _ in 0..3 {
+            let seen = fs::read(&target).unwrap();
+            reads += 1;
+            if seen != *before {
+                torn += 1;
             }
-            (reads, torn)
-        })
-    };
-
-    let mut replaced = 0;
-    for round in 0..100 {
-        let contents = if round % 2 == 0 { &new } else { &old };
-        // On Windows a reader that has the file open at the wrong moment
-        // can make one replace fail: the retries wait on the fake clock, so
-        // they take no time and the reader may still be there. The file is
-        // then unchanged, which is the property under test.
-        match write_atomic(&target, contents, &options(), &FakeClock::default()) {
-            Ok(()) => replaced += 1,
-            Err(AtomicWriteError::InUse { .. } | AtomicWriteError::Io { .. }) if cfg!(windows) => {}
-            Err(error) => panic!("round {round}: {error}"),
         }
+        assert_eq!(scratch.listing("").len(), 2, "round {round}");
+        hold.let_one_go();
+        writer.join().expect("the writer finishes").unwrap();
+        replaced += 1;
+        assert!(
+            fs::read(&target).unwrap() == *after,
+            "round {round}: after the rename the reader sees the new file"
+        );
+        assert_eq!(scratch.listing(""), ["shared.txt"], "round {round}");
     }
-    stop.store(true, Ordering::Relaxed);
-    let (reads, torn) = reader.join().expect("the reader finishes");
+    assert_eq!(hold.timed_out(), 0, "the bound let a write go on");
 
     assert!(replaced > 0, "no replace succeeded");
     assert!(reads > 0, "the reader never read");
@@ -174,6 +185,47 @@ fn a_reader_sees_the_old_content_or_the_new_and_never_a_mixture() {
     let last = fs::read(&target).unwrap();
     assert!(last == old || last == new);
     assert_eq!(scratch.listing(""), ["shared.txt"]);
+}
+
+/// A file that is created appears whole: until the new content is complete
+/// in its temporary file the name is not there, so that a reader never finds
+/// an empty file that is about to be filled. The write stops where the
+/// content is complete and the rename has not happened, and the name is
+/// looked for there. The tests above only look at the file when the write
+/// is over, and a reader that spins on the name could not tell an empty
+/// file made early from one made at the rename: it would see a file, and
+/// the content it saw would depend on when it looked.
+#[test]
+fn a_file_that_is_created_is_not_there_until_its_content_is_complete() {
+    let scratch = Scratch::new("atomic_created_whole");
+    let target = scratch.join("fresh.txt");
+    let content = vec![b'n'; 80 * 1024];
+
+    let hold = Hold::new(BEFORE_THE_RENAME);
+    let writer = {
+        let (target, content) = (target.clone(), content.clone());
+        std::thread::spawn(move || {
+            write_atomic(&target, &content, &options(), &FakeClock::default())
+        })
+    };
+    assert!(
+        hold.wait_reached(Duration::from_secs(5)),
+        "the write never reached the rename"
+    );
+    assert!(
+        !target.exists(),
+        "the name appeared before its content was complete"
+    );
+    assert_eq!(
+        scratch.listing("").len(),
+        1,
+        "only the temporary file is there"
+    );
+    hold.release();
+    writer.join().expect("the writer finishes").unwrap();
+    assert_eq!(fs::read(&target).unwrap(), content);
+    assert_eq!(scratch.listing(""), ["fresh.txt"]);
+    assert_eq!(hold.timed_out(), 0);
 }
 
 #[cfg(unix)]
