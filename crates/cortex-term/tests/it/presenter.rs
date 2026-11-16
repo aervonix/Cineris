@@ -10,6 +10,7 @@ use cortex_term::{
     Capabilities, Color, Cursor, Drawn, Frame, Inline, Line, Overrides, Platform, Sink, Span, Style,
 };
 use cortex_testkit::VTerm;
+use cortex_testkit::hostile::{self, Kind};
 use cortex_testkit::cases::{self, Outcome};
 
 /// What a shell left on screen before the program started.
@@ -412,6 +413,33 @@ fn a_streaming_frame_is_small() {
     let max = *sizes.last().unwrap();
     assert!(median <= 1024, "median frame {median} bytes");
     assert!(max <= MAX_FRAME, "largest frame {max} bytes");
+}
+
+/// The same, for every escape sequence and control character of the
+/// hostile set (`cortex_testkit::hostile`): none is obeyed, committed or
+/// live, plain or as a link's text.
+#[test]
+fn no_escape_sequence_or_control_character_of_the_hostile_set_is_obeyed() {
+    let line = |text: &str| {
+        Line::plain(text).with(Span::new(text, Style::PLAIN.bold()).link("https://ok.example"))
+    };
+    for name in hostile::of(Kind::Escape)
+        .into_iter()
+        .chain(hostile::of(Kind::Control))
+    {
+        let mut rig = Rig::new(60, 10, true);
+        let (committed, live) = (line(&name.text), line(&name.text));
+        rig.frame(&[committed], &[live], Some(Cursor { row: 0, col: 0 }))
+            .unwrap_or_else(|error| panic!("{}: {error}", name.label));
+        assert_eq!(rig.term.title(), "", "{}", name.label);
+        assert!(rig.term.take_queries().is_empty(), "{}", name.label);
+        let modes = rig.term.modes();
+        assert!(
+            !modes.alternate && !modes.sync && modes.cursor_visible,
+            "{}",
+            name.label
+        );
+    }
 }
 
 #[test]

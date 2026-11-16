@@ -199,17 +199,45 @@ mod tests {
     /// escape there (the independent review of step 18's fixes).
     #[test]
     fn a_path_the_line_names_is_written_as_an_escape() {
-        let mut policy = policy(Network::Off);
-        policy.write.push(PathBuf::from("/work/r\u{202E}t"));
-        let line = explain(
-            &policy,
-            Some(1),
-            "touch: cannot touch '/srv/x\u{E0041}y': Permission denied",
-        )
-        .expect("a line");
-        assert!(line.contains("/srv/x\\u{e0041}y"), "{line}");
-        assert!(line.contains("/work/r\\u{202e}t"), "{line}");
-        assert!(!line.chars().any(cortex_base::acts_unseen), "{line:?}");
+        use cortex_testkit::hostile::{self, Kind};
+        // Every name of the hostile set that acts unseen, in the output's
+        // path and in a root of the policy. The text of a path never holds
+        // a NUL.
+        for kind in [Kind::Control, Kind::Bidi, Kind::Format, Kind::Escape] {
+            for name in hostile::of(kind) {
+                if name.text.contains('\0') {
+                    continue;
+                }
+                let (text, shown) = (&name.text, &name.shown);
+                let mut policy = policy(Network::Off);
+                policy.write.push(PathBuf::from(format!("/work/r{text}t")));
+                let line = explain(
+                    &policy,
+                    Some(1),
+                    &format!("touch: cannot touch '/srv/x{text}y': Permission denied"),
+                )
+                .expect("a line");
+                // A path in the output ends at whitespace, as it does at a
+                // space: what follows a tab is not part of it.
+                if !text.chars().any(char::is_whitespace) {
+                    assert!(
+                        line.contains(&format!("/srv/x{shown}y")),
+                        "{}: {line}",
+                        name.label
+                    );
+                }
+                assert!(
+                    line.contains(&format!("/work/r{shown}t")),
+                    "{}: {line}",
+                    name.label
+                );
+                assert!(
+                    !line.chars().any(cortex_base::acts_unseen),
+                    "{}: {line:?}",
+                    name.label
+                );
+            }
+        }
     }
 
     #[test]

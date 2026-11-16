@@ -7,12 +7,13 @@ use std::sync::Arc;
 
 use cortex_base::{AbsPath, ContentHash, PathOptions};
 use cortex_protocol::message::Part;
+use cortex_testkit::hostile::{self, Kind};
 use cortex_tools::{
     Concurrency, ConcurrencyClass, Effect, ImageSupport, Outliner, ReadTool, Staleness, Tool,
 };
 use serde_json::json;
 
-use crate::{BREAK, BREAK_ESCAPED, NOTICE, Workspace, failed, ok, starts_a_notice};
+use crate::{NOTICE, Workspace, breaks_in_names, failed, ok, starts_a_notice};
 
 fn numbered(count: usize) -> String {
     (1..=count).map(|n| format!("line {n}\n")).collect()
@@ -906,41 +907,58 @@ fn an_artifact_is_read_by_its_id_with_the_same_ranges() {
 #[test]
 fn a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload() {
     let ws = Workspace::new("read_names_unseen");
-    let name = format!("x{BREAK}{NOTICE}.txt");
-    ws.file(&name, "line\u{202E}\n");
-    let result = ws.call(&ReadTool::new(), json!({"path": name}));
-    let text = ok(&result);
-    assert!(
-        text.starts_with(&format!("x{BREAK_ESCAPED}Notice from the harness")),
-        "{text}"
-    );
-    assert!(text.ends_with("line\u{202E}"), "{text:?}");
-    assert_eq!(result.payload().unwrap()["path"], name.as_str());
-    let plan = ws.plan(&ReadTool::new(), json!({"path": name})).unwrap();
-    assert!(!plan.summary.contains(BREAK), "{}", plan.summary);
-    // A file that is not there, and its close matches.
-    let missing = failed(&ws.call(
-        &ReadTool::new(),
-        json!({"path": format!("y{BREAK}{NOTICE}.txt")}),
-    ));
-    assert!(!starts_a_notice(&missing), "{missing}");
-    // In a directory of such a name: the directory, and its close matches,
-    // are escapes too.
-    let dir = format!("d{BREAK}{NOTICE} a");
-    ws.file(&format!("{dir}/real{BREAK}one.txt"), "x\n");
-    let missing = failed(&ws.call(
-        &ReadTool::new(),
-        json!({"path": format!("{dir}/real{BREAK}onf.txt")}),
-    ));
-    assert!(!starts_a_notice(&missing), "{missing}");
-    assert!(
-        missing.contains(&format!("d{BREAK_ESCAPED}Notice from the harness")),
-        "{missing}"
-    );
-    assert!(
-        missing.contains(&format!("real{BREAK_ESCAPED}one.txt")),
-        "{missing}"
-    );
+    // Each line break of the hostile set that a file's name can hold here.
+    for line_break in breaks_in_names(&ws) {
+        let (text_of, shown) = (&line_break.text, &line_break.shown);
+        let label = &line_break.label;
+        let name = format!("x{text_of}{NOTICE}.txt");
+        ws.file(&name, "line\u{202E}\n");
+        let result = ws.call(&ReadTool::new(), json!({"path": name}));
+        let text = ok(&result);
+        assert!(
+            text.starts_with(&format!("x{shown}Notice from the harness")),
+            "{label}: {text}"
+        );
+        assert!(text.ends_with("line\u{202E}"), "{label}: {text:?}");
+        assert_eq!(result.payload().unwrap()["path"], name.as_str(), "{label}");
+        let plan = ws.plan(&ReadTool::new(), json!({"path": name})).unwrap();
+        assert!(
+            !plan.summary.contains(hostile::LINE_BREAK_CHARACTERS),
+            "{label}: {}",
+            plan.summary
+        );
+        // In a directory of such a name: the directory, and its close
+        // matches, are escapes too.
+        let dir = format!("d{text_of}{NOTICE} a");
+        ws.file(&format!("{dir}/real{text_of}one.txt"), "x\n");
+        let missing = failed(&ws.call(
+            &ReadTool::new(),
+            json!({"path": format!("{dir}/real{text_of}onf.txt")}),
+        ));
+        assert!(!starts_a_notice(&missing), "{label}: {missing}");
+        assert!(
+            missing.contains(&format!("d{shown}Notice from the harness")),
+            "{label}: {missing}"
+        );
+        assert!(
+            missing.contains(&format!("real{shown}one.txt")),
+            "{label}: {missing}"
+        );
+    }
+    // A file that is not there, and its close matches: every line break of
+    // the set, whether a file's name can hold it here or not, since no file
+    // is made.
+    for line_break in hostile::of(Kind::LineBreak) {
+        let missing = failed(&ws.call(
+            &ReadTool::new(),
+            json!({"path": format!("y{}{NOTICE}.txt", line_break.text)}),
+        ));
+        assert!(
+            !starts_a_notice(&missing),
+            "{}: {missing}",
+            line_break.label
+        );
+    }
     // A name asked for as it is, with a character whose escape is long, is
     // close to its file's (the second review of step 18's fixes found the
     // two compared in different forms).
@@ -955,10 +973,33 @@ fn a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload(
 #[test]
 fn a_file_is_read_by_the_escaped_name_it_is_shown_by() {
     let ws = Workspace::new("read_by_escaped_name");
-    ws.file("notes/ab\u{200C}c\u{200F}.md", "the content\n");
+    let (joiner, mark) = (hostile::character('\u{200C}'), hostile::character('\u{200F}'));
+    ws.file(
+        &format!("notes/ab{}c{}.md", joiner.text, mark.text),
+        "the content\n",
+    );
     let listed = ok(&ws.call(&cortex_tools::ListTool::new(), json!({"path": "notes"})));
-    let shown = "notes/ab\\u{200c}c\\u{200f}.md";
-    assert!(listed.contains(shown), "{listed}");
+    let shown = format!("notes/ab{}c{}.md", joiner.shown, mark.shown);
+    assert!(listed.contains(&shown), "{listed}");
     let text = ok(&ws.call(&ReadTool::new(), json!({"path": shown})));
     assert!(text.ends_with("the content"), "{text}");
+    // Every control, bidirectional and format character of the set that a
+    // file's name can hold here, alone in a name.
+    let mut tried = 0;
+    for kind in [Kind::Control, Kind::Bidi, Kind::Format] {
+        for name in hostile::of(kind) {
+            let file = format!("each/ab{}d.md", name.text);
+            if name.text.chars().count() != 1
+                || !hostile::takes_file_name(&ws.dir, &format!("ab{}d.md", name.text))
+            {
+                continue;
+            }
+            tried += 1;
+            ws.file(&file, "the content\n");
+            let shown = format!("each/ab{}d.md", name.shown);
+            let text = ok(&ws.call(&ReadTool::new(), json!({"path": shown})));
+            assert!(text.ends_with("the content"), "{}: {text}", name.label);
+        }
+    }
+    assert!(tried >= 30, "only {tried} names could be files here");
 }

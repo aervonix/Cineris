@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use cortex_base::{Clock, ContentHash, FakeClock, UtcTime};
+use cortex_testkit::hostile::{self, Kind};
 use cortex_tools::{EditTool, Editing, ReadTool, Staleness, WriteTool};
 use serde_json::json;
 
@@ -236,12 +237,15 @@ fn a_file_read_under_one_spelling_is_edited_under_another() {
     assert_eq!(ws.read_bytes("Src/new.rs"), b"one\ntwo\n");
     // And the names Windows gives a second meaning are refused when the
     // call is planned.
-    for path in [
-        "NUL",
-        "notes.txt.",
-        "notes.txt::$DATA",
-        r"\\server\share\x.txt",
-    ] {
+    let devices = hostile::of(Kind::Reserved).into_iter().map(|name| name.text);
+    for path in devices.chain(
+        [
+            "notes.txt.",
+            "notes.txt::$DATA",
+            r"\\server\share\x.txt",
+        ]
+        .map(String::from),
+    ) {
         let refused = ws.plan(
             &WriteTool::new(ws.editing()),
             json!({"path": path, "content": "x"}),

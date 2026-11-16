@@ -8,6 +8,7 @@
 
 use std::fs;
 
+use cortex_testkit::hostile::{self, Kind};
 use cortex_tools::{Effect, ListTool, ReadTool, SearchTool, Tool};
 use serde_json::json;
 
@@ -139,18 +140,22 @@ fn refused_by_every_tool(ws: &Workspace, path: &str, reason: &str) {
 #[test]
 fn device_names_are_refused() {
     let ws = project("win_devices");
-    for path in [
-        "NUL",
-        "nul",
-        "CON",
-        "con.txt",
-        "src/COM1",
-        r"src\lpt9.log",
-        "AUX",
-        "PRN.rs",
-        "CONIN$",
-    ] {
-        refused_by_every_tool(&ws, path, "is a device name on Windows");
+    // Every name of the hostile set that Windows reads as a device, bare,
+    // in a directory and with the other separator. The resolver looks at a
+    // trailing dot or space first (Windows drops it), so those say that.
+    for name in hostile::of(Kind::Reserved) {
+        let reason = if name.text.ends_with(['.', ' ']) {
+            "ends with a dot or a space"
+        } else {
+            "is a device name on Windows"
+        };
+        for path in [
+            name.text.clone(),
+            format!("src/{}", name.text),
+            format!(r"src\{}", name.text),
+        ] {
+            refused_by_every_tool(&ws, &path, reason);
+        }
     }
 }
 

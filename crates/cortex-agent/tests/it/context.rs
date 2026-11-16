@@ -21,7 +21,7 @@ use cortex_protocol::usage::TokenUsage;
 use cortex_protocol::{
     Item, ItemId, Message, ModelId, Part, Plan, ProviderId, Role, StopReason, TurnId,
 };
-use cortex_testkit::{Built, Gate, Response, ScriptedProvider, fixtures};
+use cortex_testkit::{Built, Gate, Response, ScriptedProvider, fixtures, hostile};
 use serde_json::json;
 
 use crate::{
@@ -368,13 +368,14 @@ fn a_nested_instruction_file_is_given_once_when_a_tool_first_touches_its_directo
 /// (the independent review of step 18's fixes found it told so).
 #[test]
 fn a_nested_instruction_file_under_a_name_shown_escaped_is_not_told_removed() {
+    let joiner = hostile::character('\u{200C}');
     let world = World::new(
         "instructions_nested_escaped",
         [
             calls(&[(
                 "c1",
                 "read",
-                json!({"path": "src/a\u{200C}pi/handler.rs", "record": true}),
+                json!({"path": format!("src/a{}pi/handler.rs", joiner.text), "record": true}),
             )]),
             says("Done."),
             says("Again."),
@@ -382,7 +383,7 @@ fn a_nested_instruction_file_under_a_name_shown_escaped_is_not_told_removed() {
     );
     let rig = Setup::new(&world).start(&world);
     rig.instructions.set(
-        &root_file(&rig, "src/a\u{200C}pi/AGENTS.md"),
+        &root_file(&rig, &format!("src/a{}pi/AGENTS.md", joiner.text)),
         "Return JSON errors.",
     );
     world.run(async {
@@ -394,11 +395,14 @@ fn a_nested_instruction_file_under_a_name_shown_escaped_is_not_told_removed() {
     let notices = notice_texts(&rig);
     assert_eq!(notices.len(), 1, "{notices:#?}");
     assert!(
-        notices[0].starts_with("Instruction file `src/a\\u{200c}pi/AGENTS.md` applies"),
+        notices[0].starts_with(&format!(
+            "Instruction file `src/a{}pi/AGENTS.md` applies",
+            joiner.shown
+        )),
         "{}",
         notices[0]
     );
-    assert!(!notices[0].contains('\u{200C}'));
+    assert!(!notices[0].contains(&joiner.text));
 }
 
 /// A nested instruction file under a name that holds `\n` as two

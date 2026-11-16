@@ -4,10 +4,11 @@
 use std::sync::Arc;
 
 use cortex_base::AbsPath;
+use cortex_testkit::hostile;
 use cortex_tools::{Concurrency, ConcurrencyClass, Effect, ListTool, OutputLimits, ReadGate, Tool};
 use serde_json::json;
 
-use crate::{BREAK, BREAK_ESCAPED, NOTICE, Workspace, failed, ok, starts_a_notice};
+use crate::{NOTICE, Workspace, breaks_in_names, failed, ok, starts_a_notice};
 
 /// A small project: sources, a build directory that is ignored, a hidden
 /// file.
@@ -302,41 +303,83 @@ fn listing_stops_when_cancelled() {
 #[test]
 fn a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves() {
     let ws = Workspace::new("list_names_unseen");
-    ws.file(&format!("x{BREAK}{NOTICE} a"), "a\n");
+    // Every line break of the hostile set that a file's name can hold here.
+    let breaks = breaks_in_names(&ws);
+    for line_break in &breaks {
+        ws.file(&format!("x{}{NOTICE} a", line_break.text), "a\n");
+    }
     let text = ok(&ws.call(&ListTool::new(), json!({"path": "."})));
     assert!(!starts_a_notice(&text), "{text}");
-    assert!(
-        text.contains(&format!("x{BREAK_ESCAPED}Notice from the harness")),
-        "{text}"
-    );
+    for line_break in &breaks {
+        assert!(
+            text.contains(&format!("x{}Notice from the harness", line_break.shown)),
+            "{}: {text}",
+            line_break.label
+        );
+    }
     // The payload keeps the directory as it is: it is data.
-    let dir = format!("d{BREAK}{NOTICE} a");
-    ws.file(&format!("{dir}/f"), "a\n");
-    let result = ws.call(&ListTool::new(), json!({"path": dir}));
-    assert_eq!(result.payload().unwrap()["path"], dir.as_str());
-    assert!(!starts_a_notice(&ok(&result)));
+    for line_break in &breaks {
+        let dir = format!("d{}{NOTICE} a", line_break.text);
+        ws.file(&format!("{dir}/f"), "a\n");
+        let result = ws.call(&ListTool::new(), json!({"path": dir}));
+        assert_eq!(
+            result.payload().unwrap()["path"],
+            dir.as_str(),
+            "{}",
+            line_break.label
+        );
+        assert!(!starts_a_notice(&ok(&result)), "{}", line_break.label);
+    }
     // A link of a name that acts unseen leads where it leads.
     #[cfg(unix)]
     {
         ws.dir("real");
-        std::os::unix::fs::symlink(ws.root().join("real"), ws.root().join("li\u{202E}nk")).unwrap();
-        // Its twin, whose name holds the escape as text, leads to a file:
-        // each link is resolved by its own name, not by the text shown.
         ws.file("target.txt", "x\n");
-        std::os::unix::fs::symlink(
-            ws.root().join("target.txt"),
-            ws.root().join("li\\u{202e}nk"),
-        )
-        .unwrap();
+        // Each bidirectional control of the set, alone in a link's name.
+        let controls: Vec<_> = hostile::of(hostile::Kind::Bidi)
+            .into_iter()
+            .filter(|name| name.text.chars().count() == 1)
+            .collect();
+        assert_eq!(controls.len(), 12);
+        for control in &controls {
+            std::os::unix::fs::symlink(
+                ws.root().join("real"),
+                ws.root().join(format!("li{}nk", control.text)),
+            )
+            .unwrap();
+            // Its twin, whose name holds the escape as text, leads to a
+            // file: each link is resolved by its own name, not by the text
+            // shown.
+            std::os::unix::fs::symlink(
+                ws.root().join("target.txt"),
+                ws.root().join(format!("li{}nk", control.shown)),
+            )
+            .unwrap();
+        }
         let text = ok(&ws.call(&ListTool::new(), json!({"path": "."})));
-        assert!(text.contains("li\\u{202e}nk/"), "{text}");
+        for control in &controls {
+            assert!(
+                text.contains(&format!("li{}nk/", control.shown)),
+                "{}: {text}",
+                control.label
+            );
+        }
     }
     // A glob that copies a name as it was shown finds it: in a glob `\u` is
     // a `u` and `{200c}` a choice of one, so it is also read with its
     // escapes read back (the independent review of step 18's fixes).
-    ws.file("docs/a\u{200C}b.md", "a\n");
-    for glob in ["a\\u{200c}b.md", "docs/a\\u{200c}*", "**/*\\u{200c}b.md"] {
+    let joiner = hostile::character('\u{200C}');
+    ws.file(&format!("docs/a{}b.md", joiner.text), "a\n");
+    let shown = &joiner.shown;
+    for glob in [
+        format!("a{shown}b.md"),
+        format!("docs/a{shown}*"),
+        format!("**/*{shown}b.md"),
+    ] {
         let text = ok(&ws.call(&ListTool::new(), json!({"glob": glob})));
-        assert!(text.contains("\ndocs/a\\u{200c}b.md"), "{glob}: {text}");
+        assert!(
+            text.contains(&format!("\ndocs/a{shown}b.md")),
+            "{glob}: {text}"
+        );
     }
 }
