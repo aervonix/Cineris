@@ -210,11 +210,19 @@ pub(crate) struct Assembled {
 
 /// Where a directory really is: resolved through any link, whether or not
 /// all of it exists yet.
+///
+/// The deepest ancestor that is a directory is found with a `metadata` call
+/// each, and only there is a resolver made, which walks the path from its
+/// root: making one for each missing level in turn cost a session's set-up
+/// a third of its time on Windows (27 resolvers, 9 ms of 20, the seventh
+/// tooling step). A directory the resolver refuses is passed over as a
+/// missing one is, as before.
 pub(crate) fn resolve_dir(path: &Path) -> Option<AbsPath> {
     let mut missing: Vec<&std::ffi::OsStr> = Vec::new();
     let mut existing = path;
     loop {
-        if let Ok(resolver) = PathResolver::new(existing, PathOptions::new()) {
+        let is_dir = std::fs::metadata(existing).is_ok_and(|metadata| metadata.is_dir());
+        if is_dir && let Ok(resolver) = PathResolver::new(existing, PathOptions::new()) {
             let mut resolved = resolver.root().clone();
             for name in missing.iter().rev() {
                 resolved = resolved.child(name).ok()?;
@@ -1616,6 +1624,86 @@ mod tests {
         assert!(super::cached_shell_is_usable(&shell, &roots));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod resolve_dir_tests {
+    use cortex_base::{AbsPath, PathOptions, PathResolver};
+    use cortex_testkit::Scratch;
+
+    use super::resolve_dir;
+
+    /// What `resolve_dir` gave before the seventh tooling step: a resolver
+    /// tried at each level, from the path up, until one could be made.
+    fn the_old_way(path: &std::path::Path) -> Option<AbsPath> {
+        let mut missing: Vec<&std::ffi::OsStr> = Vec::new();
+        let mut existing = path;
+        loop {
+            if let Ok(resolver) = PathResolver::new(existing, PathOptions::new()) {
+                let mut resolved = resolver.root().clone();
+                for name in missing.iter().rev() {
+                    resolved = resolved.child(name).ok()?;
+                }
+                return Some(resolved);
+            }
+            missing.push(existing.file_name()?);
+            existing = existing.parent()?;
+        }
+    }
+
+    #[test]
+    fn a_folder_missing_several_levels_deep_resolves_as_it_did() {
+        let scratch = Scratch::outside("cortex-core-unit", "resolve_dir_deep");
+        scratch.dir("there");
+        scratch.file("there/a-file", "not a folder");
+        for path in [
+            scratch.path().to_path_buf(),
+            scratch.join("there"),
+            scratch.join("there/one"),
+            scratch.join("there/one/two/three"),
+            scratch.join("not/there/at/all"),
+            // A file on the way is not a folder: the names below it are
+            // kept as names, as before.
+            scratch.join("there/a-file/below"),
+        ] {
+            let resolved = resolve_dir(&path);
+            assert!(resolved.is_some(), "{}", path.display());
+            assert_eq!(resolved, the_old_way(&path), "{}", path.display());
+        }
+        let deep = resolve_dir(&scratch.join("there/one/two/three")).unwrap();
+        assert!(
+            deep.as_str().ends_with("one/two/three") || deep.as_str().ends_with("one\\two\\three")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_on_the_way_is_followed_to_where_it_leads() {
+        let scratch = Scratch::outside("cortex-core-unit", "resolve_dir_link");
+        let real = scratch.dir("real");
+        std::os::unix::fs::symlink(&real, scratch.join("link")).unwrap();
+        let through = resolve_dir(&scratch.join("link/missing/deeper")).unwrap();
+        let direct = resolve_dir(&real.join("missing/deeper")).unwrap();
+        assert_eq!(through, direct, "the link is followed");
+        assert_eq!(
+            through,
+            the_old_way(&scratch.join("link/missing/deeper")).unwrap()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_ancestor_spelt_in_another_case_resolves_to_its_spelling_on_disk() {
+        let scratch = Scratch::outside("cortex-core-unit", "resolve_dir_case");
+        scratch.dir("Folder");
+        let asked = scratch.join("FOLDER").join("missing").join("deeper");
+        let resolved = resolve_dir(&asked).unwrap();
+        assert!(
+            resolved.as_str().contains("Folder"),
+            "the on-disk spelling: {resolved}"
+        );
+        assert_eq!(Some(resolved), the_old_way(&asked));
     }
 }
 
