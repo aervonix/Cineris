@@ -1,3 +1,8 @@
+`/config` shows the values in effect, not the layer each came from; `config/get` gives no provenance.
+
+- Area: cortex-agent
+- Owner: step 24
+
 | Item | Who | When |
 |---|---|---|
 | **`/config` shows the values in effect, not where each came from.** [09-tui.md](../architecture/09-tui.md) has `/config` show "the effective configuration and where each value comes from". `config/get` answers with the values alone, so step 23's `/config` lists them (`key = value`, one a line) and says nothing of their layer. **Recommendation:** an addition to `config/get`'s result, each key's layer (built in, managed, user, project, local, profile, environment, command line) as `cortex-config`'s merge already records it, with its schema diff; `/config` then shows it beside each value. | Step 24 (settings and hot-reload), which owns `/reload` and the configuration's live view | Before the first release |

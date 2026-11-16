@@ -1,3 +1,8 @@
+`sys::unix::wait` and `sys::windows::wait` restart their timeout after an interrupted call, stale wake or key release.
+
+- Area: cortex-term
+- Owner: step 32
+
 | Item | Who | When |
 |---|---|---|
 | **The terminal layer's waits start their timeout again.** The waits in `sys::unix::wait` and `sys::windows::wait` start their timeout again after an interrupted call, a stale wake or a key release, so a wait can run longer than asked. The escape's own wait, and since step 21 the wait for the rest of a paste, are bounded by `Terminal::next`, which counts from the last input. The two other corners step 20's review found (an over-long sequence that arrives split, and a paste whose end never comes) were settled in step 21 ([steps/21/answered.md](../steps/21/answered.md)). | Step 32 (hardening) | Before the first release |

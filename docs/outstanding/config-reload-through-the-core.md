@@ -1,3 +1,8 @@
+`config/reload` answers `not_available`; step 23 settled what a reload applies to a running session, key by key, and step 24 wires it.
+
+- Area: cortex-core
+- Owner: step 24
+
 | Item | Who | When |
 |---|---|---|
 | **`config/reload` and the reload of a running session's configuration.** `cortex-config` has the live configuration with its "old configuration stays on error" rule; the core loads configuration once for each session and answers `config/reload` with `not_available`. Step 23 settled what a reload does, and left it to step 24 ([steps/23/answered.md](../steps/23/answered.md)), which owns `/reload` and hot-reload end to end: **(1)** it checks the files again, and the old configuration stays on error; **(2)** it judges trust again, as at a start: a trusted project whose rules changed has them set aside until it is trusted again, and a project's first limit waits for trust; **(3)** it applies the keys marked `Now` to each open session: the engine's rules through a new engine as `session/set` makes one, the limits, the retry policy, the log's level, `stats.retention`, the `[usage]` keys (which step 16 asked for) and the `[verify]` keys (step 19: the core's verifier holds its settings, and the loop its `verify_rounds`, as the session was put together); **(4)** it applies the `NextEpoch` keys when the session's next epoch begins, listing them as `pending` until then, and lists the `Restart` keys as `pending` with a sentence. | Step 24 (`/reload`), moved from step 23 | In that step |

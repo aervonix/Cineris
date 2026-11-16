@@ -1,0 +1,151 @@
+# The tenth tooling step's breaks.
+
+# Records that do not conflict (item 1): the open items' index written from
+# the items, and the records of a step's parts.
+
+[break] outstanding-index-is-not-compared
+rule: `rules` fails when the open items' index is not what `cargo xtask outstanding` writes, whatever a merge left in it.
+file: xtask/src/rules/layout.rs
+in: stale_index
+find: (found != expected).then
+replace: (false).then
+caught-by:
+    rules::layout::tests::an_index_that_is_not_what_the_items_give_is_found
+
+[break] outstanding-index-in-file-order
+rule: The index lists the items of an area by name, so that it does not depend on the order the files were read in.
+file: xtask/src/outstanding.rs
+in: index
+find: .then_with(|| a.name.cmp(&b.name))
+replace:
+caught-by:
+    outstanding::tests::the_index_lists_every_item_once_by_area_then_name
+
+[break] outstanding-named-areas-before-the-crates
+rule: The crates come first in the index, then the named areas in their order.
+file: xtask/src/outstanding.rs
+in: heading
+find: .map_or((0, area), |at| (at + 1, AREAS[at].1))
+replace: .map_or((9, area), |at| (at + 1, AREAS[at].1))
+caught-by:
+    outstanding::tests::the_index_lists_every_item_once_by_area_then_name
+
+[break] outstanding-a-line-twice-is-not-named
+rule: A line a merge left twice in the index is named as such.
+file: xtask/src/outstanding.rs
+in: difference
+find: .count() > 1
+replace: .count() > 2
+caught-by:
+    outstanding::tests::a_difference_names_lines_lacking_extra_and_twice
+    rules::layout::tests::an_index_that_is_not_what_the_items_give_is_found
+
+[break] outstanding-index-judged-beside-unreadable-items
+rule: The index is not judged while an item's file cannot be read; the item's own problem is said first.
+file: xtask/src/rules/layout.rs
+in: check
+find: items_read = false;
+replace:
+caught-by:
+    rules::layout::tests::the_index_waits_for_items_that_cannot_be_read
+
+[break] outstanding-the-old-form-passes-its-first-line
+rule: An item's first line is its sentence, never the table: a file in the form before the tenth tooling step is refused at line 1.
+file: xtask/src/outstanding.rs
+in: parse
+find: summary.starts_with(['|', '#', '-', '>', ' ', '*'])
+replace: summary.starts_with(['#', '-', '>', ' ', '*'])
+caught-by:
+    outstanding::tests::a_file_out_of_form_is_refused_at_its_line
+    rules::layout::tests::an_open_item_out_of_form_is_found_at_its_line
+
+[break] outstanding-any-cortex-name-is-an-area
+rule: An area that names a crate names one the workspace has.
+file: xtask/src/outstanding.rs
+in: parse
+find: (value.starts_with("cortex-") && crates.contains(value))
+replace: value.starts_with("cortex-")
+caught-by:
+    outstanding::tests::a_file_out_of_form_is_refused_at_its_line
+
+[break] outstanding-a-flaky-test-named-twice
+rule: An item names a flaky test once.
+file: xtask/src/outstanding.rs
+in: parse
+find: if flaky.contains(&flake)
+replace: if false
+caught-by:
+    outstanding::tests::a_file_out_of_form_is_refused_at_its_line
+
+[break] outstanding-a-flaky-binary-of-no-crate
+rule: A flaky test's binary is one of the workspace's crates, or a target of one.
+file: xtask/src/outstanding.rs
+in: is_binary
+find: (package == "xtask" || crates.contains(package)) && target_fits
+replace: target_fits
+caught-by:
+    outstanding::tests::a_file_out_of_form_is_refused_at_its_line
+
+[break] outstanding-two-rows-in-one-item
+rule: An item's file holds one item: a second row is refused.
+file: xtask/src/outstanding.rs
+in: parse
+find: if lines.len() > row + 1
+replace: if false
+caught-by:
+    outstanding::tests::a_file_out_of_form_is_refused_at_its_line
+    rules::layout::tests::an_open_item_out_of_form_is_found_at_its_line
+
+[break] outstanding-regen-leaves-the-index
+rule: `regen` writes the open items' index, first.
+file: xtask/src/regen.rs
+in: WRITERS
+find: name: "outstanding"
+replace: name: "outstanding-index"
+caught-by:
+    regen::tests::no_name_is_every_generator_and_names_keep_their_order
+
+[break] part-record-need-not-be-linked
+rule: A part's record is linked from the step's `answered.md` or `ci.md`.
+file: xtask/src/rules/layout.rs
+in: part_record
+find: if linked {
+replace: if true {
+caught-by:
+    rules::layout::tests::a_parts_record_is_named_headed_and_linked
+
+[break] part-record-linked-from-code
+rule: A link to a part's record in fenced code or a comment does not count.
+file: xtask/src/rules/layout.rs
+in: part_record
+find: let text = prose(text);
+replace: let text = text.to_owned();
+caught-by:
+    rules::layout::tests::a_parts_record_is_named_headed_and_linked
+
+[break] part-record-any-heading
+rule: A part's record begins with a top-level heading of its own.
+file: xtask/src/rules/layout.rs
+in: part_record
+find: heading.strip_prefix("# ")
+replace: heading.strip_prefix("#")
+caught-by:
+    rules::layout::tests::a_parts_record_is_named_headed_and_linked
+
+[break] part-record-any-name
+rule: A part's group and name are hyphenated words.
+file: xtask/src/rules/layout.rs
+in: part_record
+find: !is_hyphenated(group) || !name.is_some_and(is_hyphenated)
+replace: name.is_none()
+caught-by:
+    rules::layout::tests::a_parts_record_is_named_headed_and_linked
+
+[break] part-record-deeper-folders
+rule: A step's folder holds its two records and its parts' records, one folder deep, and nothing else.
+file: xtask/src/rules/layout.rs
+in: step_record
+find: [folder, _, _] => (*folder, ""),
+replace: [folder, ..] => (*folder, ""),
+caught-by:
+    rules::layout::tests::a_steps_folder_holds_its_two_records_and_its_parts_and_nothing_else

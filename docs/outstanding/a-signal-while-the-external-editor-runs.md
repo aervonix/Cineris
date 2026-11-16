@@ -1,3 +1,8 @@
+A signal sent to the program alone while the external editor runs leaves the editor running, and the watchdog ends the program without its graceful end, leaving the prompt's folder.
+
+- Area: cortex-tui
+- Owner: step 32
+
 | Item | Who | When |
 |---|---|---|
 | **A signal sent to the program alone while the external editor runs leaves the editor running.** Since the review of step 23 the program keeps its signal handlers while the editor has the terminal, so a SIGTERM, SIGHUP or SIGINT sent to it is handed over with its 3 s watchdog, as anywhere else ([09-tui.md](../architecture/09-tui.md), "A signal handed to the program"). When the terminal closes, the editor has the hang-up too and ends, and the program then ends as the signal asks, its prompt's folder removed, the terminal not entered again. But `kill -TERM` to the program alone reaches only the program: the interface thread waits for the editor, which goes on, and the watchdog ends the program 3 s later, by SIGALRM, without its graceful end, and the prompt's private folder in the temporary directory is left behind. Recommendation: wait for the editor in a way a hand-over can cut short (a wait on the child and the terminal's waker together, or `try_wait` on a short timer), and then end the editor (SIGTERM to its process group, which the editor's own saving may catch) and the program gracefully. | Step 32 (the external editor's remaining gaps, with [external-editor-test-gaps.md](external-editor-test-gaps.md)) | Before the first release |

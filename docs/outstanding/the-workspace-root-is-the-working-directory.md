@@ -1,3 +1,8 @@
+Every binary takes the working directory as the workspace root, where 08 says the nearest ancestor with `.cortex/` or `.git`.
+
+- Area: cortex-cli
+- Owner: the owner
+
 | Item | Who | When |
 |---|---|---|
 | **Every binary takes the working directory as the workspace root, where 08 says the nearest ancestor with `.cortex/` or `.git`** (found by the review of step 23; it predates step 23). [08-configuration.md](../architecture/08-configuration.md) says the root is found by walking up (the paragraph that begins "The workspace root is the nearest ancestor"), and `cortex-config` has `find_workspace_root`, but no binary calls it: the interactive application (`crates/cortex-cli/src/interactive.rs`), headless mode (`headless.rs`) and the subcommands (`commands.rs`) all use the working directory, as [07-sessions-and-context.md](../architecture/07-sessions-and-context.md) does. Started in `repo/src`, the repository's `.cortex/config.toml` is not read, its instructions at the root are not found as the root's, and the trust, never and not-now said at `repo/` do not apply. Recommendation: resolve the root with `find_workspace_root` in each binary before the core is asked, show it in the header, and keep the working directory as the commands' first `cd`; or change 08 to say the working directory is the root. Either changes what a feature does, so the owner chooses. | The owner, then step 24 or a step of its own | Before the first release |

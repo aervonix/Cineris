@@ -1,3 +1,8 @@
+Small faults of the seventh tooling step's commands (ci-times' unchecked `--against`, api-diff's re-export homes, the corpus lock in the dependency graph) that let no comparison pass wrongly.
+
+- Area: tooling
+- Owner: a later tooling step
+
 | Item | Who | When |
 |---|---|---|
 | **Rough edges of the seventh tooling step's commands** (its review; [steps/tooling-7/answered.md](../steps/tooling-7/answered.md); the eighth tooling step mended `try-result --os`'s verdict, `ci-times --ab`'s silent OS, `scratch-test`'s flags given twice and the corpus pin's two repairs), none of which lets a comparison pass when a side failed.  `ci-times --ab` names a test that is on one side only only when it is in `--top`, and takes `--against` as a label it never checks against the run. `api-diff`: an item reached only through `pub use` takes, of its paths of equal depth, the one that sorts first as its home, so a new re-export that sorts earlier shows every member removed and added again; and keys that collide get their `+` suffixes in the order of rustdoc's ids, which can differ between the two trees. The corpus: GitHub's dependency graph reads the tracked `corpus/Cargo.lock`, so its 670 crates show as the repository's. And the library points can reach a product binary: `cortex-testkit` turns `cortex-base/test-hooks` on as a normal dependency, so a `cargo build --workspace --release` links them into `cortex` (one atomic load a `write_atomic`); every release, dist and size build builds `-p cortex-cli` and has none, as with the `pty` feature. | A later tooling step | When the command is next changed |
