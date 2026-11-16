@@ -240,6 +240,12 @@ impl EventQueue {
         *fence = (*fence).max(seq);
     }
 
+    /// Forgets the fence of `session`: the client opened it again, or
+    /// closed it.
+    pub(crate) fn unfence(&self, session: &SessionId) {
+        lock(&self.state).fences.remove(session);
+    }
+
     /// The next thing for the client, if there is one. Never waits.
     pub fn try_next(&self) -> Option<Outgoing> {
         lock(&self.state).items.pop_front()
@@ -484,8 +490,10 @@ impl Partial {
 
 /// The sink of one session: every client that has the session open gets
 /// each event, and the items in progress are kept current.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct SessionSink {
+    /// The session, by which a client's queue keeps the fence of its read.
+    session: SessionId,
     subscribers: Mutex<Vec<(u64, Arc<EventQueue>)>>,
     progress: Mutex<InProgress>,
     /// The turn that is running and the `seq` of the last event, for a
@@ -494,20 +502,40 @@ pub(crate) struct SessionSink {
 }
 
 impl SessionSink {
+    /// The sink of `session`, with nobody subscribed.
+    pub(crate) fn new(session: SessionId) -> Self {
+        Self {
+            session,
+            subscribers: Mutex::default(),
+            progress: Mutex::default(),
+            last: Mutex::default(),
+        }
+    }
+
     /// Adds a client's queue, under the client's number. A client is added
-    /// once.
+    /// once. A fence the queue kept for this session from an earlier
+    /// opening goes: the session numbers its events from 1 again (the
+    /// review of step 23's fixes).
     pub(crate) fn subscribe(&self, client: u64, queue: Arc<EventQueue>) {
         let mut subscribers = lock(&self.subscribers);
         if !subscribers.iter().any(|(known, _)| *known == client) {
+            queue.unfence(&self.session);
             subscribers.push((client, queue));
         }
     }
 
-    /// Removes a client's queue. Says whether it was there.
+    /// Removes a client's queue, and the fence it kept for this session.
+    /// Says whether it was there.
     pub(crate) fn unsubscribe(&self, client: u64) -> bool {
         let mut subscribers = lock(&self.subscribers);
         let before = subscribers.len();
-        subscribers.retain(|(known, _)| *known != client);
+        subscribers.retain(|(known, queue)| {
+            let keep = *known != client;
+            if !keep {
+                queue.unfence(&self.session);
+            }
+            keep
+        });
         subscribers.len() != before
     }
 
@@ -526,11 +554,11 @@ impl SessionSink {
     /// `reader`, when given, is the queue of the client that reads, fenced
     /// at that `seq` under the same lock, so that no delta after it is
     /// merged into one before it.
-    pub(crate) fn snapshot(&self, reader: Option<(&EventQueue, &SessionId)>) -> (u64, Vec<Item>) {
+    pub(crate) fn snapshot(&self, reader: Option<&EventQueue>) -> (u64, Vec<Item>) {
         let progress = lock(&self.progress);
         let seq = lock(&self.last).0;
-        if let Some((queue, session)) = reader {
-            queue.fence(session, seq);
+        if let Some(queue) = reader {
+            queue.fence(&self.session, seq);
         }
         (seq, progress.items())
     }
@@ -903,7 +931,7 @@ mod tests {
     /// was drawn twice in part).
     #[test]
     fn a_read_and_the_events_after_it_hold_each_part_once() {
-        let sink = SessionSink::default();
+        let sink = SessionSink::new(SessionId::new("s_1"));
         let queue = Arc::new(EventQueue::new(16, true));
         sink.subscribe(1, Arc::clone(&queue));
         sink.emit(event(
@@ -917,8 +945,7 @@ mod tests {
         ));
         sink.emit(text(2, "i_1", "A"));
         sink.emit(text(3, "i_1", "B"));
-        let session = SessionId::new("s_1");
-        let (seq, items) = sink.snapshot(Some((&queue, &session)));
+        let (seq, items) = sink.snapshot(Some(&queue));
         assert_eq!(seq, 3);
         sink.emit(text(4, "i_1", "C"));
         sink.emit(text(5, "i_1", "D"));
@@ -947,9 +974,45 @@ mod tests {
         assert_eq!(drawn, "ABCD");
     }
 
+    /// A fence from a read of an earlier opening of the session goes when
+    /// the client opens it again: that opening numbers its events from 1
+    /// again, and its deltas merge as any others (the review of step 23's
+    /// fixes).
+    #[test]
+    fn a_fence_from_an_earlier_opening_does_not_stop_merging() {
+        let queue = Arc::new(EventQueue::new(16, true));
+        let before = SessionSink::new(SessionId::new("s_1"));
+        before.subscribe(1, Arc::clone(&queue));
+        before.emit(text(5000, "i_0", "old"));
+        let _ = before.snapshot(Some(&queue));
+        while queue.try_next().is_some() {}
+        assert!(before.unsubscribe(1));
+        let again = SessionSink::new(SessionId::new("s_1"));
+        again.subscribe(1, Arc::clone(&queue));
+        again.emit(text(1, "i_1", "A"));
+        again.emit(text(2, "i_1", "B"));
+        let mut queued = Vec::new();
+        while let Some(outgoing) = queue.try_next() {
+            queued.push(outgoing);
+        }
+        assert_eq!(queued.len(), 1, "merged: {queued:?}");
+        // Subscribing alone clears it too, for a client that never said it
+        // closed the earlier opening.
+        let _ = again.snapshot(Some(&queue));
+        let third = SessionSink::new(SessionId::new("s_1"));
+        third.subscribe(2, Arc::clone(&queue));
+        third.emit(text(1, "i_2", "C"));
+        third.emit(text(2, "i_2", "D"));
+        let mut queued = Vec::new();
+        while let Some(outgoing) = queue.try_next() {
+            queued.push(outgoing);
+        }
+        assert_eq!(queued.len(), 1, "merged: {queued:?}");
+    }
+
     #[test]
     fn the_sink_gives_every_subscriber_each_event_and_tracks_what_is_in_progress() {
-        let sink = SessionSink::default();
+        let sink = SessionSink::new(SessionId::new("s_1"));
         let (one, two) = (
             Arc::new(EventQueue::new(16, true)),
             Arc::new(EventQueue::new(16, false)),

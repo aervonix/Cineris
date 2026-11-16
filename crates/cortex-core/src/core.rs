@@ -1168,9 +1168,7 @@ impl Core {
                 // event after it is not in the answer, and the client gets
                 // it live.
                 let reader = self.inner.clients.queue(client);
-                let (seq, progress) = live
-                    .sink
-                    .snapshot(reader.as_deref().map(|queue| (queue, &params.session_id)));
+                let (seq, progress) = live.sink.snapshot(reader.as_deref());
                 let log = Arc::clone(&live.log);
                 let mut items = Self::blocking(move || {
                     lock(&log)

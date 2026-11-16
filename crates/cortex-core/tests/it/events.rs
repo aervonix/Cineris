@@ -121,6 +121,63 @@ fn an_item_in_progress_can_be_read_with_what_it_has_so_far() {
     });
 }
 
+/// A client behind its queue, holding deltas merged while it read nothing,
+/// reads the session while the answer streams: the read's text and the
+/// deltas after the read's `seq` hold the answer exactly once. The read
+/// fences the client's queue, so no delta after it is merged into one
+/// before it (the review of step 23's fixes).
+#[test]
+fn a_read_by_a_client_behind_and_the_deltas_after_it_hold_the_answer_once() {
+    let gate = Gate::new();
+    let world = World::new(
+        "read_behind",
+        [Response::new()
+            .text_in(&["The ", "build ", "fails "])
+            .wait(&gate)
+            .text_in(&["because ", "of ", "a file."])
+            .end(StopReason::End)],
+    );
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        // A second client that reads nothing until the answer has begun:
+        // its queue merges the first deltas into one.
+        let behind = front.join(ClientInfo::user()).await;
+        front.prompt("why does the build fail?").await;
+        front
+            .until(|seen| {
+                seen.iter().any(|outgoing| {
+                    matches!(outgoing, Outgoing::Event(event)
+                        if matches!(&event.event, Event::ItemDelta(delta)
+                            if matches!(&delta.delta, Delta::Text(text) if text.text.contains("fails"))))
+                })
+            })
+            .await;
+        settle().await;
+        let result = read(&behind, None, None, None).await;
+        let answer = result
+            .items
+            .iter()
+            .find(|item| matches!(item, Item::AssistantMessage(_)))
+            .expect("the answer in progress");
+        let mut drawn = text_of(answer);
+        assert_eq!(drawn, "The build fails ");
+        gate.open();
+        front.turns(1).await;
+        behind.turns(1).await;
+        for event in behind.events() {
+            if event.seq > result.seq
+                && let Event::ItemDelta(delta) = event.event
+                && let Delta::Text(text) = delta.delta
+            {
+                drawn.push_str(&text.text);
+            }
+        }
+        assert_eq!(drawn, "The build fails because of a file.");
+        front.close().await;
+    });
+}
+
 #[test]
 fn a_client_that_falls_behind_gets_fewer_deltas_one_resync_and_every_whole_event() {
     let gate = Gate::new();

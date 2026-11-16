@@ -37,9 +37,11 @@ enum Answer {
     Leave,
     /// Ends the core, answering nothing.
     ShutDown,
-    /// Takes the project's trust away, as another process would, then
-    /// trusts it.
-    UntrustThenTrust,
+    /// Takes the project's trust away, as another client or process
+    /// would (marking it never with `refuse`), then trusts it.
+    UntrustThenTrust {
+        refuse: bool,
+    },
 }
 
 fn trust_it() -> Answer {
@@ -134,9 +136,13 @@ async fn answering(
                     }
                     Answer::Leave => core.disconnect(client.id).await,
                     Answer::ShutDown => core.shutdown().await,
-                    Answer::UntrustThenTrust => {
+                    Answer::UntrustThenTrust { refuse } => {
                         let (store, key) = store(world);
-                        assert!(store.revoke(&key).unwrap());
+                        if *refuse {
+                            store.refuse(&key, "~/work/app").unwrap();
+                        } else {
+                            assert!(store.revoke(&key).unwrap());
+                        }
                         core.respond(
                             client.id,
                             &id,
@@ -335,38 +341,50 @@ fn a_project_whose_rules_changed_is_asked_about_them() {
     assert_eq!(model(&state.expect("the session opens")), OTHER_MODEL);
 }
 
-/// A yes to a project whose rules changed, whose trust another process took
-/// away while the question was open, trusts it afresh: the store keeps it,
-/// and the session is trusted, not trusted for itself alone (the review of
-/// step 23's fixes: the refusal read as an answer that could not be kept).
+/// A yes to a project whose rules changed, whose trust another client or
+/// process took away while the question was open, is not used: nothing is
+/// written, a never said meanwhile stays on disk, and the session opens
+/// with the trust as it stands now (the review of step 23's fixes: a yes to
+/// changed rules is no yes to the whole project, git included, nor past a
+/// never). A project revoked meanwhile is asked about afresh.
 #[test]
-fn a_yes_after_another_process_untrusted_the_project_trusts_it_afresh() {
-    let world = world("trusting_changed_untrusted");
-    let (store, key) = store(&world);
-    let seen = Rule {
-        effect: Effect::Write,
-        pattern: "docs/**".to_owned(),
-        action: RuleAction::Allow,
-    };
-    store
-        .trust(&key, "~/work/app", &[Definition::of_rules(&[seen])])
-        .unwrap();
-    let core = world.core();
-    let (state, asked) = world.run(open(
-        &world,
-        &core,
-        ClientInfo::user(),
-        Answer::UntrustThenTrust,
-    ));
-    assert_eq!(asked.len(), 1);
-    assert!(asked[0].resources.iter().any(|resource| resource.changed));
-    let state = state.expect("the session opens");
-    assert_eq!(model(&state), OTHER_MODEL);
-    assert_eq!(
-        state.trust,
-        Some(cortex_protocol::session::TrustStanding::Trusted)
-    );
-    assert!(store.project(&key).unwrap().is_trusted());
+fn a_yes_after_the_projects_trust_changed_meanwhile_is_not_used() {
+    for refuse in [false, true] {
+        let world = world("trusting_changed_untrusted");
+        let (store, key) = store(&world);
+        let seen = Rule {
+            effect: Effect::Write,
+            pattern: "docs/**".to_owned(),
+            action: RuleAction::Allow,
+        };
+        store
+            .trust(&key, "~/work/app", &[Definition::of_rules(&[seen])])
+            .unwrap();
+        let core = world.core();
+        let (state, asked) = world.run(open(
+            &world,
+            &core,
+            ClientInfo::user(),
+            Answer::UntrustThenTrust { refuse },
+        ));
+        assert_eq!(asked.len(), 1);
+        assert!(asked[0].resources.iter().any(|resource| resource.changed));
+        let state = state.expect("the session opens");
+        assert_eq!(model(&state), MODEL, "refuse={refuse}");
+        let stored = store.project(&key).unwrap();
+        assert!(!stored.is_trusted(), "refuse={refuse}");
+        assert_eq!(stored.is_refused(), refuse, "the never stays");
+        assert_eq!(
+            state.trust,
+            Some(if refuse {
+                cortex_protocol::session::TrustStanding::Never
+            } else {
+                cortex_protocol::session::TrustStanding::Untrusted
+            })
+        );
+        let (_, again) = world.run(open(&world, &core, ClientInfo::user(), not_now()));
+        assert_eq!(again.len(), usize::from(!refuse), "refuse={refuse}");
+    }
 }
 
 /// Never, said of a trusted project whose rules changed, is in force in the
