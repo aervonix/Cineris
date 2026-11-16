@@ -2488,3 +2488,12 @@ find: if here == 0 && there > 0 {
 replace: if false {
 caught-by:
     compare::tests::a_side_with_a_failed_test_or_a_tier_missing_is_named
+
+[break] ci-times-writes-a-run-whose-tests-failed
+rule: `ci-times` names a report that holds a failed test, and writes no record of it.
+file: xtask/src/runs.rs
+in: failed_reports
+find: .filter(|case| case.failed)
+replace: .filter(|case| case.failed && false)
+caught-by:
+    runs::tests::a_report_with_a_failed_test_is_named_as_no_measurement

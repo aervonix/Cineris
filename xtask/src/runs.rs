@@ -697,7 +697,50 @@ pub(crate) fn ci_times(arguments: &[String]) -> Result<()> {
             windows: reports[1].take(),
         });
     }
+    // A report with failed tests is no measurement of them (a timeout reads
+    // as a test of its limit's length): said, and never written into a
+    // step's record.
+    let failed = failed_reports(&runs);
+    for line in &failed {
+        println!("warning: {line}");
+    }
+    if write.is_some() && !failed.is_empty() {
+        return Err(format!(
+            "not written: {}. A step's record holds the times of runs whose tests passed.",
+            failed.join("; ")
+        ));
+    }
     crate::records::pr_times(&runs, pr, write.as_deref(), &placing)
+}
+
+/// The reports of `runs` that hold a failed test, one line each.
+pub(crate) fn failed_reports(runs: &[Measured]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for run in runs {
+        for (os, cases) in [("Linux", &run.linux), ("Windows", &run.windows)] {
+            let failed: Vec<String> = cases
+                .iter()
+                .flatten()
+                .filter(|case| case.failed)
+                .map(TestCase::id)
+                .collect();
+            if !failed.is_empty() {
+                lines.push(format!(
+                    "run {}'s {os} report has {} failed test(s) ({}{})",
+                    run.info.id,
+                    failed.len(),
+                    failed
+                        .iter()
+                        .take(3)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if failed.len() > 3 { ", …" } else { "" }
+                ));
+            }
+        }
+    }
+    lines
 }
 
 /// A run, and its test jobs' reports where they exist.
@@ -764,8 +807,39 @@ mod artifact_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{Measured, RunInfo, Source, download_root, parse_run, seconds_of};
+    use super::{Measured, RunInfo, Source, download_root, failed_reports, parse_run, seconds_of};
     use crate::junit;
+
+    #[test]
+    fn a_report_with_a_failed_test_is_named_as_no_measurement() {
+        let info = |id: u64| RunInfo {
+            id,
+            sha: "abc".to_owned(),
+            branch: "b".to_owned(),
+            event: "pull_request".to_owned(),
+            date: "2026-11-16".to_owned(),
+            jobs: Vec::new(),
+        };
+        let mut failed = junit::tests::case("cortex-base", "t::a", 0.1);
+        failed.failed = true;
+        let runs = [
+            Measured {
+                info: info(1),
+                linux: Some(vec![junit::tests::case("cortex-base", "t::a", 0.1)]),
+                windows: None,
+            },
+            Measured {
+                info: info(2),
+                linux: None,
+                windows: Some(vec![failed]),
+            },
+        ];
+        assert_eq!(
+            failed_reports(&runs),
+            ["run 2's Windows report has 1 failed test(s) (cortex-base t::a)"]
+        );
+        assert_eq!(failed_reports(&runs[..1]), Vec::<String>::new());
+    }
 
     #[test]
     fn a_source_is_main_a_run_or_a_file() {
