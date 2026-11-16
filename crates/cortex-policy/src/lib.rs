@@ -20,6 +20,7 @@
 //! | [`approvals`] | Approvals for a session and for a project, and the project's stored file. |
 //! | [`trust`] | Project trust, pinned to the hash of each definition the user saw. |
 //! | [`engine`] | [`Engine`]: one decision for one planned tool call. |
+//! | `test_support` | With the `test-support` feature, for tests only: `TestParts`, an engine's parts with sane defaults. |
 //!
 //! # What this crate does not do
 //!
@@ -58,6 +59,8 @@ pub mod level;
 pub mod rules;
 pub mod secrets;
 mod store_lock;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub mod trust;
 
 pub use approvals::{ApprovalError, ApprovalStore, SessionApprovals};

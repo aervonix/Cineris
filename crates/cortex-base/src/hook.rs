@@ -22,15 +22,42 @@
 //! writer.join().unwrap();
 //! ```
 //!
+//! # A point on an async task: [`await_point!`]
+//!
+//! [`point`] stops the *thread*. On a task of an async runtime that is the
+//! runtime's thread, and on a single-threaded runtime (the one a test of
+//! the core drives everything on) nothing else runs until the hold lets it
+//! go: not the test, which would let it go, and not the work the test
+//! wants to do while the library is stopped. A place reached by a task
+//! marks itself with [`await_point!`] instead, in an async fn or block:
+//!
+//! ```ignore
+//! cortex_base::hook::await_point!(BEFORE_THE_NEW_LEVEL_IS_IN_FORCE);
+//! ```
+//!
+//! With the feature it awaits `point_async(name)`. Held, the task is
+//! pending there and the runtime goes on with its other tasks; the hold's
+//! `release` or `let_one_go` wakes it, and so does its bound. A [`Hold`]
+//! holds either kind of point, and counts, lists and lets go a stopped
+//! task as it does a stopped thread. The test's side has an awaitable wait
+//! too (`Hold::wait_reached_times_async`), for a test that drives the
+//! library on its own thread.
+//!
 //! # With the feature off, a point is nothing
 //!
 //! [`point`] is an empty `const fn` marked `#[inline(always)]`. A build
 //! without the `test-hooks` feature (every build of the product: the
 //! released binary, `cargo build -p cortex-cli`) has no code for it, no
-//! symbol, no data, not even the load of a flag. [`Hold`] and everything
-//! else test-side do not exist there. Only a dev-dependency turns the
-//! feature on, and `cargo xtask rules` fails when anything else does
-//! (`docs/testing-and-ci.md`, "A seeded order of events").
+//! symbol, no data, not even the load of a flag. [`await_point!`] is a
+//! macro and not a function because an await is never nothing: an await
+//! of even a future that is always ready adds a state to the async fn's
+//! state machine, and keeps what lives across it in the future, which
+//! grows (`docs/testing-and-ci.md`, "A point the library stops at"). So
+//! without the feature the macro expands to no await at all, only a check
+//! that the name is a `&'static str`. [`Hold`] and everything else
+//! test-side do not exist there. Only a dev-dependency turns the feature on, and `cargo
+//! xtask rules` fails when anything else does (`docs/testing-and-ci.md`,
+//! "A seeded order of events").
 //!
 //! # With the feature on and nothing held, a point is one load
 //!
@@ -39,7 +66,8 @@
 //! workspace's tests). A point that no [`Hold`] names passes at once: it
 //! loads one counter, the number of holds alive in the process, and
 //! returns when it is zero. That is the case in the product's code under
-//! every test that holds nothing, and in every system test.
+//! every test that holds nothing, and in every system test. An awaited
+//! point does the same at its first poll, and is ready.
 //!
 //! # What a [`Hold`] does
 //!
@@ -49,7 +77,9 @@
 //!   the bound the thread goes on and the hold remembers it
 //!   ([`timed_out`](Hold::timed_out)): a mistake in a test is a failed
 //!   test, never a hung one. Every wait of the test's side takes a bound
-//!   too.
+//!   too. A task that arrives at an awaited point is pending under the
+//!   same rules, and a task dropped while it is stopped is no longer
+//!   counted as stopped.
 //! - **The n-th arrival** is held with [`skipping`](Hold::skipping): the
 //!   first `n` arrivals pass and the next ones stop.
 //! - **Letting go.** [`release`](Hold::release) lets every thread stopped
@@ -134,8 +164,6 @@ pub const PROBED: &str = "probe>";
 pub const STARTS: &str = "CORTEX_TESTKIT_STARTS";
 
 #[cfg(feature = "test-hooks")]
-pub use enabled::{Hold, Stopped, point, seen, stopped};
-#[cfg(feature = "test-hooks")]
 pub use starts::{launched, probed, program_name, started};
 
 /// Process starts, written down for the test that made them.
@@ -216,11 +244,46 @@ mod starts {
     }
 }
 
+/// The macro behind [`await_point!`], without the `test-hooks` feature: no
+/// await, nothing but the name's type checked.
+#[cfg(not(feature = "test-hooks"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __hook_await_point {
+    ($name:expr) => {{
+        let _: &'static str = $name;
+    }};
+}
+
+/// The macro behind [`await_point!`], with the `test-hooks` feature: an
+/// await of `point_async`.
+#[cfg(feature = "test-hooks")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __hook_await_point {
+    ($name:expr) => {
+        $crate::hook::point_async($name).await
+    };
+}
+
+/// Marks a place that an async task reaches, where a test can make the
+/// *task* wait without stopping its thread: [`point`] for code on a
+/// runtime's thread. Written as a statement in an async fn or block:
+/// `cortex_base::hook::await_point!(NAME);`. With the `test-hooks`
+/// feature it is `point_async(NAME).await`; without it, nothing at all,
+/// not even an await (see the [module](self)).
+pub use crate::__hook_await_point as await_point;
+
+#[cfg(feature = "test-hooks")]
+pub use enabled::{Hold, Stopped, point, point_async, seen, stopped};
+
 #[cfg(feature = "test-hooks")]
 mod enabled {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
-    use std::thread::ThreadId;
+    use std::task::{Context, Poll, Waker};
     use std::time::{Duration, Instant};
 
     use crate::sync::lock;
@@ -228,6 +291,9 @@ mod enabled {
     /// How many holds are alive in this process. A point that sees none
     /// does nothing else.
     static LIVE: AtomicUsize = AtomicUsize::new(0);
+
+    /// The number the next stop is known by.
+    static NEXT_STOP: AtomicU64 = AtomicU64::new(0);
 
     static REGISTRY: Registry = Registry {
         state: Mutex::new(RegistryState {
@@ -267,19 +333,202 @@ mod enabled {
     #[cold]
     #[inline(never)]
     fn arrive(name: &'static str) {
-        let hold = {
-            let mut registry = lock(&REGISTRY.state);
-            if !registry.seen.contains(&name) {
-                registry.seen.push(name);
-            }
-            registry
-                .holds
-                .iter()
-                .find(|hold| hold.point == name)
-                .cloned()
-        };
-        if let Some(hold) = hold {
+        if let Some(hold) = held(name) {
             hold.arrive();
+        }
+    }
+
+    /// The hold of `name`, if one is alive; the point is remembered as
+    /// reached either way.
+    fn held(name: &'static str) -> Option<Arc<Shared>> {
+        let mut registry = lock(&REGISTRY.state);
+        if !registry.seen.contains(&name) {
+            registry.seen.push(name);
+        }
+        registry
+            .holds
+            .iter()
+            .find(|hold| hold.point == name)
+            .cloned()
+    }
+
+    /// Marks a place that an async task reaches: held, the task is pending
+    /// there, and its thread goes on with other tasks, until the hold lets
+    /// it go or its bound passes. With nothing held the first poll is one
+    /// load and `Ready`.
+    pub fn point_async(name: &'static str) -> impl Future<Output = ()> + Send + 'static {
+        AtPoint {
+            name,
+            stop: None,
+            done: false,
+        }
+    }
+
+    /// The future of [`point_async`].
+    struct AtPoint {
+        name: &'static str,
+        /// The stop, once the task arrived at a held point and stopped.
+        stop: Option<TaskStop>,
+        done: bool,
+    }
+
+    struct TaskStop {
+        hold: Arc<Shared>,
+        /// The number its record in the hold is known by.
+        number: u64,
+        deadline: Instant,
+        alarm: Arc<Alarm>,
+    }
+
+    impl Future for AtPoint {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+            if self.done {
+                return Poll::Ready(());
+            }
+            if self.stop.is_none() {
+                if LIVE.load(Ordering::Acquire) == 0 {
+                    self.done = true;
+                    return Poll::Ready(());
+                }
+                let Some(hold) = held(self.name) else {
+                    self.done = true;
+                    return Poll::Ready(());
+                };
+                let thread = std::thread::current();
+                let who = format!(
+                    "a task polled on {}",
+                    thread.name().unwrap_or("an unnamed thread")
+                );
+                let mut state = lock(&hold.state);
+                let Some(number) = Shared::stop(&mut state, who) else {
+                    drop(state);
+                    self.done = true;
+                    return Poll::Ready(());
+                };
+                drop(state);
+                hold.changed.notify_all();
+                let deadline = Instant::now() + hold.limit;
+                self.stop = Some(TaskStop {
+                    hold,
+                    number,
+                    deadline,
+                    alarm: Arc::new(Alarm::default()),
+                });
+            }
+            let Some(stop) = &self.stop else {
+                return Poll::Ready(());
+            };
+            let mut state = lock(&stop.hold.state);
+            if Shared::may_go(&mut state) {
+                // Let go by the test.
+            } else if Instant::now() >= stop.deadline {
+                state.timed_out += 1;
+            } else {
+                drop(state);
+                let number = stop.number;
+                stop.alarm.arm(
+                    &stop.hold,
+                    stop.deadline,
+                    cx.waker(),
+                    move |state: &State| {
+                        state.released
+                            || state.permits > 0
+                            || !state.waiting.iter().any(|waiting| waiting.number == number)
+                    },
+                );
+                return Poll::Pending;
+            }
+            Shared::leave(&mut state, stop.number);
+            drop(state);
+            stop.hold.changed.notify_all();
+            self.stop = None;
+            self.done = true;
+            Poll::Ready(())
+        }
+    }
+
+    impl Drop for AtPoint {
+        fn drop(&mut self) {
+            // A task dropped while it is stopped is no longer stopped.
+            if let Some(stop) = self.stop.take() {
+                Shared::leave(&mut lock(&stop.hold.state), stop.number);
+                stop.alarm.disarm(&stop.hold);
+            }
+        }
+    }
+
+    /// What wakes a pending future of this module: a thread of its own
+    /// that waits on the hold's condition variable until what the future
+    /// waits for is so, or its bound passes, and wakes the task. A thread
+    /// and not a timer, because this crate has no runtime: the bound is a
+    /// bound, and a passing test never waits for it.
+    #[derive(Default)]
+    struct Alarm {
+        /// The task to wake, the latest poll's.
+        waker: Mutex<Option<Waker>>,
+        /// A thread is waiting for this future now.
+        armed: AtomicBool,
+        /// The future is gone: the thread waits no longer.
+        gone: AtomicBool,
+    }
+
+    impl Alarm {
+        fn arm(
+            self: &Arc<Self>,
+            hold: &Arc<Shared>,
+            deadline: Instant,
+            waker: &Waker,
+            woken_when: impl Fn(&State) -> bool + Send + 'static,
+        ) {
+            {
+                let mut kept = lock(&self.waker);
+                match kept.as_ref() {
+                    Some(kept_waker) if kept_waker.will_wake(waker) => {}
+                    _ => *kept = Some(waker.clone()),
+                }
+            }
+            if self.armed.swap(true, Ordering::AcqRel) {
+                return;
+            }
+            let (alarm, hold) = (Arc::clone(self), Arc::clone(hold));
+            let started = std::thread::Builder::new()
+                .name("cortex-base hook alarm".to_owned())
+                .spawn(move || {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    let state = lock(&hold.state);
+                    let state = hold
+                        .changed
+                        .wait_timeout_while(state, left, |state| {
+                            !alarm.gone.load(Ordering::Acquire) && !woken_when(state)
+                        })
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .0;
+                    drop(state);
+                    // Disarmed before the wake, so that a poll that is
+                    // still pending after it arms another.
+                    alarm.armed.store(false, Ordering::Release);
+                    if let Some(waker) = lock(&alarm.waker).take() {
+                        waker.wake();
+                    }
+                });
+            if started.is_err() {
+                // No thread to wait with: poll again at once, and wait by
+                // polling.
+                self.armed.store(false, Ordering::Release);
+                waker.wake_by_ref();
+            }
+        }
+
+        /// Ends the thread's wait, for a future that is dropped. Under the
+        /// hold's lock, so that the thread cannot miss it between its look
+        /// and its wait.
+        fn disarm(&self, hold: &Shared) {
+            let state = lock(&hold.state);
+            self.gone.store(true, Ordering::Release);
+            drop(state);
+            hold.changed.notify_all();
         }
     }
 
@@ -292,12 +541,14 @@ mod enabled {
         lock(&REGISTRY.state).seen.clone()
     }
 
-    /// A thread that is stopped at a point now.
+    /// A thread, or a task, that is stopped at a point now.
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct Stopped {
         /// The point.
         pub point: String,
-        /// The thread's name, or a stand-in for one with none.
+        /// The thread's name, or a stand-in for one with none; for a task
+        /// at an awaited point, "a task polled on" the thread that first
+        /// polled it.
         pub thread: String,
         /// How long it has been stopped.
         pub for_how_long: Duration,
@@ -342,7 +593,7 @@ mod enabled {
         skip: usize,
         /// The arrivals that stopped.
         stops: usize,
-        /// The stopped threads, longest first.
+        /// The stopped threads and tasks, longest first.
         waiting: Vec<Waiting>,
         /// Threads that may go on, one each.
         permits: usize,
@@ -353,25 +604,60 @@ mod enabled {
     }
 
     struct Waiting {
-        id: ThreadId,
+        number: u64,
         name: String,
         since: Instant,
     }
 
     impl Shared {
-        fn arrive(&self) {
-            let mut state = lock(&self.state);
+        /// Counts an arrival, and whether it stops: the number its record
+        /// is known by when it does.
+        fn stop(state: &mut State, who: String) -> Option<u64> {
             state.arrivals += 1;
             if state.released || state.arrivals <= state.skip {
-                return;
+                return None;
             }
             state.stops += 1;
-            let thread = std::thread::current();
+            let number = NEXT_STOP.fetch_add(1, Ordering::Relaxed);
             state.waiting.push(Waiting {
-                id: thread.id(),
-                name: thread.name().unwrap_or("an unnamed thread").to_owned(),
+                number,
+                name: who,
                 since: Instant::now(),
             });
+            Some(number)
+        }
+
+        /// Whether a stopped arrival may go on now, taking the permit that
+        /// lets it when there is one.
+        fn may_go(state: &mut State) -> bool {
+            if state.released {
+                return true;
+            }
+            if state.permits > 0 {
+                state.permits -= 1;
+                return true;
+            }
+            false
+        }
+
+        /// The record of a stop that ended.
+        fn leave(state: &mut State, number: u64) {
+            if let Some(index) = state
+                .waiting
+                .iter()
+                .position(|waiting| waiting.number == number)
+            {
+                state.waiting.remove(index);
+            }
+        }
+
+        fn arrive(&self) {
+            let mut state = lock(&self.state);
+            let thread = std::thread::current();
+            let who = thread.name().unwrap_or("an unnamed thread").to_owned();
+            let Some(number) = Self::stop(&mut state, who) else {
+                return;
+            };
             self.changed.notify_all();
             let (mut state, _) = self
                 .changed
@@ -379,17 +665,10 @@ mod enabled {
                     !state.released && state.permits == 0
                 })
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if !state.released {
-                if state.permits > 0 {
-                    state.permits -= 1;
-                } else {
-                    state.timed_out += 1;
-                }
+            if !Self::may_go(&mut state) {
+                state.timed_out += 1;
             }
-            let id = thread.id();
-            if let Some(index) = state.waiting.iter().position(|waiting| waiting.id == id) {
-                state.waiting.remove(index);
-            }
+            Self::leave(&mut state, number);
             drop(state);
             self.changed.notify_all();
         }
@@ -497,6 +776,24 @@ mod enabled {
             state.stops >= stops
         }
 
+        /// [`wait_reached_times`](Self::wait_reached_times) as a future,
+        /// for a test whose library runs on the test's own thread: it is
+        /// pending, and lets the runtime run the library, until `stops`
+        /// arrivals have stopped here or `limit` has passed. Whether they
+        /// have.
+        pub fn wait_reached_times_async(
+            &self,
+            stops: usize,
+            limit: Duration,
+        ) -> impl Future<Output = bool> + Send + 'static {
+            Reached {
+                hold: Arc::clone(&self.shared),
+                stops,
+                deadline: Instant::now() + limit,
+                alarm: Arc::new(Alarm::default()),
+            }
+        }
+
         /// Lets every thread stopped here go on, and every later arrival
         /// pass.
         pub fn release(&self) {
@@ -564,6 +861,41 @@ mod enabled {
             LIVE.fetch_sub(1, Ordering::Release);
             drop(registry);
             REGISTRY.freed.notify_all();
+        }
+    }
+
+    /// The future of [`Hold::wait_reached_times_async`].
+    struct Reached {
+        hold: Arc<Shared>,
+        stops: usize,
+        deadline: Instant,
+        alarm: Arc<Alarm>,
+    }
+
+    impl Future for Reached {
+        type Output = bool;
+
+        fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<bool> {
+            let stops = self.stops;
+            if lock(&self.hold.state).stops >= stops {
+                return Poll::Ready(true);
+            }
+            if Instant::now() >= self.deadline {
+                return Poll::Ready(false);
+            }
+            self.alarm.arm(
+                &self.hold,
+                self.deadline,
+                cx.waker(),
+                move |state: &State| state.stops >= stops,
+            );
+            Poll::Pending
+        }
+    }
+
+    impl Drop for Reached {
+        fn drop(&mut self) {
+            self.alarm.disarm(&self.hold);
         }
     }
 
@@ -745,6 +1077,220 @@ mod enabled {
             point("hook tests: a neighbour");
             assert!(seen().contains(&"hook tests: a neighbour"));
             drop(hold);
+        }
+
+        // ------------------------------------------------ an awaited point
+
+        /// A waker that remembers it was woken, and lets a test wait for
+        /// that with a bound.
+        #[derive(Default)]
+        struct Woken {
+            woken: Mutex<usize>,
+            changed: Condvar,
+        }
+
+        impl std::task::Wake for Woken {
+            fn wake(self: Arc<Self>) {
+                self.wake_by_ref();
+            }
+
+            fn wake_by_ref(self: &Arc<Self>) {
+                *lock(&self.woken) += 1;
+                self.changed.notify_all();
+            }
+        }
+
+        impl Woken {
+            /// Waits until the task has been woken since the last wait, for
+            /// at most `limit`. Whether it was.
+            fn wait(&self, limit: Duration) -> bool {
+                let woken = lock(&self.woken);
+                let (mut woken, _) = self
+                    .changed
+                    .wait_timeout_while(woken, limit, |woken| *woken == 0)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let was = *woken > 0;
+                *woken = 0;
+                was
+            }
+        }
+
+        /// A future and the waker its polls are given.
+        struct Task<F> {
+            future: Pin<Box<F>>,
+            woken: Arc<Woken>,
+        }
+
+        impl<F: Future> Task<F> {
+            fn new(future: F) -> Self {
+                Self {
+                    future: Box::pin(future),
+                    woken: Arc::new(Woken::default()),
+                }
+            }
+
+            fn poll(&mut self) -> Poll<F::Output> {
+                let waker = Waker::from(Arc::clone(&self.woken));
+                self.future.as_mut().poll(&mut Context::from_waker(&waker))
+            }
+        }
+
+        #[test]
+        fn an_awaited_point_nobody_holds_is_ready_at_its_first_poll() {
+            assert!(
+                Task::new(point_async("hook tests: nobody awaits this"))
+                    .poll()
+                    .is_ready()
+            );
+            let hold = Hold::new("hook tests: held, and awaited by nobody");
+            assert!(
+                Task::new(point_async("hook tests: nobody awaits this"))
+                    .poll()
+                    .is_ready()
+            );
+            assert_eq!(hold.arrivals(), 0);
+            assert!(
+                seen().contains(&"hook tests: nobody awaits this"),
+                "an awaited point is remembered as reached as any is"
+            );
+        }
+
+        #[test]
+        fn a_task_at_a_held_point_is_pending_and_its_thread_goes_on_until_the_release() {
+            const AT: &str = "hook tests: a task stops until released";
+            let hold = Hold::new(AT);
+            let mut task = Task::new(point_async(AT));
+            // Pending, on this thread, which goes on: it is the test.
+            assert!(task.poll().is_pending());
+            assert!(hold.wait_reached(Duration::ZERO), "the stop is counted");
+            assert_eq!(hold.stopped(), 1);
+            let here = std::thread::current().name().unwrap_or_default().to_owned();
+            assert!(
+                stopped().iter().any(|each| each.point == AT
+                    && each.thread.contains("a task polled on")
+                    && each.thread.contains(&here)),
+                "{:?}",
+                stopped()
+            );
+            // Polled again while held, it stays.
+            assert!(task.poll().is_pending());
+            assert_eq!(hold.arrivals(), 1, "one arrival, polled twice");
+            hold.release();
+            assert!(task.woken.wait(LIMIT), "the release wakes the task");
+            assert!(task.poll().is_ready());
+            assert_eq!(hold.stopped(), 0);
+            assert_eq!(hold.timed_out(), 0, "the release let it go, not the bound");
+            // After a release the point is ready at once.
+            assert!(Task::new(point_async(AT)).poll().is_ready());
+            assert_eq!(hold.arrivals(), 2);
+        }
+
+        #[test]
+        fn one_task_is_let_go_and_the_other_stays() {
+            const AT: &str = "hook tests: one task at a time";
+            let hold = Hold::new(AT);
+            let mut tasks = [Task::new(point_async(AT)), Task::new(point_async(AT))];
+            for task in &mut tasks {
+                assert!(task.poll().is_pending());
+            }
+            assert_eq!(hold.stopped(), 2);
+            hold.let_one_go();
+            // Whichever is woken first and polled takes the one permit.
+            assert!(
+                tasks.iter().any(|task| task.woken.wait(LIMIT)),
+                "the permit wakes a task"
+            );
+            let gone: Vec<bool> = tasks
+                .iter_mut()
+                .map(|task| task.poll().is_ready())
+                .collect();
+            assert_eq!(gone.iter().filter(|gone| **gone).count(), 1, "{gone:?}");
+            assert_eq!(hold.stopped(), 1);
+            let staying = gone.iter().position(|gone| !gone).unwrap_or_default();
+            hold.let_one_go();
+            assert!(tasks[staying].woken.wait(LIMIT));
+            assert!(tasks[staying].poll().is_ready());
+            assert_eq!(hold.stopped(), 0);
+            assert_eq!(hold.timed_out(), 0);
+        }
+
+        /// A task woken for a permit that a thread took first is pending
+        /// again, and the next letting go wakes it again.
+        #[test]
+        fn a_task_woken_for_a_permit_another_took_is_woken_again() {
+            const AT: &str = "hook tests: a permit taken by another";
+            let hold = Hold::new(AT);
+            let mut task = Task::new(point_async(AT));
+            assert!(task.poll().is_pending());
+            hold.let_one_go();
+            assert!(task.woken.wait(LIMIT), "the permit wakes the task");
+            // A thread arrives before the task is polled, and takes the
+            // permit as it arrives.
+            std::thread::spawn(|| point(AT)).join().unwrap();
+            assert!(task.poll().is_pending(), "no permit is left for it");
+            hold.release();
+            assert!(task.woken.wait(LIMIT), "the release wakes it again");
+            assert!(task.poll().is_ready());
+            assert_eq!(hold.timed_out(), 0);
+        }
+
+        #[test]
+        fn the_bound_lets_a_task_go_on_and_says_so() {
+            const AT: &str = "hook tests: a task's bound";
+            let hold = Hold::with_limit(AT, Duration::ZERO);
+            assert!(Task::new(point_async(AT)).poll().is_ready());
+            assert_eq!(hold.timed_out(), 1, "nobody let it go");
+            assert_eq!(hold.stopped(), 0);
+        }
+
+        #[test]
+        fn the_nth_arrival_of_a_task_is_the_one_that_stops() {
+            const AT: &str = "hook tests: a task's second";
+            let hold = Hold::new(AT).skipping(1);
+            assert!(Task::new(point_async(AT)).poll().is_ready());
+            let mut second = Task::new(point_async(AT));
+            assert!(second.poll().is_pending());
+            assert_eq!((hold.arrivals(), hold.stopped()), (2, 1));
+            drop(hold);
+            assert!(second.woken.wait(LIMIT), "dropping the hold releases it");
+            assert!(second.poll().is_ready());
+        }
+
+        #[test]
+        fn a_task_dropped_while_it_is_stopped_is_stopped_no_longer() {
+            const AT: &str = "hook tests: a dropped task";
+            let hold = Hold::new(AT);
+            let mut task = Task::new(point_async(AT));
+            assert!(task.poll().is_pending());
+            assert_eq!(hold.stopped(), 1);
+            drop(task);
+            assert_eq!(hold.stopped(), 0);
+            assert!(hold.wait_stopped(0, Duration::ZERO));
+            assert_eq!(hold.timed_out(), 0);
+        }
+
+        #[test]
+        fn the_awaited_wait_for_a_stop_is_ready_when_a_thread_stops() {
+            const AT: &str = "hook tests: an awaited wait";
+            let hold = Hold::new(AT);
+            let mut reached = Task::new(hold.wait_reached_times_async(1, LIMIT));
+            assert!(reached.poll().is_pending(), "nobody arrived yet");
+            let thread = std::thread::spawn(|| point(AT));
+            assert!(reached.woken.wait(LIMIT), "the stop wakes the wait");
+            assert_eq!(reached.poll(), Poll::Ready(true));
+            // One that has happened already is ready at once.
+            assert_eq!(
+                Task::new(hold.wait_reached_times_async(1, LIMIT)).poll(),
+                Poll::Ready(true)
+            );
+            // And one that does not happen ends at its bound.
+            assert_eq!(
+                Task::new(hold.wait_reached_times_async(2, Duration::ZERO)).poll(),
+                Poll::Ready(false)
+            );
+            hold.release();
+            thread.join().unwrap();
+            assert_eq!(hold.timed_out(), 0);
         }
     }
 }

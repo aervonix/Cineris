@@ -10,11 +10,9 @@ use std::sync::Arc;
 
 use cortex_base::{PathOptions, PathResolver};
 use cortex_policy::command::ShellSyntax;
-use cortex_policy::{
-    Access, Engine, Outcome, Parts, Protected, Request, SandboxState, SourcedRule, default_sandbox,
-};
-use cortex_protocol::ids::LeaseId;
-use cortex_protocol::lease::{Budget, HardLimits, Level, RuleAction};
+use cortex_policy::test_support::TestParts;
+use cortex_policy::{Access, Engine, Outcome, Request, SourcedRule};
+use cortex_protocol::lease::{Level, RuleAction};
 
 use crate::clock;
 
@@ -32,27 +30,13 @@ fn real_engine_at(
 ) -> (Engine, PathResolver) {
     let resolver = PathResolver::new(root, PathOptions::new()).expect("open the workspace");
     let workspace = resolver.root().clone();
-    let engine = Engine::start(Parts {
-        lease_id: LeaseId::new("l_1"),
-        level,
-        rules,
-        approved: Vec::new(),
-        sandbox_policy: default_sandbox(&workspace, &[], &[]),
-        sandbox: SandboxState::Enforcing,
-        models: Vec::new(),
-        budget: Budget::default(),
-        limits: HardLimits::default(),
-        workspace,
-        home: None,
-        trusted: true,
-        repository_trusted: true,
-        protected: Protected::none(),
-        shell,
-        locate: Arc::new(resolver.clone()),
-        store: None,
-        clock: clock(),
-    })
-    .unwrap();
+    let engine = TestParts::at(workspace)
+        .level(level)
+        .rules(rules)
+        .shell(shell)
+        .locate(Arc::new(resolver.clone()))
+        .clock(clock())
+        .engine();
     (engine, resolver)
 }
 

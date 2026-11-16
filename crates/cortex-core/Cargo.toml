@@ -42,6 +42,8 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]
+# An engine's parts with sane defaults, for the unit tests of the policy.
+cortex-policy = { workspace = true, features = ["test-support"] }
 cortex-testkit.workspace = true
 # The seam that puts the loop's blocking work on the test's own thread, in
 # a seeded order (`docs/testing-and-ci.md`, "A seeded order of events").
