@@ -715,12 +715,12 @@ caught-by:
 
 [break] a-lane-panic-ends-the-lane
 rule: An operation that panics in the lane is answered as failed, and the lane goes on with those behind it.
-file: crates/cortex-cli/src/interactive.rs
+file: crates/cortex-rpc/src/lane.rs
 in: run_lane
-find: let result = contained(handle(op)).await;
-replace: let result = handle(op).await.map_err(|error| *error);
+find: let result = contained(run(op)).await;
+replace: let result = run(op).await.map_err(|error| *error);
 caught-by:
-    cortex-cli::bin/cortex interactive::tests::a_panic_in_the_lane_answers_that_operation_and_the_lane_goes_on
+    cortex-rpc lane::tests::a_panic_in_the_lane_answers_that_operation_and_the_lane_goes_on
 
 [break] the-crash-report-is-not-filtered
 rule: The crash report goes through the secret filter the log uses.
@@ -1339,20 +1339,20 @@ caught-by:
 
 [break] a-result-overtakes-the-events-queued-ahead-of-it
 rule: The in-process link gives a ready result only after the events and requests queued when it was first seen.
-file: crates/cortex-cli/src/interactive.rs
-in: take
-find: let owed = ahead.get_or_insert_with(|| queue.len());
-replace: let owed = ahead.get_or_insert(0);
+file: crates/cortex-rpc/src/order.rs
+in: Order::next
+find: let owed = self.ahead.get_or_insert_with(|| queue.len());
+replace: let owed = self.ahead.get_or_insert(0);
 packages: cortex-cli
 caught-by:
     interactive::tests::a_result_comes_after_the_events_queued_ahead_of_it
 
 [break] events-that-keep-coming-hold-a-result-back
 rule: Only the events queued when a result was first seen come before it: a stream that goes on does not hold it back.
-file: crates/cortex-cli/src/interactive.rs
-in: take
-find: let owed = ahead.get_or_insert_with(|| queue.len());
-replace: let owed = ahead.insert(queue.len());
+file: crates/cortex-rpc/src/order.rs
+in: Order::next
+find: let owed = self.ahead.get_or_insert_with(|| queue.len());
+replace: let owed = self.ahead.insert(queue.len());
 packages: cortex-cli
 caught-by:
     interactive::tests::events_that_keep_coming_do_not_hold_a_result_back
