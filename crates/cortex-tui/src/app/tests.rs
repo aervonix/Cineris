@@ -1823,14 +1823,15 @@ fn an_answer_not_drawn_whole_cannot_be_pressed() {
         rows.iter().any(|row| row.contains("y Allow once")),
         "{rows:#?}"
     );
-    key(&mut app, "s", at);
-    key(&mut app, "a", at + dialog::GRACE);
-    key(&mut app, "e", at + dialog::GRACE * 2);
-    assert!(answers(&link).is_empty());
-    // Answers it does not offer type into the editor: it waits a quiet
-    // second again.
+    // Each answer not drawn whole, pressed when the dialog takes keys: it
+    // types into the editor, and the dialog waits a quiet second again.
+    let mut at = at;
+    for binding in ["s", "a", "e"] {
+        key(&mut app, binding, at);
+        assert!(answers(&link).is_empty(), "{binding} answered");
+        at = ready_again(&mut app);
+    }
     assert_eq!(app.input().editor().expanded(), "sae");
-    let at = ready_again(&mut app);
     key(&mut app, "y", at);
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }

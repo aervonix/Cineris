@@ -70,7 +70,6 @@ find: self.answers_drawn && self.ready_at().is_some_and(|ready| at >= ready)
 replace: self.shown.is_some()
 caught-by:
     app::dialog::tests::in_its_grace_typing_passes_and_its_own_other_keys_do_nothing
-    app::tests::typing_that_goes_on_past_the_grace_never_answers_a_dialog
     app::tests::a_window_too_small_for_the_question_and_its_answers_takes_none
 
 [break] typing-carries-on-into-a-dialog
@@ -168,7 +167,8 @@ in: Dialog::takes_keys
 find: self.answers_drawn && self.ready_at().is_some_and(|ready| at >= ready)
 replace: true
 caught-by:
-    app::tests::a_dialog_that_appears_while_the_person_types_takes_keys_only_after_a_grace
+    app::dialog::tests::in_its_grace_typing_passes_and_its_own_other_keys_do_nothing
+    app::tests::a_key_straight_after_the_viewer_closes_does_not_answer
 
 [break] no-second-interrupt
 rule: A second interrupt within two seconds of the first stops running commands at once.

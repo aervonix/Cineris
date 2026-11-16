@@ -363,8 +363,8 @@ in: App::terminal
 find: dialog.typed(at);
 replace: let _ = &dialog;
 caught-by:
-    app::tests::dialogs::steady_typing_through_the_loops_wake_never_answers
-    app::tests::dialogs::esc_after_closing_the_viewer_denies_when_the_row_offers_it
+    app::tests::a_choice_not_on_offer_is_not_taken
+    app::tests::a_key_before_the_answers_are_drawn_never_answers
 
 [break] answers-stay-shown-over-typing
 rule: Input that reaches the editor after the answers were drawn hides them again. The frame's cache is keyed on whether the dialog is ready, which such input changes, a second guard that leaves nothing this break can show.
@@ -529,4 +529,3 @@ find: self.not_taken(at);
 replace: let _ = at;
 caught-by:
     app::tests::keys_read_together_never_answer_a_dialog
-    app::tests::dialogs::answers_shown_are_hidden_again_by_input_that_reaches_the_editor
