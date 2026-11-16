@@ -1437,7 +1437,7 @@ export interface SessionListParams {
   workspace?: string | null;
 }
 
-/** The result of `session/list`: newest first. */
+/** The result of `session/list`: the session added to last first (by `updated_at`, the id breaking a tie), not the one made last. */
 export interface SessionListResult {
   /** Present when there are more. */
   next_cursor?: string | null;

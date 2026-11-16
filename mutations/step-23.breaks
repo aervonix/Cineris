@@ -685,3 +685,13 @@ packages: cortex-tui, cortex-cli
 caught-by:
     app::tests::a_new_session_reads_no_history
     cortex-cli::system tui::sys_a_never_survives_a_restart_and_permissions_trust_clears_it
+
+[break] the-list-ordered-by-creation
+rule: `session/list` gives the session used last first, across projects, not the one made last.
+file: crates/cortex-core/src/core.rs
+in: Core::list
+find: .cmp(&time(&a.updated_at))
+replace: .cmp(&time(&b.updated_at))
+packages: cortex-core
+caught-by:
+    turns::the_list_gives_the_session_used_last_first

@@ -1890,8 +1890,8 @@ impl Core {
         Ok(SessionsRoot::in_data_dir(&data))
     }
 
-    /// The stored sessions of a workspace, or of every workspace, newest
-    /// first.
+    /// The stored sessions of a workspace, or of every workspace, the one
+    /// added to last first.
     async fn list(&self, workspace: Option<String>) -> Result<Vec<SessionSummary>, OpError> {
         let root = self.sessions_root()?;
         Self::blocking(move || {
@@ -1917,7 +1917,18 @@ impl Core {
                     sessions.extend(records.iter().map(SessionSummary::from));
                 }
             }
-            sessions.sort_by(|a, b| b.session_id.cmp(&a.session_id));
+            // The one used last first, across projects: each index is in that
+            // order, and the merge keeps it. Times are compared as times,
+            // the id breaking a tie.
+            let time = |stamp: &cortex_protocol::Timestamp| {
+                cortex_base::UtcTime::parse(stamp.as_str())
+                    .unwrap_or(cortex_base::UtcTime::UNIX_EPOCH)
+            };
+            sessions.sort_by(|a, b| {
+                time(&b.updated_at)
+                    .cmp(&time(&a.updated_at))
+                    .then_with(|| b.session_id.cmp(&a.session_id))
+            });
             Ok(sessions)
         })
         .await

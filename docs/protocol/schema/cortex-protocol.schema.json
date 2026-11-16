@@ -5166,7 +5166,7 @@
       "type": "object"
     },
     "SessionListResult": {
-      "description": "The result of `session/list`: newest first.",
+      "description": "The result of `session/list`: the session added to last first (by\n`updated_at`, the id breaking a tie), not the one made last.",
       "properties": {
         "next_cursor": {
           "description": "Present when there are more.",
