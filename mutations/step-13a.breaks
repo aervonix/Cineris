@@ -922,8 +922,9 @@ caught-by:
 [break] changed-rules-still-trusted
 rule: A project is trusted for its rules only while they are the ones the user saw.
 file: crates/cortex-core/src/assemble.rs
-find: if project_rules_approved(&stored, &project_rules(&peek)) {
-replace: if true || project_rules_approved(&stored, &project_rules(&peek)) {
+in: trust
+find: if stored.project_rules_approved(&pinned_rules(&peek, &with_profile)?) {
+replace: if true || stored.project_rules_approved(&pinned_rules(&peek, &with_profile)?) {
 caught-by:
     cortex-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw
 
@@ -1020,7 +1021,8 @@ caught-by:
 [break] added-deny-is-no-change
 rule: The project's rules are approved as a whole: every rule its files hold is shown to the trust store, whatever it does.
 file: crates/cortex-core/src/assemble.rs
-find: .filter(|rule| rule.source == RuleSource::Project)
-replace: .filter(|rule| rule.source == RuleSource::Project && rule.rule.action == cortex_protocol::lease::RuleAction::Allow)
+in: pinned_rules
+find: project(placed.origin.layer)
+replace: project(placed.origin.layer) && placed.rule.action == cortex_protocol::lease::RuleAction::Allow
 caught-by:
     cortex-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw

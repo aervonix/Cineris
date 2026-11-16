@@ -357,6 +357,7 @@ fn check(action: Action, key: &str) {
         | Action::AllowProject
         | Action::Deny
         | Action::DenyWithNote
+        | Action::Never
         | Action::ShowWhole => {
             let map = cortex_tui::keys::KeyMap::defaults();
             assert_eq!(

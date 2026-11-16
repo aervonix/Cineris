@@ -624,6 +624,7 @@ impl Input {
             | Action::AllowProject
             | Action::Deny
             | Action::DenyWithNote
+            | Action::Never
             | Action::ShowWhole => Outcome::Ignored(action),
         }
     }

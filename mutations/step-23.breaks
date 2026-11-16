@@ -364,7 +364,7 @@ caught-by:
 rule: A dialog too tall drops the line of what a lasting answer would allow before it cuts the detail: the command stays whole.
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::draw
-find: if !view.withheld && !request.adds.is_empty() && !self.leaving {
+find: if !shape.withheld && self.says_what_lasts() {
 replace: if false {
 caught-by:
     app::tests::a_dialog_one_row_too_tall_drops_the_lasting_note_and_keeps_its_question
@@ -542,3 +542,117 @@ caught-by:
     cortex-config::it trust::a_project_may_tighten_the_mode_and_the_limits_and_not_loosen_them
     cortex-config::it waits::a_length_of_time_is_tightened_against_the_one_in_effect_in_any_units
     cortex-core::it trust::a_projects_first_limit_waits_for_trust
+
+[break] a-headless-client-asked-to-trust
+rule: Only a client that declared it answers trust questions is asked: headless mode, which answers nothing, is never asked, as before step 23.
+file: crates/cortex-core/src/core.rs
+in: Core::trust_for
+find:
+    .askable(&[client.0], crate::clients::Kind::Trust)
+    .is_empty()
+replace: .queue(client).is_none()
+caught-by:
+    cortex-core::it trusting::a_headless_client_is_never_asked
+
+[break] a-refused-project-asked-again
+rule: A project the user said never to trust is not asked about at later starts.
+file: crates/cortex-core/src/assemble.rs
+in: look
+find: if stored.is_refused() ||
+replace: if
+caught-by:
+    cortex-core::it trusting::never_is_kept_across_starts_until_the_project_is_trusted
+
+[break] not-now-forgotten
+rule: A project answered "not now" is not asked about again in the same process.
+file: crates/cortex-core/src/assemble.rs
+in: answer_trust
+find: .insert(question.key.clone());
+replace: .contains(&question.key);
+caught-by:
+    cortex-core::it trusting::not_now_is_untrusted_and_not_asked_again_in_this_process
+
+[break] never-not-kept
+rule: "Never for this project" is kept in the trust store, so that later starts do not ask either.
+file: crates/cortex-core/src/assemble.rs
+in: answer_trust
+find: .refuse(&question.key, &question.root)
+replace: .forget(&question.key)
+caught-by:
+    cortex-core::it trusting::never_is_kept_across_starts_until_the_project_is_trusted
+
+[break] changed-rules-not-marked
+rule: A project trusted with its rules changed since is asked about them with each marked changed.
+file: crates/cortex-core/src/assemble.rs
+in: look
+find: changed: rules_only
+replace: changed: false
+caught-by:
+    cortex-core::it trusting::a_project_whose_rules_changed_is_asked_about_them
+
+[break] a-profiles-rules-not-pinned
+rule: Trust pins and lists every rule the project's files hold, in each profile they define as well as outside any.
+file: crates/cortex-core/src/assemble.rs
+in: pinned_rules
+find: rules.profiles.push((name.clone(), rules_of));
+replace: let _ = rules_of;
+caught-by:
+    cortex-core::it trusting::a_yes_pins_what_was_shown_and_the_session_is_trusted
+
+[break] never-not-said-at-open
+rule: A session in a project the user said never to trust says so at its open, with the command that changes it.
+file: crates/cortex-core/src/assemble.rs
+in: trust
+find: stored.is_refused().then(
+replace: false.then(
+packages: cortex-core, cortex-cli
+caught-by:
+    cortex-cli::system tui::sys_a_never_survives_a_restart_and_permissions_trust_clears_it
+
+[break] never-not-listed
+rule: `cortex permissions list` names a project the user said never to trust, with the commands that change it.
+file: crates/cortex-core/src/manage.rs
+in: Core::project_trust
+find:
+    if stored.is_refused() {
+        return Ok(TrustState::Never);
+    }
+replace:
+packages: cortex-core, cortex-cli
+caught-by:
+    cortex-cli::system tui::sys_a_never_survives_a_restart_and_permissions_trust_clears_it
+    cortex-core::it trusting::never_is_kept_across_starts_until_the_project_is_trusted
+
+[break] trust-it-answers-not-now
+rule: In the trust dialog, `y` trusts the project, `n` and `Esc` are not now, and `x` is never.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::key
+find:
+    trusted: true,
+    never: false
+replace:
+    trusted: false,
+    never: false
+caught-by:
+    app::tests::the_trust_question_lists_what_trust_turns_on_and_takes_three_answers
+
+[break] trusted-from-a-clipped-list
+rule: A trust question whose list did not fit cannot be trusted from there: not now and never stay.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::answers
+find:
+    if !clipped {
+        answers.push(act(Action::AllowOnce, "Trust it"));
+    }
+replace: answers.push(act(Action::AllowOnce, "Trust it"));
+caught-by:
+    app::tests::a_trust_question_that_does_not_fit_cannot_be_trusted_from_there
+
+[break] a-questions-choice-one-off
+rule: A question's choice is picked by its digit, counted from one.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::key
+find: (digit as usize).checked_sub(1)
+replace: Some(digit as usize)
+caught-by:
+    app::tests::a_question_is_answered_by_the_digit_of_its_choice_or_left_unanswered

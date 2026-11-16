@@ -431,6 +431,9 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         TrustState::RulesChanged =>
                             "trusted, but its permission rules have changed since; approve them \
                              with `permissions trust`",
+                        TrustState::Never =>
+                            "never trusted: you said never to trust it, so it is not asked about; \
+                             `permissions trust` trusts it, `permissions forget` asks again",
                     }
                 );
                 if approvals.is_empty() {
@@ -464,13 +467,18 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
             PermissionsCommand::Trust => {
                 let trusted = core.trust_project(&project).map_err(fail)?;
                 let mut out = format!(
-                    "{} {}.\n",
+                    "{} {}{}.\n",
                     if trusted.was_trusted {
                         "Approved the permission rules of"
                     } else {
                         "Trusted"
                     },
-                    project.shown
+                    project.shown,
+                    if trusted.was_refused {
+                        ", which you had said never to trust"
+                    } else {
+                        ""
+                    }
                 );
                 if !trusted.rules.is_empty() {
                     out.push_str("Its permission rules, as they are now:\n");
@@ -494,6 +502,17 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                     }
                 }
                 out!("{out}");
+                Ok(exit::COMPLETED)
+            }
+            PermissionsCommand::Forget => {
+                if core.forget_project(&project).map_err(fail)? {
+                    out!(
+                        "Forgot what you said of {}: the next session there asks again.\n",
+                        project.shown
+                    );
+                } else {
+                    out!("Nothing was kept about {}.\n", project.shown);
+                }
                 Ok(exit::COMPLETED)
             }
             PermissionsCommand::Untrust => {

@@ -265,6 +265,15 @@ fn never_is_kept_across_starts_until_the_project_is_trusted() {
     assert!(asked.is_empty(), "a refused project was asked about");
     assert_eq!(model(&state.expect("the session opens")), MODEL);
     let project = later.project(&world.workspace).unwrap();
+    assert_eq!(
+        later.project_trust(&project).unwrap(),
+        cortex_core::TrustState::Never
+    );
+    // Forgotten, the next start asks again; never again keeps it.
+    assert!(later.forget_project(&project).unwrap());
+    let (_, asked) = world.run(open(&world, &world.core(), ClientInfo::user(), never()));
+    assert_eq!(asked.len(), 1, "a forgotten project was not asked about");
+    // Trusting it lifts the never.
     later.trust_project(&project).unwrap();
     assert!(!store.project(&key).unwrap().is_refused());
     let (state, _) = world.run(open(&world, &world.core(), ClientInfo::user(), not_now()));

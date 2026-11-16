@@ -185,14 +185,18 @@ caught-by:
 rule: Trusting a project pins every rule its files hold, allow, deny and ask, so the next start reads it as trusted.
 file: crates/cortex-core/src/manage.rs
 in: Core::trust_project
-find: let pin = [Definition::of_rules(&rules)];
+find: let pin = [Definition::of_project_rules(&rules)];
 replace:
-    let allowed: Vec<Rule> = rules
-        .iter()
-        .filter(|rule| rule.action == cortex_protocol::lease::RuleAction::Allow)
-        .cloned()
-        .collect();
-    let pin = [Definition::of_rules(&allowed)];
+    let allowed = cortex_policy::ProjectRules {
+        base: rules
+            .base
+            .iter()
+            .filter(|rule| rule.action == cortex_protocol::lease::RuleAction::Allow)
+            .cloned()
+            .collect(),
+        profiles: rules.profiles.clone(),
+    };
+    let pin = [Definition::of_project_rules(&allowed)];
 packages: cortex-cli
 caught-by:
     cortex-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start

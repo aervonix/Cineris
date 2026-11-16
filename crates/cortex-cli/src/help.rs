@@ -52,10 +52,13 @@ Commands:
   revoke ID…   Remove stored approvals, by the ids that list shows
   trust        Trust this project, or approve the change of its rules
   untrust      Take this project's trust away
+  forget       Forget this project's trust, or that you said never to
+               trust it: the next session there asks again
 
 Trusting a project lets its configuration choose a model, allow what its
 rules allow, and run what it defines. A change to its permission rules sets
-them aside again until it is approved with `{name} permissions trust`.
+them aside again until it is approved with `{name} permissions trust`. A
+project you said never to trust is not asked about; `trust` trusts it.
 "
         ),
         Topic::Usage => format!(

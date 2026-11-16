@@ -617,6 +617,15 @@ fn trust(
         None => (cortex_policy::ProjectTrust::untrusted(), None),
     };
     if !stored.is_trusted() {
+        // A project the user said never to trust is not asked about: the
+        // session says so, with the command that changes it.
+        let problem = problem.or_else(|| {
+            stored.is_refused().then(|| {
+                "You said never to trust this project, so nothing of it that needs trust is \
+                 used, and it is not asked about. `cortex permissions trust` trusts it."
+                    .to_owned()
+            })
+        });
         return Ok(Trust {
             rules: false,
             repository: false,

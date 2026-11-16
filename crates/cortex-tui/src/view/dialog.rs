@@ -22,7 +22,9 @@
 //! outside passes through `cortex_term::sanitize`.
 
 use cortex_protocol::lease::Effect;
-use cortex_protocol::methods::{ApprovalDetail, ApprovalRequest};
+use cortex_protocol::methods::{
+    ApprovalDetail, ApprovalRequest, QuestionRequest, TrustRequest, TrustResourceKind,
+};
 use cortex_term::{Line, Span, Style, sanitize};
 
 use super::round::diff_rows_cut;
@@ -253,7 +255,10 @@ pub fn approval(
 
     lines.push(Line::new());
     let (answer_lines, whole) = match view.note {
-        Some(note) => (vec![note_row(note, width, look)], Vec::new()),
+        Some(note) => (
+            vec![note_row("Note for the model: ", note, width, look)],
+            Vec::new(),
+        ),
         None => answer_rows(&view.answers, view.answers_hidden, width, look),
     };
     let answer_rows = answer_lines.len();
@@ -313,9 +318,9 @@ fn answer_rows(
     (rows, whole)
 }
 
-/// The note being written, its end shown when it is longer than the row.
-fn note_row(note: &str, width: usize, look: &Look) -> Line {
-    let label = "Note for the model: ";
+/// The note being written after `label`, its end shown when it is longer
+/// than the row.
+fn note_row(label: &str, note: &str, width: usize, look: &Look) -> Line {
     let text = sanitize(note).replace(['\n', '\t'], " ");
     let room = width.saturating_sub(2 + label.len()).max(1);
     let rows = wrap(&[Span::plain(text)], room.saturating_sub(2).max(1));
@@ -329,6 +334,205 @@ fn note_row(note: &str, width: usize, look: &Look) -> Line {
         }
     }
     cut(&row, width, look.glyphs.ellipsis)
+}
+
+/// What the trust question shows beside its request.
+#[derive(Debug, Clone, Default)]
+pub struct TrustView {
+    /// The answers on offer, in order.
+    pub answers: Vec<Answer>,
+    /// The answers cannot be pressed yet: their rows are left blank.
+    pub answers_hidden: bool,
+    /// The most rows the list of what trust turns on may take.
+    pub detail_rows: usize,
+}
+
+/// The trust question, `width` columns wide at most (screen 2c of the
+/// reference: the question, the folder, then each thing trust turns on in
+/// full).
+///
+/// ```text
+/// ? Trust this project?
+///   ~/src/parser
+///   Trusting it turns on what its files ask for:
+///     git      Git may read this repository's own configuration, …
+///     rule     allow write .github/**
+///     rule     allow exec make deploy (profile ci)
+///     setting  model.main = "claude-haiku-5-5" (it can raise what you spend)
+///
+///   y Trust it   n Not now   x Never for this project
+/// ```
+#[must_use]
+pub fn trust(request: &TrustRequest, view: &TrustView, width: usize, look: &Look) -> Drawn {
+    let theme = &look.theme;
+    let muted = theme.style(Token::Muted);
+    let mut lines = title("Trust this project?", width, look);
+    let question = lines.len();
+    lines.extend(indented(
+        &sanitize(&request.workspace),
+        theme.style(Token::Code),
+        2,
+        width,
+    ));
+    lines.extend(indented(
+        "Trusting it turns on what its files ask for:",
+        muted,
+        2,
+        width,
+    ));
+    const LABEL: usize = 9;
+    let mut detail: Vec<Line> = Vec::new();
+    let mut changed = false;
+    for resource in &request.resources {
+        changed |= resource.changed;
+        let detail_text = sanitize(&resource.detail).into_owned();
+        let (label, text) = match &resource.kind {
+            TrustResourceKind::Repository => ("git", detail_text),
+            TrustResourceKind::Rules => {
+                let profile = resource
+                    .name
+                    .strip_prefix("profiles.")
+                    .and_then(|rest| rest.strip_suffix(".permissions.rules"));
+                (
+                    "rule",
+                    match profile {
+                        Some(profile) => format!("{detail_text} (profile {})", sanitize(profile)),
+                        None => detail_text,
+                    },
+                )
+            }
+            TrustResourceKind::Settings => ("setting", detail_text),
+            TrustResourceKind::Hook => ("hook", detail_text),
+            TrustResourceKind::Extension => ("extension", detail_text),
+            TrustResourceKind::McpServer => ("mcp", detail_text),
+            TrustResourceKind::Commands => ("commands", detail_text),
+            _ => ("other", detail_text),
+        };
+        let rows = wrap(
+            &[Span::new(text, theme.style(Token::AccentText))],
+            width.saturating_sub(4 + LABEL).max(1),
+        );
+        for (index, row) in rows.into_iter().enumerate() {
+            let mut line = Line::plain("    ");
+            if index == 0 {
+                line.push(Span::new(format!("{label:<LABEL$}"), muted));
+            } else {
+                line.push(Span::plain(" ".repeat(LABEL)));
+            }
+            for span in row.spans() {
+                line.push(span.clone());
+            }
+            detail.push(line);
+        }
+    }
+    let room = view.detail_rows.max(2);
+    let mut clipped = false;
+    if detail.len() > room {
+        clipped = true;
+        let hidden = detail.len() - (room - 1);
+        detail.truncate(room - 1);
+        detail.extend(indented(
+            &format!(
+                "{} {hidden} more lines are not shown, so it cannot be trusted from here: \
+                 `cortex permissions trust` lists them all",
+                look.glyphs.ellipsis
+            ),
+            muted,
+            4,
+            width,
+        ));
+    }
+    let detail_rows = detail.len();
+    lines.extend(detail);
+    if changed {
+        lines.extend(indented(
+            "Its rules have changed since you trusted it.",
+            theme.style(Token::Warning),
+            2,
+            width,
+        ));
+    }
+    lines.push(Line::new());
+    let (answer_lines, whole) = answer_rows(&view.answers, view.answers_hidden, width, look);
+    let answer_rows = answer_lines.len();
+    lines.extend(answer_lines);
+    Drawn {
+        lines,
+        clipped,
+        question,
+        detail: detail_rows,
+        answer_rows,
+        whole,
+    }
+}
+
+/// What a question of the core's shows beside its request.
+#[derive(Debug, Clone, Default)]
+pub struct QuestionView<'a> {
+    /// The answers on offer, in order: its choices, by their digits.
+    pub answers: Vec<Answer>,
+    /// The answers cannot be pressed yet: their rows are left blank.
+    pub answers_hidden: bool,
+    /// The most rows the question may take below its first.
+    pub detail_rows: usize,
+    /// The answer being written, to a question with no choices.
+    pub note: Option<&'a str>,
+}
+
+/// A question of the core's (an undo's, about files edited since), `width`
+/// columns wide at most: the question, then its choices by their digits.
+#[must_use]
+pub fn question(
+    request: &QuestionRequest,
+    view: &QuestionView<'_>,
+    width: usize,
+    look: &Look,
+) -> Drawn {
+    let mut lines = title(&request.question, width, look);
+    let question = lines.len();
+    lines.push(Line::new());
+    let (answer_lines, whole) = match view.note {
+        Some(note) => (
+            vec![note_row("Your answer: ", note, width, look)],
+            Vec::new(),
+        ),
+        None => answer_rows(&view.answers, view.answers_hidden, width, look),
+    };
+    let answer_rows = answer_lines.len();
+    lines.extend(answer_lines);
+    Drawn {
+        lines,
+        clipped: false,
+        question,
+        detail: 0,
+        answer_rows,
+        whole,
+    }
+}
+
+/// A dialog's question after its `?`, wrapped and never cut.
+fn title(text: &str, width: usize, look: &Look) -> Vec<Line> {
+    let theme = &look.theme;
+    let text = sanitize(text).replace(['\n', '\t'], " ");
+    wrap(
+        &[Span::new(text, theme.style(Token::Title))],
+        width.saturating_sub(2).max(1),
+    )
+    .into_iter()
+    .enumerate()
+    .map(|(index, row)| {
+        let mut line = if index == 0 {
+            Line::from(Span::new(look.glyphs.waiting, theme.style(Token::Warning)))
+                .with(Span::plain(" "))
+        } else {
+            Line::plain("  ")
+        };
+        for span in row.spans() {
+            line.push(span.clone());
+        }
+        line
+    })
+    .collect()
 }
 
 /// The rows of a dialog's detail, wrapped at `width` and set `indent`

@@ -1,27 +1,32 @@
 //! A dialog in the input box's place: the request it answers, its keys, and
 //! the guard that keeps typing meant for the editor from answering it
-//! (`docs/steps/23/answered.md`, "The design, before building", point 2).
+//! (`docs/steps/23/answered.md`, "The design, before building", points 2
+//! and 3). It asks one of three things: may a tool call run (an approval),
+//! may the project be trusted (trust), or a question of the core's.
 //!
 //! **Only keys meant for it answer it.** A dialog can appear while the
 //! person is typing: an approval while a steering message is being
-//! written. So a dialog takes no key until [`GRACE`] after its first frame
-//! was written, and until a frame with its answers has been drawn, which
-//! is from then: what can be pressed is what was shown. After that, a key
-//! still answers only after a pause: one read less than [`GRACE`] after the
-//! key before it carries on the typing, whatever the dialog shows. While it
-//! does not take keys, what types a character goes on to the editor, where
-//! it was going, and the dialog's own other keys (`Esc`) do nothing, so
-//! that a key meant to deny never interrupts the turn instead. Once it
-//! takes keys, a key it has no use for does nothing. A paste never answers
-//! a dialog. All of these are comparisons of times; the one wake the grace
-//! needs is its end, to draw the answers ([`Dialog::deadline`]).
+//! written, the trust question just after the first frame. So a dialog
+//! takes no key until [`GRACE`] after its first frame was written, and until
+//! a frame with its answers has been drawn, which is from then: what can be
+//! pressed is what was shown. After that, a key still answers only after a
+//! pause: one read less than [`GRACE`] after the key before it carries on
+//! the typing, whatever the dialog shows. While it does not take keys, what
+//! types a character goes on to the editor, where it was going, and the
+//! dialog's own other keys (`Esc`) do nothing, so that a key meant to deny
+//! never interrupts the turn instead. Once it takes keys, a key it has no
+//! use for does nothing. A paste never answers a dialog. All of these are
+//! comparisons of times; the one wake the grace needs is its end, to draw
+//! the answers ([`Dialog::deadline`]).
 //!
 //! **Only what was seen can be pressed, and allowed for longer.** Only an
-//! answer drawn whole answers (and the deny key, which the hint row shows).
-//! A request to leave the sandbox, and one any of whose rows did not fit,
-//! offer no lasting answer: a rule that would last is never added for
-//! something the person could not read in full. Keys that come in one read
-//! were typed together, and none of them answers ([`super::App::burst`]).
+//! answer drawn whole answers (and `Esc`, which the hint row shows: deny,
+//! not now, no answer). An answer that lasts (an approval for the session
+//! or the project, trusting a project) is not offered for a request to
+//! leave the sandbox, nor for one any of whose rows did not fit: nothing
+//! that lasts is given for something the person could not read in full.
+//! Keys that come in one read were typed together, and none of them
+//! answers ([`super::App::burst`]).
 //!
 //! **It fits the window.** The question and the answers wrap, and are never
 //! cut. The line of what a lasting answer would allow gives way first, then
@@ -30,20 +35,22 @@
 //! are dropped; in one too small for those two, no answer is taken until it
 //! grows.
 //!
-//! **A note is the note's.** Once "deny with a note" is chosen, keys and a
-//! paste go to the note, and its row shows the note's end.
+//! **A note is the note's.** Once "deny with a note" is chosen (or "answer"
+//! to a question with no choices), keys and a paste go to the note, and its
+//! row shows the note's end.
 
 use std::time::{Duration, Instant};
 
 use cortex_protocol::jsonrpc::RequestId;
 use cortex_protocol::methods::{
-    ApprovalChoice, ApprovalDetail, ApprovalRequest, ApprovalResponse, ServerResponse,
+    ApprovalChoice, ApprovalDetail, ApprovalRequest, ApprovalResponse, QuestionRequest,
+    QuestionResponse, ServerResponse, TrustRequest, TrustResponse,
 };
 use cortex_term::{Key, Line};
 
 use super::tools;
 use crate::keys::{Action, Context, KeyMap, name, typed};
-use crate::view::dialog::{self, Answer, ApprovalView};
+use crate::view::dialog::{self, Answer, ApprovalView, QuestionView, TrustView};
 use crate::view::{DiffLine, Look};
 
 /// How long after a dialog is first drawn, and after the key before, a key
@@ -52,6 +59,9 @@ pub(crate) const GRACE: Duration = Duration::from_millis(300);
 
 /// The fewest rows a dialog's detail is given.
 const LEAST_DETAIL: usize = 2;
+
+/// The most choices of a question that a digit picks.
+const CHOICES: usize = 9;
 
 /// What a dialog asks.
 #[derive(Debug, Clone)]
@@ -62,6 +72,18 @@ pub(crate) enum Asks {
         /// The diff's lines, parsed once.
         diff: Vec<DiffLine>,
     },
+    /// May the project be trusted?
+    Trust { request: TrustRequest },
+    /// A question of the core's.
+    Question { request: QuestionRequest },
+}
+
+/// One answer a dialog offers: an action of its keys, or a question's
+/// choice, by its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pick {
+    Act(Action),
+    Choice(usize),
 }
 
 /// What a dialog's rows were drawn for: the same again draws the same.
@@ -71,6 +93,14 @@ struct Drawn {
     width: usize,
     ready: bool,
     note: Option<String>,
+}
+
+/// How a dialog is drawn this time.
+struct Shape {
+    answers: Vec<Answer>,
+    hidden: bool,
+    detail_rows: usize,
+    withheld: bool,
 }
 
 /// One dialog. See the [module documentation](self).
@@ -85,13 +115,14 @@ pub(crate) struct Dialog {
     /// It asks to leave the sandbox of a session whose commands are
     /// confined.
     leaving: bool,
-    /// The answers drawn whole the last time they were drawn: only their
-    /// keys answer (and the deny key, which the hint row shows).
-    offered: Vec<Action>,
+    /// The answers drawn whole the last time they were drawn: only these
+    /// answer (and `Esc`, which the hint row shows).
+    offered: Vec<Pick>,
     /// The window was too small for its question and its answers the last
     /// time they were to be drawn: no answer is taken until it is not.
     unreadable: bool,
-    /// The note being written, after "deny with a note".
+    /// The note being written: after "deny with a note", or an answer to a
+    /// question with no choices.
     note: Option<String>,
     /// Its rows as last drawn, and what for.
     cache: Option<(Drawn, Vec<Line>)>,
@@ -113,18 +144,13 @@ pub(crate) enum Keyed {
 }
 
 impl Dialog {
-    /// An approval, in a session whose commands are `confined` or not.
-    pub(crate) fn approval(id: RequestId, request: ApprovalRequest, confined: bool) -> Self {
-        let diff = match &request.detail {
-            ApprovalDetail::Diff(diff) => tools::diff_lines(&diff.diff),
-            _ => Vec::new(),
-        };
+    fn new(id: RequestId, asks: Asks, leaving: bool) -> Self {
         Self {
             id,
-            leaving: confined && dialog::outside_sandbox(&request),
-            asks: Asks::Approval { request, diff },
+            asks,
             shown: None,
             answers_drawn: false,
+            leaving,
             offered: Vec::new(),
             unreadable: false,
             note: None,
@@ -132,10 +158,31 @@ impl Dialog {
         }
     }
 
+    /// An approval, in a session whose commands are `confined` or not.
+    pub(crate) fn approval(id: RequestId, request: ApprovalRequest, confined: bool) -> Self {
+        let diff = match &request.detail {
+            ApprovalDetail::Diff(diff) => tools::diff_lines(&diff.diff),
+            _ => Vec::new(),
+        };
+        let leaving = confined && dialog::outside_sandbox(&request);
+        Self::new(id, Asks::Approval { request, diff }, leaving)
+    }
+
+    /// The trust question of a session being opened.
+    pub(crate) fn trust(id: RequestId, request: TrustRequest) -> Self {
+        Self::new(id, Asks::Trust { request }, false)
+    }
+
+    /// A question of the core's.
+    pub(crate) fn question(id: RequestId, request: QuestionRequest) -> Self {
+        Self::new(id, Asks::Question { request }, false)
+    }
+
     /// The call the dialog is about, if it is about one.
     pub(crate) fn call(&self) -> Option<&cortex_protocol::CallId> {
         match &self.asks {
             Asks::Approval { request, .. } => Some(&request.call_id),
+            Asks::Trust { .. } | Asks::Question { .. } => None,
         }
     }
 
@@ -169,6 +216,33 @@ impl Dialog {
             && previous.is_none_or(|previous| at.saturating_duration_since(previous) >= GRACE)
     }
 
+    /// What `Esc` (and the other keys of `deny`) gives: deny, not now, or no
+    /// answer.
+    fn refusal(&self) -> ServerResponse {
+        match &self.asks {
+            Asks::Approval { .. } => ServerResponse::Approval(ApprovalResponse {
+                choice: ApprovalChoice::Deny,
+                note: None,
+            }),
+            Asks::Trust { .. } => ServerResponse::Trust(TrustResponse::default()),
+            Asks::Question { .. } => ServerResponse::Question(QuestionResponse { answer: None }),
+        }
+    }
+
+    /// The answer the note gives, sent with `Enter`.
+    fn with_note(&self, note: String) -> ServerResponse {
+        let note = (!note.trim().is_empty()).then_some(note);
+        match &self.asks {
+            Asks::Question { .. } => ServerResponse::Question(QuestionResponse { answer: note }),
+            Asks::Approval { .. } | Asks::Trust { .. } => {
+                ServerResponse::Approval(ApprovalResponse {
+                    choice: ApprovalChoice::Deny,
+                    note,
+                })
+            }
+        }
+    }
+
     /// A key, read at `at`, the key before it at `previous`.
     pub(crate) fn key(
         &mut self,
@@ -193,10 +267,7 @@ impl Dialog {
                     let note = std::mem::take(note);
                     self.note = None;
                     self.cache = None;
-                    Keyed::Answer(ServerResponse::Approval(ApprovalResponse {
-                        choice: ApprovalChoice::Deny,
-                        note: (!note.trim().is_empty()).then_some(note),
-                    }))
+                    Keyed::Answer(self.with_note(note))
                 }
                 Some(Action::Stop) => {
                     self.note = None;
@@ -228,29 +299,48 @@ impl Dialog {
                 Keyed::Pass
             };
         }
+        // Only what was drawn whole can be pressed.
+        let drawn = |pick: Pick| self.offered.contains(&pick);
+        // A question's choice, by its digit.
+        if let Asks::Question { request } = &self.asks
+            && let Some(digit) = typed(key).and_then(|c| c.to_digit(10))
+            && let Some(place) = (digit as usize).checked_sub(1)
+            && drawn(Pick::Choice(place))
+        {
+            return Keyed::Answer(ServerResponse::Question(QuestionResponse {
+                answer: request.choices.get(place).cloned(),
+            }));
+        }
         let Some(action) = action else {
             return Keyed::Nothing;
         };
-        let answer = |choice: ApprovalChoice| {
-            Keyed::Answer(ServerResponse::Approval(ApprovalResponse {
-                choice,
-                note: None,
-            }))
-        };
-        // Only what was drawn whole can be pressed.
-        let drawn = |action: Action| self.offered.contains(&action);
-        match action {
-            Action::AllowOnce if drawn(Action::AllowOnce) => answer(ApprovalChoice::AllowOnce),
-            Action::AllowSession if drawn(Action::AllowSession) => {
-                answer(ApprovalChoice::AllowSession)
-            }
-            Action::AllowProject if drawn(Action::AllowProject) => {
-                answer(ApprovalChoice::AllowProject)
-            }
-            // Denying is always on offer: it is what no answer is, and the
-            // hint row shows its key.
-            Action::Deny => answer(ApprovalChoice::Deny),
-            Action::DenyWithNote if drawn(Action::DenyWithNote) => {
+        match (&self.asks, action) {
+            // `Esc`, and the other keys of `deny`, are always on offer: no
+            // answer is what each of them is, and the hint row shows it.
+            (_, Action::Deny) => Keyed::Answer(self.refusal()),
+            (Asks::Approval { .. }, action) if drawn(Pick::Act(action)) => match action {
+                Action::AllowOnce => Keyed::Answer(approve(ApprovalChoice::AllowOnce)),
+                Action::AllowSession => Keyed::Answer(approve(ApprovalChoice::AllowSession)),
+                Action::AllowProject => Keyed::Answer(approve(ApprovalChoice::AllowProject)),
+                Action::DenyWithNote => {
+                    self.note = Some(String::new());
+                    self.cache = None;
+                    Keyed::Changed
+                }
+                _ => Keyed::Nothing,
+            },
+            (Asks::Trust { .. }, action) if drawn(Pick::Act(action)) => match action {
+                Action::AllowOnce => Keyed::Answer(ServerResponse::Trust(TrustResponse {
+                    trusted: true,
+                    never: false,
+                })),
+                Action::Never => Keyed::Answer(ServerResponse::Trust(TrustResponse {
+                    trusted: false,
+                    never: true,
+                })),
+                _ => Keyed::Nothing,
+            },
+            (Asks::Question { .. }, Action::AllowOnce) if drawn(Pick::Act(Action::AllowOnce)) => {
                 self.note = Some(String::new());
                 self.cache = None;
                 Keyed::Changed
@@ -273,10 +363,11 @@ impl Dialog {
     /// The keys the hint row shows while the dialog is open.
     pub(crate) fn hint_keys(&self, keymap: &KeyMap) -> Vec<String> {
         if self.note.is_some() {
-            return vec![
-                "enter denies with the note".to_owned(),
-                "esc goes back".to_owned(),
-            ];
+            let enter = match &self.asks {
+                Asks::Question { .. } => "enter sends the answer",
+                Asks::Approval { .. } | Asks::Trust { .. } => "enter denies with the note",
+            };
+            return vec![enter.to_owned(), "esc goes back".to_owned()];
         }
         let deny = keymap
             .keys_of(Action::Deny)
@@ -285,7 +376,12 @@ impl Dialog {
             .find(|text| text == "esc")
             .or_else(|| keymap.keys_of(Action::Deny).into_iter().next().map(name))
             .unwrap_or_else(|| "esc".to_owned());
-        vec![format!("{deny} denies")]
+        let what = match &self.asks {
+            Asks::Approval { .. } => "denies",
+            Asks::Trust { .. } => "is not now",
+            Asks::Question { .. } => "leaves it unanswered",
+        };
+        vec![format!("{deny} {what}")]
     }
 
     /// The dialog's rows at `now`, at most `rows` of them and `width`
@@ -320,6 +416,54 @@ impl Dialog {
         lines
     }
 
+    /// The dialog drawn in `shape`.
+    fn render(&self, shape: &Shape, width: usize, look: &Look) -> dialog::Drawn {
+        match &self.asks {
+            Asks::Approval { request, diff } => dialog::approval(
+                request,
+                &ApprovalView {
+                    answers: shape.answers.clone(),
+                    answers_hidden: shape.hidden,
+                    diff,
+                    detail_rows: shape.detail_rows,
+                    note: self.note.as_deref(),
+                    leaving: self.leaving,
+                    withheld: shape.withheld,
+                },
+                width,
+                look,
+            ),
+            Asks::Trust { request } => dialog::trust(
+                request,
+                &TrustView {
+                    answers: shape.answers.clone(),
+                    answers_hidden: shape.hidden,
+                    detail_rows: shape.detail_rows,
+                },
+                width,
+                look,
+            ),
+            Asks::Question { request } => dialog::question(
+                request,
+                &QuestionView {
+                    answers: shape.answers.clone(),
+                    answers_hidden: shape.hidden,
+                    detail_rows: shape.detail_rows,
+                    note: self.note.as_deref(),
+                },
+                width,
+                look,
+            ),
+        }
+    }
+
+    /// Whether the dialog has a line of what a lasting answer would allow,
+    /// which can give way before its detail does.
+    fn says_what_lasts(&self) -> bool {
+        matches!(&self.asks, Asks::Approval { request, .. } if !request.adds.is_empty())
+            && !self.leaving
+    }
+
     /// Draws the dialog to fit `rows`. Says whether its question and its
     /// answers could both be shown, and which answers were drawn whole.
     fn draw(
@@ -329,37 +473,33 @@ impl Dialog {
         width: usize,
         look: &Look,
         ready: bool,
-    ) -> (Vec<Line>, bool, Vec<Action>) {
-        let Asks::Approval { request, diff } = &self.asks;
+    ) -> (Vec<Line>, bool, Vec<Pick>) {
         // Rows are kept for every answer there could be; fewer take no more.
         let every = self.answers(keymap, false);
-        let mut view = ApprovalView {
+        let mut shape = Shape {
             answers: every.iter().map(|(_, answer)| answer.clone()).collect(),
-            answers_hidden: !ready,
-            diff,
+            hidden: !ready,
             detail_rows: rows.max(LEAST_DETAIL),
-            note: self.note.as_deref(),
-            leaving: self.leaving,
             withheld: false,
         };
         // The note of what a lasting answer would allow gives way first, so
         // that the detail stays whole (no lasting answer is offered then),
         // and then the detail.
-        let mut fitted = dialog::approval(request, &view, width, look);
+        let mut fitted = self.render(&shape, width, look);
         loop {
             let over = fitted.lines.len().saturating_sub(rows);
             if over == 0 {
                 break;
             }
-            let room = fitted.detail.min(view.detail_rows);
-            if !view.withheld && !request.adds.is_empty() && !self.leaving {
-                view.withheld = true;
+            let room = fitted.detail.min(shape.detail_rows);
+            if !shape.withheld && self.says_what_lasts() {
+                shape.withheld = true;
             } else if room > LEAST_DETAIL {
-                view.detail_rows = room.saturating_sub(over).max(LEAST_DETAIL);
+                shape.detail_rows = room.saturating_sub(over).max(LEAST_DETAIL);
             } else {
                 break;
             }
-            fitted = dialog::approval(request, &view, width, look);
+            fitted = self.render(&shape, width, look);
         }
         let fits = fitted.lines.len() <= rows;
         // A lasting answer is offered only for what was seen whole, itself
@@ -367,20 +507,20 @@ impl Dialog {
         let lasting_cut = every
             .iter()
             .zip(&fitted.whole)
-            .any(|((action, _), whole)| !whole && lasting(*action));
-        let clipped = fitted.clipped || view.withheld || !fits || lasting_cut;
+            .any(|((pick, _), whole)| !whole && self.lasts(*pick));
+        let clipped = fitted.clipped || shape.withheld || !fits || lasting_cut;
         let mut drawn = fitted;
         let mut offered = Vec::new();
         if ready {
             let answers = self.answers(keymap, clipped);
-            view.answers = answers.iter().map(|(_, answer)| answer.clone()).collect();
-            view.answers_hidden = false;
-            drawn = dialog::approval(request, &view, width, look);
+            shape.answers = answers.iter().map(|(_, answer)| answer.clone()).collect();
+            shape.hidden = false;
+            drawn = self.render(&shape, width, look);
             offered = answers
                 .iter()
                 .zip(&drawn.whole)
                 .filter(|(_, whole)| **whole)
-                .map(|((action, _), _)| *action)
+                .map(|((pick, _), _)| *pick)
                 .collect();
         }
         let (question, answer_rows) = (drawn.question, drawn.answer_rows);
@@ -399,9 +539,21 @@ impl Dialog {
         (lines, readable, offered)
     }
 
-    /// The answers on offer, each with its action and its key as the key
+    /// Whether `pick` gives something that lasts: an approval for the
+    /// session or the project, or trust in the project.
+    fn lasts(&self, pick: Pick) -> bool {
+        match &self.asks {
+            Asks::Approval { .. } => {
+                matches!(pick, Pick::Act(Action::AllowSession | Action::AllowProject))
+            }
+            Asks::Trust { .. } => pick == Pick::Act(Action::AllowOnce),
+            Asks::Question { .. } => false,
+        }
+    }
+
+    /// The answers on offer, each with what picks it and its key as the key
     /// map names it.
-    fn answers(&self, keymap: &KeyMap, clipped: bool) -> Vec<(Action, Answer)> {
+    fn answers(&self, keymap: &KeyMap, clipped: bool) -> Vec<(Pick, Answer)> {
         let key = |action: Action| {
             keymap
                 .keys_of(action)
@@ -411,48 +563,76 @@ impl Dialog {
                 .or_else(|| keymap.keys_of(action).into_iter().next().map(name))
                 .unwrap_or_default()
         };
-        let Asks::Approval { request, .. } = &self.asks;
-        let lasting = !(self.leaving || clipped);
-        let mut answers = Vec::new();
-        for choice in &request.choices {
-            let (action, label) = match choice {
-                ApprovalChoice::AllowOnce if self.leaving => {
-                    (Action::AllowOnce, "Run once outside the sandbox")
-                }
-                ApprovalChoice::AllowOnce => (Action::AllowOnce, "Allow once"),
-                ApprovalChoice::AllowSession if lasting => {
-                    (Action::AllowSession, "Allow this session")
-                }
-                ApprovalChoice::AllowProject if lasting => {
-                    (Action::AllowProject, "Always allow here")
-                }
-                ApprovalChoice::Deny => (Action::Deny, "Deny"),
-                _ => continue,
-            };
-            answers.push((
-                action,
+        let act = |action: Action, label: &str| {
+            (
+                Pick::Act(action),
                 Answer {
                     key: key(action),
                     label: label.to_owned(),
                 },
-            ));
+            )
+        };
+        match &self.asks {
+            Asks::Approval { request, .. } => {
+                let lasting = !(self.leaving || clipped);
+                let mut answers = Vec::new();
+                for choice in &request.choices {
+                    let (action, label) = match choice {
+                        ApprovalChoice::AllowOnce if self.leaving => {
+                            (Action::AllowOnce, "Run once outside the sandbox")
+                        }
+                        ApprovalChoice::AllowOnce => (Action::AllowOnce, "Allow once"),
+                        ApprovalChoice::AllowSession if lasting => {
+                            (Action::AllowSession, "Allow this session")
+                        }
+                        ApprovalChoice::AllowProject if lasting => {
+                            (Action::AllowProject, "Always allow here")
+                        }
+                        ApprovalChoice::Deny => (Action::Deny, "Deny"),
+                        _ => continue,
+                    };
+                    answers.push(act(action, label));
+                }
+                if !self.leaving && request.choices.contains(&ApprovalChoice::Deny) {
+                    answers.push(act(Action::DenyWithNote, "Deny with a note"));
+                }
+                answers
+            }
+            Asks::Trust { .. } => {
+                let mut answers = Vec::new();
+                if !clipped {
+                    answers.push(act(Action::AllowOnce, "Trust it"));
+                }
+                answers.push(act(Action::Deny, "Not now"));
+                answers.push(act(Action::Never, "Never for this project"));
+                answers
+            }
+            Asks::Question { request } if request.choices.is_empty() => vec![
+                act(Action::AllowOnce, "Answer"),
+                act(Action::Deny, "Leave it unanswered"),
+            ],
+            Asks::Question { request } => request
+                .choices
+                .iter()
+                .take(CHOICES)
+                .enumerate()
+                .map(|(place, choice)| {
+                    (
+                        Pick::Choice(place),
+                        Answer {
+                            key: (place + 1).to_string(),
+                            label: choice.clone(),
+                        },
+                    )
+                })
+                .collect(),
         }
-        if !self.leaving && request.choices.contains(&ApprovalChoice::Deny) {
-            answers.push((
-                Action::DenyWithNote,
-                Answer {
-                    key: key(Action::DenyWithNote),
-                    label: "Deny with a note".to_owned(),
-                },
-            ));
-        }
-        answers
     }
 }
 
-/// Whether `action` would add a rule that lasts.
-fn lasting(action: Action) -> bool {
-    matches!(action, Action::AllowSession | Action::AllowProject)
+/// An approval's answer with no note.
+fn approve(choice: ApprovalChoice) -> ServerResponse {
+    ServerResponse::Approval(ApprovalResponse { choice, note: None })
 }
 
 /// Whether `action` is one of a dialog's own, not a global one.
@@ -464,6 +644,7 @@ fn dialogs(action: Action) -> bool {
             | Action::AllowProject
             | Action::Deny
             | Action::DenyWithNote
+            | Action::Never
             | Action::ShowWhole
     )
 }

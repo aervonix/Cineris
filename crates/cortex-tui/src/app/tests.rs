@@ -1862,3 +1862,254 @@ fn keys_read_together_never_answer_a_dialog() {
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
     assert_eq!(app.input().editor().expanded(), "sp");
 }
+
+fn resource(
+    kind: cortex_protocol::methods::TrustResourceKind,
+    name: &str,
+    detail: &str,
+    changed: bool,
+) -> cortex_protocol::methods::TrustResource {
+    cortex_protocol::methods::TrustResource {
+        kind,
+        name: name.to_owned(),
+        detail: detail.to_owned(),
+        changed,
+    }
+}
+
+fn trust_request(resources: Vec<cortex_protocol::methods::TrustResource>) -> ServerRequest {
+    ServerRequest::Trust(cortex_protocol::methods::TrustRequest {
+        session_id: SessionId::from(SESSION),
+        workspace: "~/src/app".to_owned(),
+        resources,
+    })
+}
+
+fn project_resources() -> Vec<cortex_protocol::methods::TrustResource> {
+    use cortex_protocol::methods::TrustResourceKind as Kind;
+    vec![
+        resource(
+            Kind::Repository,
+            "git",
+            "Git may read this repository's own configuration.",
+            false,
+        ),
+        resource(
+            Kind::Rules,
+            "permissions.rules",
+            "allow write .github/**",
+            false,
+        ),
+        resource(
+            Kind::Rules,
+            "profiles.ci.permissions.rules",
+            "allow exec make deploy",
+            false,
+        ),
+        resource(
+            Kind::Settings,
+            "limits.turn.time",
+            "limits.turn.time = \"0s\" (a first limit, where you have none: it could stop every turn)",
+            false,
+        ),
+    ]
+}
+
+/// The trust question, asked while the session is being opened: it lists
+/// what trust turns on, each rule with its profile, and takes the owner's
+/// three answers by their keys, `Esc` being not now.
+#[test]
+fn the_trust_question_lists_what_trust_turns_on_and_takes_three_answers() {
+    use cortex_protocol::methods::TrustResponse;
+    let trusted = TrustResponse {
+        trusted: true,
+        never: false,
+    };
+    let never = TrustResponse {
+        trusted: false,
+        never: true,
+    };
+    for (binding, expected) in [
+        ("y", trusted),
+        ("n", TrustResponse::default()),
+        ("x", never),
+        ("esc", TrustResponse::default()),
+    ] {
+        let now = Instant::now();
+        let (mut app, link) = app(now);
+        let _ = app.frame(now);
+        app.drawn(now);
+        ask(&mut app, &link, 30, trust_request(project_resources()), now);
+        let at = now + dialog::GRACE;
+        let rows = text(&app.frame(at).1);
+        for shown in [
+            "? Trust this project?",
+            "~/src/app",
+            "git",
+            "rule     allow write .github/**",
+            "allow exec make deploy (profile ci)",
+            "setting  limits.turn.time = \"0s\"",
+            "y Trust it",
+            "n Not now",
+            "x Never for this project",
+            "esc is not now",
+        ] {
+            assert!(
+                rows.iter().any(|row| row.contains(shown)),
+                "{shown}: {rows:#?}"
+            );
+        }
+        key(&mut app, binding, at);
+        let given = std::mem::take(&mut link.script().answers);
+        assert_eq!(
+            given,
+            [(RequestId::Number(30), ServerResponse::Trust(expected))],
+            "{binding}"
+        );
+    }
+}
+
+/// A list of what trust turns on that does not fit is cut, and the project
+/// cannot be trusted from there: not now and never stay.
+#[test]
+fn a_trust_question_that_does_not_fit_cannot_be_trusted_from_there() {
+    use cortex_protocol::methods::TrustResourceKind as Kind;
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    app.resize(80, 14);
+    let _ = app.frame(now);
+    app.drawn(now);
+    let rules: Vec<_> = (1..=30)
+        .map(|n| {
+            resource(
+                Kind::Rules,
+                "permissions.rules",
+                &format!("allow exec tool{n} *"),
+                false,
+            )
+        })
+        .collect();
+    ask(&mut app, &link, 31, trust_request(rules), now);
+    let at = now + dialog::GRACE;
+    let rows = text(&app.frame(at).1);
+    assert!(rows.len() <= 14, "{rows:#?}");
+    assert!(rows[0].contains("Trust this project?"), "{rows:#?}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("cannot be trusted from here")),
+        "{rows:#?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("Trust it")),
+        "{rows:#?}"
+    );
+    key(&mut app, "y", at);
+    assert!(link.script().answers.is_empty());
+    key(&mut app, "x", at + dialog::GRACE);
+    assert_eq!(
+        std::mem::take(&mut link.script().answers),
+        [(
+            RequestId::Number(31),
+            ServerResponse::Trust(cortex_protocol::methods::TrustResponse {
+                trusted: false,
+                never: true,
+            })
+        )]
+    );
+}
+
+/// A question of the core's, an undo's about files edited since: its
+/// choices by their digits, `Esc` no answer.
+#[test]
+fn a_question_is_answered_by_the_digit_of_its_choice_or_left_unanswered() {
+    use cortex_protocol::methods::{QuestionRequest, QuestionResponse};
+    let request = || {
+        ServerRequest::Question(QuestionRequest {
+            session_id: SessionId::from(SESSION),
+            turn_id: None,
+            question: "This file was changed after the turn that changed it: `a.rs`. Put it back?"
+                .to_owned(),
+            choices: vec![
+                "Put them back".to_owned(),
+                "Keep them as they are".to_owned(),
+            ],
+            extension: None,
+        })
+    };
+    for (binding, answer) in [
+        ("2", Some("Keep them as they are".to_owned())),
+        ("1", Some("Put them back".to_owned())),
+        ("esc", None),
+    ] {
+        let now = Instant::now();
+        let (mut app, link) = app(now);
+        opened(&mut app, &link, now);
+        ask(&mut app, &link, 32, request(), now);
+        let at = now + dialog::GRACE;
+        let rows = text(&app.frame(at).1);
+        assert!(
+            rows.iter().any(|row| row.contains("Put it back?")),
+            "{rows:#?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("1 Put them back   2 Keep them as they are")),
+            "{rows:#?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("esc leaves it unanswered")),
+            "{rows:#?}"
+        );
+        // A digit with no choice does nothing.
+        key(&mut app, "9", at);
+        assert!(link.script().answers.is_empty());
+        key(&mut app, binding, at + dialog::GRACE);
+        assert_eq!(
+            std::mem::take(&mut link.script().answers),
+            [(
+                RequestId::Number(32),
+                ServerResponse::Question(QuestionResponse { answer })
+            )],
+            "{binding}"
+        );
+    }
+}
+
+/// A question with no choices is answered in words.
+#[test]
+fn a_question_with_no_choices_is_answered_in_words() {
+    use cortex_protocol::methods::{QuestionRequest, QuestionResponse};
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    ask(
+        &mut app,
+        &link,
+        33,
+        ServerRequest::Question(QuestionRequest {
+            session_id: SessionId::from(SESSION),
+            turn_id: None,
+            question: "Which colour?".to_owned(),
+            choices: Vec::new(),
+            extension: None,
+        }),
+        now,
+    );
+    let at = now + dialog::GRACE;
+    let rows = text(&app.frame(at).1);
+    assert!(rows.iter().any(|row| row.contains("y Answer")), "{rows:#?}");
+    key(&mut app, "y", at);
+    type_text(&mut app, "blue", at);
+    app.terminal(&TermEvent::Paste(" and green".to_owned()), at);
+    key(&mut app, "enter", at);
+    assert_eq!(
+        std::mem::take(&mut link.script().answers),
+        [(
+            RequestId::Number(33),
+            ServerResponse::Question(QuestionResponse {
+                answer: Some("blue and green".to_owned())
+            })
+        )]
+    );
+}
