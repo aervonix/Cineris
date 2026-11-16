@@ -32,6 +32,12 @@ around it.
 say. If you could not check something, say so plainly.
 - When something is unclear and a wrong guess would be costly, ask. When it \
 is cheap to find out, find out.
+- Stay inside this project. When you need something that neither the \
+workspace nor this conversation holds, such as a decision, a preference or \
+how this project is run, ask the user. Do not look for it in other \
+projects' files, memory or instruction files elsewhere on the machine: what \
+holds there may not hold here, and it fills the session with context that \
+does not belong.
 - Keep the user informed in a few words: what you are doing and what you \
 found. When you finish, say what changed and what is left open.
 
@@ -267,6 +273,37 @@ mod tests {
         assert_ne!(first.base, with(&one, Some("more")).base);
     }
 
+    /// The owner's request (2026-11-16): the agent asks the user for what
+    /// the project and the conversation do not hold, rather than borrowing
+    /// it from another project's files on the machine.
+    const STAY_IN_PROJECT: &str = "- Stay inside this project. When you need something that \
+        neither the workspace nor this conversation holds, such as a decision, a preference \
+        or how this project is run, ask the user. Do not look for it in other projects' \
+        files, memory or instruction files elsewhere on the machine: what holds there may \
+        not hold here, and it fills the session with context that does not belong.\n";
+
+    #[test]
+    fn the_core_instructions_keep_the_agent_inside_its_project() {
+        // In the "How to work" list, after the bullet on what is unclear,
+        // and before the tools.
+        let how = CORE_INSTRUCTIONS.find("How to work:\n").unwrap();
+        let unclear = CORE_INSTRUCTIONS
+            .find("- When something is unclear")
+            .unwrap();
+        let stay = CORE_INSTRUCTIONS.find(STAY_IN_PROJECT).unwrap();
+        let tools = CORE_INSTRUCTIONS.find("Tools:\n").unwrap();
+        assert!(how < unclear && unclear < stay && stay < tools);
+        // And it is in the prompt that is sent, in section 1.
+        let built = build(&Sections {
+            environment: Some(&environment()),
+            instructions: &[],
+            append: None,
+            guided: false,
+        });
+        let env = built.system.find("Environment:").unwrap();
+        assert!(built.system.find(STAY_IN_PROJECT).unwrap() < env);
+    }
+
     #[test]
     fn the_guided_style_adds_its_notes_after_the_environment() {
         let environment = environment();
@@ -278,9 +315,10 @@ mod tests {
         };
         let (concise, guided) = (build(&sections(false)), build(&sections(true)));
         assert!(!concise.system.contains(GUIDED_NOTES));
+        let core = guided.system.find(STAY_IN_PROJECT).unwrap();
         let env = guided.system.find("Environment:").unwrap();
         let notes = guided.system.find(GUIDED_NOTES).unwrap();
-        assert!(env < notes);
+        assert!(core < env && env < notes);
         // A change of style is a change of the prompt: a new epoch.
         assert_ne!(concise.base, guided.base);
     }
