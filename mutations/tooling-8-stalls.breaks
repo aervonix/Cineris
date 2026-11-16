@@ -277,18 +277,17 @@ rule: A run that stalled is not judged at a desk.
 file: xtask/src/tiers.rs
 in: check_ci_report_in
 find: stall::judge(in_actions, &records)
-replace: None,
+replace: None
 caught-by:
     tiers::tests::a_stalled_run_is_not_judged_at_a_desk_and_is_on_ci_whatever_the_pressure
 
 [break] a-run-not-judged-goes-on-to-fail-a-tier
-rule: A run that is not judged neither passes nor fails a budget.
+rule: A run that is not judged neither passes nor fails a budget. The early return after the tables is the second of two guards: the tables of such a run are made with no mark, so no tier is over budget and the verdicts after it would find none; the return also keeps the start-cost warning and the runner line from being said of a run whose times are the disk's, which only the printed output shows.
 file: xtask/src/tiers.rs
 in: check_report_with
 find: if stalled.is_some() {
 replace: if false {
-caught-by:
-    tiers::tests::a_stalled_run_is_not_judged_at_a_desk_and_is_on_ci_whatever_the_pressure
+expect: survives
 
 [break] a-run-not-judged-marks-its-tiers
 rule: A run that is not judged has no mark on a tier, over budget or far over it.

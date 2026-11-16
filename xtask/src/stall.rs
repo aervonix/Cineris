@@ -47,12 +47,11 @@ pub(crate) mod rerun;
 /// It is `mutate`'s figure for a busy disk (`full avg60` of 10%, from which
 /// it starts with one job): a run that spent a tenth of its time with every
 /// task waiting on the disk has lost a tenth of its time to it, which is
-/// 2 s of a tier's 20 s and more than the tiers' own run-to-run variation
-/// on a quiet machine, and the runs of wave 11 that were stalled read 54%
-/// and more where a quiet desk reads under 1%. A lower figure would take
-/// every busy afternoon of the desktop for a stall and run tests again for
-/// nothing; a higher one would call a run that lost a fifth of its time
-/// judged.
+/// 2 s of a tier's 20 s. It was chosen, not fitted to quiet runs, of which
+/// nobody has a distribution: the stalled runs of wave 11 read 54% and 66%,
+/// and a machine at rest reads 0%. A lower figure would take every busy
+/// afternoon of the desktop for a stall and run tests again for nothing; a
+/// higher one would call a run that lost a fifth of its time judged.
 pub(crate) const STALLED_SHARE: f64 = 10.0;
 
 /// How close together, in milliseconds, the ends of the timeouts must lie.
