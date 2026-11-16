@@ -168,6 +168,18 @@ Four jobs block a pull request: `lint-linux`, `lint-windows`, `test-linux` and `
 - Two workflows do not block: `main`, after each merge, and `nightly`. When one fails it opens an issue labelled `ci-failure`, or adds a comment to the open one. Close the issue when the cause is fixed.
 - A change that makes the blocking checks slower than their budget moves the slow part to a non-blocking tier, or raises it for a decision. The limit is not loosened quietly.
 
+## Writing the docs
+
+- **An "As built" record is a list, one sentence a line** (since the ninth tooling step). A Markdown table's row is one line, so two sessions that add a sentence to the same part of a step's record change the same line, and their pull requests conflict. A list item per part, with each sentence on a line of its own (a sentence break that Markdown joins back into one paragraph), puts two such changes on different lines. The example is "As built in step 17" in [docs/architecture/14-adaptation.md](docs/architecture/14-adaptation.md):
+
+  ```markdown
+  - **The shared file**:
+    `<workspace>/.cortex/profile.toml`, `version = 1`: `[[entry]]` tables of a kind, a text, and optionally evidence.
+    It is read as a regular file in a `.cortex` that is a directory of the workspace itself.
+  ```
+
+  An older table is turned into a list when a step next adds to it. A table of short cells that do not grow (budgets, a comparison of figures) stays a table.
+
 ## Ground rules
 
 These hold for every change. They are the "Rules for every step" of the [build plan](docs/build-plan.md).

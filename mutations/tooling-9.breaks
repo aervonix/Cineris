@@ -1,0 +1,264 @@
+# The ninth tooling step's breaks.
+
+# The core rig (item 3).
+
+[break] rig-a-wait-for-a-question-never-gives-up
+rule: The core rig's wait for a question fails at once when the session goes idle with nothing asked.
+file: crates/cortex-core/tests/it/main.rs
+in: Front::approval
+find: open(seen).is_some() || idles_in(seen) > idle_before
+replace: open(seen).is_some()
+caught-by:
+    cortex-core::it approvals::a_wait_for_a_question_the_turn_never_asks_fails_at_once
+
+[break] rig-a-wait-for-a-question-gives-up-at-a-turns-end
+rule: The core rig's wait for a question goes on while a turn is queued behind the one that ended.
+file: crates/cortex-core/tests/it/main.rs
+in: Front::approval
+find: open(seen).is_some() || idles_in(seen) > idle_before
+replace: open(seen).is_some() || ends_in(seen).len() > idle_before
+caught-by:
+    cortex-core::it approvals::a_wait_for_a_question_goes_on_while_a_turn_is_queued
+
+[break] rig-a-turns-end-is-taken-for-idle
+rule: The session is idle when it says so, not when a turn ends.
+file: crates/cortex-core/tests/it/main.rs
+in: idles_in
+find: event: Event::SessionIdle(_)
+replace: event: Event::TurnCompleted(_)
+caught-by:
+    cortex-core::it approvals::a_wait_for_a_question_goes_on_while_a_turn_is_queued
+
+[break] rig-told-takes-any-notice
+rule: `told` waits for a notice that says what it was given.
+file: crates/cortex-core/tests/it/main.rs
+in: Front::told
+find: .find(|(index, notice)| !taken.contains(index) && notice.contains(text))
+replace: .find(|(index, _)| !taken.contains(index))
+caught-by:
+    cortex-core::it approvals::a_notice_is_waited_for_and_a_refused_turn_names_what_asked
+
+[break] rig-turn-denying-allows
+rule: `turn_denying` refuses every call that is asked about.
+file: crates/cortex-core/tests/it/main.rs
+in: Front::turn_denying
+find: self.turn_answering(text, |_| ApprovalChoice::Deny).await
+replace: self.turn_answering(text, |_| ApprovalChoice::AllowOnce).await
+caught-by:
+    cortex-core::it approvals::a_notice_is_waited_for_and_a_refused_turn_names_what_asked
+
+# An A/B that survives a test failing on one side only (item 4).
+
+[break] ab-a-one-sided-failure-is-no-failure-of-the-run
+rule: A test that failed on one side only is a failure of the run, though the rest are compared.
+file: xtask/src/ab.rs
+in: conclusion
+find: if !one_sided.is_empty() {
+replace: if false {
+caught-by:
+    ab::tests::a_test_that_failed_on_one_side_only_is_left_out_named_and_a_failure_of_the_run
+    ab::tests::a_test_that_failed_on_both_sides_once_and_on_one_side_once_is_one_sided
+
+[break] ab-a-one-sided-failure-reads-as-both-sided
+rule: A test that failed on one side in any round is named as one, not as a test both sides failed.
+file: xtask/src/ab.rs
+in: comparable
+find: entry.on = FailedOn::OneSide;
+replace: entry.on = FailedOn::Both;
+caught-by:
+    ab::tests::a_test_that_failed_on_one_side_only_is_left_out_named_and_a_failure_of_the_run
+    ab::tests::a_test_that_failed_on_both_sides_once_and_on_one_side_once_is_one_sided
+
+[break] records-a-one-sided-failure-is-not-named
+rule: ci-times --ab and try-result name a test that failed on one side only, as ab does.
+file: xtask/src/records.rs
+in: sides_of
+find: one_sided.insert(id.clone());
+replace: let _ = id;
+caught-by:
+    records::tests::a_failed_round_or_a_lone_report_is_left_out_with_its_reason_and_the_rest_keep_their_numbers
+    records::tests::a_test_that_failed_on_both_sides_is_left_out_of_every_round_and_the_rounds_compared
+    try_result::tests::an_ab_job_prints_its_tables_its_rounds_and_the_tests_that_failed
+
+[break] try-result-reads-only-the-both-sided-block
+rule: try-result shows the block of tests that failed on one side only, as ab printed it.
+file: xtask/src/try_result.rs
+in: skipped_block
+find: || lower.contains("test(s) failed on one side only")
+replace: || false
+caught-by:
+    try_result::tests::skipped_tests_are_read_wherever_the_log_names_them_and_nowhere_else
+
+# `mutate --changed` with no history of the tree's own (item 4).
+
+[break] changed-a-dangling-git-is-read
+rule: `--changed` refuses a tree whose `.git` is not its own: git's work tree must be the tree.
+file: xtask/src/mutate/changed.rs
+in: Git::open
+find: if real(Path::new(top.trim())).is_none() || real(Path::new(top.trim())) != real(root) {
+replace: if false {
+caught-by:
+    mutate::changed::tests::sys_a_tree_inside_another_repository_is_refused_and_not_read_as_its_diff
+
+[break] changed-a-refused-diff-exits-as-a-failed-break
+rule: A diff `--changed` cannot read ends with exit status 3, apart from a break left uncaught (1).
+file: xtask/src/mutate/mod.rs
+in: conclusion
+find: Some(why) => ( NO_DIFF
+replace: Some(why) => ( 1
+caught-by:
+    mutate::changed::tests::a_refused_diff_has_an_exit_status_of_its_own
+
+# ci-times (item 4).
+
+[break] ci-times-lists-a-job-that-never-ran
+rule: A matrix job skipped before its matrix was made (its name unexpanded) has no row in the jobs table.
+file: xtask/src/runs.rs
+in: parse_run
+find: if name.contains("${{") {
+replace: if false {
+caught-by:
+    runs::tests::a_run_is_read_from_what_gh_prints
+
+# try: a dispatched run's id, and a run whose status lags its jobs (item 4).
+
+[break] try-result-reads-a-run-with-a-job-still-running-as-finished
+rule: A run is read as finished when every job has ended, and not before.
+file: xtask/src/try_result.rs
+in: every_job_ended
+find: status.jobs.iter().all(|job| job.conclusion.is_some())
+replace: status.jobs.iter().any(|job| job.conclusion.is_some())
+caught-by:
+    try_result::tests::a_run_whose_jobs_have_all_ended_is_finished_whatever_its_status_says
+
+[break] try-dispatch-drops-the-against-input
+rule: A dispatch passes each input that is set.
+file: xtask/src/try_run.rs
+in: dispatch_arguments
+find: field("against", against.clone());
+replace: let _ = against;
+caught-by:
+    try_run::tests::a_dispatch_passes_each_input_that_is_set_and_no_other
+
+[break] try-dispatch-takes-an-old-run-for-its-own
+rule: The run a dispatch made is one that was not listed before it.
+file: xtask/src/try_run.rs
+in: new_runs
+find: .filter(|run| !before.contains(run))
+replace: .filter(|_| true)
+caught-by:
+    try_run::tests::the_run_a_dispatch_made_is_the_one_not_listed_before_it
+
+# Typed outcomes in the core rig's results (item 3).
+
+[break] rig-an-outcome-takes-any-text
+rule: A tool's outcome compared with a name no outcome has fails the test.
+file: crates/cortex-core/tests/it/main.rs
+in: Outcome::known
+find: cortex_protocol::item::ToolOutcome::KNOWN.contains(&text)
+replace: true || cortex_protocol::item::ToolOutcome::KNOWN.contains(&text)
+caught-by:
+    cortex-core::it approvals::a_tool_outcome_compared_with_a_name_no_outcome_has_fails_the_test
+
+# The time-limit test under load (outstanding: a-time-limit-test-under-load).
+
+[break] process-a-call-has-no-time-limit
+rule: A command's call arms its time limit when it starts.
+file: crates/cortex-tools/src/process/mod.rs
+in: run_until
+find: timeout: Some(self.timer.sleep(start.timeout))
+replace: timeout: None
+caught-by:
+    cortex-tools::it process::sys_a_time_limit_stops_the_whole_tree
+
+# The hosted-cost estimate (item 2), and the review's fixes of it.
+
+[break] starts-the-launcher-is-not-taken-off
+rule: The launcher's own start is counted as the program it became, not beside it.
+file: xtask/src/starts.rs
+in: Starts::parse
+find: *launchers = launchers.saturating_sub(count);
+replace: let _ = (launchers, count);
+caught-by:
+    starts::tests::the_launcher_becoming_a_shell_is_the_shells_start_and_not_the_binarys
+
+[break] starts-a-version-probe-is-a-shells-start
+rule: A version probe is a kind of start of its own, which a Windows runner does not make.
+file: xtask/src/starts.rs
+in: Kind::of
+find: if program.starts_with(PROBED) {
+replace: if false {
+caught-by:
+    starts::tests::programs_are_told_apart_by_their_names
+
+[break] estimate-a-start-costs-nothing
+rule: A test's starts are charged at the runner's price.
+file: xtask/src/like_runner.rs
+in: windows_seconds
+find: work * work_factor(krate, tier) + on_the_runner(counts)
+replace: work * work_factor(krate, tier)
+caught-by:
+    like_runner::tests::a_tests_starts_are_charged_at_the_runners_price_and_its_work_by_its_crate
+
+[break] estimate-never-warns
+rule: A Windows tier whose estimate grew by more than 3 s against the base is warned of.
+file: xtask/src/like_runner.rs
+in: compare
+find: let warn = change > WARN_SECONDS;
+replace: let warn = false;
+caught-by:
+    like_runner::tests::a_change_that_adds_shell_starts_is_warned_of_with_the_test_that_made_them
+
+[break] estimate-counts-a-failed-test
+rule: A test that failed on either side is left out of both estimates.
+file: xtask/src/like_runner.rs
+in: compare
+find: .filter(|case| case.failed)
+replace: .filter(|_| false)
+caught-by:
+    like_runner::tests::a_test_that_failed_on_either_side_is_left_out_of_both_estimates
+
+[break] estimate-a-base-with-no-starts-is-not-said
+rule: A base that wrote down no starts is said to be one.
+file: xtask/src/like_runner.rs
+in: compare
+find: if !head.1.is_empty() && base.1.is_empty() {
+replace: if false {
+caught-by:
+    like_runner::tests::a_base_that_counted_no_starts_is_said_to_be_one
+
+[break] estimate-work-factors-keep-the-starts
+rule: The work factors take the desk's starts, charged at the runner's price, off the runner's time.
+file: xtask/src/like_runner.rs
+in: measure_work
+find: (runner - starts).max(0.0) / seconds
+replace: runner / seconds
+caught-by:
+    like_runner::tests::the_work_factors_give_the_runners_figure_for_the_desks_run
+
+[break] estimate-a-base-without-the-estimate
+rule: `--base` goes with `--like-runner`.
+file: xtask/src/checks.rs
+in: TiersRequest::parse
+find: if request.base.is_some() && (!request.like_runner || reads) {
+replace: if false {
+caught-by:
+    checks::tests::a_tiers_request_is_read
+
+[break] size-a-crate-that-shrank-grew
+rule: pr-size names only the crates that grew.
+file: xtask/src/nonblocking.rs
+in: grew_most
+find: .filter(|(_, growth)| *growth > 0)
+replace: .filter(|_| true)
+caught-by:
+    nonblocking::tests::the_crates_that_grew_most_are_named_largest_first_and_a_new_one_whole
+
+[break] size-growth-under-100-kb-is-explained
+rule: pr-size explains growth past 100 KB, and only that.
+file: xtask/src/nonblocking.rs
+in: growth_text
+find: if growth <= GROWTH_TO_EXPLAIN {
+replace: if growth <= 0 {
+caught-by:
+    nonblocking::tests::growth_past_100_kb_is_explained_by_crate_and_less_is_not
