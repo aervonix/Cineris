@@ -670,8 +670,8 @@ pub struct ConfigOrigin {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigReloadParams {
-    /// Only this session. Absent: every open session, and the core's own
-    /// configuration.
+    /// Only this session. Absent: every session this client has open, and
+    /// the core's own configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<SessionId>,
     /// Load the session with this settings profile (`/profile`). Needs

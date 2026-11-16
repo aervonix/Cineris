@@ -179,3 +179,41 @@ fn what_waits_for_the_next_epoch_is_taken_by_a_compaction_and_not_before() {
         fixtures::PLAIN_MODEL
     );
 }
+
+/// A compaction that ends with no new epoch (here, nothing to compact yet)
+/// leaves what waits waiting: nothing is taken, and the next compaction
+/// that begins an epoch takes it (the review of step 24's first part,
+/// finding 9).
+#[test]
+fn a_compaction_with_no_new_epoch_leaves_what_waits_waiting() {
+    let world = World::new(
+        "reconfigure_no_epoch",
+        [says("One."), says("Goal: the summary.")],
+    );
+    let rig = Setup::new(&world).start(&world);
+    let told = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&told);
+    rig.handle.at_next_epoch(Some(EpochChange {
+        models: Vec::new(),
+        context: Some(EpochContext {
+            keep_recent_tokens: 0,
+            instruction_names: vec!["AGENTS.md".to_owned()],
+            instructions_cap: 4_096,
+        }),
+        taken: Some(Box::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        })),
+    }));
+    world.run(async {
+        rig.handle.compact(None).map_err(|error| *error).unwrap();
+        rig.events.turns(1).await;
+    });
+    assert_eq!(told.load(Ordering::SeqCst), 0, "taken with no new epoch");
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(2).await;
+        rig.handle.compact(None).map_err(|error| *error).unwrap();
+        rig.events.turns(3).await;
+    });
+    assert_eq!(told.load(Ordering::SeqCst), 1);
+}

@@ -598,3 +598,286 @@ fn the_load_uses_the_trust_just_judged() {
         front.close().await;
     });
 }
+
+/// A choice made in the session survives a reload that changes the file's
+/// value of the same key, and a reload that rebuilds every role's model
+/// (a change of `retry`) builds the chosen model, not the file's (the review
+/// of step 24's first part, finding 1).
+#[test]
+fn a_reload_never_undoes_a_model_or_a_level_chosen_in_the_session() {
+    let world = World::new("reload_choices_kept", [says("One."), says("Two.")]);
+    world.user_config("");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        set(
+            &front,
+            SessionSettings {
+                level: Some(Level::ReadOnly),
+                roles: [(
+                    cortex_protocol::model::ModelRole::Main,
+                    cortex_protocol::session::RoleSettings {
+                        model: Some(cortex_protocol::ModelId::new(crate::OTHER_MODEL)),
+                        ..cortex_protocol::session::RoleSettings::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..SessionSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        // The file asks for another level, and a change that rebuilds every
+        // role's model.
+        world.user_config("[permissions]\nmode = \"unrestricted\"\n\n[retry]\nattempts = 2\n");
+        let result = reload(&front, ConfigReloadParams::default()).await;
+        assert!(result.errors.is_empty(), "{result:?}");
+        assert!(
+            !result.applied.contains(&"permissions.mode".to_owned()),
+            "{result:?}"
+        );
+        assert!(
+            !result.pending.contains(&"model.main".to_owned()),
+            "{result:?}"
+        );
+        let state = state_of(&front).await;
+        assert_eq!(state.level, Level::ReadOnly);
+        assert_eq!(
+            state.roles[&cortex_protocol::model::ModelRole::Main]
+                .model
+                .as_str(),
+            crate::OTHER_MODEL,
+            "the chosen model was rebuilt from the file's"
+        );
+        front.close().await;
+    });
+}
+
+/// Trust taken away while a project file is broken is taken away all the
+/// same, from the first look of the session: what trust gave goes (finding
+/// 2).
+#[test]
+fn trust_taken_away_with_a_broken_file_is_taken_away() {
+    let world = World::new("reload_untrust_broken", [says("Done.")]);
+    let (store, key) = trust_store(&world);
+    store.trust(&key, "~/work/app", &[]).unwrap();
+    world.project_config("[retry]\nattempts = 9\n");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        assert_eq!(value(&front, "retry.attempts").await, Some(9.into()));
+        world.project_config("[retry\nattempts = 9\n");
+        assert!(store.forget(&key).unwrap());
+        let result = reload(
+            &front,
+            ConfigReloadParams {
+                changed_only: true,
+                ..ConfigReloadParams::default()
+            },
+        )
+        .await;
+        assert!(
+            !result.errors.is_empty(),
+            "the broken file was not said: {result:?}"
+        );
+        assert_ne!(
+            value(&front, "retry.attempts").await,
+            Some(9.into()),
+            "what trust gave stayed: {result:?}"
+        );
+        assert_eq!(state_of(&front).await.trust, Some(TrustStanding::Untrusted));
+        front.close().await;
+    });
+}
+
+/// Trust taken away is taken away even when another part of the reload
+/// cannot be built (the user's own model, which the project's trusted one
+/// stood in for, is not one the catalog has): the rest waits, and says so
+/// (finding 3).
+#[test]
+fn trust_taken_away_holds_when_another_part_of_the_reload_fails() {
+    let world = World::new("reload_untrust_partial", [says("Done.")]);
+    let (store, key) = trust_store(&world);
+    store.trust(&key, "~/work/app", &[]).unwrap();
+    world.raw_user_config(
+        "[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n\n[model]\nmain = \
+         \"no-such-model\"\n",
+    );
+    world.project_config(&format!("[model]\nmain = \"{}\"\n", crate::MODEL));
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        assert!(store.forget(&key).unwrap());
+        let result = reload(&front, ConfigReloadParams::default()).await;
+        assert!(!result.errors.is_empty(), "{result:?}");
+        assert_eq!(
+            state_of(&front).await.trust,
+            Some(TrustStanding::Untrusted),
+            "trust stayed because the model could not be built: {result:?}"
+        );
+        front.close().await;
+    });
+}
+
+/// A limit a reload adds is kept by the next reload that changes another:
+/// the day's account stays in the ledger (finding 4).
+#[test]
+fn a_limit_a_reload_added_stays_through_the_next() {
+    let world = World::new(
+        "reload_day_kept",
+        [
+            crate::calls(&[("c1", "read", serde_json::json!({"path": "a.txt"}))]),
+            crate::calls(&[("c2", "read", serde_json::json!({"path": "a.txt"}))]),
+            says("Unreached."),
+        ],
+    );
+    world.put("a.txt", "one\n");
+    world.user_config("");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        world.user_config("[limits.day]\nrequests = 2\n");
+        let added = reload(&front, ConfigReloadParams::default()).await;
+        assert!(added.errors.is_empty(), "{added:?}");
+        world.user_config("[limits.day]\nrequests = 2\n\n[limits.session]\nrequests = 50\n");
+        let next = reload(&front, ConfigReloadParams::default()).await;
+        assert!(next.errors.is_empty(), "{next:?}");
+        let end = front.turn("go").await;
+        assert_eq!(
+            end.outcome,
+            cortex_protocol::event::TurnOutcome::Limit,
+            "the day's limit was dropped: {:?}",
+            end.error
+        );
+        front.close().await;
+    });
+}
+
+/// Two reloads of one session never interleave: one held between judging
+/// and loading holds the next before it looks at anything (finding 7).
+#[test]
+fn two_reloads_of_a_session_never_interleave() {
+    let world = World::new("reload_one_at_a_time", [says("Done.")]);
+    let (store, key) = trust_store(&world);
+    store.trust(&key, "~/work/app", &[]).unwrap();
+    world.project_config("[retry]\nattempts = 9\n");
+    let core = world.core();
+    let judged = cortex_testkit::Hold::new(cortex_core::TRUST_JUDGED);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let params = || ConfigReloadParams {
+            session_id: Some(front.session.clone()),
+            ..ConfigReloadParams::default()
+        };
+        let mut first = std::pin::pin!(reload(&front, params()));
+        judged.drive_until_reached(first.as_mut()).await;
+        // Trust is taken away while the first is held, judged trusted.
+        assert!(store.forget(&key).unwrap());
+        let mut second = std::pin::pin!(reload(&front, params()));
+        assert!(crate::poll_once(second.as_mut()).await.is_pending());
+        crate::settle().await;
+        assert!(crate::poll_once(second.as_mut()).await.is_pending());
+        assert_eq!(
+            judged.arrivals(),
+            1,
+            "the second looked while the first was held"
+        );
+        judged.release();
+        first.await;
+        second.await;
+        // The second, which judged after the store changed, committed last.
+        assert_eq!(state_of(&front).await.trust, Some(TrustStanding::Untrusted));
+        assert_ne!(value(&front, "retry.attempts").await, Some(9.into()));
+        front.close().await;
+    });
+}
+
+/// A profile whose reload cannot be applied leaves the session's own
+/// choices as they were (finding 8).
+#[test]
+fn a_profile_that_cannot_be_applied_keeps_the_sessions_choices() {
+    let world = World::new("reload_profile_fails", [says("Done.")]);
+    world.user_config("[stats]\nenabled = false\n\n[profiles.daily.limits.day]\nrequests = 5\n");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        set(
+            &front,
+            SessionSettings {
+                level: Some(Level::ReadOnly),
+                ..SessionSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        let result = reload(
+            &front,
+            ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                profile: Some("daily".to_owned()),
+                ..ConfigReloadParams::default()
+            },
+        )
+        .await;
+        assert!(!result.errors.is_empty(), "{result:?}");
+        // A later change of the file reloads without the profile, with the
+        // choice.
+        world.user_config(
+            "[stats]\nenabled = false\n\n[profiles.daily.limits.day]\nrequests = 5\n\n\
+             [permissions]\nmode = \"unrestricted\"\n",
+        );
+        let later = reload(&front, ConfigReloadParams::default()).await;
+        assert!(later.errors.is_empty(), "{later:?}");
+        assert_eq!(state_of(&front).await.level, Level::ReadOnly);
+        front.close().await;
+    });
+}
+
+/// A file written between the judgement and the load is checked against
+/// the pins on what was loaded: a new allow rule written there is not in
+/// force, and the project's rules are set aside (finding 5).
+#[test]
+fn a_rule_written_between_the_judgement_and_the_load_is_not_in_force() {
+    let world = World::new("reload_written_between", [says("Done.")]);
+    let (store, key) = trust_store(&world);
+    store
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_rules(&[allow_github()])],
+        )
+        .unwrap();
+    world.project_config(ALLOW_GITHUB);
+    let core = world.core();
+    let judged = cortex_testkit::Hold::new(cortex_core::TRUST_JUDGED);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        world.user_config("[retry]\nattempts = 4\n");
+        let mut reloading = std::pin::pin!(reload(
+            &front,
+            ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                ..ConfigReloadParams::default()
+            },
+        ));
+        judged.drive_until_reached(reloading.as_mut()).await;
+        // Judged trusted, the rules as pinned; then the file gains a rule.
+        world.project_config(&format!("{ALLOW_GITHUB}\n{ALLOW_CURL}"));
+        judged.release();
+        let result = reloading.await;
+        let rules = value(&front, "permissions.rules")
+            .await
+            .unwrap_or(Value::Null)
+            .to_string();
+        assert!(
+            !rules.contains("curl"),
+            "loaded trusted unchecked: {rules} {result:?}"
+        );
+        assert_eq!(
+            state_of(&front).await.trust,
+            Some(TrustStanding::RulesChanged)
+        );
+        front.close().await;
+    });
+}

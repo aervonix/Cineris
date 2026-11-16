@@ -36,8 +36,8 @@ caught-by:
 rule: A reload judges the project's trust again and loads with what it judged.
 file: crates/cortex-core/src/reload.rs
 in: judge
-find: rules: judged.rules.unwrap_or(config.trusted.rules)
-replace: rules: config.trusted.rules
+find: rules: judged.rules.unwrap_or(in_force.rules)
+replace: rules: in_force.rules
 caught-by:
     cortex-core::it reload::trust_taken_away_from_outside_is_seen_by_the_next_look
     cortex-core::it reload::an_allow_rule_added_while_trusted_is_not_in_force
@@ -64,7 +64,7 @@ caught-by:
 rule: A broken file is said once by the looks, and again only when the person asks.
 file: crates/cortex-core/src/reload.rs
 in: load
-find: if said && !asked.explicit {
+find: if said && !asked.explicit && trusted == in_force {
 replace: if said && asked.explicit && false {
 caught-by:
     cortex-core::it reload::a_broken_file_keeps_the_configuration_and_is_said_once
@@ -73,8 +73,8 @@ caught-by:
 rule: The person who asks (`/reload`) is told a standing error again.
 file: crates/cortex-core/src/reload.rs
 in: load
-find: if said && !asked.explicit {
-replace: if said {
+find: if said && !asked.explicit && trusted == in_force {
+replace: if said && trusted == in_force {
 caught-by:
     cortex-core::it reload::a_broken_file_keeps_the_configuration_and_is_said_once
 
@@ -99,7 +99,7 @@ caught-by:
 [break] nothing-waits-for-an-epoch
 rule: A key that takes effect at the next epoch waits for it, and is taken when a compaction begins one.
 file: crates/cortex-core/src/reload.rs
-in: set_next_epoch
+in: install_epoch
 find:
     live.handle.at_next_epoch(Some(EpochChange {
         models,
@@ -269,7 +269,90 @@ caught-by:
 rule: The load uses the trust just judged: a change of the trust store between the judgement and the load is the next look's.
 file: crates/cortex-core/src/reload.rs
 in: load
-find: let options = config.options_with(trusted.rules, asked.profile.as_deref(), keep_choices);
-replace: let now = assemble::judge(inner, config.state.as_ref(), &config.root, &config.options_with(true, asked.profile.as_deref(), keep_choices)).rules.unwrap_or(trusted.rules); let options = config.options_with(now, asked.profile.as_deref(), keep_choices);
+find: config.options_with(trusted.rules, asked.profile.as_deref(), keep_choices)
+replace: config.options_with(assemble::judge(inner, config.state.as_ref(), &config.root, &config.options_with(true, asked.profile.as_deref(), keep_choices)).rules.unwrap_or(trusted.rules), asked.profile.as_deref(), keep_choices)
 caught-by:
     cortex-core::it reload::the_load_uses_the_trust_just_judged
+
+# Found by the review of step 24's first part.
+
+[break] two-reloads-interleave
+rule: One reload of a session at a time, from its look to its commit.
+file: crates/cortex-core/src/reload.rs
+in: reload_session
+find: let _one = live.reloading.lock().await;
+replace: let _one = ();
+caught-by:
+    cortex-core::it reload::two_reloads_of_a_session_never_interleave
+
+[break] a-trusted-load-is-not-checked-again
+rule: A load trusted is checked against the pins on what it loaded.
+file: crates/cortex-core/src/reload.rs
+in: load
+find: if !approved {
+replace: if approved && !approved {
+caught-by:
+    cortex-core::it reload::a_rule_written_between_the_judgement_and_the_load_is_not_in_force
+
+[break] the-files-are-not-watched-from-the-start
+rule: A session's files are stamped as it is put together, so trust taken away with a broken file is taken away from the first look.
+file: crates/cortex-core/src/assemble.rs
+in: trust
+find: let made = |live: cortex_config::LiveConfig| ((*live.current()).clone(), Some(live));
+replace: let made = |live: cortex_config::LiveConfig| ((*live.current()).clone(), None::<cortex_config::LiveConfig>);
+caught-by:
+    cortex-core::it reload::trust_taken_away_with_a_broken_file_is_taken_away
+
+[break] lowered-trust-waits-for-the-rest
+rule: Trust taken away is applied even when another part of the reload cannot be built.
+file: crates/cortex-core/src/reload.rs
+in: apply
+find: if !ready && lowered {
+replace: if !ready && lowered && false {
+caught-by:
+    cortex-core::it reload::trust_taken_away_holds_when_another_part_of_the_reload_fails
+
+[break] the-accounts-are-not-kept
+rule: The accounts a reload changes are kept, so the next change of a limit starts from them.
+file: crates/cortex-core/src/reload.rs
+in: put
+find: lock(&live.accounts).clone_from(&accounts);
+replace: let _ = &live.accounts;
+caught-by:
+    cortex-core::it reload::a_limit_a_reload_added_stays_through_the_next
+
+[break] a-chosen-key-is-applied-over
+rule: A key the person chose in the session is taken into the configuration and never applied over.
+file: crates/cortex-core/src/reload.rs
+in: apply
+find: if chosen.contains(&change.key.to_string()) {
+replace: if chosen.contains(&change.key.to_string()) && false {
+caught-by:
+    cortex-core::it reload::a_reload_never_undoes_a_model_or_a_level_chosen_in_the_session
+
+[break] a-failed-profile-drops-the-choices
+rule: A profile's reload drops the session's own choices only once it is applied.
+file: crates/cortex-core/src/reload.rs
+in: load
+find: profile: latest.is_some().then(|| asked.profile.clone()).flatten()
+replace: profile: { if asked.profile.is_some() { config.choices.clear(); } latest.is_some().then(|| asked.profile.clone()).flatten() }
+caught-by:
+    cortex-core::it reload::a_profile_that_cannot_be_applied_keeps_the_sessions_choices
+
+[break] an-emptied-table-stays
+rule: Removing a key removes the tables it leaves empty.
+file: crates/cortex-config/src/merge.rs
+in: remove
+find: if emptied {
+replace: if emptied && false {
+caught-by:
+    cortex-config::it reloading::taking_a_key_that_went_leaves_no_empty_table
+
+[break] the-epoch-is-taken-as-a-compaction-begins
+rule: What waits for the next epoch is taken when the compaction's new epoch builds its prompt, not when a compaction begins.
+file: crates/cortex-agent/src/turn/epochs.rs
+in: take_next_epoch
+find: self.epoch_waiting = Some(change);
+replace: self.epoch_waiting = Some(change); self.take_epoch_models();
+caught-by:
+    cortex-agent::it reconfigure::a_compaction_with_no_new_epoch_leaves_what_waits_waiting

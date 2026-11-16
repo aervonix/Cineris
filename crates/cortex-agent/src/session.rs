@@ -180,7 +180,8 @@ pub(crate) struct Inbox {
     pub(crate) closed: bool,
     /// Settings a reload changed, for the loop's next request.
     pub(crate) reconfigured: Option<crate::reconfigure::Reconfigure>,
-    /// What waits for the next context epoch, taken as a compaction begins.
+    /// What waits for the next context epoch, taken by the compaction that
+    /// begins one.
     pub(crate) next_epoch: Option<crate::reconfigure::EpochChange>,
     /// The project's standing since a reload judged its trust again, in
     /// place of the one the session opened with.

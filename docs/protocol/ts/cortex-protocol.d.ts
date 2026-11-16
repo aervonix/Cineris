@@ -377,7 +377,7 @@ export interface ConfigReloadParams {
   changed_only?: boolean;
   /** Load the session with this settings profile (`/profile`). Needs `session_id`, and a `user` client. The session's own choices of level, models and speeds give way to the profile's. */
   profile?: string | null;
-  /** Only this session. Absent: every open session, and the core's own configuration. */
+  /** Only this session. Absent: every session this client has open, and the core's own configuration. */
   session_id?: SessionId | null;
 }
 

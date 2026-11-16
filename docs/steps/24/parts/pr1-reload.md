@@ -7,7 +7,7 @@ The first of step 24's three pull requests: `config/reload` through the core, th
 - **`config/reload`** (`cortex-core`'s `reload`): the session's configuration in force and last loaded (`SessionConfig`), the look at the configuration's files and the trust store's (`LiveConfig::has_changed`, a `WatchList` of `trust.toml`), trust judged first (`assemble::judge`), one load with it (`LiveConfig::update`), the session's reload checked whole (`prepare`) and applied (`put`), the keys that wait given to the loop (`set_next_epoch`), and `config.changed` to every client of a session it changed. The core's own configuration (`CoreConfig`) takes its `at once` keys (`log.level`, `stats.retention`, `usage.*`) and keeps the rest. The look runs before each turn's prompt when no turn runs.
 - **The configuration in force is a mix,** `cortex-config`'s `Loaded::taking`, by key, from the schema's declarations.
 - **The fourth effect, `next session`,** for `sandbox.enabled`, `sandbox.protect`, `shell.*`, `compat.*`, `index.map_wait` and `index.map`; `usage.*` and `stats.retention` at once. The reference is regenerated.
-- **The loop's two slots** (`cortex-agent`'s `reconfigure`): `SessionHandle::reconfigure` (the accounts and the turn's budget, the compaction's thresholds, `verify.rounds`), taken as a request is prepared; `SessionHandle::at_next_epoch` (the context's settings, taken as a compaction begins; the roles' models, as its new epoch's prompt is built). `Account::with_budget`, `Ledger::set_accounts` and `set_turn_budget`; `SessionHandle::set_trust`.
+- **The loop's two slots** (`cortex-agent`'s `reconfigure`): `SessionHandle::reconfigure` (the accounts and the turn's budget, the compaction's thresholds, `verify.rounds`), taken as a request is prepared; `SessionHandle::at_next_epoch` (the context's settings and the roles' models, taken by the compaction that begins an epoch, as its new prompt is built). `Account::with_budget`, `Ledger::set_accounts` and `set_turn_budget`; `SessionHandle::set_trust`.
 - **What a reload reaches, made live:** the verifier's settings (`VerifyLive`), the sandbox's launcher (`SessionSandbox::set_grant`), the shell's trust and key variables (`cortex_tools::ShellLive`), the base capture's trust (`BaseCapture::start_watching`), the statistics' retention (`Recorder::set_retention`), the profile's and the map's budgets, the log's level (`CoreOptions::log`, given by the interactive binary unless `--log-level` or `CORTEX_LOG` chose it).
 - **`session/set` records its choices** (`reload::chosen`): they outrank the files, and a role so set no longer waits for the next epoch.
 - **An epoch read without variants** is fixed to those in force as it is read (`Context::fix_variants`).
@@ -20,7 +20,7 @@ The first of step 24's three pull requests: `config/reload` through the core, th
 |---|---|---|
 | `index.map` at the next epoch | `next session`, with the other keys a session is made with once | Whether a session has a map at all is decided as it is put together (the loop's `ContextParts::map`); `index.map_tokens` does wait for the next epoch. |
 | The base capture's trust lowered at once | Read where the capture decides what to read (`start_watching`) | The capture runs once, as the session opens; a reload that lowers trust after that point has nothing left to stop. |
-| A hold point between the look-ahead and the load, in the trust test | Not built | The look-ahead's loads are local to `assemble::judge` and never reach `SessionConfig`; the test that a new allow rule is not in force after the reload holds the outcome. |
+| `keep_recent_tokens` taken before the compaction chooses what to keep | Taken with the rest as the new epoch's prompt is built, for the compactions after | A compaction that begins no epoch must leave the epoch as it was (the review, finding 9). |
 | `/reload --now` | An item of its own | The coordinator's answer. |
 
 ## Tests
@@ -48,3 +48,27 @@ The first of step 24's three pull requests: `config/reload` through the core, th
 | The panels' reads run beside the lane; a refresh never waits in it | `cortex-rpc lane::tests::the_panels_reads_run_beside_the_lane_and_a_refresh_never_waits_in_it` |
 
 The breaks are `mutations/step-24.breaks`. Seven breaks of earlier steps follow the code this part moved (`set_level` into `put_engine`, the launcher behind a lock, the effects of the keys that changed, the base capture's flag).
+
+## The review
+
+An independent reviewer read the whole diff against the design and the specification. Its findings, and what each changed; each fix has a test and a break in `mutations/step-24.breaks`.
+
+| Finding | Fix | Test |
+|---|---|---|
+| A reload that rebuilds every role's model (`retry`) put back the file's model over one chosen with `/model`, and listed chosen keys as waiting | A key chosen in the session is taken into the configuration in force, whatever its effect, and never applied over or listed | `reload::a_reload_never_undoes_a_model_or_a_level_chosen_in_the_session` (a level the default does not equal, a chosen model, and a change of `retry`) |
+| Trust taken away while a file is broken was lost: the session's files were first stamped by its first reload, which could not load | The files are stamped as the session is put together, by the load it was made from (`assemble::trust` loads through `LiveConfig`, so no load is added); a load that fails still lowers what needs no loading | `reload::trust_taken_away_with_a_broken_file_is_taken_away` |
+| Trust taken away was refused whole when another part of the reload could not be built | What can fail for reasons of its own (models, providers, retry, a day's limit) waits and is said; trust's part is applied | `reload::trust_taken_away_holds_when_another_part_of_the_reload_fails` |
+| The accounts a reload changed were never kept: the next change of a limit started from the session's first | Kept in `put` | `reload::a_limit_a_reload_added_stays_through_the_next` |
+| A file written between the judgement's look-ahead and the load was loaded trusted unchecked | A load made trusted is checked against the pins on what it loaded (`assemble::pins_approved`), and made again untrusted when they differ | `reload::a_rule_written_between_the_judgement_and_the_load_is_not_in_force` (held at the point between the two) |
+| Files were read on the core's thread (the grant's roots, the launcher's policy) | Built inside `Core::blocking`; the launcher is given a ready policy (`SessionSandbox::policy_for`, `set_policy`) | By reading; the lint's allow is the module's, as before |
+| Two reloads of one session could interleave, an older one committing over a newer | One reload of a session at a time, look to commit (`Live::reloading`); `session/set`'s choices wait for it too | `reload::two_reloads_of_a_session_never_interleave` (the first held, the second does not reach the point) |
+| A `/profile` whose apply failed still dropped the session's choices | The profile and the dropped choices are committed only once applied | `reload::a_profile_that_cannot_be_applied_keeps_the_sessions_choices` |
+| What waits for the next epoch was taken when a compaction began, and a compaction that began no epoch left it half in force | Taken with the models as the new epoch's prompt is built | `cortex-agent::it reconfigure::a_compaction_with_no_new_epoch_leaves_what_waits_waiting` |
+| `taken` recorded the latest configuration, not what the loop took | The change holds the configuration it was built from | By reading |
+| The configuration's lock was held across files' reads, stalling `config/get` and the loop's `taken` | The files are a lock of their own (`Watched`), which only a reload takes | By reading |
+| What waits for the next epoch was not checked | Built and checked with the rest, before anything is applied | By reading |
+| Removing a key left an empty table, an entry of defaults | `merge::remove` removes the tables it leaves empty | `cortex-config::it reloading::taking_a_key_that_went_leaves_no_empty_table` |
+| The core's own reload said every changed key as applied | It says only the keys it acts on (`log.level`, `stats.retention`, `usage.*`) | `reload::a_reload_never_undoes_a_model_or_a_level_chosen_in_the_session` |
+| Docs: "every open session"; `load` lost its doc; 08's "checked whole" | Said as built | — |
+
+Left, as the reviewer's "should consider": a test that a rule held back is held back by the engine's own decision as well as by `config/get`; and `ChecksProfile`'s lines, which a reload of `verify.commands` does not change (a check is still chosen from the verifier's own settings, which do change).
