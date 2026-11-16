@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ErrorData;
 use crate::ids::{CallId, EntryId, ItemId, SessionId, Timestamp, TurnId};
-use crate::item::{Item, Plan, StopReason};
+use crate::item::{ArtifactRef, Item, Plan, StopReason};
 use crate::jsonrpc::RequestId;
 use crate::open::{open_enum, open_union};
 use crate::project::ProjectEntry;
@@ -296,6 +296,9 @@ open_union! {
         SpeedCooldown(SpeedCooldown) => "speed_cooldown",
         /// Anything else.
         Info(InfoNotice) => "info",
+        /// The project's checks: a round starting or ended, or checks
+        /// offered (since step 19).
+        Verification(VerificationNotice) => "verification",
     }
 }
 
@@ -313,6 +316,7 @@ impl Notice {
             Self::SpeedFallback(notice) => Some(&notice.message),
             Self::SpeedCooldown(notice) => Some(&notice.message),
             Self::Info(notice) => Some(&notice.message),
+            Self::Verification(notice) => Some(&notice.message),
             Self::Unknown(unknown) => unknown.message(),
         }
     }
@@ -367,7 +371,114 @@ open_enum! {
         /// They did not run: no files changed, no check is known, or the
         /// mode is off.
         Skipped => "skipped",
+        /// None failed, and some did not run to a result: blocked by the
+        /// sandbox, stopped at their time limit, skipped or not allowed
+        /// (since step 19).
+        Incomplete => "incomplete",
     }
+}
+
+open_enum! {
+    /// Which moment of verification a [`VerificationNotice`] tells of.
+    pub enum VerificationPhase {
+        /// A round is starting: the checks it will run.
+        Started => "started",
+        /// A round ended: how each check ended, and the verdict.
+        Finished => "finished",
+        /// The checks did not run, and are offered: `verify.mode` is
+        /// `ask`.
+        Offered => "offered",
+    }
+}
+
+open_enum! {
+    /// Where a check came from.
+    pub enum CheckSource {
+        /// The user's own `verify.commands`.
+        User => "user",
+        /// A test or check command of the project profile that the user
+        /// accepted.
+        Profile => "profile",
+    }
+}
+
+open_enum! {
+    /// How one check ended.
+    pub enum CheckOutcome {
+        /// It exited with success.
+        Passed => "passed",
+        /// It failed: the model is told.
+        Failed => "failed",
+        /// It ran past its time limit and was stopped, and is not taken
+        /// for the model's doing.
+        TimedOut => "timed_out",
+        /// It failed, and passed when run again: it is known to be flaky.
+        Flaky => "flaky",
+        /// The sandbox blocked something it needed, such as the network.
+        Blocked => "blocked",
+        /// It was not started, for its time: it usually takes longer than
+        /// the limit, or too little of it was left.
+        Skipped => "skipped",
+        /// It may not run unasked, or could not be started.
+        NotRun => "not_run",
+    }
+}
+
+/// One check, as a [`VerificationNotice`] tells of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CheckReport {
+    /// The command line.
+    pub command: String,
+    /// The directory it runs in, relative to the workspace root. Absent:
+    /// the root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Where it came from.
+    pub source: CheckSource,
+    /// The project profile's entry it came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<EntryId>,
+    /// How it ended. Absent in a notice of a round that is starting, and
+    /// of checks that are offered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<CheckOutcome>,
+    /// Its exit code, when it exited with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// How long it ran, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// What else to say of it, in words: why it was not run, what it left
+    /// running, what the sandbox blocked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// All of what it printed, when the notice to the model held less.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactRef>,
+}
+
+/// Notice: the project's checks, at the end of a turn that changed files
+/// (`docs/architecture/15-efficiency.md`, "Automatic verification"; since
+/// step 19).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct VerificationNotice {
+    /// The notice in words.
+    pub message: String,
+    /// Which moment it tells of.
+    pub phase: VerificationPhase,
+    /// The round, counted from 1 in its turn. 0 in a notice that offers
+    /// the checks.
+    pub round: u32,
+    /// The most rounds the turn gets.
+    pub rounds: u32,
+    /// The checks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<CheckReport>,
+    /// The turn's verdict so far, when a round ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verification>,
 }
 
 /// The turn is over and nothing automatic remains: no retry pending, no

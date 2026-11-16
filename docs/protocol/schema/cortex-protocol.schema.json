@@ -539,6 +539,144 @@
       "description": "One tool call. The provider chose it, so it is unique only within its session.",
       "type": "string"
     },
+    "CheckOutcome": {
+      "anyOf": [
+        {
+          "const": "passed",
+          "description": "It exited with success."
+        },
+        {
+          "const": "failed",
+          "description": "It failed: the model is told."
+        },
+        {
+          "const": "timed_out",
+          "description": "It ran past its time limit and was stopped, and is not taken for the model's doing."
+        },
+        {
+          "const": "flaky",
+          "description": "It failed, and passed when run again: it is known to be flaky."
+        },
+        {
+          "const": "blocked",
+          "description": "The sandbox blocked something it needed, such as the network."
+        },
+        {
+          "const": "skipped",
+          "description": "It was not started, for its time: it usually takes longer than the limit, or too little of it was left."
+        },
+        {
+          "const": "not_run",
+          "description": "It may not run unasked, or could not be started."
+        },
+        {
+          "description": "A value this version of the protocol does not know. Receivers need a default branch.",
+          "type": "string",
+          "x-cortex-open": true
+        }
+      ],
+      "description": "How one check ended."
+    },
+    "CheckReport": {
+      "description": "One check, as a [`VerificationNotice`] tells of it.",
+      "properties": {
+        "artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "All of what it printed, when the notice to the model held less."
+        },
+        "command": {
+          "description": "The command line.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "The directory it runs in, relative to the workspace root. Absent:\nthe root.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duration_ms": {
+          "description": "How long it ran, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "entry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntryId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The project profile's entry it came from."
+        },
+        "exit_code": {
+          "description": "Its exit code, when it exited with one.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "note": {
+          "description": "What else to say of it, in words: why it was not run, what it left\nrunning, what the sandbox blocked.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CheckOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it ended. Absent in a notice of a round that is starting, and\nof checks that are offered."
+        },
+        "source": {
+          "$ref": "#/$defs/CheckSource",
+          "description": "Where it came from."
+        }
+      },
+      "required": [
+        "command",
+        "source"
+      ],
+      "type": "object"
+    },
+    "CheckSource": {
+      "anyOf": [
+        {
+          "const": "user",
+          "description": "The user's own `verify.commands`."
+        },
+        {
+          "const": "profile",
+          "description": "A test or check command of the project profile that the user accepted."
+        },
+        {
+          "description": "A value this version of the protocol does not know. Receivers need a default branch.",
+          "type": "string",
+          "x-cortex-open": true
+        }
+      ],
+      "description": "Where a check came from."
+    },
     "ClientCapabilities": {
       "description": "What a client can handle. A capability that is absent is `false`: the\nserver never sends what the client did not ask for.",
       "properties": {
@@ -3430,6 +3568,25 @@
           "description": "Anything else."
         },
         {
+          "allOf": [
+            {
+              "properties": {
+                "kind": {
+                  "const": "verification"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "$ref": "#/$defs/VerificationNotice"
+            }
+          ],
+          "description": "The project's checks: a round starting or ended, or checks offered (since step 19)."
+        },
+        {
           "description": "A variant this version of the protocol does not know. Receivers skip it or show it generically.",
           "properties": {
             "kind": {
@@ -3442,7 +3599,8 @@
                   "instructions",
                   "speed_fallback",
                   "speed_cooldown",
-                  "info"
+                  "info",
+                  "verification"
                 ]
               },
               "type": "string"
@@ -7434,12 +7592,88 @@
           "description": "They did not run: no files changed, no check is known, or the mode is off."
         },
         {
+          "const": "incomplete",
+          "description": "None failed, and some did not run to a result: blocked by the sandbox, stopped at their time limit, skipped or not allowed (since step 19)."
+        },
+        {
           "description": "A value this version of the protocol does not know. Receivers need a default branch.",
           "type": "string",
           "x-cortex-open": true
         }
       ],
       "description": "What the project's checks said at the end of a turn."
+    },
+    "VerificationNotice": {
+      "description": "Notice: the project's checks, at the end of a turn that changed files\n(`docs/architecture/15-efficiency.md`, \"Automatic verification\"; since\nstep 19).",
+      "properties": {
+        "checks": {
+          "description": "The checks.",
+          "items": {
+            "$ref": "#/$defs/CheckReport"
+          },
+          "type": "array"
+        },
+        "message": {
+          "description": "The notice in words.",
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/VerificationPhase",
+          "description": "Which moment it tells of."
+        },
+        "round": {
+          "description": "The round, counted from 1 in its turn. 0 in a notice that offers\nthe checks.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rounds": {
+          "description": "The most rounds the turn gets.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "verdict": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Verification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The turn's verdict so far, when a round ended."
+        }
+      },
+      "required": [
+        "message",
+        "phase",
+        "round",
+        "rounds"
+      ],
+      "type": "object"
+    },
+    "VerificationPhase": {
+      "anyOf": [
+        {
+          "const": "started",
+          "description": "A round is starting: the checks it will run."
+        },
+        {
+          "const": "finished",
+          "description": "A round ended: how each check ended, and the verdict."
+        },
+        {
+          "const": "offered",
+          "description": "The checks did not run, and are offered: `verify.mode` is `ask`."
+        },
+        {
+          "description": "A value this version of the protocol does not know. Receivers need a default branch.",
+          "type": "string",
+          "x-cortex-open": true
+        }
+      ],
+      "description": "Which moment of verification a [`VerificationNotice`] tells of."
     },
     "WorkspaceFilesParams": {
       "description": "`workspace/files`: the paths of a session's workspace, for a front end's\nfile completion (since step 23).",

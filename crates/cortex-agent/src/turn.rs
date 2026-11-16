@@ -30,7 +30,7 @@ use cortex_llm::{CooldownChange, ModelEvent, ModelRequest, SpeedCooldowns, Speed
 use cortex_protocol::event::{
     Event, InfoNotice, ItemCompleted, ItemDelta, ItemKind, ItemRef, ItemStarted, LimitNotice,
     Notice, RetryNotice, SessionIdle, TurnCompleted, TurnOutcome, TurnStarted, UsageUpdated,
-    Verification,
+    Verification, VerificationNotice,
 };
 use cortex_protocol::item::{
     AssistantMessageItem, Delivery, NoticeItem, NoticeSource, UserMessageItem,
@@ -218,9 +218,15 @@ struct Turn {
     usage: UsageTotals,
     requests: u64,
     tool_calls: u64,
-    /// The files its tools have written, sorted.
+    /// What its calls have changed, sorted (`cortex_tools::changed_by`).
     written: Vec<AbsPath>,
+    /// Whether a call changed something since the last round of the
+    /// project's checks: what sends the turn to another round.
+    changed: bool,
+    /// The rounds of checks it has run, and the time they took.
     verify_rounds: u32,
+    verify_used: Duration,
+    /// The verdict of its last round of checks.
     verification: Option<Verification>,
     /// Why the last response ended.
     stop: Option<StopReason>,
@@ -677,7 +683,9 @@ impl Session {
             requests: 0,
             tool_calls: 0,
             written: Vec::new(),
+            changed: false,
             verify_rounds: 0,
+            verify_used: Duration::ZERO,
             verification: None,
             stop: None,
         };
@@ -1425,7 +1433,13 @@ impl Session {
                  continue.",
             ))),
             _ => {
-                if !turn.written.is_empty() && turn.verify_rounds < self.config.verify_rounds {
+                // A round of the project's checks when something changed
+                // since the last, rounds are left, and the turn's time
+                // limits leave time to run them.
+                if turn.changed
+                    && turn.verify_rounds < self.config.verify_rounds
+                    && self.ledger.time_left() != Some(Duration::ZERO)
+                {
                     Phase::Verifying
                 } else {
                     Phase::Finishing(End::completed())
@@ -1519,6 +1533,7 @@ impl Session {
                 approval: finished.approval,
             }));
             signature.push_str(&finished.signature);
+            turn.changed |= !finished.written.is_empty();
             turn.written.extend(finished.written);
             let item = Item::ToolResult(finished.item);
             self.store
@@ -1580,20 +1595,43 @@ impl Session {
     async fn verify(&mut self, turn: &mut Turn) -> Phase {
         self.enter(TurnState::Verifying);
         turn.verify_rounds += 1;
+        turn.changed = false;
+        let started = self.clock.monotonic();
+        self.times.enter(started, Spend::Verification);
+        let emitter = Arc::clone(&self.env.emitter);
+        let turn_id = turn.id.clone();
+        let notify = move |notice: VerificationNotice| {
+            emitter.emit(
+                Some(&turn_id),
+                Event::Notice(Notice::Verification(notice)),
+            );
+        };
         let cx = VerifyCx {
             session: &self.shared.info.id,
             turn: &turn.id,
+            number: turn.number,
             round: turn.verify_rounds,
+            rounds: self.config.verify_rounds,
             written: &turn.written,
-            cancel: turn.cancel.child(),
+            used: turn.verify_used,
+            deadline: self.ledger.time_left(),
+            cancel: &turn.cancel,
+            kill: &turn.kill,
+            notify: &notify,
         };
-        self.times
-            .enter(self.clock.monotonic(), Spend::Verification);
-        let verified = turn.cancel.race(self.verifier.verify(cx)).await;
-        self.times.enter(self.clock.monotonic(), Spend::Harness);
-        let Some(outcome) = verified else {
+        // Not raced against the turn's token, as a tool round's calls are
+        // not: on an interrupt the verifier stops what it runs and returns,
+        // and the loop waits for it, so that nothing of a check is left
+        // running and what a check changed is recorded for undo.
+        let outcome = self.verifier.verify(cx).await;
+        let ended = self.clock.monotonic();
+        turn.verify_used += ended.saturating_sub(started);
+        self.times.enter(ended, Spend::Harness);
+        if turn.cancel.is_cancelled() {
+            // Nothing was added to the conversation: the history is what it
+            // was after the last tool round.
             return Phase::Interrupted(None);
-        };
+        }
         match outcome {
             VerifyOutcome::Passed => {
                 turn.verification = Some(Verification::Passed);
@@ -1603,11 +1641,16 @@ impl Session {
                 turn.verification = Some(Verification::Skipped);
                 Phase::Finishing(End::completed())
             }
+            VerifyOutcome::Incomplete => {
+                turn.verification = Some(Verification::Incomplete);
+                Phase::Finishing(End::completed())
+            }
             VerifyOutcome::Failed { report } => {
                 turn.verification = Some(Verification::Failed);
                 if turn.verify_rounds >= self.config.verify_rounds {
                     // The round limit: the turn completes and reports the
-                    // failing state.
+                    // failing state to the user, and the model is not
+                    // sent it (`docs/architecture/15-efficiency.md`).
                     return Phase::Finishing(End::completed());
                 }
                 match self
@@ -1618,6 +1661,37 @@ impl Session {
                     Err(error) => Phase::Finishing(End::store(&error)),
                 }
             }
+            VerifyOutcome::Stopped { reason } => {
+                if turn.verification != Some(Verification::Failed) {
+                    turn.verification = Some(Verification::Incomplete);
+                }
+                // The model is told why, as a stopped tool round tells it
+                // in the call's result.
+                let note = format!(
+                    "The project's checks were stopped, and this turn with them: {reason}"
+                );
+                if let Err(error) = self
+                    .record_notice(turn, NoticeSource::Verification, note)
+                    .await
+                {
+                    return Phase::Finishing(End::store(&error));
+                }
+                let message = format!("A check stopped the turn: {reason}");
+                self.notify(
+                    turn,
+                    Notice::Info(InfoNotice {
+                        message: message.clone(),
+                    }),
+                );
+                Phase::Finishing(End {
+                    outcome: TurnOutcome::Denied,
+                    error: Some(ErrorData::new(
+                        ErrorKind::Permission,
+                        "permission_denied",
+                        message,
+                    )),
+                })
+            }
         }
     }
 
@@ -1627,9 +1701,16 @@ impl Session {
         self.enter(TurnState::Finishing);
         self.request_span = tracing::Span::none();
         let ended = self.clock.monotonic();
+        // The verdict of the turn's checks, whenever a round ran, however
+        // the turn then ended (one that ran out of time after a failed round
+        // still says so); `skipped` for a turn that completed with none.
+        let verification = match (&turn.verification, &end.outcome) {
+            (Some(verdict), _) => Some(verdict.clone()),
+            (None, TurnOutcome::Completed) => Some(Verification::Skipped),
+            (None, _) => None,
+        };
         let completed = TurnCompleted {
-            verification: (end.outcome == TurnOutcome::Completed)
-                .then(|| turn.verification.clone().unwrap_or(Verification::Skipped)),
+            verification,
             outcome: end.outcome,
             stop_reason: turn.stop.clone(),
             error: end.error,

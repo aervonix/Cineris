@@ -58,6 +58,7 @@ mod streaming;
 mod summaries;
 mod timing;
 mod transitions;
+mod verifying;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
@@ -431,7 +432,10 @@ pub enum Kind {
 /// - `session`: the call changes the session, as `plan` and `remember` do;
 /// - `link`: `[target, name]`: when it runs, make `name` in the workspace a
 ///   link to the directory `target`, as `ln -s target name` would;
-/// - `bad`: refuse the arguments when the call is planned.
+/// - `bad`: refuse the arguments when the call is planned;
+/// - `payload`: the result's payload, as a tool's: `{"kind": "unchanged"}`
+///   for a write that found its content there, `{"changes": …}` for a
+///   command whose look found what it changed.
 pub struct Probe {
     spec: ToolSpec,
     kind: Kind,
@@ -450,6 +454,7 @@ struct ProbeArgs {
     fail: bool,
     /// The link to make, and the directory it leads to.
     link: Option<(PathBuf, String)>,
+    payload: Option<Json>,
 }
 
 impl Probe {
@@ -513,6 +518,7 @@ impl Tool for Probe {
                 record: args.get("record").is_some(),
                 fail: args.get("fail").is_some(),
                 link,
+                payload: args.get("payload").cloned(),
             },
         );
         match (self.kind, path) {
@@ -591,10 +597,14 @@ impl Tool for Probe {
                 make_link(target, link);
             }
             self.log.push(format!("end {name} {label}"));
-            if args.fail {
+            let result = if args.fail {
                 ToolResult::error(format!("{name} {label} failed"))
             } else {
                 ToolResult::success(format!("{name} {label} ok"))
+            };
+            match args.payload {
+                Some(payload) => result.with_payload(payload),
+                None => result,
             }
         })
     }

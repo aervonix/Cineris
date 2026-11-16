@@ -167,8 +167,6 @@ struct Footprint {
     /// The files it reads one by one: what the table of seen files may
     /// have recorded for it.
     reads: Vec<AbsPath>,
-    /// The files it writes.
-    writes: Vec<AbsPath>,
 }
 
 impl Footprint {
@@ -191,16 +189,13 @@ impl Footprint {
                 || !matches!(plan.concurrency, Concurrency::ReadOnly),
             paths: Vec::new(),
             reads: Vec::new(),
-            writes: Vec::new(),
         };
         for effect in &plan.effects {
             if let Some(path) = effect.path() {
                 footprint.paths.push(path.abs().clone());
             }
-            match effect {
-                Effect::Read(path) => footprint.reads.push(path.abs().clone()),
-                Effect::Write(path) => footprint.writes.push(path.abs().clone()),
-                _ => {}
+            if let Effect::Read(path) = effect {
+                footprint.reads.push(path.abs().clone());
             }
         }
         footprint
@@ -1512,6 +1507,7 @@ impl Round {
 
     /// The results, in the model's call order. The round must be settled.
     pub(crate) fn finish(&mut self) -> Vec<Finished> {
+        let root = self.env.workspace.paths.root().clone();
         std::mem::take(&mut self.calls)
             .into_iter()
             .filter_map(|call| {
@@ -1519,9 +1515,18 @@ impl Round {
                     debug_assert!(false, "every call of a settled round has its result");
                     return None;
                 };
-                let written = match (&outcome.item.outcome, call.footprint) {
-                    (ToolOutcome::Success, Some(footprint)) => footprint.writes,
-                    _ => Vec::new(),
+                // What the call changed, from its result: a command's
+                // declared write of the whole workspace is not a change,
+                // and a write that found its content there made none
+                // (`cortex_tools::changed_by`, step 19).
+                let written = match &call.footprint {
+                    Some(footprint) => cortex_tools::changed_by(
+                        &footprint.shadow.effects,
+                        &outcome.item.outcome,
+                        outcome.item.payload.as_ref(),
+                        &root,
+                    ),
+                    None => Vec::new(),
                 };
                 let signature = format!(
                     "{}\u{0}{}\u{0}{}\u{0}{}\u{0}",
