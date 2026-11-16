@@ -653,8 +653,11 @@ fn ends_while_the_lane_waits(session: &mut Session, ending: Ending, waiting: &st
         took < ENDING,
         "{ending:?} while {waiting}: the application took {took:?} to end"
     );
+    // `ExitStatus` says "exit status" on Unix and "exit code" on Windows.
+    let code = ending.code();
     assert!(
-        shown.contains(&format!("{RESTORED} (exit status: {})", ending.code())),
+        shown.contains(&format!("{RESTORED} (exit status: {code})"))
+            || shown.contains(&format!("{RESTORED} (exit code: {code})")),
         "{ending:?} while {waiting}: {shown}"
     );
     let modes = session.screen().modes();
