@@ -2537,3 +2537,24 @@ find: metadata.is_dir()
 replace: metadata.is_file()
 caught-by:
     assemble::resolve_dir_tests::a_folder_missing_several_levels_deep_resolves_as_it_did
+
+# The capture input of `try`: a passing test's output shown.
+
+[break] try-capture-no-shows-nothing
+rule: `-f capture=no` passes `--no-capture` to nextest, so that a passing test's output is in the log.
+file: xtask/src/try_run.rs
+in: Inputs::with_filters
+find: nextest.push("--no-capture".to_owned());
+replace:
+caught-by:
+    try_run::tests::capture_no_shows_a_passing_tests_output_and_goes_only_where_it_means_that
+
+[break] try-capture-no-in-an-ab
+rule: `capture=no` is refused with `against`: an A/B compares runs made as the job makes them.
+file: xtask/src/try_run.rs
+in: Inputs::build
+find: if self.against.is_some() {
+replace: if false {
+occurrence: 1
+caught-by:
+    try_run::tests::capture_no_shows_a_passing_tests_output_and_goes_only_where_it_means_that

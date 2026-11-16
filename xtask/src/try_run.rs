@@ -118,6 +118,9 @@ struct Inputs {
     /// given.
     os: Option<String>,
     testkit: Option<String>,
+    /// `capture no`: a passing test's output is shown (nextest's
+    /// `--no-capture`, which runs the tests one at a time).
+    show_output: bool,
 }
 
 /// The `os` inputs of the workflow.
@@ -261,6 +264,16 @@ impl Inputs {
                         inputs.testkit = Some(testkit.to_owned());
                     }
                 }
+                "--capture" => match value.trim() {
+                    "" | "yes" => inputs.show_output = false,
+                    "no" => inputs.show_output = true,
+                    other => {
+                        return Err(format!(
+                            "`--capture {other}`: yes (nextest keeps a passing test's output) \
+                             or no (it is shown, the tests one at a time)"
+                        ));
+                    }
+                },
                 other => return Err(format!("unknown flag `{other}`\n\n{USAGE}")),
             }
         }
@@ -300,6 +313,22 @@ impl Inputs {
         }
         if !self.filters.is_empty() && !matches!(verb.as_str(), "test" | "stress") {
             return Err("`--filter` chooses tests: it goes with `test` or `stress`".to_owned());
+        }
+        if self.show_output {
+            if !matches!(verb.as_str(), "test" | "stress") {
+                return Err(
+                    "`--capture no` shows a passing test's output: it goes with `test` or \
+                     `stress` (`perf -p` shows it already)"
+                        .to_owned(),
+                );
+            }
+            if self.against.is_some() {
+                return Err(
+                    "`--capture no` runs the tests one at a time, which an A/B's comparison of \
+                     the two trees' runs is not made of: leave it out of an `against` run"
+                        .to_owned(),
+                );
+            }
         }
         if verb == "mutate" {
             return self.mutate(rest);
@@ -734,7 +763,13 @@ impl Inputs {
             .iter()
             .position(|word| word == "--")
             .unwrap_or(words.len());
-        words.splice(at..at, self.filter_arguments());
+        let mut nextest = self.filter_arguments();
+        if self.show_output {
+            // nextest runs the tests one at a time with it, so that their
+            // output does not mix.
+            nextest.push("--no-capture".to_owned());
+        }
+        words.splice(at..at, nextest);
         words
     }
 
@@ -984,6 +1019,59 @@ fn reads_the_corpus(command: &[String]) -> bool {
 mod tests {
     use super::{Inputs, check_checkout, plan};
     use crate::workspace::{DepKind, Dependency, Package};
+
+    #[test]
+    fn capture_no_shows_a_passing_tests_output_and_goes_only_where_it_means_that() {
+        assert_eq!(
+            try_command(&["--command", "test -p cortex-tui", "--capture", "no"]).unwrap(),
+            "ci --tiers --top 20 -p cortex-tui -- --no-capture"
+        );
+        assert_eq!(
+            try_command(&[
+                "--command",
+                "test -p cortex-tui",
+                "--capture",
+                "no",
+                "--filter",
+                "test(/frame/)"
+            ])
+            .unwrap(),
+            "ci --tiers --top 20 -p cortex-tui -- -E test(/frame/) --no-capture"
+        );
+        assert!(
+            try_command(&["--command", "stress -p x", "--capture", "no"])
+                .unwrap()
+                .contains("--no-capture")
+        );
+        assert_eq!(
+            try_command(&["--command", "test -p x", "--capture", "yes"]).unwrap(),
+            try_command(&["--command", "test -p x"]).unwrap()
+        );
+        for (arguments, said) in [
+            (
+                &[
+                    "--command",
+                    "test -p x",
+                    "--capture",
+                    "no",
+                    "--against",
+                    "main",
+                ][..],
+                "leave it out of an `against` run",
+            ),
+            (
+                &["--command", "ci", "--capture", "no"][..],
+                "goes with `test` or",
+            ),
+            (
+                &["--command", "test", "--capture", "maybe"][..],
+                "`--capture maybe`",
+            ),
+        ] {
+            let error = try_command(arguments).unwrap_err();
+            assert!(error.contains(said), "{arguments:?}: {error}");
+        }
+    }
 
     fn try_command(arguments: &[&str]) -> Result<String, String> {
         let arguments: Vec<String> = arguments.iter().map(|word| (*word).to_owned()).collect();
