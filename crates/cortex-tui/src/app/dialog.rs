@@ -139,6 +139,8 @@ pub(crate) enum Keyed {
     Changed,
     /// The dialog is answered.
     Answer(ServerResponse),
+    /// The request is to be shown whole, in the viewer (`Ctrl+O`).
+    ShowWhole,
     /// Nothing.
     Nothing,
 }
@@ -318,6 +320,7 @@ impl Dialog {
             // `Esc`, and the other keys of `deny`, are always on offer: no
             // answer is what each of them is, and the hint row shows it.
             (_, Action::Deny) => Keyed::Answer(self.refusal()),
+            (Asks::Approval { .. } | Asks::Trust { .. }, Action::ShowWhole) => Keyed::ShowWhole,
             (Asks::Approval { .. }, action) if drawn(Pick::Act(action)) => match action {
                 Action::AllowOnce => Keyed::Answer(approve(ApprovalChoice::AllowOnce)),
                 Action::AllowSession => Keyed::Answer(approve(ApprovalChoice::AllowSession)),
@@ -381,7 +384,34 @@ impl Dialog {
             Asks::Trust { .. } => "is not now",
             Asks::Question { .. } => "leaves it unanswered",
         };
-        vec![format!("{deny} {what}")]
+        let mut keys = vec![format!("{deny} {what}")];
+        if matches!(self.asks, Asks::Approval { .. } | Asks::Trust { .. })
+            && let Some(whole) = keymap.keys_of(Action::ShowWhole).into_iter().next()
+        {
+            keys.push(format!("{} shows it whole", name(whole)));
+        }
+        keys
+    }
+
+    /// The request drawn whole, `width` columns wide, for the viewer: its
+    /// question and all its detail, without its answers.
+    pub(crate) fn whole(&self, width: usize, look: &Look) -> Vec<Line> {
+        let mut lines = self
+            .render(
+                &Shape {
+                    answers: Vec::new(),
+                    hidden: true,
+                    detail_rows: usize::MAX,
+                    withheld: false,
+                },
+                width,
+                look,
+            )
+            .lines;
+        while lines.last().is_some_and(|line| line.width() == 0) {
+            lines.pop();
+        }
+        lines
     }
 
     /// The dialog's rows at `now`, at most `rows` of them and `width`

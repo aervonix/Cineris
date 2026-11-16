@@ -410,15 +410,6 @@ impl App {
         self.settings.theme
     }
 
-    /// Whether the viewer is open: the loop then draws [`viewer_frame`]
-    /// on the alternate screen, and nothing is committed meanwhile.
-    ///
-    /// [`viewer_frame`]: Self::viewer_frame
-    #[must_use]
-    pub fn viewing(&self) -> bool {
-        self.viewer.is_some()
-    }
-
     /// When the application must draw again whatever else happens: the end
     /// of an open dialog's grace, when its answers appear, until a frame
     /// with them has been drawn. The time may have passed, and a frame is
@@ -483,6 +474,7 @@ impl App {
     /// A terminal event, read at `at`. Says whether it was input (a key or a
     /// paste), whose frame is drawn at once.
     pub fn terminal(&mut self, event: &TermEvent, at: Instant) -> bool {
+        self.drop_stale_viewer();
         if self.viewer.is_some()
             && let TermEvent::Key(key) = event
         {
@@ -503,6 +495,10 @@ impl App {
                         }
                         Keyed::Answer(response) => {
                             self.answer(response);
+                            return true;
+                        }
+                        Keyed::ShowWhole => {
+                            self.open_whole();
                             return true;
                         }
                         Keyed::Changed | Keyed::Nothing => return true,

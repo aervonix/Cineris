@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use cortex_base::{UtcTime, Zone};
+use cortex_protocol::jsonrpc::RequestId;
 use cortex_term::{Key, KeyCode, Line, Mods};
 
 use super::App;
@@ -44,6 +45,9 @@ pub(super) struct Viewer {
     body: usize,
     /// Where the last frame's search should look from, and what it found.
     find: Option<usize>,
+    /// It shows this request whole (`Ctrl+O` in its dialog), not the
+    /// transcript, while its dialog is the one open.
+    whole: Option<RequestId>,
 }
 
 /// The rows of the transcript in the viewer, and where each box's rows are.
@@ -78,6 +82,40 @@ impl App {
             follow: true,
             ..Viewer::default()
         });
+    }
+
+    /// Opens the viewer on the open dialog's request, drawn whole: `Esc`
+    /// returns to the dialog, still waiting for its answer.
+    pub(super) fn open_whole(&mut self) {
+        if self.zone.is_none() {
+            self.zone = Some(Zone::system());
+        }
+        self.viewer = Some(Viewer {
+            whole: self.dialogs.front().map(|dialog| dialog.id.clone()),
+            ..Viewer::default()
+        });
+    }
+
+    /// Whether the viewer is open: the loop then draws [`viewer_frame`]
+    /// instead of the inline screen. A request shown whole closes it when
+    /// its dialog is no longer the one open (answered elsewhere).
+    ///
+    /// [`viewer_frame`]: Self::viewer_frame
+    #[must_use]
+    pub fn viewing(&self) -> bool {
+        self.viewer.as_ref().is_some_and(|viewer| {
+            viewer
+                .whole
+                .as_ref()
+                .is_none_or(|id| self.dialogs.front().is_some_and(|dialog| &dialog.id == id))
+        })
+    }
+
+    /// Forgets a viewer that is no longer shown.
+    pub(super) fn drop_stale_viewer(&mut self) {
+        if self.viewer.is_some() && !self.viewing() {
+            self.viewer = None;
+        }
     }
 
     /// How many boxes the committed transcript holds.
@@ -169,6 +207,12 @@ impl App {
     fn viewer_rows(&self, state: &Viewer, width: usize) -> Drawn {
         let mut rows = Vec::new();
         let mut boxes = Vec::new();
+        if let Some(id) = &state.whole {
+            if let Some(dialog) = self.dialogs.front().filter(|dialog| &dialog.id == id) {
+                rows = dialog.whole(width, &self.look);
+            }
+            return Drawn { rows, boxes };
+        }
         for part in &self.kept {
             match part {
                 Committed::Lines(lines) => rows.extend(lines.iter().cloned()),
