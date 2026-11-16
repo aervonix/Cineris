@@ -758,9 +758,11 @@ fn a_summary_with_a_reasoning_budget_keeps_its_whole_output_in_reserve() {
         ..ContextSettings::default()
     };
     let rig = setup.start(&world);
-    // Past the trigger (138,747 of a limit of 163,232), so the loop
-    // compacts before it sends anything.
-    rig.bulk(420_000);
+    // Past the trigger, so the loop compacts before it sends anything: the
+    // notice is sized from what the session sends, and it fills a model of
+    // 200,000 tokens, which is what the epoch of about 137,000 tokens above
+    // needs it to.
+    rig.fill(Fill::Compacting, "go");
     world.run(async {
         rig.prompt("go");
         rig.events.turns(1).await;

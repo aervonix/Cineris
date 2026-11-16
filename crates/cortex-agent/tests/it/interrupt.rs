@@ -15,7 +15,9 @@ use cortex_testkit::{Gate, Response};
 use serde_json::json;
 
 use crate::transitions::{retry, start};
-use crate::{Rig, Setup, World, assert_valid_history, calls, last_request, lock, says, text_of};
+use crate::{
+    Fill, Rig, Setup, World, assert_valid_history, calls, last_request, lock, says, text_of,
+};
 
 fn results(rig: &Rig) -> Vec<ToolResultItem> {
     rig.store
@@ -97,7 +99,7 @@ fn interrupted_while_compacting() {
     // Interrupted as it enters the state: the summary is never asked for.
     let (world, rig) = Rig::one("int_compacting", []);
     rig.window(4_000);
-    rig.bulk(6_000);
+    rig.fill(Fill::Compacting, "go");
     interrupt_in(&world, &rig, TurnState::Compacting, 0);
     assert_interrupted(&rig);
     assert!(
