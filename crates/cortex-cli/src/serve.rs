@@ -94,6 +94,9 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
         };
     let rpc = &loaded.settings.rpc;
     options.approval_timeout = approval_timeout(rpc);
+    // A socket's sessions outlive their clients, for another to open: a
+    // server on standard I/O has one client, whose end is the server's.
+    options.keep_sessions = serve.socket.is_some();
     // Only the server's own command line or configuration may let a client
     // ask for `unrestricted`.
     let allow_unrestricted = matches!(

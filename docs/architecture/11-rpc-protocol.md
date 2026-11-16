@@ -305,6 +305,8 @@ The server's first part: `cortex serve --stdio` (`cortex-rpc`; `docs/steps/27/an
   - Each client is a connection of its own, as `--stdio`'s one is, at most 64 at once; one past that is closed unread.
   - A connection that has not said `initialize` within 10 s is closed.
   - A client's `shutdown` ends every connection and the server.
+  - Its sessions outlive their clients (`CoreOptions::keep_sessions`): another client opens one again, and an approval in a session with no client waits for a `user` client to open it, up to the approval time limit.
+  - A `supervisor` connection is given the grant in `ServeOptions::supervisor_grant`, which the binary leaves empty.
   - On Unix the place is `$XDG_RUNTIME_DIR/cortex-harness/rpc.sock`, or `/tmp/cortex-harness-<uid>/rpc.sock` without one, in a folder the server makes owner-only and refuses when others can reach it; a path given must be in a folder others cannot write in, or root's with the sticky bit.
   - The socket is `0600`, and a lock beside it is held for the server's life: a second server is refused, and a socket left behind is removed only when nothing answers on it.
   - A peer of another user, by its credentials, and one whose line of parents reaches the server's process (one of the server's own commands) are closed unanswered.

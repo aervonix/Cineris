@@ -102,6 +102,12 @@ pub struct ServeOptions {
     pub requests_end: Duration,
     /// How long the end waits to write what is already queued.
     pub drain: Duration,
+    /// What a `supervisor` client may approve in the sessions it opens: the
+    /// grant every supervisor connection is given, which nothing on the
+    /// wire sets (`Core::connect_with_grant`). None in the binary, so a
+    /// supervisor is asked nothing; the steps of task and team leases
+    /// decide where a real one comes from.
+    pub supervisor_grant: Option<cortex_protocol::lease::Lease>,
     /// Whether a client may ask for a session at `unrestricted`: only when
     /// the server's own command line or configuration says so
     /// (`docs/security.md`, section 5: a client is never more than the
@@ -131,6 +137,7 @@ impl ServeOptions {
             drain: Duration::from_secs(2),
             initialize_within: None,
             allow_unrestricted: false,
+            supervisor_grant: None,
         }
     }
 }
@@ -823,7 +830,7 @@ impl Connection {
             return Served::Ended(Ended::Flooded);
         }
         let core = self.shared.core.clone();
-        let client = core.connect(info);
+        let client = core.connect_with_grant(info, self.shared.options.supervisor_grant.clone());
         match core.handle(client.id, Op::Initialize(params)).await {
             Ok(result) => {
                 // Weak: the queue is the client's, which the connection

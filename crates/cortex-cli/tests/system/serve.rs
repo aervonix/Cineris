@@ -494,9 +494,10 @@ fn sys_another_user_is_refused_at_the_socket() {
 
 /// A client of the Unix socket at `path`, speaking lines.
 #[cfg(unix)]
-fn socket_client(path: &std::path::Path) -> Lines {
+fn socket_client(path: &std::path::Path) -> (Lines, std::os::unix::net::UnixStream) {
     let stream = std::os::unix::net::UnixStream::connect(path).expect("the socket takes a client");
     let mut writing = stream.try_clone().unwrap();
+    let kept = stream.try_clone().unwrap();
     let (lines_read, read) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stream);
@@ -512,24 +513,36 @@ fn socket_client(path: &std::path::Path) -> Lines {
             }
         }
     });
-    Lines::new(
+    let lines = Lines::new(
         move |bytes| {
             let _ = writing.write_all(&bytes);
         },
         move || read.recv().ok(),
-    )
+    );
+    (lines, kept)
 }
 
 /// `serve --socket` with no path serves in the runtime directory, in a
 /// folder of its own that it makes owner-only, says where on standard
-/// error, serves a client there, ends at its `shutdown`, and removes the
-/// socket.
+/// error, and serves its clients there. A session outlives the client that
+/// started it, for another to open (an observer may open only a session
+/// that is running). The server ends at a client's `shutdown`, and removes
+/// the socket.
 #[cfg(unix)]
 #[test]
 fn sys_serve_socket_serves_at_the_default_place_and_removes_it() {
     use std::os::unix::fs::PermissionsExt;
     let machine = Machine::new("serve-socket");
-    let runtime = machine.home.join("run");
+    // Short, as a real runtime directory is: a socket's path has at most
+    // 107 bytes, which a test's own folder may pass in a deep checkout.
+    let runtime = std::path::PathBuf::from(format!("/tmp/cortex-rt-{}", std::process::id()));
+    struct Gone(std::path::PathBuf);
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _gone = Gone(runtime.clone());
     std::fs::create_dir_all(&runtime).unwrap();
     std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
     let mut command = machine.command(&["serve", "--socket"]);
@@ -544,7 +557,36 @@ fn sys_serve_socket_serves_at_the_default_place_and_removes_it() {
     let mode = std::fs::metadata(&folder).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o700, "the server's own folder");
 
-    let mut lines = socket_client(&path);
+    let (mut first, stream) = socket_client(&path);
+    first
+        .initialize(conformance::initialize())
+        .expect("initialize");
+    let OpResult::SessionNew(opened) = first
+        .call(Op::SessionNew(cortex_protocol::methods::SessionNewParams {
+            workspace: machine.workspace.to_str().unwrap().to_owned(),
+            settings: cortex_protocol::session::SessionSettings::default(),
+            title: None,
+            config: serde_json::Map::new(),
+            ephemeral: false,
+        }))
+        .expect("a session opens")
+    else {
+        panic!("not a session");
+    };
+    // The first client goes.
+    stream.shutdown(std::net::Shutdown::Both).unwrap();
+    drop(first);
+
+    let (mut watcher, _) = socket_client(&path);
+    let mut params = conformance::initialize();
+    params.role = cortex_protocol::methods::ClientRole::Observer;
+    watcher.initialize(params).expect("initialize");
+    watcher
+        .call(Op::SessionOpen(cortex_protocol::methods::SessionRef {
+            session_id: opened.session.session_id,
+        }))
+        .expect("the session outlived the client that started it");
+    let (mut lines, _) = socket_client(&path);
     lines
         .initialize(conformance::initialize())
         .expect("initialize");
