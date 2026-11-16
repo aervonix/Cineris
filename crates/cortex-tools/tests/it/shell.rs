@@ -654,6 +654,40 @@ fn a_call_declares_the_command_and_what_it_may_change() {
     );
 }
 
+/// A command that names no `cwd` runs where the session started, below the
+/// root (the follow-ups of step 23); one that names it runs there; and a
+/// start that is no longer a directory falls back to the root.
+#[test]
+fn a_command_with_no_cwd_runs_where_the_session_started() {
+    let ws = Workspace::new("shell_plan_start");
+    ws.dir("src/deep");
+    let tool = ShellTool::new(
+        Shell::new("bash"),
+        ShellConfig {
+            start: Some("src/deep".to_owned()),
+            ..ShellConfig::default()
+        },
+    );
+    let deep = ws.paths.resolve("src/deep").expect("the directory");
+    let plan = ws.plan(&tool, json!({ "command": "ls" })).expect("a plan");
+    assert_eq!(plan.summary, "Run `ls` in src/deep");
+    assert!(matches!(&plan.effects[0], Effect::Exec { cwd, .. } if *cwd == deep));
+    let root = ws.paths.resolve(".").expect("the root");
+    let named = ws
+        .plan(&tool, json!({ "command": "ls", "cwd": "." }))
+        .expect("a plan");
+    assert!(matches!(&named.effects[0], Effect::Exec { cwd, .. } if *cwd == root));
+    let gone = ShellTool::new(
+        Shell::new("bash"),
+        ShellConfig {
+            start: Some("src/gone".to_owned()),
+            ..ShellConfig::default()
+        },
+    );
+    let fallen = ws.plan(&gone, json!({ "command": "ls" })).expect("a plan");
+    assert_eq!(fallen.summary, "Run `ls`");
+}
+
 #[test]
 fn a_directory_outside_the_workspace_is_declared_too() {
     let (ws, tool) = planning_tool("outside", "bash");

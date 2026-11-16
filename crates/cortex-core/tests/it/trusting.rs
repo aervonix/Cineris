@@ -421,7 +421,12 @@ fn trusted_with_other_rules(world: &World, git_shown: bool) {
         action: RuleAction::Allow,
     };
     store
-        .trust(&key, "~/work/app", &[Definition::of_rules(&[seen])], git_shown)
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_rules(&[seen])],
+            git_shown,
+        )
         .unwrap();
 }
 
@@ -440,7 +445,11 @@ fn keep_of_a_trusted_project_keeps_its_trust_without_the_new_rules() {
     assert_eq!(asked.len(), 1);
     assert!(asked[0].trusted, "asked as a trusted project");
     let state = state.expect("the session opens");
-    assert_eq!(model(&state), MODEL, "the new rules' settings are held back");
+    assert_eq!(
+        model(&state),
+        MODEL,
+        "the new rules' settings are held back"
+    );
     assert_eq!(
         state.trust,
         Some(cortex_protocol::session::TrustStanding::RulesChanged)
@@ -489,6 +498,32 @@ fn a_first_yes_after_a_never_said_meanwhile_is_not_used() {
     assert!(stored.is_refused() && !stored.is_trusted());
 }
 
+/// A trusted project whose rules changed and which has become a repository
+/// is asked about both in one question; keep declines both, and neither is
+/// asked about again (the review of the follow-ups of step 23).
+#[test]
+fn keep_of_new_rules_and_new_git_declines_both() {
+    let world = world("trusting_keep_both");
+    trusted_with_other_rules(&world, false);
+    std::fs::create_dir_all(world.workspace.join(".git")).unwrap();
+    let (state, asked) = world.run(open(&world, &world.core(), ClientInfo::user(), keep()));
+    assert_eq!(asked.len(), 1);
+    assert!(asked[0].trusted);
+    let kinds: Vec<_> = asked[0]
+        .resources
+        .iter()
+        .map(|resource| resource.kind.clone())
+        .collect();
+    assert!(kinds.contains(&TrustResourceKind::Repository), "{kinds:?}");
+    assert!(kinds.contains(&TrustResourceKind::Rules), "{kinds:?}");
+    assert_eq!(model(&state.expect("the session opens")), MODEL);
+    let (store, key) = store(&world);
+    let stored = store.project(&key).unwrap();
+    assert!(stored.is_trusted() && stored.git_declined() && !stored.git_trusted());
+    let (_, asked) = world.run(open(&world, &world.core(), ClientInfo::user(), trust_it()));
+    assert!(asked.is_empty(), "{asked:#?}");
+}
+
 /// A trusted folder that has become a git repository is asked about git
 /// alone, the project's rules unchanged; a yes trusts git, and keep
 /// declines it, and neither is asked again (the follow-ups of step 23: git
@@ -523,7 +558,11 @@ fn a_trusted_folder_that_became_a_repository_is_asked_about_git() {
             .iter()
             .map(|resource| resource.kind.clone())
             .collect();
-        assert_eq!(kinds, [TrustResourceKind::Repository], "{answer}: git alone");
+        assert_eq!(
+            kinds,
+            [TrustResourceKind::Repository],
+            "{answer}: git alone"
+        );
         assert_eq!(
             model(&state.expect("the session opens")),
             OTHER_MODEL,

@@ -377,7 +377,11 @@ pub fn third_trust_answer(request: &TrustRequest) -> &'static str {
 /// "Trust it" only when it is offered (a list that does not fit offers it
 /// not).
 fn trust_answers_said(request: &TrustRequest, offered: bool) -> String {
-    let trust = if offered { "Trust it turns these on; " } else { "" };
+    let trust = if offered {
+        "Trust it turns these on; "
+    } else {
+        ""
+    };
     let rest = if request.trusted {
         "not now asks again at the next start; keep trusting it leaves them off and asks no \
          more until they change."

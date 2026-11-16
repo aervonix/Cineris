@@ -339,7 +339,11 @@ fn a_reload_reads_the_git_pin_as_an_open_does() {
         // The question about git, which the test's front end answers not
         // now.
         let front = Front::start(&world, &core).await;
-        assert_eq!(front.turn_denying("first").await, ["shell"], "asked at the open");
+        assert_eq!(
+            front.turn_denying("first").await,
+            ["shell"],
+            "asked at the open"
+        );
         reload(&front, ConfigReloadParams::default()).await;
         assert_eq!(
             front.turn_denying("after a reload").await,

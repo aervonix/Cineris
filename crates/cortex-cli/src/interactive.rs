@@ -178,7 +178,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
                 cwd: here
                     .cwd
                     .as_ref()
-                    .map(|cwd| cwd.to_string_lossy().into_owned()),
+                    .and_then(|cwd| cwd.to_str().map(str::to_owned)),
                 open,
                 prompt,
                 settings,

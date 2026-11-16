@@ -685,7 +685,7 @@ async fn session(
             cwd: plan
                 .cwd
                 .as_ref()
-                .map(|cwd| cwd.to_string_lossy().into_owned()),
+                .and_then(|cwd| cwd.to_str().map(str::to_owned)),
             workspace,
             settings: SessionSettings::default(),
             title: None,

@@ -300,10 +300,7 @@ fn a_session_resumed_after_a_compaction_begins_from_its_summary() {
 /// `cwd` outside the workspace is refused.
 #[test]
 fn a_session_started_below_the_root_says_where_commands_start_and_keeps_it() {
-    let world = World::new(
-        "start_below",
-        [says("One."), says("Two."), says("Three.")],
-    );
+    let world = World::new("start_below", [says("One."), says("Two."), says("Three.")]);
     world.put("AGENTS.md", "Root instructions.");
     world.put("src/deep/AGENTS.md", "Deep instructions.");
     let core = world.core();
@@ -318,6 +315,20 @@ fn a_session_started_below_the_root_says_where_commands_start_and_keeps_it() {
     assert!(system.contains(line), "{system}");
     assert!(system.contains("Root instructions."), "{system}");
     assert!(system.contains("Deep instructions."), "{system}");
+    // The shell says where its commands run.
+    let first = world.provider.requests()[0].clone();
+    let shell = first
+        .tools
+        .iter()
+        .find(|tool| tool.name == "shell")
+        .expect("the shell tool");
+    assert!(
+        shell
+            .description
+            .contains("runs in `src/deep` (relative to the workspace root)"),
+        "{}",
+        shell.description
+    );
     // A second run of the program resumes it: the same.
     let core = world.core();
     world.run(async {
@@ -355,7 +366,11 @@ fn a_session_started_below_the_root_says_where_commands_start_and_keeps_it() {
         front.close().await;
     });
     let at_root = world.provider.requests().pop().unwrap();
-    assert!(!at_root.system.contains("Commands start in"), "{}", at_root.system);
+    assert!(
+        !at_root.system.contains("Commands start in"),
+        "{}",
+        at_root.system
+    );
     assert!(!at_root.system.contains("Deep instructions."));
     // Outside the workspace: refused.
     let outside = world.run(async {
