@@ -108,6 +108,9 @@ pub enum Outcome {
     Picked(String, usize),
     /// A picker was closed with nothing accepted.
     PickerClosed(String),
+    /// A file of the `@` menu was put in the prompt: its path, relative to
+    /// the workspace, for the caller to read ahead (step 24).
+    FileChosen(String),
     /// A picker's toggle changed: its name, and the new state.
     Toggled(String, bool),
     /// A picker's selected row is to be removed: the picker's name, and
@@ -1002,15 +1005,19 @@ impl Input {
                     self.menu = None;
                     return Outcome::Changed;
                 };
-                let inserted = match trigger {
-                    Trigger::File { .. } => complete::file_token(&row.label),
-                    Trigger::Command { .. } => format!("/{} ", row.label),
+                let (inserted, chosen) = match trigger {
+                    Trigger::File { .. } => (complete::file_token(&row.label), true),
+                    Trigger::Command { .. } => (format!("/{} ", row.label), false),
                 };
                 self.editor
                     .replace(trigger.range(cursor), Fragment::text(inserted));
                 self.menu = None;
                 self.after_edit();
-                Outcome::Changed
+                if chosen {
+                    Outcome::FileChosen(row.label)
+                } else {
+                    Outcome::Changed
+                }
             }
         }
     }

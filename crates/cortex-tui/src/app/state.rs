@@ -98,6 +98,9 @@ enum Pending {
     /// result is the panel's while the session is the one open, and its
     /// error is said.
     Panel { session: SessionId, panel: u64 },
+    /// A file named with `@`, read ahead: nothing is said of its answer, a
+    /// refusal included, since nothing the person asked for depends on it.
+    Warm,
     /// `/reload`, or `/profile` with a name: what it did is said from its
     /// result, which holds what its `config.changed` events say.
     Reload { profile: Option<String> },
@@ -129,6 +132,10 @@ fn reload_lines(applied: &[String], errors: &[String], notes: &[String]) -> Vec<
     lines.extend(errors.iter().cloned());
     lines
 }
+
+/// The most files read ahead for one prompt: the core reads no more of one
+/// `workspace/warm`.
+const WARM_FILES: usize = 16;
 
 /// The most items of a stored session's history read at a time.
 const HISTORY_PAGE: u32 = 500;
@@ -235,6 +242,9 @@ pub struct App {
     /// first `@` typed (since the fixes of the review of step 23), so that
     /// a session that never completes a path holds no list of them.
     files_listing: bool,
+    /// The files read ahead for the prompt being written (at most
+    /// [`WARM_FILES`] a prompt, as the core reads).
+    warmed: usize,
     /// The person asked for the external editor (`Ctrl+G`).
     editor_wanted: bool,
     /// The settings `/new` opens a session with, and whether it is kept in
@@ -387,6 +397,7 @@ impl App {
             waker: None,
             files_asked: 0,
             files_listing: false,
+            warmed: 0,
             editor_wanted: false,
             reading: false,
             history_items: Vec::new(),
@@ -911,7 +922,11 @@ impl App {
 
     fn outcome(&mut self, outcome: Outcome, at: Instant) {
         match outcome {
-            Outcome::Submit { text, delivery } => self.submit(text, delivery, at),
+            Outcome::Submit { text, delivery } => {
+                self.warmed = 0;
+                self.submit(text, delivery, at);
+            }
+            Outcome::FileChosen(path) => self.warm(path),
             Outcome::Interrupt => self.interrupt(at),
             Outcome::Quit => self.exit = Some(Exit::Quit),
             Outcome::Redraw => self.effects.push(Effect::Redraw),
@@ -1294,6 +1309,7 @@ impl App {
                 self.read_ended(id, seq, false, now);
                 self.error(&error);
             }
+            (Pending::Warm, _) => {}
             (_, Err(error)) => self.error(&error),
             _ => {}
         }
@@ -1721,6 +1737,26 @@ impl App {
         if self.is_open(&event.session_id) {
             self.panels_event(&event.event);
         }
+    }
+
+    /// A file named with `@` is read ahead by the core, so that the model's
+    /// first read of it finds it in the system's cache (the features
+    /// table's prefetch; `workspace/warm`). A folder is not a file to read.
+    fn warm(&mut self, path: String) {
+        if path.ends_with('/') || self.warmed >= WARM_FILES {
+            return;
+        }
+        let Some(session) = self.session.as_ref().map(|s| s.session_id.clone()) else {
+            return;
+        };
+        self.warmed += 1;
+        let ticket = self.link.send(Op::WorkspaceWarm(
+            cortex_protocol::methods::WorkspaceWarmParams {
+                session_id: session,
+                paths: vec![path],
+            },
+        ));
+        self.pending.insert(ticket, Pending::Warm);
     }
 
     pub(super) fn say(&mut self, text: &str) {
