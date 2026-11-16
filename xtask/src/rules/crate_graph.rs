@@ -138,10 +138,12 @@ pub(crate) fn check(packages: &[Package], manifests: &[(String, String)]) -> Vec
 }
 
 /// The features that hold code for tests only: `test-hooks`, where a crate
-/// puts its test-only switches (a seeded order of events), and `pty`, the
+/// puts its test-only switches (a seeded order of events), `pty`, the
 /// operating system's half of the test kit's pseudo-terminal driver in
-/// `cortex-term`.
-const TEST_ONLY: &[&str] = &["test-hooks", "pty"];
+/// `cortex-term`, and `test-kit`, `cortex-tui`'s kit for driving its
+/// application (a scripted link in the core's place), which the test kit
+/// cannot hold because it may not depend on `cortex-tui`.
+const TEST_ONLY: &[&str] = &["test-hooks", "pty", "test-kit"];
 
 /// A test-only feature is turned on by dev-dependencies, and by the test kit,
 /// which is itself only ever a dev-dependency, and by nothing else. Anything
@@ -155,9 +157,10 @@ const TEST_ONLY: &[&str] = &["test-hooks", "pty"];
 /// - a feature of another crate that passes it on (`cortex-tools/test-hooks`).
 fn check_test_hooks(package: &Package, violations: &mut Vec<Violation>) {
     const WHY: &str = "Why: the feature holds code for tests (a seeded order of events, \
-                       docs/testing-and-ci.md; or pseudo-terminals). Asked for under \
-                       `[dev-dependencies]`, or by the test kit, it is built into test builds \
-                       only. Turned on any other way it is built into the released binary.";
+                       docs/testing-and-ci.md; pseudo-terminals; or the TUI's test kit). Asked \
+                       for under `[dev-dependencies]`, or by the test kit, it is built into \
+                       test builds only. Turned on any other way it is built into the released \
+                       binary.";
     if package.name == TESTKIT {
         return;
     }
@@ -849,6 +852,52 @@ mod tests {
         assert_one(
             &messages(&in_the_product),
             &["`cortex-tui` turns on the `pty` feature of `cortex-term`"],
+        );
+    }
+
+    #[test]
+    fn the_tuis_test_kit_is_turned_on_by_dev_dependencies_only() {
+        let kit = |dependency: Dependency| Dependency {
+            features: vec!["test-kit".to_owned()],
+            ..dependency
+        };
+        // As `cortex-tui`'s own tests do, and as another crate's would.
+        let own_tests = krate("cortex-tui", vec![kit(dev("cortex-tui"))]);
+        assert!(
+            messages(&own_tests).is_empty(),
+            "{:#?}",
+            messages(&own_tests)
+        );
+        let in_tests = krate(
+            "cortex-cli",
+            vec![dep("cortex-tui"), kit(dev("cortex-tui"))],
+        );
+        assert!(messages(&in_tests).is_empty(), "{:#?}", messages(&in_tests));
+
+        // In the product: by a normal dependency, by default, or passed on.
+        let in_the_product = krate("cortex-cli", vec![kit(dep("cortex-tui"))]);
+        assert_one(
+            &messages(&in_the_product),
+            &["`cortex-cli` turns on the `test-kit` feature of `cortex-tui`"],
+        );
+        let by_default = Package {
+            features: vec![
+                ("default".to_owned(), vec!["test-kit".to_owned()]),
+                ("test-kit".to_owned(), Vec::new()),
+            ],
+            ..krate("cortex-tui", Vec::new())
+        };
+        assert_one(
+            &messages(&by_default),
+            &["the feature `default` of `cortex-tui` turns on `test-kit`"],
+        );
+        let passed_on = Package {
+            features: vec![("ui".to_owned(), vec!["cortex-tui/test-kit".to_owned()])],
+            ..krate("cortex-cli", vec![dep("cortex-tui")])
+        };
+        assert_one(
+            &messages(&passed_on),
+            &["the feature `ui` of `cortex-cli` turns on `cortex-tui/test-kit`"],
         );
     }
 

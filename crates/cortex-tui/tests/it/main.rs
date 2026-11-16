@@ -4,7 +4,8 @@
 //! paste, history, the menus, and the external editor (tier 3, `sys_…`).
 //! And its views: the reference screens drawn again with them through the
 //! inline presenter into the test kit's virtual terminal (`screens`), and
-//! their share of a frame (`frames`).
+//! their share of a frame (`frames`). And the application through its
+//! public test kit, with keys at a person's pace (`app`).
 
 #![allow(
     clippy::disallowed_methods,
@@ -15,6 +16,7 @@
     reason = "tests: the external editor's children are processes, and a test fails by panicking"
 )]
 
+mod app;
 mod bindings;
 mod children;
 mod decoder;

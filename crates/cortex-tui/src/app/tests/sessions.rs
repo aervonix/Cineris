@@ -8,14 +8,8 @@ use cortex_protocol::methods::{ConfigGetResult, SessionListResult, SessionReadRe
 
 use super::*;
 
-fn state_of(id: &str, model: &str) -> SessionState {
-    let mut state = state();
-    state.session_id = SessionId::from(id);
-    if let Some(main) = state.roles.get_mut(&ModelRole::Main) {
-        main.model = ModelId::from(model);
-    }
-    state.seq = 5;
-    state
+fn state_of(id: &str, model: &str) -> cortex_protocol::session::SessionState {
+    session().id(id).main_model(model).seq(5).build()
 }
 
 fn ev(session: &str, seq: u64, event: Event) -> Inbound {

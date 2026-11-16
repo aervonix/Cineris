@@ -1,0 +1,141 @@
+# The ninth tooling step's TUI part: `cortex-tui`'s application test kit
+# (`cortex_tui::testkit`, behind its `test-kit` feature), the rule that only
+# dev-dependencies turn that feature on, and keys at a person's pace
+# (`cortex_testkit::cadence`).
+
+# The application's test kit.
+
+[break] tui-kit-the-link-gives-one-ticket-twice
+rule: The scripted link gives each operation a ticket of its own, one more than the last.
+file: crates/cortex-tui/src/testkit.rs
+in: Scripted::send
+find: script.last += 1;
+replace: script.last += 0;
+caught-by:
+    cortex-tui testkit::tests::the_scripted_link_records_each_operation_under_a_new_ticket_and_gives_in_order
+
+[break] tui-kit-the-link-gives-the-newest-first
+rule: The scripted link gives what the test queued oldest first.
+file: crates/cortex-tui/src/testkit.rs
+in: Scripted::next
+find: self.script().inbound.pop_front()
+replace: self.script().inbound.pop_back()
+caught-by:
+    cortex-tui testkit::tests::the_scripted_link_records_each_operation_under_a_new_ticket_and_gives_in_order
+
+[break] tui-kit-the-link-forgets-answers
+rule: The scripted link records each answer the application gives to a request.
+file: crates/cortex-tui/src/testkit.rs
+in: Scripted::respond
+find: self.script().answers.push((request, response));
+replace: let _ = (request, response);
+caught-by:
+    cortex-tui testkit::tests::the_scripted_link_records_each_operation_under_a_new_ticket_and_gives_in_order
+    cortex-tui testkit::tests::a_shown_dialog_is_answered_by_one_key_at_the_time_it_returns
+    cortex-tui::it app::the_kit_opens_the_session_it_was_given_and_shows_a_dialog_one_key_answers
+
+[break] tui-kit-a-workspace-without-its-write-root
+rule: A session's workspace is its one write root, unless the test says otherwise.
+file: crates/cortex-tui/src/testkit.rs
+in: SessionBuilder::workspace
+find: self.0.write_roots = vec![workspace.to_owned()];
+replace: let _ = &self.0.write_roots;
+caught-by:
+    cortex-tui testkit::tests::a_session_has_sane_defaults_and_states_only_what_a_test_says
+
+[break] tui-kit-the-main-model-is-not-set
+rule: The builder's main model is the one the test names, the provider and effort kept.
+file: crates/cortex-tui/src/testkit.rs
+in: SessionBuilder::main_model
+find: main.model = ModelId::from(model);
+replace: let _ = model;
+caught-by:
+    cortex-tui testkit::tests::a_session_has_sane_defaults_and_states_only_what_a_test_says
+
+[break] tui-kit-caps-without-true-colour
+rule: The kit's terminal is a modern one: true colour, in a UTF-8 locale.
+file: crates/cortex-tui/src/testkit.rs
+in: caps
+find: "COLORTERM" => Some("truecolor".to_owned()),
+replace: "COLORTERM" => None,
+caught-by:
+    cortex-tui testkit::tests::caps_are_a_modern_terminals
+
+[break] tui-kit-opened-leaves-the-open-unanswered
+rule: After opened, the application has its session: the open's result is taken in.
+file: crates/cortex-tui/src/testkit.rs
+in: opened_with
+find: drain(app, now);
+replace: let _ = now;
+caught-by:
+    cortex-tui testkit::tests::opened_gives_the_application_its_session
+    cortex-tui::it app::the_kit_opens_the_session_it_was_given_and_shows_a_dialog_one_key_answers
+
+[break] tui-kit-ask-draws-no-first-frame
+rule: An asked dialog's first frame is drawn at the time given: its grace starts then.
+file: crates/cortex-tui/src/testkit.rs
+in: ask
+find: app.drawn(now);
+replace: let _ = now;
+caught-by:
+    cortex-tui testkit::tests::an_asked_dialog_starts_its_grace_at_its_first_frame
+
+[break] tui-kit-a-shown-dialog-has-no-answers-drawn
+rule: shown_dialog draws the dialog's answers at the time it returns, so that one key then answers it.
+file: crates/cortex-tui/src/testkit.rs
+in: shown_dialog
+find: let _ = app.frame(at);
+replace: let _ = app.frame(now);
+caught-by:
+    cortex-tui testkit::tests::a_shown_dialog_is_answered_by_one_key_at_the_time_it_returns
+    cortex-tui::it app::the_kit_opens_the_session_it_was_given_and_shows_a_dialog_one_key_answers
+
+# Only dev-dependencies turn the kit on.
+
+[break] tui-kit-the-feature-is-not-test-only
+rule: `cortex-tui`'s `test-kit` is turned on by dev-dependencies only: a normal dependency, a default and a feature that passes it on are refused.
+file: xtask/src/rules/crate_graph.rs
+find: const TEST_ONLY: &[&str] = &["test-hooks", "pty", "test-kit"];
+replace: const TEST_ONLY: &[&str] = &["test-hooks", "pty"];
+caught-by:
+    rules::crate_graph::tests::the_tuis_test_kit_is_turned_on_by_dev_dependencies_only
+
+# Keys at a person's pace.
+
+[break] cadence-typing-all-at-once
+rule: Typed keys come a gap apart, the first one gap after the last input.
+file: crates/cortex-testkit/src/cadence.rs
+in: Cadence::typing
+find: self.now += every;
+replace: self.now += every * 0;
+caught-by:
+    cortex-testkit cadence::tests::typing_puts_a_key_every_gap_starting_one_gap_on_and_runs_follow_on
+
+[break] cadence-the-first-repeat-has-no-delay
+rule: A held key's first repeat comes the auto-repeat's delay after the press, the rest at its rate.
+file: crates/cortex-testkit/src/cadence.rs
+in: Cadence::hold
+find: self.now += if n == 0 { repeat.delay } else { repeat.every };
+replace: self.now += repeat.every;
+caught-by:
+    cortex-testkit cadence::tests::a_held_key_is_its_press_then_repeats_after_the_delay_at_the_rate
+
+[break] cadence-marked-repeats-are-plain-keys
+rule: A terminal that marks repeats gives each repeat as a repeat, the press as a key.
+file: crates/cortex-testkit/src/cadence.rs
+in: Cadence::hold
+find: self.push(if repeat.marked {
+replace: self.push(if false {
+caught-by:
+    cortex-testkit cadence::tests::a_terminal_that_marks_repeats_marks_all_but_the_press
+
+[break] cadence-nothing-is-read-together
+rule: A stroke is queued when the next one was read with it, at the same time.
+file: crates/cortex-testkit/src/cadence.rs
+in: Cadence::strokes
+find: queued: times.get(n + 1) == Some(&at)
+replace: queued: false
+packages: cortex-testkit, cortex-tui
+caught-by:
+    cortex-testkit cadence::tests::keys_read_together_are_queued_but_the_last
+    cortex-tui app::tests::dialogs::keys_read_together_never_answer_and_one_read_alone_does

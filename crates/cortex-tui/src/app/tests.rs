@@ -14,14 +14,11 @@ use cortex_protocol::jsonrpc::RequestId;
 use cortex_protocol::lease::Level;
 use cortex_protocol::message::Part;
 use cortex_protocol::methods::{
-    ApprovalChoice, ApprovalDetail, ApprovalRequest, ApprovalResponse, CommandDetail, Disposition,
-    Op, OpResult, ServerRequest, ServerResponse, SessionResult, TurnInterruptResult,
-    TurnStartResult,
+    ApprovalChoice, ApprovalDetail, ApprovalResponse, CommandDetail, Disposition, Op, OpResult,
+    ServerRequest, ServerResponse, SessionResult, TurnInterruptResult, TurnStartResult,
 };
 use cortex_protocol::model::{ModelInfo, ModelRole};
-use cortex_protocol::session::{
-    RoleState, SandboxStatus, SessionSettings, SessionState, SessionSummary,
-};
+use cortex_protocol::session::{SandboxStatus, SessionSettings, SessionSummary};
 use cortex_protocol::{
     CallId, ErrorData, ErrorKind, Item, ItemId, ModelId, ProviderId, SessionEvent, SessionId,
     Speed, Timestamp, TurnId,
@@ -29,10 +26,12 @@ use cortex_protocol::{
 use cortex_term::{Capabilities, Event as TermEvent, Line, Overrides, Platform};
 
 use super::*;
-use crate::highlight::Highlighter;
-use crate::history::MemoryHistory;
-use crate::keys::{KeyMap, parse};
+use crate::keys::parse;
 use crate::testing::{app_frame, assert_app_frame};
+use crate::testkit::{
+    SESSION, Scripted, WORKSPACE, app, app_opening, approval, ask, caps, drain, event, opened,
+    opened_with, session, shown_dialog,
+};
 
 mod dialogs;
 mod files;
@@ -40,167 +39,13 @@ mod output;
 mod sessions;
 mod trust_standing;
 
-/// What the scripted link has seen, and what it will give.
-#[derive(Debug, Default)]
-pub(crate) struct Script {
-    pub(crate) sent: Vec<(Ticket, Op)>,
-    pub(crate) answers: Vec<(RequestId, ServerResponse)>,
-    pub(crate) inbound: std::collections::VecDeque<Inbound>,
-    next: u64,
-}
-
-/// A link that records what is sent and gives what the test queued.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Scripted(pub(crate) Arc<Mutex<Script>>);
-
-impl Scripted {
-    pub(crate) fn script(&self) -> std::sync::MutexGuard<'_, Script> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Queues something from the core.
-    pub(crate) fn give(&self, inbound: Inbound) {
-        self.script().inbound.push_back(inbound);
-    }
-
-    /// The operations sent so far, taken.
-    pub(crate) fn take_sent(&self) -> Vec<(Ticket, Op)> {
-        std::mem::take(&mut self.script().sent)
-    }
-}
-
-impl Link for Scripted {
-    fn send(&mut self, op: Op) -> Ticket {
-        let mut script = self.script();
-        script.next += 1;
-        let ticket = Ticket(script.next);
-        script.sent.push((ticket, op));
-        ticket
-    }
-
-    fn respond(&mut self, request: RequestId, response: ServerResponse) {
-        self.script().answers.push((request, response));
-    }
-
-    fn next(&mut self) -> Option<Inbound> {
-        self.script().inbound.pop_front()
-    }
-}
-
-/// A modern terminal, as the tests draw for.
-pub(crate) fn caps() -> Capabilities {
-    Capabilities::detect(
-        |name| match name {
-            "TERM" => Some("xterm-256color".to_owned()),
-            "COLORTERM" => Some("truecolor".to_owned()),
-            "LANG" => Some("C.UTF-8".to_owned()),
-            _ => None,
-        },
-        Platform::Unix,
-        Overrides::default(),
-    )
-}
-
-pub(crate) const SESSION: &str = "s_test";
-
-/// An application with a new session to open, and its link.
-pub(crate) fn app(now: Instant) -> (App, Scripted) {
-    app_with(now, None)
-}
-
 pub(crate) fn app_with(now: Instant, prompt: Option<&str>) -> (App, Scripted) {
     let open = Open::New {
-        workspace: "/work/app".to_owned(),
+        workspace: WORKSPACE.to_owned(),
         settings: SessionSettings::default(),
         ephemeral: false,
     };
     app_opening(now, prompt, open)
-}
-
-/// An application that opens `open`, and its link.
-pub(crate) fn app_opening(now: Instant, prompt: Option<&str>, open: Open) -> (App, Scripted) {
-    let link = Scripted::default();
-    let start = Start {
-        version: "0.1.0".to_owned(),
-        folder: "~/src/app".to_owned(),
-        workspace: "/work/app".to_owned(),
-        open,
-        prompt: prompt.map(str::to_owned),
-        settings: Settings::default(),
-        keymap: KeyMap::defaults(),
-        notices: Vec::new(),
-        history: Box::new(MemoryHistory::new()),
-        highlighter: Highlighter::off(),
-    };
-    let app = App::new(Box::new(link.clone()), start, &caps(), 99, 40, now);
-    (app, link)
-}
-
-pub(crate) fn state() -> SessionState {
-    let mut roles = std::collections::BTreeMap::new();
-    roles.insert(
-        ModelRole::Main,
-        RoleState {
-            provider: ProviderId::from("anthropic"),
-            model: ModelId::from("claude-opus-5-5"),
-            effort: Some("high".to_owned()),
-            effort_in_effect: Some("high".to_owned()),
-            speed: Speed::Standard,
-            speed_in_effect: Speed::Standard,
-            speed_cooldown_until: None,
-        },
-    );
-    SessionState {
-        session_id: SessionId::from(SESSION),
-        workspace: "/work/app".to_owned(),
-        title: None,
-        created_at: Timestamp::from("2026-11-15T10:00:00Z"),
-        parent: None,
-        level: Level::Supervised,
-        lease_id: None,
-        sandbox: SandboxStatus::Off,
-        speed: Speed::Standard,
-        roles,
-        seq: 0,
-        running_turn: None,
-        queue_length: 0,
-        write_roots: vec!["/work/app".to_owned()],
-        trust: None,
-    }
-}
-
-pub(crate) fn event(event: Event) -> Inbound {
-    Inbound::Event(SessionEvent {
-        session_id: SessionId::from(SESSION),
-        seq: 0,
-        turn_id: Some(TurnId::from("t_1")),
-        event,
-    })
-}
-
-/// Draws the first frame and answers the open: the app has its session.
-pub(crate) fn opened(app: &mut App, link: &Scripted, now: Instant) {
-    opened_with(app, link, now, state());
-}
-
-/// As [`opened`], the session being `session`.
-pub(crate) fn opened_with(app: &mut App, link: &Scripted, now: Instant, session: SessionState) {
-    let _ = app.frame(now);
-    app.drawn(now);
-    let sent = link.take_sent();
-    let (ticket, _) = sent
-        .iter()
-        .find(|(_, op)| matches!(op, Op::SessionNew(_)))
-        .expect("the session is opened after the first frame");
-    link.give(Inbound::Done(
-        *ticket,
-        Ok(OpResult::SessionNew(SessionResult { session })),
-    ));
-    drain(app, now);
-}
-
-pub(crate) fn drain(app: &mut App, now: Instant) {
-    while app.drain(now, BATCH).more {}
 }
 
 pub(crate) fn key(app: &mut App, binding: &str, at: Instant) {
@@ -265,37 +110,6 @@ fn answers(link: &Scripted) -> Vec<ApprovalChoice> {
         .collect()
 }
 
-/// Gives the application a request, and draws its dialog's first frame at
-/// `now`.
-fn ask(app: &mut App, link: &Scripted, id: i64, request: ServerRequest, now: Instant) {
-    link.give(Inbound::Request(RequestId::Number(id), request));
-    drain(app, now);
-    let _ = app.frame(now);
-    app.drawn(now);
-}
-
-fn approval(call: &str) -> ServerRequest {
-    ServerRequest::Approval(ApprovalRequest {
-        session_id: SessionId::from(SESSION),
-        turn_id: TurnId::from("t_1"),
-        call_id: CallId::from(call),
-        tool: "shell".to_owned(),
-        summary: "Run cargo build".to_owned(),
-        detail: ApprovalDetail::Command(CommandDetail {
-            command: "cargo build".to_owned(),
-            cwd: "/work/app".to_owned(),
-            outside_sandbox: false,
-        }),
-        choices: vec![
-            ApprovalChoice::AllowOnce,
-            ApprovalChoice::AllowSession,
-            ApprovalChoice::Deny,
-        ],
-        reasons: vec!["`cargo build` is not on the safe list.".to_owned()],
-        adds: Vec::new(),
-    })
-}
-
 #[test]
 fn the_session_is_opened_after_the_first_frame_and_its_header_comes_first() {
     let now = Instant::now();
@@ -322,7 +136,9 @@ fn the_session_is_opened_after_the_first_frame_and_its_header_comes_first() {
     drain(&mut app, now);
     link.give(Inbound::Done(
         open,
-        Ok(OpResult::SessionNew(SessionResult { session: state() })),
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().build(),
+        })),
     ));
     drain(&mut app, now);
     let mut scrollback = Vec::new();
@@ -558,8 +374,7 @@ fn typing_that_goes_on_past_the_grace_never_answers_a_dialog() {
 fn leaving_a_confined_sessions_sandbox_offers_only_once_and_deny() {
     let now = Instant::now();
     let (mut app, link) = app(now);
-    let mut confined = state();
-    confined.sandbox = SandboxStatus::Enforcing;
+    let confined = session().sandbox(SandboxStatus::Enforcing).build();
     opened_with(&mut app, &link, now, confined);
     ask(&mut app, &link, 10, outside("c_1"), now);
     let at = now + dialog::GRACE;
@@ -814,22 +629,6 @@ fn a_key_straight_after_the_viewer_closes_does_not_answer() {
     let _ = app.frame(ready);
     key(&mut app, "y", ready + dialog::GRACE);
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
-}
-
-/// Shows a dialog, and draws the frame with its answers as the loop does at
-/// the end of its grace: the time a key may answer it.
-fn shown_dialog(app: &mut App, link: &Scripted, id: i64, now: Instant) -> Instant {
-    link.give(Inbound::Request(RequestId::Number(id), approval("c_1")));
-    drain(app, now);
-    let _ = app.frame(now);
-    app.drawn(now);
-    // Its answers, when it is ready: after its grace, or a second after a
-    // key that answered the dialog before it.
-    let at = app.deadline().map_or(now + dialog::GRACE * 2, |due| {
-        due.max(now + dialog::GRACE * 2)
-    });
-    let _ = app.frame(at);
-    at
 }
 
 /// After input that reached the editor while a dialog was up (a key it does
@@ -1227,8 +1026,7 @@ fn new_closes_the_session_and_opens_another_in_the_workspace() {
         })
         .expect("a new session");
     assert_eq!(workspace, "/work/app");
-    let mut next = state();
-    next.session_id = SessionId::from("s_next");
+    let next = session().id("s_next").build();
     link.give(Inbound::Done(
         ticket,
         Ok(OpResult::SessionNew(SessionResult { session: next })),
@@ -1269,8 +1067,7 @@ fn a_fork_opens_its_session_forks_it_and_closes_the_original() {
             _ => None,
         })
         .unwrap_or_else(|| panic!("the original is opened first: {sent:#?}"));
-    let mut old = state();
-    old.session_id = original.clone();
+    let old = session().id(original.clone()).build();
     link.give(Inbound::Done(
         opened_first,
         Ok(OpResult::SessionOpen(SessionResult { session: old })),
@@ -1287,7 +1084,9 @@ fn a_fork_opens_its_session_forks_it_and_closes_the_original() {
         .unwrap_or_else(|| panic!("the fork follows: {sent:#?}"));
     link.give(Inbound::Done(
         fork,
-        Ok(OpResult::SessionFork(SessionResult { session: state() })),
+        Ok(OpResult::SessionFork(SessionResult {
+            session: session().build(),
+        })),
     ));
     drain(&mut app, now);
     assert_eq!(
@@ -1433,7 +1232,9 @@ fn the_loop_wakes_for_a_dialogs_answers_and_sleeps_while_idle() {
     // The open is the first thing sent: its result, then a request.
     link.give(Inbound::Done(
         Ticket(1),
-        Ok(OpResult::SessionNew(SessionResult { session: state() })),
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().build(),
+        })),
     ));
     link.give(Inbound::Request(RequestId::Number(7), approval("c_1")));
     let written = Arc::new(Mutex::new(Vec::new()));
@@ -1679,8 +1480,7 @@ fn a_fork_that_fails_closes_its_original_and_takes_nothing_of_it() {
         .into_iter()
         .find(|(_, op)| matches!(op, Op::SessionOpen(_)))
         .expect("the original's open");
-    let mut old = state();
-    old.session_id = original.clone();
+    let old = session().id(original.clone()).build();
     link.give(Inbound::Done(
         ticket,
         Ok(OpResult::SessionOpen(SessionResult {
@@ -2031,7 +1831,9 @@ fn keys_read_together_never_answer_a_dialog() {
     let (mut app, link) = app(base);
     link.give(Inbound::Done(
         Ticket(1),
-        Ok(OpResult::SessionNew(SessionResult { session: state() })),
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().build(),
+        })),
     ));
     link.give(Inbound::Request(RequestId::Number(7), approval("c_1")));
     let waits = Arc::new(Mutex::new(Vec::new()));
@@ -2383,7 +2185,9 @@ fn with_models(now: Instant) -> (App, Scripted) {
         .expect("the open");
     link.give(Inbound::Done(
         open,
-        Ok(OpResult::SessionNew(SessionResult { session: state() })),
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().build(),
+        })),
     ));
     drain(&mut app, now);
     sent.extend(link.take_sent());
@@ -2500,10 +2304,7 @@ fn effort_picks_a_level_and_tab_toggles_fast_mode() {
 fn effort_on_a_model_with_no_levels_says_so() {
     let now = Instant::now();
     let (mut app, link) = with_models(now);
-    let mut open_model = state();
-    if let Some(main) = open_model.roles.get_mut(&ModelRole::Main) {
-        main.model = ModelId::from("some-open-model");
-    }
+    let open_model = session().main_model("some-open-model").build();
     link.give(event(Event::SessionUpdated(
         cortex_protocol::event::SessionUpdated {
             session: open_model,
@@ -2607,7 +2408,9 @@ fn undo_sends_session_undo_and_says_what_it_did() {
     assert!(params.restore_files);
     link.give(Inbound::Done(
         ticket,
-        Ok(OpResult::SessionUndo(SessionResult { session: state() })),
+        Ok(OpResult::SessionUndo(SessionResult {
+            session: session().build(),
+        })),
     ));
     drain(&mut app, now);
     assert!(notices(&mut app, now).contains("The last turn is undone"));
@@ -2964,8 +2767,7 @@ fn a_resumed_session_draws_its_history_then_what_came_after() {
         .into_iter()
         .find(|(_, op)| matches!(op, Op::SessionOpen(_)))
         .expect("the open");
-    let mut stored = state();
-    stored.seq = 5;
+    let stored = session().seq(5).build();
     link.give(Inbound::Done(
         open,
         Ok(OpResult::SessionOpen(SessionResult { session: stored })),
@@ -3077,8 +2879,7 @@ fn a_new_session_reads_no_history() {
         .into_iter()
         .find(|(_, op)| matches!(op, Op::SessionNew(_)))
         .expect("the open");
-    let mut new = state();
-    new.seq = 3;
+    let new = session().seq(3).build();
     link.give(Inbound::Done(
         open,
         Ok(OpResult::SessionNew(SessionResult { session: new })),
@@ -3101,7 +2902,9 @@ fn ctrl_g_leaves_the_loop_for_the_editor_and_the_prompt_stays() {
     let (mut app, link) = app(base);
     link.give(Inbound::Done(
         Ticket(1),
-        Ok(OpResult::SessionNew(SessionResult { session: state() })),
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().build(),
+        })),
     ));
     let written = Arc::new(Mutex::new(Vec::new()));
     let device = Played {
@@ -3141,8 +2944,9 @@ fn ctrl_g_leaves_the_loop_for_the_editor_and_the_prompt_stays() {
 fn status_says_a_project_is_marked_never_and_how_to_change_it() {
     let now = Instant::now();
     let (mut app, link) = app(now);
-    let mut never = state();
-    never.trust = Some(cortex_protocol::session::TrustStanding::Never);
+    let never = session()
+        .trust(cortex_protocol::session::TrustStanding::Never)
+        .build();
     opened_with(&mut app, &link, now, never);
     let _ = link.take_sent();
     run_command(&mut app, "/status", now);
