@@ -780,3 +780,30 @@ fn perf_choosing_a_rounds_checks_from_a_typical_profile() {
         times[times.len() - 1]
     );
 }
+
+/// The hop to the blocking pool the verifier makes for its look at the
+/// project's files: what a round with no check costs beyond the look and
+/// choosing. Run by hand, as the test above.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn perf_the_hop_to_the_blocking_pool_for_the_look() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let token = cortex_base::CancelToken::new();
+    let mut times = Vec::new();
+    for _ in 0..2_000 {
+        let start = std::time::Instant::now();
+        runtime
+            .block_on(cortex_tools::run_blocking(&token, |_| ()))
+            .unwrap();
+        times.push(start.elapsed());
+    }
+    times.sort();
+    let median = times[times.len() / 2];
+    cortex_testkit::numbers::report("verify.blocking_hop", median.as_secs_f64() * 1e6, "us");
+    println!(
+        "the hop: median {median:?}, slowest {:?}",
+        times[times.len() - 1]
+    );
+}
