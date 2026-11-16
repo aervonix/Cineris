@@ -930,3 +930,27 @@ replace: signal != 0 &&
 packages: cortex-term, cortex-cli
 caught-by:
     cortex-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
+
+[break] a-history-file-kept-open
+rule: Each prompt is appended to the history file opened afresh under its lock, so that another process's compaction loses none.
+file: crates/cortex-cli/src/history.rs
+in: append
+find:
+    for text in queue {
+        let entry = Entry {
+            project: project.to_owned(),
+            text,
+        };
+        let _lock = cortex_base::private::hold_lock(path).ok().flatten();
+        if let Ok(mut file) = open(path) {
+replace:
+    let mut kept = open(path).ok();
+    for text in queue {
+        let entry = Entry {
+            project: project.to_owned(),
+            text,
+        };
+        if let Some(file) = kept.as_mut() {
+packages: cortex-cli
+caught-by:
+    history::tests::a_prompt_after_another_process_compacts_the_file_is_kept
