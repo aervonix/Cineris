@@ -24,6 +24,23 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "net", "io-util"] }
 tracing.workspace = true
 
+# The named pipe of `serve --socket` (docs/steps/27/answered.md, "The
+# design, before building", point 1): each instance made with its security
+# descriptor (`Win32_System_Pipes`, with the flags of `Win32_Storage_FileSystem`
+# and the descriptor's text read by `Win32_Security_Authorization`), and each
+# connection's token checked (`Win32_Security`, and `Win32_System_Threading`
+# for the thread's token). Used by one module, `socket::windows`, the only
+# place in this crate where `unsafe` is allowed.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
 [features]
 # Test only: a listener whose pipe admits everyone, so that a test shows the
 # check of a connection's token by itself (`ListenOptions`). Turned on by a
@@ -38,6 +55,20 @@ cortex-testkit.workspace = true
 # fake timer (`cortex-tools`).
 cortex-config.workspace = true
 cortex-tools.workspace = true
+
+# The pipe's tests make the clients it must refuse: a token below the
+# server's integrity, a restricted one, a second user logged on, each
+# impersonated by a thread of the test; and they read the pipe's security
+# back. The integrity's flag is `Win32_System_SystemServices`'.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
 
 [lints]
 workspace = true
