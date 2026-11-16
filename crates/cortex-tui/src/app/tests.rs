@@ -651,6 +651,63 @@ fn a_dialog_taller_than_the_window_keeps_its_question_and_offers_only_this_call(
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
+/// `Ctrl+O` in an approval shows the request whole in the viewer: every line
+/// of a command the dialog had to cut. `Esc` returns to the dialog, still
+/// waiting for its answer; a request settled elsewhere closes the viewer.
+#[test]
+fn ctrl_o_shows_the_request_whole_and_esc_returns_to_its_dialog() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    app.resize(99, 20);
+    let ServerRequest::Approval(mut request) = approval("c_1") else {
+        unreachable!("an approval");
+    };
+    let script: Vec<String> = (1..=80).map(|line| format!("echo {line}")).collect();
+    request.detail = ApprovalDetail::Command(CommandDetail {
+        command: script.join("\n"),
+        cwd: "/work/app".to_owned(),
+        outside_sandbox: false,
+    });
+    ask(&mut app, &link, 12, ServerRequest::Approval(request), now);
+    let at = now + dialog::GRACE;
+    let rows = text(&app.frame(at).1);
+    assert!(
+        rows.iter().any(|row| row.contains("ctrl+o shows it whole")),
+        "the hint row says so: {rows:#?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("echo 80")),
+        "cut in the dialog"
+    );
+
+    key(&mut app, "ctrl+o", at + dialog::GRACE);
+    assert!(app.viewing());
+    let rows = text(&app.viewer_frame(200, 99, at));
+    for line in ["echo 1", "echo 40", "echo 80"] {
+        assert!(
+            rows.iter().any(|row| row.trim_start() == line),
+            "{line} is not shown whole: {rows:#?}"
+        );
+    }
+    assert!(rows.iter().any(|row| row.contains("? Run cargo build?")));
+    key(&mut app, "esc", at + dialog::GRACE * 2);
+    assert!(!app.viewing());
+    assert!(answers(&link).is_empty(), "returning answered nothing");
+    let rows = text(&app.frame(at + dialog::GRACE * 2).1);
+    assert!(rows.iter().any(|row| row.contains("? Run cargo build?")));
+
+    // Shown whole again, then settled elsewhere: the viewer closes with it.
+    key(&mut app, "ctrl+o", at + dialog::GRACE * 4);
+    assert!(app.viewing());
+    link.give(event(Event::RequestResolved(RequestResolved {
+        request_id: RequestId::Number(12),
+        resolution: Resolution::Cancelled,
+    })));
+    drain(&mut app, at + dialog::GRACE * 4);
+    assert!(!app.viewing());
+}
+
 /// Shows a dialog, and draws the frame with its answers as the loop does at
 /// the end of its grace: the time a key may answer it.
 fn shown_dialog(app: &mut App, link: &Scripted, id: i64, now: Instant) -> Instant {
@@ -1818,7 +1875,10 @@ fn a_dialog_is_drawn_again_when_the_look_changes() {
     let mono = Capabilities::detect(|_| None, Platform::Unix, Overrides::default());
     app.set_caps(&mono);
     let after = app.frame(at).1;
-    assert_eq!(text(&before), text(&after));
+    // The dialog's rows say the same; the hint row's separator is the
+    // glyph set's, which the new look changed.
+    let dialog = |rows: &[Line]| text(&rows[..rows.len() - 1]);
+    assert_eq!(dialog(&before), dialog(&after));
     assert_ne!(before, after, "the rows kept the old look");
 }
 

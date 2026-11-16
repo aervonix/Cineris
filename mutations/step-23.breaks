@@ -828,3 +828,23 @@ caught-by:
     cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
     cortex-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
     cortex-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
+
+[break] ctrl-o-does-not-show-a-dialog-whole
+rule: Ctrl+O in an approval or trust dialog shows its request whole, in the viewer.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::key
+find: (Asks::Approval { .. } | Asks::Trust { .. }, Action::ShowWhole) => Keyed::ShowWhole
+replace: (Asks::Approval { .. } | Asks::Trust { .. }, Action::ShowWhole) => Keyed::Nothing
+packages: cortex-tui
+caught-by:
+    app::tests::ctrl_o_shows_the_request_whole_and_esc_returns_to_its_dialog
+
+[break] a-whole-view-outlives-its-dialog
+rule: A request shown whole closes the viewer when its dialog is no longer the one open.
+file: crates/cortex-tui/src/app/state/viewer.rs
+in: App::viewing
+find: .is_none_or(|id| self.dialogs.front().is_some_and(|dialog| &dialog.id == id))
+replace: .is_none_or(|_| true)
+packages: cortex-tui
+caught-by:
+    app::tests::ctrl_o_shows_the_request_whole_and_esc_returns_to_its_dialog
