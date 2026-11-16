@@ -98,3 +98,39 @@ A second reviewer read the changes since the first review (the hold point, the f
 **Found by the mutate run** after the first review's fixes: three tests no longer bit their breaks because a second guard now held (the load's check of the pins; the core's own report of a broken user file; the session's stamps), and one (`a_choice_made_in_the_session_outranks_the_files`) never had: its file asked for `supervised`, the default. The breaks now name the tests that catch them; a broken project file has a test of its own, with another file changed beside it; the vacuous test is gone, its rule held by `a_reload_never_undoes_a_model_or_a_level_chosen_in_the_session`.
 
 **Found by the stress run** (`stress -p cortex-core -p cortex-agent -p cortex-tools -p cortex-config --count 100`, seed 43 of 100): the look before a turn asked the loop's state, which stays idle until the loop picks up a turn a prompt has started. A second prompt sent at once looked; the look's blocking work let the first turn end; and the second, meant to queue, started a turn of its own (`approvals::a_wait_for_a_question_goes_on_while_a_turn_is_queued`). The look is now made only when no turn holds the session, asked as a prompt decides (`SessionHandle::turn_running`); the promote's check asks the same. Test: `reload::a_prompt_queued_behind_a_turn_not_yet_begun_does_not_look`, deterministic, with its break.
+
+## CI times
+
+<!-- written by cargo xtask ci-times, section "CI times": it replaces this up to the end mark -->
+Pull request 87, on `main` at `327cfaa`. "Main" is main's own run at `327cfaa` (run 43947714781).
+The PR's run is 43956687369, at `a66fafc`.
+
+| Job | Main, `327cfaa` | The PR at `a66fafc` |
+|---|---|---|
+| `lint-linux` | 55 s | 73 s |
+| `test-linux` | 104 s | 138 s |
+| `lint-windows` | 88 s | 89 s |
+| `test-windows` | 283 s | 188 s |
+| `pr-size-linux` (blocks nothing) | — | 379 s |
+| `pr-size-windows` (blocks nothing) | — | 286 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `a66fafc` (6 ms) | Windows, main (8 ms) | Windows, `a66fafc` (5 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 12.6 s | 14.5 s | 14.6 s | 9.0 s |
+| Tier 2, integration (40 s) | 34.2 s | 29.6 s | 38.2 s | 24.6 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 21.6 s | 26.0 s | 81.6 s | 56.6 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "CI times" -->
+
+## Windows, both trees on one runner
+
+<!-- written by cargo xtask ci-times: it replaces this up to the end mark -->
+`try` with `-f against=main` (run 43954436047), the median of 5 runs each, on one runner at 5.0 ms a process start:
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 6.8 s (2,504 tests) | 7.2 s (2,500) | −0.4 s | 20 s |
+| 2, integration | 19.6 s (1,469 tests) | 19.1 s (1,431) | +0.5 s | 40 s |
+| 3, system | 50.0 s (185 tests) | 49.6 s (185) | +0.4 s | 90 s |
+
+<!-- end of what cargo xtask ci-times wrote -->
