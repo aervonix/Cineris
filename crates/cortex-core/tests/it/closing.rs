@@ -1,8 +1,7 @@
-//! Closing a view of a session, as built in step 27 pending the owner's
-//! word (`docs/outstanding/an-observer-that-ends-a-session.md`,
-//! `docs/outstanding/a-closed-view-can-still-answer.md`): an observer never
-//! ends a session, and a client that closes its view leaves the session's
-//! open questions, as one that disconnects does.
+//! Closing a view of a session, as settled in step 27
+//! (`docs/architecture/11-rpc-protocol.md`, "As built in step 27"): an
+//! observer never ends a session, and a client that closes its view leaves
+//! the session's open questions, as one that disconnects does.
 
 use cortex_core::{ClientInfo, Outgoing};
 use cortex_protocol::error::code;
