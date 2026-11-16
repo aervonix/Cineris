@@ -177,6 +177,10 @@ const COMMANDS: &[(&str, &str)] = &[
     ("permissions", "The approvals stored here, to remove"),
     ("plan", "The plan: skip, reword, add or move its items"),
     (
+        "project",
+        "What is kept of this project: accept, edit, turn off or promote",
+    ),
+    (
         "profile",
         "Load this session with a settings profile, or list them",
     ),
@@ -196,7 +200,6 @@ const NOT_YET: &[&str] = &[
     "rewind",
     "lease",
     "usage",
-    "project",
     "extend",
     "mcp",
     "extensions",
@@ -310,8 +313,12 @@ pub struct App {
     /// When a dialog last took a key: the next dialog is ready no sooner
     /// than the repeat window after it.
     taken: Option<Instant>,
-    /// The panels (step 24), the plan's and the review's.
+    /// The panels (step 24): the plan's, the review's, the project's and
+    /// the usage's.
     panels: Panels,
+    /// The time of day, for what the panels say of times (an entry's age,
+    /// a limit's reset).
+    clock: cortex_base::SharedClock,
     /// The panel drawn with the focus in the last frame.
     panel_drawn: Option<u64>,
     /// When the last input no panel took was read: a key or a paste that
@@ -371,6 +378,7 @@ impl App {
     ) -> Self {
         let highlighter = start.highlighter.clone();
         let look = super::look(&start.settings, caps);
+        let clock: cortex_base::SharedClock = std::sync::Arc::new(cortex_base::SystemClock::new());
         let mut input = Input::new(start.keymap, start.history);
         input.set_width(view::input::text_width(width));
         input.set_commands(
@@ -447,7 +455,8 @@ impl App {
             note_cut: None,
             untaken: None,
             taken: None,
-            panels: panel::registered(),
+            panels: panel::registered(&clock),
+            clock,
             panel_drawn: None,
             panel_untaken: None,
             panel_held: None,

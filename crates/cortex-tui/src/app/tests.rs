@@ -38,6 +38,7 @@ mod dialogs;
 mod files;
 mod output;
 mod panels;
+mod project;
 mod restyle;
 mod sessions;
 mod trust_standing;

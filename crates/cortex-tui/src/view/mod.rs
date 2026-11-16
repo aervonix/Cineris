@@ -39,6 +39,7 @@ pub mod viewer;
 // Step 24: the panels.
 pub mod panel;
 pub mod plan;
+pub mod project;
 pub mod review;
 
 pub use blocks::{error, listing, notice, reasoning, reasoning_live, turn_summary, user};
