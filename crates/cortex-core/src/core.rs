@@ -49,7 +49,7 @@ use cortex_protocol::methods::{
 };
 use cortex_protocol::model::ModelRole;
 use cortex_protocol::session::{SandboxStatus, SessionSettings, SessionSummary};
-use cortex_protocol::{ErrorData, ErrorKind, Item, ItemId, LeaseId, SessionId};
+use cortex_protocol::{ErrorData, ErrorKind, ItemId, LeaseId, SessionId};
 use cortex_session::entry::{LeaseEvent, LeaseRecord};
 use cortex_session::{Body, Git, Restore, SessionsRoot};
 use cortex_tools::PlanBoard;
@@ -1335,43 +1335,26 @@ impl Core {
                 let reader = self.inner.clients.queue(client);
                 let (seq, progress) = live.sink.snapshot(reader.as_deref());
                 let log = Arc::clone(&live.log);
-                let mut items = Self::blocking(move || {
+                let logged = Self::blocking(move || {
                     lock(&log)
                         .items()
                         .map_err(|problem| error(ErrorKind::Internal, "store_failed", problem))
                 })
                 .await?;
-                // An item that completed between the two looks is in the
-                // log already, and is not also given as in progress.
-                let incomplete: Vec<ItemId> = progress
-                    .iter()
-                    .filter_map(|item| item.id().map(ItemId::new))
-                    .filter(|id| !items.iter().any(|item| item.id() == Some(id.as_str())))
-                    .collect();
-                items.extend(progress.into_iter().filter(|item| {
-                    item.id()
-                        .is_some_and(|id| incomplete.iter().any(|known| known.as_str() == id))
-                }));
-                if let Some(wanted) = &params.item_id {
-                    items.retain(|item| item.id() == Some(wanted.as_str()));
-                }
-                let start = params
-                    .cursor
-                    .as_deref()
-                    .and_then(|cursor| cursor.parse::<usize>().ok())
-                    .unwrap_or(0);
-                let limit = params.limit.map_or(usize::MAX, |limit| limit as usize);
-                let total = items.len();
-                let page: Vec<Item> = items.into_iter().skip(start).take(limit).collect();
-                let next = start + page.len();
-                let incomplete = incomplete
-                    .into_iter()
-                    .filter(|id| page.iter().any(|item| item.id() == Some(id.as_str())))
-                    .collect();
+                // The log by a cursor of its own, and the items in progress
+                // whole in the last page, so nothing moves between pages
+                // (settled in step 27).
+                let page = crate::paging::page(
+                    logged,
+                    progress,
+                    params.item_id.as_ref(),
+                    params.cursor.as_deref(),
+                    params.limit,
+                )?;
                 Ok(OpResult::SessionRead(SessionReadResult {
-                    items: page,
-                    incomplete,
-                    next_cursor: (next < total).then(|| next.to_string()),
+                    items: page.items,
+                    incomplete: page.incomplete,
+                    next_cursor: page.next_cursor,
                     seq,
                 }))
             }

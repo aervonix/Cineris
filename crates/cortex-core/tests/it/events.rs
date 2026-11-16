@@ -9,7 +9,7 @@ use cortex_protocol::methods::{Op, OpResult, SessionReadParams};
 use cortex_protocol::{Item, ItemId, Part, StopReason};
 use cortex_testkit::{Gate, Response};
 
-use crate::{Front, World, settle};
+use crate::{Front, World, says, settle};
 
 async fn read(
     front: &Front,
@@ -377,5 +377,80 @@ fn a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync()
         assert_eq!(whole_events(&stopped), expected);
         front.close().await;
         stopped.close().await;
+    });
+}
+
+/// `session/read` pages the log by a cursor of its own, and gives the items
+/// in progress whole in the last page, past its limit: a client that reads
+/// a running session a page at a time draws each item once, and the answer
+/// in progress only in the last page (settled in step 27; paged as one
+/// list, an item in progress that completed before an earlier one moved
+/// between pages).
+#[test]
+fn the_items_in_progress_come_whole_in_the_last_page_of_a_read() {
+    let gate = Gate::new();
+    let world = World::new(
+        "read_pages",
+        [
+            says("First."),
+            Response::new()
+                .text_in(&["Second "])
+                .wait(&gate)
+                .text(" answer.")
+                .end(StopReason::End),
+        ],
+    );
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("one").await;
+        front.prompt("two").await;
+        front
+            .until(|seen| {
+                seen.iter().any(|outgoing| {
+                    matches!(outgoing, Outgoing::Event(event)
+                        if matches!(&event.event, Event::ItemDelta(delta)
+                            if matches!(&delta.delta, Delta::Text(text) if text.text.contains("Second"))))
+                })
+            })
+            .await;
+        let late = front.join(ClientInfo::user()).await;
+        let mut pages = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = read(&late, None, Some(1), cursor).await;
+            cursor = page.next_cursor.clone();
+            pages.push(page);
+            if cursor.is_none() {
+                break;
+            }
+        }
+        let (last, before) = pages.split_last().unwrap();
+        assert!(!before.is_empty(), "the log has more than one item");
+        for page in before {
+            assert_eq!(page.items.len(), 1, "{:?}", page.items);
+            assert!(page.incomplete.is_empty(), "an item in progress before the last page");
+        }
+        // The last item of the log, and the answer in progress past the
+        // limit.
+        assert_eq!(last.items.len(), 2, "{:?}", last.items);
+        let Item::AssistantMessage(answer) = &last.items[1] else {
+            panic!("not the answer in progress: {:?}", last.items);
+        };
+        assert_eq!(text_of(&last.items[1]), "Second ");
+        assert_eq!(last.incomplete, std::slice::from_ref(&answer.id));
+        let mut ids: Vec<&str> = pages
+            .iter()
+            .flat_map(|page| page.items.iter().filter_map(Item::id))
+            .collect();
+        let count = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), count, "an item drawn twice");
+
+        gate.open();
+        front.turns(2).await;
+        front.close().await;
+        late.close().await;
     });
 }
