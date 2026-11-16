@@ -130,7 +130,11 @@ pub struct SessionState {
     /// paths: the workspace, the session's temporary directory and any the
     /// configuration adds. A front end keeps a program it runs for the
     /// person (an external editor) out of them, since a command could have
-    /// put one there (since step 23).
+    /// put one there (since step 23). The list is the same whether or not
+    /// commands are confined: where they are not (the sandbox off, the
+    /// `unrestricted` level, or a system the sandbox does not confine yet)
+    /// a command may write anywhere, and keeping out of these protects
+    /// nothing then.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub write_roots: Vec<String>,
     /// What the user has said of the project's trust, for a front end's

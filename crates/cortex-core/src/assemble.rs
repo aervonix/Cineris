@@ -322,11 +322,63 @@ pub(crate) fn pinned_rules(
         let rules_of = if loaded.profile.as_deref() == Some(name.as_str()) {
             own(loaded, true)
         } else {
-            own(&with_profile(name)?, true)
+            let other = with_profile(name)?;
+            // A profile the managed file's lock keeps from being selected
+            // never applies: another profile's rules are not pinned under
+            // its name (the review of step 23).
+            if other.profile.as_deref() != Some(name.as_str()) {
+                continue;
+            }
+            own(&other, true)
         };
         rules.profiles.push((name.clone(), rules_of));
     }
     Ok(rules)
+}
+
+/// The project's settings that wait for trust, as the question lists them
+/// and as trusting turns them on: those its files set outside any profile,
+/// and those each profile its files define sets, whichever is selected,
+/// each with the profile (`None`: outside any). `loaded` is a load that
+/// does not trust the project; `with_profile` loads it so with another
+/// profile selected (the review of step 23: a project's profile can be
+/// selected, and its settings must have been shown).
+pub(crate) fn held_back_settings(
+    loaded: &Loaded,
+    with_profile: &dyn Fn(&str) -> Result<Loaded, Box<ErrorData>>,
+) -> Result<Vec<(Option<String>, cortex_config::Withheld)>, Box<ErrorData>> {
+    let project = |kind: LayerKind| matches!(kind, LayerKind::Project | LayerKind::ProjectLocal);
+    let in_profile = |withheld: &cortex_config::Withheld| {
+        withheld.origin.layer == LayerKind::Profile
+            && withheld.origin.defined_in.is_some_and(project)
+    };
+    let mut settings: Vec<_> = loaded
+        .withheld
+        .iter()
+        .filter(|withheld| withheld.origin.layer != LayerKind::Profile)
+        .map(|withheld| (None, withheld.clone()))
+        .collect();
+    for name in &loaded.project_profiles {
+        let other;
+        let of = if loaded.profile.as_deref() == Some(name.as_str()) {
+            loaded
+        } else {
+            other = with_profile(name)?;
+            // One the managed file's lock keeps from being selected never
+            // applies.
+            if other.profile.as_deref() != Some(name.as_str()) {
+                continue;
+            }
+            &other
+        };
+        settings.extend(
+            of.withheld
+                .iter()
+                .filter(|withheld| in_profile(withheld))
+                .map(|withheld| (Some(name.clone()), withheld.clone())),
+        );
+    }
+    Ok(settings)
 }
 
 /// What the trust question asks of a project, and what a yes pins.
@@ -362,6 +414,9 @@ fn held_back(withheld: &cortex_config::Withheld) -> String {
         TrustClass::RunsCode => "it can run code",
         TrustClass::WidensAccess => "it widens what the session may do",
         TrustClass::RaisesCost => "it can raise what you spend",
+        TrustClass::StopsCommands => {
+            "it takes variables from every command: it could stop them all"
+        }
         _ => "it waits for trust",
     };
     format!("{} = {} ({does})", withheld.key, withheld.value)
@@ -493,11 +548,26 @@ pub(crate) fn look(
             changed: rules_only,
         });
     }
-    for withheld in &trust.loaded.withheld {
+    let untrusted_load = |profile: &str| {
+        let mut options = place.load.clone();
+        options.trust = cortex_config::ProjectTrust::Untrusted;
+        options.profile = Some(profile.to_owned());
+        cortex_config::load(&options).map_err(|failure| {
+            Box::new(ErrorData::new(
+                ErrorKind::Config,
+                "invalid_configuration",
+                failure.render(&inner.options.env),
+            ))
+        })
+    };
+    for (profile, withheld) in held_back_settings(&trust.loaded, &untrusted_load)? {
         resources.push(TrustResource {
             kind: TrustResourceKind::Settings,
-            name: withheld.key.to_string(),
-            detail: held_back(withheld),
+            name: match profile {
+                Some(profile) => format!("profiles.{profile}.{}", withheld.key),
+                None => withheld.key.to_string(),
+            },
+            detail: held_back(&withheld),
             changed: false,
         });
     }
@@ -518,6 +588,11 @@ pub(crate) fn look(
 /// put the session together with: after a yes, worked out again from the
 /// store, so that a change to the files while the question was open reads
 /// as rules changed. Not now is kept in this core only. Blocks.
+///
+/// An answer the trust store cannot keep still opens the session, with a
+/// notice (the review of step 23): a yes trusts the project for this
+/// session alone, as `--trust-project` would, while its rules are still the
+/// ones shown; a never is taken as not now.
 pub(crate) fn answer_trust(
     inner: &Inner,
     wanted: &Wanted,
@@ -525,48 +600,110 @@ pub(crate) fn answer_trust(
     answer: TrustAnswer,
     trust: Trust,
 ) -> Result<Trust, Box<ErrorData>> {
-    let failed = |failure: cortex_policy::TrustError| {
-        error(
-            ErrorKind::Internal,
-            "store_failed",
-            format!("The answer to the trust question could not be kept: {failure}"),
-        )
-    };
     let place = place(inner, wanted)?;
     let Some(state) = place.state.as_ref() else {
         return Ok(trust);
     };
     let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
+    let not_now = || {
+        inner
+            .not_now
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(question.key.clone());
+    };
     match answer {
         TrustAnswer::Yes => {
             let pin = [question.pin.clone()];
-            if question.rules_only {
-                store.approve(&question.key, &pin).map_err(failed)?;
+            let kept = if question.rules_only {
+                store.approve(&question.key, &pin)
             } else {
-                store
-                    .trust(&question.key, &question.root, &pin)
-                    .map_err(failed)?;
+                store.trust(&question.key, &question.root, &pin)
+            };
+            match kept {
+                Ok(_) => self::trust(inner, place.state.as_ref(), &place.root, &place.load),
+                Err(failure) => trusted_unkept(inner, &place.load, question, &failure),
             }
-            self::trust(inner, place.state.as_ref(), &place.root, &place.load)
         }
-        TrustAnswer::Never => {
-            store
-                .refuse(&question.key, &question.root)
-                .map_err(failed)?;
+        TrustAnswer::Never => match store.refuse(&question.key, &question.root) {
             // In force at once: the session asked in is put together with
             // the project refused, as a later start is, not with the trust
             // worked out before the answer (the review of the second pull
             // request).
-            self::trust(inner, place.state.as_ref(), &place.root, &place.load)
-        }
+            Ok(()) => self::trust(inner, place.state.as_ref(), &place.root, &place.load),
+            Err(failure) => {
+                not_now();
+                Ok(Trust {
+                    problem: Some(format!(
+                        "Your answer could not be kept, so this project will be asked about \
+                         again when the harness starts next; until then it is not trusted: \
+                         {failure}"
+                    )),
+                    ..trust
+                })
+            }
+        },
         TrustAnswer::NotNow => {
-            inner
-                .not_now
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(question.key.clone());
+            not_now();
             Ok(trust)
         }
+    }
+}
+
+/// The trust of a session whose yes the trust store could not keep: the
+/// project trusted for this session, as `--trust-project` trusts it for a
+/// run, when its rules are still the ones that were shown; when they
+/// changed while the question was open, what they could loosen is set
+/// aside, as it is after a yes the store kept.
+fn trusted_unkept(
+    inner: &Inner,
+    options: &LoadOptions,
+    question: &TrustQuestion,
+    failure: &cortex_policy::TrustError,
+) -> Result<Trust, Box<ErrorData>> {
+    let load = |trusted: bool, profile: Option<&str>| {
+        let mut options = options.clone();
+        options.trust = if trusted {
+            cortex_config::ProjectTrust::Trusted
+        } else {
+            cortex_config::ProjectTrust::Untrusted
+        };
+        if let Some(profile) = profile {
+            options.profile = Some(profile.to_owned());
+        }
+        cortex_config::load(&options).map_err(|failure| {
+            Box::new(ErrorData::new(
+                ErrorKind::Config,
+                "invalid_configuration",
+                failure.render(&inner.options.env),
+            ))
+        })
+    };
+    let peek = load(true, None)?;
+    let rules = pinned_rules(&peek, &|profile| load(true, Some(profile)))?;
+    if Definition::of_project_rules(&rules) == question.pin {
+        Ok(Trust {
+            rules: true,
+            repository: true,
+            loaded: peek,
+            problem: Some(format!(
+                "Your answer could not be kept, so this project is trusted for this session \
+                 only, and will be asked about again: {failure}"
+            )),
+            standing: TrustStanding::ForTheRun,
+        })
+    } else {
+        Ok(Trust {
+            rules: false,
+            repository: true,
+            loaded: load(false, None)?,
+            problem: Some(format!(
+                "Your answer could not be kept, so this project is trusted for this session \
+                 only; its permission rules changed while you were asked, so its settings and \
+                 its allow rules are set aside: {failure}"
+            )),
+            standing: TrustStanding::RulesChanged,
+        })
     }
 }
 

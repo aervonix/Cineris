@@ -65,7 +65,7 @@ shell.program                      user only
 shell.args                         user only
 shell.timeout                      tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
 shell.max_timeout                  tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
-shell.env_remove                   preference
+shell.env_remove                   stops commands
 context.auto_compact               preference
 context.background                 user only
 context.compact_at                 raises cost

@@ -1002,14 +1002,14 @@
         },
         "env_remove": {
           "default": [],
-          "description": "Environment variables that commands are not given, besides the key variables of the providers, which are always removed. A name may end with `*` for every variable that starts so. Every layer adds to the list.",
+          "description": "Environment variables that commands are not given, besides the key variables of the providers, which are always removed. A name may end with `*` for every variable that starts so. Every layer adds to the list. A project's entries wait for trust: `\"*\"` would take `PATH` away and stop every command.",
           "items": {
             "type": "string"
           },
           "type": "array",
           "x-cortex-effect": "next epoch",
           "x-cortex-joined": true,
-          "x-cortex-trust": "preference"
+          "x-cortex-trust": "stops commands"
         },
         "max_timeout": {
           "default": "30m",

@@ -209,6 +209,117 @@ fn a_question_whose_client_went_away_ends_as_no_answer() {
     });
 }
 
+/// Waits until the front has been put a question.
+async fn asked(front: &Front) {
+    front
+        .until(|seen| {
+            seen.iter().any(|outgoing| {
+                matches!(
+                    outgoing,
+                    Outgoing::Request {
+                        request: ServerRequest::Question(_),
+                        ..
+                    }
+                )
+            })
+        })
+        .await;
+}
+
+/// The asking client closes the session while the undo's question is open
+/// (the review of step 23): the question is withdrawn, the undo ends
+/// without changing the ended session or its files, an answer that comes
+/// later is refused, and the session can be opened again at once.
+#[test]
+fn an_undos_question_ends_when_its_session_is_closed() {
+    let world = changed_world("undo_closed");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("change it").await;
+        world.put("a.txt", "edited by hand\n");
+        let (asking, client, op) = (core.clone(), front.client.id, undo(&front));
+        let undoing = tokio::spawn(async move { asking.handle(client, op).await });
+        asked(&front).await;
+        let (id, ..) = questions(&front).remove(0);
+        front.close().await;
+        let undone = undoing.await.unwrap();
+        assert_eq!(
+            undone.map(|_| ()).map_err(|error| error.code),
+            Err("session_not_open".to_owned())
+        );
+        let late = core.respond(
+            front.client.id,
+            &id,
+            ServerResponse::Question(QuestionResponse {
+                answer: Some("Put them back".to_owned()),
+            }),
+        );
+        assert_eq!(
+            late.map_err(|error| error.code),
+            Err("request_not_open".to_owned())
+        );
+        assert_eq!(world.read("a.txt").as_deref(), Some("edited by hand\n"));
+        let other = core.connect(ClientInfo::user());
+        let (reopened, _) = crate::not_now(
+            &core,
+            &other,
+            core.handle(
+                other.id,
+                Op::SessionOpen(cortex_protocol::methods::SessionRef {
+                    session_id: front.session.clone(),
+                }),
+            ),
+        )
+        .await;
+        reopened.expect("the closed session opens again");
+    });
+}
+
+/// The core's end withdraws an undo's open question (the review of step
+/// 23): the undo ends as no answer, and the edited file is kept.
+#[test]
+fn an_undos_question_ends_when_the_core_ends() {
+    let world = changed_world("undo_shutdown");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("change it").await;
+        world.put("a.txt", "edited by hand\n");
+        let (asking, client, op) = (core.clone(), front.client.id, undo(&front));
+        let undoing = tokio::spawn(async move { asking.handle(client, op).await });
+        asked(&front).await;
+        core.shutdown().await;
+        let _ = undoing.await.unwrap();
+        assert_eq!(world.read("a.txt").as_deref(), Some("edited by hand\n"));
+    });
+}
+
+/// `workspace/files` walks under the core's token (the review of step 23):
+/// a core that is ending lists nothing.
+#[test]
+fn the_workspace_is_not_walked_once_the_core_is_ending() {
+    let world = World::new("workspace_files_ending", [says("Nothing.")]);
+    world.put("src/new.rs", "new");
+    let cancel = cortex_base::CancelToken::new();
+    let core = world.core_with(|options| options.cancel = cancel.clone());
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        cancel.cancel();
+        let listed = front
+            .op(Op::WorkspaceFiles(WorkspaceFilesParams {
+                session_id: front.session.clone(),
+                limit: None,
+            }))
+            .await
+            .unwrap();
+        let OpResult::WorkspaceFiles(listed) = listed else {
+            panic!("not the files");
+        };
+        assert!(listed.paths.is_empty(), "{:?}", listed.paths);
+    });
+}
+
 #[test]
 fn the_workspace_is_listed_newest_first_as_the_ignore_rules_leave_it() {
     let world = World::new("workspace_files", [says("Nothing.")]);

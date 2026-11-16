@@ -110,7 +110,9 @@ pub struct LoadOptions {
     /// environment. A test points the managed file, which has a fixed place
     /// on Linux, somewhere of its own.
     pub dirs: Dirs,
-    /// The workspace root, for the two project layers. `None` loads none.
+    /// The workspace root, for the two project layers. `None` loads none,
+    /// and a selected profile no other layer defines is then not an error:
+    /// a project's file may define it, and a load with the workspace says.
     pub workspace: Option<PathBuf>,
     /// Whether the project is trusted.
     pub trust: ProjectTrust,
@@ -367,7 +369,8 @@ impl fmt::Debug for FileLayer {
 /// A [`LoadFailure`] when any layer has an error: a file that cannot be
 /// read or parsed, a value of the wrong type or out of range, an unknown
 /// key in an enforced table, a newer `config_version`, a profile that does
-/// not exist, or a command-line setting that is not one.
+/// not exist (when there is a workspace), or a command-line setting that is
+/// not one.
 pub fn load(options: &LoadOptions) -> Result<Loaded, LoadFailure> {
     load_layers(options).map(|(loaded, _)| loaded)
 }
@@ -604,6 +607,8 @@ fn read_locks(layers: &[FileLayer], diagnostics: &mut Vec<Diagnostic>) -> Vec<Ke
 }
 
 /// Applies the selected profile from every file layer that defines it.
+/// A profile no layer defines is an error, except in a load with no
+/// workspace, which cannot see a project's profiles.
 ///
 /// `--profile` chooses the profile over the `profile` key, unless the
 /// managed file locks that key: a lock holds against the command line too,
@@ -673,7 +678,11 @@ fn apply_profile(
             table,
         );
     }
-    if !defined {
+    // With no workspace the project's files are not read, and one of them
+    // may define the profile: a session's load, which reads them, says
+    // whether it exists (the review of step 23: a profile only the project
+    // defines could never be selected).
+    if !defined && options.workspace.is_some() {
         let mut known: Vec<&str> = layers
             .iter()
             .filter_map(|layer| layer.document.table.get("profiles")?.as_table())

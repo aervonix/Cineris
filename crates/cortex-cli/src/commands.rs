@@ -702,8 +702,12 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 }
                 if !trusted.settings.is_empty() {
                     out.push_str("Its settings that now apply:\n");
-                    for setting in &trusted.settings {
-                        out.push_str(&format!("  {} = {}\n", setting.key, setting.value));
+                    for (profile, setting) in &trusted.settings {
+                        let place = profile
+                            .as_deref()
+                            .map(|profile| format!("  (profile {profile})"))
+                            .unwrap_or_default();
+                        out.push_str(&format!("  {} = {}{place}\n", setting.key, setting.value));
                     }
                 }
                 out!("{out}");

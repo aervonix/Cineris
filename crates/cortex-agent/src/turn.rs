@@ -65,6 +65,12 @@ use crate::toolset::ToolSet;
 use crate::usage::{UsageBook, add_request};
 use crate::verify::{Verifier, VerifyCx, VerifyOutcome};
 
+/// The library point just after a turn's `turn.completed` is told, before
+/// `session.updated` and `session.idle` (`cortex_base::hook`): a test holds
+/// it to look at the session as a front end that acts on the event finds
+/// it.
+pub const TURN_COMPLETED_TOLD: &str = "conclude: turn.completed is told";
+
 /// Everything a session is made of.
 pub struct SessionParts {
     /// What the loop is told about the session and does not change.
@@ -1752,8 +1758,10 @@ impl Session {
             duration: now.saturating_sub(turn.started),
             times: self.times.finish(now),
         }));
-        self.emit(turn, Event::TurnCompleted(completed));
-
+        // The session's state changes before the end is told: a front end
+        // that acts on `turn.completed` (an undo the moment the idle box
+        // shows) finds the turn no longer running (found by the review of
+        // the eighth tooling step).
         let next = {
             let mut inbox = self.shared.lock();
             // An interrupt that came as the turn was finishing does not
@@ -1764,7 +1772,14 @@ impl Session {
                 self.next_turn(&mut inbox)
             } else {
                 Self::hold(&mut inbox);
-                None
+                // A compaction asked for during a turn that failed still
+                // runs, as a turn that only compacts: no turn follows to
+                // take it (the review of step 23). An interrupt drops it.
+                if turn.cancel.is_cancelled() {
+                    None
+                } else {
+                    self.compact_turn(&mut inbox)
+                }
             };
             inbox.running = next.as_ref().map(|(running, _)| running.clone());
             if store_failed {
@@ -1772,16 +1787,22 @@ impl Session {
                 inbox.reload = true;
                 inbox.diverged = true;
             }
+            next
+        };
+        self.emit(turn, Event::TurnCompleted(completed));
+        cortex_base::hook::point(TURN_COMPLETED_TOLD);
+        {
+            let inbox = self.shared.lock();
             // Told under the lock, so that a prompt accepted from another
-            // thread is not followed by a stale "idle".
+            // thread is not followed by a stale "idle": one accepted since
+            // the turn ended is running.
             self.shared.emit_updated(&inbox);
-            if next.is_none() && inbox.queue.is_empty() && inbox.held.is_empty() {
+            if inbox.running.is_none() && inbox.queue.is_empty() && inbox.held.is_empty() {
                 self.shared
                     .emitter
                     .emit(None, Event::SessionIdle(SessionIdle {}));
             }
-            next
-        };
+        }
         if next.is_none() {
             self.enter(TurnState::Idle);
         }
@@ -1813,22 +1834,33 @@ impl Session {
             // A compaction asked for during the turn's last request found
             // no boundary: a turn that only compacts, as an idle session's
             // `session/compact` runs.
-            let position = inbox
-                .pending
-                .iter()
-                .position(|pending| matches!(pending, Pending::Compact(_)))?;
-            let Some(Pending::Compact(focus)) = inbox.pending.remove(position) else {
-                return None;
-            };
-            let prompt = Prompt {
-                input: Vec::new(),
-                delivery: None,
-                compact: Some(focus),
-            };
-            (inbox.turn_ids.next_id(), prompt)
+            return self.compact_turn(inbox);
         };
         let running = Running {
             id: turn,
+            cancel: self.shared.cancel.child(),
+            kill: CancelToken::new(),
+        };
+        Some((running, prompt))
+    }
+
+    /// A turn that only compacts, for a compaction still pending when a
+    /// turn ended with nothing to follow it.
+    fn compact_turn(&self, inbox: &mut Inbox) -> Option<(Running, Prompt)> {
+        let position = inbox
+            .pending
+            .iter()
+            .position(|pending| matches!(pending, Pending::Compact(_)))?;
+        let Some(Pending::Compact(focus)) = inbox.pending.remove(position) else {
+            return None;
+        };
+        let prompt = Prompt {
+            input: Vec::new(),
+            delivery: None,
+            compact: Some(focus),
+        };
+        let running = Running {
+            id: inbox.turn_ids.next_id(),
             cancel: self.shared.cancel.child(),
             kill: CancelToken::new(),
         };

@@ -28,6 +28,7 @@
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
+use std::future::Future;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -43,7 +44,7 @@ use cortex_config::schema::{
 use cortex_config::{Dirs, Env, LoadOptions, Loaded, StateDir};
 use cortex_core::{ClientId, ClientInfo, Core, CoreOptions, EventQueue, Outgoing, TokioTimer};
 use cortex_protocol::jsonrpc::RequestId;
-use cortex_protocol::methods::{Op, ServerResponse};
+use cortex_protocol::methods::{Op, OpResult, ServerResponse};
 use cortex_protocol::session::SessionSettings;
 use cortex_protocol::{ErrorData, ErrorKind, SessionId};
 use cortex_tui::app::{
@@ -117,9 +118,12 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
             return exit::USAGE;
         }
     };
-    let log = start_log(&run, &env, &loaded);
+    // One filter for the log and the crash report: what the log masks, the
+    // report masks too.
+    let secrets = Arc::new(SecretFilter::new());
+    let log = start_log(&run, &env, &loaded, &secrets);
     let logs = StateDir::from_dirs(&Dirs::from_env(&env)).map(|state| state.logs_dir());
-    install_panic_hook(logs.clone());
+    install_panic_hook(logs.clone(), secrets);
 
     // A rule the command line gives that cannot be read stops the program,
     // as it does a headless run: a deny that was mistyped must not be lost.
@@ -460,7 +464,12 @@ fn overrides(terminal: &TerminalSettings) -> Overrides {
 
 /// Starts the log: the file alone, since standard error is the terminal.
 /// Its level is `--log-level`, then `CORTEX_LOG`, then `log.level`.
-fn start_log(run: &Run, env: &Env, loaded: &Loaded) -> Option<Arc<LogHandle>> {
+fn start_log(
+    run: &Run,
+    env: &Env,
+    loaded: &Loaded,
+    secrets: &Arc<SecretFilter>,
+) -> Option<Arc<LogHandle>> {
     let clock = Arc::new(SystemClock::new());
     let mut options = LogOptions::new(clock);
     let level = run
@@ -476,7 +485,7 @@ fn start_log(run: &Run, env: &Env, loaded: &Loaded) -> Option<Arc<LogHandle>> {
     options.file = StateDir::from_dirs(&Dirs::from_env(env))
         .map(|state| FileOptions::in_dir(state.logs_dir()));
     options.stderr = None;
-    options.secrets = Arc::new(SecretFilter::new());
+    options.secrets = Arc::clone(secrets);
     let (subscriber, handle) = log::start(options).ok()?;
     tracing::subscriber::set_global_default(subscriber).ok()?;
     Some(Arc::new(handle))
@@ -498,7 +507,7 @@ static CRASH: OnceLock<PathBuf> = OnceLock::new();
 /// printed when the program ends; any other thread's panic, which the core
 /// may have caught and gone on from, leaves the terminal the interface's,
 /// so the default hook's message would land in the middle of a frame.
-fn install_panic_hook(logs: Option<PathBuf>) {
+fn install_panic_hook(logs: Option<PathBuf>, secrets: Arc<SecretFilter>) {
     let _ = INTERFACE.set(std::thread::current().id());
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
@@ -519,16 +528,29 @@ fn install_panic_hook(logs: Option<PathBuf>) {
         let written = cortex_base::private::create_dir_all(logs)
             .and_then(|()| cortex_base::private::create_new(&path))
             .and_then(|mut file| {
-                writeln!(
-                    file,
-                    "cortex {} panicked on its {name} thread:\n{info}\n\n{backtrace}",
-                    crate::VERSION
-                )
+                write!(file, "{}", crash_report(&name, info, &backtrace, &secrets))
             });
         if written.is_ok() {
             let _ = CRASH.set(path);
         }
     }));
+}
+
+/// What the crash report says: the panic's message through the secret
+/// filter the log uses, since a panic can quote the text it was handling (a
+/// string slice's panic quotes up to 256 bytes of it, which may be a prompt
+/// or a key), and the backtrace (the review of step 23).
+fn crash_report(
+    thread: &str,
+    info: &dyn std::fmt::Display,
+    backtrace: &dyn std::fmt::Display,
+    secrets: &SecretFilter,
+) -> String {
+    format!(
+        "cortex {} panicked on its {thread} thread:\n{}\n\n{backtrace}\n",
+        crate::VERSION,
+        secrets.redact(&info.to_string())
+    )
 }
 
 // --------------------------------------------------------------- the core
@@ -669,6 +691,50 @@ impl Drop for Running {
     }
 }
 
+/// The lane: runs what it is sent one at a time, in the order sent, and
+/// answers each. An operation that panics is answered `Internal` and the
+/// lane goes on: the ones queued behind it are run and answered, and its
+/// write is counted as done (the review of step 23: a panic ended the lane,
+/// leaving everything behind it unanswered and the app waiting for good).
+async fn run_lane<F, W>(
+    mut written: tokio::sync::mpsc::UnboundedReceiver<(Ticket, Op, bool)>,
+    routes: Routes,
+    handle: F,
+    done: Done,
+    wake: Slot,
+) where
+    F: Fn(Op) -> W,
+    W: Future<Output = Result<OpResult, Box<ErrorData>>> + Send + 'static,
+{
+    while let Some((ticket, op, write)) = written.recv().await {
+        let running = routes.running(write);
+        let result = contained(handle(op)).await;
+        drop(running);
+        push(&done, Inbound::Done(ticket, result));
+        wake.wake();
+    }
+}
+
+/// Runs one operation on a task of its own, so that a panic in it is that
+/// operation's failure and not its runner's.
+#[expect(
+    clippy::result_large_err,
+    reason = "the result goes straight into `Inbound::Done`, which holds it so"
+)]
+async fn contained<W>(work: W) -> Result<OpResult, ErrorData>
+where
+    W: Future<Output = Result<OpResult, Box<ErrorData>>> + Send + 'static,
+{
+    match tokio::spawn(work).await {
+        Ok(result) => result.map_err(|error| *error),
+        Err(_) => Err(ErrorData::new(
+            ErrorKind::Internal,
+            "operation_failed",
+            "The operation failed inside the core; the log file has the details.",
+        )),
+    }
+}
+
 /// The answer to an operation that could not be handed to the core.
 fn core_gone(ticket: Ticket) -> Inbound {
     Inbound::Done(
@@ -747,22 +813,21 @@ impl CoreThread {
                     // The lane: what changes a session runs on a task of
                     // its own, one at a time in the order sent, so that the
                     // end below is never behind it.
-                    let (writes, mut written) =
+                    let (writes, written) =
                         tokio::sync::mpsc::unbounded_channel::<(Ticket, Op, bool)>();
                     let routes = Routes::default();
                     let lane_task = {
                         let core = core.clone();
-                        let (done, wake) = (Arc::clone(&thread_done), thread_slot.clone());
-                        let routes = routes.clone();
-                        tokio::spawn(async move {
-                            while let Some((ticket, op, write)) = written.recv().await {
-                                let running = routes.running(write);
-                                let result = core.handle(client.id, op).await.map_err(|e| *e);
-                                drop(running);
-                                push(&done, Inbound::Done(ticket, result));
-                                wake.wake();
-                            }
-                        })
+                        tokio::spawn(run_lane(
+                            written,
+                            routes.clone(),
+                            move |op| {
+                                let core = core.clone();
+                                async move { core.handle(client.id, op).await }
+                            },
+                            Arc::clone(&thread_done),
+                            thread_slot.clone(),
+                        ))
                     };
                     while let Some((ticket, op)) = lane.recv().await {
                         let route = routes.route(&op);
@@ -781,7 +846,9 @@ impl CoreThread {
                             let core = core.clone();
                             let (done, wake) = (Arc::clone(&thread_done), thread_slot.clone());
                             tokio::spawn(async move {
-                                let result = core.handle(client.id, op).await.map_err(|e| *e);
+                                let result =
+                                    contained(async move { core.handle(client.id, op).await })
+                                        .await;
                                 push(&done, Inbound::Done(ticket, result));
                                 wake.wake();
                             });
@@ -1045,6 +1112,94 @@ mod tests {
         }));
         assert!(panicked.is_err());
         assert_eq!(routes.route(&list()), Route::Beside);
+    }
+
+    /// The crash report masks what the log masks: a panic that quotes a
+    /// key does not put it in a file whose place is printed to be shared
+    /// (the review of step 23).
+    #[test]
+    fn the_crash_report_masks_a_key_the_panic_quotes() {
+        let key = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
+        let report = crash_report(
+            "main",
+            &format!("byte index 9 is not a char boundary; it is inside 'x' of `{key}`"),
+            &"the backtrace",
+            &SecretFilter::new(),
+        );
+        assert!(!report.contains(key), "{report}");
+        assert!(report.contains("not a char boundary"), "{report}");
+        assert!(report.contains("the backtrace"), "{report}");
+    }
+
+    /// An operation that panics in the lane is answered as failed, and the
+    /// ones queued behind it are run and answered in order; its write is
+    /// done, so a read after it runs beside the lane again (the review of
+    /// step 23: a panic ended the lane, leaving the app waiting for good).
+    #[test]
+    fn a_panic_in_the_lane_answers_that_operation_and_the_lane_goes_on() {
+        use cortex_protocol::methods::{Empty, PermissionsRevokeParams, SessionRef};
+        let session = cortex_protocol::SessionId::from("s_1");
+        let revoke = || {
+            Op::PermissionsRevoke(PermissionsRevokeParams {
+                session_id: session.clone(),
+                ids: vec![cortex_protocol::ApprovalId::from("a_1")],
+            })
+        };
+        let close = Op::SessionClose(SessionRef {
+            session_id: session.clone(),
+        });
+        let routes = Routes::default();
+        let done: Done = Arc::new(Mutex::new(VecDeque::new()));
+        let (send, written) = tokio::sync::mpsc::unbounded_channel();
+        for (number, op) in [revoke(), revoke(), close].into_iter().enumerate() {
+            let Route::Lane { write } = routes.route(&op) else {
+                panic!("a write runs in the lane");
+            };
+            send.send((Ticket(number as u64), op, write)).unwrap();
+        }
+        drop(send);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(run_lane(
+            written,
+            routes.clone(),
+            |op| async move {
+                match op {
+                    Op::PermissionsRevoke(_) => panic!("an operation that panics"),
+                    _ => Ok::<_, Box<ErrorData>>(OpResult::SessionClose(Empty {})),
+                }
+            },
+            Arc::clone(&done),
+            Slot::default(),
+        ));
+        let answered: Vec<(u64, Result<(), String>)> = done
+            .lock()
+            .unwrap()
+            .drain(..)
+            .map(|inbound| match inbound {
+                Inbound::Done(ticket, result) => {
+                    (ticket.0, result.map(drop).map_err(|error| error.code))
+                }
+                other => panic!("not an answer: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            answered,
+            [
+                (0, Err("operation_failed".to_owned())),
+                (1, Err("operation_failed".to_owned())),
+                (2, Ok(()))
+            ]
+        );
+        let list = Op::PermissionsList(SessionRef {
+            session_id: session.clone(),
+        });
+        assert_eq!(
+            routes.route(&list),
+            Route::Beside,
+            "a write is counted for good"
+        );
     }
 
     /// A queue the core closed is the end of the connection, said once,

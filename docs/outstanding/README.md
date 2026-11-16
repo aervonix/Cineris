@@ -39,9 +39,11 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-cli
 
+- [history-has-no-size-limit](history-has-no-size-limit.md): The prompt history has no limit in bytes for an entry or the file; a pasted log is stored expanded and read at every start. Owner: step 25, with the owner.
 - [headless-details-left-open](headless-details-left-open.md): Six small gaps in headless mode: dropped early notices, error records, `files_changed` matching, Windows close, untested signals. Owner: step 27 or step 32.
 - [reading-a-key-at-a-terminal](reading-a-key-at-a-terminal.md): `cortex auth login` refuses a terminal because reading a key without echo needs the terminal layer. Owner: step 25.
 - [shell-completions](shell-completions.md): Completions should come from an `xtask` command over the `FLAGS` table; the table exists, the command does not. Owner: step 34.
+- [the-workspace-root-is-the-working-directory](the-workspace-root-is-the-working-directory.md): Every binary takes the working directory as the workspace root, where 08 says the nearest ancestor with `.cortex/` or `.git`. Owner: the owner.
 - [the-binary-near-its-size-budget](the-binary-near-its-size-budget.md): After step 33's size fix the binary has about 5 MB left on each system (Windows 13.19 of 18 MiB, Linux 11.33 of 16), with extensions and MCP to come; each pull request shows its size. Open until a step-34 build passes on both. Owner: step 34.
 - [json-outputs-that-escape-what-json-does-not](json-outputs-that-escape-what-json-does-not.md): `usage`, `stats` and `sessions` with `--json` print an escape that is not JSON's for a character that acts unseen. Owner: a fix session for `cortex-cli`.
 
@@ -64,7 +66,9 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [config-reload-through-the-core](config-reload-through-the-core.md): `config/reload` answers `not_available`; step 23 settled what a reload applies to a running session, key by key, and step 24 wires it. Owner: step 24.
 - [log-level-from-configuration-in-headless-mode](log-level-from-configuration-in-headless-mode.md): A headless run starts the log before configuration is read, so `log.level` is ignored there (the interactive half is done). Owner: step 32.
 - [secret-filter-on-what-clients-are-sent](secret-filter-on-what-clients-are-sent.md): Events, approval requests and in-progress items sent to clients skip the secret filter applied to disk writes. Owner: the owner; before step 27.
+- [session-list-paging-by-index](session-list-paging-by-index.md): `session/list`'s cursor is a position, so a session used between two pages can be skipped or listed twice. Owner: step 27.
 - [shutdown-and-a-session-being-put-together](shutdown-and-a-session-being-put-together.md): `Core::shutdown` returns before a session still being put together has ended itself. Owner: step 27.
+- [trust-question-corners](trust-question-corners.md): "Never" on a rules-changed question takes all the project's trust away, git's included; git can be trusted unshown for a folder trusted before `git init`. Owner: the owner, then step 27 or a trust step.
 - [the-top-of-a-tree-past-the-listing-cap](the-top-of-a-tree-past-the-listing-cap.md): A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree. Owner: a later index step, or step 33.
 - [a-file-held-open-on-ntfs-and-its-stamp](a-file-held-open-on-ntfs-and-its-stamp.md): NTFS updates a directory entry's stamp lazily while a writer holds a file open, so the index may read it every pass or keep an old outline. Owner: a later index step, or step 33.
 - [memory-a-pass-leaves-resident](memory-a-pass-leaves-resident.md): The allocator keeps what the index's pass freed: on real code 22.8 MB resident after a cold pass on Linux, from 8.7 MB, against the idle TUI's 25 MB. Owner: step 33.

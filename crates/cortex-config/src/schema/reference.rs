@@ -32,7 +32,7 @@ pub fn reference_page() -> String {
          make every request fail.\n\
          - **From a project.** What happens to the key in a project's `.cortex/config.toml` or \
          `.cortex/config.local.toml`. *preference*: applied always. *runs code*, *widens \
-         access* and *raises cost*: applied only after the user has trusted the project, and \
+         access*, *raises cost* and *stops commands*: applied only after the user has trusted the project, and \
          listed for the user until then; until then the user's own value applies. *user only*: \
          ignored, with a warning. *tighten only*: a value at or below the one in effect \
          applies, a first limit where there was none applies only after the user has trusted the \

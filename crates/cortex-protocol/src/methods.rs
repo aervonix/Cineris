@@ -271,7 +271,17 @@ pub struct SessionForkParams {
     pub at: Option<ItemId>,
 }
 
-/// `session/rewind`
+/// `session/rewind`: moves the active branch back to an item, putting files
+/// back if asked.
+///
+/// **It may ask a question** (since step 23). With `restore_files`, a file
+/// edited since the harness left it is put back only if the person says so:
+/// the session's `user` clients that answer questions are put one
+/// `question/ask` naming those files, with the choices "Put them back" and
+/// "Keep them as they are". No client to ask, no answer, a client that goes
+/// away, the session's close and the core's end all keep the files. The
+/// result comes once the question is settled; a session closed meanwhile is
+/// not moved back (`session_not_open`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SessionRewindParams {
@@ -287,6 +297,15 @@ pub struct SessionRewindParams {
 
 /// `session/undo`: steps back before the session's last turn, its first
 /// included, and records the step as an undo (since step 23).
+///
+/// **It may ask a question** (since step 23). With `restore_files`, a file
+/// edited since the harness left it is put back only if the person says so:
+/// the session's `user` clients that answer questions are put one
+/// `question/ask` naming those files, with the choices "Put them back" and
+/// "Keep them as they are". No client to ask, no answer, a client that goes
+/// away, the session's close and the core's end all keep the files. The
+/// result comes once the question is settled; a session closed meanwhile is
+/// not moved back (`session_not_open`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SessionUndoParams {
@@ -930,6 +949,8 @@ pub struct TrustResponse {
     /// With `trusted` false: remember the refusal, so that the project is
     /// not asked about at later starts either (since step 23). It is kept
     /// beside the trusted projects, and `cortex permissions trust` lifts it.
+    /// An answer with both `trusted` and `never` is refused
+    /// (`invalid_answer`), and the question stays open.
     #[serde(default, skip_serializing_if = "is_false")]
     pub never: bool,
 }

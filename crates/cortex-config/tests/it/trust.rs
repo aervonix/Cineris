@@ -71,6 +71,8 @@ fn the_documented_classes_hold() {
     for key in ["hooks.*", "extensions.*", "mcp.*", "verify.*"] {
         assert_eq!(class_of(key), Trust::RunsCode, "{key}");
     }
+    // Can stop every command.
+    assert_eq!(class_of("shell.env_remove"), Trust::StopsCommands);
     // Can widen access.
     assert_eq!(class_of("sandbox.write"), Trust::WidensAccess);
     assert_eq!(class_of("permissions.rules"), Trust::ByRuleAction);
@@ -687,5 +689,35 @@ fn joining_lists_does_not_let_an_untrusted_project_widen_the_sandbox() {
     assert_eq!(
         value(&loaded, "sandbox.write"),
         "[\"~/scratch\", \"/\", \"/etc\", \"/var\"]"
+    );
+}
+
+/// A project's `shell.env_remove` waits for trust (the owner's decision of
+/// 2026-11-16, after the review of step 23): `"*"` would take `PATH` from
+/// every command. The user's own entries apply as before.
+#[test]
+fn a_projects_removed_variables_wait_for_trust() {
+    let mut machine = Machine::new("trust_env_remove");
+    machine
+        .layer(LayerKind::User, "[shell]\nenv_remove = [\"MINE\"]\n")
+        .layer(LayerKind::Project, "[shell]\nenv_remove = [\"*\"]\n");
+    let loaded = machine.load();
+    assert_eq!(loaded.settings.shell.env_remove, ["MINE"]);
+    let held: Vec<(String, TrustClass)> = loaded
+        .withheld
+        .iter()
+        .map(|held| (format!("{} = {}", held.key, held.value), held.class))
+        .collect();
+    assert_eq!(
+        held,
+        [(
+            "shell.env_remove = \"*\"".to_owned(),
+            TrustClass::StopsCommands
+        )]
+    );
+    assert!(TrustClass::StopsCommands.needs_trust());
+    assert_eq!(
+        machine.trusted().load().settings.shell.env_remove,
+        ["MINE", "*"]
     );
 }

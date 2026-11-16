@@ -35,6 +35,8 @@ enum Answer {
     ChangeThenTrust,
     /// Goes away.
     Leave,
+    /// Ends the core, answering nothing.
+    ShutDown,
 }
 
 fn trust_it() -> Answer {
@@ -128,6 +130,7 @@ async fn answering(
                         .expect("the question is open");
                     }
                     Answer::Leave => core.disconnect(client.id).await,
+                    Answer::ShutDown => core.shutdown().await,
                 }
             }
             Some(_) => {}
@@ -386,6 +389,59 @@ fn a_client_that_leaves_while_asked_gets_no_session() {
     assert!(state.is_ok(), "{state:?}");
 }
 
+/// With the profile locked by the managed file, the project's other
+/// profiles can never be selected: their rules are not listed, and the
+/// locked profile's rules are not listed under their names (the review of
+/// step 23).
+#[test]
+fn a_profile_the_managed_file_locks_out_is_not_listed() {
+    let world = World::new("trusting_locked_profile", []);
+    let managed = world.dirs().managed_config.unwrap();
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+    std::fs::write(
+        &managed,
+        "profile = \"review\"\n\n[managed]\nlocked = [\"profile\"]\n",
+    )
+    .unwrap();
+    world.project_config(
+        "[[profiles.review.permissions.rules]]\neffect = \"write\"\nmatch = \"docs/**\"\naction = \
+         \"allow\"\n\n[[profiles.ci.permissions.rules]]\neffect = \"exec\"\nmatch = \"make \
+         deploy\"\naction = \"allow\"\n",
+    );
+    let core = world.core();
+    let (state, asked) = world.run(open(&world, &core, ClientInfo::user(), not_now()));
+    state.expect("the session opens");
+    assert_eq!(asked.len(), 1);
+    let rules: Vec<(String, String)> = asked[0]
+        .resources
+        .iter()
+        .filter(|resource| resource.kind == TrustResourceKind::Rules)
+        .map(|resource| (resource.name.clone(), resource.detail.clone()))
+        .collect();
+    assert_eq!(
+        rules,
+        [(
+            "profiles.review.permissions.rules".to_owned(),
+            "allow write docs/**".to_owned()
+        )]
+    );
+}
+
+/// The core's end withdraws an open trust question (the review of step
+/// 23): the open ends, refused as the core is ending, and does not wait
+/// for a person.
+#[test]
+fn the_core_ending_ends_a_trust_question() {
+    let world = world("trusting_shutdown");
+    let core = world.core();
+    let (state, asked) = world.run(open(&world, &core, ClientInfo::user(), Answer::ShutDown));
+    assert_eq!(asked.len(), 1);
+    assert_eq!(
+        state.map(|_| ()).map_err(|error| error.code),
+        Err("shutting_down".to_owned())
+    );
+}
+
 fn git(dir: &Path, arguments: &[&str]) -> bool {
     Command::new("git")
         .args(["-c", "init.defaultBranch=main"])
@@ -426,4 +482,145 @@ fn a_folder_with_nothing_to_trust_asks_nothing() {
     let (state, asked) = world.run(open(&world, &core, ClientInfo::user(), trust_it()));
     state.expect("the session opens");
     assert!(asked.is_empty(), "{asked:#?}");
+}
+
+/// An answer the trust store cannot keep (its lock cannot be taken) still
+/// opens the session (the review of step 23): a yes trusts the project for
+/// this session alone, and a never is taken as not now.
+#[test]
+fn an_answer_the_store_cannot_keep_still_opens_the_session() {
+    let world = world("trusting_store_fails");
+    let state = world.dirs().state.unwrap();
+    std::fs::create_dir_all(state.join("trust.toml.lock")).unwrap();
+    let core = world.core();
+    let (state, asked) = world.run(open(&world, &core, ClientInfo::user(), trust_it()));
+    assert_eq!(asked.len(), 1);
+    let state = state.expect("a yes the store cannot keep opens the session");
+    assert_eq!(model(&state), OTHER_MODEL, "trusted for this session");
+    assert_eq!(
+        state.trust,
+        Some(cortex_protocol::session::TrustStanding::ForTheRun)
+    );
+    let (store, key) = store(&world);
+    assert!(!store.project(&key).unwrap().is_trusted());
+    // Asked again by the same core, since nothing was kept; a never that
+    // cannot be kept is not now: the session opens untrusted, and the core
+    // does not ask again.
+    let (state, asked) = world.run(open(&world, &core, ClientInfo::user(), never()));
+    assert_eq!(asked.len(), 1);
+    assert_eq!(model(&state.expect("the session opens")), MODEL);
+    assert!(!store.project(&key).unwrap().is_refused());
+    let (_, asked) = world.run(open(&world, &core, ClientInfo::user(), trust_it()));
+    assert!(asked.is_empty(), "{asked:#?}");
+}
+
+/// An answer that says both "trust it" and "never" is refused where it is
+/// given, and the question stays open for one that can be read (the review
+/// of step 23: it was taken as a yes).
+#[test]
+fn an_answer_of_both_trust_and_never_is_refused() {
+    let world = world("trusting_both");
+    let core = world.core();
+    let client = core.connect(ClientInfo::user());
+    let opening = core.handle(
+        client.id,
+        Op::SessionNew(SessionNewParams {
+            workspace: world.workspace.to_str().unwrap().to_owned(),
+            settings: SessionSettings::default(),
+            title: None,
+            config: serde_json::Map::new(),
+            ephemeral: false,
+        }),
+    );
+    let answering = async {
+        loop {
+            if let Some(Outgoing::Request {
+                id,
+                request: ServerRequest::Trust(_),
+            }) = client.queue.next().await
+            {
+                let both = core.respond(
+                    client.id,
+                    &id,
+                    ServerResponse::Trust(TrustResponse {
+                        trusted: true,
+                        never: true,
+                    }),
+                );
+                let refused = both.expect_err("a contradictory answer is refused");
+                assert_eq!(refused.code, "invalid_answer");
+                core.respond(
+                    client.id,
+                    &id,
+                    ServerResponse::Trust(TrustResponse::default()),
+                )
+                .expect("the question is still open");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    let result = world.run(async {
+        let mut opening = std::pin::pin!(opening);
+        let mut answering = std::pin::pin!(answering);
+        std::future::poll_fn(|context| {
+            let _ = answering.as_mut().poll(context);
+            opening.as_mut().poll(context)
+        })
+        .await
+    });
+    let Ok(OpResult::SessionNew(result)) = result else {
+        panic!("{result:?}");
+    };
+    assert_eq!(model(&result.session), MODEL, "not trusted");
+}
+
+/// A profile only the project's files define can be selected (the review of
+/// step 23): the core starts with it, the question lists the settings each
+/// of the project's profiles holds back, the selected one's and the
+/// others', and a yes applies the selected one's. `permissions trust` lists
+/// the same.
+#[test]
+fn a_profile_only_the_project_defines_can_be_selected_and_its_settings_are_shown() {
+    let world = World::new("trusting_project_profile", []);
+    world.project_config(&format!(
+        "[profiles.review]\nmodel.main = \"{OTHER_MODEL}\"\n\n[profiles.ci]\nretry.attempts = 2\n\
+         [profiles.ci.shell]\nenv_remove = [\"*\"]\n"
+    ));
+    let core = world.core_with(|options| options.profile = Some("review".to_owned()));
+    let (state, asked) = world.run(open(&world, &core, ClientInfo::user(), trust_it()));
+    assert_eq!(asked.len(), 1);
+    let settings: Vec<(String, String)> = asked[0]
+        .resources
+        .iter()
+        .filter(|resource| resource.kind == TrustResourceKind::Settings)
+        .map(|resource| (resource.name.clone(), resource.detail.clone()))
+        .collect();
+    let names: Vec<&str> = settings.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "profiles.ci.retry.attempts",
+            "profiles.ci.shell.env_remove",
+            "profiles.review.model.main"
+        ],
+        "{settings:#?}"
+    );
+    assert!(settings[1].1.contains("stop them all"), "{settings:#?}");
+    assert_eq!(model(&state.expect("the session opens")), OTHER_MODEL);
+
+    let project = core.project(&world.workspace).unwrap();
+    let trusted = core.trust_project(&project).unwrap();
+    let listed: Vec<(Option<&str>, String)> = trusted
+        .settings
+        .iter()
+        .map(|(profile, setting)| (profile.as_deref(), setting.key.to_string()))
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (Some("ci"), "retry.attempts".to_owned()),
+            (Some("ci"), "shell.env_remove".to_owned()),
+            (Some("review"), "model.main".to_owned())
+        ]
+    );
 }

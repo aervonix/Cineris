@@ -158,15 +158,26 @@ impl Drop for FileHistory {
 /// The project's newest prompts in the file, oldest first. The file is
 /// written again, smaller, when it has grown past [`COMPACT`] lines.
 fn read(path: &Path, project: &str) -> Vec<String> {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(bytes) = std::fs::read(path) else {
         return Vec::new();
     };
-    let entries: Vec<Entry> = text.lines().filter_map(Entry::parse).collect();
+    let entries = entries(&bytes);
     let mine: Vec<String> = newest(entries.iter().filter(|entry| entry.project == project));
     if entries.len() > COMPACT {
         let _ = compact(path);
     }
     mine
+}
+
+/// The entries of the file's bytes, line by line: a line that is not UTF-8
+/// or not one of the store's is passed over, and the others are read (the
+/// review of step 23: one bad byte emptied every project's history).
+fn entries(bytes: &[u8]) -> Vec<Entry> {
+    bytes
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| std::str::from_utf8(line.strip_suffix(b"\r").unwrap_or(line)).ok())
+        .filter_map(Entry::parse)
+        .collect()
 }
 
 /// The newest [`KEEP`] of `entries`, oldest first.
@@ -185,8 +196,7 @@ fn newest<'a>(entries: impl DoubleEndedIterator<Item = &'a Entry>) -> Vec<String
 /// appended meanwhile is kept.
 fn compact(path: &Path) -> io::Result<()> {
     let _lock = cortex_base::private::hold_lock(path)?;
-    let text = std::fs::read_to_string(path)?;
-    let entries: Vec<Entry> = text.lines().filter_map(Entry::parse).collect();
+    let entries = entries(&std::fs::read(path)?);
     let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     let mut kept: Vec<&Entry> = Vec::new();
     for entry in entries.iter().rev() {
@@ -227,11 +237,32 @@ fn append(path: &Path, project: &str, queue: &Receiver<String>) {
         };
         let _lock = cortex_base::private::hold_lock(path).ok().flatten();
         if let Ok(mut file) = open(path) {
+            // A last line cut short (a write a kill or a full disk ended)
+            // is ended first, so that this one is not glued to it and both
+            // lost (the review of step 23).
+            let mut line = if unfinished(path) {
+                "\n".to_owned()
+            } else {
+                String::new()
+            };
+            line.push_str(&entry.line());
             // One write of a whole line: another process's lines are not
             // cut into.
-            let _ = file.write_all(entry.line().as_bytes());
+            let _ = file.write_all(line.as_bytes());
         }
     }
+}
+
+/// Whether the file's last line has no end.
+fn unfinished(path: &Path) -> bool {
+    use std::io::{Read as _, Seek as _};
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut last = [0_u8];
+    file.seek(io::SeekFrom::End(-1)).is_ok()
+        && file.read_exact(&mut last).is_ok()
+        && last[0] != b'\n'
 }
 
 /// The file, open to append to: created private when it is not there.
@@ -370,5 +401,47 @@ mod tests {
         drop(history);
         let lines = std::fs::read_to_string(&path).unwrap().lines().count();
         assert_eq!(lines, 2 * KEEP, "each project's newest {KEEP}");
+        // The file written again is private, as the one it replaced was
+        // made (the review of step 23).
+        assert!(cortex_base::private::is_private(&path).unwrap());
+    }
+
+    /// A byte that is not UTF-8 costs its own line, not the file: the
+    /// other lines are read (the review of step 23).
+    #[test]
+    fn a_line_that_is_not_utf_8_costs_only_itself() {
+        let scratch = Scratch::new("not_utf8");
+        let path = scratch.join("history");
+        let mut bytes = b"{\"project\":\"p\",\"text\":\"before\"}\n".to_vec();
+        bytes.extend_from_slice(b"{\"project\":\"p\",\"text\":\"bad \xff\"}\r\n");
+        bytes.extend_from_slice(b"{\"project\":\"p\",\"text\":\"after\"}\r\n");
+        std::fs::write(&path, &bytes).unwrap();
+        let history = FileHistory::open(path.clone(), "p".to_owned());
+        wait_read(&history);
+        assert_eq!(history.len(), 2);
+        assert_eq!(history.get(0), Some("before"));
+        assert_eq!(history.get(1), Some("after"));
+    }
+
+    /// A last line cut short is ended before the next prompt is written:
+    /// the prompt is kept, not glued to it (the review of step 23).
+    #[test]
+    fn a_prompt_after_a_cut_line_is_kept() {
+        let scratch = Scratch::new("cut_line");
+        let path = scratch.join("history");
+        std::fs::write(
+            &path,
+            "{\"project\":\"p\",\"text\":\"whole\"}\n{\"project\":\"p\",\"te",
+        )
+        .unwrap();
+        let mut history = FileHistory::open(path.clone(), "p".to_owned());
+        wait_read(&history);
+        history.push("next");
+        drop(history);
+        let again = FileHistory::open(path.clone(), "p".to_owned());
+        wait_read(&again);
+        assert_eq!(again.len(), 2);
+        assert_eq!(again.get(0), Some("whole"));
+        assert_eq!(again.get(1), Some("next"));
     }
 }
