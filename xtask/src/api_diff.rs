@@ -132,7 +132,13 @@ impl Request {
                 }
             }
         }
+        let mut packages = request.packages.clone();
+        packages.sort();
+        packages.dedup();
         for list in &bare {
+            if list.split([',', ' ']).all(str::is_empty) {
+                return Err(format!("`--features` names no feature\n\n{USAGE}"));
+            }
             for feature in list.split([',', ' ']).filter(|word| !word.is_empty()) {
                 let named = match feature.split_once('/') {
                     Some((package, feature)) if !package.is_empty() && !feature.is_empty() => {
@@ -143,7 +149,7 @@ impl Request {
                             "`--features {feature}`: a feature is `CRATE/FEATURE`\n\n{USAGE}"
                         ));
                     }
-                    None => match request.packages.as_slice() {
+                    None => match packages.as_slice() {
                         [package] => (package.clone(), feature.to_owned()),
                         _ => {
                             return Err(format!(
@@ -162,21 +168,47 @@ impl Request {
     }
 }
 
+/// Refuses a feature asked for of a crate not compared, or one the working
+/// tree's crate does not have: before anything is built.
+fn check_features(
+    features: &[(String, String)],
+    chosen: &[String],
+    head: &BTreeMap<String, Library>,
+) -> Result<()> {
+    for (package, feature) in features {
+        if !chosen.contains(package) {
+            return Err(format!(
+                "`--features {package}/{feature}`: `{package}` is not among the crates compared"
+            ));
+        }
+        let known = head
+            .get(package)
+            .is_some_and(|library| library.features.iter().any(|known| known == feature));
+        if !known {
+            return Err(format!(
+                "`--features {package}/{feature}`: the working tree's `{package}` has no such \
+                 feature"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// One call of `cargo doc`: its crates, and its `--features` arguments.
 type DocCall = (Vec<String>, Vec<String>);
 
 /// The calls of `cargo doc` that document `libraries` with the features
 /// asked for: one for each crate that has a feature asked for, given as
-/// its bare names (cargo takes `--features CRATE/FEATURE` and turns
-/// nothing on for a package it was asked to document with `-p`: found
-/// when the tenth tooling step tried it), and one for the rest. Each call
+/// its bare names, and one for the rest. A crate with a dev-dependency on
+/// itself that asks for the feature (as `cortex-tui` and `cortex-policy`
+/// have, for their tests) takes `--features CRATE/FEATURE` as the
+/// dev-dependency's, and documents its library without it: the tenth
+/// tooling step found `cortex-tui`'s kit missing so. The bare names of a
+/// call of one crate are its own. Each call
 /// is its crates and its `--features` arguments. Also the features asked
 /// for of these crates that this tree's crate does not have, to be said:
 /// a feature the ref does not have yet is left off there.
-fn doc_calls(
-    libraries: &[&Library],
-    features: &[(String, String)],
-) -> (Vec<DocCall>, Vec<String>) {
+fn doc_calls(libraries: &[&Library], features: &[(String, String)]) -> (Vec<DocCall>, Vec<String>) {
     let mut calls = Vec::new();
     let mut rest = Vec::new();
     let mut missing = Vec::new();
@@ -346,56 +378,66 @@ fn document(
     features: &[(String, String)],
     label: &str,
 ) -> Result<()> {
-    let (calls, missing) = doc_calls(libraries, features);
+    let (commands, missing) = doc_commands(libraries, features);
     for feature in &missing {
         eprintln!("the {label} tree has no feature `{feature}`: documented without it there");
     }
-    for (names, asked) in &calls {
-        let chosen: Vec<&Library> = libraries
-            .iter()
-            .filter(|library| names.contains(&library.package))
-            .copied()
-            .collect();
-        document_once(tree, target, &chosen, asked, label)?;
+    for (count, arguments) in &commands {
+        document_once(tree, target, *count, arguments, label)?;
     }
     Ok(())
 }
 
-/// One call of `cargo doc`, for `libraries` with the arguments `asked`.
+/// The arguments of each call of `cargo doc` that documents `libraries`
+/// with the features asked for ([`doc_calls`]), with how many crates the
+/// call documents; and the features asked for that this tree lacks.
+fn doc_commands(
+    libraries: &[&Library],
+    features: &[(String, String)],
+) -> (Vec<(usize, Vec<String>)>, Vec<String>) {
+    let (calls, missing) = doc_calls(libraries, features);
+    let commands = calls
+        .iter()
+        .map(|(names, asked)| {
+            let sandbox = libraries.iter().any(|library| {
+                names.contains(&library.package)
+                    && library.package == "cortex-sandbox"
+                    && library.features.iter().any(|feature| feature == "backends")
+            });
+            let mut arguments: Vec<String> = [
+                "doc",
+                "--no-deps",
+                "--lib",
+                "--locked",
+                "--quiet",
+                "--color",
+                "never",
+            ]
+            .map(str::to_owned)
+            .to_vec();
+            for name in names {
+                arguments.extend(["-p".to_owned(), name.clone()]);
+            }
+            if sandbox {
+                arguments.extend(workspace::implied_features(names));
+            }
+            arguments.extend(asked.iter().cloned());
+            (names.len(), arguments)
+        })
+        .collect();
+    (commands, missing)
+}
+
+/// One call of `cargo doc`, of `count` crates, with `arguments`.
 fn document_once(
     tree: &Path,
     target: &Path,
-    libraries: &[&Library],
-    asked: &[String],
+    count: usize,
+    arguments: &[String],
     label: &str,
 ) -> Result<()> {
-    let names: Vec<String> = libraries
-        .iter()
-        .map(|library| library.package.clone())
-        .collect();
-    let implied = if libraries.iter().any(|library| {
-        library.package == "cortex-sandbox"
-            && library.features.iter().any(|feature| feature == "backends")
-    }) {
-        workspace::implied_features(&names)
-    } else {
-        Vec::new()
-    };
     let mut command = Command::new(workspace::cargo());
-    command.args([
-        "doc",
-        "--no-deps",
-        "--lib",
-        "--locked",
-        "--quiet",
-        "--color",
-        "never",
-    ]);
-    for name in &names {
-        command.args(["-p", name]);
-    }
-    command.args(&implied);
-    command.args(asked);
+    command.args(arguments);
     command
         .current_dir(tree)
         .env("CARGO_TARGET_DIR", target)
@@ -404,8 +446,7 @@ fn document_once(
         .env_remove("CARGO_BUILD_TARGET_DIR")
         .env_remove("CARGO_ENCODED_RUSTDOCFLAGS");
     eprintln!(
-        "documenting {} crate(s) of the {label} tree ({})",
-        names.len(),
+        "documenting {count} crate(s) of the {label} tree ({})",
         tree.display()
     );
     let started = Instant::now();
@@ -476,23 +517,7 @@ fn report(root: &Path, request: &Request) -> Result<String> {
         .iter()
         .filter_map(|name| base_libraries.get(name))
         .collect();
-    // A feature is one of the working tree's, of a crate compared.
-    for (package, feature) in &request.features {
-        if !chosen.contains(package) {
-            return Err(format!(
-                "`--features {package}/{feature}`: `{package}` is not among the crates compared"
-            ));
-        }
-        let known = head_libraries
-            .get(package)
-            .is_some_and(|library| library.features.iter().any(|known| known == feature));
-        if !known {
-            return Err(format!(
-                "`--features {package}/{feature}`: the working tree's `{package}` has no such \
-                 feature"
-            ));
-        }
-    }
+    check_features(&request.features, &chosen, &head_libraries)?;
     document(root, &head_target, &in_head, &request.features, "working")?;
     document(&base, &base_target, &in_base, &request.features, "base")?;
 

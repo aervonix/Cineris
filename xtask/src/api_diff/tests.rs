@@ -3,7 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{
-    Format, Library, Request, doc_calls, libraries, lock, prepare_base, report, resolve, select,
+    Format, Library, Request, check_features, doc_calls, doc_commands, libraries, lock,
+    prepare_base, report, resolve, select,
 };
 use crate::combine::{git, remove_tree};
 use crate::workspace::{Package, Target};
@@ -74,12 +75,17 @@ fn features_are_read_with_their_crate() {
             pair("cortex-policy", "test-support")
         ]
     );
+    // A crate named twice is one crate.
+    let twice = Request::parse(&strings(&["-p", "x", "-p", "x", "--features", "f"])).unwrap();
+    assert_eq!(twice.features, [pair("x", "f")]);
     for (words, expected) in [
         (&["--features", "test-kit"][..], "which crate's?"),
         (&["-p", "a", "-p", "b", "--features", "x"], "which crate's?"),
         (&["--features", "a/"], "a feature is `CRATE/FEATURE`"),
         (&["--features", "/x"], "a feature is `CRATE/FEATURE`"),
         (&["--features"], "needs a value"),
+        (&["-p", "a", "--features", ","], "names no feature"),
+        (&["--features="], "names no feature"),
     ] {
         let error = Request::parse(&strings(words)).unwrap_err();
         assert!(error.contains(expected), "{words:?}: {error}");
@@ -127,6 +133,73 @@ fn a_feature_is_turned_on_where_its_crate_has_it_and_said_where_it_does_not() {
     assert_eq!(
         doc_calls(&[&policy_before], &asked[..1]),
         (vec![(strings(&["cortex-policy"]), Vec::new())], Vec::new())
+    );
+}
+
+#[test]
+fn each_call_of_cargo_doc_has_its_crates_and_its_features_and_no_other() {
+    let lib = |package: &str, features: &[&str]| Library {
+        package: package.to_owned(),
+        json: package.replace('-', "_"),
+        features: strings(features),
+    };
+    let tui = lib("cortex-tui", &["test-kit"]);
+    let base = lib("cortex-base", &[]);
+    let policy = lib("cortex-policy", &["test-support"]);
+    let asked = [
+        ("cortex-tui".to_owned(), "test-kit".to_owned()),
+        ("cortex-policy".to_owned(), "test-support".to_owned()),
+    ];
+    let (commands, missing) = doc_commands(&[&base, &tui, &policy], &asked);
+    assert!(missing.is_empty());
+    let shown: Vec<(usize, String)> = commands
+        .iter()
+        .map(|(count, arguments)| (*count, arguments[7..].join(" ")))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (1, "-p cortex-base".to_owned()),
+            (1, "-p cortex-tui --features test-kit".to_owned()),
+            (1, "-p cortex-policy --features test-support".to_owned()),
+        ]
+    );
+    assert!(
+        commands
+            .iter()
+            .all(|(_, arguments)| arguments[..2] == ["doc", "--no-deps"])
+    );
+    // Nothing asked: one call of every crate, as before the step.
+    let (commands, _) = doc_commands(&[&base, &tui], &[]);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].0, 2);
+    assert_eq!(commands[0].1[7..].join(" "), "-p cortex-base -p cortex-tui");
+}
+
+#[test]
+fn a_feature_of_a_crate_not_compared_or_that_the_crate_lacks_is_refused() {
+    let head: BTreeMap<String, Library> = [(
+        "cortex-tui".to_owned(),
+        Library {
+            package: "cortex-tui".to_owned(),
+            json: "cortex_tui".to_owned(),
+            features: strings(&["test-kit"]),
+        },
+    )]
+    .into_iter()
+    .collect();
+    let chosen = strings(&["cortex-tui"]);
+    let feature = |package: &str, name: &str| vec![(package.to_owned(), name.to_owned())];
+    assert_eq!(
+        check_features(&feature("cortex-tui", "test-kit"), &chosen, &head),
+        Ok(())
+    );
+    let error = check_features(&feature("cortex-tui", "nope"), &chosen, &head).unwrap_err();
+    assert!(error.contains("has no such feature"), "{error}");
+    let error = check_features(&feature("cortex-base", "x"), &chosen, &head).unwrap_err();
+    assert!(
+        error.contains("is not among the crates compared"),
+        "{error}"
     );
 }
 
