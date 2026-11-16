@@ -32,8 +32,9 @@
 //! | [`input`] | [`Input`](input::Input): the editor, its menus, history and focus driven by events | 21 |
 //! | [`external`] | The external-editor hand-off | 21 |
 //! | `view::input`, `view::menu` | The input box and the menus | 21 |
-//! | [`app`] | The application: the loop, the state, the link to the core, the dialogs | 23 |
+//! | [`app`] | The application: the loop, the state, the link to the core, the dialogs; since step 24 the panels | 23 |
 //! | `view::dialog` | The dialogs in the input box's place | 23 |
+//! | `view::panel`, `view::plan`, `view::review` | The panels' rows: what they share, the plan's and the review's | 24 |
 //! | `testkit` | The application driven by tests, with a scripted link in the core's place (the `test-kit` feature, dev-dependencies only) | tooling 9 |
 //!
 //! Each module's code is in its own files, so that the steps that build

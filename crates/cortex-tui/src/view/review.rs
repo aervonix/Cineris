@@ -1,5 +1,5 @@
 //! The review panel's rows (`docs/architecture/09-tui.md`, "Panels";
-//! `docs/steps/24/answered.md`, points 2 and 4b): what a turn changed, and
+//! "The panels as built"): what a turn changed, and
 //! what the project's checks said of it.
 //!
 //! ```text

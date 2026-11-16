@@ -1,5 +1,5 @@
 //! The panels (`docs/architecture/09-tui.md`, "Panels";
-//! `docs/steps/24/answered.md`, point 2): bounded blocks in the live region
+//! "The panels as built"): bounded blocks in the live region
 //! that appear when they have something to show and go when they do not.
 //!
 //! **A panel kind is one type and one registration.** Each kind is a type

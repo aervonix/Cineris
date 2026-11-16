@@ -29,6 +29,8 @@
 //! | `items` | The core's items onto the transcript |
 //! | `tools` | A tool call's line: verb, target, state, measure and detail |
 //! | `dialog` | The dialogs in the input box's place, and their keys |
+//! | `ready` | When a dialog or a panel takes keys: the rule they share (step 24) |
+//! | `panels` | The panels: the `Panel` kind, their layout in the live region, their focus and readiness (step 24) |
 //! | `wording` | What an error says, and what to do next |
 
 pub(crate) mod dialog;

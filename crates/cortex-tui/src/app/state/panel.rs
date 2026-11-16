@@ -1,5 +1,5 @@
-//! The panels in the application (step 24; `docs/steps/24/answered.md`,
-//! point 2): what they see, the block they are drawn in, and what their
+//! The panels in the application (step 24; `docs/architecture/09-tui.md`,
+//! "The panels as built"): what they see, the block they are drawn in, and what their
 //! keys do. The panels themselves are `app::panels`.
 //!
 //! **A panel's keys** come here while it has the focus:
