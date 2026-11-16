@@ -72,7 +72,7 @@ fn merged_text(existing: Option<&str>, parts: &[Part]) -> String {
 }
 
 /// What to merge for `step`, read from `root`'s `mutations/`.
-fn plan(root: &Path, step: &str) -> Result<Plan> {
+fn plan(root: &Path, step: &str, named: &[String]) -> Result<Plan> {
     let well_formed = !step.is_empty()
         && step
             .chars()
@@ -122,6 +122,31 @@ fn plan(root: &Path, step: &str) -> Result<Plan> {
              list is named for its step and its part."
         ));
     }
+    // Only the parts named are taken. A list of its own can have a name of
+    // the same form (`step-12-fixes`, `tooling-2` beside `tooling`), and
+    // merging it would rename its breaks and delete it.
+    let found: Vec<String> = parts.iter().map(|part| part.name.clone()).collect();
+    if named.is_empty() {
+        return Err(format!(
+            "`--merge {step}` takes the parts it is given by name: `cargo xtask mutate --merge \
+             {step} {}`. These lists are named like parts of it: {}. Name only the parts: a list \
+             of its own (a step's fixes, another step) named like one is not a part.",
+            found.join(" "),
+            found
+                .iter()
+                .map(|name| format!("{DIRECTORY}/{step}-{name}{SUFFIX}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if let Some(missing) = named.iter().find(|name| !found.contains(name)) {
+        return Err(format!(
+            "`--merge {step} {missing}`: there is no {DIRECTORY}/{step}-{missing}{SUFFIX}. The \
+             parts there are: {}",
+            found.join(", ")
+        ));
+    }
+    parts.retain(|part| named.contains(&part.name));
     let target = format!("{DIRECTORY}/{step}{SUFFIX}");
     let existing = match fs::read_to_string(root.join(&target)) {
         Ok(text) => Some(text),
@@ -193,8 +218,8 @@ fn preflight(root: &Path, plan: &Plan) -> Result<Vec<String>> {
 }
 
 /// `--merge STEP`, and with `dry_run` only what it would do.
-pub(crate) fn run(root: &Path, step: &str, dry_run: bool) -> Result<()> {
-    let plan = plan(root, step)?;
+pub(crate) fn run(root: &Path, step: &str, named: &[String], dry_run: bool) -> Result<()> {
+    let plan = plan(root, step, named)?;
     let breaks_of =
         |text: &str, place: &str| list::parse(place, text).map_or(0, |breaks| breaks.len());
     println!(
@@ -337,7 +362,7 @@ mod tests {
         // Not a list: a file that is not named for a part is left alone.
         fs::write(root.join("mutations/step-9-notes.txt"), "not a list").unwrap();
 
-        run(&root, "step-9", false).unwrap();
+        run(&root, "step-9", &["a".to_owned(), "b".to_owned()], false).unwrap();
 
         let merged = fs::read_to_string(root.join("mutations/step-9.breaks")).unwrap();
         assert!(
@@ -370,7 +395,7 @@ mod tests {
             ],
         );
 
-        run(&root, "step-9", false).unwrap();
+        run(&root, "step-9", &["fixes".to_owned()], false).unwrap();
 
         let merged = fs::read_to_string(root.join("mutations/step-9.breaks")).unwrap();
         let first = merged.find("[break] first").unwrap();
@@ -391,7 +416,7 @@ mod tests {
             ],
         );
 
-        let error = run(&root, "step-9", false).unwrap_err();
+        let error = run(&root, "step-9", &["a".to_owned(), "b".to_owned()], false).unwrap_err();
 
         assert!(
             error.contains("Nothing was written and no part deleted"),
@@ -411,7 +436,7 @@ mod tests {
             ],
         );
 
-        let error = run(&root, "step-9", false).unwrap_err();
+        let error = run(&root, "step-9", &["a".to_owned(), "b".to_owned()], false).unwrap_err();
 
         assert!(error.contains("1 problem(s)"), "{error}");
         assert_eq!(lists_in(&root), ["step-9-a.breaks", "step-9-b.breaks"]);
@@ -427,8 +452,8 @@ mod tests {
                 ("step-9-b", one("gone", "a == b", "true")),
             ],
         );
-        assert!(run(&root, "step-9", true).is_err());
-        assert!(run(&root, "step-9", false).is_err());
+        assert!(run(&root, "step-9", &["a".to_owned(), "b".to_owned()], true).is_err());
+        assert!(run(&root, "step-9", &["a".to_owned(), "b".to_owned()], false).is_err());
         assert_eq!(lists_in(&root), ["step-9-a.breaks", "step-9-b.breaks"]);
         let _ = fs::remove_dir_all(&root);
 
@@ -439,8 +464,44 @@ mod tests {
                 ("step-9-b", one("also", "a < b", "a <= b")),
             ],
         );
-        run(&root, "step-9", true).unwrap();
+        run(&root, "step-9", &["a".to_owned(), "b".to_owned()], true).unwrap();
         assert_eq!(lists_in(&root), ["step-9-a.breaks", "step-9-b.breaks"]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_the_parts_named_are_merged_and_a_list_of_its_own_is_left_alone() {
+        let root = setup(
+            "merge-named",
+            &[
+                ("step-9", one("first", "a > b", "a >= b")),
+                // A list of its own, named like a part.
+                ("step-9-fixes", one("fixed", "a < b", "a <= b")),
+                ("step-9-api", one("api", "a < b", "a > b")),
+            ],
+        );
+        // With no part named, nothing is merged: the candidates are said.
+        let error = run(&root, "step-9", &[], false).unwrap_err();
+        assert!(
+            error.contains("takes the parts it is given by name"),
+            "{error}"
+        );
+        assert!(error.contains("mutations/step-9-fixes.breaks"), "{error}");
+        let error = run(&root, "step-9", &["nope".to_owned()], false).unwrap_err();
+        assert!(
+            error.contains("there is no mutations/step-9-nope.breaks"),
+            "{error}"
+        );
+        assert_eq!(
+            lists_in(&root),
+            ["step-9-api.breaks", "step-9-fixes.breaks", "step-9.breaks"]
+        );
+
+        run(&root, "step-9", &["api".to_owned()], false).unwrap();
+        let merged = fs::read_to_string(root.join("mutations/step-9.breaks")).unwrap();
+        assert!(merged.contains("[break] api"), "{merged}");
+        assert!(!merged.contains("[break] fixed"), "{merged}");
+        assert_eq!(lists_in(&root), ["step-9-fixes.breaks", "step-9.breaks"]);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -448,9 +509,9 @@ mod tests {
     fn a_step_with_no_parts_and_a_step_badly_named_are_refused() {
         let root = setup("merge-none", &[("step-9", one("only", "a > b", "a >= b"))]);
 
-        let error = run(&root, "step-9", false).unwrap_err();
+        let error = run(&root, "step-9", &["a".to_owned()], false).unwrap_err();
         assert!(error.contains("no part to merge"), "{error}");
-        let error = run(&root, "Step 9", false).unwrap_err();
+        let error = run(&root, "Step 9", &["a".to_owned()], false).unwrap_err();
         assert!(
             error.contains("lower-case letters, digits and `-`"),
             "{error}"

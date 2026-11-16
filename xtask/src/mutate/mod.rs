@@ -98,10 +98,14 @@ Without one, every break.
                  says so and exits 0. BREAK names narrow the choice. Breaks
                  with a verdict that is flagged (NOT CAUGHT ...) are not
                  chosen: run them with --again.
-  --merge STEP   Merge mutations/STEP-*.breaks (the lists of a step's
-                 sub-agents) into mutations/STEP.breaks, each part under a
-                 comment line naming it, after the whole pre-flight passes on
-                 the result, and delete the parts. All or nothing.
+  --merge STEP PART...
+                 Merge mutations/STEP-PART.breaks (the lists of a step's
+                 sub-agents), for each PART named, into mutations/STEP.breaks,
+                 each part under a comment line naming it, after the whole
+                 pre-flight passes on the result, and delete the parts. All
+                 or nothing. With no PART it names the lists that look like
+                 parts and merges nothing: a list of its own can have such a
+                 name (step-12-fixes).
   --dry-run      With --merge: say what it would do, and do none of it.
   --list         Print the breaks chosen, and stop.
   --report       Print what is known so far for the tree as it is. Runs nothing.
@@ -428,12 +432,8 @@ impl Request {
             }
         }
         if self.mode == Mode::Merge {
-            let others = !self.only.is_empty()
-                || !self.files.is_empty()
-                || self.flagged
-                || self.again
-                || self.tests
-                || self.fix_in;
+            let others =
+                !self.files.is_empty() || self.flagged || self.again || self.tests || self.fix_in;
             if others {
                 return Err(format!(
                     "`--merge` goes with no other option but `--dry-run`\n\n{USAGE}"
@@ -494,7 +494,7 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     let root = workspace::root();
     let done = drive::Finished::Complete { flagged: 0 };
     if let Some(step) = &request.merge {
-        merge::run(&root, step, request.dry_run)?;
+        merge::run(&root, step, &request.only, request.dry_run)?;
         return Ok(done);
     }
     // A break given with `--break` is the only break there is: no list is
@@ -2048,10 +2048,6 @@ replace: 5
             ),
             (&["--break"], "needs a value"),
             (&["--merge"], "needs a step's name"),
-            (
-                &["--merge", "step-9", "step-10"],
-                "goes with no other option",
-            ),
             (
                 &["--merge", "step-9", "--flagged"],
                 "goes with no other option",
