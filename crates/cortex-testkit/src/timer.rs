@@ -114,6 +114,18 @@ impl FakeTimer {
     pub fn sleeping(&self) -> Sleeping {
         Sleeping {
             timer: self.clone(),
+            length: None,
+        }
+    }
+
+    /// Completes when a wait of `length` is running: for a test whose
+    /// library has other waits running beside the one it means, told apart
+    /// by a length of the test's choosing.
+    #[must_use]
+    pub fn sleeping_for(&self, length: Duration) -> Sleeping {
+        Sleeping {
+            timer: self.clone(),
+            length: Some(length),
         }
     }
 
@@ -232,10 +244,12 @@ impl Drop for ManualSleep {
     }
 }
 
-/// The future of [`FakeTimer::sleeping`].
+/// The future of [`FakeTimer::sleeping`] and [`FakeTimer::sleeping_for`].
 #[derive(Debug)]
 pub struct Sleeping {
     timer: FakeTimer,
+    /// The length of the wait looked for; any, when `None`.
+    length: Option<Duration>,
 }
 
 impl Future for Sleeping {
@@ -243,11 +257,15 @@ impl Future for Sleeping {
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
         let mut state = self.timer.lock();
-        if state.running.is_empty() {
+        let found = state
+            .running
+            .iter()
+            .any(|wait| self.length.is_none_or(|length| wait.length == length));
+        if found {
+            Poll::Ready(())
+        } else {
             state.watchers.push(context.waker().clone());
             Poll::Pending
-        } else {
-            Poll::Ready(())
         }
     }
 }

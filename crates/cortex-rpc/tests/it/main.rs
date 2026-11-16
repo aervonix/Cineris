@@ -55,6 +55,11 @@ pub struct World {
 
 impl World {
     pub fn new(test: &str) -> Self {
+        Self::with_config(test, "")
+    }
+
+    /// A world whose user configuration has `extra` at its end.
+    pub fn with_config(test: &str, extra: &str) -> Self {
         let scratch = Scratch::outside("cortex-rpc-it", test);
         let root = scratch.path().to_path_buf();
         let home = root.join("home");
@@ -80,7 +85,7 @@ impl World {
             env,
             _scratch: scratch,
         };
-        world.user_config();
+        world.user_config(extra);
         world
     }
 
@@ -92,7 +97,7 @@ impl World {
 
     /// The user's configuration: the scripted server as Anthropic, and
     /// nothing kept on the disk past what a test needs.
-    fn user_config(&self) {
+    fn user_config(&self, extra: &str) {
         let path = self.dirs().user_config.unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
@@ -100,7 +105,7 @@ impl World {
             format!(
                 "[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n\n\
                  [model]\nmain = \"{}\"\n\n[retry]\nattempts = 1\n\n\
-                 [providers.anthropic]\nbase_url = \"{}\"\n",
+                 [providers.anthropic]\nbase_url = \"{}\"\n\n{extra}",
                 kit::MODEL,
                 self.server.base_url()
             ),

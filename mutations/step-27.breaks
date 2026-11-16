@@ -153,7 +153,7 @@ replace:
             tracing::warn!("requests were still running at the server's end");
         }
 caught-by:
-    cortex-rpc::it wire::a_shutdown_waits_for_the_requests_under_way_before_it_answers
+    cortex-rpc::it wire::a_shutdown_waits_for_an_operation_still_running_past_the_lanes_bound
 
 [break] the-end-of-input-leaves-the-core-running
 rule: `serve --stdio` shuts the core down when its one client's input ends: its sessions end.
