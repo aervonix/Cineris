@@ -98,7 +98,9 @@ fn indexed(index: &str, number: u32, file: &str, title: &str, status: &str) -> R
         .iter()
         .rposition(|line| line.starts_with("| [0") || line.starts_with("| [1"))
         .ok_or_else(|| {
-            format!("{FOLDER}/README.md has no row of a record (`| [NNNN](…) | … |`) to add one after")
+            format!(
+                "{FOLDER}/README.md has no row of a record (`| [NNNN](…) | … |`) to add one after"
+            )
         })?;
     // The title is a cell: a `|` in it would end the cell.
     let cell = title.replace('|', "\\|");
@@ -145,7 +147,10 @@ fn plan(
     }
     let number = next_number(names);
     let file = format!("{number:04}-{slug}.md");
-    if names.iter().any(|name| name.ends_with(&format!("-{slug}.md"))) {
+    if names
+        .iter()
+        .any(|name| name.ends_with(&format!("-{slug}.md")))
+    {
         return Err(format!(
             "a record named `…-{slug}.md` is there already: give the decision a title of its own"
         ));
@@ -240,7 +245,12 @@ The owner's answers.
     #[test]
     fn the_number_is_the_one_after_the_highest_record() {
         assert_eq!(
-            next_number(&names(&["0001-a.md", "0036-b.md", "0009-c.md", "README.md"])),
+            next_number(&names(&[
+                "0001-a.md",
+                "0036-b.md",
+                "0009-c.md",
+                "README.md"
+            ])),
             37
         );
         assert_eq!(next_number(&names(&["README.md", "0100-x.txt"])), 1);
@@ -258,7 +268,9 @@ The owner's answers.
         )
         .unwrap();
         assert_eq!(file, "0037-two-refs-on-one-runner.md");
-        assert!(text.starts_with("# 0037: Two refs on one runner\n\n- **Status:** Provisional\n- **Date:** 2026-11-16\n"));
+        assert!(text.starts_with(
+            "# 0037: Two refs on one runner\n\n- **Status:** Provisional\n- **Date:** 2026-11-16\n"
+        ));
         for heading in [
             "## Context",
             "## Options",
@@ -281,8 +293,14 @@ The owner's answers.
 
     #[test]
     fn a_pipe_in_the_title_does_not_end_its_cell() {
-        let (_, _, index) =
-            plan(&names(&["0001-a.md"]), INDEX, "A | B", "Accepted", "2026-11-16").unwrap();
+        let (_, _, index) = plan(
+            &names(&["0001-a.md"]),
+            INDEX,
+            "A | B",
+            "Accepted",
+            "2026-11-16",
+        )
+        .unwrap();
         assert!(index.contains("| [0002](0002-a-b.md) | A \\| B | Accepted |\n"));
     }
 
