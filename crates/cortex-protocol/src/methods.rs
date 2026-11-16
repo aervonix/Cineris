@@ -21,7 +21,7 @@ use crate::lease::{Effect, Rule};
 use crate::message::Part;
 use crate::model::ModelInfo;
 use crate::open::{open_enum, open_union};
-use crate::project::{EntryChange, PlanEdit, ProjectEntry};
+use crate::project::{EntryChange, NewEntry, PlanEdit, ProjectEntry};
 use crate::session::{SandboxStatus, SessionSettings, SessionState, SessionSummary};
 use crate::usage::{ProviderLimits, SessionUsage, UsageGroup, UsageRange, UsageReport};
 
@@ -543,6 +543,11 @@ pub struct ProjectEntriesResult {
     /// The entries: all of them for `project/list`, the changed ones for
     /// `project/update`.
     pub entries: Vec<ProjectEntry>,
+    /// What is wrong with the project's files, each in a sentence: a file
+    /// that cannot be read as it is, and what is used in its place. Added
+    /// in step 17.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<String>,
 }
 
 /// `project/update`
@@ -556,7 +561,12 @@ pub struct ProjectUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     /// The changes, applied in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<EntryChange>,
+    /// Entries the user writes, added after the changes. Each is active at
+    /// once. Added in step 17.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add: Vec<NewEntry>,
 }
 
 // ------------------------------------------- catalog, configuration, status

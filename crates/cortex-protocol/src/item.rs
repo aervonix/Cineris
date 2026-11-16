@@ -83,6 +83,9 @@ open_enum! {
         /// The repository map: an epoch's view of the workspace, given once
         /// in it.
         Map => "map",
+        /// The project profile changed since the model was given it
+        /// (since step 17).
+        Profile => "profile",
     }
 }
 

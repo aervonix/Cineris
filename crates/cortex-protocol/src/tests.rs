@@ -153,6 +153,17 @@ fn the_golden_values_round_trip_exactly() {
                     "each standing is one this version knows"
                 );
             }
+            Some("ProjectUpdateParams") => {
+                let params = round_trip::<crate::methods::ProjectUpdateParams>(value);
+                assert_eq!(params.add.len(), 2, "the entries a user writes");
+                assert!(params.changes.is_empty());
+            }
+            Some("ProjectEntriesResult") => {
+                let result = round_trip::<crate::methods::ProjectEntriesResult>(value);
+                assert_eq!(result.problems.len(), 1);
+                assert_eq!(result.entries[0].observations, Some(2));
+                assert!(result.entries[0].accepted_at.is_some());
+            }
             other => panic!("the values file names a type this test does not read: {other:?}"),
         }
     }
