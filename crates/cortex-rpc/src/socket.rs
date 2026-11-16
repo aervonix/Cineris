@@ -27,9 +27,23 @@ mod sys;
 mod sys;
 
 /// How much is read from a connection at a time.
+#[cfg_attr(
+    windows,
+    allow(
+        dead_code,
+        reason = "the named pipe, which serves through it, is not in this build yet"
+    )
+)]
 const CHUNK: usize = 64 * 1024;
 
 /// How many chunks may wait for the connection before reading stops.
+#[cfg_attr(
+    windows,
+    allow(
+        dead_code,
+        reason = "the named pipe, which serves through it, is not in this build yet"
+    )
+)]
 const CHUNKS: usize = 4;
 
 /// Where a server listens.
@@ -165,6 +179,13 @@ impl Listener {
 /// the runtime it is made in: what is read goes to the connection in
 /// chunks, and its lines are written in turn. Reading stops when the
 /// connection lets go of its input, writing when it lets go of its output.
+#[cfg_attr(
+    windows,
+    allow(
+        dead_code,
+        reason = "the named pipe, which serves through it, is not in this build yet"
+    )
+)]
 pub(crate) fn transport_of<R, W>(mut read: R, mut write: W) -> Transport
 where
     R: AsyncRead + Unpin + Send + 'static,
