@@ -10,7 +10,7 @@
 //! them out, and is not stable on the pinned toolchain, so every build of
 //! the shipped binary through `xtask` (`size`, `startup --profile dist`,
 //! and step 34's `dist`) passes rustc a `--remap-path-prefix` for each of
-//! those folders ([`build_environment`]), and `size` then reads the binary
+//! those folders ([`environment_of`]), and `size` then reads the binary
 //! for any path still under a home folder ([`home_paths`]). `cargo xtask
 //! home-paths FILE…` reads any built file the same way.
 
@@ -52,16 +52,16 @@ pub(crate) struct Folders {
 }
 
 impl Folders {
-    /// The folders of this machine and this build.
-    fn of_this_build() -> Result<Self> {
-        let metadata = workspace::metadata(&workspace::root())?;
-        Ok(Self {
+    /// The folders of this machine and a build of the tree at `root`, whose
+    /// build directory is `target`.
+    fn of_tree(root: &Path, target: &Path) -> Self {
+        Self {
             home: home_folder(),
             cargo_home: cargo_home(),
             sysroot: sysroot(),
-            workspace: Some(workspace::root()),
-            target: Some(metadata.target_directory),
-        })
+            workspace: Some(root.to_path_buf()),
+            target: Some(target.to_path_buf()),
+        }
     }
 
     /// Each folder and what it becomes, in the order rustc is given them.
@@ -161,39 +161,87 @@ pub(crate) fn encoded_rustflags(
 }
 
 /// The environment every build of the shipped binary through `xtask` is
-/// made in.
-pub(crate) fn build_environment() -> Result<Vec<(&'static str, String)>> {
-    let folders = Folders::of_this_build()?;
+/// made in, for the tree at `root` with its build directory at `target`.
+fn environment_of(root: &Path, target: &Path) -> Vec<(&'static str, String)> {
+    let folders = Folders::of_tree(root, target);
     let encoded = env::var("CARGO_ENCODED_RUSTFLAGS").ok();
     let plain = env::var("RUSTFLAGS").ok();
-    Ok(vec![(
+    vec![(
         "CARGO_ENCODED_RUSTFLAGS",
         encoded_rustflags(encoded.as_deref(), plain.as_deref(), &folders.remaps()),
-    )])
+    )]
 }
 
-/// Builds `cortex` in the shipped profile, with [`build_environment`].
+/// Builds `cortex` in the shipped profile, with the build's environment.
 /// `target` is a target triple, or `None` for the host's.
 pub(crate) fn build(target: Option<&str>) -> Result<()> {
+    build_with(&Options {
+        profile: PROFILE,
+        target,
+        tree: None,
+        target_dir: None,
+        variables: &[],
+    })
+}
+
+/// How [`build_with`] builds `cortex`.
+pub(crate) struct Options<'a> {
+    /// The cargo profile: `dist`, or `release` for a look that is not of the
+    /// shipped binary.
+    pub(crate) profile: &'a str,
+    /// A target triple, or `None` for the host's.
+    pub(crate) target: Option<&'a str>,
+    /// Another checkout of the workspace to build, or `None` for this one.
+    pub(crate) tree: Option<&'a Path>,
+    /// A build directory of its own, or `None` for the tree's.
+    pub(crate) target_dir: Option<&'a Path>,
+    /// More environment: a profile setting, as `CARGO_PROFILE_DIST_STRIP`.
+    pub(crate) variables: &'a [(&'a str, &'a str)],
+}
+
+/// Builds `cortex` as `options` say, with the build machine's folders taken
+/// out of its paths.
+pub(crate) fn build_with(options: &Options) -> Result<()> {
+    let root = options.tree.map_or_else(workspace::root, Path::to_path_buf);
+    let target_dir = match options.target_dir {
+        Some(directory) => directory.to_path_buf(),
+        None => workspace::metadata(&root)?.target_directory,
+    };
     let mut arguments = vec![
         "build",
         "--locked",
         "--profile",
-        PROFILE,
+        options.profile,
         "--package",
         "cortex-cli",
         "--bin",
         "cortex",
     ];
-    if let Some(target) = target {
+    if let Some(target) = options.target {
         arguments.extend(["--target", target]);
     }
-    let environment = build_environment()?;
-    let environment: Vec<(&str, &str)> = environment
-        .iter()
-        .map(|(name, value)| (*name, value.as_str()))
-        .collect();
-    crate::steps::cargo_with(&arguments, &environment)
+    println!("$ cargo {}", arguments.join(" "));
+    let mut command = Command::new(workspace::cargo());
+    command
+        .args(&arguments)
+        .envs(environment_of(&root, &target_dir))
+        .envs(options.variables.iter().copied())
+        .current_dir(&root);
+    if options.target_dir.is_some() {
+        // Whatever the caller's environment says: a build of its own never
+        // shares, or rebuilds, another's.
+        command
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .env_remove("CARGO_BUILD_TARGET_DIR");
+    }
+    let status = command
+        .status()
+        .map_err(|error| format!("could not run cargo {}: {error}", arguments.join(" ")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("`cargo {}` failed", arguments.join(" ")))
+    }
 }
 
 /// How many places a file holds a path under a home folder, each kind

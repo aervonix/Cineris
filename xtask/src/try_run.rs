@@ -31,6 +31,13 @@ COMMAND is one of:
                                    build (dist with --profile dist), one at a
                                    time, output shown, and nothing else; a NAME
                                    narrows them
+  size [OPTION]...                 `cargo xtask size`: the binary's size and its
+                                   crates (--target, --check, --against-main,
+                                   --breakdown, --top N pass; the `profile` input
+                                   chooses the build, release or dist, and ci
+                                   is the command's own, dist; Linux builds
+                                   the musl target unless --target says
+                                   another; --at is refused: use `commit`)
   ci [ARGS]...                     any form of `cargo xtask ci`
   mutate BREAK... [OPTION]...      `cargo xtask mutate` of the breaks (a break,
                                    a list or the end of a name) on the runner,
@@ -61,6 +68,12 @@ and test. It runs with --keep-going: a round in which a test fails is recorded
 and left out, the run goes on, and it ends as a failure after the comparison of
 the rounds that finished.
 
+--against REF with `perf -p CRATE...` makes it a performance A/B run: `cargo xtask
+perf-ab` builds the crates' ignored `perf_` tests of both trees once, runs them
+in turn, --count rounds (3 when not given), on one runner, and compares the
+measurements they print (`perf: NAME VALUE UNIT`). A NAME narrows the tests;
+other options are refused.
+
 --dependents beside -p, in `test`, `stress` or `perf -p`, is resolved here, as
 `cargo xtask test --dependents -p CRATE` resolves it: the crates it added are
 named, and the job runs every one of them.
@@ -77,10 +90,11 @@ the workflow's other inputs, which it checks too.
 An empty value is the same as leaving the flag out.";
 
 /// The commands a `try` run may run.
-const COMMANDS: [&str; 9] = [
+const COMMANDS: [&str; 10] = [
     "test",
     "stress",
     "startup",
+    "size",
     "perf",
     "ci",
     "mutate",
@@ -95,7 +109,7 @@ const NIGHTLY_JOBS: [&str; 3] = ["partial-landlock", "advisories", "unused"];
 
 /// The filter of the ignored performance tests: a test whose name, below its
 /// binary, is `perf_…` or ends a module path with one.
-const PERF_TESTS: &str = "test(/(^|::)perf_/)";
+pub(crate) const PERF_TESTS: &str = "test(/(^|::)perf_/)";
 
 /// The workflow's inputs.
 #[derive(Debug, Default, PartialEq)]
@@ -336,7 +350,13 @@ impl Inputs {
         if NIGHTLY_JOBS.contains(&verb.as_str()) {
             return self.nightly_job(verb, rest);
         }
+        if verb == "size" {
+            return self.size(rest);
+        }
         if let Some(against) = &self.against {
+            if verb == "perf" {
+                return self.perf_ab(rest, against);
+            }
             return self.ab(verb, rest, against);
         }
         let squeezed = self.load.is_some() || self.cores.is_some();
@@ -558,6 +578,9 @@ fn validate(command: &[String]) -> Result<()> {
         "stress" => crate::stress::check_arguments(arguments).map_err(refused),
         "ab" => crate::ab::check_arguments(arguments).map_err(refused),
         "perf" => crate::perf::check_arguments(arguments).map_err(refused),
+        "perf-ab" => crate::perf_ab::check_arguments(arguments).map_err(refused),
+        "size" => crate::nonblocking::check_arguments(arguments, cfg!(target_os = "linux"))
+            .map_err(refused),
         "mutate" => crate::mutate::check_arguments(arguments).map_err(refused),
         "startup" => check_startup(arguments).map_err(refused),
         _ => Ok(()),
@@ -813,6 +836,94 @@ impl Inputs {
         Ok(command)
     }
 
+    /// `size`: `cargo xtask size`, which builds the binary and reports its
+    /// size. The `profile` input chooses the build (`ci`, the input's default,
+    /// is the command's own: the shipped `dist` build); a Linux runner builds
+    /// the static target the budgets are of, unless `--target` says another.
+    fn size(&self, rest: &[String]) -> Result<Vec<String>> {
+        for (given, flag) in [
+            (
+                self.against.is_some(),
+                "--against (it is `size`'s own `--against-main`)",
+            ),
+            (self.count.is_some(), "--count"),
+            (self.load.is_some(), "--load"),
+            (self.cores.is_some(), "--cores"),
+        ] {
+            if given {
+                return Err(format!(
+                    "`{flag}` does not go with `size`, which builds once"
+                ));
+            }
+        }
+        if let Some(word) = rest.iter().find(|word| word.as_str() == "--profile") {
+            return Err(format!(
+                "`{word}`: the `profile` input chooses the build, release or dist"
+            ));
+        }
+        let mut command = vec!["size".to_owned()];
+        command.extend(rest.iter().cloned());
+        if self.profile != "ci" {
+            command.extend(["--profile".to_owned(), self.profile.clone()]);
+        }
+        if cfg!(target_os = "linux") && !rest.iter().any(|word| word == "--target") {
+            command.extend([
+                "--target".to_owned(),
+                crate::nonblocking::LINUX_TARGET.to_owned(),
+            ]);
+        }
+        Ok(command)
+    }
+
+    /// `perf -p CRATE… --against REF`: the crates' ignored `perf_` tests of
+    /// both trees, built once each and run in turn on this runner, and the
+    /// measurements they print compared (`cargo xtask perf-ab`).
+    fn perf_ab(&self, rest: &[String], against: &str) -> Result<Vec<String>> {
+        let (packages, names) = packages_and_others(rest)?;
+        if packages.is_empty() {
+            return Err(
+                "`--against` with `perf` compares the crates' `perf_` tests: name them with -p \
+                 (`perf` alone is the terminal's measurement, which has no other tree)"
+                    .to_owned(),
+            );
+        }
+        if self.load.is_some() || self.cores.is_some() {
+            return Err(
+                "`--load` and `--cores` go with a stress run, not a performance A/B".to_owned(),
+            );
+        }
+        if let Some(word) = names.iter().find(|word| word.starts_with('-')) {
+            return Err(format!(
+                "`{word}`: a performance A/B takes the crates and the names of tests, and no \
+                 other option"
+            ));
+        }
+        let profile = if self.profile == "dist" {
+            "dist"
+        } else {
+            "release"
+        };
+        let mut command: Vec<String> = [
+            "perf-ab",
+            "--base",
+            AB_BASE,
+            "--label",
+            against,
+            "--cargo-profile",
+            profile,
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        if let Some(count) = self.count {
+            command.extend(["--count".to_owned(), count.max(2).to_string()]);
+        }
+        for package in packages {
+            command.extend(["-p".to_owned(), package]);
+        }
+        command.extend(names);
+        Ok(command)
+    }
+
     /// The A/B run: `ab` against the tree the workflow checked out.
     fn ab(&self, verb: &str, rest: &[String], against: &str) -> Result<Vec<String>> {
         if verb != "test" || self.profile != "ci" {
@@ -1006,13 +1117,15 @@ fn run(arguments: &[String]) -> Result<ExitCode> {
     crate::run(first, rest).map(|()| ExitCode::SUCCESS)
 }
 
-/// Whether a command is the crates' ignored `perf_` tests (`perf -p CRATE`),
-/// which may measure the corpus of real code.
+/// Whether a command is the crates' ignored `perf_` tests (`perf -p CRATE`,
+/// alone or as a comparison of two trees), which may measure the corpus of
+/// real code.
 fn reads_the_corpus(command: &[String]) -> bool {
-    command.first().is_some_and(|verb| verb == "test")
-        && command
-            .windows(2)
-            .any(|pair| pair[0] == "--profile" && pair[1] == "perf")
+    command.first().is_some_and(|verb| verb == "perf-ab")
+        || command.first().is_some_and(|verb| verb == "test")
+            && command
+                .windows(2)
+                .any(|pair| pair[0] == "--profile" && pair[1] == "perf")
 }
 
 #[cfg(test)]
@@ -1398,8 +1511,8 @@ mod tests {
                 "go with a stress run",
             ),
             (
-                &["--command", "perf -p cortex-index", "--against", "main"],
-                "goes with `test`",
+                &["--command", "perf --only editor", "--against", "main"],
+                "name them with -p",
             ),
         ] {
             let error = try_command(arguments).unwrap_err();
@@ -1999,6 +2112,202 @@ mod tests {
                 .any(|note| note.contains("os=linux-22.04"))
         );
         assert_eq!(planned.command, ["partial-landlock"]);
+    }
+
+    #[test]
+    fn against_makes_a_crates_perf_run_a_comparison_of_the_two_trees() {
+        assert_eq!(
+            try_command(&["--command", "perf -p cortex-index", "--against", "main"]),
+            Ok(
+                "perf-ab --base ../ab-base --label main --cargo-profile release -p cortex-index"
+                    .to_owned()
+            )
+        );
+        // Several crates, a test's name, dist, and a count of rounds (two at
+        // least: one round has no order).
+        assert_eq!(
+            try_command(&[
+                "--command",
+                "perf -p cortex-index -pcortex-tools warm",
+                "--against",
+                "origin/main",
+                "--profile",
+                "dist",
+                "--count",
+                "1"
+            ]),
+            Ok(
+                "perf-ab --base ../ab-base --label origin/main --cargo-profile dist --count 2 \
+                -p cortex-index -p cortex-tools warm"
+                    .to_owned()
+            )
+        );
+        assert_eq!(
+            try_command(&[
+                "--command",
+                "perf -p cortex-index",
+                "--against",
+                "main",
+                "--profile",
+                "release",
+                "--count",
+                "5"
+            ]),
+            Ok(
+                "perf-ab --base ../ab-base --label main --cargo-profile release --count 5 \
+                -p cortex-index"
+                    .to_owned()
+            )
+        );
+        for (arguments, expected) in [
+            (
+                &[
+                    "--command",
+                    "perf -p x --run-ignored all",
+                    "--against",
+                    "main",
+                ][..],
+                "no other option",
+            ),
+            (
+                &["--command", "perf -p x", "--against", "main", "--load", "2"],
+                "go with a stress run",
+            ),
+            (
+                &[
+                    "--command",
+                    "perf -p x",
+                    "--against",
+                    "main",
+                    "--count",
+                    "21",
+                ],
+                "from 2 to 20",
+            ),
+            (
+                &["--command", "perf -p x --against y", "--against", "main"],
+                "no other option",
+            ),
+            (&["--command", "perf -p x", "--against", "a b"], "not a ref"),
+        ] {
+            let error = try_command(arguments).unwrap_err();
+            assert!(error.contains(expected), "{arguments:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn only_a_perf_comparison_and_a_perf_run_fetch_the_corpus() {
+        let command = |words: &[&str]| {
+            let arguments: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
+            Inputs::parse(&arguments).unwrap().command().unwrap()
+        };
+        assert!(super::reads_the_corpus(&command(&[
+            "--command",
+            "perf -p cortex-index",
+            "--against",
+            "main"
+        ])));
+        assert!(!super::reads_the_corpus(&command(&[
+            "--command",
+            "test -p cortex-index",
+            "--against",
+            "main"
+        ])));
+    }
+
+    /// The target `size` builds for on this runner when none is named.
+    fn size_target() -> &'static str {
+        if cfg!(target_os = "linux") {
+            " --target x86_64-unknown-linux-musl"
+        } else {
+            ""
+        }
+    }
+
+    #[test]
+    fn a_size_run_takes_its_options_and_the_profile_chooses_the_build() {
+        let musl = size_target();
+        assert_eq!(
+            try_command(&["--command", "size --check --against-main"]),
+            Ok(format!("size --check --against-main{musl}"))
+        );
+        assert_eq!(
+            try_command(&["--command", "size", "--profile", "release"]),
+            Ok(format!("size --profile release{musl}"))
+        );
+        assert_eq!(
+            try_command(&[
+                "--command",
+                "size --breakdown --top 10",
+                "--profile",
+                "dist"
+            ]),
+            Ok(format!("size --breakdown --top 10 --profile dist{musl}"))
+        );
+        // A target that is named is the one built.
+        let own = if cfg!(target_os = "linux") {
+            "x86_64-unknown-linux-musl"
+        } else {
+            "x86_64-pc-windows-msvc"
+        };
+        assert_eq!(
+            try_command(&["--command", &format!("size --target {own}")]),
+            Ok(format!("size --target {own}"))
+        );
+    }
+
+    #[test]
+    fn a_size_run_refuses_what_makes_no_sense_before_anything_is_built() {
+        let other_os = if cfg!(target_os = "linux") {
+            "x86_64-pc-windows-msvc"
+        } else {
+            "x86_64-unknown-linux-musl"
+        };
+        for (arguments, expected) in [
+            (
+                &["--command", "size --check", "--profile", "release"][..],
+                "the budgets are of the shipped binary",
+            ),
+            (
+                &["--command", "size --against-main", "--profile", "release"],
+                "records the `dist` build",
+            ),
+            (
+                &["--command", "size --profile dist"],
+                "the `profile` input chooses",
+            ),
+            (&["--command", "size --at abc123"], "use the `commit` input"),
+            (&["--command", "size --nope"], "usage: cargo xtask size"),
+            (
+                &["--command", "size", "--against", "main"],
+                "`size`'s own `--against-main`",
+            ),
+            (&["--command", "size", "--count", "3"], "builds once"),
+            (
+                &["--command", "size", "--filter", "test(x)"],
+                "goes with `test` or `stress`",
+            ),
+            (&["--command", "size --top 0"], "is not a number above zero"),
+        ] {
+            let error = try_command(arguments).unwrap_err();
+            assert!(error.contains(expected), "{arguments:?}: {error}");
+        }
+        let error = try_command(&["--command", &format!("size --target {other_os}")]).unwrap_err();
+        assert!(
+            error.contains("is not a target this runner builds for"),
+            "{error}"
+        );
+        // The breakdown reads symbols with `nm`: a Windows binary has none.
+        let windows = if cfg!(target_os = "linux") {
+            "size --breakdown --target x86_64-pc-windows-msvc"
+        } else {
+            "size --breakdown"
+        };
+        let error = try_command(&["--command", windows]).unwrap_err();
+        assert!(
+            error.contains("for the Linux targets") || error.contains("not a target this runner"),
+            "{error}"
+        );
     }
 
     #[test]
