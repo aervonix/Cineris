@@ -398,7 +398,7 @@ impl Inputs {
 /// command, and why: they are options of another command, or something a
 /// `try` input says. Passed on, each would reach nextest after the build and
 /// fail the job with no test run.
-const NOT_FOR_NEXTEST: [(&str, &str); 20] = [
+const NOT_FOR_NEXTEST: [(&str, &str); 23] = [
     (
         "--tiers",
         "it is an option of `cargo xtask ci`, and a `test` run already ends with the tier \
@@ -465,6 +465,20 @@ const NOT_FOR_NEXTEST: [(&str, &str); 20] = [
     ),
     ("--commit", "it is the `commit` input"),
     (
+        "--workspace",
+        "the run is of the whole workspace when no crate is named, and nextest refuses it \
+         given twice",
+    ),
+    (
+        "--locked",
+        "every run `try` makes is `--locked` already, and nextest refuses it given twice",
+    ),
+    (
+        "--no-tests",
+        "`try`'s runs set what a run that finds no test does, and nextest refuses it given \
+         twice",
+    ),
+    (
         "--dry-run",
         "it is an option of `cargo xtask try`, not of the command",
     ),
@@ -481,6 +495,12 @@ fn refuse_foreign_words(words: &[String], into_stress: bool) -> Result<()> {
     let words = words.iter().take_while(|word| *word != "--");
     for word in words {
         let flag = word.split_once('=').map_or(word.as_str(), |(flag, _)| flag);
+        // A short option with its value joined to it: `-Pfast`.
+        let flag = if flag.starts_with("-P") && !flag.starts_with("--") {
+            "-P"
+        } else {
+            flag
+        };
         let Some((_, why)) = NOT_FOR_NEXTEST.iter().find(|(name, _)| *name == flag) else {
             continue;
         };
@@ -1681,6 +1701,29 @@ mod tests {
                 ],
                 "--count",
                 "`count` input",
+            ),
+            // What `try`'s runs give nextest already, which it refuses
+            // twice: found before the two trees of an A/B are built.
+            (
+                &["--command", "test -p x --locked", "--against", "main"],
+                "--locked",
+                "`--locked` already",
+            ),
+            (
+                &["--command", "test --workspace"],
+                "--workspace",
+                "given twice",
+            ),
+            (
+                &["--command", "test -p x --no-tests=pass"],
+                "--no-tests=pass",
+                "given twice",
+            ),
+            // A short option with its value joined to it.
+            (
+                &["--command", "test -p x -Pfast"],
+                "-Pfast",
+                "nextest's profile",
             ),
         ] {
             let error = try_command(arguments).unwrap_err();
