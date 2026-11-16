@@ -316,8 +316,15 @@ fn run_steps(runs: Vec<Vec<String>>, rerun: bool) -> Vec<Step> {
             };
             Step::closure(name, move || {
                 let root = workspace::root();
+                let tiers = if single {
+                    crate::stall::EVERY_TIER
+                } else if index == 0 {
+                    crate::stall::UNIT_AND_INTEGRATION
+                } else {
+                    crate::stall::SYSTEM
+                };
                 let ran = if rerun {
-                    run_with_rerun(&run, &root)
+                    run_with_rerun(&run, &root, tiers)
                 } else {
                     let watch = crate::stall::Watch::start();
                     let ran = steps::cargo(&run);
@@ -341,7 +348,7 @@ fn run_steps(runs: Vec<Vec<String>>, rerun: bool) -> Vec<Step> {
 /// `crate::stall::rerun` says so. What the pressure said of each run is
 /// added to the records the tier check reads, and a re-run is on the job's
 /// summary page.
-fn run_with_rerun(run: &[String], root: &Path) -> Result<()> {
+fn run_with_rerun(run: &[String], root: &Path, tiers: u8) -> Result<()> {
     use crate::stall::rerun;
     let mut exec = |arguments: &[String]| {
         let watch = crate::stall::Watch::start();
@@ -361,7 +368,8 @@ fn run_with_rerun(run: &[String], root: &Path) -> Result<()> {
     for record in &outcome.records {
         // A record is a convenience of the tier check: failing to write one
         // leaves the tiers judged, as they were without the pressure.
-        if let Err(error) = crate::stall::append_record(&records, record) {
+        let record = crate::stall::Record { tiers, ..*record };
+        if let Err(error) = crate::stall::append_record(&records, &record) {
             println!("warning: {error}");
         }
     }

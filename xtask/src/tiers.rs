@@ -191,7 +191,8 @@ fn check_report_with(
     summary: bool,
 ) -> Result<()> {
     let cases = junit::read(report)?;
-    let (table, over) = summarise_marked(&cases, os, stalled.is_none());
+    let judged = |tier: Tier| stalled.is_none_or(|stalled| stalled.judges(tier));
+    let (table, over) = summarise_marked(&cases, os, judged);
     if let Some(stalled) = &stalled {
         println!("{}", stalled.message());
     }
@@ -207,10 +208,8 @@ fn check_report_with(
             slowest_markdown(&cases, slowest)
         ));
     }
-    if stalled.is_some() {
-        // No verdict: the tiers are neither over nor within their budgets.
-        return Ok(());
-    }
+    // The tiers a stalled run measured have no verdict (`over` leaves them
+    // out); the others are judged as ever.
 
     let names = |wanted: Verdict| -> Vec<&str> {
         let tiers = over.iter().filter(|(_, verdict)| *verdict == wanted);
@@ -413,12 +412,16 @@ fn start_line(start: f64, sample: usize) -> String {
 
 /// The table for the terminal, and the tiers that are over budget.
 fn summarise(cases: &[TestCase], os: Os) -> (String, Vec<(Tier, Verdict)>) {
-    summarise_marked(cases, os, true)
+    summarise_marked(cases, os, |_| true)
 }
 
 /// [`summarise`], with a mark on a tier that is over its budget only when
 /// `marked`: a run that is not judged has none.
-fn summarise_marked(cases: &[TestCase], os: Os, marked: bool) -> (String, Vec<(Tier, Verdict)>) {
+fn summarise_marked(
+    cases: &[TestCase],
+    os: Os,
+    marked: impl Fn(Tier) -> bool,
+) -> (String, Vec<(Tier, Verdict)>) {
     let (start, sample) = start_of(cases);
     let mut table = format!(
         "  {}\n  tier             tests   time    above start  budget  used\n",
@@ -433,7 +436,7 @@ fn summarise_marked(cases: &[TestCase], os: Os, marked: bool) -> (String, Vec<(T
         } = total(cases, tier, start);
         let budget = tier.budget(os);
         let used = 100.0 * above_start / budget;
-        let verdict = verdict(above_start, budget).filter(|_| marked);
+        let verdict = verdict(above_start, budget).filter(|_| marked(tier));
         let mark = match verdict {
             None => "",
             Some(Verdict::OverBudget) => "  over budget (warning)",
@@ -1097,6 +1100,25 @@ mod tests {
     }
 
     #[test]
+    fn a_stall_of_the_system_tests_run_leaves_the_unit_tier_judged() {
+        // The unit tier is far over its budget in a quiet run of tiers 1 and
+        // 2; the system tests' run stalled. Together 35 s of 300 (11.7%).
+        let root = tree_with(
+            "other-run-stalled",
+            Some(
+                "elapsed_ms=200000 full_us=0 tiers=1,2\nelapsed_ms=100000 full_us=35000000 \
+                 tiers=3\n",
+            ),
+        );
+        let desk = check_ci_report_in(&root, false, false);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(
+            desk.is_err_and(|error| error.contains("times over its time budget")),
+            "a stall of the system tests excused the unit tier"
+        );
+    }
+
+    #[test]
     fn a_run_whose_disk_did_not_stall_is_judged_at_a_desk_as_it_always_was() {
         // 5 s of 100: under the threshold. And a run with no record at all,
         // where the pressure could not be read.
@@ -1118,10 +1140,10 @@ mod tests {
     #[test]
     fn a_run_that_is_not_judged_has_no_mark_on_any_tier() {
         let cases = unit_tests_taking(6.5);
-        let (marked, over) = summarise_marked(&cases, Os::Linux, true);
+        let (marked, over) = summarise_marked(&cases, Os::Linux, |_| true);
         assert!(marked.contains("FAR OVER BUDGET"));
         assert_eq!(over.len(), 1);
-        let (plain, over) = summarise_marked(&cases, Os::Linux, false);
+        let (plain, over) = summarise_marked(&cases, Os::Linux, |_| false);
         assert!(!plain.contains("OVER BUDGET") && !plain.contains("over budget"));
         assert!(over.is_empty());
         // The numbers are the same.
