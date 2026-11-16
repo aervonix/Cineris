@@ -841,6 +841,16 @@ pub fn normalise(entries: &[Value], known: &[(&str, &str)]) -> Vec<Value> {
     for entry in entries {
         learn(entry, &mut names, None);
     }
+    // A Windows path is written with `\` in some places and `/` in others
+    // (a rule's pattern, the reasons it is quoted in): both are known.
+    let slashed: Vec<(String, &str)> = known
+        .iter()
+        .filter(|(from, _)| from.contains('\\'))
+        .map(|(from, to)| (from.replace('\\', "/"), *to))
+        .collect();
+    let mut every: Vec<(&str, &str)> = known.to_vec();
+    every.extend(slashed.iter().map(|(from, to)| (from.as_str(), *to)));
+    let known = every.as_slice();
     let mut out: Vec<Value> = Vec::new();
     // Each session's last `usage.updated`, in the order the sessions first
     // had one: compared after the sequence, which leaves them out.
