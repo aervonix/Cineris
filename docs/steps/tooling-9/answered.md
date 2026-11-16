@@ -40,7 +40,7 @@ The slowest tests and their starts after it (`try` 43892837490, the same tree as
 
 Tier 2 is about 38 to 41 s on 9 to 10 ms runners, against the 32 s target. No test change found takes 9 s off it without testing less: the time is a few milliseconds of the operating system's in each of about 1,360 tests (the seventh tooling step found the same). A session's open on Windows, 18 ms against 1.4 ms at a desk, is the largest single share (2.6 s over 143 opens in `cortex-core`), and is product code in `cortex-core`, where other steps are working.
 
-**What would meet it:** tiers 1 and 2 two at a time on Windows, in place of three. On one 6 ms runner it took the integration tier from 28.1 to 22.2 s (−21%) and the unit tier from 13.8 to 9.5 s, for 5.8 s more of the run's wall time (`try` 43884288025, three rounds of each). It reverses the owner's choice of three in the seventh tooling step. **Proposed, pending the owner:** it is on a branch of its own, `worktree-step-02-tooling-9-two`, ready as a one-change pull request ([windows-tiers-one-and-two-two-at-a-time](../../outstanding/windows-tiers-one-and-two-two-at-a-time.md)).
+**What would meet it:** tiers 1 and 2 two at a time on Windows, in place of three. On one 6 ms runner it took the integration tier from 28.1 to 22.2 s (−21%) and the unit tier from 13.8 to 9.5 s, for 5.8 s more of the run's wall time (`try` 43884288025, three rounds of each). It reverses the owner's choice of three in the seventh tooling step. **The owner's decision (2026-11-16): two at a time on Windows,** made in a pull request of its own after the tiers' (`.config/nextest.toml`, the group `tiers-windows`).
 
 ## The tools: what was built, item by item
 
