@@ -268,11 +268,12 @@ pub fn interactive(
     overrides: Overrides,
     make: impl FnOnce(&Waker, &Capabilities) -> (Box<dyn Link>, Start),
 ) -> io::Result<Exit> {
-    let mut terminal = Terminal::enter(overrides)?;
-    let waker = terminal.waker();
-    let caps = *terminal.caps();
+    let mut terminal = Some(Terminal::enter(overrides)?);
+    let (waker, caps, (cols, rows)) = match terminal.as_ref() {
+        Some(entered) => (entered.waker(), *entered.caps(), entered.size()?),
+        None => return Ok(Exit::Quit),
+    };
     let (link, start) = make(&waker, &caps);
-    let (cols, rows) = terminal.size()?;
     let mut app = App::new(
         link,
         start,
@@ -281,11 +282,51 @@ pub fn interactive(
         usize::from(rows),
         Instant::now(),
     );
-    let ran = run(&mut terminal, &mut app);
-    let left = terminal.leave();
+    let mut presenter = Inline::new(cols, rows);
+    let ran = loop {
+        let Some(entered) = terminal.as_mut() else {
+            break Ok(());
+        };
+        match run_with(entered, &mut presenter, &mut app) {
+            Ok(Ran::Ended) => break Ok(()),
+            Err(error) => break Err(error),
+            // `Ctrl+G`: the terminal is handed to the editor, and taken
+            // back whatever it did (`external`).
+            Ok(Ran::Editor) => {
+                let mut env = crate::external::Env::current();
+                env.avoid = app.write_roots();
+                let result = crate::external::find(&env).and_then(|program| {
+                    let mut handoff = crate::external::TerminalHandoff {
+                        terminal: &mut terminal,
+                        inline: &mut presenter,
+                        overrides,
+                    };
+                    crate::external::edit(
+                        &app.editor_text(),
+                        &program,
+                        &mut handoff,
+                        &std::env::temp_dir(),
+                    )
+                });
+                if let Err(crate::external::EditorError::Terminal(error)) = result {
+                    break Err(error);
+                }
+                app.edited(result);
+            }
+        }
+    };
+    let left = terminal.map_or(Ok(()), Terminal::leave);
     ran?;
     left?;
     Ok(app.exit().cloned().unwrap_or(Exit::Quit))
+}
+
+/// Why [`run_with`] gave the terminal back.
+enum Ran {
+    /// The application ended.
+    Ended,
+    /// The person asked for the external editor.
+    Editor,
 }
 
 /// Runs the application on `terminal` until it ends: the interface's
@@ -298,13 +339,32 @@ pub fn interactive(
 pub fn run<D: Device>(terminal: &mut Terminal<D>, app: &mut App) -> io::Result<()> {
     let (cols, rows) = terminal.size()?;
     let mut presenter = Inline::new(cols, rows);
+    // A terminal of the caller's own has no editor to hand over to: the
+    // prompt stays as it was.
+    while let Ran::Editor = run_with(terminal, &mut presenter, app)? {
+        app.edited(Err(crate::external::EditorError::File(io::Error::other(
+            "this terminal cannot be handed to an editor",
+        ))));
+    }
+    Ok(())
+}
+
+/// The loop, on `terminal` and `presenter`, until the application ends or
+/// asks for the external editor.
+fn run_with<D: Device>(
+    terminal: &mut Terminal<D>,
+    presenter: &mut Inline,
+    app: &mut App,
+) -> io::Result<Ran> {
+    let (cols, rows) = terminal.size()?;
+    presenter.resize(cols, rows);
     app.resize(usize::from(presenter.width()), usize::from(rows));
     let mut scheduler = Scheduler::new();
     scheduler.input();
     loop {
         let now = terminal.now();
         if scheduler.wake(now) == Wake::Now {
-            draw(terminal, &mut presenter, app, now)?;
+            draw(terminal, presenter, app, now)?;
             scheduler.drawn(now);
             app.drawn(terminal.now());
         }
@@ -329,7 +389,7 @@ pub fn run<D: Device>(terminal: &mut Terminal<D>, app: &mut App) -> io::Result<(
         let mut next = terminal.next(timeout)?;
         let mut input = false;
         while let Some(event) = next.take() {
-            input |= take(terminal, &mut presenter, &mut scheduler, app, &event)?;
+            input |= take(terminal, presenter, &mut scheduler, app, &event)?;
             // After the last key the application takes, what is typed is
             // the shell's: nothing more is read.
             if app.exit().is_some() {
@@ -340,9 +400,14 @@ pub fn run<D: Device>(terminal: &mut Terminal<D>, app: &mut App) -> io::Result<(
         if due.is_some_and(|due| terminal.now() >= due) {
             scheduler.input();
         }
+        // `Ctrl+G`: the caller hands the terminal to the editor, and runs
+        // this loop again after.
+        if app.take_editor() {
+            return Ok(Ran::Editor);
+        }
         if input {
             let now = terminal.now();
-            draw(terminal, &mut presenter, app, now)?;
+            draw(terminal, presenter, app, now)?;
             scheduler.drawn(now);
             app.drawn(terminal.now());
             if app.exit().is_some() {
@@ -369,7 +434,7 @@ pub fn run<D: Device>(terminal: &mut Terminal<D>, app: &mut App) -> io::Result<(
             }
             // Keys first, between batches.
             if let Some(event) = terminal.next(Some(Duration::ZERO))?
-                && take(terminal, &mut presenter, &mut scheduler, app, &event)?
+                && take(terminal, presenter, &mut scheduler, app, &event)?
             {
                 scheduler.input();
                 scheduler.stream();
@@ -378,12 +443,13 @@ pub fn run<D: Device>(terminal: &mut Terminal<D>, app: &mut App) -> io::Result<(
         }
         if app.exit().is_some() {
             let now = terminal.now();
-            draw(terminal, &mut presenter, app, now)?;
+            draw(terminal, presenter, app, now)?;
             break;
         }
     }
     let caps = *terminal.caps();
-    presenter.finish(&caps, terminal)
+    presenter.finish(&caps, terminal)?;
+    Ok(Ran::Ended)
 }
 
 /// One terminal event: what it does to the presenter and the scheduler,
