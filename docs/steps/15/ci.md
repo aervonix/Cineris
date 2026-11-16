@@ -80,3 +80,27 @@ The fixes after the review of step 15 (pull request #49): 48 files, about 3,400 
 - **The first run of `test-windows` failed in a test the fixes do not reach:** `cortex-tools`' `changes::sys_git_says_what_a_command_changed`, whose second look (a command that changes nothing) came back incomplete, which is what git answering after the look's time cap gives on a slow runner. The job passed when it was run again. It is step 11's test; nothing in the fixes changes the change detector.
 - **The desk stalled twice in this step's runs:** every test then in flight that wrote files (the agent's `context` tests, `cortex-config`'s, `cortex-base`'s atomic writes, `cortex-tools`' editing tests) ran out of time at once, and the next run, with nothing changed, passed whole. It matches the stall step 15 recorded above, and the side run that mutates the code met it once too. A `mutate` run's baseline is the check that catches it.
 - **A Windows `try` of `cortex-core` and `cortex-agent`** (run 43668459729: 409 tests) passed before the pull request, the three link tests on Windows among them: on the runner a link that cannot be made fails the test, so each made its symbolic link.
+
+## Stay inside the project (2026-11-16)
+
+<!-- written by cargo xtask ci-times, section "Stay inside the project (2026-11-16)": it replaces this up to the end mark -->
+Pull request 62, on `main` at `de5a686`. "Main" is main's own run at `de5a686` (run 43791749637).
+The PR's run is 43816315383, at `3ddcc0c`.
+
+| Job | Main, `de5a686` | The PR at `3ddcc0c` |
+|---|---|---|
+| `lint-linux` | 67 s | 53 s |
+| `test-linux` | 85 s | 98 s |
+| `lint-windows` | 113 s | 85 s |
+| `test-windows` | 184 s | 231 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `3ddcc0c` (4 ms) | Windows, main (7 ms) | Windows, `3ddcc0c` (9 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 7.6 s | 10.9 s | 10.2 s | 17.0 s |
+| Tier 2, integration (40 s) | 15.8 s | 19.8 s | 22.4 s | 34.7 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 15.6 s | 29.7 s | 53.5 s | 71.1 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "Stay inside the project (2026-11-16)" -->
+
+- **The change adds one unit test and one string's 374 bytes to the prompt;** nothing in it runs in tier 3. The rises above (Linux tier 3 from 15.6 s to 29.7 s, Windows' on a slower runner, 9 ms against 7 ms) are the runners, not the change: no system test reads the prompt.
+- **The prompt cache:** section 1 is part of the `base` hash, so every session's first request after this change misses the cache once, and a session resumed from before it begins a new epoch.
