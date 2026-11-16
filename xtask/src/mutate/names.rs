@@ -901,7 +901,11 @@ mod tests {
                 problems[0]
             );
             assert!(
-                problems[0].contains("only Windows builds"),
+                problems[0].contains(if cfg!(windows) {
+                    "only Linux builds"
+                } else {
+                    "only Windows builds"
+                }),
                 "{}",
                 problems[0]
             );
