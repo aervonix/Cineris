@@ -616,6 +616,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         status.sha,
         status.conclusion.as_deref().unwrap_or("no conclusion")
     );
+    let ended = conclusion_read(&status, &jobs, request.os.is_some());
     let mut problems = Vec::new();
     for job in jobs {
         let directory = runs::artifact_dir(run, &job.name)?;
@@ -637,17 +638,40 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         print!("{}", result.text);
         problems.extend(result.problems);
     }
-    if problems.is_empty() && status.conclusion.as_deref().is_none_or(|c| c == "success") {
+    if problems.is_empty() && ended.is_none() {
         println!("run {run}: nothing failed");
         return Ok(());
     }
-    if problems.is_empty() {
-        problems.push(format!(
-            "the run ended as {}",
-            status.conclusion.as_deref().unwrap_or("no conclusion")
-        ));
+    if problems.is_empty()
+        && let Some(ended) = ended
+    {
+        problems.push(ended);
     }
     Err(format!("try run {run} failed: {}", problems.join("; ")))
+}
+
+/// How what was read ended, when not well: the run's conclusion, or with
+/// `--os` the conclusion of the jobs it chose (a run with a failed Windows
+/// job is not a failure of its Linux one). `None` when it ended well.
+fn conclusion_read(status: &Status, jobs: &[&Job], one_os: bool) -> Option<String> {
+    if one_os {
+        let failed: Vec<String> = jobs
+            .iter()
+            .filter(|job| job.conclusion.as_deref() != Some("success"))
+            .map(|job| {
+                format!(
+                    "`{}` ended as {}",
+                    job.name,
+                    job.conclusion.as_deref().unwrap_or("no conclusion")
+                )
+            })
+            .collect();
+        return (!failed.is_empty()).then(|| failed.join("; "));
+    }
+    match status.conclusion.as_deref() {
+        None | Some("success") => None,
+        Some(other) => Some(format!("the run ended as {other}")),
+    }
 }
 
 #[cfg(test)]
@@ -655,9 +679,27 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Job, Request, Status, against_of, chosen_jobs, first_seed_of, job_result, os_of,
-        parse_status, skipped_block,
+        Job, Request, Status, against_of, chosen_jobs, conclusion_read, first_seed_of, job_result,
+        os_of, parse_status, skipped_block,
     };
+
+    #[test]
+    fn one_os_is_judged_by_its_own_job_and_the_whole_run_by_its_conclusion() {
+        let status = parse_status(STATUS).unwrap();
+        // The run failed, by its Windows job.
+        let linux = chosen_jobs(&status, Some("linux")).unwrap();
+        assert_eq!(conclusion_read(&status, &linux, true), None);
+        let windows = chosen_jobs(&status, Some("windows")).unwrap();
+        assert_eq!(
+            conclusion_read(&status, &windows, true).as_deref(),
+            Some("`try-windows` ended as failure")
+        );
+        let both = chosen_jobs(&status, None).unwrap();
+        assert_eq!(
+            conclusion_read(&status, &both, false).as_deref(),
+            Some("the run ended as failure")
+        );
+    }
     use crate::tiers::Os;
 
     fn strings(words: &[&str]) -> Vec<String> {
