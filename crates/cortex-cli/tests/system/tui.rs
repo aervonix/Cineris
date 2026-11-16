@@ -937,6 +937,21 @@ fn sys_a_signal_ends_the_application_gracefully_with_its_code() {
     );
 }
 
+/// Waits until the spinner has turned from its first frame: the hint row, the
+/// last row of a frame, shows the second. The console is then closed just
+/// after a whole frame, and the next is a tick away (100 ms), so that the
+/// signal does not land while one is written: it would end the application
+/// with 1 and "the terminal failed: the terminal has been put back", not
+/// with 129 (the eighth tooling step's report says so), which these tests
+/// are not about. A turn that has begun has drawn its call's box by then.
+fn turned(session: &mut Session) {
+    session.wait_for(LIMIT, "the spinner turning", |t| {
+        GLYPHS.history_has_row(t, |g| {
+            RowPattern::starting_with(g.spinner[1]).containing("esc stops")
+        })
+    });
+}
+
 /// How long the application has to end once its console is closed under it:
 /// under the watchdog (3 s) that ends a process that does not, so that an
 /// end the watchdog made fails. It takes a few milliseconds at the desk.
@@ -968,7 +983,8 @@ fn closes_in_order(session: &mut Session, what: &str, stopped: impl FnOnce() -> 
                 restored: true,
                 exit: Exit::Code(129)
             }),
-            "{what}"
+            "{what}: {}",
+            everything(session)
         );
     }
     #[cfg(windows)]
@@ -996,6 +1012,7 @@ fn sys_the_console_closing_ends_the_application_and_stops_its_turn() {
     );
     let mut session = machine.tui(&["work"]);
     wait_shows(&mut session, "Working on it");
+    turned(&mut session);
     closes_in_order(&mut session, "mid-stream", || closed.wait(LIMIT));
 }
 
@@ -1016,6 +1033,7 @@ fn sys_the_console_closing_stops_a_running_command() {
         .all(&["command"], LIMIT)
         .try_into()
         .unwrap_or_else(|_| panic!("the command did not start"));
+    turned(&mut session);
     closes_in_order(&mut session, "mid-tool", || running.gone_within(LIMIT));
 }
 
