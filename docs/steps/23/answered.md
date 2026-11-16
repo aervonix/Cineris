@@ -308,3 +308,24 @@ What the second pull request built differently from the design above, or added, 
 | The statistics notice | Left to step 24's usage panel ([outstanding](../../outstanding/statistics-a-build-cannot-use-are-said-only-in-the-log.md)) | A look at the totals at the start reads the statistics when nobody asked, which step 16's rule forbids and a test holds; the writer finds such a file only when it settles |
 | `/config`'s provenance, `/export` | Open items of their own ([provenance](../../outstanding/config-provenance-in-the-application.md), [`/export`](../../outstanding/the-export-command-has-no-step.md)) | `config/get` gives values only; no step builds `/export` |
 
+### The review of the second pull request
+
+An independent reviewer read the whole of the second pull request before it was opened, the dialogs and the session's opening first. Its findings, and what each changed:
+
+| Finding | Changed |
+|---|---|
+| A dialog that came while the viewer was open had its grace run unseen, and a key typed just after the viewer closed could answer it; the loop spun while the viewer stayed open | A dialog is shown by the inline frame alone; a key in the viewer is the key before the next; nothing is due under the viewer. Tested (`a_dialog_that_comes_under_the_viewer_waits_for_the_inline_screen`) |
+| `workspace/files` ran in the lane, so a first prompt waited for the walk, which was not bounded | A read, beside the lane; the walk stops once it has met four times its limit |
+| With the lane a task of its own a read could overtake a write sent before it (`/permissions`' list after a revoke) | A read sent while a write is under way runs after it, in the lane (`Routes`) |
+| Never did not apply to the session it was said in | The trust is worked out again after the refusal |
+| A setting the question listed that changes while it is open is used after a yes | As designed: what a yes pins is the rules ([06](../../architecture/06-permissions-and-sandbox.md)); a trusted project's settings may change after it, and one changed while the question is open is no different |
+| A prompt sent after another process compacted the history file was lost | Each prompt appended to the file opened afresh, under the store's lock |
+| `join` took the clients' lock under the open requests' lock, the other order from `put` and `disconnect` | One order |
+| A request that ends with its askers, put when they had gone, never ended | Dropped at once |
+| SIGABRT was handed over with the four signals that end a program | Left to its default action; a system test sends one |
+| A question's choices were drawn without `sanitize` | Drawn through it |
+| The viewer's transcript is kept for the life of the application, unmeasured against the 200-turn memory budget | Left to step 25's long-session memory test, which covers both presenters ([build-plan.md](../../build-plan.md), step 23, "What later steps inherit") |
+| After a signal the history's and the core's waits could reach the watchdog | The core has 1.5 s after a signal |
+| A profile the project defines that fails to load only when selected might fail every open | Not so: a project's profiles are checked when its files are loaded, and one that cannot be read refuses the file at every open, as before this step |
+| 09 said the history is read after the first frame | It is read from the start, beside the start-up; 09 says so |
+
