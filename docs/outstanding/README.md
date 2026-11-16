@@ -170,6 +170,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### The tooling and CI
 
+- [a-known-flake-in-a-breaks-own-run](a-known-flake-in-a-breaks-own-run.md): A known flake that fails in a break's own run of `mutate` makes a break that names no test look caught. Owner: a later tooling step.
 - [a-retried-tests-standard-error-in-the-report](a-retried-tests-standard-error-in-the-report.md): `xtask` reads a retried test's standard error from its first attempt, not the last. Owner: a later tooling step.
 - [actionlint-in-the-checks](actionlint-in-the-checks.md): The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary. Owner: the owner.
 - [caught-by-names-checked-only-at-the-desk](caught-by-names-checked-only-at-the-desk.md): `check` in CI keeps no list of tests, so it does not check `caught-by` names. Owner: the owner.
