@@ -59,11 +59,17 @@
 //!   refused, and so is one whose process cannot be looked at. The server's
 //!   own process may connect: it is in the job too, and it is the server.
 //!   If the job cannot be made or joined, the listener is not bound. This is
-//!   defence in depth: a command can still reach outside the job through a
-//!   service that starts processes for it (WMI's `Win32_Process.Create`,
-//!   the task scheduler). But Windows has no sandbox in the first release,
-//!   so it is the main thing that keeps a command the user approved from
-//!   answering its session's approvals over the pipe.
+//!   defence in depth, and a thin one (the independent review of step 27's
+//!   second part): a process of the user at the same integrity may open
+//!   any other such process with full rights by default, so a command can
+//!   take a connection that is admitted already from a client outside the
+//!   job (the user's terminal, `cortex attach`), act from inside the
+//!   server's own process, or make an instance of the pipe's name for a new
+//!   client to reach; and a service that starts processes for it (WMI's
+//!   `Win32_Process.Create`, the task scheduler) puts one outside the job.
+//!   Windows has no sandbox in the first release: what keeps a command from
+//!   answering its session's approvals there is the person who approved
+//!   the command (`docs/security.md`, section 5).
 //!
 //! The instances are made here (`CreateNamedPipeW`) rather than by tokio's
 //! `ServerOptions`, which needs a runtime to make one: binding needs none,

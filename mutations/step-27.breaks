@@ -285,9 +285,9 @@ caught-by:
 [break] the-servers-own-command-is-served
 rule: A peer whose line of parents reaches the server's process is one of its own commands, and is closed unanswered.
 file: crates/cortex-rpc/src/socket/unix.rs
-in: descends_from
-find: Some(parent) if parent == server => return true,
-replace: Some(parent) if parent == server => return false,
+in: line_of
+find: Some(parent) if parent == server => return Line::Server,
+replace: Some(parent) if parent == server => return Line::Elsewhere,
 caught-by:
     cortex-rpc::it socket::sys_one_of_the_servers_own_commands_is_refused
 
@@ -397,4 +397,41 @@ find: options.keep_sessions = serve.socket.is_some();
 replace: options.keep_sessions = false;
 caught-by:
     cortex-cli::system serve::sys_serve_socket_serves_at_the_default_place_and_removes_it
+
+[break] a-connection-keeps-its-place-for-good
+rule: A socket's connection gives its place back when it stops serving, so that a client that has gone is not counted against the next.
+file: crates/cortex-rpc/src/server.rs
+in: serve_socket
+find: drop(place);
+replace: std::mem::forget(place);
+caught-by:
+    cortex-rpc::it socket::the_place_of_a_client_that_went_is_the_next_ones
+
+[break] an-accept-that-fails-for-a-moment-ends-the-server
+rule: An accept that fails for want of a resource is tried again after a wait; only another failure ends the server.
+file: crates/cortex-rpc/src/server.rs
+in: serve_socket
+find: Err(error) if passes(&error) =>
+replace: Err(error) if false && passes(&error) =>
+caught-by:
+    cortex-rpc::it socket::an_accept_that_fails_for_want_of_a_resource_is_tried_again
+
+[break] out-of-descriptors-is-the-listeners-end
+rule: Out of descriptors, memory or buffers, by the system's own code, is a failure that passes.
+file: crates/cortex-rpc/src/server.rs
+in: passes
+find: || error.raw_os_error().is_some_and(|code| OUT_OF.contains(&code))
+replace: || false
+caught-by:
+    cortex-rpc server::tests::an_accept_out_of_a_resource_passes_and_any_other_failure_ends_the_listener
+    cortex-rpc::it socket::an_accept_that_fails_for_want_of_a_resource_is_tried_again
+
+[break] a-peer-whose-parents-cannot-be-read-is-served
+rule: A peer whose line of parents cannot be read (its process, or a parent of it, is gone) is refused.
+file: crates/cortex-rpc/src/socket/unix.rs
+in: line_of
+find: None => return Line::Unknown,
+replace: None => return Line::Elsewhere,
+caught-by:
+    cortex-rpc::it socket::sys_a_peer_whose_process_is_gone_is_refused
 

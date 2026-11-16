@@ -302,14 +302,15 @@ The server's first part: `cortex serve --stdio` (`cortex-rpc`; `docs/steps/27/an
 - **A client asks for `unrestricted` only of a server started at it** (`--permission-mode unrestricted`, or the user's configuration).
   - Otherwise `session/new` and `session/set` asking for it, as the level or as an override of `permissions.mode` (dotted, nested or in a profile), are refused `unrestricted_not_allowed`, of kind `permission`, before the core sees them.
 - **`cortex serve --socket [PATH]` serves several clients over a local socket** (`cortex_rpc::socket`, `serve_socket`).
-  - Each client is a connection of its own, as `--stdio`'s one is, at most 64 at once; one past that is closed unread.
+  - Each client is a connection of its own, as `--stdio`'s one is, at most 64 at once; one past that is closed unread. A connection gives its place back when it stops serving.
+  - An `accept` that fails for want of a resource (descriptors, memory) is tried again after a wait that doubles from 50 ms to 1 s; any other failure ends the server.
   - A connection that has not said `initialize` within 10 s is closed.
   - A client's `shutdown` ends every connection and the server.
   - Its sessions outlive their clients (`CoreOptions::keep_sessions`): another client opens one again, and an approval in a session with no client waits for a `user` client to open it, up to the approval time limit.
   - A `supervisor` connection is given the grant in `ServeOptions::supervisor_grant`, which the binary leaves empty.
   - On Unix the place is `$XDG_RUNTIME_DIR/cortex-harness/rpc.sock`, or `/tmp/cortex-harness-<uid>/rpc.sock` without one, in a folder the server makes owner-only and refuses when others can reach it; a path given must be in a folder others cannot write in, or root's with the sticky bit.
   - The socket is `0600`, and a lock beside it is held for the server's life: a second server is refused, and a socket left behind is removed only when nothing answers on it.
-  - A peer of another user, by its credentials, and one whose line of parents reaches the server's process (one of the server's own commands) are closed unanswered.
+  - A peer of another user, by its credentials, and one whose line of parents reaches the server's process (one of the server's own commands) are closed unanswered; so is one whose line of parents cannot be read (its process, or a parent of it, is gone) or whose process is not known (another pid namespace).
   - On Windows the place is the named pipe `\\.\pipe\cortex-harness-<the user's SID>` (`cortex_rpc::socket`'s Windows module, [decision 0037](../decisions/0037-the-named-pipe-is-served-from-cortex-rpc-in-one-windows-only-module-that-may-use-unsafe.md)).
   - Its security is given to the call that makes each instance: owned by the user, an access list that allows the user alone, and a mandatory label at the server's integrity with no write up and no read up.
   - The first instance refuses a name another process holds, every instance refuses remote clients, and the next instance is made before a connected one is handed on, so the name never lapses.

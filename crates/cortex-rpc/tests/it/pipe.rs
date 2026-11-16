@@ -75,8 +75,8 @@ fn bind_widened(place: &Place) -> Listener {
     Listener::bind(
         place,
         &ListenOptions {
-            own_folder: false,
             widen_access_for_tests: true,
+            ..ListenOptions::new(false)
         },
     )
     .unwrap()
