@@ -28,6 +28,11 @@
 //! and [`Lines`] checks that no event at or below a `session/read`'s `seq`
 //! arrives after the read's result.
 //!
+//! **`usage.updated`** is compared as each session's last one, after the
+//! sequence: the loop sends one at most once a frame while a response
+//! arrives, by the clock, so where one falls among the deltas is timing,
+//! and what the usage came to is not.
+//!
 //! **What it does not see,** by design: events after a scenario's last
 //! step that waits for one, and where a result falls among the events
 //! (each is kept at its step: when it arrives beside the events is the
@@ -837,8 +842,25 @@ pub fn normalise(entries: &[Value], known: &[(&str, &str)]) -> Vec<Value> {
         learn(entry, &mut names, None);
     }
     let mut out: Vec<Value> = Vec::new();
+    // Each session's last `usage.updated`, in the order the sessions first
+    // had one: compared after the sequence, which leaves them out.
+    let mut usage: Vec<(Value, Value)> = Vec::new();
     for entry in entries {
         let entry = rename(entry, &mut names, known, None);
+        // The loop sends `usage.updated` at most once a frame while a
+        // response arrives, by the clock: whether one comes before or after
+        // a delta is timing. What a session's usage came to is not.
+        if entry.pointer("/event/type").and_then(Value::as_str) == Some("usage.updated") {
+            let session = entry
+                .pointer("/event/session_id")
+                .cloned()
+                .unwrap_or(Value::Null);
+            match usage.iter_mut().find(|(known, _)| *known == session) {
+                Some((_, last)) => *last = entry,
+                None => usage.push((session, entry)),
+            }
+            continue;
+        }
         // A delta that follows a delta of the same item and kind, and of
         // the same call, is added to it, as the core's queue merges them.
         if let (Some(last), Some(delta)) = (out.last_mut(), delta_of(&entry))
@@ -852,6 +874,11 @@ pub fn normalise(entries: &[Value], known: &[(&str, &str)]) -> Vec<Value> {
         }
         out.push(entry);
     }
+    out.extend(
+        usage
+            .into_iter()
+            .map(|(_, last)| json!({"last_usage": last})),
+    );
     out
 }
 
