@@ -257,6 +257,9 @@ pub struct App {
     panel_held: Option<(Key, Instant)>,
     /// The panel an item edit in the editor is for, and what it is for.
     item_edit: Option<(u64, ItemEditFor)>,
+    /// The panel a command asked for, until a frame has laid it out: one
+    /// that cannot be drawn focused there says so.
+    summoned: Option<u64>,
     /// The last turn's cost and the session's, shown until the next prompt.
     last_cost: Option<(String, String)>,
     /// Whether this session has had a turn, here or before.
@@ -367,6 +370,7 @@ impl App {
             panel_untaken: None,
             panel_held: None,
             item_edit: None,
+            summoned: None,
             last_cost: None,
             had_turn: false,
             effects: Vec::new(),
@@ -694,6 +698,12 @@ impl App {
                 // The key before this one was one a dialog took.
                 let after_taken = before.is_some_and(|before| !before.typing);
                 let Some(dialog) = self.dialogs.front_mut() else {
+                    // A key held down after a panel took it goes where its
+                    // press went, nowhere, though the panel it acted on has
+                    // gone (`x`) or given the input the focus (`e`).
+                    if self.panel_holds(*key, at, repeat) {
+                        return true;
+                    }
                     // A panel that has the focus takes its keys (step 24).
                     if let Target::Panel(id) = self.input.focus().focused() {
                         return self.panel_key(id, *key, at, repeat);
@@ -1102,6 +1112,9 @@ impl App {
         let Some(pending) = self.pending.remove(&ticket) else {
             return;
         };
+        if let Pending::Panel { panel, .. } = &pending {
+            self.panels.answered(*panel);
+        }
         match (pending, result) {
             (Pending::Open, Ok(OpResult::SessionNew(result))) => {
                 self.opened(result.session, false, now);
@@ -1637,7 +1650,11 @@ impl App {
             }
             _ => self.mapper.event(&mut self.transcript, &event.event, now),
         }
-        self.panels_event(&event.event);
+        // The notices of a session not open (one that failed to open, one
+        // closed) are said, and are nothing of a panel's.
+        if self.is_open(&event.session_id) {
+            self.panels_event(&event.event);
+        }
     }
 
     pub(super) fn say(&mut self, text: &str) {

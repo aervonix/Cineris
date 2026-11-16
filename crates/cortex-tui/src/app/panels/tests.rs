@@ -207,8 +207,11 @@ fn the_oldest_collapsed_panels_fold_into_one_row_and_with_no_room_nothing_is_dra
     );
     assert_eq!(folded.drawn, [second, third]);
     let one = panels.layout(1, None, &draw, &keymap);
-    assert_eq!(texts(&one.lines), ["+3 panels · ctrl+p"]);
+    // None of them can be drawn focused in one row: the key reaches none,
+    // and is not named.
+    assert_eq!(texts(&one.lines), ["+3 panels"]);
     assert!(one.drawn.is_empty());
+    assert!(one.reachable.is_empty());
     // The folded ones that fit focused are still reachable, and drawn
     // first when they have the focus.
     assert_eq!(folded.reachable, [first, second, third]);

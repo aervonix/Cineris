@@ -240,6 +240,13 @@ impl Panel for PlanPanel {
     }
 
     fn edited(&mut self, edit: &ItemEditFor, text: &str, session: Option<&SessionId>) -> Act {
+        // An item is one line: the line breaks, tabs and other control
+        // characters a paste or the external editor brought become spaces,
+        // which the core takes (it refuses an item's text with any).
+        let text: String = text
+            .chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect();
         let text = text.trim();
         let Some(session) = session else {
             return Act::Taken;

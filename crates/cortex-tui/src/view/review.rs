@@ -7,7 +7,7 @@
 //!   src/lex.rs  +5 −1
 //!   …/numbers/separators.rs  +6 −3
 //!   tests/lex.rs  +1 −0
-//!   ✓ cargo test -p parser  crates/parser  exit 0 · 3.4s
+//!   ✓ cargo test -p parser  crates/parser  3.4s
 //!   ✗ cargo clippy -- -D warnings  exit 101 · 8.1s  2 warnings
 //!   checks failed · round 1 of 2
 //!   commands ran too: /view shows them

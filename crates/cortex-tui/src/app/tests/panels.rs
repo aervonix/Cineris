@@ -131,6 +131,27 @@ fn edits(link: &Scripted) -> Vec<PlanEdit> {
 }
 
 /// The live region of the frame drawn at `at`, as the loop draws it.
+/// The plan's edits sent so far, taken, each answered as the core answers
+/// one: with the plan, here as it was, so that the next key's edit is not
+/// held for this one's answer.
+fn answered(app: &mut App, link: &Scripted, at: Instant) -> Vec<PlanEdit> {
+    let mut edits = Vec::new();
+    for (ticket, op) in link.take_sent() {
+        if let Op::PlanUpdate(params) = op {
+            assert_eq!(params.session_id, SessionId::from(SESSION));
+            edits.extend(params.edits);
+            link.give(Inbound::Done(
+                ticket,
+                Ok(OpResult::PlanUpdate(PlanResult {
+                    plan: screen_plan(1),
+                })),
+            ));
+        }
+    }
+    drain(app, at);
+    edits
+}
+
 fn live_text(app: &mut App, at: Instant) -> Vec<String> {
     let (_, live, _) = app.frame(at);
     app.drawn(at);
@@ -259,7 +280,7 @@ fn each_plan_key_sends_its_edit_to_the_session() {
     // The focus starts on the active item.
     press(&mut app, "space", ready);
     assert_eq!(
-        edits(&link),
+        answered(&mut app, &link, ready),
         [PlanEdit::Skip(cortex_protocol::project::PlanItemRef {
             id: id("p2")
         })]
@@ -267,21 +288,21 @@ fn each_plan_key_sends_its_edit_to_the_session() {
     press(&mut app, "down", ms(ready, 2_000));
     press(&mut app, "d", ms(ready, 4_000));
     assert_eq!(
-        edits(&link),
+        answered(&mut app, &link, ready),
         [PlanEdit::Remove(cortex_protocol::project::PlanItemRef {
             id: id("p3")
         })]
     );
     press(&mut app, "alt+up", ms(ready, 6_000));
     assert_eq!(
-        edits(&link),
+        answered(&mut app, &link, ready),
         [PlanEdit::Reorder(cortex_protocol::project::PlanReorder {
             order: vec![id("p1"), id("p3"), id("p2"), id("p4")],
         })]
     );
     press(&mut app, "alt+down", ms(ready, 8_000));
     assert_eq!(
-        edits(&link),
+        answered(&mut app, &link, ready),
         [PlanEdit::Reorder(cortex_protocol::project::PlanReorder {
             order: vec![id("p1"), id("p2"), id("p4"), id("p3")],
         })]
@@ -289,7 +310,7 @@ fn each_plan_key_sends_its_edit_to_the_session() {
     // At the end, a move down has nowhere to go.
     press(&mut app, "down", ms(ready, 9_000));
     press(&mut app, "alt+down", ms(ready, 11_000));
-    assert!(edits(&link).is_empty());
+    assert!(answered(&mut app, &link, ready).is_empty());
 }
 
 #[test]
@@ -547,29 +568,23 @@ fn a_held_key_keys_read_together_and_a_paste_never_act() {
     let now = Instant::now() + Duration::from_secs(20);
     let space = cortex_term::Key::plain(cortex_term::KeyCode::Char(' '));
     let d = cortex_term::Key::plain(cortex_term::KeyCode::Char('d'));
-    // A key held down, its repeats marked: one press, one edit.
-    let (mut app, link) = with_plan(now);
-    let ready = plan_focused(&mut app, now);
-    feed(
-        &mut app,
-        &Cadence::starting(ready)
-            .hold(d, AutoRepeat::WINDOWS, 20)
-            .strokes(),
-    );
-    assert_eq!(edits(&link).len(), 1, "the press, not its repeats");
-    assert_eq!(app.input().editor().expanded(), "", "nor typed");
-    // Unmarked, as X11 sends them: the same key again within the repeat
-    // window goes where its press went.
-    let (mut app, link) = with_plan(now);
-    let ready = plan_focused(&mut app, now);
-    feed(
-        &mut app,
-        &Cadence::starting(ready)
-            .hold(d, AutoRepeat::X11, 20)
-            .strokes(),
-    );
-    assert_eq!(edits(&link).len(), 1);
-    assert_eq!(app.input().editor().expanded(), "");
+    // A key held down, its repeats marked, then unmarked as X11 sends them:
+    // the press's edit, answered before the repeats come so that only the
+    // held key's rule can keep them from acting; the same key again within
+    // the repeat window goes where its press went.
+    let mut held = None;
+    for repeat in [AutoRepeat::WINDOWS, AutoRepeat::X11] {
+        let (mut app, link) = with_plan(now);
+        let ready = plan_focused(&mut app, now);
+        let strokes = Cadence::starting(ready).hold(d, repeat, 20).strokes();
+        feed(&mut app, &strokes[..1]);
+        assert_eq!(answered(&mut app, &link, ready).len(), 1, "the press");
+        feed(&mut app, &strokes[1..]);
+        assert!(edits(&link).is_empty(), "{repeat:?}: not its repeats");
+        assert_eq!(app.input().editor().expanded(), "", "nor typed");
+        held = Some((app, link, ready));
+    }
+    let (mut app, link, ready) = held.expect("the X11 hold");
     // Released and pressed again after the window: it acts.
     press(&mut app, "d", ms(ready, 660 + 40 * 19) + REPEAT);
     assert_eq!(edits(&link).len(), 1);
@@ -1124,13 +1139,220 @@ fn hostile_plan_items_and_paths_are_drawn_visible_in_the_frame() {
         link.give(inbound);
     }
     drain(&mut app, now);
-    for focus in [None, Some(plan_id(&app)), Some(review_id(&app))] {
+    let (plan, review) = (plan_id(&app), review_id(&app));
+    // The rows that hold the text, as the panels draw them at 120 columns:
+    // the plan's active item collapsed; every item of the plan focused; the
+    // path, with the review focused.
+    for (focus, rows) in [(None, 1), (Some(plan), 4), (Some(review), 2)] {
         app.focus_panel(focus);
         for columns in [20, 60, 120] {
             app.resize(columns - 1, 40);
             let (_, live, _) = app.frame(now);
             let problems = crate::testing::problems(&live, columns - 1);
             assert!(problems.is_empty(), "{focus:?} at {columns}: {problems:#?}");
+            if columns < 120 {
+                continue;
+            }
+            let shown = text(&live);
+            assert!(
+                shown.iter().any(|row| row.starts_with("◇ Plan"))
+                    && shown.iter().any(|row| row.starts_with("◇ Changed")),
+                "{focus:?}: both panels are drawn: {shown:#?}"
+            );
+            let escaped = shown
+                .iter()
+                .filter(|row| row.contains("\\u{202e}gone\\u{200b}"))
+                .count();
+            assert_eq!(escaped, rows, "{focus:?}: {shown:#?}");
         }
     }
+}
+
+// ------------------------------------------- the independent review's
+
+/// A change to the focused item from outside starts the readiness again as
+/// it is seen, not at the next frame: the loop takes keys between batches
+/// of what arrives, before it draws.
+#[test]
+fn a_key_read_after_the_focused_item_went_and_before_a_frame_does_not_act() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_plan(now);
+    let ready = plan_focused(&mut app, now);
+    press(&mut app, "down", ready);
+    // The model takes p3 out, the focused one: the focus goes to p4.
+    let mut gone = screen_plan(2);
+    gone.items.retain(|item| item.id.as_str() != "p3");
+    link.give(plan_updated(gone));
+    drain(&mut app, ms(ready, 10));
+    key(&mut app, "d", ms(ready, 12));
+    assert!(edits(&link).is_empty(), "p4 was never shown focused");
+    assert_eq!(app.input().editor().expanded(), "d", "typed");
+}
+
+/// An item is one line: a line break or a tab that a paste or the external
+/// editor brought into an item edit is a space, which the core takes.
+#[test]
+fn a_pasted_line_break_in_an_item_edit_saves_one_line() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_plan(now);
+    let ready = plan_focused(&mut app, now);
+    press(&mut app, "e", ready);
+    app.terminal(
+        &TermEvent::Paste("\nand\tthe rest".to_owned()),
+        ms(ready, 10),
+    );
+    press(&mut app, "enter", ms(ready, 20));
+    assert_eq!(
+        edits(&link),
+        [PlanEdit::Reword(cortex_protocol::project::PlanReword {
+            id: PlanItemId::from("p2"),
+            text: "reject a trailing _ and the rest".to_owned(),
+        })]
+    );
+}
+
+/// In a window with no room to draw the plan focused, `/plan` says so, and
+/// the folded row names no key that would reach nothing.
+#[test]
+fn slash_plan_in_a_window_with_no_room_for_it_says_so() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, _link) = with_plan(now);
+    app.resize(98, 12);
+    let live = live_text(&mut app, now);
+    assert!(live.iter().any(|row| row == "+1 panel"), "{live:#?}");
+    run_command(&mut app, "/plan", now);
+    let mut scrollback = Vec::new();
+    let _ = screen(&mut app, now, &mut scrollback);
+    let _ = screen(&mut app, now, &mut scrollback);
+    assert!(app.input().focus().on_input(), "it cannot hold the focus");
+    assert!(
+        scrollback
+            .iter()
+            .any(|row| row.contains("There is no room for the plan panel in this window")),
+        "{scrollback:#?}"
+    );
+    // Taller, `/plan` focuses it and says nothing.
+    app.resize(98, 40);
+    run_command(&mut app, "/plan", now);
+    let mut scrollback = Vec::new();
+    let _ = screen(&mut app, now, &mut scrollback);
+    assert_eq!(app.input().focus().focused(), Target::Panel(plan_id(&app)));
+    assert!(!scrollback.iter().any(|row| row.contains("no room")));
+}
+
+/// The notices of a session that never opened are said, and open no panel:
+/// they are not that session's turn's checks.
+#[test]
+fn a_notice_of_a_session_that_did_not_open_opens_no_panel() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = app(now);
+    let _ = app.frame(now);
+    app.drawn(now);
+    let sent = link.take_sent();
+    let (open, _) = sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::SessionNew(_)))
+        .unwrap();
+    link.give(checks(
+        VerificationPhase::Finished,
+        Some(Verification::Passed),
+    ));
+    link.give(Inbound::Done(
+        *open,
+        Err(ErrorData::new(
+            ErrorKind::Usage,
+            "no_workspace",
+            "No such folder.",
+        )),
+    ));
+    drain(&mut app, now);
+    assert!(app.session().is_none());
+    assert!(!app.panels().is_open(review_id(&app)));
+}
+
+/// A key held down after it closed the review goes where its press went:
+/// nowhere, not into the prompt the focus went back to.
+#[test]
+fn a_held_x_that_closed_the_review_types_nothing() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let x = cortex_term::Key::plain(cortex_term::KeyCode::Char('x'));
+    for repeat in [AutoRepeat::X11, AutoRepeat::WINDOWS] {
+        let (mut app, link) = turn_with_changes(now);
+        link.give(turn_completed(None));
+        drain(&mut app, now);
+        let _ = app.frame(now);
+        press(&mut app, "ctrl+p", now);
+        feed(
+            &mut app,
+            &Cadence::starting(ms(now, 50)).hold(x, repeat, 20).strokes(),
+        );
+        assert!(!app.panels().is_open(review_id(&app)));
+        assert_eq!(app.input().editor().expanded(), "", "{repeat:?}");
+    }
+}
+
+/// While a change of the plan's is on its way, a second computed from the
+/// plan shown, which the first will change, is not sent: `alt+up` then
+/// `alt+down` before the first's answer would put the item back where it
+/// was not.
+#[test]
+fn an_edit_on_its_way_holds_the_next_until_it_is_answered() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_plan(now);
+    let ready = plan_focused(&mut app, now);
+    press(&mut app, "alt+up", ready);
+    let sent = link.take_sent();
+    let (first, _) = sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::PlanUpdate(_)))
+        .expect("the first reorder");
+    press(&mut app, "alt+down", ms(ready, 100));
+    assert!(
+        edits(&link).is_empty(),
+        "held while the first is on its way"
+    );
+    assert_eq!(app.input().editor().expanded(), "", "and not typed");
+    let mut moved = screen_plan(2);
+    moved.items.swap(0, 1);
+    link.give(Inbound::Done(
+        *first,
+        Ok(OpResult::PlanUpdate(PlanResult { plan: moved })),
+    ));
+    drain(&mut app, ms(ready, 200));
+    let _ = live_text(&mut app, ms(ready, 200));
+    press(&mut app, "alt+down", ms(ready, 2_000));
+    assert_eq!(
+        edits(&link),
+        [PlanEdit::Reorder(cortex_protocol::project::PlanReorder {
+            order: ["p1", "p2", "p3", "p4"].map(PlanItemId::from).to_vec(),
+        })],
+        "from the order the first gave"
+    );
+}
+
+/// While an item of the plan is edited in the input box, the plan stays
+/// drawn whole, the item being edited shown.
+#[test]
+fn the_plan_stays_drawn_whole_while_its_item_is_edited() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, _link) = with_plan(now);
+    let ready = plan_focused(&mut app, now);
+    press(&mut app, "e", ready);
+    assert!(app.input().focus().on_input());
+    let live = live_text(&mut app, ready);
+    for row in [
+        "◇ Plan  1 of 4 done",
+        "  ☑ allow _ between digits",
+        "  ◧ reject a trailing _",
+        "  ☐ add a test for 1_000",
+        "  ☐ run clippy",
+    ] {
+        assert!(live.iter().any(|shown| shown == row), "{row}: {live:#?}");
+    }
+    assert!(
+        live.last()
+            .unwrap()
+            .starts_with("  enter saves the item · esc cancels"),
+        "{live:#?}"
+    );
 }
