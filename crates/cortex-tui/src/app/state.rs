@@ -630,7 +630,7 @@ impl App {
                 let Some(dialog) = self.dialogs.front_mut() else {
                     self.last_key = Some(LastKey { typing: true });
                     self.untaken = Some(at);
-                    return self.to_editor(*key, at);
+                    return self.edit_with(*key, at);
                 };
                 let ready = dialog.takes_keys(at);
                 let keyed = dialog.key(*key, at, repeat, after_taken, self.input.keymap());
@@ -662,7 +662,7 @@ impl App {
                 }
                 match keyed {
                     // It goes on to the editor, where it was going.
-                    Keyed::Pass => self.to_editor(*key, at),
+                    Keyed::Pass => self.edit_with(*key, at),
                     Keyed::Global(action) => {
                         // `Ctrl+C` with no turn running (the trust question,
                         // the undo's) leaves the text the dialog hides.
@@ -719,7 +719,7 @@ impl App {
     }
 
     /// A key that goes to the editor, read at `at`.
-    fn to_editor(&mut self, key: Key, at: Instant) -> bool {
+    fn edit_with(&mut self, key: Key, at: Instant) -> bool {
         if self.holds_submit(key, at) {
             return true;
         }
