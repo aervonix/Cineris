@@ -43,6 +43,9 @@ fn enforcing() -> Option<u8> {
 /// A workspace, a temporary directory, and a directory outside both.
 struct Place {
     scratch: Scratch,
+    /// The command's temporary folder, a write root, when it is not the
+    /// scratch's own `tmp`: a short folder of its own ([`Place::short`]).
+    short_tmp: Option<ShortFolder>,
 }
 
 /// A folder with a short path of its own, for a Unix socket: the kernel
@@ -73,7 +76,20 @@ impl Place {
         scratch.file("ws/README", "workspace\n");
         scratch.dir("tmp");
         scratch.file("outside/keep", "keep me\n");
-        Self { scratch }
+        Self {
+            scratch,
+            short_tmp: None,
+        }
+    }
+
+    /// The same, with the command's temporary folder, a write root, a short
+    /// folder of its own: a Unix socket bound in it has a path the kernel
+    /// takes, whatever `TMPDIR` the test runs under.
+    fn short(test: &str) -> Self {
+        Self {
+            short_tmp: Some(ShortFolder::new(test)),
+            ..Self::new(test)
+        }
     }
 
     fn ws(&self) -> PathBuf {
@@ -81,7 +97,10 @@ impl Place {
     }
 
     fn tmp(&self) -> PathBuf {
-        self.scratch.join("tmp")
+        match &self.short_tmp {
+            Some(short) => short.0.clone(),
+            None => self.scratch.join("tmp"),
+        }
     }
 
     fn outside(&self) -> PathBuf {
@@ -288,12 +307,13 @@ fn verdict(ran: &Ran) -> String {
 #[test]
 fn sys_with_the_network_off_no_socket_reaches_anything() {
     let Some(landlock) = enforcing() else { return };
-    let place = Place::new("network_off");
+    let place = Place::short("network_off");
     let tcp = TcpListener::bind("127.0.0.1:0").expect("listen on loopback");
     let tcp6 = TcpListener::bind("[::1]:0").ok();
     let udp = UdpSocket::bind("127.0.0.1:0").expect("a UDP socket on loopback");
-    let short = ShortFolder::new("net");
-    let unix_path = short.0.join("listener.sock");
+    // In the command's own temporary folder, a write root: the strongest
+    // place to refuse a socket from.
+    let unix_path = place.tmp().join("listener.sock");
     let _unix = UnixListener::bind(&unix_path).expect("a Unix socket");
     let abstract_name = format!("cortex-sandbox-test-{}", std::process::id());
     let _abstract = UnixListener::bind_addr(

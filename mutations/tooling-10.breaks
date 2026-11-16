@@ -473,3 +473,30 @@ find: !package.is_empty() && !feature.is_empty()
 replace: true
 caught-by:
     api_diff::tests::features_are_read_with_their_crate
+
+[break] api-diff-the-features-asked-are-not-given
+rule: Each call of `cargo doc` is given the features asked of its crate.
+file: xtask/src/api_diff.rs
+in: doc_commands
+find: arguments.extend(asked.iter().cloned());
+replace:
+caught-by:
+    api_diff::tests::each_call_of_cargo_doc_has_its_crates_and_its_features_and_no_other
+
+[break] api-diff-a-feature-the-crate-lacks-passes
+rule: A feature the working tree's crate does not have is refused before anything is built.
+file: xtask/src/api_diff.rs
+in: check_features
+find: if !known {
+replace: if false {
+caught-by:
+    api_diff::tests::a_feature_of_a_crate_not_compared_or_that_the_crate_lacks_is_refused
+
+[break] api-diff-a-feature-of-a-crate-not-compared-passes
+rule: A feature of a crate that is not compared is refused.
+file: xtask/src/api_diff.rs
+in: check_features
+find: if !chosen.contains(package) {
+replace: if false {
+caught-by:
+    api_diff::tests::a_feature_of_a_crate_not_compared_or_that_the_crate_lacks_is_refused

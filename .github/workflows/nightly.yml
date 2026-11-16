@@ -1,7 +1,8 @@
 # Every night: the checks that do not belong on a pull request. So far, the
 # advisory check, the unused-dependency check, a release build for every
 # release target, the property tests with many more cases than a pull
-# request runs, the mutation driver's test against the real cargo,
+# request runs, the mutation driver's test against the real cargo, the
+# check of every break's `caught-by` against the tests that exist,
 # coverage-guided fuzzing of the stream decoders, and the sandbox's tests on
 # a kernel with the partial Landlock (ABI 4). Later
 # steps add the long-session memory test and the live smoke tests (tiers 5
