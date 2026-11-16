@@ -235,7 +235,12 @@ pub(crate) const PRESSURE_FILE_VARIABLE: &str = "CORTEX_PRESSURE_FILE";
 /// [`PRESSURE_FILE_VARIABLE`] names, when it is set and not empty, else the
 /// kernel's.
 pub(crate) fn read_pressure() -> Result<Pressure, String> {
-    match std::env::var_os(PRESSURE_FILE_VARIABLE).filter(|file| !file.is_empty()) {
+    read_pressure_with(std::env::var_os(PRESSURE_FILE_VARIABLE))
+}
+
+/// [`read_pressure`], given what [`PRESSURE_FILE_VARIABLE`] is set to.
+fn read_pressure_with(file: Option<std::ffi::OsString>) -> Result<Pressure, String> {
+    match file.filter(|file| !file.is_empty()) {
         Some(file) => read_pressure_from(Path::new(&file)),
         None => read_kernel_pressure(),
     }
@@ -320,7 +325,7 @@ impl Observed {
     /// The share of the run, in percent, in which every task waited on I/O.
     /// Nothing for a run that took no time.
     pub(crate) fn share(&self) -> f64 {
-        share(self.stalled_seconds(), self.elapsed.as_secs_f64())
+        percent(self.stalled_seconds(), self.elapsed.as_secs_f64())
     }
 
     /// What of the run the tier check needs ([`Record`]).
@@ -346,7 +351,7 @@ fn micros_to_seconds(micros: u64) -> f64 {
 }
 
 /// `stalled` seconds as a percentage of `run` seconds: 0 for no time.
-fn share(stalled: f64, run: f64) -> f64 {
+fn percent(stalled: f64, run: f64) -> f64 {
     if run > 0.0 {
         100.0 * stalled / run
     } else {
@@ -456,7 +461,7 @@ pub(crate) fn judge(in_actions: bool, records: &[Record]) -> Option<Stalled> {
     )]
     let run_seconds = elapsed_ms as f64 / 1e3;
     let stalled_seconds = micros_to_seconds(full_us);
-    let share = share(stalled_seconds, run_seconds);
+    let share = percent(stalled_seconds, run_seconds);
     (share >= STALLED_SHARE).then_some(Stalled {
         share,
         stalled_seconds,
@@ -524,7 +529,7 @@ mod tests {
 
     use super::{
         Observed, Pressure, Record, Stalled, append_record, explain, find, find_cases, instant_ms,
-        judge, parse_pressure, read_pressure_from, read_records,
+        judge, parse_pressure, read_pressure_from, read_pressure_with, read_records,
     };
     use crate::junit::Failure;
 
@@ -883,7 +888,7 @@ mod tests {
              full avg10=9.00 avg60=2.00 avg300=0.50 total=30200000\n",
         )
         .unwrap();
-        let read = read_pressure_from(&path);
+        let read = read_pressure_with(Some(path.clone().into_os_string()));
         let missing = read_pressure_from(&folder.join("nothing"));
         std::fs::write(&path, "nonsense").unwrap();
         let wrong = read_pressure_from(&path);

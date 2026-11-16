@@ -1045,6 +1045,43 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_passed_on_their_retry_are_no_cluster_to_run_again() {
+        // Three timeouts that ended together, each a try that a retry then
+        // passed, and a test that failed: the run failed for that one.
+        let flaky = |name: &str, started: &str, seconds: f64| {
+            format!(
+                "        <testcase name=\"{name}\" classname=\"cx::it\" timestamp=\"{started}\" \
+                 time=\"{seconds}\">\n            <flakyFailure type=\"test timeout\"/>\n        \
+                 </testcase>\n"
+            )
+        };
+        let body = format!(
+            "{}{}{}{}",
+            flaky("a", "2026-11-15T10:00:00.000+00:00", 14.0),
+            flaky("b", "2026-11-15T10:00:02.000+00:00", 12.1),
+            flaky("c", "2026-11-15T10:00:03.900+00:00", 10.3),
+            case(
+                "cx::it",
+                "p",
+                "2026-11-15T10:00:00.000+00:00",
+                0.1,
+                "test failure with exit code 101"
+            ),
+        );
+        let first = report(&[("cx::it", body, 1)]);
+        let ran = ran(
+            "flaky",
+            &first,
+            observed(30.0, 100),
+            &rerun_report(&[], &[]),
+            Ok(()),
+        );
+        assert_eq!(ran.commands.len(), 1, "{}", ran.said);
+        assert!(ran.outcome.result.is_err());
+        assert_eq!(ran.left, first);
+    }
+
+    #[test]
     fn each_test_that_was_run_again_is_judged_by_the_reruns_own_report() {
         let tests = [
             Test {

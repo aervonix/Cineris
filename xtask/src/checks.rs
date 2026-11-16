@@ -1050,6 +1050,20 @@ mod tests {
     }
 
     #[test]
+    fn what_the_pressure_said_of_an_earlier_run_is_forgotten_with_its_reports() {
+        let root = std::env::temp_dir().join(format!("xtask-records-gone-{}", std::process::id()));
+        let records = crate::stall::record_path(&root);
+        std::fs::create_dir_all(records.parent().unwrap()).unwrap();
+        std::fs::write(&records, "elapsed_ms=100000 full_us=90000000\n").unwrap();
+        let before = crate::stall::read_records(&records).len();
+        super::forget_reports(&root).unwrap();
+        let after = crate::stall::read_records(&records).len();
+        std::fs::remove_dir_all(&root).unwrap();
+        // A stale record would keep the next run's tiers from being judged.
+        assert_eq!((before, after), (1, 0));
+    }
+
+    #[test]
     fn the_ci_run_is_the_workspace_or_the_packages_named() {
         assert_eq!(
             ci_run(&[]).join(" "),
