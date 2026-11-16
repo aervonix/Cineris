@@ -89,7 +89,7 @@ pub use remember::{
 };
 pub use result::{ToolError, ToolResult};
 pub use search::SearchTool;
-pub use shell::{Shell, ShellConfig, ShellKind, ShellSearch, ShellTool};
+pub use shell::{Shell, ShellConfig, ShellKind, ShellLive, ShellSearch, ShellTool};
 pub use store::{ArtifactWriter, ContentStore, MemoryStore, StoreError};
 pub use toolbox::Toolbox;
 pub use touched::changed_by;

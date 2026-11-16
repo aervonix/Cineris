@@ -421,6 +421,34 @@ impl BaseCapture {
         Ok(Self { receiver })
     }
 
+    /// [`start`](Self::start), with the project's trust as it is when the
+    /// capture comes to what only a trusted project's state may be read
+    /// for (step 24: a reload of the configuration can take trust away
+    /// while the capture runs). `trusted` is the session's own flag.
+    ///
+    /// # Errors
+    ///
+    /// When the thread cannot be started.
+    pub fn start_watching(
+        root: AbsPath,
+        trusted: Arc<std::sync::atomic::AtomicBool>,
+        store: Arc<DiskStore>,
+        git: Arc<dyn Git>,
+        clock: SharedClock,
+        limits: BaseLimits,
+        gate: Arc<dyn KeepGate>,
+    ) -> io::Result<Self> {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("cortex-base-state".to_owned())
+            .spawn(move || {
+                let now = || trusted.load(std::sync::atomic::Ordering::Acquire);
+                let state = capture_with(&root, &now, &store, &*git, &*clock, &limits, &*gate);
+                let _ = sender.send(state);
+            })?;
+        Ok(Self { receiver })
+    }
+
     /// The state, if it is ready. Never waits.
     pub fn try_take(&mut self) -> Option<BaseState> {
         self.receiver.try_recv().ok()
@@ -451,6 +479,20 @@ pub fn capture(
     limits: &BaseLimits,
     gate: &dyn KeepGate,
 ) -> BaseState {
+    capture_with(root, &|| trusted, store, git, clock, limits, gate)
+}
+
+/// [`capture`], asking `trusted` when it comes to what only a trusted
+/// project's state may be read for.
+fn capture_with(
+    root: &AbsPath,
+    trusted: &dyn Fn() -> bool,
+    store: &DiskStore,
+    git: &dyn Git,
+    clock: &dyn Clock,
+    limits: &BaseLimits,
+    gate: &dyn KeepGate,
+) -> BaseState {
     let started = clock.now();
     let directory = root.to_fs_path();
     let answer = git.run(&directory, &["rev-parse", "--show-toplevel"], 64 * 1024);
@@ -463,7 +505,7 @@ pub fn capture(
     {
         return BaseState {
             complete: false,
-            trusted,
+            trusted: trusted(),
             note: Some(format!(
                 "git could not be started, so the workspace's state was not taken: {error}"
             )),
@@ -474,11 +516,19 @@ pub fn capture(
         .ok()
         .filter(|output| output.success)
         .and_then(|output| first_line(&output.stdout));
+    // The trust the record holds is the one asked where it decided what
+    // was read.
+    let seen = std::cell::Cell::new(None);
+    let asked = || {
+        let now = trusted();
+        seen.set(Some(now));
+        now
+    };
     let mut state = match top {
-        Some(top) => from_git(root, &top, trusted, store, git, limits, gate),
+        Some(top) => from_git(root, &top, &asked, store, git, limits, gate),
         None => from_listing(root, clock, limits, gate),
     };
-    state.trusted = trusted;
+    state.trusted = seen.get().unwrap_or_else(trusted);
     state.took_ms = clock
         .now()
         .duration_since(started)
@@ -495,7 +545,7 @@ fn first_line(output: &[u8]) -> Option<String> {
 fn from_git(
     root: &AbsPath,
     top: &str,
-    trusted: bool,
+    trusted: &dyn Fn() -> bool,
     store: &DiskStore,
     git: &dyn Git,
     limits: &BaseLimits,
@@ -527,7 +577,7 @@ fn from_git(
         untracked: Vec::new(),
         links: Vec::new(),
     };
-    if !trusted {
+    if !trusted() {
         return BaseState {
             complete: false,
             git: Some(base),

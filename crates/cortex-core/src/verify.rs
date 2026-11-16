@@ -99,7 +99,7 @@ pub(crate) const MARK: &str = "| ";
 
 /// `[verify]`, as the verifier reads it, with the longest time limit the
 /// shell gives a command.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Settings {
     pub(crate) mode: VerifyMode,
     pub(crate) commands: Vec<String>,
@@ -886,9 +886,22 @@ impl Unready {
     }
 }
 
+/// What a reload of the configuration changes of a session's verifier
+/// (step 24): the seam step 19 left. A round reads it as it begins, and
+/// keeps what it read to its end.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct VerifyLive {
+    pub(crate) settings: Settings,
+    /// Whether the user trusts the project.
+    pub(crate) trusted: bool,
+    /// Whether a project's file turned `verify.mode` down.
+    pub(crate) lowered_by_project: bool,
+}
+
 /// A session's verifier: the project's checks, chosen and run.
 pub(crate) struct CoreVerifier {
     parts: Parts,
+    live: Mutex<VerifyLive>,
     memory: Mutex<Memory>,
     told: Mutex<BTreeSet<String>>,
 }
@@ -896,8 +909,7 @@ pub(crate) struct CoreVerifier {
 impl std::fmt::Debug for CoreVerifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CoreVerifier")
-            .field("settings", &self.parts.settings)
-            .field("trusted", &self.parts.trusted)
+            .field("live", &*lock(&self.live))
             .finish_non_exhaustive()
     }
 }
@@ -910,6 +922,8 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 struct Round<'r, 'a> {
     cx: &'r VerifyCx<'a>,
     shell: &'r Arc<RecordingShell>,
+    /// The settings the round began with.
+    settings: Settings,
     /// When the round started, on the monotonic clock.
     started: Duration,
     /// How many checks it has planned, for their ids.
@@ -918,11 +932,27 @@ struct Round<'r, 'a> {
 
 impl CoreVerifier {
     pub(crate) fn new(parts: Parts) -> Self {
+        let live = VerifyLive {
+            settings: parts.settings.clone(),
+            trusted: parts.trusted,
+            lowered_by_project: parts.lowered_by_project,
+        };
         Self {
             parts,
+            live: Mutex::new(live),
             memory: Mutex::new(Memory::default()),
             told: Mutex::new(BTreeSet::new()),
         }
+    }
+
+    /// What a reload changed: from the next round.
+    pub(crate) fn set_live(&self, live: VerifyLive) {
+        *lock(&self.live) = live;
+    }
+
+    /// What the next round begins with.
+    pub(crate) fn live(&self) -> VerifyLive {
+        lock(&self.live).clone()
     }
 
     /// Tells the user something once a session.
@@ -944,10 +974,14 @@ impl CoreVerifier {
     /// The checks a round would run and the shell to run them in, or why
     /// it would run none. A line of the user's that cannot run is told,
     /// once a session.
-    async fn ready(&self, cancel: &CancelToken) -> Result<(Chosen, Arc<RecordingShell>), Unready> {
+    async fn ready(
+        &self,
+        live: &VerifyLive,
+        cancel: &CancelToken,
+    ) -> Result<(Chosen, Arc<RecordingShell>), Unready> {
         let current = self.current(cancel).await;
         let chosen = choose(
-            &self.parts.settings,
+            &live.settings,
             current
                 .as_ref()
                 .map(|(snapshot, now)| (snapshot.as_ref(), *now)),
@@ -958,7 +992,7 @@ impl CoreVerifier {
         if chosen.checks.is_empty() {
             return Err(Unready::NoneKnown);
         }
-        if !self.parts.trusted {
+        if !live.trusted {
             return Err(Unready::Untrusted);
         }
         if *self.parts.policy.engine().level() == Level::ReadOnly {
@@ -973,12 +1007,13 @@ impl CoreVerifier {
     /// Why `verify/run` would run no check now: `None` when it would run
     /// one. Each check is still decided as it runs.
     pub(crate) async fn why_none(&self) -> Option<Unready> {
-        self.ready(&CancelToken::new()).await.err()
+        self.ready(&self.live(), &CancelToken::new()).await.err()
     }
 
     async fn round(&self, cx: VerifyCx<'_>) -> VerifyOutcome {
-        let settings = &self.parts.settings;
-        if self.parts.lowered_by_project && settings.mode != VerifyMode::Auto {
+        let live = self.live();
+        let settings = &live.settings;
+        if live.lowered_by_project && settings.mode != VerifyMode::Auto {
             self.tell_once(format!(
                 "The project's configuration sets `verify.mode` to `{}`: its checks do not run by \
                  themselves at the end of a turn.",
@@ -989,7 +1024,7 @@ impl CoreVerifier {
         if !cx.asked && settings.mode == VerifyMode::Off {
             return VerifyOutcome::Skipped;
         }
-        let ready = self.ready(cx.cancel).await;
+        let ready = self.ready(&live, cx.cancel).await;
         if cx.cancel.is_cancelled() {
             return VerifyOutcome::Skipped;
         }
@@ -1084,6 +1119,7 @@ impl CoreVerifier {
         let mut round = Round {
             cx: &cx,
             shell,
+            settings: settings.clone(),
             started: self.parts.clock.monotonic(),
             planned: 0,
         };
@@ -1127,7 +1163,7 @@ impl CoreVerifier {
     /// answer, and the run itself.
     async fn run_once(&self, round: &mut Round<'_, '_>, check: &Check) -> Ran {
         let cx = round.cx;
-        let settings = &self.parts.settings;
+        let settings = &round.settings.clone();
         // The time it may have: what the round, the turn and the limits
         // leave, and no more than the shell gives a command.
         let in_round = self.parts.clock.monotonic().saturating_sub(round.started);
