@@ -374,7 +374,7 @@ fn sys_a_test_that_fails_then_passes_with_nothing_changed_becomes_a_flaky_entry(
     let line = test_program(
         &world,
         "n=$(cat flip-count 2>/dev/null || echo 0)\necho $((n + 1)) > flip-count\n[ $((n % 2)) -eq 1 ]",
-        "set n=0\r\nif exist flip-count set /p n=<flip-count\r\nset /a m=n+1\r\necho %m%>flip-count\r\nset /a r=n%%2\r\nif %r%==1 (exit /b 0) else (exit /b 1)",
+        "set n=0\r\nif exist flip-count set /p n=<flip-count\r\nset /a m=n+1\r\n>flip-count echo %m%\r\nset /a r=n%%2\r\nif %r%==1 exit /b 0\r\nexit /b 1",
     );
     aged(&world);
     world.provider = cortex_testkit::ScriptedProvider::new([
@@ -418,7 +418,7 @@ fn sys_a_test_that_fails_then_passes_with_nothing_changed_becomes_a_flaky_entry(
 /// the user accepts it. `remember` stores a proposal in this project's
 /// store, and nothing else.
 #[test]
-fn sys_a_models_proposal_is_stored_and_reaches_the_prompt_only_once_accepted() {
+fn a_models_proposal_is_stored_and_reaches_the_prompt_only_once_accepted() {
     let world = World::new(
         "knowledge_remember",
         [
@@ -761,7 +761,7 @@ fn the_knowledge_is_not_touched_until_the_session_is_open() {
 /// protocol, where a project is named by a session the client has open,
 /// or, by a `user` client alone, by its workspace.
 #[test]
-fn sys_a_session_cannot_read_another_projects_store() {
+fn a_session_cannot_read_another_projects_store() {
     let mut world = World::new("knowledge_other_project", []);
     // Another project of the same user, with something learned.
     let elsewhere = world.dir.join("work").join("other");
@@ -852,8 +852,13 @@ fn sys_a_session_cannot_read_another_projects_store() {
                 }))
                 .await
                 .unwrap_err();
-            assert_eq!(refused.code, "invalid_request");
+            assert_eq!(refused.code, "invalid_params");
         }
+        // And by a path that can be a workspace.
+        let refused = list_at(&front, &world.workspace.join("no").join("such"))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "invalid_workspace");
         front.close().await;
     });
 }
@@ -1182,5 +1187,201 @@ fn an_entry_with_a_credential_in_its_evidence_is_not_promoted() {
         );
         assert_eq!(list(&front).await[0].scope, EntryScope::Private);
         front.close().await;
+    });
+}
+
+/// Another session's or process's write to the store (a command it saw
+/// for the first time) changes the file in the middle of this session's
+/// turn. The safe list is made again from the file, not taken away: the
+/// accepted command still runs unasked (found by the independent review).
+#[test]
+fn sys_a_write_to_the_store_by_another_process_does_not_take_the_safe_list_away() {
+    let mut world = World::new("knowledge_other_write", []);
+    let line = passing(&world);
+    let other = deploy(&world);
+    world.provider = cortex_testkit::ScriptedProvider::new([
+        run("c1", &line),
+        run("c2", other),
+        run("c3", &line),
+        says("Done."),
+    ]);
+    let (project, id) = learned(&world, &line);
+    project
+        .update(&[change_of(&id, EntryAction::Accept)], &[], None)
+        .unwrap();
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("three commands").await;
+        let (asked, _) = front.approval().await;
+        // Another process sees a command of its own for the first time.
+        project
+            .learn(
+                &cortex_knowledge::Learnt {
+                    kind: cortex_knowledge::Kind::Command,
+                    purpose: cortex_knowledge::Purpose::Build,
+                    line: "cargo build".to_owned(),
+                    cwd: None,
+                    duration_ms: 10,
+                    read_only: false,
+                    session: None,
+                },
+                None,
+            )
+            .unwrap();
+        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        // An unanswered question fails the test at once.
+        front.turns(1).await;
+        assert_eq!(front.approvals().len(), 1, "the accepted command asked");
+        assert_eq!(front.results().len(), 3);
+        front.close().await;
+    });
+}
+
+/// Files a rewind puts back are files changed: a test that failed before
+/// the undo and passes after it has not flipped (found by the independent
+/// review).
+#[test]
+fn sys_a_test_that_passes_after_an_undo_put_a_file_back_has_not_flipped() {
+    let mut world = World::new("knowledge_undo", []);
+    // It fails while `marker` is there.
+    let line = test_program(
+        &world,
+        "[ ! -f marker ]",
+        "if exist marker exit /b 1\r\nexit /b 0",
+    );
+    aged(&world);
+    world.provider = cortex_testkit::ScriptedProvider::new([
+        calls(&[("c1", "write", json!({ "path": "marker", "content": "x\n" }))]),
+        says("Written."),
+        run("c2", &line),
+        says("It fails."),
+        run("c3", &line),
+        says("It passes."),
+    ]);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn_allowing("write it").await;
+        assert!(world.workspace.join("marker").exists());
+        // The file is older than the next command, which did not write it.
+        aged(&world);
+        front.turn_allowing("test").await;
+        assert!(front.results().last().unwrap().2.contains("exit code 1"));
+        // Both turns are undone: the second changed nothing, the first's
+        // file is taken away again.
+        for _ in 0..2 {
+            front
+                .op(Op::SessionUndo(
+                    cortex_protocol::methods::SessionUndoParams {
+                        session_id: front.session.clone(),
+                        restore_files: true,
+                    },
+                ))
+                .await
+                .expect("the turn is undone");
+        }
+        assert!(
+            !world.workspace.join("marker").exists(),
+            "the file was put back"
+        );
+        front.turn_allowing("test again").await;
+        let results = front.results();
+        assert!(
+            results.last().unwrap().2.contains("exit code 0"),
+            "{results:?}"
+        );
+        // The command was seen to succeed once; nothing says it is flaky.
+        let entries = list(&front).await;
+        assert!(
+            entries.iter().all(|entry| entry.kind != EntryKind::Flaky),
+            "{entries:#?}"
+        );
+        assert_eq!(entries.len(), 1);
+        front.close().await;
+    });
+}
+
+/// The done criterion, in a session: an entry past its expiry drops out.
+/// The model is told that the profile holds nothing now, the user that
+/// the entry expired and how to bring it back, and the entry is marked.
+#[test]
+fn an_entry_that_expires_between_two_turns_drops_out_and_is_told() {
+    let mut world = World::new("knowledge_expired", []);
+    world.provider = cortex_testkit::ScriptedProvider::new([says("One."), says("Two.")]);
+    let (_project, id) = learned(&world, "cargo test");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("hello").await;
+        assert!(
+            world.provider.requests()[0]
+                .system
+                .contains("Commands:\n- test: `cargo test`"),
+            "{}",
+            world.provider.requests()[0].system
+        );
+        // An observed command lasts 90 days from when it was last seen.
+        world
+            .clock
+            .advance(std::time::Duration::from_secs(91 * 24 * 60 * 60));
+        front.turn("and now").await;
+        let sent: String = world
+            .provider
+            .requests()
+            .last()
+            .unwrap()
+            .messages
+            .iter()
+            .map(texts)
+            .collect();
+        assert!(sent.contains(cortex_agent::PROFILE_EMPTY), "{sent}");
+        // The mark is written beside the turn; the listing waits for it.
+        let entries = list(&front).await;
+        assert_eq!(entries[0].status, EntryStatus::Disabled);
+        let told = front.notices();
+        assert!(
+            told.iter().any(|notice| notice.contains(&format!(
+                "entry {id} (`cargo test`) expired, and is no longer used. `cortex project accept {id}` brings it back."
+            ))),
+            "{told:?}"
+        );
+        front.close().await;
+    });
+}
+
+/// A session that is closed lets its knowledge go, with the policy, the
+/// checkpoints and the hooks it holds: the callbacks those hold back to it
+/// are weak (found by the independent review). The test's probe is held
+/// once by each session's knowledge, so its count says how many live.
+#[test]
+fn a_closed_session_lets_its_knowledge_go() {
+    let world = World::new("knowledge_let_go", [says("Done.")]);
+    let probe: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+    let held = Arc::clone(&probe);
+    let core = world.core_with(move |options| options.knowledge_read = Some(held));
+    let before = Arc::strong_count(&probe);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        assert_eq!(
+            Arc::strong_count(&probe),
+            before + 1,
+            "one session's knowledge"
+        );
+        front.turn("go").await;
+        front.close().await;
+        drop(front);
+        // The session's task ends beside this one.
+        for _ in 0..10_000 {
+            if Arc::strong_count(&probe) == before {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            Arc::strong_count(&probe),
+            before,
+            "the closed session's knowledge is still held"
+        );
     });
 }

@@ -23,6 +23,22 @@
 //! turn, on the blocking pool; the engine is given the learned rules
 //! there, before the turn's first request.
 //!
+//! # Nothing on a turn's path waits for the store's lock
+//!
+//! A read takes no lock. What writes the store for the session itself
+//! (what the observer saw, the mark on an entry that expired) is done
+//! beside the turn, on the blocking pool ([`Knowledge::beside`]): a
+//! process that holds the lock and has stopped cannot hold up a turn's
+//! start or a command's result. `project/list` waits for that work, so a
+//! listing after a turn holds what the turn's commands showed.
+//!
+//! # A session's parts do not hold each other
+//!
+//! The permission policy and the round's checkpoints call back into the
+//! session's knowledge, which holds both: the callbacks hold it weakly, or
+//! a closed session would never be let go (found by the independent
+//! review).
+//!
 //! # One place holds a session's learned rules
 //!
 //! [`Knowledge`] keeps the rules it last gave the engine, with the
@@ -38,7 +54,10 @@
 //! first of the entries behind the rules has expired. Not the snapshot
 //! the project's sessions share: another session of the project may have
 //! read the files again since, and this session's engine was not given
-//! that reading's rules.
+//! that reading's rules. When either is so, the files are read again
+//! there and then, and the engine given the rules that follow: a command
+//! turned off asks, and the others go on running unasked, though another
+//! session or process wrote the store in the middle of this one's turn.
 //!
 //! # Only this project's store
 //!
@@ -190,7 +209,16 @@ pub(crate) struct Knowledge {
     learned: Mutex<Given>,
     /// What the user was told already, so that each thing is said once.
     told: Mutex<BTreeSet<String>>,
+    /// This knowledge, for the work it starts beside a turn.
+    me: std::sync::Weak<Knowledge>,
+    /// The work started beside a turn that may still be running.
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Whether the mark on expired entries is being written.
+    marking: std::sync::atomic::AtomicBool,
 }
+
+/// The most things a session says once: past it, nothing new is said.
+const MAX_TOLD: usize = 256;
 
 impl std::fmt::Debug for Knowledge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -210,8 +238,11 @@ fn shown(entry: &Entry) -> String {
 }
 
 impl Knowledge {
-    pub(crate) fn new(parts: Parts) -> Self {
-        Self {
+    pub(crate) fn new(parts: Parts) -> Arc<Self> {
+        Arc::new_cyclic(|me| Self {
+            me: me.clone(),
+            tasks: Mutex::new(Vec::new()),
+            marking: std::sync::atomic::AtomicBool::new(false),
             project: parts.project,
             key: parts.key,
             shared: parts.shared,
@@ -228,13 +259,46 @@ impl Knowledge {
             watch: Mutex::new(Watch::new()),
             learned: Mutex::new(Given::default()),
             told: Mutex::new(BTreeSet::new()),
-        }
+        })
     }
 
     /// Tells the user something, once in this session.
     fn tell_once(&self, message: String) {
-        if lock(&self.told).insert(message.clone()) {
+        let mut told = lock(&self.told);
+        if told.len() < MAX_TOLD && told.insert(message.clone()) {
+            drop(told);
             self.hooks.tell(message);
+        }
+    }
+
+    /// Does `work` beside the turn, on the blocking pool, and returns at
+    /// once: work that writes the store, and so waits for its lock. With
+    /// no runtime to do it on, it is done here.
+    fn beside(&self, work: impl FnOnce(&Self) + Send + 'static) {
+        let Some(this) = self.me.upgrade() else {
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            work(&this);
+            return;
+        };
+        let task = runtime.spawn_blocking(move || work(&this));
+        let mut tasks = lock(&self.tasks);
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(task);
+    }
+
+    /// Waits for the work started beside a turn: what the session's
+    /// commands showed is in the store once this returns.
+    pub(crate) async fn settled(&self) {
+        loop {
+            let tasks = std::mem::take(&mut *lock(&self.tasks));
+            if tasks.is_empty() {
+                return;
+            }
+            for task in tasks {
+                let _ = task.await;
+            }
         }
     }
 
@@ -251,41 +315,63 @@ impl Knowledge {
     }
 
     /// The project's knowledge as it is now: read again when either file
-    /// changed since the last read, with every entry past its expiry
-    /// marked. Blocks.
-    fn refresh(&self) -> Arc<Snapshot> {
+    /// changed since the last read. Reads, and takes no lock.
+    ///
+    /// An entry past its expiry is out of use by the clock already,
+    /// wherever a snapshot is asked what is in use. The mark on it is a
+    /// write, which waits for the store's lock: it is made beside the
+    /// turn, or here when `wait` says the caller is not on a turn's path.
+    fn refresh(&self, wait: bool) -> Arc<Snapshot> {
         if let Some(probe) = &self.on_read {
             probe();
         }
         let held = self.peek();
-        let mut snapshot = match held {
+        let snapshot = match held {
             Some(held) if self.project.is_current(&held) => held,
             held => Arc::new(self.project.load(held.as_deref())),
         };
+        self.took(&snapshot);
         if snapshot.has_lapsed(self.project.now()) {
-            match self.project.lapse(Some(&snapshot)) {
-                Ok(lapsed) => {
-                    for entry in &lapsed.changed {
-                        self.hooks.tell(format!(
-                            "The project profile's entry {} ({}) expired, and is no longer used. \
-                             `cortex project accept {}` brings it back.",
-                            entry.id,
-                            shown(entry),
-                            entry.id
-                        ));
-                    }
-                    self.updated(&lapsed.changed, &[]);
-                    snapshot = Arc::new(lapsed.snapshot);
-                }
-                // The entry is out of use by the clock already; the mark
-                // waits for a store that can be written.
-                Err(error) => self.tell_once(format!(
-                    "An expired entry of the project profile could not be marked: {error}"
-                )),
+            if wait {
+                self.mark_lapsed();
+                return self.peek().unwrap_or(snapshot);
+            }
+            if !self.marking.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                self.beside(|this| {
+                    this.mark_lapsed();
+                    this.marking
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                });
             }
         }
-        self.took(&snapshot);
         snapshot
+    }
+
+    /// Marks every entry past its expiry, and tells the user of each.
+    /// Blocks, and waits for the store's lock.
+    fn mark_lapsed(&self) {
+        let held = self.peek();
+        match self.project.lapse(held.as_deref()) {
+            Ok(lapsed) => {
+                for entry in &lapsed.changed {
+                    self.hooks.tell(format!(
+                        "The project profile's entry {} ({}) expired, and is no longer used. \
+                         `cortex project accept {}` brings it back.",
+                        entry.id,
+                        shown(entry),
+                        entry.id
+                    ));
+                }
+                self.updated(&lapsed.changed, &[]);
+                self.took(&Arc::new(lapsed.snapshot));
+            }
+            // The entry is out of use by the clock already; the mark
+            // waits for a store that can be written.
+            Err(error) => self.tell_once(format!(
+                "An expired entry of the project profile could not be marked: {}",
+                visible(&error.to_string())
+            )),
+        }
     }
 
     /// Takes `snapshot` as the project's knowledge now: every session of
@@ -383,25 +469,36 @@ impl Knowledge {
     /// engine was given what it read (found by the independent read of the
     /// trust path).
     pub(crate) fn before_command(&self) {
-        let mut given = lock(&self.learned);
-        if given.rules.is_empty() {
-            return;
-        }
+        let (from, expired) = {
+            let given = lock(&self.learned);
+            // With no learned rule in force there is nothing to take
+            // back; what was accepted elsewhere since comes at the next
+            // turn's start.
+            if given.rules.is_empty() {
+                return;
+            }
+            let expired = given.until.is_some_and(|until| until <= self.project.now());
+            (given.from.clone(), expired)
+        };
         if let Some(probe) = &self.on_read {
             probe();
         }
-        let expired = given.until.is_some_and(|until| until <= self.project.now());
-        let current = !expired
-            && given
-                .from
-                .as_ref()
-                .is_some_and(|from| self.project.is_current(from));
-        if !current {
-            given.rules.clear();
-            if let Err(errors) = self.policy.engine().set_learned(Vec::new()) {
-                tracing::warn!(?errors, "the learned rules could not be taken back");
-            }
+        let current = from
+            .as_ref()
+            .is_some_and(|from| self.project.is_current(from));
+        if current && !expired {
+            return;
         }
+        // The rules are made again before this command is decided: from
+        // the files as they are now when they changed (a read, with no
+        // lock taken), or from the same snapshot at the time it is now
+        // when an entry expired. A command turned off asks; the others
+        // still run unasked.
+        let snapshot = match from {
+            Some(from) if current => from,
+            from => Arc::new(self.project.load(from.as_deref())),
+        };
+        self.took(&snapshot);
     }
 
     /// Tells front ends which entries changed.
@@ -433,34 +530,43 @@ impl Knowledge {
 
     /// A `shell` call finished. What it showed is counted off the turn's
     /// path, on the blocking pool; this returns at once.
-    pub(crate) fn observed(self: &Arc<Self>, run: &Run) {
+    pub(crate) fn observed(&self, run: &Run) {
         // The watch sees every run, for what changed between two of them.
         let seen = lock(&self.watch).see(run, Some(&self.session));
-        if !self.learn || seen.is_empty() || self.finds_secret(&run.command) {
+        if !self.learn
+            || seen.is_empty()
+            || self.finds_secret(&run.command)
+            || run.cwd.as_deref().is_some_and(|cwd| self.finds_secret(cwd))
+        {
             return;
         }
         let now = self.project.now();
         let held = self.peek();
-        for learnt in seen {
-            // A line the engine could not write as an exact rule is not
-            // learned: it could never run unasked, and is not one command.
-            if exact_command_rule(&learnt.line, self.syntax).is_none() {
-                continue;
-            }
-            if held.as_ref().is_some_and(|held| !held.wants(&learnt, now)) {
-                continue;
-            }
-            // A flip is told from what the harness saw change, and a
-            // session kept in memory does not see what its file tools
-            // write.
-            if learnt.kind == Kind::Flaky && self.rounds.is_none() {
-                continue;
-            }
-            let this = Arc::clone(self);
-            // Not waited for: the command's result goes back to the model
-            // now, and the store is written beside it.
-            drop(tokio::task::spawn_blocking(move || this.learn(&learnt)));
+        let wanted: Vec<Learnt> = seen
+            .into_iter()
+            .filter(|learnt| {
+                // A line the engine could not write as an exact rule is
+                // not learned: it could never run unasked, and is not one
+                // command.
+                exact_command_rule(&learnt.line, self.syntax).is_some()
+                    && held.as_ref().is_none_or(|held| held.wants(learnt, now))
+                    // A flip is told from what the harness saw change, and
+                    // a session kept in memory does not see what its file
+                    // tools write.
+                    && (learnt.kind != Kind::Flaky || self.rounds.is_some())
+            })
+            .collect();
+        if wanted.is_empty() {
+            return;
         }
+        // Not waited for: the command's result goes back to the model
+        // now, and the store is written beside it, one observation after
+        // the other.
+        self.beside(move |this| {
+            for learnt in &wanted {
+                this.learn(learnt);
+            }
+        });
     }
 
     /// Stores one thing the observer saw. Blocks.
@@ -507,14 +613,16 @@ impl Knowledge {
             }
             Err(error) => self.tell_once(format!(
                 "What this session's commands showed could not be kept in the project profile: \
-                 {error}"
+                 {}",
+                visible(&error.to_string())
             )),
         }
     }
 
-    /// Every entry, for `project/list`. Blocks.
+    /// Every entry, for `project/list`. Blocks, for the store's lock too
+    /// when an entry has expired and is to be marked.
     fn list(&self) -> ProjectEntriesResult {
-        let snapshot = self.refresh();
+        let snapshot = self.refresh(true);
         ProjectEntriesResult {
             entries: snapshot.listing(),
             problems: snapshot.problems().to_vec(),
@@ -524,7 +632,7 @@ impl Knowledge {
 
 impl cortex_agent::ProfileSource for Knowledge {
     fn section(&self) -> String {
-        let snapshot = self.refresh();
+        let snapshot = self.refresh(false);
         let section = cortex_knowledge::render::render_with(
             &snapshot,
             self.project.now(),
@@ -686,7 +794,7 @@ fn target(
         }
         _ => Err(error(
             ErrorKind::Usage,
-            "invalid_request",
+            "invalid_params",
             "Name the project by exactly one of `session_id` and `workspace`.",
         )),
     }
@@ -731,6 +839,10 @@ pub(crate) async fn list(
         params.session_id.as_ref(),
         params.workspace.as_deref(),
     )?;
+    // What the session's commands showed is in the store first.
+    if let Target::Session(knowledge) = &target {
+        knowledge.settled().await;
+    }
     Core::blocking(move || {
         Ok(match target {
             Target::Session(knowledge) => knowledge.list(),
@@ -780,6 +892,18 @@ pub(crate) async fn update(
         .changes
         .iter()
         .any(|change| change.action == EntryAction::Promote);
+    // A promote writes the repository's shared file, which the sandbox
+    // looks at around a confined command. The sessions are told before
+    // the write as well as after it: a command that finishes between the
+    // two would otherwise take the write for a change made from outside,
+    // and stop its turn.
+    if promoted {
+        for live in core.sessions_of(&key) {
+            if let Some(knowledge) = &live.knowledge {
+                knowledge.touched_shared_file();
+            }
+        }
+    }
     let updated = Core::blocking(move || {
         let finds = |text: &str| {
             filter

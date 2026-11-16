@@ -97,7 +97,9 @@ fn check_of(learnt: &Learnt) -> Option<Check> {
         .line
         .split(' ')
         .find(|word| !word.contains('=') || word.starts_with("./"))?;
-    if !program.contains('/') || program.starts_with('/') {
+    // A program on the search path, a rooted one, or one on a drive
+    // (`C:/tools/jest.cmd`, which the store refuses as a check's path).
+    if !program.contains('/') || program.starts_with('/') || program.contains(':') {
         return None;
     }
     let joined = match &learnt.cwd {

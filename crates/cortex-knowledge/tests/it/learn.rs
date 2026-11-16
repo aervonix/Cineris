@@ -352,6 +352,10 @@ fn a_program_in_the_workspace_gets_a_check_that_it_exists() {
         ("cargo test", None),
         ("/usr/bin/make test", None),
         ("../outside/run.sh test", None),
+        // A program on a drive: the store refuses a check with such a
+        // path, and the entry would never be learned (found by the
+        // independent review).
+        ("C:/tools/jest.cmd", None),
         ("CI=1 scripts/check.sh", Some("scripts/check.sh")),
     ] {
         let (_, updated) = project.learn(&command(line, Purpose::Test), None).unwrap();
