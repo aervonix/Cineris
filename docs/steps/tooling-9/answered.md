@@ -75,3 +75,21 @@ One line a sentence, in the style this step set for the docs ([CONTRIBUTING.md](
 - **Docs** (item 5): "A reviewer's quick start" in testing-and-ci.md; the As-built table of step 17 in 14-adaptation.md as a list with one sentence a line, and the rule in CONTRIBUTING.md, "Writing the docs".
 - **`a-time-limit-test-under-load`** (item 6): the runner starts a command before it arms the call's time limit, so under load the test found the family up and the limit not yet armed; the test now waits for the limit as it waits for the family.
   Settled; its file is deleted.
+
+## The test kits: what was built
+
+Built by two sub-agents, each in a worktree with a list of breaks of its own, merged with `mutate --merge tooling-9 tui hooks`; the session wrote the re-decide test's fix.
+
+- **`cortex-tui`'s test kit** (item 3, from the review of step 23):
+  `cortex_tui::testkit`, behind the feature `test-kit`, turned on only as a dev-dependency (`cargo xtask rules` refuses any other way, as it does `test-hooks` and `pty`).
+  It gives the scripted `Link`, a `SessionState` builder with sane defaults (`session().id(…).main_model(…).build()`), `caps()`, `app()`, `opened()`, `ask()`, `approval()` and `shown_dialog()`.
+  The crate's own tests use it, so there is one copy, and a test in `crates/cortex-tui/tests/it/app.rs` uses it as another crate would.
+- **Keys at a person's pace** (item 3): `cortex_testkit::cadence`: typing every N ms, a held key's auto-repeat (X11's and Windows' cadences), keys read together and a paste, as data with times for the application's own clock.
+  There is no pseudo-terminal form: a program in one reads its own clock, so a pace there would need real waiting.
+- **An awaitable library point** (item 3, from the re-decide step): `cortex_base::hook::await_point!(NAME)` in an async fn: with `test-hooks` an await of `point_async(NAME)`, which a `Hold` holds without stopping the thread; without it, nothing, not even an await (a ready future still costs a state of the future, measured).
+  The test kit's `Hold::drive_until_reached` polls an operation until it is held.
+  The core marks `BEFORE_THE_NEW_LEVEL_IS_IN_FORCE` in `Core::set_level`, and `redecide::a_revoke_made_while_the_level_changes_is_not_lost` holds it, where it counted the turns of the runtime.
+- **`cortex-policy`'s test support** (item 3): `cortex_policy::test_support::TestParts`, behind the feature `test-support`, an `Engine`'s parts with sane defaults and setters; `cortex-core`'s policy tests and `cortex-policy`'s own copies use it.
+- **The re-decide test under load** (found by this step's loaded stress run; the coordinator gave it to this step): `redecide::sys_a_copy_through_a_link_an_earlier_command_made_is_asked_about_again` failed once in 50 under `--cores 2 --load 6`.
+  A round decides a call when it plans it, and under load the copy's planning could start after the link had run, so its first decision already saw the link and there was nothing to decide again: the product did what its documentation says.
+  The round now has an awaited point before a call's tool runs (`cortex_agent::BEFORE_A_CALL_RUNS`, nothing without `test-hooks`), and the test holds the link there until the copy has been asked about, and checks that the link was held when it was.
