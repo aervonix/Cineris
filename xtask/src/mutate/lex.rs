@@ -709,6 +709,21 @@ pub(crate) fn without_layout_commas(source: &str, code: &[Token]) -> Vec<Token> 
         .collect()
 }
 
+/// The names among the tokens of `source`: identifiers and keywords, each
+/// once. Not a number, a string or a comment's words.
+pub(crate) fn names_in(source: &str) -> std::collections::HashSet<&str> {
+    lex(source, false)
+        .into_iter()
+        .map(|token| token.text(source))
+        .filter(|text| {
+            text.chars()
+                .next()
+                .is_some_and(|first| first.is_alphabetic() || first == '_')
+                && text.chars().all(|c| c.is_alphanumeric() || c == '_')
+        })
+        .collect()
+}
+
 /// The text of each of [`code_tokens`].
 pub(crate) fn code_texts(source: &str) -> Vec<&str> {
     lex(source, false)

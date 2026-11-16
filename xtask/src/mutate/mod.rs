@@ -890,6 +890,20 @@ fn report_check(root: &Path, breaks: &[Break], names: &Names<'_>) -> Result<()> 
 
 /// What a check of the `caught-by` names covered, in a line.
 fn names_said(checked: &names::Checked) -> String {
+    let said = names_said_of_lists(checked);
+    if checked.by_source == 0 {
+        said
+    } else {
+        format!(
+            "{said} {} name(s) of breaks of the other system's code were looked for in the words \
+             of the source, since its tests are not built here.",
+            checked.by_source
+        )
+    }
+}
+
+/// [`names_said`], of the names checked against the lists of tests.
+fn names_said_of_lists(checked: &names::Checked) -> String {
     let missing = checked.unchecked.len();
     match (checked.names, missing) {
         (_, 0) => format!(
