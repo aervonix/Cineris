@@ -78,6 +78,11 @@ impl Machine {
     /// The binary with `arguments`, in a pseudo-terminal of 100 by 30, in
     /// the workspace with the machine's environment.
     pub fn tui(&self, arguments: &[&str]) -> Session {
+        self.tui_as(std::path::Path::new(CORTEX), arguments)
+    }
+
+    /// As [`tui`](Self::tui), the binary at `program`: under another name.
+    pub fn tui_as(&self, program: &std::path::Path, arguments: &[&str]) -> Session {
         let spec = self.home.join(format!(
             "tui-{}.json",
             std::time::SystemTime::now()
@@ -93,7 +98,7 @@ impl Machine {
         std::fs::write(
             &spec,
             json!({
-                "program": CORTEX,
+                "program": program.to_string_lossy(),
                 "cwd": self.workspace.to_string_lossy(),
                 "args": arguments,
                 "env": env,
@@ -573,4 +578,191 @@ fn sys_undo_asks_about_a_file_edited_since_and_puts_it_back() {
     );
 
     quit(&mut session, &phases);
+}
+
+/// Start to first frame of the real application, under both its names,
+/// `CORTEX_PERF_RUNS` runs of each (30 unless given): from the moment the
+/// shell starts the binary to the moment the first frame is on the
+/// screen, read through the pseudo-terminal. The budget
+/// (`docs/performance-budgets.md`) is 20 ms at the desk, 50 ms on a Linux
+/// runner and 120 ms on a Windows one, in a release build. A measurement:
+///
+/// ```text
+/// gh workflow run try --ref <branch> -f os=windows -f command="perf -p cortex-cli"
+/// cargo test --release -p cortex-cli --test system perf_start -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "a measurement, run in a release build: see its documentation"]
+fn perf_start_to_first_frame_under_both_names() {
+    let runs: usize = std::env::var("CORTEX_PERF_RUNS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(30);
+    let machine = Machine::new("perf_first_frame");
+    let alias = crate::names::install_alias(&machine);
+    for (name, program) in [("cortex", std::path::PathBuf::from(CORTEX)), ("cx", alias)] {
+        let mut times: Vec<f64> = Vec::with_capacity(runs);
+        for _ in 0..runs {
+            let mut session = machine.tui_as(&program, &[]);
+            let starting = session.wait_for(LIMIT, "the shell to start the binary", |t| {
+                t.shows(STARTING)
+            });
+            let drawn = session.wait_for(LIMIT, "the first frame", |t| {
+                READY.iter().any(|ready| t.shows(ready))
+            });
+            times.push((drawn - starting).as_secs_f64() * 1000.0);
+            session.send(b"\x04");
+            session.wait_exit(LIMIT);
+        }
+        times.sort_by(f64::total_cmp);
+        println!(
+            "start to first frame as {name:<6} {runs} runs: median {:>7.2} ms   p95 {:>7.2} ms   \
+             best {:>7.2} ms",
+            times[times.len() / 2],
+            times[(times.len() * 95 / 100).min(times.len() - 1)],
+            times[0]
+        );
+    }
+}
+
+/// The resident memory of the process that the role shell started for
+/// `session`, in KiB: Linux only, read from `/proc`.
+#[cfg(target_os = "linux")]
+fn resident_kib(session: &Session) -> Option<u64> {
+    let shell = session.pid().to_string();
+    let field = |status: &str, name: &str| -> Option<String> {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .map(|value| value.trim().trim_end_matches("kB").trim().to_owned())
+    };
+    // The process whose parent is the shell: the binary.
+    std::fs::read_dir("/proc")
+        .ok()?
+        .flatten()
+        .find_map(|entry| {
+            let status = std::fs::read_to_string(entry.path().join("status")).ok()?;
+            (field(&status, "PPid:")? == shell)
+                .then(|| field(&status, "VmRSS:")?.parse().ok())
+                .flatten()
+        })
+}
+
+fn percentiles(name: &str, mut times: Vec<f64>) {
+    times.sort_by(f64::total_cmp);
+    let at = |share: usize| times[(times.len() * share / 100).min(times.len() - 1)];
+    println!(
+        "{name:<34} {} samples: median {:>7.2} ms   p95 {:>7.2} ms   p99 {:>7.2} ms   most {:>7.2} ms",
+        times.len(),
+        at(50),
+        at(95),
+        at(99),
+        times[times.len() - 1]
+    );
+}
+
+/// The application idle with a new session: its resident memory (Linux),
+/// and a key's time to its frame, `CORTEX_PERF_RUNS` keys (200 unless
+/// given), a character typed and taken back by turns, each timed from its
+/// write to the frame that shows it. Budgets: 25 MB resident; 2 ms at the
+/// 99th percentile for a key (`docs/performance-budgets.md`). A
+/// measurement, in a release build: see
+/// [`perf_start_to_first_frame_under_both_names`].
+#[test]
+#[ignore = "a measurement, run in a release build: see its documentation"]
+fn perf_idle_memory_and_a_keys_time_to_its_frame() {
+    let keys: usize = std::env::var("CORTEX_PERF_RUNS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(200);
+    let machine = Machine::new("perf_idle");
+    let mut session = machine.tui(&[]);
+    session.wait_for(LIMIT, "the first frame", |t| {
+        READY.iter().any(|ready| t.shows(ready))
+    });
+    session.wait_for(LIMIT, "the session's header", |t| t.shows("Cortex-Harness"));
+    #[cfg(target_os = "linux")]
+    match resident_kib(&session) {
+        Some(kib) => println!(
+            "idle with a new session: {:.1} MB resident",
+            kib as f64 / 1024.0
+        ),
+        None => println!("idle with a new session: the resident memory could not be read"),
+    }
+    #[cfg(not(target_os = "linux"))]
+    println!("idle with a new session: resident memory is read on Linux only");
+    let mut times = Vec::with_capacity(keys);
+    for n in 0..keys {
+        let started = Instant::now();
+        if n % 2 == 0 {
+            session.send(b"x");
+            session.wait_for(LIMIT, "the key's echo", |t| t.shows("◆ x"));
+        } else {
+            session.send(b"\x7f");
+            session.wait_for(LIMIT, "the key taken back", |t| {
+                READY.iter().any(|ready| t.shows(ready))
+            });
+        }
+        times.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    percentiles("a key to its frame, idle", times);
+    session.send(b"\x04");
+    session.wait_exit(LIMIT);
+}
+
+/// A streamed answer's piece to the frame that shows it: the scripted
+/// server holds each piece until the test lets it go, and the time is from
+/// letting it go to the screen showing it (the budget: 20 ms at the 95th
+/// percentile; the frame cap of 60 a second is most of it). Keys typed
+/// while the turn runs are timed to their frames too. A measurement, in a
+/// release build: see [`perf_start_to_first_frame_under_both_names`].
+#[test]
+#[ignore = "a measurement, run in a release build: see its documentation"]
+fn perf_a_streamed_piece_and_a_key_while_streaming() {
+    const PIECES: usize = 40;
+    let machine = Machine::new("perf_stream");
+    let gates: Vec<Gate> = (0..PIECES).map(|_| Gate::new()).collect();
+    let mut reply = ServerReply::sse().send(super::sse(&[
+        super::message_start(),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+    ]));
+    for (n, gate) in gates.iter().enumerate() {
+        reply = reply.wait(gate).send(super::sse(&[json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": format!("piece{n:03} ")}
+        })]));
+    }
+    reply = reply.send(super::sse(&[
+        json!({"type": "content_block_stop", "index": 0}),
+        super::message_delta("end_turn"),
+        json!({"type": "message_stop"}),
+    ]));
+    machine.server.push(reply);
+    let mut session = machine.tui(&["go"]);
+    session.wait_for(LIMIT, "the first frame", |t| {
+        READY.iter().any(|ready| t.shows(ready))
+    });
+    let mut pieces = Vec::with_capacity(PIECES);
+    let mut keys = Vec::with_capacity(PIECES);
+    for (n, gate) in gates.iter().enumerate() {
+        let started = Instant::now();
+        gate.open();
+        let text = format!("piece{n:03}");
+        session.wait_for(LIMIT, "the piece", |t| {
+            t.history().iter().any(|row| row.contains(&text))
+        });
+        pieces.push(started.elapsed().as_secs_f64() * 1000.0);
+        // A key while the answer streams: typed, then taken back.
+        let started = Instant::now();
+        session.send(b"q");
+        session.wait_for(LIMIT, "the key's echo", |t| t.shows("◆ q"));
+        keys.push(started.elapsed().as_secs_f64() * 1000.0);
+        session.send(b"\x7f");
+        session.wait_for(LIMIT, "the key taken back", |t| !t.shows("◆ q"));
+    }
+    percentiles("a streamed piece to its frame", pieces);
+    percentiles("a key to its frame, streaming", keys);
+    session.send(b"\x04");
+    session.wait_exit(LIMIT);
 }
