@@ -35,7 +35,7 @@
 [0m  [0;38;2;122;60;251m◧ [0;1;38;2;141;87;252mreject a trailing _[0m
 [0m  [0;90m☐ [0madd a test for 1_000[0m
 [0m  [0;90m☐ [0mrun clippy[0m
-[0;93m  fast tier: 18% of the hourly output limit left, resets 15:00[0m
+[0m  [0;93manthropic fast tier: 18% of the output token limit left, resets 15:00[0m
 [0m
 [0;90m╭─────────────────────────────────────────────────────────────────────────────────────────────────╮[0m
 [0;90m│[0m [0;1;38;2;122;60;251m◆[0m                                                                                               [0;90m│[0m

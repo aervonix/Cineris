@@ -380,11 +380,6 @@ impl Compose<'_> {
         self.rows.extend(live.into_iter().map(Row::Built));
     }
 
-    fn not_built(&mut self, count: usize, what: &'static str) {
-        self.rows
-            .extend(std::iter::repeat_n(Row::NotBuilt(what), count));
-    }
-
     fn hint(&mut self, row: &HintRow) {
         self.rows
             .push(Row::Built(view::hint_row(row, self.width, self.look)));
@@ -838,9 +833,46 @@ fn viewer_title() -> ViewerTitle {
 /// What the steering message says.
 const STEER: &str = "also run clippy when that's done";
 
-/// The usage panel's line of a limit near, which step 24's third pull
-/// request draws.
-const USAGE: &str = "the usage panel (step 24, third pull request)";
+/// Screen 4's usage panel, opened by itself: the line of a limit near, the
+/// fast tier's output at 18% of its limit, which resets at 15:00, seen a
+/// minute before 14:30 (UTC, the zone the screen is said in).
+fn screen_usage(width: usize, look: &Look) -> Vec<Line> {
+    use cortex_base::{UtcTime, Zone};
+    use cortex_protocol::usage::{
+        LimitMeasure, LimitSource, LimitWindow, ProviderLimits, SessionUsage, UsageRange,
+    };
+    let session = SessionUsage {
+        limits: vec![ProviderLimits {
+            provider: ProviderId::from("anthropic"),
+            windows: vec![LimitWindow {
+                measure: LimitMeasure::OutputTokens,
+                speed: Some(Pace::Fast),
+                limit: Some(100_000),
+                remaining: Some(18_000),
+                resets_at: Some(Timestamp::from("2026-11-16T15:00:00Z")),
+            }],
+            seen_at: Timestamp::from("2026-11-16T14:29:00Z"),
+            source: LimitSource::Headers,
+            balances: Vec::new(),
+            available: None,
+            next_epoch: None,
+        }],
+        ..SessionUsage::default()
+    };
+    let zone = Zone::utc();
+    let state = view::usage::UsageView {
+        session: Some(&session),
+        report: None,
+        reading: false,
+        range: &UsageRange::Today,
+        group: &[],
+        refreshed: &[],
+        said: &[],
+        now: UtcTime::parse("2026-11-16T14:30:00Z").expect("a time"),
+        zone: &zone,
+    };
+    view::usage::usage_collapsed(&state, false, width, look)
+}
 
 /// Screen 4's plan: one item done, the one being worked on, two to do.
 fn screen_plan() -> Plan {
@@ -1017,7 +1049,7 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
                     .map(|row| row.line)
                     .collect(),
             );
-            screen.not_built(1, USAGE);
+            screen.lines(screen_usage(width, &look));
             screen.lines(vec![Line::new()]);
             screen.input_running(true);
             screen.hint(&hint(

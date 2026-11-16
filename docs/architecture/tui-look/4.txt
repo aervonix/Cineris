@@ -35,7 +35,7 @@
   ◧ reject a trailing _
   ☐ add a test for 1_000
   ☐ run clippy
-  fast tier: 18% of the hourly output limit left, resets 15:00
+  anthropic fast tier: 18% of the output token limit left, resets 15:00
 
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ ◆                                                                                               │

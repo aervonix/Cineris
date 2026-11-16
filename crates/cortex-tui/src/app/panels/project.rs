@@ -13,17 +13,23 @@
 //! **Its keys,** each one `project/update` with one change, in the session
 //! open: `y` accepts, `e` edits the text (in the prompt's own editor), `n`
 //! turns the entry off, `d` deletes it, `p` promotes it to the repository's
-//! file. The entries the result gives replace those shown.
+//! file. The entries the result gives replace those shown; a deleted entry
+//! goes when `project.updated` says it was removed, which the core sends
+//! every session of the project, this one included. A key is offered, and
+//! taken, only where the core would do it: no edit or delete of an entry of
+//! the repository's file, and no promote of one not in use and accepted.
 //!
 //! - **`y` is taken only when the focused entry's whole detail was drawn**
 //!   in the frame on screen: what a person accepts is what they were shown
-//!   (a command whole, as an approval shows what will run). One whose
-//!   detail did not fit offers no `y`, and the hint row says to make the
-//!   window taller.
+//!   (a command whole, what for and where, and what accepting keeps it
+//!   until). One whose detail did not fit offers no `y`, and the hint row
+//!   says to make the window taller. The detail drawn whole for a new entry
+//!   starts the readiness again: the grace is for what was just shown.
 //! - **`d` asks first, in the entry's row**: `y` then deletes, and any
-//!   other key keeps it. The question changes the focused row, so the
-//!   panel's readiness starts again: its `y` is held to the same rule.
-//! - **`p` while this session's turn runs** is refused by the core (no
+//!   other key keeps it, a move of the focus included. The question changes
+//!   the focused row, so the panel's readiness starts again: its `y` is
+//!   held to the same rule.
+//! - **`p` while a turn of this session runs** is refused by the core (no
 //!   promote writes the repository's file under a confined command): the
 //!   hint row says so beside the key, and the refusal is said with the
 //!   core's sentence.
@@ -33,13 +39,14 @@ use cortex_protocol::SessionId;
 use cortex_protocol::event::Event;
 use cortex_protocol::ids::EntryId;
 use cortex_protocol::methods::{Op, OpResult, ProjectListParams, ProjectUpdateParams};
-use cortex_protocol::project::{EntryAction, EntryChange, EntryScope, EntryStatus, ProjectEntry};
+use cortex_protocol::project::{EntryAction, EntryChange, EntryStatus, ProjectEntry};
+use cortex_protocol::session::{SessionState, TrustStanding};
 use cortex_term::Line;
 
 use super::{Act, Draw, ItemEditFor, ItemKey, Panel, Seen, Show};
 use crate::keys::{Action, KeyMap, name};
 use crate::view::panel::PanelRow;
-use crate::view::project::{self as views, ProjectView, accepted, waits};
+use crate::view::project::{self as views, ProjectView, acceptable, promotable, shared, waits};
 
 /// What `Enter` does in an item edit of the panel's, as the hint row says.
 const SAVES: &str = "saves the entry";
@@ -63,13 +70,12 @@ pub(crate) struct ProjectPanel {
     summoned: bool,
     /// Whether this session's turn runs.
     running: bool,
+    /// Whether the person trusts the project as it is.
+    trusted: bool,
     /// The entry whose deletion is asked.
     asking: Option<EntryId>,
     /// The entry whose detail the last frame drew whole, with the focus.
     whole: Option<EntryId>,
-    /// The entry a delete on its way is for: the result does not carry
-    /// what it removed.
-    deleting: Option<EntryId>,
     clock: SharedClock,
 }
 
@@ -83,9 +89,9 @@ impl ProjectPanel {
             listed: false,
             summoned: false,
             running: false,
+            trusted: false,
             asking: None,
             whole: None,
-            deleting: None,
             clock,
         }
     }
@@ -133,6 +139,7 @@ impl ProjectPanel {
             asking,
             reading: !self.listed,
             problems: &self.problems,
+            trusted: self.trusted,
         }
     }
 
@@ -150,18 +157,21 @@ impl ProjectPanel {
         }))
     }
 
-    /// Whether `y` would change `entry`: one waiting, turned off, or a
-    /// command in use that still asks.
-    fn acceptable(entry: &ProjectEntry) -> bool {
-        waits(entry) || entry.status != EntryStatus::Active || !accepted(entry)
-    }
-
     /// The list, for `session`.
     fn list(session: &SessionId) -> Op {
         Op::ProjectList(ProjectListParams {
             session_id: Some(session.clone()),
             workspace: None,
         })
+    }
+
+    /// Whether a project with `trust` is trusted as it is: what lets an
+    /// accepted command run without asking.
+    fn trusted(trust: Option<&TrustStanding>) -> bool {
+        matches!(
+            trust,
+            Some(TrustStanding::Trusted | TrustStanding::ForTheRun)
+        )
     }
 }
 
@@ -179,10 +189,18 @@ impl Panel for ProjectPanel {
                         self.merge(&updated.entries, &updated.removed);
                         self.show()
                     }
+                    Event::SessionUpdated(updated) => {
+                        self.trusted = Self::trusted(updated.session.trust.as_ref());
+                        Show::Same
+                    }
                     _ => Show::Same,
                 }
             }
-            Seen::Prompt => Show::Same,
+            // This client's prompt starts a turn: promote waits for its end.
+            Seen::Prompt => {
+                self.running = true;
+                Show::Same
+            }
             Seen::Left => {
                 let clock = self.clock.clone();
                 *self = Self::new(clock);
@@ -201,8 +219,7 @@ impl Panel for ProjectPanel {
                 self.show()
             }
             OpResult::ProjectUpdate(update) => {
-                let removed: Vec<EntryId> = self.deleting.take().into_iter().collect();
-                self.merge(&update.entries, &removed);
+                self.merge(&update.entries, &[]);
                 self.problems.clone_from(&update.problems);
                 self.show()
             }
@@ -210,9 +227,11 @@ impl Panel for ProjectPanel {
         }
     }
 
-    fn when_opened(&self, session: &SessionId, _stored: bool) -> Option<Op> {
+    fn when_opened(&mut self, state: &SessionState, _stored: bool) -> Option<Op> {
+        self.trusted = Self::trusted(state.trust.as_ref());
+        self.running = state.running_turn.is_some();
         // Entries may wait from earlier sessions, a new one's included.
-        Some(Self::list(session))
+        Some(Self::list(&state.session_id))
     }
 
     fn summon(&mut self) -> Result<(), String> {
@@ -237,9 +256,9 @@ impl Panel for ProjectPanel {
     }
 
     fn least_rows(&self, focused: usize, _draw: &Draw<'_>) -> usize {
-        // Its first row, and the focused entry's own row (its detail may
-        // be cut: then it offers no `y`), or the row that says there is
-        // none.
+        // Its first row, and the focused entry's own row: its detail may be
+        // cut, and then it offers no `y` (the trait allows this). Or the
+        // row that says there is none.
         if self.shown.is_empty() {
             1 + usize::from(self.listed)
         } else {
@@ -261,62 +280,71 @@ impl Panel for ProjectPanel {
         self.asking = None;
     }
 
-    fn shown_whole(&mut self, focused: usize, whole: bool) {
-        self.whole = self
+    fn moved(&mut self, focused: usize) {
+        // The question is the entry's it was asked on: the focus leaving it
+        // keeps the entry.
+        if self.asking.as_ref() != self.shown.get(focused).map(|entry| &entry.id) {
+            self.asking = None;
+        }
+    }
+
+    fn shown_whole(&mut self, focused: usize, whole: bool) -> bool {
+        let now = self
             .shown
             .get(focused)
             .filter(|_| whole)
             .map(|entry| entry.id.clone());
+        let new = now.is_some() && now != self.whole;
+        self.whole = now;
+        new
     }
 
     fn hint(&self, focused: usize, keymap: &KeyMap) -> Vec<String> {
         let key = |action: Action| keymap.keys_of(action).into_iter().next().map(name);
         let mut keys = Vec::new();
-        let Some(entry) = self.shown.get(focused) else {
-            if let Some(close) = key(Action::FocusClose) {
-                keys.push(format!("{close} closes"));
-            }
-            if let Some(back) = key(Action::FocusReturn) {
-                keys.push(format!("{back} back to the input"));
-            }
-            return keys;
-        };
-        if self.asking.as_ref() == Some(&entry.id) {
-            if let Some(yes) = key(Action::FocusAccept) {
-                keys.push(format!("{yes} deletes"));
-            }
-            keys.push("any other key keeps it".to_owned());
-            return keys;
-        }
-        if Self::acceptable(entry) {
-            match key(Action::FocusAccept) {
-                Some(yes) if self.whole.as_ref() == Some(&entry.id) => {
-                    keys.push(format!("{yes} accepts"));
+        let now = self.clock.now();
+        if let Some(entry) = self.shown.get(focused) {
+            if self.asking.as_ref() == Some(&entry.id) {
+                if let Some(yes) = key(Action::FocusAccept) {
+                    keys.push(format!("{yes} deletes"));
                 }
-                Some(_) => keys.push("make the window taller to accept".to_owned()),
-                None => {}
+                keys.push("any other key keeps it".to_owned());
+                return keys;
             }
-        }
-        if let Some(edit) = key(Action::FocusEdit) {
-            keys.push(format!("{edit} edits"));
-        }
-        if entry.status == EntryStatus::Active
-            && let Some(off) = key(Action::FocusDisable)
-        {
-            keys.push(format!("{off} turns off"));
-        }
-        // Refused by the core while a turn of the project runs.
-        if entry.scope == EntryScope::Private
-            && let Some(promote) = key(Action::FocusPromote)
-        {
-            if self.running {
-                keys.push(format!("{promote} promotes after this turn"));
-            } else {
-                keys.push(format!("{promote} promotes"));
+            if acceptable(entry, now) {
+                match key(Action::FocusAccept) {
+                    Some(yes) if self.whole.as_ref() == Some(&entry.id) => {
+                        keys.push(format!("{yes} accepts"));
+                    }
+                    Some(_) => keys.push("make the window taller to accept".to_owned()),
+                    None => {}
+                }
             }
-        }
-        if let Some(delete) = key(Action::FocusDelete) {
-            keys.push(format!("{delete} deletes"));
+            if !shared(entry)
+                && let Some(edit) = key(Action::FocusEdit)
+            {
+                keys.push(format!("{edit} edits"));
+            }
+            if entry.status == EntryStatus::Active
+                && let Some(off) = key(Action::FocusDisable)
+            {
+                keys.push(format!("{off} turns off"));
+            }
+            // Refused by the core while a turn of the project runs.
+            if promotable(entry, now)
+                && let Some(promote) = key(Action::FocusPromote)
+            {
+                if self.running {
+                    keys.push(format!("{promote} promotes after this turn"));
+                } else {
+                    keys.push(format!("{promote} promotes"));
+                }
+            }
+            if !shared(entry)
+                && let Some(delete) = key(Action::FocusDelete)
+            {
+                keys.push(format!("{delete} deletes"));
+            }
         }
         if let Some(close) = key(Action::FocusClose) {
             keys.push(format!("{close} closes"));
@@ -340,21 +368,24 @@ impl Panel for ProjectPanel {
             return Act::Pass;
         };
         let id = entry.id.clone();
-        // A deletion asked: `y` deletes, any other key keeps the entry.
-        if let Some(asked) = self.asking.take() {
-            if action == Action::FocusAccept && asked == id {
-                self.deleting = Some(id.clone());
+        let now = self.clock.now();
+        // A deletion asked of this entry: `y` deletes, any other key keeps
+        // the entry. A question of another entry is forgotten, and the key
+        // does what it does.
+        match self.asking.take() {
+            Some(asked) if asked == id && action == Action::FocusAccept => {
                 return Self::change(session, &id, EntryAction::Delete, None);
             }
-            return Act::Taken;
+            Some(asked) if asked == id => return Act::Taken,
+            _ => {}
         }
-        // A change on its way of another kind is no delete.
-        self.deleting = None;
         match action {
-            Action::FocusAccept if !Self::acceptable(entry) => Act::Taken,
+            Action::FocusAccept if !acceptable(entry, now) => Act::Taken,
             // What is accepted is what was shown, whole.
             Action::FocusAccept if self.whole.as_ref() != Some(&id) => Act::Say(TALLER.to_owned()),
             Action::FocusAccept => Self::change(session, &id, EntryAction::Accept, None),
+            // The repository's file is changed there, not here.
+            Action::FocusEdit | Action::FocusDelete if shared(entry) => Act::Taken,
             Action::FocusEdit => Act::Edit {
                 text: entry.text.clone(),
                 hint: SAVES,
@@ -370,7 +401,7 @@ impl Panel for ProjectPanel {
                 self.asking = Some(id);
                 Act::Taken
             }
-            Action::FocusPromote if entry.scope == EntryScope::Private => {
+            Action::FocusPromote if promotable(entry, now) => {
                 Self::change(session, &id, EntryAction::Promote, None)
             }
             Action::FocusDisable | Action::FocusPromote => Act::Taken,
@@ -398,7 +429,6 @@ impl Panel for ProjectPanel {
         if text.is_empty() || text == entry.text {
             return Act::Taken;
         }
-        self.deleting = None;
         Self::change(session, &entry.id, EntryAction::Edit, Some(text.to_owned()))
     }
 }

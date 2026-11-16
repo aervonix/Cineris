@@ -1,0 +1,386 @@
+# Step 24's third pull request, its sub-agent's part: the project and usage
+# panels, and the mechanism's hooks they use. Their rules broken one at a
+# time, with the tests that must fail. Written with the code.
+
+# ------------------------------------------------- the project panel's y
+
+[break] y-accepts-a-detail-not-drawn-whole
+rule: `y` accepts an entry only when its whole detail was drawn in the frame on screen; otherwise it says to make the window taller and sends nothing.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::act
+find: Action::FocusAccept if self.whole.as_ref() != Some(&id) => Act::Say(TALLER.to_owned()),
+replace: Action::FocusAccept if false => Act::Say(TALLER.to_owned()),
+caught-by:
+    app::tests::project::y_on_an_entry_whose_detail_does_not_fit_says_to_make_the_window_taller
+
+[break] a-cut-detail-counts-as-whole
+rule: The mechanism says a focused item was drawn whole only when every one of its rows was in the window.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::scrolled
+find: let whole = !wanted.is_empty() && start <= wanted.start && wanted.end <= end;
+replace: let whole = !wanted.is_empty();
+caught-by:
+    app::tests::project::y_on_an_entry_whose_detail_does_not_fit_says_to_make_the_window_taller
+
+[break] a-detail-first-drawn-whole-has-no-grace
+rule: An entry's detail drawn whole for the first time starts the panel's readiness again: the grace is for what was just shown.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::shown_whole
+find: let new = now.is_some() && now != self.whole;
+replace: let new = false;
+caught-by:
+    app::tests::project::a_detail_first_drawn_whole_has_its_grace
+
+[break] the-mechanism-ignores-a-new-whole-detail
+rule: The mechanism restarts a panel's readiness when the panel says what it drew whole is new.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::scrolled
+find: if slot.panel.shown_whole(focus, whole) {
+replace: if slot.panel.shown_whole(focus, whole) && false {
+caught-by:
+    app::tests::project::a_detail_first_drawn_whole_has_its_grace
+
+[break] y-accepts-what-has-nothing-to-accept
+rule: `y` changes nothing on an entry that is in use and accepted.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::act
+find: Action::FocusAccept if !acceptable(entry, now) => Act::Taken,
+replace: Action::FocusAccept if false => Act::Taken,
+caught-by:
+    app::tests::project::slash_project_lists_again_and_opens_it_focused_with_every_entry
+
+[break] an-expired-entry-cannot-be-accepted-again
+rule: An accepted entry that expired is offered `y`: accepting brings it back.
+file: crates/cortex-tui/src/view/project.rs
+in: acceptable
+find: || !accepted(entry) || expired(entry, now)
+replace: || !accepted(entry)
+caught-by:
+    view::project::tests::what_a_key_would_do_is_what_the_core_does
+    view::project::tests::each_origin_and_standing_is_said_as_cortex_project_says_it
+
+# ---------------------------------------------- the deletion asked
+
+[break] delete-asks-nothing
+rule: `d` asks first, in the entry's row, and deletes nothing itself.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::act
+find: self.asking = Some(id);
+replace: self.asking = None;
+caught-by:
+    app::tests::project::d_asks_in_the_row_y_then_deletes_once_ready_and_any_other_key_keeps_it
+
+[break] a-key-after-the-question-acts
+rule: Any key but `y` after the question keeps the entry and does nothing else.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::act
+find: Some(asked) if asked == id => return Act::Taken,
+replace: Some(_) if false => return Act::Taken,
+caught-by:
+    app::tests::project::d_asks_in_the_row_y_then_deletes_once_ready_and_any_other_key_keeps_it
+
+[break] the-question-takes-the-next-entrys-key
+rule: A question asked of an entry the focus is no longer on takes no key: the key does what it does on the entry shown.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::act
+find: Some(asked) if asked == id => return Act::Taken,
+replace: Some(_) => return Act::Taken,
+caught-by:
+    app::tests::project::a_question_of_an_entry_gone_takes_no_key_of_the_next
+
+[break] the-question-outlives-a-move
+rule: The focus leaving the entry a deletion was asked of forgets the question.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::moved
+find: slot.panel.moved(slot.focus);
+replace: let _ = slot.focus;
+caught-by:
+    app::tests::project::the_delete_question_is_forgotten_when_the_focus_moves
+
+[break] a-key-that-changes-the-row-keeps-the-readiness
+rule: A key that changes what the focused item shows (the question) starts the readiness again at once: a `y` read before the next frame is typing.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::act
+find: self.observe(id);
+replace: let _ = id;
+caught-by:
+    app::tests::project::a_y_straight_after_d_is_typing_not_a_delete
+
+# ------------------------------------------ what the core would do
+
+[break] a-shared-entry-is-edited-here
+rule: An entry of the repository's file is neither edited nor deleted here (`shared_entry_read_only`).
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::act
+find: Action::FocusEdit | Action::FocusDelete if shared(entry) => Act::Taken,
+replace: Action::FocusEdit | Action::FocusDelete if false => Act::Taken,
+caught-by:
+    app::tests::project::an_entry_of_the_repositorys_file_offers_no_edit_or_delete
+
+[break] promote-offered-on-an-entry-not-accepted
+rule: `p` promotes only an entry of the private store that is in use and accepted (`not_promotable` otherwise).
+file: crates/cortex-tui/src/view/project.rs
+in: promotable
+find: && accepted(entry)
+replace: && true
+caught-by:
+    view::project::tests::what_a_key_would_do_is_what_the_core_does
+    app::tests::project::p_promotes_an_accepted_entry_and_while_a_turn_runs_the_hint_says_so_and_the_refusal_is_said
+
+[break] promote-says-nothing-of-the-turn
+rule: While a turn of this session runs, the hint row says `p` promotes after it.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::hint
+find: if self.running {
+replace: if false {
+caught-by:
+    app::tests::project::p_promotes_an_accepted_entry_and_while_a_turn_runs_the_hint_says_so_and_the_refusal_is_said
+    app::tests::project::a_prompt_sent_says_promote_waits_for_the_turn
+
+[break] a-prompt-is-no-turn-running
+rule: This client's prompt starts a turn: promote waits for it before the turn's first event.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::seen
+find: self.running = true;
+replace: self.running = false;
+caught-by:
+    app::tests::project::a_prompt_sent_says_promote_waits_for_the_turn
+
+[break] the-sessions-trust-is-not-followed
+rule: The detail says what the session's trust lets an accepted command do, as `session.updated` gives it.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::seen
+find: self.trusted = Self::trusted(updated.session.trust.as_ref());
+replace: let _ = updated;
+caught-by:
+    app::tests::project::the_detail_says_what_the_sessions_trust_lets_a_command_do
+
+# ------------------------------------------------- the detail
+
+[break] the-purpose-is-not-in-the-detail
+rule: The detail says what a command is for: the entry's row, which is cut, is not needed.
+file: crates/cortex-tui/src/view/project.rs
+in: detail
+find: let mut where_ = vec![format!("for {}", one_line(command.purpose.as_str()))];
+replace: let mut where_: Vec<String> = Vec::new();
+caught-by:
+    view::project::tests::the_focused_commands_detail_is_whole_and_wrapped_never_cut
+    view::project::tests::the_project_in_every_variant
+
+[break] accepting-renews-for-the-wrong-time
+rule: Accepting a learned command keeps it 90 days from the acceptance, as `cortex-knowledge` does, and the detail says so.
+file: crates/cortex-tui/src/view/project.rs
+in: kept_until
+find: EntryKind::Command => 90,
+replace: EntryKind::Command => 30,
+caught-by:
+    view::project::tests::the_focused_commands_detail_is_whole_and_wrapped_never_cut
+    view::project::tests::each_origin_and_standing_is_said_as_cortex_project_says_it
+    view::project::tests::the_project_in_every_variant
+
+[break] an-accepted-command-in-an-untrusted-project-runs
+rule: An accepted command in a project not trusted as it is still asks before it runs, and the detail says so.
+file: crates/cortex-tui/src/view/project.rs
+in: standing
+find: EntryStatus::Active if entry.kind == EntryKind::Command && !trusted => (
+replace: EntryStatus::Active if entry.kind == EntryKind::Command && false => (
+caught-by:
+    view::project::tests::each_origin_and_standing_is_said_as_cortex_project_says_it
+    app::tests::project::the_detail_says_what_the_sessions_trust_lets_a_command_do
+
+[break] an-expired-proposal-says-nothing
+rule: A proposal past its date says it expired.
+file: crates/cortex-tui/src/view/project.rs
+in: standing
+find: EntryStatus::Proposed if expired(entry, now) => (
+replace: EntryStatus::Proposed if false => (
+caught-by:
+    view::project::tests::each_origin_and_standing_is_said_as_cortex_project_says_it
+
+[break] a-shared-entry-does-not-wait
+rule: An entry of the repository's file not accepted here waits for review.
+file: crates/cortex-tui/src/view/project.rs
+in: waits
+find: && (entry.basis == Some(EntryBasis::Observed) || entry.scope == EntryScope::Shared)
+replace: && entry.basis == Some(EntryBasis::Observed)
+caught-by:
+    view::project::tests::what_waits_for_review_is_a_proposal_or_an_entry_never_accepted
+    view::project::tests::the_first_row_counts_what_waits_and_what_is_in_use
+    app::tests::project::the_project_opens_by_itself_collapsed_when_entries_wait_and_not_otherwise
+
+[break] an-entrys-command-is-drawn-raw
+rule: An entry's command comes from a file anyone can write, and is made one line and visible before it is laid out.
+file: crates/cortex-tui/src/view/project.rs
+in: entry_row
+find: one_line(&command.command)
+replace: command.command.clone()
+caught-by:
+    view::project::tests::hostile_texts_commands_folders_checks_evidence_and_problems_are_drawn_visible
+    app::tests::project::hostile_entries_are_drawn_visible_in_the_frame
+
+# --------------------------------------- the project panel's open
+
+[break] the-open-asks-no-list
+rule: Entries that wait from earlier sessions open the panel by itself: the session's open asks for the list.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::when_opened
+find: Some(Self::list(&state.session_id))
+replace: None
+caught-by:
+    app::tests::project::the_project_opens_by_itself_collapsed_when_entries_wait_and_not_otherwise
+
+[break] no-project-kept-is-said-on-every-open
+rule: The open's own list, where the core keeps no project (no state directory), says nothing.
+file: crates/cortex-tui/src/app/state.rs
+in: App::done
+find: (Pending::Opened { .. }, Err(error)) if error.code == "not_available" => {}
+replace: (Pending::Opened { .. }, Err(error)) if false && error.code.is_empty() => {}
+caught-by:
+    app::tests::project::no_project_kept_says_nothing_as_the_session_opens
+
+# ------------------------------------------------- the usage panel
+
+[break] slash-usage-asks-the-wrong-refresh-list
+rule: `/usage` asks the user's own `usage.refresh`, once, beside its one report.
+file: crates/cortex-tui/src/app/panels/usage.rs
+in: UsagePanel::summoned
+find: keys: vec!["usage.refresh".to_owned()]
+replace: keys: vec!["usage".to_owned()]
+caught-by:
+    app::tests::usage::slash_usage_asks_once_and_the_frame_after_the_answer_has_the_rows
+
+[break] a-fifth-left-is-near
+rule: A limit is near with less than a fifth left; a fifth exactly is not.
+file: crates/cortex-tui/src/view/usage.rs
+in: near
+find: if left.saturating_mul(5) >= limit {
+replace: if left.saturating_mul(5) > limit {
+caught-by:
+    view::usage::tests::a_limit_with_less_than_a_fifth_left_is_the_warning_line
+
+[break] a-limit-no-longer-near-keeps-it-open
+rule: Opened by a limit near, the panel closes by itself when no limit is.
+file: crates/cortex-tui/src/app/panels/usage.rs
+in: UsagePanel::saw
+find: (true, false) if !self.summoned => Show::Close,
+replace: (true, false) if !self.summoned => Show::Same,
+caught-by:
+    app::tests::usage::a_limit_near_opens_it_by_itself_as_the_warning_line_and_its_end_closes_it
+
+[break] tab-asks-for-no-report
+rule: `tab` goes to the next range and asks for its report.
+file: crates/cortex-tui/src/app/panels/usage.rs
+in: UsagePanel::key
+find: Act::Send(self.report_op())
+replace: Act::Taken
+occurrence: 1
+caught-by:
+    app::tests::usage::tab_and_g_ask_for_the_next_range_and_grouping
+
+[break] r-with-no-provider-sends
+rule: With no provider in `usage.refresh`, `r` says so and sends nothing.
+file: crates/cortex-tui/src/app/panels/usage.rs
+in: UsagePanel::key
+find: Some(list) if list.is_empty() => Act::Say(NO_REFRESH.to_owned()),
+replace: Some(list) if false && list.is_empty() => Act::Say(NO_REFRESH.to_owned()),
+caught-by:
+    app::tests::usage::r_asks_one_refresh_at_a_time_and_with_none_turned_on_says_so_and_sends_nothing
+
+[break] a-reload-keeps-the-old-refresh-list
+rule: A reload that changes `usage.*` has the list asked of the core again.
+file: crates/cortex-tui/src/app/panels/usage.rs
+in: UsagePanel::saw
+find: self.refresh = None;
+replace: let _ = changed;
+caught-by:
+    app::tests::usage::r_asks_one_refresh_at_a_time_and_with_none_turned_on_says_so_and_sends_nothing
+
+[break] a-refused-report-reads-on
+rule: A report the core refuses is said in the panel, and its rows stop `reading…`.
+file: crates/cortex-tui/src/app/panels/usage.rs
+in: UsagePanel::failed
+find: if self.reading {
+replace: if false {
+caught-by:
+    app::tests::usage::a_refused_report_is_said_in_the_panel_and_reading_ends
+
+[break] an-estimate-is-not-marked
+rule: A cost that is an estimate is marked `est.`.
+file: crates/cortex-tui/src/view/usage.rs
+in: cost_words
+find: CostBasis::Estimate => format!("{amount} est."),
+replace: CostBasis::Estimate => amount,
+caught-by:
+    view::usage::tests::costs_say_their_basis_and_an_unknown_price_is_a_dash
+    view::usage::tests::the_usage_in_every_variant
+
+[break] a-mixed-total-is-not-shown-apart
+rule: A total that mixes bases shows them apart: `$44.40 metered + $2.10 est.`.
+file: crates/cortex-tui/src/view/usage.rs
+in: cost_words
+find: CostBasis::Metered if mixed => format!("{amount} metered"),
+replace: CostBasis::Metered if mixed => amount,
+caught-by:
+    view::usage::tests::costs_say_their_basis_and_an_unknown_price_is_a_dash
+    view::usage::tests::the_usage_in_every_variant
+
+[break] an-unknown-price-is-a-number
+rule: A cost with no price known is `—`, never a number.
+file: crates/cortex-tui/src/view/usage.rs
+in: cost_words
+find: return "—".to_owned();
+replace: return "$0.00".to_owned();
+caught-by:
+    view::usage::tests::costs_say_their_basis_and_an_unknown_price_is_a_dash
+    view::usage::tests::the_usage_in_every_variant
+
+[break] the-columns-drop-in-the-wrong-order
+rule: As the window narrows, the cache writes drop first, then the cache reads, then the input.
+file: crates/cortex-tui/src/view/usage.rs
+in: Table::new
+find: for drop in [Column::CacheWrite, Column::CacheRead, Column::Input] {
+replace: for drop in [Column::Input, Column::CacheRead, Column::CacheWrite] {
+caught-by:
+    view::usage::tests::the_columns_drop_as_the_window_narrows
+
+[break] a-narrow-window-keeps-every-column
+rule: Under 60 columns the table is the name, the output and the cost.
+file: crates/cortex-tui/src/view/usage.rs
+in: Table::new
+find: let mut columns: Vec<Column> = if width < NARROW {
+replace: let mut columns: Vec<Column> = if width < 1 {
+caught-by:
+    view::usage::tests::the_columns_drop_as_the_window_narrows
+    view::usage::tests::the_usage_in_every_variant
+
+[break] a-reset-passed-is-shown-as-full
+rule: A limit past its reset is `reset since; unknown until the next request`, never a figure.
+file: crates/cortex-tui/src/view/usage.rs
+in: window_words
+find: if reset.is_some_and(|reset| reset <= now) {
+replace: if false {
+caught-by:
+    view::usage::tests::limits_say_their_age_a_reset_passed_a_refresh_and_not_available
+    view::usage::tests::the_usage_in_every_variant
+
+[break] a-provider-with-no-limits-says-nothing
+rule: A provider that reports no limits says `not available`.
+file: crates/cortex-tui/src/view/usage.rs
+in: parts
+find: if !limits.iter().any(|limits| limits.provider == provider) {
+replace: if false {
+caught-by:
+    view::usage::tests::limits_say_their_age_a_reset_passed_a_refresh_and_not_available
+    view::usage::tests::the_usage_in_every_variant
+    app::tests::usage::slash_usage_asks_once_and_the_frame_after_the_answer_has_the_rows
+
+[break] a-projects-label-is-drawn-raw
+rule: A project's label comes from outside, and is made one line and visible before it is laid out.
+file: crates/cortex-tui/src/view/usage.rs
+in: cell_name
+find: .map(one_line)
+replace: .map(str::to_owned)
+occurrence: 1
+caught-by:
+    view::usage::tests::hostile_names_labels_currencies_notes_and_errors_are_drawn_visible
+    app::tests::usage::hostile_usage_is_drawn_visible_in_the_frame

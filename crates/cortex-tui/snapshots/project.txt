@@ -19,10 +19,11 @@
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features --|
     {fg=a14}--test-threads 1 --include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
   {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that s…  {fg=a8}2d|
@@ -37,10 +38,11 @@
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features --|
     {fg=a14}--test-threads 1 --include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
     {fg=a11}delete this entry? y deletes · any other key keeps it|
@@ -59,6 +61,7 @@
     next.|
     {fg=a8}proposed by the model in session s_1 on 2026-11-14|
     {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
   {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                    {fg=a8}2d|
   {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
 
@@ -97,10 +100,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-featur...{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features --|
     {fg=a14}--test-threads 1 --include-ignored|
-    {fg=a8}in crates/parser | may change files|
+    {fg=a8}for test | in crates/parser | may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
   {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that...  {fg=a8}2d|
@@ -115,10 +119,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-featur...{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features --|
     {fg=a14}--test-threads 1 --include-ignored|
-    {fg=a8}in crates/parser | may change files|
+    {fg=a8}for test | in crates/parser | may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
     {fg=a11}delete this entry? y deletes | any other key keeps it|
@@ -137,6 +142,7 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
     next.|
     {fg=a8}proposed by the model in session s_1 on 2026-11-14|
     {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
   {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                    {fg=a8}2d|
   {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
 
@@ -175,10 +181,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a14}--include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
   {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
@@ -193,10 +200,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a14}--include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
     {fg=a11}delete this entry? y deletes · any other key keeps it|
@@ -214,6 +222,7 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
     Errors are written as sentences that say what to do next.|
     {fg=a8}proposed by the model in session s_1 on 2026-11-14|
     {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
   {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
   {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
 
@@ -252,10 +261,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads...{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a14}--include-ignored|
-    {fg=a8}in crates/parser | may change files|
+    {fg=a8}for test | in crates/parser | may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
   {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
@@ -270,10 +280,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads...{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a14}--include-ignored|
-    {fg=a8}in crates/parser | may change files|
+    {fg=a8}for test | in crates/parser | may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
     {fg=a11}delete this entry? y deletes | any other key keeps it|
@@ -291,6 +302,7 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
     Errors are written as sentences that say what to do next.|
     {fg=a8}proposed by the model in session s_1 on 2026-11-14|
     {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
   {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
   {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
 
@@ -328,10 +340,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
 ◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored{}                         {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1 --include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
   {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.                                            {fg=a8}2d|
@@ -345,10 +358,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
 ◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored{}                         {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1 --include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
     {fg=a11}delete this entry? y deletes · any other key keeps it|
@@ -366,6 +380,7 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
     Errors are written as sentences that say what to do next.|
     {fg=a8}proposed by the model in session s_1 on 2026-11-14|
     {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
   {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                                                                {fg=a8}2d|
   {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
 
@@ -403,10 +418,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
 o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored{}                         {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1 --include-ignored|
-    {fg=a8}in crates/parser | may change files|
+    {fg=a8}for test | in crates/parser | may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
   {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.                                            {fg=a8}2d|
@@ -420,10 +436,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
 o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored{}                         {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1 --include-ignored|
-    {fg=a8}in crates/parser | may change files|
+    {fg=a8}for test | in crates/parser | may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
     {fg=a11}delete this entry? y deletes | any other key keeps it|
@@ -441,6 +458,7 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
     Errors are written as sentences that say what to do next.|
     {fg=a8}proposed by the model in session s_1 on 2026-11-14|
     {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
   {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                                                                                {fg=a8}2d|
   {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
 
@@ -479,10 +497,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a3 b}?{} {fg=a8}command{}  {fg=#7A3CFB b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a6 b}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a6 b}--include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a3 b}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a3 b}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
   {fg=a3 b}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
@@ -497,10 +516,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a3 b}?{} {fg=a8}command{}  {fg=#7A3CFB b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a6 b}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a6 b}--include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a3 b}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a3 b}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
     {fg=a3 b}delete this entry? y deletes · any other key keeps it|
@@ -518,6 +538,7 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
     Errors are written as sentences that say what to do next.|
     {fg=a8}proposed by the model in session s_1 on 2026-11-14|
     {fg=a3 b}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
   {fg=a2 b}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
   {fg=a3 b}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
 
@@ -556,10 +577,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a14}--include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
   {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
@@ -574,10 +596,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a14}--include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
     {fg=a11}delete this entry? y deletes · any other key keeps it|
@@ -595,6 +618,7 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
     Errors are written as sentences that say what to do next.|
     {fg=a8}proposed by the model in session s_1 on 2026-11-14|
     {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
   {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
   {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
 
@@ -633,10 +657,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a3 b}?{} {fg=a8}command{}  {fg=a5 b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a6 b}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a6 b}--include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a3 b}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a3 b}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
   {fg=a3 b}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
@@ -651,10 +676,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a3 b}?{} {fg=a8}command{}  {fg=a5 b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a6 b}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a6 b}--include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a3 b}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a3 b}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
     {fg=a3 b}delete this entry? y deletes · any other key keeps it|
@@ -672,6 +698,7 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
     Errors are written as sentences that say what to do next.|
     {fg=a8}proposed by the model in session s_1 on 2026-11-14|
     {fg=a3 b}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
   {fg=a2 b}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
   {fg=a3 b}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
 
@@ -710,10 +737,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=i99 b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a14}--include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
   {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
@@ -728,10 +756,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   {fg=a11}?{} {fg=a8}command{}  {fg=i99 b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
     {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
     {fg=a14}--include-ignored|
-    {fg=a8}in crates/parser · may change files|
+    {fg=a8}for test · in crates/parser · may change files|
     the parser's tests|
     {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
-    {fg=a11}in use, and still asks before it runs, until 2026-12-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
     {fg=a8}check  `Cargo.toml` exists, not run in this build|
     {fg=a8}evidence  ran 3 times and passed|
     {fg=a11}delete this entry? y deletes · any other key keeps it|
@@ -749,6 +778,7 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
     Errors are written as sentences that say what to do next.|
     {fg=a8}proposed by the model in session s_1 on 2026-11-14|
     {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
   {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
   {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
 
@@ -787,10 +817,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   ? {d}command{}  {b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {d}2d|
     {d}runs  {b}cargo test -p parser --all-features -- --test-threads 1|
     {b}--include-ignored|
-    {d}in crates/parser · may change files|
+    {d}for test · in crates/parser · may change files|
     the parser's tests|
     {d}observed 3 times, learned in session s_1 on 2026-11-14|
-    in use, and still asks before it runs, until 2026-12-14|
+    in use, and still asks before it runs|
+    {d}accepting keeps it until 2027-02-14|
     {d}check  `Cargo.toml` exists, not run in this build|
     {d}evidence  ran 3 times and passed|
   ? {d}convention{}  Errors are written as sentences that say what to do next.    {d}2d|
@@ -805,10 +836,11 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
   ? {d}command{}  {b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {d}2d|
     {d}runs  {b}cargo test -p parser --all-features -- --test-threads 1|
     {b}--include-ignored|
-    {d}in crates/parser · may change files|
+    {d}for test · in crates/parser · may change files|
     the parser's tests|
     {d}observed 3 times, learned in session s_1 on 2026-11-14|
-    in use, and still asks before it runs, until 2026-12-14|
+    in use, and still asks before it runs|
+    {d}accepting keeps it until 2027-02-14|
     {d}check  `Cargo.toml` exists, not run in this build|
     {d}evidence  ran 3 times and passed|
     delete this entry? y deletes · any other key keeps it|
@@ -826,6 +858,7 @@ o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
     Errors are written as sentences that say what to do next.|
     {d}proposed by the model in session s_1 on 2026-11-14|
     waits for your review: not in use|
+    {d}accepting keeps it until 2027-01-15|
   ✓ {d}fact{}  The parser is hand-written.                                        {d}2d|
   ? {d}flaky{}  lex::numbers::huge times out on CI|
 

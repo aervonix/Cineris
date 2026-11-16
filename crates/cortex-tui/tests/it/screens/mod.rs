@@ -6,9 +6,9 @@
 //! - **Every row this step's views draw is compared,** text, style and wide
 //!   cells alike, as they are seen: a space is compared by its background
 //!   and by whether it is reversed or underlined, which is all of it that
-//!   shows. A row another step draws (the usage panel's line, step 24's
-//!   third pull request) is counted as not built, by screen, and is never
-//!   counted as compared.
+//!   shows. A row another step draws is counted as not built, by screen,
+//!   and is never counted as compared: since step 24 drew screen 4's usage
+//!   line, there is none.
 //! - **A dialog is the application's own frame** (screens 2a to 2d): the
 //!   real [`cortex_tui::app::App`], given the request by a scripted core in
 //!   a window of the screen's size, draws it, so that its answers, their
@@ -49,7 +49,7 @@ const COMPARED: [(&str, usize); 19] = [
     ("2d", 8),
     ("3a", 11),
     ("3b", 11),
-    ("4", 42),
+    ("4", 43),
     ("5", 17),
     ("6", 42),
     ("7a", 40),
@@ -548,16 +548,25 @@ fn a_changed_colour_weight_or_background_is_found_and_an_unseen_one_is_not() {
 
 #[test]
 fn a_skipped_row_is_never_counted_as_compared() {
-    // A screen whose every row is built compares them all, and one with
-    // rows of later steps counts each of those once.
+    // A screen whose every row is built compares them all (since step 24,
+    // every screen), and one with a row of a later step counts it once and
+    // compares the rest: screen 4 with its usage line taken for one.
     let whole = compare(SPECS[0], BACKGROUNDS[0]);
     assert!(whole.not_built.is_empty(), "screen 0 is built whole");
     assert_eq!(whole.compared, whole.rows);
     let spec = SPECS.iter().find(|spec| spec.id == "4").copied().unwrap();
-    let outcome = compare(spec, BACKGROUNDS[0]);
+    let mut screen = compose(spec, BACKGROUNDS[0].1);
+    let usage = screen
+        .rows
+        .iter()
+        .position(|row| matches!(row, Row::Built(line) if line.text().contains("fast tier")))
+        .expect("screen 4's usage line");
+    screen.rows[usage] = Row::NotBuilt("a later step's row");
+    let outcome = compare_screen(spec, BACKGROUNDS[0].0, &screen);
     let not_built: usize = outcome.not_built.iter().map(|(_, count)| count).sum();
-    assert_eq!(not_built, 1, "screen 4's limit line, the usage panel's");
+    assert_eq!(not_built, 1, "the row taken for a later step's");
     assert_eq!(outcome.compared, outcome.rows - 1);
+    assert!(outcome.differences.is_empty(), "the rest compared alike");
     // Every depth is drawn as the reference is.
     assert!(SPECS.iter().any(|spec| spec.depth == ColorDepth::Mono));
 }
