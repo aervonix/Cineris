@@ -98,6 +98,11 @@ enum Pending {
     /// result is the panel's while the session is the one open, and its
     /// error is said.
     Panel { session: SessionId, panel: u64 },
+    /// `/reload`, or `/profile` with a name: what it did is said from its
+    /// result, which holds what its `config.changed` events say.
+    Reload { profile: Option<String> },
+    /// `/profile` with no name: the profiles this session's files define.
+    Profiles(SessionId),
 }
 
 /// The last key read, for the dialogs' rules (`super::dialog`).
@@ -109,6 +114,22 @@ struct LastKey {
     typing: bool,
 }
 
+/// What a reload did, as lines to say: the keys in force now, the core's
+/// notes, then each error.
+fn reload_lines(applied: &[String], errors: &[String], notes: &[String]) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !applied.is_empty() {
+        let keys: Vec<String> = applied.iter().map(|key| format!("`{key}`")).collect();
+        lines.push(format!(
+            "The configuration was read again: {} in force now.",
+            keys.join(", ")
+        ));
+    }
+    lines.extend(notes.iter().cloned());
+    lines.extend(errors.iter().cloned());
+    lines
+}
+
 /// The most items of a stored session's history read at a time.
 const HISTORY_PAGE: u32 = 500;
 
@@ -118,7 +139,14 @@ const COMMANDS: &[(&str, &str)] = &[
         "compact",
         "Compact the conversation now, keeping what you name",
     ),
-    ("config", "The configuration in effect"),
+    (
+        "config",
+        "The configuration in effect, and where each value came from",
+    ),
+    (
+        "context",
+        "What the last request held, by part, against the window",
+    ),
     ("copy", "Copy the last answer to the clipboard"),
     ("effort", "Choose the model's effort, and fast mode"),
     ("help", "The commands and the keys"),
@@ -127,11 +155,17 @@ const COMMANDS: &[(&str, &str)] = &[
     ("new", "Start a new session"),
     ("permissions", "The approvals stored here, to remove"),
     ("plan", "The plan: skip, reword, add or move its items"),
+    (
+        "profile",
+        "Load this session with a settings profile, or list them",
+    ),
     ("quit", "Quit"),
+    ("reload", "Read the configuration files again"),
     ("sessions", "Switch to another session of this workspace"),
     ("status", "The session's model, mode, sandbox and limits"),
     ("theme", "Choose the colours, for this run"),
     ("undo", "Undo the last turn, its files put back"),
+    ("verify", "Run the project's checks now"),
     ("view", "Open the session in a full-screen view"),
 ];
 
@@ -140,12 +174,8 @@ const COMMANDS: &[(&str, &str)] = &[
 const NOT_YET: &[&str] = &[
     "rewind",
     "lease",
-    "context",
     "usage",
     "project",
-    "profile",
-    "verify",
-    "reload",
     "extend",
     "mcp",
     "extensions",
@@ -222,6 +252,9 @@ pub struct App {
     session: Option<SessionState>,
     models: Vec<ModelInfo>,
     usage: Option<SessionUsage>,
+    /// The profile this session was loaded with by `/profile`, while it is
+    /// the one open.
+    profile: Option<String>,
     dialogs: VecDeque<Dialog>,
     /// When the running turn began, from this app's point of view.
     running: Option<Instant>,
@@ -367,6 +400,7 @@ impl App {
             session: None,
             models: Vec::new(),
             usage: None,
+            profile: None,
             dialogs: VecDeque::new(),
             running: None,
             last_interrupt: None,
@@ -1216,8 +1250,15 @@ impl App {
             (Pending::Permissions, Ok(OpResult::PermissionsList(list))) => {
                 self.permissions_listed(list.approvals);
             }
+            (Pending::Profiles(id), _) if !self.is_open(&id) => {}
             (Pending::Config(shown, _), Ok(OpResult::ConfigGet(result))) => {
-                self.config_shown(shown, &result.config);
+                self.config_shown(shown, &result.config, &result.origins);
+            }
+            (Pending::Profiles(_), Ok(OpResult::ConfigGet(result))) => {
+                self.profiles_listed(&result.config);
+            }
+            (Pending::Reload { profile }, Ok(OpResult::ConfigReload(result))) => {
+                self.reloaded(&result, profile);
             }
             (Pending::Set(_), Ok(OpResult::SessionSet(result))) => {
                 self.session = Some(result.session);
@@ -1315,6 +1356,7 @@ impl App {
         self.had_turn = false;
         self.last_cost = None;
         self.usage = None;
+        self.profile = None;
         // As the command line asked for the first: its settings, and kept
         // in memory only if it was.
         let (settings, ephemeral) = self.fresh.clone();
@@ -1640,6 +1682,20 @@ impl App {
                 }
             }
             Event::UsageUpdated(updated) => self.usage = Some(updated.usage.clone()),
+            // What a reload changed, found by another client's reload or by
+            // the core's look before a turn. This application's own
+            // `/reload` says it from its result, once.
+            Event::ConfigChanged(changed) => {
+                let asked = self
+                    .pending
+                    .values()
+                    .any(|pending| matches!(pending, Pending::Reload { .. }));
+                if !asked {
+                    for line in reload_lines(&changed.applied, &changed.errors, &changed.notes) {
+                        self.say(&line);
+                    }
+                }
+            }
             Event::Notice(notice) => {
                 if let Some(message) = notice_text(notice) {
                     self.transcript.push(Block::Notice(message));
@@ -1669,6 +1725,23 @@ impl App {
 
     pub(super) fn say(&mut self, text: &str) {
         self.transcript.push(Block::Notice(text.to_owned()));
+    }
+
+    /// What a reload did, said: the keys in force now, the core's notes
+    /// (what waits, and for what), and what was wrong.
+    fn reloaded(
+        &mut self,
+        result: &cortex_protocol::methods::ConfigReloadResult,
+        profile: Option<String>,
+    ) {
+        if let Some(profile) = profile
+            && result.errors.is_empty()
+        {
+            self.profile = Some(profile);
+        }
+        for line in reload_lines(&result.applied, &result.errors, &result.notes) {
+            self.say(&line);
+        }
     }
 
     fn error(&mut self, error: &ErrorData) {

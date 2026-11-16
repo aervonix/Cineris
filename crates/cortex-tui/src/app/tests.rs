@@ -33,6 +33,7 @@ use crate::testkit::{
     opened_with, session, shown_dialog,
 };
 
+mod commands;
 mod dialogs;
 mod files;
 mod output;
@@ -2299,6 +2300,7 @@ fn help_lists_every_command_and_the_keys() {
     for name in [
         "compact",
         "config",
+        "context",
         "copy",
         "effort",
         "help",
@@ -2306,11 +2308,14 @@ fn help_lists_every_command_and_the_keys() {
         "model",
         "new",
         "permissions",
+        "profile",
         "quit",
+        "reload",
         "sessions",
         "status",
         "theme",
         "undo",
+        "verify",
         "view",
     ] {
         assert!(all.contains(&format!("/{name}")), "/{name}: {all}");
