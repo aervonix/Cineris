@@ -15,7 +15,9 @@
 # the shipped binary and judge it count: `shipped.rs` (how it is built),
 # `nonblocking.rs` (`size`, the budgets and the verdict), `steps.rs` (how
 # cargo is run), `workspace.rs` (the workspace and target folders) and
-# `rules/home_paths.rs` (the home-path check). Anything else can.
+# `rules/home_paths.rs` (the home-path check). So do the workflows that hold
+# the size jobs (`ci.yml`, `main.yml`) and this action, so that a change to
+# the job runs it on its own pull request. Anything else can.
 #
 # The job that uses this must check out with `fetch-depth: 2`, so that the
 # pull request's merge commit has its parents.
@@ -62,6 +64,10 @@ runs:
                 # The files the shipped build and its verdict go through.
                 xtask/src/shipped.rs | xtask/src/nonblocking.rs | xtask/src/steps.rs | \
                 xtask/src/workspace.rs | xtask/src/rules/home_paths.rs) code=true; binary=true ;;
+                # The size job itself and this action: a change to them is run on
+                # its own pull request before it merges.
+                .github/workflows/ci.yml | .github/workflows/main.yml | \
+                .github/actions/changes/*) code=true; binary=true ;;
                 mutations/* | xtask/* | .github/workflows/*) code=true ;;
                 *) code=true; binary=true ;;
               esac

@@ -54,6 +54,28 @@ fn is_main(info: &RunInfo) -> bool {
     info.branch == "main"
 }
 
+/// The jobs of the `ci` workflow that block no merge, by the start of their
+/// names: the pull request's binary size (`pr-size-linux`,
+/// `pr-size-windows`), which starts only after the required jobs. A test
+/// reads `.github/workflows/ci.yml` and fails on a job that is in neither
+/// this list nor `BLOCKING`.
+pub(crate) const NON_BLOCKING: [&str; 1] = ["pr-size"];
+
+/// The `ci` workflow's jobs that a merge waits for, by the start of their
+/// names (`lint-linux`, `test-windows`, …): what the test of the workflow
+/// checks against, since every job not in [`NON_BLOCKING`] is taken to block.
+#[cfg(test)]
+const BLOCKING: [&str; 2] = ["lint", "test"];
+
+/// Whether a job of a `ci` run blocks a merge. A job of no known kind is
+/// taken as one that does, so that it is never left out of sight.
+pub(crate) fn blocks(job: &str) -> bool {
+    !NON_BLOCKING.iter().any(|kind| {
+        job.strip_prefix(kind)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
+    })
+}
+
 /// A run's column in the jobs' table.
 fn job_label(info: &RunInfo) -> String {
     if is_main(info) {
@@ -125,9 +147,16 @@ pub(crate) fn pr_section(runs: &[Measured], pr: Option<u64>) -> String {
             }
         }
     }
-    names.sort_by_key(|name| (name.contains("windows"), *name));
+    // The jobs that block a merge first, Linux's before Windows'; then the
+    // ones that block nothing, marked, so that their minutes are never read
+    // as the five-minute jobs'.
+    names.sort_by_key(|name| (!blocks(name), name.contains("windows"), *name));
     for name in names {
-        let _ = write!(text, "| `{name}` |");
+        if blocks(name) {
+            let _ = write!(text, "| `{name}` |");
+        } else {
+            let _ = write!(text, "| `{name}` (blocks nothing) |");
+        }
         for measured in runs {
             let took = measured
                 .info
@@ -973,6 +1002,7 @@ mod tests {
             event: "push".to_owned(),
             date: "2026-11-15".to_owned(),
             jobs: vec![
+                ("pr-size-linux".to_owned(), Some(240)),
                 ("test-windows".to_owned(), Some(190)),
                 ("lint-linux".to_owned(), Some(44)),
                 ("test-linux".to_owned(), None),
@@ -990,6 +1020,44 @@ mod tests {
         cases.push(case("cortex-core::it", "a::b", integration));
         cases.push(case("cortex-cli::system", "sys_c", system));
         cases
+    }
+
+    #[test]
+    fn a_job_blocks_unless_it_is_of_a_kind_that_blocks_nothing() {
+        assert!(!blocks("pr-size-linux"));
+        assert!(!blocks("pr-size-windows"));
+        assert!(!blocks("pr-size"));
+        assert!(blocks("pr-sizes"));
+        assert!(blocks("lint-linux"));
+        assert!(blocks("test-windows"));
+        assert!(blocks("a-job-not-known-yet"));
+    }
+
+    /// Every job of `ci.yml` is in one of the two lists, so that a job
+    /// added to the workflow is placed in `ci-times`' table on purpose.
+    #[test]
+    fn every_job_of_the_ci_workflow_is_known_as_blocking_or_not() {
+        let workflow = std::fs::read_to_string(
+            crate::workspace::root().join(".github/workflows/ci.yml"),
+        )
+        .unwrap();
+        let after_jobs = workflow
+            .split_once("\njobs:\n")
+            .map(|(_, rest)| rest)
+            .unwrap();
+        let ids: Vec<&str> = after_jobs
+            .lines()
+            .filter_map(|line| line.strip_prefix("  ")?.strip_suffix(':'))
+            .filter(|id| !id.starts_with([' ', '#']))
+            .collect();
+        assert!(ids.contains(&"pr-size"), "{ids:?}");
+        for id in ids {
+            assert!(
+                BLOCKING.contains(&id) || NON_BLOCKING.contains(&id),
+                "the `ci` workflow's job `{id}` is in neither records::BLOCKING nor \
+                 records::NON_BLOCKING"
+            );
+        }
     }
 
     #[test]
@@ -1020,9 +1088,13 @@ mod tests {
             text.contains("| Job | Main, `8c818f3` | The PR at `99f3307` |\n|---|---|---|\n"),
             "{text}"
         );
-        // Linux's jobs first, a job that did not end as a dash.
+        // Linux's jobs first, a job that did not end as a dash, and the job
+        // that blocks nothing last, marked.
         assert!(
-            text.contains("| `lint-linux` | 44 s | 44 s |\n| `test-linux` | — | — |\n| `test-windows` | 190 s | 190 s |\n"),
+            text.contains(
+                "| `lint-linux` | 44 s | 44 s |\n| `test-linux` | — | — |\n| `test-windows` | 190 \
+                 s | 190 s |\n| `pr-size-linux` (blocks nothing) | 240 s | 240 s |\n"
+            ),
             "{text}"
         );
         assert!(
