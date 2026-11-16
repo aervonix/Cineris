@@ -43,6 +43,7 @@ use windows_sys::Win32::Security::{
     TokenIntegrityLevel,
 };
 use windows_sys::Win32::Storage::FileSystem::{READ_CONTROL, SECURITY_ANONYMOUS};
+use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
 use windows_sys::Win32::System::SystemServices::SE_GROUP_INTEGRITY;
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -65,6 +66,19 @@ fn name(place: &Place) -> &str {
 
 fn bind(place: &Place) -> io::Result<Listener> {
     Listener::bind(place, &ListenOptions::new(false))
+}
+
+/// A listener whose pipe admits everyone at any integrity, so that the
+/// check of a connection's token alone keeps a client out.
+fn bind_widened(place: &Place) -> Listener {
+    Listener::bind(
+        place,
+        &ListenOptions {
+            own_folder: false,
+            widen_access_for_tests: true,
+        },
+    )
+    .unwrap()
 }
 
 /// A runtime to accept on, for the tests that take connections one by one.
@@ -125,6 +139,28 @@ fn client(pipe: File) -> Lines {
     )
 }
 
+/// Opens the pipe and asks `initialize`, from the calling thread: Windows
+/// gives the server the token of the thread that wrote what it read.
+fn said(place: &Place) -> io::Result<File> {
+    let mut pipe = open(place)?;
+    pipe.write_all(&initialize_line())?;
+    Ok(pipe)
+}
+
+/// Waits, for two seconds at most, until an instance of the pipe waits
+/// for a client: one the server makes while it handles another.
+fn wait_for_instance(place: &Place) {
+    let name = wide(name(place));
+    // SAFETY: `name` is zero-terminated and alive for the call.
+    let waited = unsafe { WaitNamedPipeW(name.as_ptr(), 2_000) };
+    assert_ne!(
+        waited,
+        0,
+        "no instance waited: {}",
+        io::Error::last_os_error()
+    );
+}
+
 /// The line that asks `initialize`.
 fn initialize_line() -> Vec<u8> {
     let mut line = serde_json::to_vec(&serde_json::json!({"jsonrpc": "2.0", "id": 1,
@@ -135,9 +171,30 @@ fn initialize_line() -> Vec<u8> {
 }
 
 /// Whether the server end of `pipe` is closed with nothing written to it.
-fn closed_unanswered(pipe: &mut File) -> bool {
-    let mut buffer = [0; 64];
-    matches!(pipe.read(&mut buffer), Ok(0) | Err(_))
+/// The runtime the server's end was in is driven meanwhile, as a server's
+/// is: tokio's pipe, dropped with a read pending, lets its handle go only
+/// once the runtime has seen the read cancelled.
+fn closed_unanswered(runtime: &tokio::runtime::Runtime, pipe: &mut File) -> bool {
+    std::thread::scope(|scope| {
+        let (read, closed) = tokio::sync::oneshot::channel();
+        scope.spawn(move || {
+            let mut buffer = [0; 64];
+            let _ = read.send(matches!(pipe.read(&mut buffer), Ok(0) | Err(_)));
+        });
+        runtime.block_on(closed).unwrap()
+    })
+}
+
+/// A list of a descriptor's text (`P(A;;FA;;;LA)`): its flags, and each
+/// entry's fields.
+fn entries(list: &str) -> (&str, Vec<Vec<&str>>) {
+    let (flags, rest) = list.split_at(list.find('(').unwrap_or(list.len()));
+    let entries = rest
+        .split(')')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| entry.trim_start_matches('(').split(';').collect())
+        .collect();
+    (flags, entries)
 }
 
 /// What a refused connection's reason was, or a panic naming what came.
@@ -480,7 +537,7 @@ fn a_name_in_use_is_refused() {
 
 /// The pipe is owned by the user, its access list is protected and allows
 /// the user alone, and its label is the server's own integrity, with no
-/// write up.
+/// write up and no read up.
 #[test]
 fn the_pipe_admits_the_user_alone_at_the_servers_integrity() {
     let place = pipe_of("security");
@@ -495,45 +552,96 @@ fn the_pipe_admits_the_user_alone_at_the_servers_integrity() {
         .split_once("S:")
         .unwrap_or_else(|| panic!("no label: {text}"));
     assert_eq!(long_form(owner), user, "the owner: {text}");
-    assert_eq!(
-        list,
-        format!("P(A;;FA;;;{user})"),
-        "the access list: {text}"
+    let (flags, allowed) = entries(list);
+    assert!(
+        flags.contains('P'),
+        "the access list is not protected: {text}"
     );
-    let level = label
-        .strip_prefix("(ML;;NW;;;")
-        .and_then(|rest| rest.strip_suffix(')'))
-        .unwrap_or_else(|| panic!("not one label with no write up: {text}"));
-    assert_eq!(long_form(level), own_level(), "the label's level: {text}");
+    let [entry] = allowed.as_slice() else {
+        panic!("not one entry: {text}");
+    };
+    assert_eq!(entry[..5], ["A", "", "FA", "", ""], "the entry: {text}");
+    assert_eq!(long_form(entry[5]), user, "the entry's user: {text}");
+    let (_, labels) = entries(label);
+    let [label] = labels.as_slice() else {
+        panic!("not one label: {text}");
+    };
+    assert_eq!(label[..5], ["ML", "", "NWNR", "", ""], "the label: {text}");
+    assert_eq!(
+        long_form(label[5]),
+        own_level(),
+        "the label's level: {text}"
+    );
 }
 
-/// A client that has written nothing is checked and admitted: the server
-/// can take a client's token as soon as it connects, with nothing read from
-/// it first. And the next instance is there before a connection is handed
-/// on: a second client opens at once, before the server accepts again.
+/// A client that has sent nothing cannot be checked yet, since Windows
+/// gives the server a client's token only once it has read from it, and it
+/// holds up no other: a second client, which opens on the instance the
+/// server made when the first connected, is admitted, with what it sent
+/// first; and an instance, made when the second was handed on, waits for a
+/// third client before the server is asked for another.
 #[test]
-fn a_silent_client_is_admitted_and_the_name_never_lapses() {
+fn a_silent_client_holds_up_no_other_and_the_name_never_lapses() {
     let place = pipe_of("silent");
     let mut listener = bind(&place).unwrap();
     let runtime = runtime();
-    let _first = open(&place).expect("the first client opens");
-    let accepted = runtime.block_on(listener.accept()).unwrap();
-    let Accepted::Client { peer, .. } = &accepted else {
-        panic!("a silent client of the user's was refused: {accepted:?}");
+    let _silent = open(&place).expect("the first client opens");
+    let accepted = std::thread::scope(|scope| {
+        let accepting = scope.spawn(|| runtime.block_on(listener.accept()).unwrap());
+        wait_for_instance(&place);
+        let mut second = open(&place).expect("the second client opens");
+        second.write_all(b"second\n").unwrap();
+        accepting.join().unwrap()
+    });
+    let Accepted::Client {
+        mut transport,
+        peer,
+    } = accepted
+    else {
+        panic!("the second client was refused: {accepted:?}");
     };
     assert!(peer.starts_with("pid ") && peer != "pid unknown", "{peer}");
-    let _second = open(&place).expect("no instance waited after a connection was handed on");
-    let again = runtime.block_on(listener.accept()).unwrap();
-    assert!(matches!(again, Accepted::Client { .. }), "{again:?}");
+    let first = runtime.block_on(transport.input.recv());
+    assert_eq!(
+        first.map(Result::unwrap).as_deref(),
+        Some(&b"second\n"[..]),
+        "what the client sent first"
+    );
+    let _third = open(&place).expect("no instance waited after a connection was handed on");
 }
 
-/// A client below the server's integrity cannot open the pipe to write (its
-/// label); one that opens it to read only is refused by the check of its
-/// token, and closed with nothing sent.
+/// Clients that send nothing cannot hold the pipe's instances: one more
+/// than the server lets wait (16) closes the one that has waited longest.
+#[test]
+fn the_longest_silent_client_is_closed_to_make_room() {
+    let place = pipe_of("crowd");
+    let mut listener = bind(&place).unwrap();
+    let runtime = runtime();
+    let (accepted, mut silent) = std::thread::scope(|scope| {
+        let accepting = scope.spawn(|| runtime.block_on(listener.accept()).unwrap());
+        let silent: Vec<File> = (0..17)
+            .map(|_| {
+                wait_for_instance(&place);
+                open(&place).expect("a silent client opens")
+            })
+            .collect();
+        (accepting.join().unwrap(), silent)
+    });
+    let why = refused(accepted);
+    assert!(why.contains("sent nothing"), "{why}");
+    assert!(
+        closed_unanswered(&runtime, &mut silent[0]),
+        "the oldest was not closed"
+    );
+}
+
+/// A client below the server's integrity cannot open the pipe, to write or
+/// to read (its label). Where the label lets it in, on the widened pipe,
+/// the check of its token refuses it, and closes it with nothing sent.
 #[test]
 fn a_client_below_the_servers_integrity_is_kept_out() {
     let place = pipe_of("integrity");
-    let mut listener = bind(&place).unwrap();
+    let _listener = bind(&place).unwrap();
     let low = own_token_at(4096);
     let (writing, reading) = as_token(&low, || {
         (
@@ -541,17 +649,21 @@ fn a_client_below_the_servers_integrity_is_kept_out() {
             OpenOptions::new().read(true).open(name(&place)),
         )
     });
-    let denied = writing.unwrap_err();
-    assert_eq!(
-        denied.raw_os_error(),
-        Some(ERROR_ACCESS_DENIED.cast_signed()),
-        "{denied}"
-    );
-    let mut reading = reading.expect("a lower client may open the pipe to read");
+    for denied in [writing.unwrap_err(), reading.unwrap_err()] {
+        assert_eq!(
+            denied.raw_os_error(),
+            Some(ERROR_ACCESS_DENIED.cast_signed()),
+            "{denied}"
+        );
+    }
+
+    let widened = pipe_of("integrity-widened");
+    let mut listener = bind_widened(&widened);
+    let mut pipe = as_token(&low, || said(&widened)).expect("the widened pipe lets it in");
     let runtime = runtime();
     let why = refused(runtime.block_on(listener.accept()).unwrap());
     assert!(why.contains("integrity"), "{why}");
-    assert!(closed_unanswered(&mut reading));
+    assert!(closed_unanswered(&runtime, &mut pipe));
 }
 
 /// A client whose token is restricted is refused by the check of its token,
@@ -561,12 +673,11 @@ fn a_restricted_client_is_refused() {
     let place = pipe_of("restricted");
     let mut listener = bind(&place).unwrap();
     let restricted = own_token_restricted();
-    let mut pipe = as_token(&restricted, || open(&place)).expect("a restricted client opens");
-    pipe.write_all(&initialize_line()).unwrap();
+    let mut pipe = as_token(&restricted, || said(&place)).expect("a restricted client opens");
     let runtime = runtime();
     let why = refused(runtime.block_on(listener.accept()).unwrap());
     assert!(why.contains("restricted"), "{why}");
-    assert!(closed_unanswered(&mut pipe));
+    assert!(closed_unanswered(&runtime, &mut pipe));
 }
 
 /// A client that allows the server only anonymous impersonation has no
@@ -585,7 +696,7 @@ fn an_anonymous_client_is_refused() {
     let runtime = runtime();
     let why = refused(runtime.block_on(listener.accept()).unwrap());
     assert!(why.contains("token"), "{why}");
-    assert!(closed_unanswered(&mut pipe));
+    assert!(closed_unanswered(&runtime, &mut pipe));
 }
 
 // ----------------------------------------------------------- a second user
@@ -691,18 +802,10 @@ fn sys_another_user_cannot_open_the_pipe() {
     done.recv().unwrap();
 
     let widened = pipe_of("other-user-widened");
-    let mut listener = Listener::bind(
-        &widened,
-        &ListenOptions {
-            own_folder: false,
-            widen_access_for_tests: true,
-        },
-    )
-    .unwrap();
-    let mut pipe = as_token(&token, || open(&widened)).expect("everyone may open the widened pipe");
-    pipe.write_all(&initialize_line()).unwrap();
+    let mut listener = bind_widened(&widened);
+    let mut pipe = as_token(&token, || said(&widened)).expect("everyone may open the widened pipe");
     let runtime = runtime();
     let why = refused(runtime.block_on(listener.accept()).unwrap());
     assert!(why.contains("another user"), "{why}");
-    assert!(closed_unanswered(&mut pipe));
+    assert!(closed_unanswered(&runtime, &mut pipe));
 }

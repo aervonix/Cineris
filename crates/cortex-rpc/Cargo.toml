@@ -59,13 +59,15 @@ cortex-tools.workspace = true
 # The pipe's tests make the clients it must refuse: a token below the
 # server's integrity, a restricted one, a second user logged on, each
 # impersonated by a thread of the test; and they read the pipe's security
-# back. The integrity's flag is `Win32_System_SystemServices`'.
+# back, and wait for an instance of the pipe (`Win32_System_Pipes`). The
+# integrity's flag is `Win32_System_SystemServices`'.
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
 ] }
