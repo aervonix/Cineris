@@ -5,8 +5,9 @@ use cortex_testkit::scratch::git;
 
 use super::{
     CommitInfo, Git, Holds, Kind, RecordsRequest, RewriteRequest, backup_name, batch_check,
-    batch_objects, chain_after, commit_records, merge_tree_result, move_transaction,
-    not_from_the_branch, record_path, rewrite, tree_refusal, undo, used_elsewhere,
+    batch_objects, built_on, chain_after, commit_records, merge_tree_result, move_transaction,
+    not_from_the_branch, record_path, records_transaction, rewrite, tree_refusal, undo,
+    used_elsewhere,
 };
 
 fn strings(words: &[&str]) -> Vec<String> {
@@ -75,7 +76,20 @@ fn a_request_is_read_and_what_it_lacks_is_said() {
             branch: "step-24".to_owned(),
             message: "Record the CI times".to_owned(),
             files: strings(&["docs/steps/24/ci.md"]),
+            replace: false,
         })
+    );
+    assert!(
+        RecordsRequest::parse(&strings(&[
+            "--branch",
+            "b",
+            "-m",
+            "x",
+            "--replace",
+            "docs/steps/1/a.md"
+        ]))
+        .unwrap()
+        .replace
     );
     for (words, said) in [
         (&["-m", "x", "docs/steps/1/a.md"][..], "--branch BRANCH"),
@@ -250,28 +264,44 @@ fn what_each_command_prints_and_gives_git_is_what_it_must_be() {
         "{said}"
     );
     assert!(tree_refusal(Kind::ToEnd, "1", "2").contains("the branch's tree as it is"));
-    // A record whose copy on the branch is not the one HEAD has.
+    // commit-records' move: only from the commit read at the start.
     assert_eq!(
-        not_from_the_branch("d.md", "b", Some("aa"), Some("aa")),
-        None
+        records_transaction("refs/heads/b", "new", "old"),
+        "update refs/heads/b new old\n"
     );
-    assert_eq!(not_from_the_branch("d.md", "b", None, None), None);
-    let said = not_from_the_branch(
-        "d.md",
-        "b",
-        Some("1111111111111111"),
-        Some("2222222222222222"),
-    )
-    .unwrap();
+    // A file built on the branch's copy: its lines all there, in order,
+    // whatever was added between them, and whatever the line ends.
+    let theirs = "# CI\n\nPR one's times\n";
+    assert!(built_on(theirs, theirs));
+    assert!(built_on(theirs, "# CI\n\nPR one's times\nPR two's times\n"));
+    assert!(built_on(
+        theirs,
+        "# CI\r\n\r\nnew first\r\nPR one's times\r\n"
+    ));
+    assert!(built_on("", "anything\n"));
     assert!(
-        said.contains("`d.md` on b (111111111111) is not the copy HEAD has (222222222222)")
-            && said.contains("git show b:d.md > d.md"),
+        !built_on(theirs, "# CI\n\nPR two's times\n"),
+        "a line dropped"
+    );
+    assert!(
+        !built_on(theirs, "PR one's times\n# CI\n\n"),
+        "out of order"
+    );
+    // What may be committed: no copy on the branch, the branch's copy HEAD's,
+    // built on it, or --replace.
+    let refuse = |theirs: Option<(&str, &str)>, ours: Option<&str>, working: &str, replace| {
+        not_from_the_branch("d.md", "b", theirs, ours, working, replace)
+    };
+    assert_eq!(refuse(None, Some("22"), "x\n", false), None);
+    assert_eq!(refuse(Some(("11", "a\n")), Some("11"), "x\n", false), None);
+    assert_eq!(refuse(Some(("11", "a\n")), None, "a\nb\n", false), None);
+    assert_eq!(refuse(Some(("11", "a\n")), None, "b\n", true), None);
+    let said = refuse(Some(("1111111111111111", "a\n")), Some("22"), "b\n", false).unwrap();
+    assert!(
+        said.contains("`d.md` on b (111111111111) has lines the file here does not")
+            && said.contains("git show b:d.md > d.md")
+            && said.contains("--replace"),
         "{said}"
-    );
-    assert!(
-        not_from_the_branch("d.md", "b", None, Some("2222"))
-            .unwrap()
-            .contains("(none)")
     );
 }
 
@@ -481,6 +511,7 @@ fn sys_records_reach_a_branch_not_checked_out_and_a_fold_rewrites_only_the_curre
         branch: branch.to_owned(),
         message: "Record the CI times".to_owned(),
         files: strings(&["docs/steps/24/ci.md"]),
+        replace: false,
     };
     let made = commit_records(&git_here, &request("records")).unwrap();
     assert!(
@@ -539,11 +570,18 @@ fn sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_lef
     git(&repo, &["commit", "--quiet", "-m", "base"]);
     git(&repo, &["branch", "step-24"]);
     git(&repo, &["branch", "reb"]);
-    // `diverged`: a branch whose ci.md is not the one main has.
+    // `diverged`: a branch whose ci.md is not the one main has, and with a
+    // record main has not.
     std::fs::write(repo.join("docs/steps/24/ci.md"), "theirs\n").unwrap();
-    git(&repo, &["commit", "--quiet", "-am", "theirs"]);
+    std::fs::create_dir_all(repo.join("docs/steps/26")).unwrap();
+    std::fs::write(repo.join("docs/steps/26/ci.md"), "PR one's times\n").unwrap();
+    git(&repo, &["add", "--all"]);
+    git(&repo, &["commit", "--quiet", "-m", "theirs"]);
     git(&repo, &["branch", "diverged"]);
     git(&repo, &["reset", "--quiet", "--hard", "HEAD~1"]);
+    // `@{-1}` names `previous`.
+    git(&repo, &["switch", "--quiet", "-c", "previous"]);
+    git(&repo, &["switch", "--quiet", "main"]);
     git(
         &repo,
         &[
@@ -582,6 +620,7 @@ fn sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_lef
         branch: branch.to_owned(),
         message: "Record the CI times".to_owned(),
         files: strings(files),
+        replace: false,
     };
     let records = ["docs/steps/24/ci.md", "docs/steps/24/answered.md"];
     let git_here = isolated(&repo);
@@ -625,53 +664,109 @@ fn sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_lef
     };
     assert_eq!(without(&state(&repo)), without(&before));
 
-    // What is refused, each before anything is written.
     let refused = |branch: &str, files: &[&str], said: &str| {
         let error = commit_records(&git_here, &request(branch, files)).unwrap_err();
         assert!(error.contains(said), "{branch} {files:?}: {error}");
     };
-    // Run again: the branch now has the times, and HEAD the old copy.
-    refused("step-24", &records, "is not the copy HEAD has");
-    refused("main", &["docs/steps/24/kept.md"], "(checked out there)");
-    refused("step-24", &["docs/steps/24/kept.md"], "nothing changed");
-    refused("main", &records, "(checked out there)");
-    refused("held", &records, "held-worktree");
-    refused("reb", &records, "reb-worktree (being rebased there)");
-    refused("no-such", &records, "no branch `no-such`");
-    refused("step-24~1", &records, "`step-24~1` is not a branch's name");
+    // Run again, as `ci-times --write` after a second push: the branch has
+    // the first times and HEAD the old copy. As it is, nothing changed; with
+    // a section added, it is committed.
+    refused("step-24", &records, "nothing changed");
+    std::fs::write(
+        repo.join("docs/steps/24/ci.md"),
+        "the times\nthe second push's times\n",
+    )
+    .unwrap();
+    let again = commit_records(&git_here, &request("step-24", &records[..1])).unwrap();
+    assert_eq!(again.old, made.new);
+
+    // The refusal's advice, followed: `diverged` has a ci.md HEAD has not;
+    // made from its copy with a section added, it is committed.
+    std::fs::create_dir_all(repo.join("docs/steps/26")).unwrap();
+    std::fs::write(
+        repo.join("docs/steps/26/ci.md"),
+        "PR one's times\nPR two's times\n",
+    )
+    .unwrap();
+    commit_records(&git_here, &request("diverged", &["docs/steps/26/ci.md"])).unwrap();
+    // A file that dropped the branch's lines is refused, and committed with
+    // --replace.
     refused(
         "diverged",
         &records[..1],
         "`docs/steps/24/ci.md` on diverged (",
     );
-    // A link: to a file outside, and through a folder that leads out.
+    commit_records(
+        &git_here,
+        &RecordsRequest {
+            replace: true,
+            ..request("diverged", &records[..1])
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        git(&repo, &["show", "diverged:docs/steps/24/ci.md"]),
+        "the times\nthe second push's times"
+    );
+
+    // What is refused, each before anything is written.
+    let without = |text: &str| {
+        text.lines()
+            .filter(|line| {
+                !line.starts_with("refs/heads/step-24 ")
+                    && !line.starts_with("refs/heads/diverged ")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let before = state(&repo);
+    refused("main", &["docs/steps/24/kept.md"], "(checked out there)");
+    refused("step-24", &["docs/steps/24/kept.md"], "nothing changed");
+    refused("held", &records, "held-worktree");
+    refused("reb", &records, "reb-worktree (being rebased there)");
+    refused("no-such", &records, "no branch `no-such`");
+    refused("step-24~1", &records, "`step-24~1` is not a branch's name");
+    refused("@{-1}", &records, "`@{-1}` stands for `previous`");
+    // A link: to a file outside, through a folder that leads out, and
+    // through a folder that leads elsewhere inside the repository.
     let outside = scratch.join("outside");
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(outside.join("secret.md"), "a secret\n").unwrap();
-    std::os::unix::fs::symlink(
-        outside.join("secret.md"),
-        repo.join("docs/steps/24/link.md"),
-    )
-    .unwrap();
-    std::os::unix::fs::symlink(&outside, repo.join("docs/steps/25")).unwrap();
+    std::fs::create_dir_all(repo.join("xtask")).unwrap();
+    std::fs::write(repo.join("xtask/notes.md"), "not a record\n").unwrap();
+    let links = [
+        (outside.join("secret.md"), "docs/steps/24/link.md"),
+        (outside.clone(), "docs/steps/25"),
+        (std::path::PathBuf::from("../../xtask"), "docs/steps/99"),
+    ];
+    for (target, link) in &links {
+        std::os::unix::fs::symlink(target, repo.join(link)).unwrap();
+    }
     refused(
         "step-24",
         &["docs/steps/24/link.md"],
-        "is not a regular file",
+        "goes through a link (`docs/steps/24/link.md`)",
     );
     refused(
         "step-24",
         &["docs/steps/25/secret.md"],
-        "through a link that leads out",
+        "goes through a link (`docs/steps/25`)",
     );
-    std::fs::remove_file(repo.join("docs/steps/24/link.md")).unwrap();
-    std::fs::remove_file(repo.join("docs/steps/25")).unwrap();
+    refused(
+        "step-24",
+        &["docs/steps/99/notes.md"],
+        "goes through a link (`docs/steps/99`)",
+    );
+    for (_, link) in &links {
+        std::fs::remove_file(repo.join(link)).unwrap();
+    }
+    std::fs::remove_dir_all(repo.join("xtask")).unwrap();
     refused(
         "step-24",
         &["docs/steps/24/gone.md"],
         "not in the working tree",
     );
-    assert_eq!(git(&repo, &["rev-parse", "step-24"]), made.new);
+    assert_eq!(git(&repo, &["rev-parse", "step-24"]), again.new);
     assert_eq!(without(&state(&repo)), without(&before));
 }
 
