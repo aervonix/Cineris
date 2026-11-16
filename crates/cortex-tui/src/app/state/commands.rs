@@ -11,9 +11,12 @@
 use std::time::Instant;
 
 use cortex_protocol::lease::Level;
+use std::collections::BTreeMap;
+
 use cortex_protocol::methods::{
-    ConfigGetParams, Op, PermissionsRevokeParams, SessionCompactParams, SessionListParams,
-    SessionRef, SessionSetParams, SessionUndoParams, StoredApproval,
+    ConfigGetParams, ConfigLayer, ConfigOrigin, ConfigReloadParams, Op, PermissionsRevokeParams,
+    SessionCompactParams, SessionListParams, SessionRef, SessionSetParams, SessionUndoParams,
+    StoredApproval,
 };
 use cortex_protocol::model::{ModelRole, ReasoningControlKind};
 use cortex_protocol::session::{RoleSettings, SessionSettings, SessionSummary};
@@ -152,6 +155,30 @@ impl App {
             }
             "status" => self.config_get(Shown::Status),
             "config" => self.config_get(Shown::Config),
+            "reload" => {
+                // The core's own configuration and every session of this
+                // client: the person asked, so a standing error is said
+                // again.
+                let ticket = self
+                    .link
+                    .send(Op::ConfigReload(ConfigReloadParams::default()));
+                self.pending
+                    .insert(ticket, Pending::Reload { profile: None });
+            }
+            "profile" => self.profile(rest),
+            "verify" => {
+                let Some(session) = self.needs_session("verify") else {
+                    return;
+                };
+                // A turn that only verifies, whose events say the rest; or
+                // why no check could run (`no_checks`), said as the core
+                // says it.
+                let ticket = self.link.send(Op::VerifyRun(SessionRef {
+                    session_id: session,
+                }));
+                self.pending.insert(ticket, Pending::Said);
+            }
+            "context" => self.context(),
             "copy" => {
                 let answer = for_clipboard(self.mapper.last_answer());
                 if answer.trim().is_empty() {
@@ -225,15 +252,161 @@ impl App {
         self.pending.insert(ticket, Pending::Config(shown, session));
     }
 
-    /// What `config/get` gave, shown.
-    pub(super) fn config_shown(&mut self, shown: Shown, config: &serde_json::Map<String, Value>) {
+    /// What `config/get` gave, shown: for `/config`, each value with where
+    /// it came from.
+    pub(super) fn config_shown(
+        &mut self,
+        shown: Shown,
+        config: &serde_json::Map<String, Value>,
+        origins: &BTreeMap<String, ConfigOrigin>,
+    ) {
         let mut lines = Vec::new();
         flatten("", &Value::Object(config.clone()), &mut lines);
         let (title, lines) = match shown {
-            Shown::Config => ("The configuration in effect:".to_owned(), lines),
+            Shown::Config => {
+                let mut shown = Vec::new();
+                for (key, value) in config {
+                    let mut lines = Vec::new();
+                    flatten(key, value, &mut lines);
+                    let from = origins
+                        .get(key)
+                        .map_or_else(|| "default".to_owned(), origin);
+                    shown.extend(lines.into_iter().map(|line| format!("{line}  ({from})")));
+                }
+                (
+                    "The configuration in effect, and where each value came from:".to_owned(),
+                    shown,
+                )
+            }
             Shown::Status => ("Status:".to_owned(), self.status(&lines)),
         };
         self.transcript.push(Block::Listing { title, lines });
+    }
+
+    /// `/profile`: with a name, the session loaded with that profile; with
+    /// none, the profiles its files define.
+    fn profile(&mut self, rest: &str) {
+        let Some(session) = self.needs_session("load a profile for") else {
+            return;
+        };
+        if rest.is_empty() {
+            let ticket = self.link.send(Op::ConfigGet(ConfigGetParams {
+                session_id: Some(session.clone()),
+                keys: vec!["profile".to_owned(), "profiles".to_owned()],
+            }));
+            self.pending.insert(ticket, Pending::Profiles(session));
+            return;
+        }
+        let ticket = self.link.send(Op::ConfigReload(ConfigReloadParams {
+            session_id: Some(session),
+            profile: Some(rest.to_owned()),
+            changed_only: false,
+        }));
+        self.pending.insert(
+            ticket,
+            Pending::Reload {
+                profile: Some(rest.to_owned()),
+            },
+        );
+    }
+
+    /// The profiles the session's files define, and the one in force.
+    pub(super) fn profiles_listed(&mut self, config: &serde_json::Map<String, Value>) {
+        let mut names: Vec<String> = config
+            .keys()
+            .filter_map(|key| key.strip_prefix("profiles."))
+            .filter_map(|rest| rest.split('.').next())
+            .map(ToOwned::to_owned)
+            .collect();
+        names.dedup();
+        if names.is_empty() {
+            self.say(
+                "No profile is defined: a `[profiles.<name>]` table in a configuration file \
+                 defines one, and `/profile <name>` loads this session with it.",
+            );
+            return;
+        }
+        let from_file = config.get("profile").and_then(Value::as_str);
+        let in_force = self.profile.as_deref().or(from_file);
+        let lines = names
+            .iter()
+            .map(|name| {
+                if Some(name.as_str()) == in_force {
+                    format!("{name}  (in force)")
+                } else {
+                    name.clone()
+                }
+            })
+            .collect();
+        self.transcript.push(Block::Listing {
+            title: "The profiles this session's files define (/profile <name> loads one):"
+                .to_owned(),
+            lines,
+        });
+    }
+
+    /// `/context`: what the last request held, by part.
+    fn context(&mut self) {
+        let Some(parts) = self.usage.as_ref().and_then(|usage| usage.context.clone()) else {
+            self.say(
+                "No request has been made in this session yet: /context measures the last one.",
+            );
+            return;
+        };
+        let whole = parts.estimate.max(1);
+        let share = |tokens: u64| {
+            // A share to one decimal place, which f64 holds exactly enough.
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a share shown to one decimal place"
+            )]
+            let share = tokens as f64 * 100.0 / whole as f64;
+            share
+        };
+        let rows = [
+            ("system prompt", parts.system),
+            ("tools", parts.tools),
+            ("summary", parts.summary),
+            ("your messages", parts.user),
+            ("answers", parts.assistant),
+            ("tool results", parts.tool_results),
+            ("notices", parts.notices),
+        ];
+        let mut lines: Vec<String> = rows
+            .iter()
+            .map(|(name, tokens)| {
+                format!(
+                    "{name:<14} {:>7}  {:>5.1}%",
+                    crate::view::blocks::count(*tokens),
+                    share(*tokens)
+                )
+            })
+            .collect();
+        let of = |part: u64, whole: u64| {
+            if whole == 0 {
+                String::new()
+            } else {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a share shown to one decimal place"
+                )]
+                let share = part as f64 * 100.0 / whole as f64;
+                format!(" ({share:.1}%)")
+            }
+        };
+        lines.push(format!(
+            "{:<14} {:>7}  of the {} a request may hold{}, in a window of {}{}",
+            "the request",
+            crate::view::blocks::count(parts.estimate),
+            crate::view::blocks::count(parts.limit),
+            of(parts.estimate, parts.limit),
+            crate::view::blocks::count(parts.window),
+            of(parts.estimate, parts.window),
+        ));
+        self.transcript.push(Block::Listing {
+            title: "The last request's context, in tokens (estimates):".to_owned(),
+            lines,
+        });
     }
 
     /// `/status`: the session's state, and the limits in force.
@@ -612,6 +785,27 @@ pub(crate) fn for_clipboard(answer: &str) -> String {
         .filter(|&c| matches!(c, '\n' | '\t') || cortex_term::sanitize::visible(c).is_none())
         .collect();
     cortex_term::sanitize(&typed).into_owned()
+}
+
+/// Where a value came from, as a person reads it: the layer, then the file
+/// and line when there is one.
+fn origin(origin: &ConfigOrigin) -> String {
+    let layer = match origin.layer {
+        ConfigLayer::Default => "default",
+        ConfigLayer::Managed => "managed",
+        ConfigLayer::User => "user",
+        ConfigLayer::Project => "project",
+        ConfigLayer::ProjectLocal => "project, local",
+        ConfigLayer::Profile => "profile",
+        ConfigLayer::Environment => "environment",
+        ConfigLayer::CommandLine => "command line or this session",
+        _ => "another layer",
+    };
+    match (&origin.file, origin.line) {
+        (Some(file), Some(line)) => format!("{layer}, {file}:{line}"),
+        (Some(file), None) => format!("{layer}, {file}"),
+        _ => layer.to_owned(),
+    }
 }
 
 /// `value` as `key = value` lines, its tables flattened into dotted keys.
