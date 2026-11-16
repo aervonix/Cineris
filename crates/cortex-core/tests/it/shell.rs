@@ -85,6 +85,10 @@ fn sys_a_command_is_given_the_environment_the_command_analysis_relies_on() {
         env.retain(|(name, _)| !name.eq_ignore_ascii_case("PATH"));
         env.push(("PATH".into(), path.clone().into()));
         options.shell_env = Some(env);
+        // The shell the harness picks when nothing is configured, not the
+        // rig's cheaper one: this test keeps the product's own pick covered
+        // from a turn to the command's output.
+        options.shell = crate::default_shell();
     });
     world.run(async {
         let front = Front::start(&world, &core).await;

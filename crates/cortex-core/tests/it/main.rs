@@ -279,9 +279,30 @@ impl World {
         );
         // The machine's shell, found once for the whole test binary and
         // not asked its version: no process is started to open a session.
+        // On Windows it is Windows PowerShell where it is there, which
+        // starts in about two thirds of PowerShell 7's time on a hosted
+        // runner: these tests are not about which PowerShell runs a
+        // command, and `cortex-tools`' tests run each shell.
         static SHELL: std::sync::OnceLock<Option<cortex_tools::Shell>> = std::sync::OnceLock::new();
         options.shell = SHELL
-            .get_or_init(|| cortex_tools::ShellSearch::from_env().find(None, None).ok())
+            .get_or_init(|| {
+                let search = cortex_tools::ShellSearch::from_env();
+                let cheap = cfg!(windows)
+                    .then(|| search.find(Some("powershell"), None))
+                    .and_then(|found| match found {
+                        Ok(shell) => Some(shell),
+                        // Quietly going back to PowerShell 7 would lose the
+                        // saving with no sign of it.
+                        Err(error) => {
+                            assert!(
+                                std::env::var_os("CI").is_none(),
+                                "Windows PowerShell is not on PATH on this runner: {error}"
+                            );
+                            None
+                        }
+                    });
+                cheap.or_else(|| search.find(None, None).ok())
+            })
             .clone();
         // A command inherits a small environment of the test's own, never
         // the developer's.
@@ -456,6 +477,14 @@ pub async fn not_now(
         .await
     };
     (result, read)
+}
+
+/// The shell the harness picks on this machine when nothing is
+/// configured: PowerShell 7 on a Windows runner, where the rig's own is
+/// Windows PowerShell ([`World::options`]). For the tests that keep the
+/// product's own pick covered end to end.
+pub fn default_shell() -> Option<cortex_tools::Shell> {
+    cortex_tools::ShellSearch::from_env().find(None, None).ok()
 }
 
 /// A front end: a client of a core, with a session open.
@@ -687,6 +716,18 @@ impl Front {
     /// in order.
     pub async fn turn_allowing(&self, text: &str) -> Vec<String> {
         let _turn = cortex_testkit::profile::phase("a turn, allowing what is asked");
+        self.turn_answering(text, |_| ApprovalChoice::AllowOnce)
+            .await
+    }
+
+    /// Sends a prompt and waits for its turn to end, answering every call
+    /// that is asked about with what `choose` says of it. Returns the tools
+    /// that were asked about, in order.
+    pub async fn turn_answering(
+        &self,
+        text: &str,
+        choose: impl Fn(&ApprovalRequest) -> ApprovalChoice,
+    ) -> Vec<String> {
         let before = self.ends().len();
         self.prompt(text).await;
         let mut asked = Vec::new();
@@ -703,7 +744,7 @@ impl Front {
             }
             let (id, request) = self.approval().await;
             asked.push(request.tool.clone());
-            self.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+            self.answer(&id, choose(&request)).unwrap();
         }
     }
 

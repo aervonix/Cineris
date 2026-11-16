@@ -226,7 +226,8 @@ fn sys_a_run_with_no_console_completes() {
     /// `DETACHED_PROCESS`: the new process has no console.
     const DETACHED_PROCESS: u32 = 0x0000_0008;
 
-    let machine = Machine::new("sys_no_console");
+    // The shell the binary picks itself, which starts with no console here.
+    let machine = Machine::with_product_shell("sys_no_console");
     machine.reply_tool(
         "toolu_1",
         "shell",
