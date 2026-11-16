@@ -49,6 +49,7 @@ crates/cortex-*    the product, one crate per job (docs/architecture/01-workspac
 crates/cortex-cli  the `cortex` binary; `cx` is a link to it
 catalog/           the model catalog, embedded in the binary by cortex-llm's build script
 xtask/             developer commands; not shipped
+corpus/            the list, the lock and the pin of the corpus of real code that perf tests measure (`cargo xtask corpus`); no code
 fuzz/              fuzz targets for the stream decoders; a package of its own, outside the workspace
 mutations/         the break lists `cargo xtask mutate` runs, one file per step
 docs/              the specification

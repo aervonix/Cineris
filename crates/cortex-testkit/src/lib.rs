@@ -5,6 +5,7 @@
 //! |---|---|
 //! | re-exports | [`FakeClock`] and [`SeededRng`], which live in `cortex-base` beside the traits they implement. |
 //! | [`cases`] | Property tests without a property-testing crate. |
+//! | [`corpus`] | [`corpus::real_code`]: the pinned corpus of about 20,000 `.rs` files of real Rust, verified, for a `perf_` test that measures real code. Fetched by `cargo xtask corpus fetch`; no blocking test asks for it. |
 //! | [`canary`] | [`assert_never_printed`]: no `Debug` or `Display` form of a value holds a made-up key. |
 //! | [`timer`] | [`FakeTimer`]: waits that move the fake clock instead of waiting. |
 //! | [`gate`] | [`Gate`]: how two sides of a test take turns without sleeping. |
@@ -47,6 +48,7 @@ pub mod built;
 pub mod canary;
 pub mod cases;
 pub mod children;
+pub mod corpus;
 pub mod exec;
 pub mod fixture;
 pub mod fixtures;

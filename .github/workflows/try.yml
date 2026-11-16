@@ -167,6 +167,16 @@ jobs:
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.151
+      # `perf -p CRATE` measures real code: the pinned corpus (`corpus/`),
+      # which `cargo xtask try` fetches before it builds anything and checks
+      # against its hash. It is kept on the runner's temporary disk, the one
+      # the workspace is on, so that a measured tree can hard-link its files
+      # (on Windows the user's cache folder is on the system disk). Fetched
+      # each time: about 5 to 15 s at a desk, and no cache to key and keep.
+      - name: Keep the corpus of real code beside the workspace
+        if: startsWith(inputs.command, 'perf')
+        shell: bash
+        run: echo "CORTEX_CORPUS_DIR=$RUNNER_TEMP/corpus" >> "$GITHUB_ENV"
       # `ci` runs `check`, whose last step is cargo-deny, and the nightly's
       # `advisories` is cargo-deny too; its `unused` is cargo-machete. Both
       # are prebuilt binaries the action checks against its checksums, at

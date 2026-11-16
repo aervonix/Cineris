@@ -1,0 +1,6 @@
+# The corpus of real code `cargo xtask corpus` keeps: what a folder of it must hold
+# (docs/testing-and-ci.md, "A tree of real code to measure"). Written by
+# `cargo xtask corpus pin`; not by hand.
+hash = 285100c9ac0c85f0
+files = 20162
+bytes = 323808140

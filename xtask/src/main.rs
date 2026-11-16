@@ -24,6 +24,7 @@ mod checks;
 mod ci_log;
 mod combine;
 mod compare;
+mod corpus;
 mod decide;
 mod dependents;
 mod junit;
@@ -262,6 +263,13 @@ Working on the code
                     HEAD and checking `links`. --list names what it writes and
                     what it leaves to other commands, and why.
   alias [--release] Build `cortex` and put its alias `cx` beside it.
+  corpus fetch|check|path|pin [--update]
+                    The pinned corpus of about 20,000 `.rs` files of real
+                    code that perf_ tests measure, kept outside the repository
+                    (~/.cache/cortex-harness/corpus): fetch makes it when it
+                    is not there whole, check and path verify it against
+                    corpus/PIN, pin makes a new one. `corpus` alone has the
+                    rest.
 
 Not built yet
   dist              Package release binaries (step 34).
@@ -332,6 +340,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "partial-landlock" => nonblocking::partial_landlock(),
         "advisories" => nonblocking::advisories(),
         "alias" => alias::run(rest),
+        "corpus" => corpus::run(rest),
         "stress" => stress::run(rest),
         "try-result" => try_result::run(rest),
         "ab" => ab::run(rest),
