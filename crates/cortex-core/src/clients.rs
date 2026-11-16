@@ -117,7 +117,19 @@ struct Entry {
 /// Whether a supervisor's grant allows the call an approval is about:
 /// what the policy that asked works out for the supervisor's allow
 /// ([`crate::policy`]). Asked off the table's lock.
-pub(crate) type Judge = Arc<dyn Fn(&Lease) -> bool + Send + Sync>;
+pub(crate) type Judge = Arc<dyn Fn(&Lease) -> Judged + Send + Sync>;
+
+/// What a supervisor's allow of a call comes to against its grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Judged {
+    /// The grant covers the call: the allow is taken, as `allow_once`.
+    Within,
+    /// It does not: the request stays open for the users.
+    Beyond,
+    /// The grant has expired (its `at`, or a `time` to stop, has passed):
+    /// it covers nothing, and the request stays open for the users.
+    Expired,
+}
 
 /// An answer taken.
 #[derive(Debug, Clone, PartialEq)]
@@ -552,24 +564,45 @@ impl Clients {
                 let note = approval.note.clone();
                 // Worked out off the table's lock: it makes an engine.
                 drop(open);
-                let within = judge.is_some_and(|judge| judge(&grant));
-                if !within {
-                    // The client is not told by JSON-RPC that its answer was
-                    // not taken: the log says it.
-                    tracing::warn!(
-                        %client,
-                        request = %id,
-                        "a supervisor's allow is beyond its grant: it is not taken, and the \
-                         request stays open for the users"
-                    );
-                    return Err(refused(
-                        code::ROLE_NOT_ALLOWED,
-                        format!(
-                            "The call of request `{id}` is beyond this supervisor's grant: the \
-                             allow is not taken, and the request stays open for the session's \
-                             users."
-                        ),
-                    ));
+                let judged = judge.map_or(Judged::Beyond, |judge| judge(&grant));
+                // The client is not told by JSON-RPC that its answer was not
+                // taken: the log says it.
+                match judged {
+                    Judged::Within => {}
+                    Judged::Beyond => {
+                        tracing::warn!(
+                            %client,
+                            request = %id,
+                            "a supervisor's allow is beyond its grant: it is not taken, and the \
+                             request stays open for the users"
+                        );
+                        return Err(refused(
+                            code::ROLE_NOT_ALLOWED,
+                            format!(
+                                "The call of request `{id}` is beyond this supervisor's grant: \
+                                 the allow is not taken, and the request stays open for the \
+                                 session's users."
+                            ),
+                        ));
+                    }
+                    Judged::Expired => {
+                        tracing::warn!(
+                            %client,
+                            request = %id,
+                            grant = %grant.id,
+                            "a supervisor's grant has expired: its allow is not taken, and the \
+                             request stays open for the users"
+                        );
+                        return Err(refused(
+                            code::ROLE_NOT_ALLOWED,
+                            format!(
+                                "This supervisor's grant `{}` has expired: the allow of request \
+                                 `{id}` is not taken, and the request stays open for the \
+                                 session's users.",
+                                grant.id
+                            ),
+                        ));
+                    }
                 }
                 if asked_for != ApprovalChoice::AllowOnce {
                     tracing::info!(
@@ -900,7 +933,11 @@ mod tests {
         let within = Arc::new(AtomicBool::new(false));
         let judged = Arc::clone(&within);
         let judge: Judge = Arc::new(move |grant: &Lease| {
-            grant.id.as_str() == "l_grant" && judged.load(Ordering::SeqCst)
+            if grant.id.as_str() == "l_grant" && judged.load(Ordering::SeqCst) {
+                Judged::Within
+            } else {
+                Judged::Beyond
+            }
         });
         let asked = [user.0, layer.0, bare.0];
 

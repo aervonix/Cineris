@@ -129,8 +129,8 @@ caught-by:
 rule: A supervisor's allow is taken only where its grant covers the call; beyond it the request stays open for the users.
 file: crates/cortex-core/src/clients.rs
 in: Clients::answer
-find: let within = judge.is_some_and(|judge| judge(&grant));
-replace: let within = judge.is_some() || !grant.id.as_str().is_empty();
+find: let judged = judge.map_or(Judged::Beyond, |judge| judge(&grant));
+replace: let judged = judge.map_or(Judged::Within, |_| Judged::Within);
 caught-by:
     cortex-core clients::tests::a_supervisors_allow_is_taken_only_within_its_grant_and_as_once
     cortex-core::it supervising::a_call_beyond_the_grant_is_not_taken_from_the_supervisor_and_the_user_answers
@@ -182,8 +182,8 @@ caught-by:
 rule: Who decides is the grant's: its level, not the session's under which the call was asked.
 file: crates/cortex-core/src/policy.rs
 in: within_grant
-find: lease.grant.level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
-replace: let _ = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
+find: let mut level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
+replace: let mut level = lease.grant.level.clone();
 caught-by:
     cortex-core policy::tests::a_grant_covers_what_its_rules_and_level_allow
 
@@ -191,8 +191,8 @@ caught-by:
 rule: A grant's level is at most `autonomous`: `unrestricted` is never handed on.
 file: crates/cortex-core/src/policy.rs
 in: within_grant
-find: lease.grant.level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
-replace: lease.grant.level = grant.grant.level.clone();
+find: let mut level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
+replace: let mut level = grant.grant.level.clone();
 caught-by:
     cortex-core policy::tests::a_grant_never_widens_what_the_session_holds
 
@@ -200,8 +200,8 @@ caught-by:
 rule: The grant's allow rules decide what it covers.
 file: crates/cortex-core/src/policy.rs
 in: within_grant
-find: if rule.action == RuleAction::Allow && !lease.grant.rules.contains(rule) {
-replace: if rule.action == RuleAction::Allow && lease.grant.rules.contains(rule) {
+find: if rule.action == RuleAction::Allow && !of_a_path(rule) && !lease.grant.rules.contains(rule)
+replace: if rule.action == RuleAction::Allow && !of_a_path(rule) && lease.grant.rules.contains(rule)
 caught-by:
     cortex-core policy::tests::a_grant_covers_what_its_rules_and_level_allow
     cortex-core::it supervising::a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
@@ -335,3 +335,75 @@ packages: cortex-core, cortex-rpc
 caught-by:
     cortex-core::it settings::unrestricted_is_refused_where_the_core_may_not_give_it
     cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
+
+[break] a-grants-path-allow-lifts-a-path-question
+rule: A grant never lifts a question about a path: its `read` and `write` allow rules are not used.
+file: crates/cortex-core/src/policy.rs
+in: within_grant
+find: if rule.action == RuleAction::Allow && !of_a_path(rule) && !lease.grant.rules.contains(rule)
+replace: if rule.action == RuleAction::Allow && !lease.grant.rules.contains(rule)
+caught-by:
+    cortex-core policy::tests::a_grant_lifts_no_question_about_a_path
+
+[break] a-command-rests-on-a-sandbox-it-does-not-run-in
+rule: A command's leave to run rests on the sandbox only where the narrowed scope is the session's own and its commands are confined.
+file: crates/cortex-core/src/policy.rs
+in: within_grant
+find: if !confined || !same_scope(&lease.grant.sandbox, &standing.grant.sandbox) {
+replace: if !confined && !same_scope(&lease.grant.sandbox, &standing.grant.sandbox) {
+caught-by:
+    cortex-core policy::tests::a_command_rests_on_the_sandbox_only_where_it_runs_in_it
+
+[break] a-narrower-network-is-the-same-scope
+rule: A narrower network is a narrower scope.
+file: crates/cortex-core/src/policy.rs
+in: same_scope
+find: && first.network == second.network
+replace: && first.network == first.network
+caught-by:
+    cortex-core policy::tests::a_command_rests_on_the_sandbox_only_where_it_runs_in_it
+
+[break] the-judge-reads-the-session-as-it-was
+rule: A supervisor's allow is judged by the session as it is when the answer comes: its template, standing lease and confinement, not as they were when the question was put.
+file: crates/cortex-core/src/policy.rs
+in: judge
+find:
+        Some(Arc::new(move |grant: &Lease| {
+            let parts = template
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .parts
+                .clone();
+            let standing = in_force.get().lease().clone();
+            let confined = sandboxed.load(std::sync::atomic::Ordering::Acquire);
+replace:
+        let parts = template
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .parts
+            .clone();
+        let standing = in_force.get().lease().clone();
+        let confined = sandboxed.load(std::sync::atomic::Ordering::Acquire);
+        Some(Arc::new(move |grant: &Lease| {
+caught-by:
+    cortex-core::it supervising::a_reload_that_tightens_the_rules_reaches_an_open_requests_judge
+    cortex-core::it supervising::a_supervisors_allow_is_judged_by_the_session_as_it_is_when_it_answers
+
+[break] an-expired-grant-covers-what-it-allows
+rule: A grant whose expiry has passed by the core's clock covers nothing, and says so.
+file: crates/cortex-core/src/policy.rs
+in: within_grant
+find: if expired(grant, template.clock.now()) {
+replace: if expired(grant, template.clock.now()) && grant.id.as_str().is_empty() {
+caught-by:
+    cortex-core policy::tests::an_expired_grant_covers_nothing
+    cortex-core::it supervising::an_expired_grant_takes_no_allow
+
+[break] a-time-to-stop-is-not-judged
+rule: A grant whose `time` to stop has passed covers nothing.
+file: crates/cortex-core/src/policy.rs
+in: expired
+find: at || grant.stop_when.iter().any(|condition| {
+replace: at || grant.stop_when.is_empty() && grant.stop_when.iter().any(|condition| {
+caught-by:
+    cortex-core policy::tests::an_expired_grant_covers_nothing
