@@ -56,6 +56,99 @@ pub fn parse_duration(text: &str) -> Result<Duration, String> {
     Ok(Duration::from_millis(total))
 }
 
+/// A bound of a range as a `settings!` declaration writes it, in the unit
+/// the range is kept in: a length of time (`100ms`, `1m`, `1h30m`) in
+/// milliseconds, any other number as it is written (`1_000`). `timed` says
+/// which the setting is.
+///
+/// It is evaluated when the crate is built, so a bound that is neither, a
+/// length of time written as a bare number, or a number written with a
+/// unit, is an error of the build and never of a session.
+///
+/// # Panics
+///
+/// On such a bound, at compile time where it is called in a constant.
+#[must_use]
+pub(crate) const fn range_bound(text: &str, timed: bool) -> u64 {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    let mut total: u64 = 0;
+    assert!(!bytes.is_empty(), "a range's bound is empty");
+    while at < bytes.len() {
+        let mut number: u64 = 0;
+        let mut digits = 0;
+        while at < bytes.len() && (bytes[at].is_ascii_digit() || bytes[at] == b'_') {
+            if bytes[at] != b'_' {
+                let Some(tens) = number.checked_mul(10) else {
+                    panic!("a range's bound is too large");
+                };
+                let Some(next) = tens.checked_add((bytes[at] - b'0') as u64) else {
+                    panic!("a range's bound is too large");
+                };
+                number = next;
+                digits += 1;
+            }
+            at += 1;
+        }
+        assert!(
+            digits > 0,
+            "a range's bound is a whole number, with a unit for a length of time"
+        );
+        let unit = at;
+        while at < bytes.len() && bytes[at].is_ascii_lowercase() {
+            at += 1;
+        }
+        if !timed {
+            assert!(
+                unit == at && at == bytes.len(),
+                "the range of a setting that is not a length of time is written with no unit"
+            );
+            return number;
+        }
+        let scale = match unit_scale(bytes, unit, at) {
+            Some(scale) => scale,
+            None if unit == at => panic!(
+                "the range of a length of time is written with its units, as the reference \
+                 writes it: `100ms..=1m`"
+            ),
+            None => panic!("a range's bound has a unit that is not one of ms, s, m, h and d"),
+        };
+        let Some(part) = number.checked_mul(scale) else {
+            panic!("a range's bound is too long a time");
+        };
+        let Some(sum) = total.checked_add(part) else {
+            panic!("a range's bound is too long a time");
+        };
+        total = sum;
+    }
+    total
+}
+
+/// The length in milliseconds of the unit `bytes[start..end]`, as [`UNITS`]
+/// has it, or `None` when it is not one of them.
+const fn unit_scale(bytes: &[u8], start: usize, end: usize) -> Option<u64> {
+    let mut index = 0;
+    while index < UNITS.len() {
+        let (name, scale) = UNITS[index];
+        let name = name.as_bytes();
+        if name.len() == end - start {
+            let mut same = true;
+            let mut offset = 0;
+            while offset < name.len() {
+                if name[offset] != bytes[start + offset] {
+                    same = false;
+                }
+                offset += 1;
+            }
+            if same {
+                return Some(scale);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
 /// Writes a duration the way [`parse_duration`] reads it, with the largest
 /// units that fit: 90 seconds is `1m30s`. Anything below a millisecond is
 /// dropped.
@@ -80,6 +173,41 @@ pub fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_range_bound_is_read_in_its_settings_unit() {
+        assert_eq!(range_bound("100ms", true), 100);
+        assert_eq!(range_bound("0s", true), 0);
+        assert_eq!(range_bound("2m", true), 120_000);
+        assert_eq!(range_bound("1h30m", true), 5_400_000);
+        assert_eq!(range_bound("1d", true), 86_400_000);
+        assert_eq!(range_bound("60_000", false), 60_000);
+        assert_eq!(
+            range_bound("1_000_000_000_000_000", false),
+            1_000_000_000_000_000
+        );
+        // Every bound as `parse_duration` reads the same text.
+        for text in ["100ms", "1s", "30s", "1m", "5m", "1h", "1h30m", "1d"] {
+            let millis = parse_duration(text).unwrap().as_millis();
+            assert_eq!(u128::from(range_bound(text, true)), millis, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_range_bound_in_the_wrong_unit_is_refused() {
+        for (text, timed) in [
+            ("100", true),
+            ("100ms", false),
+            ("1x", true),
+            ("ms", true),
+            ("", true),
+            ("1m ", true),
+            ("99999999999999999999", false),
+        ] {
+            let refused = std::panic::catch_unwind(|| range_bound(text, timed));
+            assert!(refused.is_err(), "`{text}` (timed: {timed}) was taken");
+        }
+    }
 
     #[test]
     fn durations_read_and_write_back() {

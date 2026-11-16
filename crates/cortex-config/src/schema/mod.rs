@@ -24,7 +24,7 @@
 //! | Bracket | Meaning |
 //! |---|---|
 //! | `[<trust>, <effect>]` | A setting: its [`Trust`] rule and its [`Effect`]. |
-//! | `[<trust>, <effect>, low..=high]` | The same, with the range a number must be in. |
+//! | `[<trust>, <effect>, low..=high]` | The same, with the range a number must be in. A length of time's range is written in its units, as the reference writes it (`100ms..=1m`), and any other number's with none (`1..=20`); the other way round is an error of the build. |
 //! | `[<trust>, <effect>, joined]` | The same, for a list that every layer adds to. |
 //! | `[nested]` | A table of settings, or a named collection of such tables. |
 //! | `[enforced]` | A table of settings the harness enforces: an unknown key in it is an error. |
@@ -614,6 +614,31 @@ impl<T: Setting> Setting for BTreeMap<String, T> {
     }
 }
 
+/// Whether a setting's range is a length of time, written with units
+/// (`100ms..=1m`), or a number, written with none. Only the types a range
+/// is declared on have it, so a range on any other is an error of the build.
+pub(crate) trait Ranged {
+    /// A length of time.
+    const TIMED: bool;
+}
+
+impl Ranged for std::time::Duration {
+    const TIMED: bool = true;
+}
+
+macro_rules! numbers_are_ranged {
+    ($($number:ty),*) => {
+        $(impl Ranged for $number {
+            const TIMED: bool = false;
+        })*
+    };
+}
+numbers_are_ranged!(u8, u16, u32, u64, usize, i32, i64, f64);
+
+impl<T: Ranged> Ranged for Option<T> {
+    const TIMED: bool = T::TIMED;
+}
+
 /// Declares a table of settings: the struct, its defaults, its schema, its
 /// reader and its writer. The syntax is described on [the module](self).
 macro_rules! settings {
@@ -662,7 +687,7 @@ macro_rules! settings {
                         $crate::schema::Child {
                             name: stringify!($field),
                             doc: &[$($doc),*],
-                            meta: settings!(@meta $($meta)*),
+                            meta: settings!(@meta $ty; $($meta)*),
                             default: $crate::schema::Setting::write(&defaults.$field),
                             node: <$ty as $crate::schema::Setting>::node(),
                             check: |value| {
@@ -704,12 +729,12 @@ macro_rules! settings {
     };
     (@default) => { Default::default() };
     (@default $default:expr) => { $default };
-    (@meta nested) => { $crate::schema::Meta::Nested { enforced: false } };
-    (@meta enforced) => { $crate::schema::Meta::Nested { enforced: true } };
-    (@meta reserved $trust:ident) => {
+    (@meta $_ty:ty; nested) => { $crate::schema::Meta::Nested { enforced: false } };
+    (@meta $_ty:ty; enforced) => { $crate::schema::Meta::Nested { enforced: true } };
+    (@meta $_ty:ty; reserved $trust:ident) => {
         $crate::schema::Meta::Reserved { trust: $crate::schema::Trust::$trust }
     };
-    (@meta $trust:ident, $effect:ident) => {
+    (@meta $_ty:ty; $trust:ident, $effect:ident) => {
         $crate::schema::Meta::Leaf {
             trust: $crate::schema::Trust::$trust,
             effect: $crate::schema::Effect::$effect,
@@ -717,7 +742,7 @@ macro_rules! settings {
             joined: false,
         }
     };
-    (@meta $trust:ident, $effect:ident, joined) => {
+    (@meta $_ty:ty; $trust:ident, $effect:ident, joined) => {
         $crate::schema::Meta::Leaf {
             trust: $crate::schema::Trust::$trust,
             effect: $crate::schema::Effect::$effect,
@@ -725,15 +750,23 @@ macro_rules! settings {
             joined: true,
         }
     };
-    (@meta $trust:ident, $effect:ident, $low:literal ..= $high:literal) => {
+    (@meta $ty:ty; $trust:ident, $effect:ident, $low:tt ..= $high:tt) => {
         $crate::schema::Meta::Leaf {
             trust: $crate::schema::Trust::$trust,
             effect: $crate::schema::Effect::$effect,
             range: Some({
-                // Whole numbers, named as such so that a large bound is not
-                // read as an `i32`.
-                let (low, high): (i64, i64) = ($low, $high);
-                (low as f64, high as f64)
+                // Read when the crate is built, in the setting's unit: a
+                // length of time as the reference writes one (`100ms..=1m`),
+                // in milliseconds; any other number as it is written.
+                const RANGE: (u64, u64) = {
+                    let timed = <$ty as $crate::schema::Ranged>::TIMED;
+                    let low = $crate::duration::range_bound(stringify!($low), timed);
+                    let high = $crate::duration::range_bound(stringify!($high), timed);
+                    assert!(low <= high, "a range's low bound is above its high one");
+                    (low, high)
+                };
+                #[expect(clippy::cast_precision_loss, reason = "bounds are far below 2^53")]
+                (RANGE.0 as f64, RANGE.1 as f64)
             }),
             joined: false,
         }

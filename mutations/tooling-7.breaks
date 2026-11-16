@@ -1,0 +1,41 @@
+# The seventh tooling step's breaks: the session's own, and, at the end, the
+# parts its sub-agents wrote, merged in (`cargo xtask mutate --merge`).
+
+# Duration ranges written in their units in `settings!` (item 7).
+
+[break] a-minute-read-as-six-seconds
+rule: A range's bound in minutes is read as sixty thousand milliseconds, as a length of time in a configuration file is.
+file: crates/cortex-config/src/duration.rs
+in: unit_scale
+find: return Some(scale);
+replace: return Some(scale / 10);
+caught-by:
+    duration::tests::a_range_bound_is_read_in_its_settings_unit
+    generated::the_generated_configuration_files_are_current
+
+[break] a-range-bound-of-several-units-keeps-only-the-last
+rule: A bound of several units (`1h30m`) is the sum of its parts.
+file: crates/cortex-config/src/duration.rs
+in: range_bound
+find: let Some(sum) = total.checked_add(part)
+replace: let Some(sum) = 0u64.checked_add(part)
+caught-by:
+    duration::tests::a_range_bound_is_read_in_its_settings_unit
+
+[break] a-number-with-a-unit-is-taken
+rule: A setting that is not a length of time has its range written with no unit.
+file: crates/cortex-config/src/duration.rs
+in: range_bound
+find: unit == at && at == bytes.len()
+replace: true
+caught-by:
+    duration::tests::a_range_bound_in_the_wrong_unit_is_refused
+
+[break] a-length-of-time-written-bare-is-taken
+rule: A length of time's range is written with its units; a bare number is refused.
+file: crates/cortex-config/src/duration.rs
+in: range_bound
+find: None if unit == at =>
+replace: None if unit == at => 1, None if false =>
+caught-by:
+    duration::tests::a_range_bound_in_the_wrong_unit_is_refused
