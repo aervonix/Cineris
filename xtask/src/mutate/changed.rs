@@ -12,9 +12,12 @@
 //! of a file that was moved:
 //!
 //! 1. touches the build's own settings (the workspace's `Cargo.toml`,
-//!    `Cargo.lock`, `.config/nextest.toml`, `rust-toolchain.toml`: what every
-//!    break's build reads), or the `Cargo.toml` or `build.rs` of a crate the
-//!    break runs; or
+//!    `Cargo.lock`, `.config/nextest.toml`, `rust-toolchain.toml`,
+//!    `.cargo/config.toml`: what every break's build reads), or any file
+//!    outside `crates/`, `xtask/`, `docs/`, `mutations/` and `.github/` that
+//!    is not Markdown (a file a build script embeds, such as the model
+//!    catalog: what is not known is taken to touch every break), or the
+//!    `Cargo.toml` or `build.rs` of a crate the break runs; or
 //! 2. adds or changes the break itself: its text, by what decides what it
 //!    does ([`Break::definition`]), is not that of any break of the lists at
 //!    `REF` (a reworded `rule` is not a change); or
@@ -29,14 +32,17 @@
 //! now, or as it was at `REF`: a test that was removed or moved) has that
 //! word among its tokens, anywhere (a definition, a macro's argument, a
 //! call). That over-chooses (a helper of the same name, a test of the same
-//! name in another module) and under-chooses nothing a token can show. When
-//! no file of those crates has the word at all (a test that a macro made
-//! from pieces, a name that is a pattern ending in `::*`) the name cannot be
-//! placed, and the break is chosen when **any file of those crates** was
-//! touched, and counted as such. What the rule does not see: a change to
-//! something a test calls or reads (code of the crate that is not the
-//! break's file, a fixture), and a break that names no test (it is chosen by
-//! its file, its text and the settings only). A full run is for those.
+//! name in another module). When no file of those crates has the word at all
+//! (a test that a macro made from pieces), or the name is a pattern (it ends
+//! in `*`, which can end inside a module's name: `open*` is every test of
+//! `openai_chat`), the name cannot be placed, and the break is chosen when
+//! **any file of those crates** was touched, and counted as such. A file of
+//! those crates that is not Rust (a fixture, a snapshot, a file a test reads
+//! or `include_str!` takes) chooses the break too, counted the same way.
+//! What the rule does not see: a change to Rust code a test calls that is
+//! not the break's file nor names a test it names (a helper elsewhere in the
+//! crate, the test kit), and a break that names no test (it is chosen by its
+//! file, its text and the settings only). A full run is for those.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
@@ -47,13 +53,29 @@ use crate::Result;
 
 /// The files whose change touches every break: what each break's build
 /// reads.
-const SETTINGS: [&str; 5] = [
+const SETTINGS: [&str; 7] = [
     "Cargo.toml",
     "Cargo.lock",
     ".config/nextest.toml",
     "rust-toolchain.toml",
     "rust-toolchain",
+    ".cargo/config.toml",
+    ".cargo/config",
 ];
+
+/// The folders whose files the rule reads one by one: anything else that is
+/// not Markdown is taken to touch every break's build.
+const KNOWN: [&str; 5] = ["crates/", "xtask/", "docs/", "mutations/", ".github/"];
+
+/// A touched file the rule cannot place, which chooses every break: a
+/// build's settings, or a file outside [`KNOWN`] that is not Markdown.
+fn touches_every_build(path: &str) -> bool {
+    SETTINGS.contains(&path)
+        || (!KNOWN.iter().any(|folder| path.starts_with(folder))
+            && !Path::new(path)
+                .extension()
+                .is_some_and(|extension| extension == "md"))
+}
 
 /// The text of the files the rule reads: now, at the reference, and which
 /// Rust files there are.
@@ -188,14 +210,14 @@ pub(crate) fn select(
     sources: &dyn Sources,
 ) -> Selection {
     let touched: BTreeSet<String> = changed.iter().map(|path| path.replace('\\', "/")).collect();
-    let settings = SETTINGS.iter().find(|file| touched.contains(**file));
+    let settings = touched.iter().find(|file| touches_every_build(file));
     let before = definitions_before(known, &touched, sources);
     let mut crates = Crates::new(&touched, sources);
     let chosen = given
         .iter()
         .filter_map(|one| {
             let reason = if let Some(file) = settings {
-                Some(Reason::Settings((*file).to_owned()))
+                Some(Reason::Settings(file.clone()))
             } else if !before.contains(&one.definition()) {
                 Some(Reason::Itself)
             } else if touched.contains(&one.file) {
@@ -286,6 +308,14 @@ impl<'a> Crates<'a> {
         };
         if !touched.iter().any(in_directories) {
             return None;
+        }
+        // A file of the crates that is not Rust (a fixture, a snapshot, what
+        // a test reads) can change what a test sees: chosen to be safe.
+        if let Some(file) = touched
+            .iter()
+            .find(|path| in_directories(path) && !path.ends_with(".rs"))
+        {
+            return Some(Reason::Unplaced(file.clone()));
         }
         for entry in &one.caught_by {
             match placed(entry) {
@@ -385,8 +415,11 @@ fn placed(entry: &str) -> Placed {
     let name = entry
         .split_once(char::is_whitespace)
         .map_or(entry, |(_, name)| name.trim());
+    // A pattern can end inside a module's name (`open*` is every test of
+    // `openai_chat`), whose tests no word of their own names: placed
+    // nowhere, so any file of the crates chooses the break.
     let (name, prefix) = match name.strip_suffix('*') {
-        Some(name) => (name, true),
+        Some(_) => return Placed::Nowhere,
         None => (name, false),
     };
     let last = name.rsplit("::").next().unwrap_or(name);
@@ -617,6 +650,8 @@ mod tests {
         assert_eq!(chosen(&tree(), &[], &all()), []);
         // A file no break or test is in.
         assert_eq!(chosen(&tree(), &["docs/testing-and-ci.md"], &all()), []);
+        assert_eq!(chosen(&tree(), &["README.md"], &all()), []);
+        assert_eq!(chosen(&tree(), &[".github/workflows/ci.yml"], &all()), []);
     }
 
     #[test]
@@ -768,14 +803,10 @@ mod tests {
     }
 
     #[test]
-    fn a_name_that_ends_in_a_star_is_a_beginning() {
-        assert_eq!(
-            placed("mutate::tests::sys_*"),
-            Placed::Word {
-                word: "sys_".to_owned(),
-                prefix: true
-            }
-        );
+    fn a_name_that_ends_in_a_star_is_placed_nowhere_and_chosen_by_any_file_of_its_crates() {
+        assert_eq!(placed("mutate::tests::sys_*"), Placed::Nowhere);
+        // A pattern that ends inside a module's name.
+        assert_eq!(placed("cortex-llm::it openai*"), Placed::Nowhere);
         assert_eq!(placed("tests::*"), Placed::Nowhere);
         assert_eq!(placed("*"), Placed::Nowhere);
         // The binary of an entry is not part of the name.
@@ -804,8 +835,39 @@ mod tests {
             ),
             [(
                 "demo/a".to_owned(),
-                Reason::Test("tests::first_*".to_owned())
+                Reason::Unplaced("tests::first_*".to_owned())
             )]
+        );
+        // The review's case: `open*` names the tests of a module `openai`,
+        // whose file is touched and has no word that begins `open`.
+        let list = A.replace("tests::first_test", "open*");
+        let files = tree()
+            .same("crates/demo/src/lib.rs", "mod openai;")
+            .same("crates/demo/src/openai.rs", "#[test]\nfn first() {}\n");
+        assert_eq!(
+            chosen(
+                &files,
+                &["crates/demo/src/openai.rs"],
+                &lists(&[("demo", &list)])
+            ),
+            [("demo/a".to_owned(), Reason::Unplaced("open*".to_owned()))]
+        );
+    }
+
+    #[test]
+    fn a_file_of_a_breaks_crate_that_is_not_rust_chooses_it() {
+        assert_eq!(
+            chosen(&tree(), &["crates/demo/tests/data.json"], &all()),
+            [
+                (
+                    "demo/a".to_owned(),
+                    Reason::Unplaced("crates/demo/tests/data.json".to_owned())
+                ),
+                (
+                    "demo/b".to_owned(),
+                    Reason::Unplaced("crates/demo/tests/data.json".to_owned())
+                ),
+            ]
         );
     }
 
@@ -874,7 +936,14 @@ mod tests {
 
     #[test]
     fn a_change_to_the_builds_settings_chooses_every_break() {
-        for file in ["Cargo.lock", "Cargo.toml", ".config/nextest.toml"] {
+        for file in [
+            "Cargo.lock",
+            "Cargo.toml",
+            ".config/nextest.toml",
+            ".cargo/config.toml",
+            "catalog/models.toml",
+            "rustfmt.toml",
+        ] {
             let got = chosen(&tree(), &[file], &all());
             assert_eq!(got.len(), 3, "{file}");
             assert!(

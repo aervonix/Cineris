@@ -433,7 +433,7 @@ fn by_source(root: &Path, files: &[String], breaks: &[&Break]) -> (usize, Vec<St
             if !found {
                 let system = one.os.map_or("the other system", |os| os.name());
                 problems.push(format!(
-                    "{}: break `{}` is of code only {system} builds, and its `caught-by` names                      `{entry}`, whose name (`{word}`) is a word of no Rust file of {}.\n  There \
+                    "{}: break `{}` is of code only {system} builds, and its `caught-by` names `{entry}`, whose name (`{word}`) is a word of no Rust file of {}.\n  There \
                      is no list of the tests of {system}'s build here, so the names are looked \
                      for among the words of the source. The test was renamed or removed: \
                      correct the name. (A test a macro makes from pieces is no word of any \
