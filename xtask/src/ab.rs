@@ -191,6 +191,25 @@ pub(crate) enum Attempt {
     Failed(Failure),
 }
 
+/// Whether a side's run of a round broke: it failed, and not only by its
+/// tests failing.
+pub(crate) fn attempt_broke(attempt: &Attempt) -> bool {
+    matches!(attempt, Attempt::Failed(failure) if !failure.by_tests)
+}
+
+/// The name a round's report is kept under in `target/ab/`:
+/// `<side>-round-<n>.xml`, or `<side>-round-<n>-broke.xml` for a run that
+/// broke, which `ci-times --ab` and `try-result` then count as a side
+/// that did not finish the round ([`crate::runs::ab_report_name`],
+/// [`crate::runs::ab_broke_name`]).
+pub(crate) fn kept_report_name(base: bool, round: usize, broke: bool) -> String {
+    format!(
+        "{}-round-{round}{}.xml",
+        if base { "base" } else { "head" },
+        if broke { "-broke" } else { "" }
+    )
+}
+
 /// A test that failed, and the first line of what its failure said.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FailedTest {
@@ -763,19 +782,24 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             }
             // What the run reported, if it got as far as a report.
             let read = Report::read(&report);
+            let attempt = attempt_of(job, read)?;
             // Each round's report, kept where the head's run keeps its own
-            // (the `try` workflow uploads the folder).
-            let kept = head.join("target").join("ab").join(format!(
-                "{}-round-{}.xml",
-                if which == Which::Base { "base" } else { "head" },
-                round + 1
+            // (the `try` workflow uploads the folder). A run that broke
+            // (not by its tests failing: a build, a signal, a run of the
+            // system tests that never happened) keeps what it wrote under a
+            // name of its own, which no reader takes for a round's: its
+            // report may hold some tiers and not others.
+            let kept = head.join("target").join("ab").join(kept_report_name(
+                which == Which::Base,
+                round + 1,
+                attempt_broke(&attempt),
             ));
             if report.is_file() {
                 std::fs::create_dir_all(kept.parent().unwrap_or(&head))
                     .and_then(|()| std::fs::copy(&report, &kept))
                     .map_err(|error| format!("could not keep {}: {error}", kept.display()))?;
             }
-            attempts[which as usize] = Some(attempt_of(job, read)?);
+            attempts[which as usize] = Some(attempt);
         }
         let [Some(base), Some(head)] = attempts else {
             return Err("a round ran only one side".to_owned());
