@@ -18,6 +18,7 @@ use crate::{Front, World, poll_once, says};
 
 fn new_session(world: &World, ephemeral: bool) -> Op {
     Op::SessionNew(SessionNewParams {
+        cwd: None,
         workspace: world.workspace.to_str().unwrap().to_owned(),
         settings: SessionSettings::default(),
         title: None,

@@ -31,7 +31,7 @@ fn a_project_is_untrusted_until_the_user_trusts_it() {
     assert!(!store.path().exists(), "reading creates nothing");
 
     let trusted = store
-        .trust(&key, "~/work/app", std::slice::from_ref(&format))
+        .trust(&key, "~/work/app", std::slice::from_ref(&format), false)
         .unwrap();
     assert!(trusted.is_trusted());
     assert_eq!(trusted.standing(&format), Standing::Approved);
@@ -54,7 +54,7 @@ fn a_project_is_untrusted_until_the_user_trusts_it() {
     );
     let text = std::fs::read_to_string(store.path()).unwrap();
     for expected in [
-        "version = 1",
+        "version = 2",
         "[[project]]",
         "key = \"aaaa1111\"",
         "root = \"~/work/app\"",
@@ -81,7 +81,7 @@ fn a_changed_definition_is_disabled_until_it_is_approved_again() {
     let format = hook("format", &["cargo", "fmt"]);
     let server = Definition::of(TrustResourceKind::McpServer, "docs", ["npx", "docs-server"]);
     store
-        .trust(&key, "~/work/app", &[format.clone(), server.clone()])
+        .trust(&key, "~/work/app", &[format.clone(), server.clone()], false)
         .unwrap();
 
     // Somebody edits the hook.
@@ -105,7 +105,7 @@ fn a_changed_definition_is_disabled_until_it_is_approved_again() {
     );
 
     // The user approves the change, and only that changes.
-    let trust = store.approve(&key, std::slice::from_ref(&edited)).unwrap();
+    let trust = store.approve(&key, std::slice::from_ref(&edited), false).unwrap();
     assert_eq!(trust.standing(&edited), Standing::Approved);
     assert_eq!(
         trust.standing(&format),
@@ -120,14 +120,14 @@ fn a_changed_definition_is_disabled_until_it_is_approved_again() {
     let stranger = ProjectKey::new("cccc3333");
     assert!(
         store
-            .approve(&stranger, std::slice::from_ref(&edited))
+            .approve(&stranger, std::slice::from_ref(&edited), false)
             .is_err()
     );
     assert!(!store.project(&stranger).unwrap().is_trusted());
 
     // Trusting again replaces what was pinned with what is shown now.
     let trust = store
-        .trust(&key, "~/work/app", std::slice::from_ref(&added))
+        .trust(&key, "~/work/app", std::slice::from_ref(&added), false)
         .unwrap();
     assert_eq!(trust.standing(&added), Standing::Approved);
     assert_eq!(trust.standing(&server), Standing::New);
@@ -145,7 +145,7 @@ fn a_projects_allow_rules_are_disabled_when_its_rules_change_after_trust() {
         rule(Effect::Write, "generated/**", RuleAction::Deny),
     ];
     store
-        .trust(&key, "~/work/app", &[Definition::of_rules(&seen)])
+        .trust(&key, "~/work/app", &[Definition::of_rules(&seen)], false)
         .unwrap();
 
     // As the core will do it: the project's rules apply as trusted only
@@ -201,7 +201,7 @@ fn a_projects_allow_rules_are_disabled_when_its_rules_change_after_trust() {
 
     // The user approves the new rules.
     store
-        .approve(&key, &[Definition::of_rules(&changed)])
+        .approve(&key, &[Definition::of_rules(&changed)], false)
         .unwrap();
     assert_eq!(
         said(&shell(&engine_for(&changed), "curl evil.example")),
@@ -223,7 +223,7 @@ fn a_project_that_drops_one_of_its_denials_is_not_trusted_until_approved_again()
     let ask = rule(Effect::Write, "migrations/**", RuleAction::Ask);
     let seen = [allow.clone(), deny.clone(), ask.clone()];
     store
-        .trust(&key, "~/work/app", &[Definition::of_rules(&seen)])
+        .trust(&key, "~/work/app", &[Definition::of_rules(&seen)], false)
         .unwrap();
     let engine_for = |rules: &[cortex_protocol::lease::Rule]| {
         let trusted = store.project(&key).unwrap().rules_approved(rules);
@@ -261,8 +261,26 @@ fn a_trust_store_that_is_not_understood_trusts_nothing() {
     let cases: Vec<(&str, String, &str)> = vec![
         (
             "newer version",
-            format!("version = 2\n{pinned}"),
-            "version is 2",
+            format!("version = 3\n{pinned}"),
+            "version is 3",
+        ),
+        (
+            "a version 1 file that records git",
+            format!("version = 1\n{pinned}git = \"trusted\"\n"),
+            "version 1",
+        ),
+        (
+            "a version 1 file that records declined rules",
+            format!(
+                "version = 1\n{pinned}declined_rules = \"{}\"\n",
+                "0".repeat(64)
+            ),
+            "version 1",
+        ),
+        (
+            "git said in a way this build does not know",
+            format!("version = 2\n{pinned}git = \"maybe\"\n"),
+            "maybe",
         ),
         ("no version", pinned.to_owned(), "version"),
         (
@@ -308,7 +326,7 @@ fn a_trust_store_that_is_not_understood_trusts_nothing() {
             "{name}: {error}"
         );
         // Trusting through it fails, and leaves it as it was.
-        assert!(store.trust(&key, "~/work/app", &[]).is_err(), "{name}");
+        assert!(store.trust(&key, "~/work/app", &[], false).is_err(), "{name}");
         assert!(store.revoke(&key).is_err(), "{name}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), contents, "{name}");
     }
@@ -354,7 +372,7 @@ fn a_projects_rules_are_pinned_with_every_profile_it_defines() {
         profiles: vec![("ci".to_owned(), vec![deploy.clone()])],
     };
     store
-        .trust(&key, "~/work/app", &[Definition::of_project_rules(&shown)])
+        .trust(&key, "~/work/app", &[Definition::of_project_rules(&shown)], false)
         .unwrap();
     let trust = store.project(&key).unwrap();
     assert!(trust.project_rules_approved(&shown));
@@ -392,4 +410,120 @@ fn a_projects_rules_are_pinned_with_every_profile_it_defines() {
         shown.each().map(|(profile, _)| profile).collect::<Vec<_>>(),
         [None, Some("ci")]
     );
+}
+
+/// Whether git was shown is pinned with the trust (version 2, the
+/// follow-ups of step 23): a project trusted while it was not a repository
+/// has git untrusted; approving what is new with git shown trusts it; and
+/// keeping trust without git declines it, never taking back git trusted
+/// before.
+#[test]
+fn whether_git_was_shown_is_pinned_with_the_trust() {
+    let scratch = cortex_testkit::scratch!("trust_git");
+    let store = store(&scratch);
+    let key = ProjectKey::new("dddd4444");
+    let trust = store.trust(&key, "~/work/app", &[], false).unwrap();
+    assert!(trust.is_trusted() && !trust.git_trusted() && !trust.git_declined());
+    let again = store.project(&key).unwrap();
+    assert!(!again.git_trusted(), "git never shown is not trusted");
+    assert!(!again.from_older_store());
+    // Kept trusted without git: declined, the trust as it was.
+    let kept = store.keep_without(&key, None, true).unwrap();
+    assert!(kept.is_trusted() && kept.git_declined() && !kept.git_trusted());
+    // Approved with git shown: trusted.
+    let approved = store.approve(&key, &[], true).unwrap();
+    assert!(approved.git_trusted() && !approved.git_declined());
+    // Keeping without git once trusted takes nothing back.
+    let kept = store.keep_without(&key, None, true).unwrap();
+    assert!(kept.git_trusted());
+    // Approving without git shown leaves what was said of it.
+    assert!(store.approve(&key, &[], false).unwrap().git_trusted());
+    // A project trusted with git shown has it trusted, across a restart.
+    let other = ProjectKey::new("eeee5555");
+    store.trust(&other, "~/work/other", &[], true).unwrap();
+    assert!(store.project(&other).unwrap().git_trusted());
+    // Kept without, a project that is not trusted is refused.
+    assert!(store.keep_without(&ProjectKey::new("ffff"), None, true).is_err());
+    let written = std::fs::read_to_string(store.path()).unwrap();
+    assert!(written.starts_with("version = 2\n"), "{written}");
+    assert!(private::is_private(store.path()).unwrap());
+}
+
+/// Rules kept out ("keep trusting it, without the new rules") stay held
+/// back and are known as declined while they are those rules; any other
+/// change is not declined; approving rules clears it. What was trusted
+/// before, git included, stays.
+#[test]
+fn rules_kept_out_are_declined_while_they_are_those_rules() {
+    let scratch = cortex_testkit::scratch!("trust_declined");
+    let store = store(&scratch);
+    let key = ProjectKey::new("abab1212");
+    let test = rule(Effect::Exec, "make test", RuleAction::Allow);
+    let deploy = rule(Effect::Exec, "make deploy", RuleAction::Allow);
+    let rules = |list: &[cortex_protocol::lease::Rule]| cortex_policy::ProjectRules {
+        base: list.to_vec(),
+        profiles: Vec::new(),
+    };
+    let seen = rules(std::slice::from_ref(&test));
+    store
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_project_rules(&seen)],
+            true,
+        )
+        .unwrap();
+    let changed = rules(&[test.clone(), deploy.clone()]);
+    let kept = store
+        .keep_without(&key, Some(&Definition::of_project_rules(&changed)), false)
+        .unwrap();
+    assert!(kept.rules_declined(&changed));
+    assert!(!kept.project_rules_approved(&changed), "still held back");
+    assert!(kept.project_rules_approved(&seen), "the pin as it was");
+    assert!(kept.git_trusted(), "git trusted before stays");
+    let again = store.project(&key).unwrap();
+    assert!(again.rules_declined(&changed), "across a restart");
+    let further = rules(&[test.clone(), deploy, rule(Effect::Exec, "rm *", RuleAction::Allow)]);
+    assert!(!again.rules_declined(&further), "a further change asks again");
+    // Git approved alone (the folder became a repository) leaves the rules
+    // kept out (the early review of the follow-ups of step 23).
+    let git_alone = store.approve(&key, &[], true).unwrap();
+    assert!(git_alone.rules_declined(&changed), "a git-only yes undid a keep");
+    assert!(git_alone.git_trusted());
+    // Approving the rules clears the decline.
+    let approved = store
+        .approve(&key, &[Definition::of_project_rules(&changed)], false)
+        .unwrap();
+    assert!(!approved.rules_declined(&changed));
+    assert!(approved.project_rules_approved(&changed));
+}
+
+/// A version 1 store (before git was pinned) is read as it meant, with git
+/// never shown for any project, says it is older, and is written as
+/// version 2 at its next change, owner-only, every project kept.
+#[test]
+fn a_version_1_store_is_read_with_git_not_shown_and_written_as_version_2() {
+    let scratch = cortex_testkit::scratch!("trust_v1");
+    let file = scratch.file(
+        "state/trust.toml",
+        "version = 1\n\n[[project]]\nkey = \"aaaa1111\"\nroot = \"~/a\"\n\
+         trusted_at = \"2026-11-13T10:00:00Z\"\n\n[[project]]\nkey = \"bbbb2222\"\n\
+         root = \"~/b\"\ntrusted_at = \"2026-11-13T10:00:00Z\"\n\n[[refused]]\n\
+         key = \"cccc3333\"\nroot = \"~/c\"\nrefused_at = \"2026-11-14T10:00:00Z\"\n",
+    );
+    let store = store(&scratch);
+    let old = store.project(&ProjectKey::new("aaaa1111")).unwrap();
+    assert!(old.is_trusted() && !old.git_trusted() && !old.git_declined());
+    assert!(old.from_older_store());
+    store
+        .approve(&ProjectKey::new("aaaa1111"), &[], true)
+        .unwrap();
+    let written = std::fs::read_to_string(&file).unwrap();
+    assert!(written.starts_with("version = 2\n"), "{written}");
+    let a = store.project(&ProjectKey::new("aaaa1111")).unwrap();
+    assert!(a.git_trusted() && !a.from_older_store());
+    let b = store.project(&ProjectKey::new("bbbb2222")).unwrap();
+    assert!(b.is_trusted() && !b.git_trusted(), "the other kept as it was");
+    assert!(store.project(&ProjectKey::new("cccc3333")).unwrap().is_refused());
+    assert!(private::is_private(&file).unwrap());
 }

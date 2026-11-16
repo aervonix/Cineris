@@ -26,7 +26,19 @@
 //!   condition) and to the capture of the base state (the same again). A change to the
 //!   project's permission rules does not touch what git would run, so
 //!   this answer is the user's trust alone: a project that adds a `deny`
-//!   does not lose its base state for it.
+//!   does not lose its base state for it. Since the follow-ups of step 23
+//!   it is the user's trust *with git shown*: a folder trusted before it
+//!   was a repository has git asked about when it becomes one
+//!   (`TrustStore`'s version 2).
+//!
+//! # The trust question's answers
+//!
+//! A project not trusted is asked "Trust it", "Not now" or "Never for this
+//! project". A project trusted already, with what is new in it (its rules
+//! changed, or git, now that it is a repository), is asked "Trust it",
+//! "Not now" or "Keep trusting it, without what is new" ([`TrustAnswer`]):
+//! never is not offered there, since it would take away the trust given
+//! before (the owner's decision of 2026-11-16).
 
 #![allow(
     clippy::disallowed_methods,
@@ -79,11 +91,57 @@ use crate::shell_cache;
 use crate::store::{Disk, Hooks, Kept, LogStore, SharedLog};
 use cortex_tools::shell::ShellKind;
 
+/// Where a session's commands start, given `session/new`'s `cwd`: the
+/// directory relative to the root, with `/` between names, or `None` for
+/// the root itself (since the follow-ups of step 23).
+///
+/// # Errors
+///
+/// Of kind `usage` (`invalid_cwd`) when `cwd` is not inside the workspace.
+fn start_below(root: &AbsPath, cwd: &Path) -> Result<Option<String>, Box<ErrorData>> {
+    let outside = || {
+        error(
+            ErrorKind::Usage,
+            "invalid_cwd",
+            format!(
+                "`{}` is not inside the workspace `{root}`: a session's commands start inside it.",
+                cwd.display()
+            ),
+        )
+    };
+    let resolved = resolve_dir(cwd).ok_or_else(outside)?;
+    let rest = cortex_base::strip_location_prefix(&resolved.to_fs_path(), &root.to_fs_path())
+        .ok_or_else(outside)?;
+    let names: Vec<String> = rest
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    Ok((!names.is_empty()).then(|| names.join("/")))
+}
+
+/// Whether a start kept in a session's log names a directory below the
+/// root: names with `/` between them, none empty, `.` or `..`, and nothing
+/// that makes it absolute.
+fn is_below(start: &str) -> bool {
+    !start.is_empty()
+        && start.split('/').all(|name| {
+            let mut parts = Path::new(name).components();
+            matches!(
+                (parts.next(), parts.next()),
+                (Some(std::path::Component::Normal(only)), None) if only == name
+            )
+        })
+}
+
 /// Whether the workspace is in a git repository: a `.git` in it or in a
 /// directory above it. Looked at, not asked of git, which starts nothing.
 fn in_git(root: &AbsPath) -> bool {
-    root.to_fs_path()
-        .ancestors()
+    in_git_at(&root.to_fs_path())
+}
+
+/// [`in_git`] of a root given as a path.
+pub(crate) fn in_git_at(root: &Path) -> bool {
+    root.ancestors()
         .any(|dir| std::fs::symlink_metadata(dir.join(".git")).is_ok())
 }
 
@@ -142,6 +200,9 @@ pub(crate) enum Which {
         id: SessionId,
         title: Option<String>,
         ephemeral: bool,
+        /// Where its commands start when it is not the root: `session/new`'s
+        /// `cwd`, inside the workspace.
+        cwd: Option<PathBuf>,
     },
     /// A stored one.
     Resume { id: SessionId },
@@ -292,13 +353,23 @@ fn sourced_rules(loaded: &Loaded) -> Vec<SourcedRule> {
         .collect()
 }
 
+/// A yes the store could not keep, which trust for this session holds to:
+/// the rules the person saw, and whether git was trusted with them (since
+/// the follow-ups of step 23: a yes to changed rules alone is no yes to
+/// git, on a reload as at the open).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ForTheRun {
+    pub(crate) pin: Definition,
+    pub(crate) git: bool,
+}
+
 /// What was learned about the project's trust.
 pub(crate) struct Trust {
     /// Whether the project may loosen what is asked and raise what is
     /// spent: it is trusted, and its rules are the ones the user saw.
     rules: bool,
     /// Whether git may read the repository's own configuration: the user
-    /// trusts the project.
+    /// trusts the project, with git shown.
     repository: bool,
     loaded: Loaded,
     /// The files `loaded` was read from, stamped as they were read: what a
@@ -308,11 +379,20 @@ pub(crate) struct Trust {
     /// The rules the person said yes to when the store could not keep the
     /// yes: trust for this session only holds to them, as the store's pins
     /// would (the second review of step 24's first part).
-    pub(crate) for_the_run: Option<Definition>,
+    pub(crate) for_the_run: Option<ForTheRun>,
     /// What went wrong reading the trust store, for the user.
     problem: Option<String>,
+    /// Why git does not read the repository's configuration in a trusted
+    /// project, for the user.
+    git_note: Option<String>,
     /// What the user has said of the project, for a front end's status.
     standing: TrustStanding,
+    /// The project is trusted, its rules have changed, and the person kept
+    /// trusting it without these rules: they are not asked about.
+    rules_declined: bool,
+    /// The project is trusted and is a repository, and git was never shown
+    /// (nor declined): it is asked about.
+    git_new: bool,
 }
 
 /// The project's rules as trust pins them (the owner's answer of
@@ -417,9 +497,15 @@ pub(crate) struct TrustQuestion {
     /// The definition of the rules that were shown: a yes pins this, not
     /// the files as they are when the answer comes.
     pub(crate) pin: Definition,
-    /// The project is trusted and only its rules changed: a yes approves
-    /// them again.
-    pub(crate) rules_only: bool,
+    /// The project is trusted already: the question is about what is new
+    /// in it, and its third answer is "keep trusting it, without what is
+    /// new", not never.
+    pub(crate) trusted: bool,
+    /// The rules were listed: a yes pins them, and a keep (of a trusted
+    /// project) declines them.
+    pub(crate) rules_shown: bool,
+    /// Git was listed: a yes trusts it, and a keep declines it.
+    pub(crate) git_shown: bool,
 }
 
 /// A person's answer to the trust question.
@@ -429,8 +515,13 @@ pub(crate) enum TrustAnswer {
     Yes,
     /// Not now: not asked again by this core, and nothing stored.
     NotNow,
-    /// Never for this project: stored, and not asked at later starts.
+    /// Never for this project: stored, and not asked at later starts. Only
+    /// of a project not trusted.
     Never,
+    /// Keep trusting it as it was trusted, without what is new: stored, and
+    /// what is new not asked about while it is what it is. Only of a
+    /// project trusted already (the follow-ups of step 23).
+    Keep,
 }
 
 /// What one setting held back for trust can do, said to the person asked.
@@ -507,7 +598,13 @@ pub(crate) fn look(
 ) -> Result<(Trust, Option<TrustQuestion>), Box<ErrorData>> {
     let place = place(inner, wanted)?;
     let trust = trust(inner, place.state.as_ref(), &place.root, &place.load)?;
-    if trust.rules || inner.options.trust_project {
+    if inner.options.trust_project {
+        return Ok((trust, None));
+    }
+    // A trusted project is asked about only what is new in it: its rules
+    // changed and not kept out, or git, now that it is a repository.
+    let rules_new = !trust.rules && !trust.rules_declined;
+    if trust.standing != TrustStanding::Untrusted && !rules_new && !trust.git_new {
         return Ok((trust, None));
     }
     let key = place.root.project_key();
@@ -529,7 +626,15 @@ pub(crate) fn look(
     {
         return Ok((trust, None));
     }
-    let rules_only = stored.is_trusted();
+    let trusted = stored.is_trusted();
+    // What the question lists: everything for a project not trusted; for
+    // one trusted, what is new.
+    let rules_shown = !trusted || rules_new;
+    let git_shown = if trusted {
+        trust.git_new
+    } else {
+        in_git(&place.root)
+    };
     let trusted_load = |profile: Option<&str>| {
         let mut options = place.load.clone();
         options.trust = cortex_config::ProjectTrust::Trusted;
@@ -547,7 +652,7 @@ pub(crate) fn look(
     let peek = trusted_load(None)?;
     let rules = pinned_rules(&peek, &|profile| trusted_load(Some(profile)))?;
     let mut resources = Vec::new();
-    if !rules_only && in_git(&place.root) {
+    if git_shown {
         resources.push(TrustResource {
             kind: TrustResourceKind::Repository,
             name: "git".to_owned(),
@@ -558,7 +663,7 @@ pub(crate) fn look(
             changed: false,
         });
     }
-    for (profile, rule) in rules.each() {
+    for (profile, rule) in rules.each().filter(|_| rules_shown) {
         resources.push(TrustResource {
             kind: TrustResourceKind::Rules,
             name: profile.map_or_else(
@@ -571,7 +676,7 @@ pub(crate) fn look(
                 rule.effect.as_str(),
                 rule.pattern
             ),
-            changed: rules_only,
+            changed: trusted,
         });
     }
     let untrusted_load = |profile: &str| {
@@ -586,7 +691,14 @@ pub(crate) fn look(
             ))
         })
     };
-    for (profile, withheld) in held_back_settings(&trust.loaded, &untrusted_load)? {
+    // A trusted project's settings wait only for its changed rules: with
+    // those kept out, or unchanged, they are not what is asked about.
+    let settings = if rules_shown {
+        held_back_settings(&trust.loaded, &untrusted_load)?
+    } else {
+        Vec::new()
+    };
+    for (profile, withheld) in settings {
         resources.push(TrustResource {
             kind: TrustResourceKind::Settings,
             name: match profile {
@@ -605,7 +717,9 @@ pub(crate) fn look(
         key,
         resources,
         pin: Definition::of_project_rules(&rules),
-        rules_only,
+        trusted,
+        rules_shown,
+        git_shown,
     };
     Ok((trust, Some(question)))
 }
@@ -618,7 +732,7 @@ pub(crate) fn look(
 /// An answer the trust store cannot keep still opens the session, with a
 /// notice (the review of step 23): a yes trusts the project for this
 /// session alone, as `--trust-project` would, while its rules are still the
-/// ones shown; a never is taken as not now.
+/// ones shown; a never or a keep is taken as not now.
 pub(crate) fn answer_trust(
     inner: &Inner,
     wanted: &Wanted,
@@ -638,40 +752,72 @@ pub(crate) fn answer_trust(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(question.key.clone());
     };
+    // The project's trust was taken away while a question about what is
+    // new in it was open (revoked, forgotten or refused, by another client
+    // or process): an answer about what is new is no answer about the whole
+    // project, nor past a never.
+    // And a first question's yes is no yes past a never said while it was
+    // open (the review of the follow-ups of step 23).
+    let gone = |failure: &cortex_policy::TrustError| {
+        matches!(failure, cortex_policy::TrustError::NotUnderstood { .. })
+            && store.project(&question.key).is_ok_and(|now| {
+                if question.trusted {
+                    !now.is_trusted()
+                } else {
+                    now.is_refused()
+                }
+            })
+    };
+    let gone_trust = || -> Result<Trust, Box<ErrorData>> {
+        let mut now = self::trust(inner, place.state.as_ref(), &place.root, &place.load)?;
+        now.problem = Some(
+            "This project's trust changed while you were asked, so your answer was not used and \
+             nothing of the project that needs trust is used in this session. A session opened \
+             again asks afresh, unless the project was marked never."
+                .to_owned(),
+        );
+        Ok(now)
+    };
     match answer {
         TrustAnswer::Yes => {
-            let pin = [question.pin.clone()];
-            let kept = if question.rules_only {
-                store.approve(&question.key, &pin)
+            let pin = if question.rules_shown {
+                vec![question.pin.clone()]
             } else {
-                store.trust(&question.key, &question.root, &pin)
+                Vec::new()
+            };
+            let kept = if question.trusted {
+                store.approve(&question.key, &pin, question.git_shown)
+            } else {
+                store.trust_unless_refused(&question.key, &question.root, &pin, question.git_shown)
             };
             match kept {
                 Ok(_) => self::trust(inner, place.state.as_ref(), &place.root, &place.load),
-                // The project's trust was taken away while the question was
-                // open (revoked, forgotten or refused, by another client or
-                // process): a yes to its changed rules is no yes to the
-                // whole project, nor past a never. Nothing is written, and
-                // the session opens with the trust as it stands now (the
-                // review of step 23's fixes).
-                Err(cortex_policy::TrustError::NotUnderstood { .. })
-                    if question.rules_only
-                        && store
-                            .project(&question.key)
-                            .is_ok_and(|now| !now.is_trusted()) =>
-                {
-                    let mut now =
-                        self::trust(inner, place.state.as_ref(), &place.root, &place.load)?;
-                    now.problem = Some(
-                        "This project's trust changed while you were asked, so your answer was \
-                         not used and nothing of the project that needs trust is used in this \
-                         session. A session opened again asks afresh, unless the project was \
-                         marked never."
-                            .to_owned(),
-                    );
-                    Ok(now)
+                // Nothing is written, and the session opens with the trust
+                // as it stands now (the review of step 23's fixes).
+                Err(failure) if gone(&failure) => gone_trust(),
+                Err(failure) => {
+                    trusted_unkept(inner, &place.load, question, &failure, trust.repository)
                 }
-                Err(failure) => trusted_unkept(inner, &place.load, question, &failure),
+            }
+        }
+        // Only of a project trusted already; of one that is not, it is not
+        // now (`Core::trust_for` reads it so).
+        TrustAnswer::Keep => {
+            let rules = question.rules_shown.then_some(&question.pin);
+            match store.keep_without(&question.key, rules, question.git_shown) {
+                Ok(_) => self::trust(inner, place.state.as_ref(), &place.root, &place.load),
+                Err(failure) if gone(&failure) => gone_trust(),
+                Err(failure) => {
+                    not_now();
+                    Ok(Trust {
+                        problem: Some(format!(
+                            "Your answer could not be kept, so this project will be asked about \
+                             again when the harness starts next; until then what is new in it \
+                             is not used: {failure}"
+                        )),
+                        ..trust
+                    })
+                }
             }
         }
         TrustAnswer::Never => match store.refuse(&question.key, &question.root) {
@@ -703,13 +849,18 @@ pub(crate) fn answer_trust(
 /// project trusted for this session, as `--trust-project` trusts it for a
 /// run, when its rules are still the ones that were shown; when they
 /// changed while the question was open, what they could loosen is set
-/// aside, as it is after a yes the store kept.
+/// aside, as it is after a yes the store kept. Git reads the repository's
+/// configuration only when it was shown, or was trusted before
+/// (`git_before`): a yes to changed rules alone is no yes to git declined
+/// or never shown (the review of the follow-ups of step 23).
 fn trusted_unkept(
     inner: &Inner,
     options: &LoadOptions,
     question: &TrustQuestion,
     failure: &cortex_policy::TrustError,
+    git_before: bool,
 ) -> Result<Trust, Box<ErrorData>> {
+    let repository = git_after_an_unkept_yes(question.git_shown, git_before);
     let load = |trusted: bool, profile: Option<&str>| {
         let mut options = options.clone();
         options.trust = if trusted {
@@ -733,31 +884,52 @@ fn trusted_unkept(
     if Definition::of_project_rules(&rules) == question.pin {
         Ok(Trust {
             rules: true,
-            repository: true,
+            repository,
             loaded: peek,
             watched: None,
-            for_the_run: Some(question.pin.clone()),
+            for_the_run: Some(ForTheRun {
+                pin: question.pin.clone(),
+                git: repository,
+            }),
             problem: Some(format!(
                 "Your answer could not be kept, so this project is trusted for this session \
                  only, and will be asked about again: {failure}"
             )),
+            git_note: None,
             standing: TrustStanding::ForTheRun,
+            rules_declined: false,
+            git_new: false,
         })
     } else {
         Ok(Trust {
             rules: false,
-            repository: true,
+            repository,
             loaded: load(false, None)?,
             watched: None,
-            for_the_run: Some(question.pin.clone()),
+            for_the_run: Some(ForTheRun {
+                pin: question.pin.clone(),
+                git: repository,
+            }),
             problem: Some(format!(
                 "Your answer could not be kept, so this project is trusted for this session \
                  only; its permission rules changed while you were asked, so its settings and \
                  its allow rules are set aside: {failure}"
             )),
+            git_note: None,
             standing: TrustStanding::RulesChanged,
+            rules_declined: false,
+            git_new: false,
         })
     }
+}
+
+/// Whether git reads the repository's configuration in a session whose
+/// yes the store could not keep: only when git was in what the yes was
+/// given to, or was trusted before. A yes to changed rules alone is no yes
+/// to git declined or never shown (the early review of the follow-ups of
+/// step 23: it was always yes).
+fn git_after_an_unkept_yes(git_shown: bool, git_before: bool) -> bool {
+    git_shown || git_before
 }
 
 /// A root as a person reads it: under the home directory with `~`, and
@@ -814,7 +986,10 @@ fn trust(
             watched,
             for_the_run: None,
             problem: None,
+            git_note: None,
             standing: TrustStanding::ForTheRun,
+            rules_declined: false,
+            git_new: false,
         });
     }
     let (stored, problem) = match state {
@@ -857,9 +1032,32 @@ fn trust(
             watched,
             for_the_run: None,
             problem,
+            git_note: None,
             standing,
+            rules_declined: false,
+            git_new: false,
         });
     }
+    // Git reads the repository's configuration only once it was shown and
+    // trusted (version 2 of the store). A trusted folder that has become a
+    // repository since, or one trusted under an older store, which kept no
+    // record of git, is asked about it; until then git does not read it.
+    let git_new = !stored.git_trusted() && !stored.git_declined() && in_git(root);
+    let git_note = git_new.then(|| {
+        if stored.from_older_store() {
+            "The trust store was written by an older version of Cortex-Harness, which did not \
+             record whether you were shown git when you trusted this project, so git does not \
+             read the repository's own configuration until you are asked again, or until \
+             `cortex permissions trust` trusts it."
+                .to_owned()
+        } else {
+            "You were not shown git when you trusted this project (it became a git repository \
+             since, or was trusted by an older version, which did not record it), so git does \
+             not read the repository's own configuration until you are asked, or until `cortex \
+             permissions trust` trusts it."
+                .to_owned()
+        }
+    });
     // Trusted when the user last looked. The rules the project's files hold
     // now are read as a trusted project's would be, so that none is held
     // back before it is compared with what the user saw, in every profile
@@ -877,34 +1075,44 @@ fn trust(
             ))
         })
     };
-    if stored.project_rules_approved(&pinned_rules(&peek.current(), &with_profile)?) {
+    let rules = pinned_rules(&peek.current(), &with_profile)?;
+    if stored.project_rules_approved(&rules) {
         let (loaded, watched) = made(peek);
         Ok(Trust {
             rules: true,
-            repository: true,
+            repository: stored.git_trusted(),
             loaded,
             watched,
             for_the_run: None,
             problem,
+            git_note,
             standing: TrustStanding::Trusted,
+            rules_declined: false,
+            git_new,
         })
     } else {
         // The user still trusts the project; what they have not seen is
         // its rules as they are now. What the rules could loosen is set
         // aside, and what has nothing to do with them is not.
+        let rules_declined = stored.rules_declined(&rules);
         let (loaded, watched) = made(load(false)?);
         Ok(Trust {
             rules: false,
-            repository: true,
+            repository: stored.git_trusted(),
             loaded,
             watched,
             for_the_run: None,
-            problem: Some(
+            problem: Some(if rules_declined {
+                RULES_DECLINED.to_owned()
+            } else {
                 "This project's permission rules have changed since it was trusted, so its \
                  settings and its allow rules are set aside until the change is approved."
-                    .to_owned(),
-            ),
+                    .to_owned()
+            }),
+            git_note,
             standing: TrustStanding::RulesChanged,
+            rules_declined,
+            git_new,
         })
     }
 }
@@ -1151,6 +1359,13 @@ pub(crate) struct Judged {
     pub(crate) standing: TrustStanding,
 }
 
+/// The sentence of a trusted project whose changed rules the person kept
+/// out ("keep trusting it, without the new rules").
+const RULES_DECLINED: &str = "This project's permission rules have changed since it was trusted, \
+                              and you chose to keep trusting it without the new rules: its \
+                              settings and its allow rules are set aside. `cortex permissions \
+                              trust` approves them.";
+
 /// See [`Judged`]. Blocks: it reads the trust store and the project's
 /// files.
 pub(crate) fn judge(
@@ -1158,7 +1373,7 @@ pub(crate) fn judge(
     state: Option<&StateDir>,
     root: &AbsPath,
     options: &LoadOptions,
-    for_the_run: Option<&Definition>,
+    for_the_run: Option<&ForTheRun>,
 ) -> Judged {
     let peek = |profile: Option<&str>| load_trusted(inner, options, profile);
     judge_pins(inner, state, root, for_the_run, || {
@@ -1177,7 +1392,7 @@ pub(crate) fn judge_loaded(
     root: &AbsPath,
     loaded: &Loaded,
     options: &LoadOptions,
-    for_the_run: Option<&Definition>,
+    for_the_run: Option<&ForTheRun>,
 ) -> Judged {
     judge_pins(inner, state, root, for_the_run, || {
         pinned_rules(loaded, &|profile| {
@@ -1213,7 +1428,7 @@ fn judge_pins(
     inner: &Inner,
     state: Option<&StateDir>,
     root: &AbsPath,
-    for_the_run: Option<&Definition>,
+    for_the_run: Option<&ForTheRun>,
     pinned: impl FnOnce() -> Result<ProjectRules, Box<ErrorData>>,
 ) -> Judged {
     if inner.options.trust_project {
@@ -1224,20 +1439,21 @@ fn judge_pins(
             standing: TrustStanding::ForTheRun,
         };
     }
-    if let Some(pin) = for_the_run {
+    if let Some(given) = for_the_run {
         // A yes the store could not keep holds for this session to the
-        // rules the person saw, as a pin would: the store, which has no
-        // record of it, is not asked.
+        // rules the person saw, as a pin would, and to git as the yes gave
+        // it: the store, which has no record of it, is not asked.
+        let repository = given.git;
         return match pinned() {
-            Ok(pins) if Definition::of_project_rules(&pins) == *pin => Judged {
+            Ok(pins) if Definition::of_project_rules(&pins) == given.pin => Judged {
                 rules: Some(true),
-                repository: true,
+                repository,
                 problem: None,
                 standing: TrustStanding::ForTheRun,
             },
             Ok(_) => Judged {
                 rules: Some(false),
-                repository: true,
+                repository,
                 problem: Some(
                     "This project's permission rules have changed since you trusted it for this \
                      session, so its settings and its allow rules are set aside."
@@ -1247,7 +1463,7 @@ fn judge_pins(
             },
             Err(_) => Judged {
                 rules: None,
-                repository: true,
+                repository,
                 problem: None,
                 standing: TrustStanding::ForTheRun,
             },
@@ -1282,26 +1498,31 @@ fn judge_pins(
             standing,
         };
     }
+    // Git reads the repository's configuration only as it was shown and
+    // trusted, on a reload as at the open (the follow-ups of step 23).
+    let repository = stored.git_trusted();
     match pinned() {
         Ok(pins) if stored.project_rules_approved(&pins) => Judged {
             rules: Some(true),
-            repository: true,
+            repository,
             problem,
             standing: TrustStanding::Trusted,
         },
-        Ok(_) => Judged {
+        Ok(pins) => Judged {
             rules: Some(false),
-            repository: true,
-            problem: Some(
+            repository,
+            problem: Some(if stored.rules_declined(&pins) {
+                RULES_DECLINED.to_owned()
+            } else {
                 "This project's permission rules have changed since it was trusted, so its \
                  settings and its allow rules are set aside until the change is approved."
-                    .to_owned(),
-            ),
+                    .to_owned()
+            }),
             standing: TrustStanding::RulesChanged,
         },
         Err(_) => Judged {
             rules: None,
-            repository: true,
+            repository,
             problem,
             standing: TrustStanding::Trusted,
         },
@@ -1708,7 +1929,9 @@ pub(crate) fn assemble(
         watched,
         for_the_run,
         problem,
+        git_note,
         standing,
+        ..
     } = match looked {
         Some(trust) => trust,
         None => trust(inner, state.as_ref(), &root, &load)?,
@@ -1748,6 +1971,7 @@ pub(crate) fn assemble(
         }
     }
     told.extend(problem);
+    told.extend(git_note);
     for diagnostic in &loaded.diagnostics {
         told.push(diagnostic.render(env));
     }
@@ -1787,8 +2011,15 @@ pub(crate) fn assemble(
             id,
             title,
             ephemeral,
+            ..
         } => (id.clone(), title.clone(), *ephemeral, false),
         Which::Resume { id } => (id.clone(), None, false, true),
+    };
+    // Where commands start: a new session's `cwd`, below the root; a
+    // resumed one's, as its log keeps it.
+    let mut start = match &wanted.which {
+        Which::New { cwd: Some(cwd), .. } => start_below(&root, cwd)?,
+        _ => None,
     };
     // The write roots a confined command of this session could write: a
     // shell or a git found inside one is passed over, so the harness never
@@ -1851,6 +2082,13 @@ pub(crate) fn assemble(
                 .map(|records| records.len() as u64)
                 .unwrap_or(0);
             created_at = session.created().clone();
+            // Kept by this harness, below the root; anything else (a log
+            // edited by hand) starts at the root.
+            start = session
+                .header()
+                .start
+                .clone()
+                .filter(|start| is_below(start));
             parent = session
                 .header()
                 .forked_from
@@ -1882,8 +2120,14 @@ pub(crate) fn assemble(
             session
         } else {
             base_capture = options.base_capture;
-            cortex_session::Session::create(&sessions, id.clone(), &root, session_options)
-                .map_err(|failure| session_error(&failure))?
+            cortex_session::Session::create_starting_in(
+                &sessions,
+                id.clone(),
+                &root,
+                start.clone(),
+                session_options,
+            )
+            .map_err(|failure| session_error(&failure))?
         };
         if !session.not_private().is_empty() {
             told.push(format!(
@@ -2119,6 +2363,7 @@ pub(crate) fn assemble(
             // ask git, which the repository's own configuration could make
             // run a program.
             repository_trusted,
+            start: start.clone(),
         };
         let mut tool = ShellTool::new(shell, config)
             .with_runner(runner(inner))
@@ -2309,6 +2554,7 @@ pub(crate) fn assemble(
             os: if cfg!(windows) { "Windows" } else { "Linux" }.to_owned(),
             shell: shell_named,
             workspace: root.to_native_string(),
+            start: start.clone(),
             git: in_git(&root),
         },
         append: inner.options.system_append.clone(),
@@ -2464,6 +2710,31 @@ mod tests {
 
     /// A shell inside a write root is passed over and the next on `PATH` is
     /// used; when nothing else is left, there is none.
+    /// A yes the store could not keep gives git only what the person was
+    /// shown or had trusted before.
+    #[test]
+    fn an_unkept_yes_gives_git_only_what_was_shown_or_trusted_before() {
+        assert!(!git_after_an_unkept_yes(false, false));
+        assert!(git_after_an_unkept_yes(true, false));
+        assert!(git_after_an_unkept_yes(false, true));
+    }
+
+    /// A start kept in a log names a directory below the root, and nothing
+    /// else.
+    #[test]
+    fn a_kept_start_is_below_the_root_or_not_taken() {
+        for good in ["src", "src/deep", "a b/c"] {
+            assert!(is_below(good), "{good}");
+        }
+        for bad in ["", "/", "/etc", "..", "src/..", "./src", "src//x", "src/"] {
+            assert!(!is_below(bad), "{bad:?}");
+        }
+        if cfg!(windows) {
+            assert!(!is_below("C:"));
+            assert!(!is_below("C:\\x"));
+        }
+    }
+
     #[test]
     fn a_shell_inside_a_write_root_is_passed_over() {
         let dir = std::env::temp_dir().join(format!(

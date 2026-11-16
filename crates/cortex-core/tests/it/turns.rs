@@ -403,6 +403,7 @@ fn a_session_with_no_log_runs_the_same_and_leaves_nothing_behind() {
             .handle(
                 client.id,
                 Op::SessionNew(cortex_protocol::methods::SessionNewParams {
+                    cwd: None,
                     workspace: world.workspace.to_str().unwrap().to_owned(),
                     settings: cortex_protocol::session::SessionSettings::default(),
                     title: None,

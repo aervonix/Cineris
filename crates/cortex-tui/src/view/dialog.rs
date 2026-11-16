@@ -348,11 +348,54 @@ pub struct TrustView {
     pub answers_hidden: bool,
     /// The most rows the list of what trust turns on may take.
     pub detail_rows: usize,
+    /// The line of what each answer does is left out, in a window too
+    /// small for it and the list whole.
+    pub unsaid: bool,
+}
+
+/// The third answer to a trust question: never, for a project not
+/// trusted; for one trusted already, keep trusting it without what is new
+/// in it, which never would have taken away (the follow-ups of step 23).
+#[must_use]
+pub fn third_trust_answer(request: &TrustRequest) -> &'static str {
+    if !request.trusted {
+        return "Never for this project";
+    }
+    let git = request
+        .resources
+        .iter()
+        .any(|resource| resource.kind == TrustResourceKind::Repository);
+    let rules = request.resources.iter().any(|resource| resource.changed);
+    match (git, rules) {
+        (true, true) => "Keep trusting it, without these",
+        (true, false) => "Keep trusting it, without git",
+        _ => "Keep trusting it, without the new rules",
+    }
+}
+
+/// What each answer to a trust question does, said under the answers: of
+/// "Trust it" only when it is offered (a list that does not fit offers it
+/// not).
+fn trust_answers_said(request: &TrustRequest, offered: bool) -> String {
+    let trust = if offered { "Trust it turns these on; " } else { "" };
+    let rest = if request.trusted {
+        "not now asks again at the next start; keep trusting it leaves them off and asks no \
+         more until they change."
+    } else {
+        "not now asks again at the next start; never asks no more, until `cortex permissions \
+         trust`."
+    };
+    let said = format!("{trust}{rest}");
+    let mut first = said.chars();
+    first
+        .next()
+        .map(|letter| letter.to_uppercase().chain(first).collect())
+        .unwrap_or_default()
 }
 
 /// The trust question, `width` columns wide at most (reference screen 2c,
 /// `docs/architecture/tui-look/2c.txt`: the question, the folder, then
-/// each thing trust turns on in full).
+/// each thing trust turns on in full, the answers and what each does).
 ///
 /// ```text
 /// ? Trust this project?
@@ -364,13 +407,26 @@ pub struct TrustView {
 ///     setting  model.main = "claude-haiku-5-5" (it can raise what you spend)
 ///
 ///   y Trust it   n Not now   x Never for this project
+///   Trust it turns these on, and asks again if they change. Not now …
 /// ```
+///
+/// A project trusted already is asked about what is new in it ("Trust
+/// what is new in this project?"), and its third answer keeps the trust it
+/// had ([`third_trust_answer`]).
 #[must_use]
 pub fn trust(request: &TrustRequest, view: &TrustView, width: usize, look: &Look) -> Drawn {
     let theme = &look.theme;
     let muted = theme.style(Token::Muted);
     let prose = look.prose_width.min(width);
-    let mut lines = title("Trust this project?", width, look);
+    let mut lines = title(
+        if request.trusted {
+            "Trust what is new in this project?"
+        } else {
+            "Trust this project?"
+        },
+        width,
+        look,
+    );
     let question = lines.len();
     lines.extend(indented(
         &sanitize(&request.workspace),
@@ -379,7 +435,11 @@ pub fn trust(request: &TrustRequest, view: &TrustView, width: usize, look: &Look
         width,
     ));
     lines.extend(indented(
-        "Trusting it turns on what its files ask for:",
+        if request.trusted {
+            "You trust this project. Trusting what is new in it turns on:"
+        } else {
+            "Trusting it turns on what its files ask for:"
+        },
         muted,
         2,
         prose,
@@ -458,6 +518,15 @@ pub fn trust(request: &TrustRequest, view: &TrustView, width: usize, look: &Look
     }
     lines.push(Line::new());
     let (answer_lines, whole) = answer_rows(&view.answers, view.answers_hidden, width, look);
+    let mut answer_lines = answer_lines;
+    if !view.unsaid {
+        answer_lines.extend(indented(
+            &trust_answers_said(request, !clipped),
+            muted,
+            2,
+            prose,
+        ));
+    }
     let answer_rows = answer_lines.len();
     lines.extend(answer_lines);
     Drawn {

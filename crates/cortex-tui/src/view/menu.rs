@@ -172,6 +172,7 @@ fn search_line(input: &Input, query: &str, look: &Look, width: usize) -> Line {
     line.push(Span::plain(" ".repeat(GAP)));
     match input.search_found() {
         Some(found) => {
+            let found = found.shown();
             let first = found.lines().next().unwrap_or_default();
             let more = if found.contains('\n') {
                 look.glyphs.ellipsis

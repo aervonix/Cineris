@@ -311,6 +311,7 @@ fn answer(make: impl Fn(&ServerRequest) -> ServerResponse + Send + Sync + 'stati
 fn new_session() -> Step {
     call(|ctx| {
         Op::SessionNew(SessionNewParams {
+            cwd: None,
             workspace: ctx.workspace.clone(),
             settings: cortex_protocol::session::SessionSettings::default(),
             title: None,
@@ -571,6 +572,7 @@ pub fn scenarios() -> Vec<Scenario> {
             steps: vec![
                 Step::Start(Box::new(|ctx| {
                     Op::SessionNew(SessionNewParams {
+                        cwd: None,
                         workspace: ctx.workspace.clone(),
                         settings: cortex_protocol::session::SessionSettings::default(),
                         title: None,
@@ -582,6 +584,7 @@ pub fn scenarios() -> Vec<Scenario> {
                     ServerResponse::Trust(cortex_protocol::methods::TrustResponse {
                         trusted: true,
                         never: false,
+                        keep: false,
                     })
                 }),
                 Step::Finish,

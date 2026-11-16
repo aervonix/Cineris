@@ -30,7 +30,7 @@ use cortex_protocol::methods::{ProjectEntriesResult, StoredApproval};
 use cortex_protocol::project::{EntryChange, NewEntry};
 use cortex_protocol::{ApprovalId, ErrorKind, ProjectKey};
 
-use crate::assemble::{held_back_settings, pinned_rules, resolve_dir};
+use crate::assemble::{held_back_settings, in_git_at, pinned_rules, resolve_dir};
 use crate::core::{Core, OpError, error};
 use crate::provider::{builtin_names, key_variable};
 
@@ -77,6 +77,21 @@ pub enum TrustState {
     /// The user said never to trust it: it is not asked about, and nothing
     /// of it that needs trust is used (since step 23).
     Never,
+    /// Trusted, its rules the ones the user approved, and a git repository
+    /// whose git was not shown when it was trusted (it became one since, or
+    /// was trusted under an older store), or that the user kept trusting
+    /// without git: git does not read the repository's configuration (since
+    /// the follow-ups of step 23).
+    GitNotTrusted,
+}
+
+impl TrustState {
+    /// Whether the project's rules and settings apply: it is trusted, and
+    /// its rules are the ones the user approved, whatever was said of git.
+    #[must_use]
+    pub fn rules_trusted(self) -> bool {
+        matches!(self, Self::Trusted | Self::GitNotTrusted)
+    }
 }
 
 /// What trusting a project pinned.
@@ -96,6 +111,9 @@ pub struct Trusted {
     pub was_trusted: bool,
     /// Whether the user had said never to trust it: trusting it lifts that.
     pub was_refused: bool,
+    /// Whether the project is a git repository, whose git is trusted now
+    /// with the rest (since the follow-ups of step 23).
+    pub git: bool,
 }
 
 impl Core {
@@ -274,16 +292,20 @@ impl Core {
             return Ok(TrustState::Untrusted);
         }
         let rules = self.pinned(project)?;
-        Ok(if stored.project_rules_approved(&rules) {
-            TrustState::Trusted
-        } else {
+        Ok(if !stored.project_rules_approved(&rules) {
             TrustState::RulesChanged
+        } else if !stored.git_trusted() && in_git_at(&project.root) {
+            TrustState::GitNotTrusted
+        } else {
+            TrustState::Trusted
         })
     }
 
     /// Trusts a project, or approves the change of its rules: pins every
     /// permission rule its files hold now (allow, deny and ask, which is
-    /// what a later start compares) and keeps whatever else was pinned.
+    /// what a later start compares) and keeps whatever else was pinned. In
+    /// a git repository git is trusted with it, and said to be
+    /// ([`Trusted::git`]), as the trust question lists it.
     ///
     /// # Errors
     ///
@@ -303,11 +325,12 @@ impl Core {
         let stored = store.project(&project.key).map_err(failed)?;
         let (was_trusted, was_refused) = (stored.is_trusted(), stored.is_refused());
         let pin = [Definition::of_project_rules(&rules)];
+        let git = in_git_at(&project.root);
         if was_trusted {
-            store.approve(&project.key, &pin).map_err(failed)?;
+            store.approve(&project.key, &pin, git).map_err(failed)?;
         } else {
             store
-                .trust(&project.key, &project.shown, &pin)
+                .trust(&project.key, &project.shown, &pin, git)
                 .map_err(failed)?;
         }
         Ok(Trusted {
@@ -318,6 +341,7 @@ impl Core {
             settings,
             was_trusted,
             was_refused,
+            git,
         })
     }
 
@@ -370,7 +394,7 @@ impl Core {
     /// valid.
     pub fn configuration(&self, project: &Project, strict: bool) -> Result<Loaded, OpError> {
         let trusted =
-            self.inner.options.trust_project || self.project_trust(project)? == TrustState::Trusted;
+            self.inner.options.trust_project || self.project_trust(project)?.rules_trusted();
         let trust = if trusted {
             ConfigTrust::Trusted
         } else {

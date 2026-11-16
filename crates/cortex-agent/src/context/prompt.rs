@@ -81,6 +81,11 @@ pub struct Environment {
     pub shell: Option<String>,
     /// The workspace root, as the operating system writes it.
     pub workspace: String,
+    /// Where commands start, relative to the workspace root with `/`
+    /// between names, when it is not the root: the directory the person
+    /// started in (since the follow-ups of step 23). A session started at
+    /// the root has none, and its prompt is the same as before.
+    pub start: Option<String>,
     /// Whether the workspace is in a git repository.
     pub git: bool,
 }
@@ -96,6 +101,13 @@ impl Environment {
             "- Workspace: {}\n",
             cortex_base::visible(&self.workspace)
         ));
+        if let Some(start) = &self.start {
+            out.push_str(&format!(
+                "- Commands start in: {} (relative to the workspace; paths given to the other \
+                 tools are relative to the workspace)\n",
+                cortex_base::visible(start)
+            ));
+        }
         out.push_str(if self.git {
             "- The workspace is in a git repository."
         } else {
@@ -219,8 +231,33 @@ mod tests {
             os: "Linux".to_owned(),
             shell: Some("bash 5.2".to_owned()),
             workspace: "/work/app".to_owned(),
+            start: None,
             git: true,
         }
+    }
+
+    /// Started at the root, the environment is the text it always was, to
+    /// the byte, so a request's prefix and its cache are unchanged; started
+    /// in a folder below it, one line says where commands start (the
+    /// follow-ups of step 23).
+    #[test]
+    fn the_environment_says_where_commands_start_only_below_the_root() {
+        assert_eq!(
+            environment().render(),
+            "Environment:\n- Operating system: Linux\n- Shell: bash 5.2\n- Workspace: \
+             /work/app\n- The workspace is in a git repository."
+        );
+        let below = Environment {
+            start: Some("src/de\u{202e}ep".to_owned()),
+            ..environment()
+        };
+        assert_eq!(
+            below.render(),
+            "Environment:\n- Operating system: Linux\n- Shell: bash 5.2\n- Workspace: \
+             /work/app\n- Commands start in: src/de\\u{202e}ep (relative to the workspace; \
+             paths given to the other tools are relative to the workspace)\n- The workspace is \
+             in a git repository."
+        );
     }
 
     #[test]

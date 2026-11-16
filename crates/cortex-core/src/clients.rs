@@ -178,6 +178,44 @@ fn refused(code: &str, message: impl Into<String>) -> Box<ErrorData> {
     Box::new(ErrorData::new(ErrorKind::Usage, code, message))
 }
 
+/// What is wrong with a trust answer to `request`, if anything: one that
+/// contradicts itself is refused, as an unknown value of a grant is, and
+/// the question stays open for an answer that can be read (the review of
+/// step 23: it was taken as a yes). Never is an answer to a project not
+/// trusted, and keep to one trusted already: a never to a question about
+/// what is new in a trusted project would take away the trust given before
+/// (the follow-ups of step 23).
+fn trust_answer_problem(request: &ServerRequest, answer: &TrustResponse) -> Option<&'static str> {
+    let trusted_project = matches!(request, ServerRequest::Trust(request) if request.trusted);
+    match answer {
+        TrustResponse {
+            trusted: true,
+            never: true,
+            ..
+        } => Some(
+            "A trust answer cannot be both `trusted` and `never`: `never` goes with `trusted` \
+             false.",
+        ),
+        TrustResponse {
+            keep: true,
+            trusted,
+            never,
+        } if *trusted || *never => Some(
+            "A trust answer cannot be `keep` with `trusted` or `never`: `keep` goes with both \
+             false.",
+        ),
+        TrustResponse { never: true, .. } if trusted_project => Some(
+            "The project is trusted already: `never` is not an answer to what is new in it. \
+             `keep` keeps trusting it without what is new.",
+        ),
+        TrustResponse { keep: true, .. } if !trusted_project => Some(
+            "The project is not trusted: `keep` is an answer only to what is new in a project \
+             trusted already.",
+        ),
+        _ => None,
+    }
+}
+
 impl Clients {
     /// Adds a client, and returns its number and its queue.
     pub(crate) fn connect(&self, info: ClientInfo) -> (ClientId, Arc<EventQueue>) {
@@ -398,16 +436,10 @@ impl Clients {
         // A grant that contradicts itself is refused, as an unknown value
         // of a grant is, and the question stays open for an answer that
         // can be read (the review of step 23: it was taken as a yes).
-        if let ServerResponse::Trust(TrustResponse {
-            trusted: true,
-            never: true,
-        }) = &response
+        if let ServerResponse::Trust(answer) = &response
+            && let Some(problem) = trust_answer_problem(&request.request, answer)
         {
-            return Err(refused(
-                "invalid_answer",
-                "A trust answer cannot be both `trusted` and `never`: `never` goes with \
-                 `trusted` false.",
-            ));
+            return Err(refused("invalid_answer", problem));
         }
         let Some(request) = open.remove(id) else {
             return Err(refused("request_not_open", "The request is gone."));

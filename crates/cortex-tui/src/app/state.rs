@@ -166,6 +166,8 @@ pub struct App {
     open: Option<Open>,
     /// The workspace, for `/new`.
     workspace: String,
+    /// Where a new session's commands start, below the root (`Start::cwd`).
+    cwd: Option<String>,
     /// The terminal's capabilities, for the look of a theme chosen later.
     caps: Capabilities,
     /// The picker the application opened, and what its rows stand for.
@@ -341,6 +343,7 @@ impl App {
             },
             open: Some(start.open),
             workspace: start.workspace,
+            cwd: start.cwd,
             caps: *caps,
             picker: None,
             kept: Vec::new(),
@@ -1015,7 +1018,10 @@ impl App {
                 workspace,
                 settings,
                 ephemeral,
-            } => (new_session(workspace, settings, ephemeral), Pending::Open),
+            } => (
+                new_session(workspace, self.cwd.clone(), settings, ephemeral),
+                Pending::Open,
+            ),
             Open::Resume(id) => (
                 Op::SessionOpen(SessionRef { session_id: id }),
                 Pending::Open,
@@ -1155,7 +1161,7 @@ impl App {
                     }),
                     None => {
                         self.say("There is no session to continue here, so this is a new one.");
-                        new_session(workspace, settings, ephemeral)
+                        new_session(workspace, self.cwd.clone(), settings, ephemeral)
                     }
                 };
                 let ticket = self.link.send(op);
@@ -1961,8 +1967,14 @@ fn item_of(event: &Event) -> Option<&str> {
     }
 }
 
-fn new_session(workspace: String, settings: SessionSettings, ephemeral: bool) -> Op {
+fn new_session(
+    workspace: String,
+    cwd: Option<String>,
+    settings: SessionSettings,
+    ephemeral: bool,
+) -> Op {
     Op::SessionNew(SessionNewParams {
+        cwd,
         workspace,
         settings,
         title: None,

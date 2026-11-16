@@ -580,6 +580,7 @@ fn trust_question() -> TrustRequest {
     };
     TrustRequest {
         session_id: SessionId::from(SESSION),
+        trusted: false,
         workspace: "~/src/parser".to_owned(),
         resources: vec![
             resource(
@@ -628,9 +629,10 @@ fn undo_question() -> QuestionRequest {
 
 const SESSION: &str = "s_screens";
 
-/// The height of screen 2c's window: its dialog, the blank row and the
+/// The height of screen 2c's window: its dialog, the line of what each
+/// answer does (since the follow-ups of step 23), the blank row and the
 /// hint row, with no room to spare.
-const TRUST_HEIGHT: usize = 13;
+const TRUST_HEIGHT: usize = 15;
 
 /// The height of screen 2d's window.
 const UNDO_HEIGHT: usize = 8;
@@ -722,6 +724,7 @@ fn app_dialog(
     let start = Start {
         version: "0.1.0".to_owned(),
         folder: "~/src/parser".to_owned(),
+        cwd: None,
         workspace: "/work/parser".to_owned(),
         open: Open::New {
             workspace: "/work/parser".to_owned(),

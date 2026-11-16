@@ -88,10 +88,10 @@ impl HistoryStore for RaisesOnPush {
     fn len(&self) -> usize {
         0
     }
-    fn get(&self, _: usize) -> Option<&str> {
+    fn get(&self, _: usize) -> Option<&cortex_tui::editor::Fragment> {
         None
     }
-    fn push(&mut self, _: &str) {
+    fn push(&mut self, _: &cortex_tui::editor::Fragment) {
         cortex_term::pty::raise_interrupt().expect("raise SIGINT");
     }
 }
@@ -162,6 +162,7 @@ pub(crate) fn enter() {
         let start = Start {
             version: "0.0.0".to_owned(),
             folder: "~/signals".to_owned(),
+            cwd: None,
             workspace: "/nonexistent-signals".to_owned(),
             open: Open::New {
                 workspace: "/nonexistent-signals".to_owned(),

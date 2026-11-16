@@ -38,11 +38,13 @@ mod headless;
 mod help;
 mod history;
 mod interactive;
+mod json;
 mod project_view;
 mod report;
 mod serve;
 mod signals;
 mod usage_view;
+mod workspace;
 
 use std::env;
 use std::ffi::{OsStr, OsString};

@@ -121,6 +121,19 @@ fn sys_config_shows_and_checks_what_a_session_would_load() {
     );
     machine.run(&["config", "check"]).expect_code(0);
 
+    // Run in a folder below the project's root, the project's own file is
+    // read: the root is found by walking up (the follow-ups of step 23).
+    machine.project_config("[retry]\nattempts = 2\n");
+    let below = machine.run_in(
+        &machine.workspace.join("src").join("deep"),
+        &["config", "show", "--layer", "project"],
+    );
+    assert!(
+        below.expect_code(0).stdout.contains("attempts = 2"),
+        "{}",
+        shown(&below)
+    );
+
     // An unknown key is a warning to a run, and an error to `check`.
     machine.user_config("model.mian = \"x\"\n");
     let shown_anyway = machine.run(&["config", "show"]);

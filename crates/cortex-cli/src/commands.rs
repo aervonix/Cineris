@@ -68,12 +68,17 @@ impl Context {
         Core::start(options).map_err(|error| self.fail(&error))
     }
 
+    /// The project of the workspace root, found from the working directory
+    /// by walking up, as a session's would be.
     fn project(&self, core: &Core) -> Result<Project, Done> {
-        let here = std::env::current_dir().map_err(|error| {
+        let here = crate::workspace::Here::now().map_err(|error| {
             self.say(&format!("the working directory could not be read: {error}"));
             exit::USAGE
         })?;
-        core.project(&here).map_err(|error| self.fail(&error))
+        for said in here.passed_over_said() {
+            self.say(&said);
+        }
+        core.project(&here.root).map_err(|error| self.fail(&error))
     }
 
     fn say(&self, text: &str) {
@@ -137,22 +142,7 @@ pub(crate) fn sessions(command: SessionsCommand, name: &'static str) -> Done {
             Ok(_) => return Err(exit::INTERNAL),
             Err(error) => return Err(context.fail(&error)),
         };
-        let mut out = String::new();
-        for session in &sessions {
-            if json {
-                out.push_str(&serde_json::to_string(session).unwrap_or_default());
-                out.push('\n');
-            } else {
-                out.push_str(&format!(
-                    "{}  {}  {:>3} turns  {}  {}\n",
-                    session.session_id,
-                    session.updated_at,
-                    session.turns,
-                    session.model.as_ref().map_or("-", |model| model.as_str()),
-                    session.title.as_deref().unwrap_or(""),
-                ));
-            }
-        }
+        let listing = session_lines(&sessions, json);
         if sessions.is_empty() && !json {
             context.say(if all {
                 "there are no stored sessions"
@@ -160,9 +150,33 @@ pub(crate) fn sessions(command: SessionsCommand, name: &'static str) -> Done {
                 "there are no stored sessions in this workspace; --all lists every workspace's"
             });
         }
-        out!("{out}");
+        if json {
+            crate::print_out(&listing);
+        } else {
+            out!("{listing}");
+        }
         Ok(exit::COMPLETED)
     })())
+}
+
+/// What `sessions list` prints: a line each, as JSON with `json`.
+fn session_lines(sessions: &[cortex_protocol::session::SessionSummary], json: bool) -> String {
+    let mut out = String::new();
+    for session in sessions {
+        if json {
+            out.push_str(&crate::json::record(serde_json::to_string(session)));
+        } else {
+            out.push_str(&format!(
+                "{}  {}  {:>3} turns  {}  {}\n",
+                session.session_id,
+                session.updated_at,
+                session.turns,
+                session.model.as_ref().map_or("-", |model| model.as_str()),
+                session.title.as_deref().unwrap_or(""),
+            ));
+        }
+    }
+    out
 }
 
 /// `cortex models`
@@ -279,7 +293,7 @@ pub(crate) fn usage(command: UsageCommand, name: &'static str) -> Done {
             Err(error) => return Err(context.fail(&error)),
         };
         if command.json {
-            out!("{}\n", serde_json::to_string(&report).unwrap_or_default());
+            crate::print_out(&usage_json(&report));
         } else {
             out!("{}", crate::usage_view::usage(&report, now()));
         }
@@ -317,26 +331,7 @@ pub(crate) fn stats(command: StatsCommand, name: &'static str) -> Done {
                     .block_on(core.stats_summary())
                     .map_err(|error| context.fail(&error))?;
                 if json {
-                    let value = serde_json::json!({
-                        "enabled": summary.enabled,
-                        "dir": summary.dir,
-                        "retention_months": summary.retention,
-                        "months": summary.months,
-                        "bytes": summary.bytes,
-                        "requests": summary.requests,
-                        "turns": summary.turns,
-                        "tool_calls": summary.tool_calls,
-                        "dropped": summary.dropped,
-                        "unreadable": summary.unreadable,
-                        "aggregates": match &summary.aggregates {
-                            cortex_core::AggregatesFound::Newer { .. } => "newer",
-                            cortex_core::AggregatesFound::Unreadable => "unreadable",
-                            cortex_core::AggregatesFound::Missing => "missing",
-                            _ => "read",
-                        },
-                        "set_aside": summary.set_aside,
-                    });
-                    out!("{value}\n");
+                    crate::print_out(&stats_json(&summary));
                 } else {
                     out!("{}", crate::usage_view::stats(&summary));
                 }
@@ -344,6 +339,35 @@ pub(crate) fn stats(command: StatsCommand, name: &'static str) -> Done {
         }
         Ok(exit::COMPLETED)
     })())
+}
+
+/// What `usage --json` prints.
+fn usage_json(report: &cortex_protocol::usage::UsageReport) -> String {
+    crate::json::record(serde_json::to_string(report))
+}
+
+/// What `stats show --json` prints.
+fn stats_json(summary: &cortex_core::StatsSummary) -> String {
+    let value = serde_json::json!({
+        "enabled": summary.enabled,
+        "dir": summary.dir,
+        "retention_months": summary.retention,
+        "months": summary.months,
+        "bytes": summary.bytes,
+        "requests": summary.requests,
+        "turns": summary.turns,
+        "tool_calls": summary.tool_calls,
+        "dropped": summary.dropped,
+        "unreadable": summary.unreadable,
+        "aggregates": match &summary.aggregates {
+            cortex_core::AggregatesFound::Newer { .. } => "newer",
+            cortex_core::AggregatesFound::Unreadable => "unreadable",
+            cortex_core::AggregatesFound::Missing => "missing",
+            _ => "read",
+        },
+        "set_aside": summary.set_aside,
+    });
+    crate::json::record(serde_json::to_string(&value))
 }
 
 /// Now, for "as of" in what is printed.
@@ -434,7 +458,10 @@ pub(crate) fn project(command: ProjectCommand, name: &'static str) -> Done {
         // Whether the project is trusted as it is. A store that cannot say
         // is "not trusted", which is how a session would take it: it only
         // decides whether to say that an accepted command still asks.
-        let trusted = || core.project_trust(&project).ok() == Some(TrustState::Trusted);
+        let trusted = || {
+            core.project_trust(&project)
+                .is_ok_and(cortex_core::TrustState::rules_trusted)
+        };
         // What a change made, an entry a line, and then, where a command
         // was accepted or written, whether it still asks for want of trust.
         let changed = |result: &ProjectEntriesResult, what: &str| {
@@ -475,10 +502,7 @@ pub(crate) fn project(command: ProjectCommand, name: &'static str) -> Done {
                         "entries": project_view::chosen(&listed.entries, all, kind.as_ref()),
                         "problems": listed.problems,
                     });
-                    crate::print_out(&format!(
-                        "{}\n",
-                        project_view::json_line(&chosen.to_string())
-                    ));
+                    crate::print_out(&crate::json::record(serde_json::to_string(&chosen)));
                     return Ok(exit::COMPLETED);
                 }
                 out!(
@@ -639,6 +663,10 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         TrustState::Never =>
                             "never trusted: you said never to trust it, so it is not asked about; \
                              `permissions trust` trusts it, `permissions forget` asks again",
+                        TrustState::GitNotTrusted =>
+                            "trusted, but not its git: it is a repository whose git you were not \
+                             shown when you trusted it, or kept out, so git does not read its \
+                             configuration; `permissions trust` trusts it",
                     }
                 );
                 if approvals.is_empty() {
@@ -673,7 +701,9 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 let trusted = core.trust_project(&project).map_err(fail)?;
                 let mut out = format!(
                     "{} {}{}.\n",
-                    if trusted.was_trusted {
+                    if trusted.was_trusted && trusted.git {
+                        "Approved the permission rules and git of"
+                    } else if trusted.was_trusted {
                         "Approved the permission rules of"
                     } else {
                         "Trusted"
@@ -685,6 +715,12 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         ""
                     }
                 );
+                if trusted.git {
+                    out.push_str(
+                        "Git may read this repository's own configuration, which can name \
+                         programs for git to run.\n",
+                    );
+                }
                 if !trusted.rules.is_empty() {
                     out.push_str("Its permission rules, as they are now:\n");
                     for (profile, rule) in &trusted.rules {
@@ -836,4 +872,107 @@ fn known_provider(context: &Context, core: &Core, provider: &str) -> Result<(), 
         known.join(", ")
     ));
     Err(exit::USAGE)
+}
+
+#[cfg(test)]
+mod tests {
+    use cortex_protocol::ids::Timestamp;
+    use cortex_protocol::session::SessionSummary;
+    use cortex_protocol::usage::{UsageReport, UsageRow, UsageTotals};
+    use cortex_protocol::{ModelId, SessionId};
+
+    use super::*;
+    use crate::json::tests::parsed;
+
+    /// Every hostile name, inside a text that is otherwise plain.
+    fn hostile_texts() -> Vec<(String, String)> {
+        cortex_testkit::hostile::all()
+            .into_iter()
+            .map(|name| (name.label, format!("x{}y", name.text)))
+            .collect()
+    }
+
+    /// `sessions list --json` is JSON, safe at a terminal, whatever a
+    /// session's title, workspace or model holds (the follow-ups of step
+    /// 23: it printed `\u{202e}`, which is not JSON).
+    #[test]
+    fn sessions_list_json_is_json_for_every_hostile_name() {
+        for (label, text) in hostile_texts() {
+            let session = SessionSummary {
+                session_id: SessionId::new("s_1"),
+                workspace: text.clone(),
+                title: Some(text.clone()),
+                created_at: Timestamp::new("2026-11-16T10:00:00Z"),
+                updated_at: Timestamp::new("2026-11-16T10:00:00Z"),
+                parent: None,
+                model: Some(ModelId::new(text.clone())),
+                turns: 2,
+            };
+            let back = parsed(&session_lines(&[session.clone(), session], true));
+            assert_eq!(back.len(), 2, "{label}");
+            for line in back {
+                assert_eq!(line["title"], text.as_str(), "{label}");
+                assert_eq!(line["workspace"], text.as_str(), "{label}");
+                assert_eq!(line["model"], text.as_str(), "{label}");
+            }
+        }
+    }
+
+    /// `usage --json` alike, with a project's label, a model and a zone.
+    #[test]
+    fn usage_json_is_json_for_every_hostile_name() {
+        for (label, text) in hostile_texts() {
+            let report = UsageReport {
+                range: UsageRange::Month,
+                from: None,
+                to: None,
+                group_by: vec![UsageGroup::Model],
+                rows: vec![UsageRow {
+                    model: Some(ModelId::new(text.clone())),
+                    project_label: Some(text.clone()),
+                    ..UsageRow::default()
+                }],
+                totals: UsageTotals::default(),
+                limits: Vec::new(),
+                sources: vec![text.clone()],
+                recording: true,
+                time: None,
+                tools: Vec::new(),
+                zone: Some(text.clone()),
+            };
+            let back = parsed(&usage_json(&report));
+            assert_eq!(back[0]["rows"][0]["model"], text.as_str(), "{label}");
+            assert_eq!(
+                back[0]["rows"][0]["project_label"],
+                text.as_str(),
+                "{label}"
+            );
+            assert_eq!(back[0]["zone"], text.as_str(), "{label}");
+        }
+    }
+
+    /// `stats show --json` alike, with the directory and a file set aside.
+    #[test]
+    fn stats_json_is_json_for_every_hostile_name() {
+        for (label, text) in hostile_texts() {
+            let summary = cortex_core::StatsSummary {
+                enabled: true,
+                dir: Some(text.clone()),
+                retention: 12,
+                months: vec![text.clone()],
+                bytes: 1,
+                requests: 2,
+                turns: 3,
+                tool_calls: 4,
+                dropped: 0,
+                unreadable: 0,
+                aggregates: cortex_core::AggregatesFound::Missing,
+                set_aside: vec![text.clone()],
+            };
+            let back = parsed(&stats_json(&summary));
+            assert_eq!(back[0]["dir"], text.as_str(), "{label}");
+            assert_eq!(back[0]["set_aside"][0], text.as_str(), "{label}");
+            assert_eq!(back[0]["aggregates"], "missing", "{label}");
+        }
+    }
 }

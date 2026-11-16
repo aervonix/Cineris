@@ -176,6 +176,10 @@ pub struct Start {
     pub folder: String,
     /// The workspace's root, where `/new` opens a session.
     pub workspace: String,
+    /// Where a new session's commands start when it is not the root: the
+    /// directory the person started in, below the root the binary found
+    /// (`session/new`'s `cwd`, since the follow-ups of step 23).
+    pub cwd: Option<String>,
     /// The session to open.
     pub open: Open,
     /// A prompt given on the command line, sent once the session is open.

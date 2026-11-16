@@ -47,6 +47,19 @@ The workspace root is the nearest ancestor of the working directory that contain
 
 A worktree's or a submodule's `.git` is a plain file, and counts like a folder. A `.cortex` must be a folder: a link there is passed over on both OSes. What was passed over is reported (`find_workspace_root`), so that the front end can say why a folder the user expected to be the project is not.
 
+**As built since the follow-ups of step 23** (the owner's choice of 2026-11-16; until then every binary took the working directory for the root). Each binary finds the root this way before the core is asked anything: the interactive application, headless mode and every subcommand (`cortex-cli`'s `workspace::Here`). What was passed over is said, as a notice in the application and on standard error elsewhere. The interface's header shows the root. The working directory, when it is below the root, is where the session's commands start: it is given to `session/new` as `cwd` ([11-rpc-protocol.md](11-rpc-protocol.md)) and kept in the session's log ([07-sessions-and-context.md](07-sessions-and-context.md), "What goes into a request"). Started in `repo/src`, then:
+
+- the repository's `.cortex/config.toml` and `.cortex/config.local.toml` are read;
+- its instruction files are found from the root down to `src` ([07-sessions-and-context.md](07-sessions-and-context.md), "Project instruction files");
+- the trust, never and not-now said at `repo/` apply ([06-permissions-and-sandbox.md](06-permissions-and-sandbox.md), "Project trust");
+- the session's project key is the root's, and so are its stored approvals, its knowledge, its statistics and the prompt history;
+- `cortex permissions …`, `cortex project …`, `cortex sessions list` and `cortex config …` act on the root's project.
+
+**What was kept under a subfolder's key before the change stays where it is,** and is no longer reached from below a root that holds it:
+
+- **A session started in `repo/src` before** is filed under `src`'s key, with `src` as its workspace. `--continue` and `sessions list` from `repo/src` now look under the root's key and do not list it; `--resume <id>` (and `sessions list --all`) still find it, and it opens with the workspace it was made in.
+- **Trust, a never, or stored approvals given at `repo/src` before** are filed under `src`'s key, and are no longer consulted from `repo/src`, where the root's apply. They are inert, not lost: `cortex permissions` lists the trusted projects by the root each was trusted at. A folder with no `.cortex` or `.git` above it is its own root, as before, and keeps what was given there.
+
 **A project's files are found without following a planted link.** A repository can put a link where its own configuration file goes, or where another tool's file is looked for. On Windows a link to a network share makes the system send the account's credentials to the server it names as soon as it is followed, by opening the file or merely asking about it ([security.md](../security.md), section 7). So the project's two files, and what discovery looks for in the workspace, are found through `cortex-base`'s path resolver, which follows each link itself and refuses a share before the network is asked. A project file whose way is refused, or that is a link to nothing, is an error, not a layer to skip, as a broken project file is; so is a workspace root the resolver cannot take (one whose name is not Unicode, say), since nothing in it could be checked. A workspace that is itself on a share is where the user chose to work: its own share is allowed, and a link to any other share is refused.
 
 **Nothing is read behind the caller's back.** The loader is given the environment and the workspace as values. It does not read the process's environment or its working directory, so a test loads configuration from a folder of its own and cannot see the real home directory.

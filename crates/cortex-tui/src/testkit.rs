@@ -296,6 +296,7 @@ pub fn app_opening(now: Instant, prompt: Option<&str>, open: Open) -> (App, Scri
     let start = Start {
         version: "0.1.0".to_owned(),
         folder: "~/src/app".to_owned(),
+        cwd: None,
         workspace: WORKSPACE.to_owned(),
         open,
         prompt: prompt.map(str::to_owned),

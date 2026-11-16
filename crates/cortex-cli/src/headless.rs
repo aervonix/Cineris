@@ -59,6 +59,9 @@ struct Plan {
     prompt: String,
     name: &'static str,
     workspace: PathBuf,
+    /// The working directory, when it is below the root: where commands
+    /// start.
+    cwd: Option<PathBuf>,
     started: Instant,
     guard: Option<(PathBuf, Vec<OsString>)>,
     log: Option<Arc<LogHandle>>,
@@ -94,8 +97,10 @@ pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
             );
         }
     };
-    let workspace = match std::env::current_dir() {
-        Ok(directory) => directory,
+    // The workspace root, found by walking up; the working directory below
+    // it is where commands start.
+    let here = match crate::workspace::Here::now() {
+        Ok(here) => here,
         Err(error) => {
             return fail(
                 ErrorKind::Usage,
@@ -104,6 +109,14 @@ pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
             );
         }
     };
+    for said in here.passed_over_said() {
+        eprintln!("{name}: {}", crate::visible(&said));
+    }
+    let crate::workspace::Here {
+        root: workspace,
+        cwd,
+        ..
+    } = here;
     // The harness's own executable, under the hidden subcommand: the guard
     // of process trees. Without a path to itself, commands run unguarded.
     let guard = std::env::current_exe()
@@ -134,6 +147,7 @@ pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
         prompt,
         name,
         workspace,
+        cwd,
         started,
         guard,
         log,
@@ -668,6 +682,10 @@ async fn session(
     };
     let op = match &plan.run.choice {
         Choice::New => Op::SessionNew(SessionNewParams {
+            cwd: plan
+                .cwd
+                .as_ref()
+                .map(|cwd| cwd.to_string_lossy().into_owned()),
             workspace,
             settings: SessionSettings::default(),
             title: None,

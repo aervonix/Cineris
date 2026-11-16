@@ -1886,6 +1886,7 @@ fn resource(
 fn trust_request(resources: Vec<cortex_protocol::methods::TrustResource>) -> ServerRequest {
     ServerRequest::Trust(cortex_protocol::methods::TrustRequest {
         session_id: SessionId::from(SESSION),
+        trusted: false,
         workspace: "~/src/app".to_owned(),
         resources,
     })
@@ -1930,10 +1931,12 @@ fn the_trust_question_lists_what_trust_turns_on_and_takes_three_answers() {
     let trusted = TrustResponse {
         trusted: true,
         never: false,
+        keep: false,
     };
     let never = TrustResponse {
         trusted: false,
         never: true,
+        keep: false,
     };
     for (binding, expected) in [
         ("y", trusted),
@@ -1971,6 +1974,65 @@ fn the_trust_question_lists_what_trust_turns_on_and_takes_three_answers() {
             given,
             [(RequestId::Number(30), ServerResponse::Trust(expected))],
             "{binding}"
+        );
+    }
+}
+
+/// A question about what is new in a trusted project (the follow-ups of
+/// step 23) asks to trust what is new, offers to keep trusting it without
+/// that in place of never, names what is new in that answer, and says what
+/// each answer does; `x` keeps.
+#[test]
+fn a_trusted_projects_question_offers_to_keep_its_trust_and_not_never() {
+    use cortex_protocol::methods::TrustResourceKind as Kind;
+    use cortex_protocol::methods::TrustResponse;
+    let git = || resource(Kind::Repository, "git", "Git may read it.", false);
+    let rule = || resource(Kind::Rules, "permissions.rules", "allow exec make *", true);
+    for (resources, label) in [
+        (vec![rule()], "x Keep trusting it, without the new rules"),
+        (vec![git()], "x Keep trusting it, without git"),
+        (vec![git(), rule()], "x Keep trusting it, without these"),
+    ] {
+        let now = Instant::now();
+        let (mut app, link) = app(now);
+        app.resize(120, 40);
+        let _ = app.frame(now);
+        app.drawn(now);
+        let ServerRequest::Trust(mut request) = trust_request(resources) else {
+            unreachable!()
+        };
+        request.trusted = true;
+        ask(&mut app, &link, 32, ServerRequest::Trust(request), now);
+        let at = now + dialog::GRACE;
+        let rows = text(&app.frame(at).1);
+        for shown in [
+            "? Trust what is new in this project?",
+            "You trust this project.",
+            "y Trust it",
+            label,
+            "asks no more until they change",
+        ] {
+            assert!(
+                rows.iter().any(|row| row.contains(shown)),
+                "{shown}: {rows:#?}"
+            );
+        }
+        assert!(
+            !rows.iter().any(|row| row.contains("Never")),
+            "{rows:#?}"
+        );
+        key(&mut app, "x", at);
+        let given = std::mem::take(&mut link.script().answers);
+        assert_eq!(
+            given,
+            [(
+                RequestId::Number(32),
+                ServerResponse::Trust(TrustResponse {
+                    keep: true,
+                    ..TrustResponse::default()
+                })
+            )],
+            "{label}"
         );
     }
 }
@@ -2020,6 +2082,7 @@ fn a_trust_question_that_does_not_fit_cannot_be_trusted_from_there() {
             ServerResponse::Trust(cortex_protocol::methods::TrustResponse {
                 trusted: false,
                 never: true,
+                keep: false,
             })
         )]
     );

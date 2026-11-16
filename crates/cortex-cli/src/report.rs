@@ -181,14 +181,9 @@ pub(crate) fn text_output(result: &HeadlessResult) -> String {
     }
 }
 
-/// One JSON object on one line. A value of these types always serialises;
-/// should one not, the line says so as JSON rather than as nothing.
+/// One JSON object on one line, safe at a terminal: [`crate::json::record`].
 fn line(json: Result<String, serde_json::Error>) -> String {
-    let mut text = json.unwrap_or_else(|error| {
-        serde_json::json!({"type": "error", "message": error.to_string()}).to_string()
-    });
-    text.push('\n');
-    text
+    crate::json::record(json)
 }
 
 fn text_of(parts: &[Part]) -> String {

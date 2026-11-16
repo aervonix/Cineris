@@ -166,12 +166,20 @@ pub fn is_instruction_name(name: &str) -> bool {
         && name.to_ascii_lowercase().ends_with(".md")
 }
 
-/// The places looked at when an epoch starts, outermost first.
+/// The places looked at when an epoch starts, outermost first: the user's
+/// configuration directory, then each directory from the workspace root
+/// down to `start`, where the session's commands start (relative to the
+/// root with `/`; since the follow-ups of step 23 it can be below it).
 ///
 /// In the user's configuration directory only the default names are read:
 /// a name a project's configuration added must not reach the user's own
 /// files there.
-pub(crate) fn places(root: &AbsPath, user_dir: Option<&AbsPath>, names: &[String]) -> Vec<Place> {
+pub(crate) fn places(
+    root: &AbsPath,
+    start: Option<&str>,
+    user_dir: Option<&AbsPath>,
+    names: &[String],
+) -> Vec<Place> {
     let names: Vec<&String> = names
         .iter()
         .filter(|name| is_instruction_name(name))
@@ -189,14 +197,26 @@ pub(crate) fn places(root: &AbsPath, user_dir: Option<&AbsPath>, names: &[String
             }
         }
     }
-    for name in names {
-        if let Ok(path) = root.join(name) {
-            out.push(Place {
-                shown: shown(root, &path),
-                path,
-                user: false,
-                dir: root.clone(),
-            });
+    let mut dirs = vec![root.clone()];
+    for part in start.into_iter().flat_map(|start| start.split('/')) {
+        let Some(below) = dirs
+            .last()
+            .and_then(|dir| dir.child(std::ffi::OsStr::new(part)).ok())
+        else {
+            break;
+        };
+        dirs.push(below);
+    }
+    for dir in &dirs {
+        for name in &names {
+            if let Ok(path) = dir.join(name) {
+                out.push(Place {
+                    shown: shown(root, &path),
+                    path,
+                    user: false,
+                    dir: dir.clone(),
+                });
+            }
         }
     }
     out
@@ -544,7 +564,7 @@ mod tests {
         assert!(is_instruction_name("GUIDE.md") && is_instruction_name("notes.MD"));
         let mut more = names();
         more.extend(["GUIDE.md".to_owned(), "credentials.toml".to_owned()]);
-        let found = places(&path("/work/app"), Some(&path("/config/cx")), &more);
+        let found = places(&path("/work/app"), None, Some(&path("/config/cx")), &more);
         let shown: Vec<&str> = found.iter().map(|place| place.shown.as_str()).collect();
         assert_eq!(
             shown,
@@ -565,7 +585,7 @@ mod tests {
     #[test]
     fn on_windows_a_workspace_at_a_drives_root_has_its_files_and_nested_directories() {
         let root = windows("C:\\");
-        let found = places(&root, Some(&windows("D:\\Config\\cx")), &names());
+        let found = places(&root, None, Some(&windows("D:\\Config\\cx")), &names());
         let places: Vec<&str> = found.iter().map(|place| place.shown.as_str()).collect();
         assert_eq!(
             places,
@@ -669,9 +689,30 @@ mod tests {
         assert_eq!(told_date("no date here"), None);
     }
 
+    /// A session started below the root reads each directory's files from
+    /// the root down to where it started, outermost first (07: "from the
+    /// workspace root down to the working directory", since the follow-ups
+    /// of step 23).
+    #[test]
+    fn a_start_below_the_root_reads_each_directory_down_to_it() {
+        let found = places(&path("/work/app"), Some("src/deep"), None, &names());
+        let shown: Vec<&str> = found.iter().map(|place| place.shown.as_str()).collect();
+        assert_eq!(
+            shown,
+            [
+                "AGENTS.md",
+                "CLAUDE.md",
+                "src/AGENTS.md",
+                "src/CLAUDE.md",
+                "src/deep/AGENTS.md",
+                "src/deep/CLAUDE.md",
+            ]
+        );
+    }
+
     #[test]
     fn the_user_file_comes_first_then_agents_before_claude() {
-        let found = places(&path("/work/app"), Some(&path("/config/cx")), &names());
+        let found = places(&path("/work/app"), None, Some(&path("/config/cx")), &names());
         let shown: Vec<&str> = found.iter().map(|place| place.shown.as_str()).collect();
         assert_eq!(
             shown,
@@ -692,7 +733,7 @@ mod tests {
         files.set(&user.join("AGENTS.md").unwrap(), "u".repeat(60));
         files.set(&root.join("AGENTS.md").unwrap(), "a".repeat(60));
         files.set(&root.join("CLAUDE.md").unwrap(), "c".repeat(60));
-        let found = discover(&files, &places(&root, Some(&user), &names()), 100);
+        let found = discover(&files, &places(&root, None, Some(&user), &names()), 100);
         assert_eq!(found.texts.len(), 2, "{found:?}");
         assert_eq!(found.texts[0].text, "u".repeat(60));
         assert!(found.texts[1].text.starts_with(&"a".repeat(40)));
@@ -708,14 +749,14 @@ mod tests {
         let root = path("/work/app");
         files.set(&root.join("AGENTS.md").unwrap(), "same");
         files.set(&root.join("CLAUDE.md").unwrap(), "same");
-        let found = discover(&files, &places(&root, None, &names()), DEFAULT_CAP);
+        let found = discover(&files, &places(&root, None, None, &names()), DEFAULT_CAP);
         assert_eq!(found.texts.len(), 1);
         assert_eq!(found.texts[0].path, "AGENTS.md");
     }
 
     #[test]
     fn a_notice_is_read_back_as_what_the_model_was_given() {
-        let place = places(&path("/w"), None, &names()).remove(0);
+        let place = places(&path("/w"), None, None, &names()).remove(0);
         let found = Found {
             place: place.clone(),
             text: "Use tabs.\n\nAlways.".to_owned(),

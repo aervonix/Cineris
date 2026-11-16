@@ -850,6 +850,7 @@ impl Core {
             session_id: session.clone(),
             workspace: question.root.clone(),
             resources: question.resources.clone(),
+            trusted: question.trusted,
         };
         let (id, answer) = self.inner.clients.ask_once(&session, &[client.0], |_| {
             ServerRequest::Trust(request.clone())
@@ -870,11 +871,21 @@ impl Core {
             Some(Ok(ServerResponse::Trust(TrustResponse {
                 trusted: true,
                 never: false,
+                keep: false,
             }))) => Some(TrustAnswer::Yes),
+            // Never is an answer to a project not trusted, and keep to one
+            // trusted already; the other way round it is refused where it
+            // is given, and would be read here as not now.
             Some(Ok(ServerResponse::Trust(TrustResponse {
                 trusted: false,
                 never: true,
-            }))) => Some(TrustAnswer::Never),
+                keep: false,
+            }))) if !question.trusted => Some(TrustAnswer::Never),
+            Some(Ok(ServerResponse::Trust(TrustResponse {
+                trusted: false,
+                never: false,
+                keep: true,
+            }))) if question.trusted => Some(TrustAnswer::Keep),
             Some(Ok(_)) => Some(TrustAnswer::NotNow),
             // The client went away, or the core is ending.
             Some(Err(_)) | None => None,
@@ -1174,6 +1185,7 @@ impl Core {
                                 id: self.inner.ids.session_id(),
                                 title: params.title,
                                 ephemeral: params.ephemeral,
+                                cwd: params.cwd.map(PathBuf::from),
                             },
                             workspace: PathBuf::from(params.workspace),
                             settings: params.settings,

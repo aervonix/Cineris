@@ -404,6 +404,7 @@ fn every_field_of_an_approval_escapes_what_acts_unseen() {
 fn every_field_of_the_trust_question_escapes_what_acts_unseen() {
     let request = TrustRequest {
         session_id: SessionId::from("s_1"),
+        trusted: false,
         workspace: format!("workspace{UNSEEN}"),
         resources: vec![
             TrustResource {
@@ -424,6 +425,7 @@ fn every_field_of_the_trust_question_escapes_what_acts_unseen() {
         answers: answers(),
         answers_hidden: false,
         detail_rows: 10,
+        unsaid: false,
     };
     let width = 120;
     shows_escaped(
