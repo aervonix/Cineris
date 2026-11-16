@@ -143,6 +143,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### The tooling and CI
 
 - [caught-by-names-checked-only-at-the-desk](caught-by-names-checked-only-at-the-desk.md): `check` in CI keeps no list of tests, so it does not check `caught-by` names. Owner: the owner.
+- [a-mutate-jobs-test-that-once-finished-every-piece](a-mutate-jobs-test-that-once-finished-every-piece.md): A test of `mutate`'s jobs failed once in 50 repeats under load, finishing every piece where its time should have run out. Owner: a later tooling step.
 - [a-retried-tests-standard-error-in-the-report](a-retried-tests-standard-error-in-the-report.md): `xtask` reads a retried test's standard error from its first attempt, not the last. Owner: a later tooling step.
 - [actionlint-in-the-checks](actionlint-in-the-checks.md): The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary. Owner: the owner.
 - [perf-in-the-main-workflow](perf-in-the-main-workflow.md): `cargo xtask perf` is not yet run in the `main` workflow on both systems with stored baselines. Owner: a tooling step, or step 33.
