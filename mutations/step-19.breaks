@@ -9,6 +9,17 @@
 # set, and, in the core, who may choose a check, where it runs and what the
 # model is told of it.
 
+# ------------------------------------------------------- headless's report
+
+[break] headless-forgets-the-checks
+rule: Headless's result says what the project's checks said of the turn: the verdict, the rounds that ended, and the last round's checks.
+file: crates/cortex-cli/src/report.rs
+in: Collector::result
+find: result.verification = end.verification.clone().map(
+replace: result.verification = None::<cortex_protocol::event::Verification>.map(
+caught-by:
+    cortex-cli::bin/cortex report::tests::the_result_says_what_the_checks_said_of_the_turn
+
 # ------------------------------------------------- what a call changed
 
 [break] a-commands-declared-write-is-a-change
