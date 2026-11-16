@@ -324,7 +324,6 @@ caught-by:
 
 # ------------------------------------------------- the review of the second pull request
 
-
 [break] a-raise-to-unrestricted-is-taken
 rule: Where the core may not give `unrestricted`, `session/set` raising a session to it is refused.
 file: crates/cortex-core/src/core.rs
@@ -407,3 +406,21 @@ find: at || grant.stop_when.iter().any(|condition| {
 replace: at || grant.stop_when.is_empty() && grant.stop_when.iter().any(|condition| {
 caught-by:
     cortex-core policy::tests::an_expired_grant_covers_nothing
+
+[break] a-read-cursor-of-another-session-is-taken
+rule: A `session/read` cursor of another session is refused.
+file: crates/cortex-core/src/paging.rs
+in: start_of
+find: if named != session.as_str() {
+replace: if named.is_empty() {
+caught-by:
+    cortex-core paging::tests::a_cursor_is_refused_on_another_session_or_another_branch
+
+[break] a-read-cursor-on-another-branch-is-taken
+rule: A `session/read` cursor whose last item is not where it was (a rewind moved the session to another branch) is refused.
+file: crates/cortex-core/src/paging.rs
+in: start_of
+find: (at == last).then_some(count)
+replace: (!at.is_empty() || !last.is_empty()).then_some(count)
+caught-by:
+    cortex-core paging::tests::a_cursor_is_refused_on_another_session_or_another_branch
