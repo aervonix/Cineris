@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use cortex_agent::PROFILE_CHANGED;
-use cortex_base::{PathOptions, PathResolver};
+use cortex_base::{Clock, PathOptions, PathResolver};
 use cortex_core::{ClientInfo, Outgoing};
 use cortex_knowledge::Project;
 use cortex_protocol::SessionEvent;
@@ -1508,4 +1508,112 @@ fn sys_a_command_turned_off_while_the_level_changes_stays_off() {
         assert_eq!(turn_denying(&front, "test it").await, ["shell"]);
         front.close().await;
     });
+}
+
+/// What `cortex project` asks of the core, outside a session: the same
+/// store and the same checks as the operations, for the project a session
+/// started in that directory would be in.
+#[test]
+fn the_command_line_lists_and_changes_a_projects_entries() {
+    let world = World::new("knowledge_command_line", []);
+    world.put(
+        ".cortex/profile.toml",
+        "version = 1\n\n[[entry]]\nkind = \"convention\"\ntext = \"Errors are returned.\"\n",
+    );
+    let core = world.core();
+    let project = core.project(&world.workspace).unwrap();
+    let files = core.project_files(&project).unwrap();
+    assert!(cortex_base::same_location(
+        &files.store,
+        &store_file(&world, &world.workspace)
+    ));
+    assert!(
+        files
+            .shared
+            .ends_with(std::path::Path::new(".cortex").join("profile.toml"))
+    );
+
+    // The repository's entry waits for this user.
+    let listed = core.project_entries(&project).unwrap();
+    assert_eq!(listed.problems, Vec::<String>::new());
+    assert_eq!(listed.entries.len(), 1);
+    assert_eq!(
+        (&listed.entries[0].scope, &listed.entries[0].status),
+        (&EntryScope::Shared, &EntryStatus::Proposed)
+    );
+
+    // The user writes a command, and accepts the repository's entry.
+    let added = core
+        .change_project_entries(
+            &project,
+            &[],
+            &[NewEntry {
+                kind: EntryKind::Command,
+                text: "Runs the tests.".to_owned(),
+                command: Some(cortex_protocol::project::NewCommand {
+                    purpose: cortex_protocol::project::CommandPurpose::Test,
+                    command: "cargo test".to_owned(),
+                    cwd: None,
+                    read_only: false,
+                }),
+                check: None,
+            }],
+        )
+        .unwrap();
+    assert_eq!(added.entries.len(), 1);
+    let mine = added.entries[0].id.clone();
+    let accepted = core
+        .change_project_entries(
+            &project,
+            &[change_of(&listed.entries[0].id, EntryAction::Accept)],
+            &[],
+        )
+        .unwrap();
+    assert_eq!(accepted.entries[0].status, EntryStatus::Active);
+    assert!(accepted.entries[0].accepted_at.is_some());
+
+    // It is the store another handle on the project reads.
+    let snapshot = other_process(&world).load(None);
+    assert_eq!(snapshot.runs_unasked(world.clock.now()).count(), 1);
+    assert_eq!(snapshot.in_use(world.clock.now()).count(), 2);
+
+    // The same refusals as the operation's, with nothing written.
+    let key = format!("ghp_{}", "a1B2".repeat(9));
+    let refused = core
+        .change_project_entries(
+            &project,
+            &[EntryChange {
+                id: mine.clone(),
+                action: EntryAction::Edit,
+                text: Some(format!("The token is {key}.")),
+            }],
+            &[],
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, "invalid_entry");
+    let refused = core
+        .change_project_entries(
+            &project,
+            &[change_of(
+                &cortex_protocol::ids::EntryId::new("k_99"),
+                EntryAction::Disable,
+            )],
+            &[],
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, "unknown_entry");
+    assert_eq!(core.project_entries(&project).unwrap().entries.len(), 2);
+
+    // An entry past its expiry is marked when it is listed.
+    let (_, learned) = learned(&world, "cargo build");
+    world
+        .clock
+        .advance(std::time::Duration::from_secs(91 * 24 * 60 * 60));
+    let listed = core.project_entries(&project).unwrap();
+    let lapsed = listed
+        .entries
+        .iter()
+        .find(|entry| entry.id == learned)
+        .unwrap();
+    assert_eq!(lapsed.status, EntryStatus::Disabled);
 }

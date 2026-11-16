@@ -210,3 +210,126 @@ fn sys_models_lists_the_catalog() {
     let out = &models.expect_code(0).stdout;
     assert!(out.contains(MODEL) && out.contains(OTHER_MODEL), "{out}");
 }
+
+/// `cortex project`, through the real binary: an entry is written, listed
+/// with its command in full, the repository's entries are accepted with
+/// one command, an entry is turned off and deleted, and a mistake is said.
+#[test]
+fn sys_project_writes_lists_accepts_and_turns_off_entries() {
+    let machine = Machine::new("sys_project");
+    std::fs::create_dir_all(machine.workspace.join(".cortex")).unwrap();
+    std::fs::write(
+        machine.workspace.join(".cortex").join("profile.toml"),
+        "version = 1\n\n[[entry]]\nkind = \"convention\"\ntext = \"Errors are returned.\"\n",
+    )
+    .unwrap();
+
+    let line = "cargo nextest run --workspace --no-fail-fast --features a,b";
+    let added = machine.run(&[
+        "project",
+        "add",
+        "command",
+        "Runs the tests.",
+        "--purpose",
+        "test",
+        "--command",
+        line,
+        "--cwd",
+        "crates/app",
+    ]);
+    assert_eq!(
+        added.expect_code(0).stdout,
+        "Added k_1\n",
+        "{}",
+        shown(&added)
+    );
+    let added = machine.run(&["project", "add", "fact", "The docs are in docs/."]);
+    assert_eq!(
+        added.expect_code(0).stdout,
+        "Added k_2\n",
+        "{}",
+        shown(&added)
+    );
+
+    // The listing: the repository's entry waits, the user's are in use,
+    // and the command's line and directory are whole.
+    let list = machine.run(&["project"]);
+    let out = &list.expect_code(0).stdout;
+    assert!(out.contains("Waiting for your review:\n  s_"), "{out}");
+    assert!(
+        out.contains("[proposed, shared]  convention: Errors are returned."),
+        "{out}"
+    );
+    assert!(
+        out.contains(&format!(
+            "  k_1  [active, accepted]  test: `{line}` (in `crates/app`)  Runs the tests.\n      written by you\n"
+        )),
+        "{out}"
+    );
+    assert!(
+        out.contains("  k_2  [active]  fact: The docs are in docs/."),
+        "{out}"
+    );
+
+    // One command accepts every entry of the repository's file.
+    let accepted = machine.run(&["project", "accept", "--shared"]);
+    assert!(
+        accepted.expect_code(0).stdout.starts_with("Accepted s_"),
+        "{}",
+        shown(&accepted)
+    );
+    let again = machine.run(&["project", "accept", "--shared"]);
+    assert_eq!(
+        again.expect_code(0).stdout,
+        "No entry of the repository's file waits for you.\n"
+    );
+
+    // An id cut short; then what is turned off is listed only with --all.
+    let off = machine.run(&["project", "disable", "k_2"]);
+    assert_eq!(
+        off.expect_code(0).stdout,
+        "Turned off k_2\n",
+        "{}",
+        shown(&off)
+    );
+    let all = machine.run(&["project", "list", "--all", "--json"]);
+    let listed: Value = serde_json::from_str(all.expect_code(0).stdout.trim()).unwrap();
+    let statuses: Vec<(&str, &str)> = listed["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry["kind"].as_str().unwrap(),
+                entry["status"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            ("command", "active"),
+            ("fact", "disabled"),
+            ("convention", "active")
+        ]
+    );
+    let deleted = machine.run(&["project", "delete", "k_2"]);
+    assert_eq!(deleted.expect_code(0).stdout, "Deleted k_2\n");
+
+    // A mistake is said, and is a usage error.
+    let wrong = machine.run(&["project", "accept", "k_7"]);
+    assert!(
+        wrong
+            .expect_code(2)
+            .stderr
+            .contains("no entry of this project has the id 'k_7'"),
+        "{}",
+        shown(&wrong)
+    );
+    let paths = machine.run(&["project", "path"]);
+    let out = &paths.expect_code(0).stdout;
+    assert!(
+        out.contains("knowledge.toml") && out.contains("profile.toml"),
+        "{out}"
+    );
+}

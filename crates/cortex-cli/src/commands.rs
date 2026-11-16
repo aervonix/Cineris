@@ -20,8 +20,8 @@ use cortex_protocol::methods::{
 use cortex_protocol::usage::{UsageGroup, UsageRange};
 
 use crate::args::{
-    AuthCommand, Common, ConfigCommand, PermissionsCommand, SessionsCommand, StatsCommand,
-    UsageCommand,
+    AuthCommand, Common, ConfigCommand, PermissionsCommand, ProjectCommand, SessionsCommand,
+    StatsCommand, UsageCommand,
 };
 use crate::exit;
 
@@ -407,6 +407,171 @@ pub(crate) fn config(command: ConfigCommand, name: &'static str) -> Done {
             context.warn(&loaded.diagnostics);
             out!("The configuration is valid.\n");
             Ok(exit::COMPLETED)
+        }
+    })())
+}
+
+/// `cortex project …`
+pub(crate) fn project(command: ProjectCommand, name: &'static str) -> Done {
+    use cortex_protocol::project::{
+        CommandPurpose, EntryAction, EntryChange, EntryKind, NewCommand, NewEntry,
+    };
+
+    let context = Context::new(name);
+    result((|| {
+        let core = context.core(&Common::default())?;
+        let project = context.project(&core)?;
+        let fail = |error: OpError| context.fail(&error);
+        let usage = |message: String| {
+            context.say(&message);
+            exit::USAGE
+        };
+        // What a change made, an entry a line.
+        let changed = |result: &cortex_protocol::methods::ProjectEntriesResult, what: &str| {
+            let mut out = String::new();
+            for entry in &result.entries {
+                out.push_str(&format!("{what} {}\n", entry.id));
+            }
+            for problem in &result.problems {
+                out.push_str(&format!("problem: {problem}\n"));
+            }
+            out
+        };
+        match command {
+            ProjectCommand::List { all, kind, json } => {
+                let listed = core.project_entries(&project).map_err(fail)?;
+                if json {
+                    let text = serde_json::to_string(&listed).map_err(|error| {
+                        context.say(&error.to_string());
+                        exit::INTERNAL
+                    })?;
+                    crate::print_out(&format!("{text}\n"));
+                    return Ok(exit::COMPLETED);
+                }
+                let kind = kind.as_deref().map(EntryKind::from_wire);
+                out!(
+                    "{}\n{}",
+                    project.shown,
+                    crate::project_view::listing(
+                        &listed.entries,
+                        &listed.problems,
+                        all,
+                        kind.as_ref(),
+                        name
+                    )
+                );
+                Ok(exit::COMPLETED)
+            }
+            ProjectCommand::Change {
+                action,
+                ids,
+                shared,
+            } => {
+                let listed = core.project_entries(&project).map_err(fail)?;
+                let ids = if shared {
+                    crate::project_view::waiting_shared(&listed.entries)
+                } else {
+                    ids.iter()
+                        .map(|given| crate::project_view::resolve(&listed.entries, given))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(usage)?
+                };
+                if ids.is_empty() {
+                    out!("No entry of the repository's file waits for you.\n");
+                    return Ok(exit::COMPLETED);
+                }
+                let changes: Vec<EntryChange> = ids
+                    .into_iter()
+                    .map(|id| EntryChange {
+                        id,
+                        action: EntryAction::from_wire(&action),
+                        text: None,
+                    })
+                    .collect();
+                let done = core
+                    .change_project_entries(&project, &changes, &[])
+                    .map_err(fail)?;
+                let mut out = match action.as_str() {
+                    "accept" => changed(&done, "Accepted"),
+                    "disable" => changed(&done, "Turned off"),
+                    "promote" => changed(&done, "Now in the repository's file, as"),
+                    _ => String::new(),
+                };
+                if action == "delete" {
+                    for change in &changes {
+                        out.push_str(&format!("Deleted {}\n", change.id));
+                    }
+                }
+                // An accepted command runs without asking only in a
+                // project the user trusts.
+                if action == "accept"
+                    && done.entries.iter().any(|entry| entry.command.is_some())
+                    && core.project_trust(&project).map_err(fail)? != TrustState::Trusted
+                {
+                    out.push_str(&format!(
+                        "An accepted command runs without asking once the project is trusted: \
+                         `{name} permissions trust`.\n"
+                    ));
+                }
+                out!("{out}");
+                Ok(exit::COMPLETED)
+            }
+            ProjectCommand::Edit { id, text } => {
+                let listed = core.project_entries(&project).map_err(fail)?;
+                let id = crate::project_view::resolve(&listed.entries, &id).map_err(usage)?;
+                let done = core
+                    .change_project_entries(
+                        &project,
+                        &[EntryChange {
+                            id,
+                            action: EntryAction::Edit,
+                            text: Some(text),
+                        }],
+                        &[],
+                    )
+                    .map_err(fail)?;
+                out!("{}", changed(&done, "Changed"));
+                Ok(exit::COMPLETED)
+            }
+            ProjectCommand::Add {
+                kind,
+                text,
+                purpose,
+                command,
+                cwd,
+                read_only,
+            } => {
+                let command = command.map(|line| NewCommand {
+                    purpose: CommandPurpose::from_wire(purpose.as_deref().unwrap_or("run")),
+                    command: line,
+                    cwd,
+                    read_only,
+                });
+                let done = core
+                    .change_project_entries(
+                        &project,
+                        &[],
+                        &[NewEntry {
+                            kind: EntryKind::from_wire(&kind),
+                            text,
+                            command,
+                            check: None,
+                        }],
+                    )
+                    .map_err(fail)?;
+                out!("{}", changed(&done, "Added"));
+                Ok(exit::COMPLETED)
+            }
+            ProjectCommand::Path => {
+                let files = core.project_files(&project).map_err(fail)?;
+                let shown = |path: &std::path::Path| context.env.display_path(path);
+                out!(
+                    "your store:        {}\nthe repository's:  {}\n",
+                    shown(&files.store),
+                    shown(&files.shared)
+                );
+                Ok(exit::COMPLETED)
+            }
         }
     })())
 }

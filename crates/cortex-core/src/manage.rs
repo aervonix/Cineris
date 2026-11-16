@@ -26,7 +26,8 @@ use cortex_config::{
 };
 use cortex_policy::{ApprovalStore, Definition, TrustStore};
 use cortex_protocol::lease::Rule;
-use cortex_protocol::methods::StoredApproval;
+use cortex_protocol::methods::{ProjectEntriesResult, StoredApproval};
+use cortex_protocol::project::{EntryChange, NewEntry};
 use cortex_protocol::{ApprovalId, ErrorKind, ProjectKey};
 
 use crate::assemble::{pinned_rules, resolve_dir};
@@ -51,6 +52,16 @@ pub struct Project {
     pub shown: String,
     /// The key the stores file it under.
     pub key: ProjectKey,
+}
+
+/// Where what the harness knows about a project is kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectFiles {
+    /// The user's own store for the project, in the state directory.
+    pub store: PathBuf,
+    /// The repository's shared profile, `.cortex/profile.toml` in the
+    /// workspace.
+    pub shared: PathBuf,
 }
 
 /// Whether the user trusts a project.
@@ -155,6 +166,65 @@ impl Core {
             root: root.to_fs_path(),
             shown: self.inner.options.env.display_path(&root.to_fs_path()),
             key: root.project_key(),
+        })
+    }
+
+    /// Every entry of a project's profile and memory, with the standing
+    /// each has for this user, and the files that could not be read
+    /// (`cortex project list`). An entry past its expiry is marked first.
+    ///
+    /// # Errors
+    ///
+    /// Of kind `usage` when there is no state directory.
+    pub fn project_entries(&self, project: &Project) -> Result<ProjectEntriesResult, OpError> {
+        let (knowledge, _) = crate::knowledge::at(self, &project.root)?;
+        Ok(crate::knowledge::listing(&knowledge))
+    }
+
+    /// Changes a project's entries as its user: `changes` to entries
+    /// there are, and `add`, entries the user writes. It is what
+    /// `project/update` does for a `user` client, with the same checks,
+    /// all or nothing. Answers with the entries that changed.
+    ///
+    /// A session of the project in another process takes the change at
+    /// its next turn's start, and a command turned off before its next
+    /// decision.
+    ///
+    /// # Errors
+    ///
+    /// Of kind `usage` with the operation's codes: an entry that is not
+    /// there, a change that cannot be made to it, a text that holds what
+    /// looks like a credential, a store that is full or cannot be read as
+    /// it is.
+    pub fn change_project_entries(
+        &self,
+        project: &Project,
+        changes: &[EntryChange],
+        add: &[NewEntry],
+    ) -> Result<ProjectEntriesResult, OpError> {
+        let (knowledge, _) = crate::knowledge::at(self, &project.root)?;
+        let updated =
+            crate::knowledge::apply(&knowledge, &self.inner.providers.filter, None, changes, add)?;
+        Ok(ProjectEntriesResult {
+            entries: updated
+                .changed
+                .iter()
+                .map(cortex_knowledge::Entry::to_wire)
+                .collect(),
+            problems: updated.snapshot.problems().to_vec(),
+        })
+    }
+
+    /// Where a project's knowledge is kept (`cortex project path`).
+    ///
+    /// # Errors
+    ///
+    /// Of kind `usage` when there is no state directory.
+    pub fn project_files(&self, project: &Project) -> Result<ProjectFiles, OpError> {
+        let (knowledge, _) = crate::knowledge::at(self, &project.root)?;
+        Ok(ProjectFiles {
+            store: knowledge.store().path().to_path_buf(),
+            shared: knowledge.shared_file(),
         })
     }
 
