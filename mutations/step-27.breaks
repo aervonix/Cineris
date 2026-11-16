@@ -430,8 +430,8 @@ caught-by:
 rule: A peer whose line of parents cannot be read (its process, or a parent of it, is gone) is refused.
 file: crates/cortex-rpc/src/socket/unix.rs
 in: line_of
-find: None => return Line::Unknown,
-replace: None => return Line::Elsewhere,
+find: None => return Line::Unknown
+replace: None => return Line::Elsewhere
 caught-by:
     cortex-rpc::it socket::sys_a_peer_whose_process_is_gone_is_refused
 
