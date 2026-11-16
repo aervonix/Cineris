@@ -3203,8 +3203,40 @@
       ],
       "description": "Whether sandboxed processes may use the network. There is no per-host list."
     },
+    "NewCommand": {
+      "additionalProperties": false,
+      "description": "The command of an entry the user writes. Added in step 17.\n\nIt is read strictly, as [`NewEntry`] is: the command may come to run\nwithout asking.",
+      "properties": {
+        "command": {
+          "description": "The command line.",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "The directory it runs in, relative to the workspace root.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "purpose": {
+          "$ref": "#/$defs/CommandPurpose",
+          "description": "What it is for."
+        },
+        "read_only": {
+          "default": false,
+          "description": "Whether it only reads.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "purpose",
+        "command"
+      ],
+      "type": "object"
+    },
     "NewEntry": {
-      "description": "An entry the user writes: it is active at once. Added in step 17.",
+      "additionalProperties": false,
+      "description": "An entry the user writes: it is active at once. Added in step 17.\n\n**It is read strictly:** a field this build does not know refuses the\nrequest (`docs/decisions/0028-enforced-values-fail-closed.md`). An entry\nthe user writes is accepted from the moment it is written, and a\ncommand among them becomes an allow rule once the project is trusted:\na field that is not understood could be the one that narrows it, such\nas an expiry.",
       "properties": {
         "check": {
           "anyOf": [
@@ -3220,7 +3252,7 @@
         "command": {
           "anyOf": [
             {
-              "$ref": "#/$defs/EntryCommand"
+              "$ref": "#/$defs/NewCommand"
             },
             {
               "type": "null"

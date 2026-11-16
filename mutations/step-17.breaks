@@ -246,7 +246,6 @@ file: crates/cortex-knowledge/src/project.rs
 in: Project::read_shared
 find: Ok(found) if found.file_type().is_symlink() =>
 replace: Ok(found) if false && found.file_type().is_symlink() =>
-os: linux
 caught-by:
     cortex-knowledge::it project::a_shared_file_behind_a_link_is_not_read
 
@@ -381,3 +380,149 @@ find: self.recompile(&mut held);
 replace: let _ = &mut held;
 caught-by:
     cortex-policy::it learned::a_learned_list_with_anything_but_an_exec_allow_leaves_none_in_force
+
+# ------------------------------------------- after the review of the store
+
+[break] a-change-passes-the-size-cap
+rule: The cap on the store's size is held when it is written: a change that would pass it is refused, and the store stays one every load reads.
+file: crates/cortex-knowledge/src/store.rs
+in: Store::change
+find: text.len() as u64 > MAX_FILE_BYTES
+replace: false
+caught-by:
+    cortex-knowledge::it store::a_change_that_would_pass_the_size_cap_is_refused_and_the_store_stays_readable
+
+[break] the-shared-file-passes-its-size
+rule: The cap on the shared file's size is held when an entry is added to it.
+file: crates/cortex-knowledge/src/file.rs
+in: append_shared
+find: text.len() as u64 > MAX_FILE_BYTES
+replace: false
+caught-by:
+    cortex-knowledge file::tests::an_entry_that_would_take_the_shared_file_past_its_size_is_not_added
+    cortex-knowledge::it project::a_promote_that_would_pass_the_shared_files_size_is_refused
+
+[break] a-snapshots-stamp-is-taken-after-the-lock
+rule: The snapshot a change gives back holds the store's stamp from while the lock was held, so another process's change right after it shows at the next look.
+file: crates/cortex-knowledge/src/project.rs
+in: Project::after
+find: false, private_stamp, shared_stamp
+replace: false, self.store.stamp(), shared_stamp
+caught-by:
+    cortex-knowledge::it store::a_change_made_by_another_right_after_ours_is_seen
+
+[break] a-load-waits-for-the-lock
+rule: A load never waits for the store's lock: the good copy is brought up to date only when the lock can be had at once.
+file: crates/cortex-knowledge/src/store.rs
+in: Store::keep_good_copy
+find: let Some(_lock) = self.try_lock() else
+replace: let Ok(_lock) = private::hold_lock(&self.file) else
+caught-by:
+    cortex-knowledge::it store::a_load_does_not_wait_for_a_writer
+
+[break] a-problem-quotes-the-file-raw
+rule: A problem is shown to a person and sent to clients: what it quotes of the file is escaped.
+file: crates/cortex-knowledge/src/file.rs
+in: Problem::new
+find: cortex_base::visible(&message.into()).into_owned()
+replace: message.into()
+caught-by:
+    cortex-knowledge file::tests::a_problem_never_carries_what_acts_unseen
+
+[break] a-left-out-entry-is-quoted-raw
+rule: What is said of a shared entry that was left out is escaped too.
+file: crates/cortex-knowledge/src/file.rs
+in: parse_shared
+find: cortex_base::visible(&message)
+replace: message
+caught-by:
+    cortex-knowledge file::tests::a_problem_never_carries_what_acts_unseen
+
+[break] a-number-past-the-bound-is-read
+rule: A file whose id or counter holds a number past the bound is refused, so no arithmetic on it can wrap round to an id in use.
+file: crates/cortex-knowledge/src/file.rs
+in: parse_private
+find: largest > MAX_NUMBER || read.next.is_some_and(|next| next > MAX_NUMBER)
+replace: false
+caught-by:
+    cortex-knowledge file::tests::a_number_past_what_an_id_may_hold_refuses_the_file
+
+[break] a-private-id-takes-a-shared-entrys-name
+rule: A private entry cannot be given an id that begins `s_`: it would stand in front of a shared entry.
+file: crates/cortex-knowledge/src/file.rs
+in: parse_private
+find: Some(id) if id.starts_with("s_") =>
+replace: Some(id) if false && id.starts_with("s_") =>
+caught-by:
+    cortex-knowledge file::tests::a_private_id_cannot_take_a_shared_entrys_name
+
+[break] the-shared-file-is-written-through-a-link
+rule: The shared file is never written through a link, whatever the read before it found.
+file: crates/cortex-knowledge/src/project.rs
+in: Project::write_shared
+find: follow_links: false
+replace: follow_links: true
+caught-by:
+    cortex-knowledge::it project::a_link_planted_between_the_read_and_the_write_is_not_written_through
+
+[break] a-linked-cortex-directory-is-written-into
+rule: The shared file is written only into a `.cortex` that is a directory of the workspace itself.
+file: crates/cortex-knowledge/src/project.rs
+in: Project::write_shared
+find: found.file_type().is_symlink() || !found.is_dir()
+replace: false
+caught-by:
+    cortex-knowledge::it project::a_link_planted_between_the_read_and_the_write_is_not_written_through
+
+[break] an-entry-already-shared-is-added-again
+rule: A promote of an entry the shared file already holds finishes the move and adds nothing.
+file: crates/cortex-knowledge/src/project.rs
+in: Work::promote
+find: if !there
+replace: if true
+caught-by:
+    cortex-knowledge::it project::a_promote_that_stopped_half_way_is_finished_by_the_next
+
+[break] a-rooted-directory-is-reread-as-relative
+rule: A directory that names a root, a drive or the home directory is refused as written, never read as a path below the workspace.
+file: crates/cortex-knowledge/src/entry.rs
+in: checked_dir
+find: if rooted
+replace: if false
+caught-by:
+    cortex-knowledge entry::tests::a_directory_that_names_a_root_is_refused_as_written
+    cortex-knowledge::it project::a_rooted_directory_is_refused_not_reread_as_a_relative_one
+
+[break] the-hash-follows-how-a-text-is-spaced
+rule: An entry's hash is of its text with its blanks made one, so a checkout that changed the line endings has the same entry.
+file: crates/cortex-knowledge/src/entry.rs
+in: Entry::content_hash
+find: part(&one_spaced(&self.text));
+replace: part(&self.text);
+caught-by:
+    cortex-knowledge entry::tests::the_content_hash_follows_what_the_entry_says_and_nothing_else
+
+[break] a-check-may-hold-a-control-character
+rule: A check's command and pattern are one line, with no control character.
+file: crates/cortex-knowledge/src/entry.rs
+in: one_line
+find: text.chars().any(char::is_control)
+replace: false
+caught-by:
+    cortex-knowledge entry::tests::an_entry_that_is_not_well_formed_is_refused_with_the_reason
+
+[break] a-new-entry-is-read-leniently
+rule: An entry the user writes is read strictly: a field this build does not know refuses the request.
+file: crates/cortex-protocol/src/project.rs
+find: #[serde(deny_unknown_fields)] pub struct NewEntry
+replace: pub struct NewEntry
+caught-by:
+    cortex-protocol tests::the_golden_values_round_trip_exactly
+
+[break] a-new-entrys-command-is-read-leniently
+rule: The command of an entry the user writes is read strictly too.
+file: crates/cortex-protocol/src/project.rs
+find: #[serde(deny_unknown_fields)] pub struct NewCommand
+replace: pub struct NewCommand
+caught-by:
+    cortex-protocol tests::the_golden_values_round_trip_exactly

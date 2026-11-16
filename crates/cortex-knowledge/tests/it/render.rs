@@ -274,15 +274,22 @@ fn the_section_stays_inside_its_budget_and_says_what_it_left_out() {
         assert_eq!(render(&snapshot, world.now(), tokens), cut);
     }
     // One entry left out is said in the singular.
-    let all_but_one = whole.text.len() - 10;
-    let tokens = u32::try_from(all_but_one / BYTES_PER_TOKEN).unwrap();
-    let cut = render(&snapshot, world.now(), tokens);
-    if cut.left_out == 1 {
-        assert!(
-            cut.text
-                .ends_with("(1 more entry is not shown, to keep this within its size.)")
-        );
-    }
+    let other = World::new(scratch!("render_budget_one"));
+    other.write_store(&format!(
+        "version = 1\n[[entry]]\nkind = \"fact\"\ntext = \"Short.\"\nstatus = \"active\"\n[[entry]]\nkind = \"fact\"\ntext = \"{}\"\nstatus = \"active\"\n",
+        "long ".repeat(100)
+    ));
+    let snapshot_of_two = other.load();
+    let whole_of_two = render(&snapshot_of_two, other.now(), 100_000);
+    let tokens = u32::try_from((whole_of_two.text.len() - 3) / BYTES_PER_TOKEN).unwrap();
+    let cut = render(&snapshot_of_two, other.now(), tokens);
+    assert_eq!((cut.shown, cut.left_out), (1, 1));
+    assert!(
+        cut.text
+            .ends_with("- Short.\n\n(1 more entry is not shown, to keep this within its size.)"),
+        "{}",
+        cut.text
+    );
     // A budget that holds no entry gives no section, not a heading over
     // nothing.
     for tokens in [0, 10, 60] {
