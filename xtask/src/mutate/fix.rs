@@ -88,7 +88,7 @@ pub(crate) fn propose_all(root: &Path, breaks: &[Break]) -> Vec<Fix> {
 /// [`propose_all`], for one break and the source it changes.
 pub(crate) fn propose(one: &Break, source: &str, tokens: &[lex::Token]) -> Option<Fix> {
     let anchor = one.anchor.as_deref()?;
-    let located = lex::locate_with_items(source, tokens, Some(anchor), &one.find, one.occurrence);
+    let located = one.locate_with_items(source, tokens, Some(anchor));
     match located {
         Err(
             lex::Missing::NoSuchItem { .. }
@@ -111,7 +111,7 @@ pub(crate) fn propose(one: &Break, source: &str, tokens: &[lex::Token]) -> Optio
 /// Where the code of `one` is in `source`, as an `in:` that names that
 /// place and no other.
 fn look(one: &Break, source: &str, tokens: &[lex::Token]) -> std::result::Result<Found, String> {
-    let places = lex::find_everywhere(source, tokens, &one.find);
+    let places = one.find_everywhere(source, tokens);
     let range = match places.as_slice() {
         [] => {
             return Err(format!(
@@ -163,8 +163,7 @@ fn look(one: &Break, source: &str, tokens: &[lex::Token]) -> std::result::Result
             .map(|item| item.name.as_str())
             .collect::<Vec<_>>()
             .join("::");
-        let located =
-            lex::locate_with_items(source, tokens, Some(&candidate), &one.find, one.occurrence);
+        let located = one.locate_with_items(source, tokens, Some(&candidate));
         if let Ok((found, items)) = located
             && found == range
             && items.len() == 1
@@ -440,5 +439,20 @@ replace: 0
             with_anchor("[break] a\nfind: 1\n[break] b\nin: y\n", 1, "z"),
             None
         );
+    }
+
+    #[test]
+    fn a_text_in_a_string_moved_into_another_item_is_found_by_its_text() {
+        let source = "fn old() { say(\"too slow\"); }\nfn fresh() { say(\"too busy\"); }\n";
+        let list = "[break] b\nrule: r\nfile: crates/demo/src/lib.rs\nin: old\nin-string: busy\nreplace: free\n";
+        let one = parse("mutations/demo.breaks", list).unwrap().remove(0);
+
+        let fix = propose(&one, source, &lex::tokens(source)).unwrap();
+
+        assert_eq!(fix.found.map(|found| found.anchor), Ok("fresh".to_owned()));
+        // Where it still is, nothing is offered.
+        let list = list.replace("in: old", "in: fresh");
+        let one = parse("mutations/demo.breaks", &list).unwrap().remove(0);
+        assert_eq!(propose(&one, source, &lex::tokens(source)), None);
     }
 }
