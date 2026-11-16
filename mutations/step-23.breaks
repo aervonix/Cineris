@@ -212,9 +212,9 @@ caught-by:
 [break] events-the-history-holds-shown-twice
 rule: Of the events held while the history was read, those it already holds (seq up to the read's) are dropped.
 file: crates/cortex-tui/src/app/state.rs
-in: App::history_read
-find: None => event.seq > page.seq
-replace: None => true
+in: ReadMark::holds
+find: None => event.seq <= self.seq
+replace: None => false
 caught-by:
     app::tests::a_resumed_session_draws_its_history_then_what_came_after
 
@@ -862,8 +862,8 @@ caught-by:
 rule: The workspace's paths are matched on a thread of their own, so that a key's frame never waits for the match.
 file: crates/cortex-tui/src/app/state.rs
 in: App::done
-find: match super::files::FileSearch::start(candidates, self.waker.clone()) {
-replace: match Err::<super::files::FileSearch, _>(candidates) {
+find: match super::files::FileSearch::start(files.paths, self.waker.clone()) {
+replace: match Err::<super::files::FileSearch, _>(files.paths) {
 packages: cortex-tui
 caught-by:
     app::tests::files::the_workspace_files_are_listed_on_the_first_at_and_not_when_the_session_opens

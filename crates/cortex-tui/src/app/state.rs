@@ -176,9 +176,14 @@ pub struct App {
     /// A stored session's history is being read: its events wait, and
     /// those it already holds (`seq` up to the read's) are dropped.
     reading: bool,
-    /// The items the read has drawn so far: `None` for one drawn whole,
-    /// the `seq` of its page for one drawn as it was then, in progress.
-    history_items: HashMap<String, Option<u64>>,
+    /// The items the read has drawn so far, in order: `None` for one drawn
+    /// whole, the `seq` of its page for one drawn as it was then, in
+    /// progress.
+    history_items: Vec<(String, Option<u64>)>,
+    /// The `seq` of the last page read.
+    history_seq: Option<u64>,
+    /// What the last read holds, for its session's events taken after it.
+    read_mark: Option<ReadMark>,
     /// The viewer, while it is open.
     viewer: Option<viewer::Viewer>,
     /// The worker that filters `@` completion off the key's path, once the
@@ -317,7 +322,9 @@ impl App {
             files_listing: false,
             editor_wanted: false,
             reading: false,
-            history_items: HashMap::new(),
+            history_items: Vec::new(),
+            history_seq: None,
+            read_mark: None,
             forked_from: None,
             opening: false,
             held: Vec::new(),
@@ -1106,7 +1113,7 @@ impl App {
                 self.sessions_listed(list.sessions);
             }
             // A result for a session left meanwhile is not this one's.
-            (Pending::Undo(id) | Pending::Set(id) | Pending::Config(_, id), Ok(_))
+            (Pending::Undo(id) | Pending::Set(id) | Pending::Config(_, id), _)
                 if !self.is_open(&id) => {}
             (Pending::History(id), _) if !(self.reading && self.is_open(&id)) => {}
             (Pending::Undo(_), Ok(OpResult::SessionUndo(result))) => {
@@ -1129,27 +1136,29 @@ impl App {
                 self.history_read(id, page, now);
             }
             (Pending::Files, Ok(OpResult::WorkspaceFiles(files))) => {
-                // Matched on a thread of their own: at the core's cap a
-                // match takes longer than a key's budget. With no thread,
-                // on the key's path. The paths are moved into the one
-                // compact list, never copied.
-                let candidates = crate::complete::Candidates::new(files.paths);
-                match super::files::FileSearch::start(candidates, self.waker.clone()) {
+                // Listed and matched on a thread of their own: at the
+                // core's cap either takes longer than a key's budget. With no
+                // thread, on the key's path. The paths are moved into the
+                // one compact list, never copied.
+                match super::files::FileSearch::start(files.paths, self.waker.clone()) {
                     Ok(search) => {
                         self.file_search = Some(search);
                         self.input.filter_files_elsewhere();
                         self.ask_files();
                     }
-                    Err(candidates) => self.input.set_file_candidates(candidates),
+                    Err(paths) => self.input.set_files(paths),
                 }
             }
-            (Pending::History(_), Err(error)) => {
-                self.reading = false;
-                self.history_items.clear();
-                let held = std::mem::take(&mut self.held);
-                for event in held {
-                    self.event(event, now);
-                }
+            // What was drawn before the page that failed is dealt with as a
+            // whole read's.
+            // Asked again on the next `@`.
+            (Pending::Files, Err(error)) => {
+                self.files_listing = false;
+                self.error(&error);
+            }
+            (Pending::History(id), Err(error)) => {
+                let seq = self.history_seq;
+                self.read_ended(id, seq, now);
                 self.error(&error);
             }
             (_, Err(error)) => self.error(&error),
@@ -1268,6 +1277,7 @@ impl App {
         // (`ask_files`), not here.
         if stored {
             self.reading = true;
+            self.read_mark = None;
             self.read_history(session_id, None);
         } else {
             let held = std::mem::take(&mut self.held);
@@ -1327,7 +1337,7 @@ impl App {
                 .is_some_and(|id| page.incomplete.iter().any(|open| open.as_str() == id));
             if let Some(id) = item.id() {
                 self.history_items
-                    .insert(id.to_owned(), incomplete.then_some(page.seq));
+                    .push((id.to_owned(), incomplete.then_some(page.seq)));
             }
             // Each prompt began a turn, a queued one too, and a steering
             // message did not: the history's turns are counted from one.
@@ -1347,20 +1357,38 @@ impl App {
                 );
             }
         }
+        self.history_seq = Some(page.seq);
         if let Some(cursor) = page.next_cursor {
             self.read_history(session, Some(cursor));
             return;
         }
+        self.read_ended(session, Some(page.seq), now);
+    }
+
+    /// The read of `session`'s history has ended, its last page read at
+    /// `seq` (none when its first page failed). Whether a turn ran at the
+    /// read is decided, and the events held meanwhile follow, but for those
+    /// the read already holds; so do those taken after it, which the link
+    /// may give after the read's result though they were queued before it.
+    fn read_ended(&mut self, session: SessionId, seq: Option<u64>, now: Instant) {
         self.reading = false;
-        let drawn = std::mem::take(&mut self.history_items);
+        self.history_seq = None;
+        // An item that still gets events is among the last the read drew.
+        let items = std::mem::take(&mut self.history_items);
+        let recent = items.len().saturating_sub(HISTORY_PAGE as usize);
+        let drawn: HashMap<String, Option<u64>> = items.into_iter().skip(recent).collect();
         let held = std::mem::take(&mut self.held);
         // Whether a turn was running when the read was taken: an item in
-        // progress says so, and else the turn's events held up to it.
+        // progress says so, and else this session's turn events held up to
+        // it.
         let mut running = self
             .session
             .as_ref()
             .is_some_and(|session| session.running_turn.is_some());
-        for event in held.iter().filter(|event| event.seq <= page.seq) {
+        for event in held
+            .iter()
+            .filter(|event| event.session_id == session && seq.is_none_or(|seq| event.seq <= seq))
+        {
             match &event.event {
                 Event::TurnStarted(_) => running = true,
                 Event::TurnCompleted(_) => running = false,
@@ -1381,22 +1409,13 @@ impl App {
             // A call the history holds with no result was cut off.
             self.mapper.turn_done(&mut self.transcript, now);
         }
-        // An item the read drew whole has nothing more to show; one it drew
-        // in progress goes on from the read's `seq`; of any other item, what
-        // came before the read is of an item that came to nothing. Anything
-        // else (the open's notices, the turn's events) is shown.
+        self.read_mark = seq.map(|seq| ReadMark {
+            session,
+            seq,
+            drawn,
+        });
         for event in held {
-            let shown = match item_of(&event.event) {
-                None => true,
-                Some(id) => match drawn.get(id) {
-                    Some(None) => false,
-                    Some(Some(seq)) => event.seq > *seq,
-                    None => event.seq > page.seq,
-                },
-            };
-            if shown {
-                self.event(event, now);
-            }
+            self.event(event, now);
         }
     }
 
@@ -1437,6 +1456,20 @@ impl App {
             // open: only what it said is shown.
             None if !matches!(event.event, Event::Notice(_)) => return,
             _ => {}
+        }
+        if let Some(mark) = &self.read_mark
+            && mark.session == event.session_id
+        {
+            if mark.holds(&event) {
+                return;
+            }
+            // A turn begun or ended after the read: what the read held has
+            // all come.
+            if event.seq > mark.seq
+                && matches!(event.event, Event::TurnStarted(_) | Event::TurnCompleted(_))
+            {
+                self.read_mark = None;
+            }
         }
         match &event.event {
             Event::TurnStarted(_) => {
@@ -1736,6 +1769,39 @@ pub struct Drained {
     pub more: bool,
     /// A request arrived: a dialog to draw at once.
     pub request: bool,
+}
+
+/// What a finished read of a session's history holds: the events of that
+/// session it already drew are not drawn again, whether they were held
+/// while it ran or taken after its result, which the link may give before
+/// the events queued ahead of it.
+#[derive(Debug)]
+struct ReadMark {
+    session: SessionId,
+    /// The `seq` of its last page.
+    seq: u64,
+    /// The last page's worth of the items it drew: `None` for one drawn
+    /// whole, the `seq` of its page for one drawn in progress.
+    drawn: HashMap<String, Option<u64>>,
+}
+
+impl ReadMark {
+    /// Whether the read already drew `event`: of an item it drew whole, any;
+    /// of one it drew in progress, those up to its page's `seq`; of any
+    /// other item, those up to the read's (an item that came to nothing).
+    fn holds(&self, event: &SessionEvent) -> bool {
+        if event.session_id != self.session {
+            return false;
+        }
+        let Some(id) = item_of(&event.event) else {
+            return false;
+        };
+        match self.drawn.get(id) {
+            Some(None) => true,
+            Some(Some(seq)) => event.seq <= *seq,
+            None => event.seq <= self.seq,
+        }
+    }
 }
 
 /// The item an event is of, if it is of one.

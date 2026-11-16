@@ -318,3 +318,43 @@ fn perf_a_keys_frame_through_the_loop() {
         times[times.len() - 1]
     );
 }
+
+/// A `workspace/files` that fails (the core's walk, a session closed under
+/// it) says why, once, and the next `@` asks for the list again: it does not
+/// say "listing" for the rest of the program (the review of the fixes after
+/// step 23).
+#[test]
+fn a_failed_file_listing_says_why_and_is_asked_again_on_the_next_at() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let _ = link.take_sent();
+    type_text(&mut app, "@", now);
+    let _ = app.frame(now);
+    let asked = files_asked(&link);
+    assert_eq!(asked.len(), 1, "{asked:#?}");
+    link.give(Inbound::Done(
+        asked[0].0,
+        Err(ErrorData::new(
+            ErrorKind::Internal,
+            "store_failed",
+            "The workspace's files could not be listed.",
+        )),
+    ));
+    drain(&mut app, now);
+    let mut seen = Vec::new();
+    let _ = screen(&mut app, now, &mut seen);
+    key(&mut app, "backspace", now);
+    let _ = screen(&mut app, now, &mut seen);
+    type_text(&mut app, "@", now);
+    let _ = screen(&mut app, now, &mut seen);
+    let live = screen(&mut app, now, &mut seen);
+    let again = files_asked(&link);
+    assert_eq!(again.len(), 1, "{again:#?}");
+    let all = [seen, live].concat().join("\n");
+    assert_eq!(
+        all.matches("could not be listed").count(),
+        1,
+        "said once: {all}"
+    );
+}
