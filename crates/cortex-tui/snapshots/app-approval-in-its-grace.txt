@@ -1,0 +1,19 @@
+== 100 columns, 40 rows
+-- committed: 6 lines
+{fg=a8}╭──────────────────────────────────────────────────────────────╮|
+{fg=a8}│{} {fg=#7A3CFB b}◆{} {b}Cortex-Harness{fg=a8} 0.1.0{}                                       {fg=a8}│|
+{fg=a8}│{}                                                              {fg=a8}│|
+{fg=a8}│{}   claude-opus-5-5 high  ·  ~/src/app                         {fg=a8}│|
+{fg=a8}╰──────────────────────────────────────────────────────────────╯|
+|
+-- live region: 9 lines
+{fg=a11}?{} {b}Run cargo build?|
+  {fg=a8}`cargo build` is not on the safe list.|
+|
+    {fg=#8D57FC}cargo build|
+    {fg=a8}in /work/app|
+|
+|
+|
+  {fg=a8}esc denies · ctrl+o shows it whole{}                                                {fg=a8}opus-5.5 high{}  |
+cursor at row 8, column 0|

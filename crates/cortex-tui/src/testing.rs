@@ -9,10 +9,12 @@
 
 use std::fmt::Write as _;
 use std::path::Path;
+use std::time::Instant;
 
 use cortex_base::{Rng, SeededRng};
 use cortex_term::{Color, ColorDepth, Line, Style};
 
+use crate::app::App;
 use crate::glyphs::Glyphs;
 use crate::theme::{Rgb, Theme};
 
@@ -240,6 +242,41 @@ pub(crate) fn assert_snapshot(name: &str, actual: &str) {
                 .join("\n"),
         );
     }
+}
+
+/// The frame `app` draws at `now` in a window of `columns` by `rows`, as
+/// snapshot text: the lines the frame commits to the scrollback, the live
+/// region, and where the cursor goes, each line with its styles
+/// ([`markup`]). The application is resized first, as the loop resizes it
+/// for a window of that size; the frame is the application's real one
+/// (`App::frame`), so what it consumes (the lines committed) is consumed.
+pub(crate) fn app_frame(app: &mut App, now: Instant, columns: usize, rows: usize) -> String {
+    // Views get one column less than the window.
+    app.resize(columns.saturating_sub(1), rows);
+    let (commit, live, cursor) = app.frame(now);
+    let mut out = format!("== {columns} columns, {rows} rows\n");
+    let _ = writeln!(out, "-- committed: {} lines", commit.len());
+    out.push_str(&markup(&commit));
+    let _ = writeln!(out, "-- live region: {} lines", live.len());
+    out.push_str(&markup(&live));
+    let _ = writeln!(out, "cursor at row {}, column {}|", cursor.row, cursor.col);
+    out
+}
+
+/// Draws `app`'s frame at `now` in a window of `columns` by `rows`
+/// ([`app_frame`]) and compares it with the snapshot `name` (a file
+/// `snapshots/<name>.txt`, named `app-…` by convention). With
+/// `CORTEX_UPDATE_SNAPSHOTS` set it writes the snapshot instead, as every
+/// other snapshot of the crate is, to be reviewed like code. The one call a
+/// test of the application makes to say "this is what it shows".
+pub(crate) fn assert_app_frame(
+    name: &str,
+    app: &mut App,
+    now: Instant,
+    columns: usize,
+    rows: usize,
+) {
+    assert_snapshot(name, &app_frame(app, now, columns, rows));
 }
 
 /// What is wrong with lines drawn for `width` columns: a line wider than
