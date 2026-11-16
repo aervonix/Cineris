@@ -186,6 +186,11 @@ What moved in tier 1 is `cortex-cli`'s new history tests (+0.92 s together: file
 
 - **Breaks:** `cargo xtask mutate step-23-followups --jobs 2`: 43 breaks, every one caught by the tests its list names (one list corrected: `version-1-kept-on-write` named a test that starts from no file, where a version 1 store cannot show; the two that read one catch it). The sixteen breaks of steps 13a, 17, 23 and 24 that named code this change rewrote were moved to the code as it is (`mutate --check`: every break applies).
 
+- **Stress, plain:** `cargo xtask stress -p cortex-cli -p cortex-core -p cortex-config --count 50` (the side slot): 652 tests, 50 times each, seeds 0 to 49: every test passed every time.
+- **Stress, loaded** (`--cores 2 --load 6`): 49 of 50 rounds passed. Once, under seed 33, `cortex-config`'s `discovery::in_the_workspace_a_link_is_looked_at_before_it_is_followed_on_unix` was stopped at 43.9 s. It is in a crate this change does not touch, it runs in milliseconds, and it was stopped while the disk stalled (every task waited on I/O 90.9% of one 10 s window). Run again under seed 33 it passed, and 100 loaded rounds of `cortex-config`'s discovery tests (seeds 0 to 99) passed every time. It is not a listed flake, and it is taken for the machine.
+
 ## Left open
 
-To be filled in.
+- **Untested on Windows:** the start through a junction out of the workspace (finding 3) is tested with a link on Linux only; the Windows test runner cannot make a junction without privileges the test kit does not ask for. The code compares the canonical forms with `cortex_base::location_within`, as the Windows facts in `AGENTS.md` require.
+- **A client from before that answers never to a trusted project's question** is refused, as above: a narrowing documented in 11, with no version of its own.
+- Nothing of the five items is left open.
