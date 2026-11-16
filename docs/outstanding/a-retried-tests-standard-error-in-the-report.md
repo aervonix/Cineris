@@ -1,3 +1,8 @@
+`xtask` reads a retried test's standard error from its first attempt, not the last.
+
+- Area: tooling
+- Owner: a later tooling step
+
 | Item | Who | When |
 |---|---|---|
 | **A retried test's standard error, as `xtask` reads a JUnit report.** `junit::failures` takes a test case's first `<system-err>`; quick-junit writes a retry's elements, each with its own, before the case's own, so for a test that was retried the standard error `stress` shows is an earlier attempt's. Only tests in a `timing_sensitive` module are retried, and none of the blocking checks reads it, so nothing is wrong today; a test run with more retries would show the wrong attempt's timeout report. | A later tooling step | Before retries are turned on more widely |

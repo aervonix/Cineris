@@ -1,3 +1,8 @@
+The limits lock held through an update, the flushed save, two races of moving a file aside, the reader thread's end and the 64-bit index on Windows are seen only by reading.
+
+- Area: cortex-stats
+- Owner: step 33
+
 | Item | Who | When |
 |---|---|---|
 | **What the fixes to step 16 do that no test can see yet.** (1) `limits.json`'s lock held from the read to the write: the test sees the lock taken (`limits::an_update_takes_the_files_lock`, and the stuck writer of `usage::a_stuck_statistics_writer_holds_the_end_at_most_two_seconds`), and the lock's holding is tested in `cortex-base` and `cortex-policy`, but a lock let go at once (`let _ = hold_lock(…)`) would pass: nothing in the update can be watched between its read and its write. (2) The aggregates flushed to the disk before they take their name (`sync: true`): a flush cannot be seen without a power cut. (3) Moving an unreadable aggregates file aside when another process replaced it between the look and the rename, and two files moved aside in one second under one name: races a test cannot time. (4) The day's reader thread ending with its day: no test can see a thread end. (5) The 64-bit file index on Windows, used only on a volume that does not give the 128-bit id (FAT, some shares): no runner has one. Each was reviewed by reading (the reviews of step 16's fixes). To settle: a hook between the update's read and write in a test build (the test kit's gates), a fault-injecting file system in the non-blocking tier, and a Windows runner with a FAT volume. | Step 33, or the next step that changes `cortex-stats`' files | When the non-blocking tier gains a fault-injecting file system |

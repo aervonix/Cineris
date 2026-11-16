@@ -1,3 +1,8 @@
+The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary.
+
+- Area: tooling
+- Owner: the owner
+
 | Item | Who | When |
 |---|---|---|
 | **The workflows are not linted by actionlint.** The fourth tooling step built the step in `cargo xtask check` and found that the install action the workflows pin (`taiki-e/install-action` v2.90.3) has no entry for actionlint at any version, so it cannot be installed there as a checksummed prebuilt binary, and took the step out. The repo rules still check the forms that are about security (pinned actions, rights, inputs in scripts, values YAML would misread). **Options:** a step that downloads actionlint's release archive and checks it against a SHA-256 written in the workflow (one more download in the lint job, about a second); or a newer install action, if its manifest has actionlint, which is a change to every workflow. | The owner | When a workflow mistake the repo rules miss reaches a run |

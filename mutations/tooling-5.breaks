@@ -160,14 +160,9 @@ caught-by:
 
 # ---------------------------------------------------------- the open items
 
-[break] the-index-check-passes-an-unlisted-item
-rule: Every open item is listed in the index of docs/outstanding/README.md exactly once.
-file: xtask/src/rules/layout.rs
-in: unlisted
-find: if listed == 1 {
-replace: if listed <= 1 {
-caught-by:
-    rules::layout::tests::an_item_the_index_does_not_list_once_is_named
+# Since the tenth tooling step the index is written from the items by
+# `cargo xtask outstanding`, and compared whole: its breaks are in
+# mutations/tooling-10.breaks (`outstanding-*`).
 
 # -------------------------------------------------- the comma a find ends in
 
@@ -323,14 +318,6 @@ packages: cortex-core
 caught-by:
     approvals::a_request_another_client_answered_is_not_unexpected
 
-[break] a-link-in-fenced-code-lists-an-item
-rule: A link to an open item inside fenced code or an HTML comment in the index lists nothing.
-file: xtask/src/rules/layout.rs
-in: unlisted
-find: let index = &prose(index);
-replace:
-caught-by:
-    rules::layout::tests::an_item_the_index_does_not_list_once_is_named
 
 [break] a-fenced-heading-starts-a-section
 rule: A heading inside fenced code is not one, when ci-times looks for a section.

@@ -12,3 +12,9 @@
 # Scripts that only run on Windows keep the line endings Windows tools expect.
 *.cmd text eol=crlf
 *.bat text eol=crlf
+
+# The open items' index is written by `cargo xtask outstanding` from the items'
+# files. Merged line by line, keeping both sides, so that a rebase never stops
+# on it; `cargo xtask rules` finds what such a merge gets wrong, and the command
+# puts it right.
+docs/outstanding/README.md merge=union

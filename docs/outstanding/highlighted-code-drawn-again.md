@@ -1,3 +1,8 @@
+`Markdown::render` draws code plain when a finished answer is redrawn at another width.
+
+- Area: cortex-tui
+- Owner: step 25
+
 | Item | Who | When |
 |---|---|---|
 | **Colours for code that is drawn again (step 22's review).** A streamed answer's code lines are coloured by the highlighter's worker as they commit. `Markdown::render`, which draws a finished answer again at another width, draws its code plain: it cannot wait for the worker on the interface's thread, and the stream's colours are kept by block and line, not by content. The full-screen presenter and the viewer (step 25) draw finished answers again on a resize and when scrolled to. The likely shape: the highlighter keeps results by a block's language and text, `render` asks for them and draws plain until they are there, and the worker's waker asks for a redraw. | Step 25 | With the full-screen presenter |

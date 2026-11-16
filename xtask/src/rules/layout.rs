@@ -18,19 +18,15 @@
 //! - `docs/outstanding/<item>.md`, named in lower-case words joined by
 //!   hyphens, holds the table's header and one row.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::Violation;
+use crate::outstanding::{self, FOLDER as OUTSTANDING, INDEX as OUTSTANDING_PAGE, is_hyphenated};
 
 const STEPS: &str = "docs/steps/";
-const OUTSTANDING: &str = "docs/outstanding/";
 
 /// Where the layout is described, for the messages.
 const STEPS_PAGE: &str = "docs/steps/README.md";
-const OUTSTANDING_PAGE: &str = "docs/outstanding/README.md";
-
-/// The header of an open item's table.
-const ITEM_HEADER: [&str; 2] = ["| Item | Who | When |", "|---|---|---|"];
 
 /// Whether a file is one this rule looks at: anything under the two
 /// directories, whatever its ending.
@@ -39,23 +35,37 @@ pub(super) fn is_read(file: &str) -> bool {
 }
 
 /// Checks every file under the two directories. `texts` holds each file's
-/// text by its path from the repository's root.
-pub(crate) fn check(texts: &BTreeMap<String, String>) -> Vec<Violation> {
+/// text by its path from the repository's root; `names` are the
+/// repository's files, which say what the crates are.
+pub(crate) fn check(texts: &BTreeMap<String, String>, names: &BTreeSet<String>) -> Vec<Violation> {
+    let crates = outstanding::crates_of(names);
     let mut violations = Vec::new();
+    let mut items_read = true;
     for (file, text) in texts {
         let problem = if let Some(rest) = file.strip_prefix(STEPS) {
-            step_record(rest, text)
+            step_record(rest, text, texts)
         } else if let Some(rest) = file.strip_prefix(OUTSTANDING) {
-            open_item(rest, text)
+            open_item(rest, text, &crates)
         } else {
             None
         };
         if let Some((line, problem)) = problem {
+            if file.starts_with(OUTSTANDING) {
+                items_read = false;
+            }
             violations.push(Violation::new(file, line, problem));
         }
     }
-    if let Some(index) = texts.get(OUTSTANDING_PAGE) {
-        violations.extend(unlisted(texts, index));
+    if let Some(found) = texts.get(OUTSTANDING_PAGE) {
+        if items_read {
+            violations.extend(stale_index(texts, &crates, found));
+        } else {
+            violations.push(Violation::new(
+                OUTSTANDING_PAGE,
+                None,
+                "the index is checked once every item's file can be read (above).",
+            ));
+        }
     }
     violations
 }
@@ -87,51 +97,35 @@ fn prose(text: &str) -> String {
     kept
 }
 
-/// The open items the index of [`OUTSTANDING_PAGE`] does not list exactly
-/// once, as a link to the item's file: `[name](name.md)`. An index that a
-/// step may forget to change goes stale, and one that misses an item is
-/// worse than none.
-fn unlisted(texts: &BTreeMap<String, String>, index: &str) -> Vec<Violation> {
-    let index = &prose(index);
-    let mut violations = Vec::new();
-    for file in texts.keys() {
-        let Some(path) = file.strip_prefix(OUTSTANDING) else {
-            continue;
-        };
-        if path == "README.md" || path.contains('/') || !path.ends_with(".md") {
-            continue;
-        }
-        let listed = index.matches(&format!("]({path})")).count();
-        if listed == 1 {
-            continue;
-        }
-        let problem = if listed == 0 {
+/// The index of [`OUTSTANDING_PAGE`], when it is not what `cargo xtask
+/// outstanding` writes from the items git tracks. Whatever a merge of its
+/// two sides got wrong (a line twice, a line lost, a line of an item that
+/// is gone, an order that is not the index's) is found here, since the
+/// whole page is compared.
+fn stale_index(
+    texts: &BTreeMap<String, String>,
+    crates: &BTreeSet<String>,
+    found: &str,
+) -> Option<Violation> {
+    let (items, _) = outstanding::read(
+        texts
+            .iter()
+            .map(|(file, text)| (file.as_str(), text.as_str())),
+        crates,
+    );
+    let expected = outstanding::index(&items);
+    (found != expected).then(|| {
+        Violation::new(
+            OUTSTANDING_PAGE,
+            None,
             format!(
-                "this item is not in the index of `{OUTSTANDING_PAGE}`.\n    Add a line \
-                 `- [{name}]({path}): <the mechanism it covers>. Owner: <who settles it>.` \
-                 under the crate or area it is about, and take it out when the item is settled.",
-                name = path.trim_end_matches(".md")
-            )
-        } else {
-            format!(
-                "the index of `{OUTSTANDING_PAGE}` lists this item {listed} times: once, under \
-                 the crate or area it is about."
-            )
-        };
-        violations.push(Violation::new(file, None, problem));
-    }
-    violations
-}
-
-/// Lower-case words of letters and digits, joined by hyphens.
-fn is_hyphenated(name: &str) -> bool {
-    !name.is_empty()
-        && name.split('-').all(|word| {
-            !word.is_empty()
-                && word
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        })
+                "the index is not what the items' files give:{}\n    Run `cargo xtask \
+                 outstanding`, which writes it (after a rebase too: git merges this page's two \
+                 sides line by line, and the command puts the result right).",
+                outstanding::difference(found, &expected)
+            ),
+        )
+    })
 }
 
 /// A step's folder name as its headings write the step: `07` is `step 7`,
@@ -156,19 +150,28 @@ fn is_date(text: &str) -> bool {
 
 /// What is wrong with a file under `docs/steps/`, given its path from
 /// there: the line it is at, if it is at one, and what to do.
-fn step_record(path: &str, text: &str) -> Option<(Option<usize>, String)> {
+fn step_record(
+    path: &str,
+    text: &str,
+    texts: &BTreeMap<String, String>,
+) -> Option<(Option<usize>, String)> {
     if path == "README.md" {
         return None;
     }
     let parts: Vec<&str> = path.split('/').collect();
-    let [folder, file] = parts.as_slice() else {
-        return Some((
-            None,
-            format!(
-                "a step's records are `{STEPS}<step>/answered.md` and `{STEPS}<step>/ci.md`, \
-                 and this is neither.\n    {STEPS_PAGE} has the layout."
-            ),
-        ));
+    let (folder, file) = match parts.as_slice() {
+        [folder, file] => (*folder, *file),
+        [folder, _, _] => (*folder, ""),
+        _ => {
+            return Some((
+                None,
+                format!(
+                    "a step's records are `{STEPS}<step>/answered.md`, `{STEPS}<step>/ci.md` and \
+                     a part's `{STEPS}<step>/<group>/<part>.md`, and this is none of them.\n    \
+                     {STEPS_PAGE} has the layout."
+                ),
+            ));
+        }
     };
     let step = step_of(folder);
     // A name must not look like a number that was written wrongly: `7`,
@@ -185,7 +188,10 @@ fn step_record(path: &str, text: &str) -> Option<(Option<usize>, String)> {
             ),
         ));
     }
-    let (begins, then) = match *file {
+    if let [_, group, part] = parts.as_slice() {
+        return part_record(folder, group, part, text, texts);
+    }
+    let (begins, then) = match file {
         "answered.md" => ("# Answered in ", ", on "),
         "ci.md" => ("# After ", ": "),
         _ => {
@@ -201,7 +207,7 @@ fn step_record(path: &str, text: &str) -> Option<(Option<usize>, String)> {
     };
 
     let heading = text.lines().next().unwrap_or("");
-    let expected = match (&step, *file) {
+    let expected = match (&step, file) {
         (Some(step), "answered.md") => format!("# Answered in {step}, on <date>"),
         (Some(step), _) => format!("# After {step}: <what it built>"),
         (None, "answered.md") => "# Answered in <the work's name>, on <date>".to_owned(),
@@ -215,7 +221,7 @@ fn step_record(path: &str, text: &str) -> Option<(Option<usize>, String)> {
                 Some(step) => who == step,
                 None => !who.trim().is_empty(),
             };
-            let rest_fits = if *file == "answered.md" {
+            let rest_fits = if file == "answered.md" {
                 is_date(rest)
             } else {
                 !rest.trim().is_empty()
@@ -235,13 +241,71 @@ fn step_record(path: &str, text: &str) -> Option<(Option<usize>, String)> {
     ))
 }
 
+/// What is wrong with a part's record, `<step>/<group>/<part>.md`: a step
+/// done in several pull requests gives each part a file of its own, so that
+/// two parts never append to one record, and the step's `answered.md` (or
+/// `ci.md`) links each one, so that reading the step's records in order
+/// still reaches every part.
+fn part_record(
+    folder: &str,
+    group: &str,
+    part: &str,
+    text: &str,
+    texts: &BTreeMap<String, String>,
+) -> Option<(Option<usize>, String)> {
+    let name = part.strip_suffix(".md");
+    if !is_hyphenated(group) || !name.is_some_and(is_hyphenated) {
+        return Some((
+            None,
+            format!(
+                "a part's record is `{STEPS}<step>/<group>/<part>.md`, the group and the part \
+                 each named in lower-case words joined by hyphens (`after-review/pr2-trust.md`).\n    \
+                 {STEPS_PAGE} has the layout."
+            ),
+        ));
+    }
+    let heading = text.lines().next().unwrap_or("");
+    if heading
+        .strip_prefix("# ")
+        .is_none_or(|rest| rest.trim().is_empty())
+    {
+        return Some((
+            Some(1),
+            format!(
+                "the first line is `{heading}`, and a part's record begins with a heading of \
+                 its own: `# <the step>, <the part>`.\n    {STEPS_PAGE} has the layout."
+            ),
+        ));
+    }
+    let target = format!("{group}/{part}");
+    let linked = ["answered.md", "ci.md"].iter().any(|record| {
+        texts
+            .get(&format!("{STEPS}{folder}/{record}"))
+            .is_some_and(|text| {
+                let text = prose(text);
+                text.contains(&format!("]({target})")) || text.contains(&format!("]({target}#"))
+            })
+    });
+    if linked {
+        return None;
+    }
+    Some((
+        None,
+        format!(
+            "no record of the step links this part: add `[…]({target})` to \
+             `{STEPS}{folder}/answered.md` (or `ci.md`), so that the step's records lead to \
+             every part.\n    {STEPS_PAGE} has the layout."
+        ),
+    ))
+}
+
 /// What is wrong with a file under `docs/outstanding/`.
-fn open_item(path: &str, text: &str) -> Option<(Option<usize>, String)> {
+fn open_item(path: &str, text: &str, crates: &BTreeSet<String>) -> Option<(Option<usize>, String)> {
     if path == "README.md" {
         return None;
     }
     let name = path.strip_suffix(".md");
-    if path.contains('/') || !name.is_some_and(is_hyphenated) {
+    let Some(name) = name.filter(|name| !path.contains('/') && is_hyphenated(name)) else {
         return Some((
             None,
             format!(
@@ -249,49 +313,35 @@ fn open_item(path: &str, text: &str) -> Option<(Option<usize>, String)> {
                  words joined by hyphens, ending `.md`.\n    {OUTSTANDING_PAGE} has the layout."
             ),
         ));
-    }
-    let lines: Vec<&str> = text.lines().collect();
-    let content = lines
-        .iter()
-        .rposition(|line| !line.trim().is_empty())
-        .map_or(&[][..], |last| &lines[..=last]);
-    let row_fits = |row: &str| row.starts_with("| ") && row.trim_end().ends_with('|');
-    // The first line that is not what it should be: a line of the header,
-    // the row that is missing or is not a row, or a line after the row.
-    let wrong_header = content
-        .iter()
-        .zip(ITEM_HEADER)
-        .position(|(found, expected)| *found != expected);
-    let line = match (wrong_header, content.get(2)) {
-        (Some(index), _) => index + 1,
-        (None, None) => content.len() + 1,
-        (None, Some(row)) if !row_fits(row) => 3,
-        (None, Some(_)) if content.len() > 3 => 4,
-        (None, Some(_)) => return None,
     };
-    Some((
-        Some(line),
-        format!(
-            "an open item is the table's header, `{}`, the line `{}`, and one row: the item, \
-             who settles it, and when.\n    One item to a file: a second item is a second \
-             file. {OUTSTANDING_PAGE} has the layout.",
-            ITEM_HEADER[0], ITEM_HEADER[1]
-        ),
-    ))
+    outstanding::parse(name, text, crates)
+        .err()
+        .map(|(line, message)| (Some(line), message))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::check;
+    use crate::outstanding;
+
+    fn names() -> BTreeSet<String> {
+        [
+            "crates/cortex-tui/Cargo.toml",
+            "crates/cortex-cli/Cargo.toml",
+        ]
+        .map(str::to_owned)
+        .into_iter()
+        .collect()
+    }
 
     fn found(files: &[(&str, &str)]) -> Vec<String> {
         let texts: BTreeMap<String, String> = files
             .iter()
             .map(|(file, text)| ((*file).to_owned(), (*text).to_owned()))
             .collect();
-        check(&texts)
+        check(&texts, &names())
             .into_iter()
             .map(|violation| violation.to_string())
             .collect()
@@ -308,69 +358,121 @@ mod tests {
         }
     }
 
-    const ITEM: &str = "| Item | Who | When |\n|---|---|---|\n| **A flag.** It has a recommendation. | Step 13 | In that step |\n";
+    fn item(summary: &str, area: &str) -> String {
+        format!(
+            "{summary}\n\n- Area: {area}\n- Owner: step 13\n\n| Item | Who | When |\n\
+             |---|---|---|\n| **A flag.** It has a recommendation. | Step 13 | In that step |\n"
+        )
+    }
+
+    /// The index `cargo xtask outstanding` writes for these items.
+    fn index_of(items: &[(&str, &str)]) -> String {
+        let crates = outstanding::crates_of(&names());
+        let (items, problems) = outstanding::read(items.iter().copied(), &crates);
+        assert!(problems.is_empty(), "{problems:?}");
+        outstanding::index(&items)
+    }
 
     #[test]
-    fn an_item_the_index_does_not_list_once_is_named() {
-        let index = "# Still outstanding\n\n### cortex-tui\n\n- [a-flag](a-flag.md): a flag. \
-                     Owner: step 23.\n- [twice](twice.md): x.\n\nAlso [twice](twice.md).\n";
-        let listed = found(&[
-            ("docs/outstanding/README.md", index),
-            ("docs/outstanding/a-flag.md", ITEM),
-            ("docs/outstanding/forgotten.md", ITEM),
-            ("docs/outstanding/twice.md", ITEM),
-        ]);
+    fn an_index_that_is_not_what_the_items_give_is_found() {
+        let flag = item("A flag.", "cortex-tui");
+        let quick = item("The engine.", "other");
+        let items = [
+            ("docs/outstanding/a-flag.md", flag.as_str()),
+            ("docs/outstanding/quickjs.md", quick.as_str()),
+        ];
+        let right = index_of(&items);
+        let with = |index: &str| {
+            let mut files = items.to_vec();
+            files.push(("docs/outstanding/README.md", index));
+            found(&files)
+        };
+        assert_eq!(with(&right), [] as [&str; 0]);
 
-        assert_eq!(listed.len(), 2, "{listed:#?}");
-        assert!(
-            listed[0].starts_with("docs/outstanding/forgotten.md")
-                && listed[0].contains("is not in the index")
-                && listed[0].contains("- [forgotten](forgotten.md): "),
-            "{listed:#?}"
+        let flag_line = "- [a-flag](a-flag.md): A flag. Owner: step 13.\n";
+        assert!(right.contains(flag_line), "{right}");
+        // What a merge of two sides line by line can leave: a line lost,
+        // a line twice, the line of an item whose file is gone, an order
+        // that is not the index's.
+        let lost = right.replace(flag_line, "");
+        let twice = right.replace(flag_line, &format!("{flag_line}{flag_line}"));
+        let gone = right.replace(
+            flag_line,
+            &format!("{flag_line}- [gone](gone.md): Gone. Owner: x.\n"),
         );
-        assert!(
-            listed[1].starts_with("docs/outstanding/twice.md")
-                && listed[1].contains("lists this item 2 times"),
-            "{listed:#?}"
-        );
-        // A link in fenced code or a comment lists nothing.
-        for index in [
-            "```text\n- [a-flag](a-flag.md)\n```\n",
-            "<!-- [a-flag](a-flag.md) -->\n",
+        let quick_line = "- [quickjs](quickjs.md): The engine. Owner: step 13.\n";
+        let moved = right
+            .replace(quick_line, "")
+            .replace(flag_line, &format!("{quick_line}{flag_line}"));
+        for (index, needle) in [
+            (lost, "It lacks:\n      - [a-flag](a-flag.md)"),
+            (twice, "It has twice:\n      - [a-flag](a-flag.md)"),
+            (gone, "should not"),
+            (moved, "another order"),
+            (String::new(), "It lacks"),
         ] {
-            let hidden = found(&[
-                ("docs/outstanding/README.md", index),
-                ("docs/outstanding/a-flag.md", ITEM),
-            ]);
-            assert_eq!(hidden.len(), 1, "{index:?}: {hidden:#?}");
-            assert!(
-                hidden[0].contains("is not in the index"),
-                "{index:?}: {hidden:#?}"
+            let found = with(&index);
+            assert_one(
+                &found,
+                &[
+                    "docs/outstanding/README.md: the index is not what",
+                    needle,
+                    "Run `cargo xtask outstanding`",
+                ],
             );
         }
-        // A link to a file of the same name elsewhere does not count.
-        let elsewhere = found(&[
-            ("docs/outstanding/README.md", "- [a](../steps/a-flag.md)\n"),
-            ("docs/outstanding/a-flag.md", ITEM),
+    }
+
+    #[test]
+    fn the_index_waits_for_items_that_cannot_be_read() {
+        let flag = item("A flag.", "cortex-tui");
+        let right = index_of(&[("docs/outstanding/a-flag.md", flag.as_str())]);
+        let found = found(&[
+            ("docs/outstanding/a-flag.md", flag.as_str()),
+            ("docs/outstanding/broken.md", "| Item | Who | When |\n"),
+            ("docs/outstanding/README.md", right.as_str()),
         ]);
-        assert_eq!(elsewhere.len(), 1, "{elsewhere:#?}");
+        assert_eq!(found.len(), 2, "{found:#?}");
+        assert!(found[1].starts_with("docs/outstanding/README.md: the index is checked once"));
+        assert!(
+            found[0].starts_with("docs/outstanding/broken.md:1:"),
+            "{found:#?}"
+        );
     }
 
     #[test]
     fn records_and_items_in_their_places_pass() {
+        let flag = item("A flag.", "cortex-cli");
+        let engine = item("The engine.", "other");
+        let index = index_of(&[
+            (
+                "docs/outstanding/speed-flag-for-headless-mode.md",
+                flag.as_str(),
+            ),
+            ("docs/outstanding/quickjs-2.md", engine.as_str()),
+        ]);
         assert_eq!(
             found(&[
                 ("docs/steps/README.md", "# Step records\n"),
                 (
                     "docs/steps/07/answered.md",
-                    "# Answered in step 7, on 2026-11-13\n\nText.\n"
+                    "# Answered in step 7, on 2026-11-13\n\nText, and [the trust \
+                     part](after-review/pr2-trust.md#what-changed).\n"
                 ),
                 ("docs/steps/07/ci.md", "# After step 7: the agent loop\n"),
+                (
+                    "docs/steps/07/after-review/pr2-trust.md",
+                    "# Step 7, after the review: trust\n"
+                ),
                 (
                     "docs/steps/13a/answered.md",
                     "# Answered in step 13a, on 2026-11-14\n"
                 ),
-                ("docs/steps/13a/ci.md", "# After step 13a: core assembly\n"),
+                (
+                    "docs/steps/13a/ci.md",
+                    "# After step 13a: core assembly\n\n[Its times](parts/two.md)\n"
+                ),
+                ("docs/steps/13a/parts/two.md", "# Step 13a's second part\n"),
                 (
                     "docs/steps/tooling-w5/answered.md",
                     "# Answered in the wave 5 tooling step, on 2026-11-13\n"
@@ -379,14 +481,9 @@ mod tests {
                     "docs/steps/tooling-w5/ci.md",
                     "# After the wave 5 tooling step: developer tooling\n"
                 ),
-                (
-                    "docs/outstanding/README.md",
-                    "# Still outstanding\n\n### cortex-cli\n\n- \
-                     [speed-flag-for-headless-mode](speed-flag-for-headless-mode.md): a flag. \
-                     Owner: step 13.\n- [quickjs-2](quickjs-2.md): the engine. Owner: the owner.\n"
-                ),
-                ("docs/outstanding/speed-flag-for-headless-mode.md", ITEM),
-                ("docs/outstanding/quickjs-2.md", &format!("{ITEM}\n\n")),
+                ("docs/outstanding/README.md", &index),
+                ("docs/outstanding/speed-flag-for-headless-mode.md", &flag),
+                ("docs/outstanding/quickjs-2.md", &format!("{engine}\n\n")),
                 // Nothing here is this rule's.
                 ("docs/build-plan.md", "no heading at all\n"),
             ]),
@@ -401,22 +498,69 @@ mod tests {
             let found = found(&[(&file, "# After step 7: the agent loop\n")]);
             assert_one(&found, &[&format!("`{folder}` is not a step's folder")]);
         }
+        let found = found(&[("docs/steps/7/parts/two.md", "# Two\n")]);
+        assert_one(&found, &["`7` is not a step's folder"]);
     }
 
     #[test]
-    fn a_steps_folder_holds_its_two_records_and_nothing_else() {
+    fn a_steps_folder_holds_its_two_records_and_its_parts_and_nothing_else() {
         assert_one(
             &found(&[("docs/steps/07/notes.md", "# Notes\n")]),
             &["holds `answered.md`", "`docs/outstanding/`"],
         );
         assert_one(
-            &found(&[("docs/steps/07/ci/run-1.md", "# After step 7: x\n")]),
-            &["and this is neither"],
+            &found(&[("docs/steps/07/ci/runs/run-1.md", "# After step 7: x\n")]),
+            &["none of them"],
         );
         assert_one(
             &found(&[("docs/steps/notes.md", "# Notes\n")]),
-            &["and this is neither"],
+            &["none of them"],
         );
+    }
+
+    #[test]
+    fn a_parts_record_is_named_headed_and_linked() {
+        let answered = "# Answered in step 7, on 2026-11-13\n\n[Two](parts/two.md)\n";
+        for (part, text, needle) in [
+            ("parts/Two.md", "# Two\n", "lower-case words"),
+            ("Parts/two.md", "# Two\n", "lower-case words"),
+            ("parts/two.txt", "# Two\n", "lower-case words"),
+            ("parts/two.md", "Two\n", "a heading of its own"),
+            ("parts/two.md", "# \n", "a heading of its own"),
+            ("parts/two.md", "## Two\n", "a heading of its own"),
+        ] {
+            let file = format!("docs/steps/07/{part}");
+            let found = found(&[(&file, text), ("docs/steps/07/answered.md", answered)]);
+            assert_one(&found, &[&file, needle]);
+        }
+        // Linked from nowhere, from another step, or only in code.
+        for (record, text) in [
+            (
+                "docs/steps/07/answered.md",
+                "# Answered in step 7, on 2026-11-13\n",
+            ),
+            (
+                "docs/steps/08/answered.md",
+                "# Answered in step 8, on 2026-11-13\n\n[Two](../07/parts/two.md)\n",
+            ),
+            (
+                "docs/steps/07/answered.md",
+                "# Answered in step 7, on 2026-11-13\n\n```text\n[Two](parts/two.md)\n```\n",
+            ),
+            (
+                "docs/steps/07/answered.md",
+                "# Answered in step 7, on 2026-11-13\n\n[Three](parts/two.md.old)\n",
+            ),
+        ] {
+            let found = found(&[("docs/steps/07/parts/two.md", "# Two\n"), (record, text)]);
+            assert_one(
+                &found,
+                &[
+                    "docs/steps/07/parts/two.md",
+                    "no record of the step links this part",
+                ],
+            );
+        }
     }
 
     #[test]
@@ -477,6 +621,7 @@ mod tests {
 
     #[test]
     fn an_open_item_is_named_in_hyphenated_words() {
+        let flag = item("A flag.", "cortex-tui");
         for file in [
             "docs/outstanding/Speed-flag.md",
             "docs/outstanding/speed_flag.md",
@@ -486,34 +631,29 @@ mod tests {
             "docs/outstanding/-speed.md",
         ] {
             assert_one(
-                &found(&[(file, ITEM)]),
+                &found(&[(file, &flag)]),
                 &["lower-case words joined by hyphens"],
             );
         }
     }
 
     #[test]
-    fn an_open_item_is_the_header_and_one_row() {
+    fn an_open_item_out_of_form_is_found_at_its_line() {
         let row = "| **A flag.** | Step 13 | In that step |";
+        let fields = "- Area: cortex-tui\n- Owner: step 13\n";
         for (text, line) in [
             // Two items in one file.
             (
-                format!("| Item | Who | When |\n|---|---|---|\n{row}\n{row}\n"),
+                format!(
+                    "A flag.\n\n{fields}\n| Item | Who | When |\n|---|---|---|\n{row}\n{row}\n"
+                ),
+                9,
+            ),
+            // The form before the tenth tooling step.
+            (format!("| Item | Who | When |\n|---|---|---|\n{row}\n"), 1),
+            (
+                "A flag.\n\n- Owner: step 13\n\n| Item | Who | When |\n".to_owned(),
                 4,
-            ),
-            ("| Item | Who | When |\n|---|---|---|\n".to_owned(), 3),
-            (
-                format!("| Item | Owner | When |\n|---|---|---|\n{row}\n"),
-                1,
-            ),
-            (format!("| Item | Who | When |\n{row}\n"), 2),
-            (
-                format!("# A flag\n\n| Item | Who | When |\n|---|---|---|\n{row}\n"),
-                1,
-            ),
-            (
-                "| Item | Who | When |\n|---|---|---|\nA flag, in prose.\n".to_owned(),
-                3,
             ),
             (String::new(), 1),
         ] {
@@ -522,7 +662,7 @@ mod tests {
                 &found,
                 &[
                     &format!("docs/outstanding/speed-flag.md:{line}:"),
-                    "the table's header",
+                    "docs/outstanding/README.md has the layout",
                 ],
             );
         }

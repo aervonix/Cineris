@@ -1,3 +1,8 @@
+A managed `ask` rule lets the user's own verification line through, as any `ask` does; whether it should hold it back is the owner's choice. Recommendation: it holds it back.
+
+- Area: cortex-core
+- Owner: the owner
+
 | Item | Who | When |
 |---|---|---|
 | **Whether a managed `ask` rule holds back the user's own check.** A line of the user's own `verify.commands` runs where the permission engine would ask, as the user's word (step 19; [steps/19/answered.md](../steps/19/answered.md), Q2): the user wrote it, in a project the user trusts. The engine's `ask` does not say which layer asked, so an `ask` rule from the **managed** file (the one an organisation's administrator writes, and that no user layer can override) lets the user's line through too, where a managed `deny` refuses it. A managed configuration is how an organisation binds its users, so whether a managed `ask` binds a user's own check is the owner's choice. **Recommendation: it holds it back.** An administrator who wrote `ask` for a command meant that a person decides each time; a check never asks, so held back is the nearest. The cost is small: the engine says which rule asked (its reasons carry each rule's source), and the verifier refuses an `ask` whose rule is the managed file's, with a note naming it. A user who wants the check runs it by hand, or asks the administrator for an `allow`. | The owner | Before step 24's `/verify` |

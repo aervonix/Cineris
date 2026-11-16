@@ -1,3 +1,8 @@
+The prompt history has no limit in bytes for an entry or the file; a pasted log is stored expanded and read at every start.
+
+- Area: cortex-cli
+- Owner: step 25, with the owner
+
 | Item | Who | When |
 |---|---|---|
 | **The prompt history has no limit in bytes, for an entry or for the file** (found by the review of step 23). The state directory's `history` keeps each project's newest 1,000 prompts and is compacted past 20,000 lines (`crates/cortex-cli/src/history.rs`), but a prompt with a pasted chip is stored expanded (`cortex-tui`'s `input.rs`), so a few large pasted logs make a file of hundreds of megabytes. Every start reads and parses all of it, and the project's newest 1,000 stay in memory for the run, far above the idle memory budget in [performance-budgets.md](../performance-budgets.md). A recalled entry also comes back as text, not as a chip. Recommendation: cap what one entry stores (cut it with a marker, or keep the chip's label and not its text: which one is a choice of what recall gives back), and compact by bytes as well as by lines. Since the review's fixes one bad line costs only itself, and a cut last line is ended before the next prompt. | Step 25 (the editor's history), with the owner for what a recalled large paste gives back | Before the first release |

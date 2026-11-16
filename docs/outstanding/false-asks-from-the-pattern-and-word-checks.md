@@ -1,3 +1,8 @@
+The pattern and word checks ask or refuse needlessly for several link, quoting, set and heredoc forms.
+
+- Area: cortex-policy
+- Owner: step 32
+
 | Item | Who | When |
 |---|---|---|
 | **Questions and refusals the pattern and word checks give where nothing is wrong.** A pattern that matches a link to nothing asks at every level, `unrestricted` included, where the same link named outright does not; a commit message that names one of the harness's own files is refused by the check of words with a space in them; an `allow write .github/workflows/**` rule does not lift a question the text of a pattern asks; `git diff HEAD -- src` is taken off the table of commands that only read; a pattern that begins with a set (`rm [ab]*.o`) is read as one that could be `..` and asked about, though no shell matches a leading `.` with a set; a quoted text with an operator and a pattern in it (`rg 'TODO|FIXME.*' src`) is checked as a line, and asked about at `autonomous`; and an unmodelled line, a heredoc above all, with more distinct words than the bound of work (10,000 units, about 2,000 words tried from five places) is asked about at every level. Found by the final and last independent reviews of the fixes to step 12. | Step 32 (hardening pass); the sandbox of step 26 holds the rest | In step 32 |

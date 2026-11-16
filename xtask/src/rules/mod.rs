@@ -112,7 +112,7 @@ pub(crate) fn check_docs(
     }
     let names: BTreeSet<String> = names.iter().chain(files).cloned().collect();
     let mut violations = links::check(&texts, &names);
-    violations.extend(layout::check(&texts));
+    violations.extend(layout::check(&texts, &names));
     Ok(violations)
 }
 

@@ -1,3 +1,8 @@
+The provider's token-counting endpoint is never asked near the limit; needs a `Protocol` method and loop call.
+
+- Area: cortex-agent
+- Owner: a later step that touches the budget, or step 33
+
 | Item | Who | When |
 |---|---|---|
 | **The provider's token-counting endpoint is not asked near the limit.** [07-sessions-and-context.md](../architecture/07-sessions-and-context.md), "Budgeting", calls for it when the estimate is within 10% of the limit. The loop estimates from the last count and a measured ratio of bytes to tokens only. A wrong estimate is answered by the provider's refusal: below the trigger, the turn's own request is refused, and the loop compacts once and tries again; past the trigger, where the loop compacts before it sends anything, the summary request is refused, and it is cut to half the limit at the ratio the refusal showed and tried once more ([07](../architecture/07-sessions-and-context.md), "Budgeting", since the fixes after the review of step 15, which found nothing answering a refusal there). Either way a refusal costs a request, and a second refusal in a compaction ends the turn with `compaction_failed`, with what the budget learned kept for the next. The endpoint would show the true count before any of that. Anthropic has one (`POST /v1/messages/count_tokens`); most `openai-chat` servers have none. To settle: a `Protocol` method that builds the count request, the core making it, and the loop asking it once an epoch's estimate is near the trigger. | A later step that touches the budget, or step 33 (performance) | When a session is seen to compact too early or to overflow |

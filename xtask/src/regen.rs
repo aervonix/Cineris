@@ -13,16 +13,17 @@
 //!
 //! | Step | Writes | By |
 //! |---|---|---|
+//! | `outstanding` | `docs/outstanding/README.md` | `outstanding` (since the tenth tooling step) |
 //! | `protocol` | `docs/protocol/` | `schema` |
 //! | `configuration` | `docs/configuration/` | `cortex-config`'s generated-files test in its writing mode |
 //! | `screens` | the reference screens of the look and their text copies | `tui-screens --write` |
 //! | `snapshots` | the view, decoder, request, map and configuration snapshots | the tests of the crates that keep them, with `CORTEX_UPDATE_SNAPSHOTS` |
 //!
 //! It ends with `links`, which writes nothing: what `regen` cannot write
-//! ([`NOT_COVERED`]) it can still check, the open items' index and the step
-//! records among them. And it lists the files that differ from `HEAD` in
-//! the places it writes, so the diff is looked at as a change to the
-//! sources' output and not skimmed.
+//! ([`NOT_COVERED`]) it can still check, the step records among them. And
+//! it lists the files that differ from `HEAD` in the places it writes, so
+//! the diff is looked at as a change to the sources' output and not
+//! skimmed.
 //!
 //! Nothing here needs the network or a key. [`NOT_COVERED`] is the list of
 //! what does, with the command for each, and a test holds the two lists to
@@ -54,7 +55,15 @@ pub(crate) struct Writer {
 const SNAPSHOT_CRATES: [&str; 4] = ["cortex-tui", "cortex-llm", "cortex-index", "cortex-config"];
 
 /// Every generator `regen` runs, in the order it runs them.
-pub(crate) const WRITERS: [Writer; 4] = [
+pub(crate) const WRITERS: [Writer; 5] = [
+    // First: it reads text files alone, and is done in a moment.
+    Writer {
+        name: "outstanding",
+        what: "the index of the open items, from their files",
+        writes: &["docs/outstanding/README.md"],
+        modes: &[],
+        run: outstanding_index,
+    },
     Writer {
         name: "protocol",
         what: "the protocol's JSON Schema and TypeScript declarations",
@@ -105,21 +114,11 @@ pub(crate) struct NotCovered {
 }
 
 /// What `regen` leaves to others.
-pub(crate) const NOT_COVERED: [NotCovered; 6] = [
+pub(crate) const NOT_COVERED: [NotCovered; 5] = [
     NotCovered {
         what: "the tables of docs/steps/<step>/ci.md",
         why: "they are measurements of a CI run: a run id, read through `gh`, and a network",
         instead: "cargo xtask ci-times RUN --against main --pr N --write docs/steps/<step>/ci.md",
-        modes: &[],
-    },
-    NotCovered {
-        what: "the index of docs/outstanding/README.md",
-        why: "each line is prose that the item's file does not hold (the area it is about, what \
-              it covers in a sentence, who settles it), so there is nothing to generate it \
-              from; `links`, which `regen` ends with, fails on an item left out, listed twice \
-              or named for a file that is gone",
-        instead: "edit it by hand: after a rebase keep every line of both sides, and delete the \
-                  line of an item whose file is gone",
         modes: &[],
     },
     NotCovered {
@@ -152,6 +151,10 @@ pub(crate) const NOT_COVERED: [NotCovered; 6] = [
         modes: &[],
     },
 ];
+
+fn outstanding_index() -> Result<()> {
+    crate::outstanding::run(&[])
+}
 
 fn protocol() -> Result<()> {
     crate::schema::write()
@@ -323,7 +326,13 @@ mod tests {
     fn no_name_is_every_generator_and_names_keep_their_order() {
         assert_eq!(
             names(&select(&[]).unwrap()),
-            ["protocol", "configuration", "screens", "snapshots"]
+            [
+                "outstanding",
+                "protocol",
+                "configuration",
+                "screens",
+                "snapshots"
+            ]
         );
         assert_eq!(
             names(&select(&["screens".to_owned(), "protocol".to_owned()]).unwrap()),
@@ -348,6 +357,7 @@ mod tests {
         assert_eq!(
             steps(&[]),
             [
+                "outstanding",
                 "protocol",
                 "configuration",
                 "screens",

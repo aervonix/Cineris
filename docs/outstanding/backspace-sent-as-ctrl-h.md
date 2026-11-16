@@ -1,3 +1,8 @@
+The decoder reads byte 0x08 as `Ctrl+Backspace`, so a terminal whose Backspace sends `^H` deletes a word.
+
+- Area: cortex-term
+- Owner: step 25
+
 | Item | Who | When |
 |---|---|---|
 | **A terminal whose Backspace sends `^H` deletes a word with it.** The decoder reads byte 0x08 as `Ctrl+Backspace` (most terminals send it for that), and step 21 binds `Ctrl+Backspace` to delete the last word into the kill slot. In a terminal set to send `^H` for Backspace (`stty erase ^H`, an option of PuTTY and of macOS Terminal) every Backspace deletes a word; it is undoable and in the slot, so nothing is lost, but it is wrong. Recommendation: a `[terminal]` override that reads 0x08 as Backspace, with detection from the terminal's erase character at start, among step 25's terminal quirks. | Step 25 (terminal quirks, each with an override) | Before the first release |

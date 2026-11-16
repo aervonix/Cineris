@@ -36,6 +36,7 @@ mod load;
 mod mutate;
 mod nonblocking;
 mod outside;
+mod outstanding;
 mod owner_guard;
 mod pattern;
 mod perf;
@@ -300,6 +301,11 @@ Working on the code
                     of the file, run this. Ends by listing what differs from
                     HEAD and checking `links`. --list names what it writes and
                     what it leaves to other commands, and why.
+  outstanding [--check]
+                    Write the index of docs/outstanding/README.md from the
+                    items' files (each item's first line, `- Area:` and
+                    `- Owner:`). Run it after adding, settling or changing an
+                    item, and after a rebase. --check only compares.
   alias [--release] Build `cortex` and put its alias `cx` beside it.
   corpus fetch|check|path|pin [--update]
                     The pinned corpus of about 20,000 `.rs` files of real
@@ -373,6 +379,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "decision" => decision::run(rest),
         "gen" => generate(),
         "regen" => regen::run(rest),
+        "outstanding" => outstanding::run(rest),
         "schema" => schema::run(rest),
         "size" => nonblocking::size(rest),
         "home-paths" => shipped::home_paths_command(rest),

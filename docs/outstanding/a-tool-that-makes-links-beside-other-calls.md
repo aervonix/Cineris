@@ -1,3 +1,8 @@
+An extension's tool that declares itself read-only or keyed and makes a link runs beside later calls, which were decided before it ended.
+
+- Area: cortex-agent
+- Owner: step 28
+
 | Item | Who | When |
 |---|---|---|
 | **A tool that declares itself read-only or keyed, and changes what a path leads to, runs beside later calls of its response.** A call is decided again when a call that may have changed the file system has *finished* since its decision ([architecture/03-agent-loop.md](../architecture/03-agent-loop.md), "A call is decided again"). The built-in tools that can make a link are commands, which run alone, so a later call always starts after they end. A tool from an extension or an MCP server declares its own scheduling: one that declares itself read-only or keyed by a path, and makes a link, can be running when a later call that conflicts with nothing it declared starts, and that call was decided before the link existed. Found by the review of the re-decide step's design. **What holds meanwhile:** extension and MCP tools are exclusive unless they declare otherwise; a call planned again onto a path a later call has already used does not run; and the sandbox confines what an extension's programs write. **What would close it:** treat a running call with side effects that is not exclusive as one that may change the file system at any moment, so that a later call that would start beside it is decided again first, or holds until it ends; or refuse non-exclusive scheduling to a tool with an effect that is not a read. | Step 28 (extensions), which first runs such tools | Before extensions with scheduling of their own are enabled |
