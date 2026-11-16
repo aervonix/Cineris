@@ -76,6 +76,10 @@ on:
         description: "A ref to compare the branch with, both run in turn on one runner (count rounds), for test or perf -p CRATE. Empty: no comparison."
         required: false
         default: ""
+      label:
+        description: "What an A/B's report calls the against side: the ref as typed, when against is the hash `cargo xtask try --dispatch` resolved it to. Empty: against as it is."
+        required: false
+        default: ""
       commit:
         description: "A full 40-digit commit hash to run in place of the ref's head (its own xtask runs the command, so it must contain this try). Empty: the ref's head."
         required: false
@@ -238,6 +242,7 @@ jobs:
           TRY_AGAINST: ${{ inputs.against }}
           TRY_COMMIT: ${{ inputs.commit }}
           TRY_CAPTURE: ${{ inputs.capture }}
+          TRY_LABEL: ${{ inputs.label }}
           # Only a `size` command is given the token, to read `main`'s record.
           GH_TOKEN: ${{ startsWith(inputs.command, 'size') && github.token || '' }}
           # The test kit's switches, from a list: each is set or left empty.
@@ -252,6 +257,7 @@ jobs:
           added=()
           if [ -n "$TRY_COMMIT" ]; then added+=(--commit "$TRY_COMMIT"); fi
           if [ "$TRY_CAPTURE" = "no" ]; then added+=(--capture no); fi
+          if [ -n "$TRY_LABEL" ]; then added+=(--label "$TRY_LABEL"); fi
           cargo run --locked --quiet --package xtask -- try \
             --command "$TRY_COMMAND" --profile "$TRY_PROFILE" \
             --count "$TRY_COUNT" --load "$TRY_LOAD" --cores "$TRY_CORES" \
@@ -271,6 +277,7 @@ jobs:
           TRY_AGAINST: ${{ inputs.against }}
           TRY_COMMIT: ${{ inputs.commit }}
           TRY_CAPTURE: ${{ inputs.capture }}
+          TRY_LABEL: ${{ inputs.label }}
           GH_TOKEN: ${{ startsWith(inputs.command, 'size') && github.token || '' }}
           CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
           CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}\target\testkit-profile', github.workspace) || '' }}
@@ -283,6 +290,7 @@ jobs:
           $added = @()
           if ($env:TRY_COMMIT -ne '') { $added += @('--commit', $env:TRY_COMMIT) }
           if ($env:TRY_CAPTURE -eq 'no') { $added += @('--capture', 'no') }
+          if ($env:TRY_LABEL -ne '') { $added += @('--label', $env:TRY_LABEL) }
           cargo run --locked --quiet --package xtask -- try `
             --command "$env:TRY_COMMAND" --profile "$env:TRY_PROFILE" `
             --count "$env:TRY_COUNT" --load "$env:TRY_LOAD" --cores "$env:TRY_CORES" `
