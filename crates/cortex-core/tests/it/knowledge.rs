@@ -1669,3 +1669,71 @@ fn sys_a_snapshot_another_change_overtook_does_not_put_a_rule_back() {
         front.close().await;
     });
 }
+
+/// A promote writes the repository's shared profile, a protected path: it
+/// is refused while a turn of the project runs, so that no command's looks
+/// around it read the write as a change from outside, and goes through once
+/// the turn has ended (step 24; `a-promote-while-a-confined-command-runs`).
+#[test]
+fn a_promote_waits_for_the_turn_to_end() {
+    let gate = cortex_testkit::Gate::new();
+    let world = World::new(
+        "knowledge_promote_turn",
+        [cortex_testkit::Response::new()
+            .text("Done.")
+            .wait(&gate)
+            .end(cortex_protocol::StopReason::End)],
+    );
+    let project = other_process(&world);
+    let (_, stored) = project
+        .propose(
+            cortex_knowledge::Proposed {
+                kind: cortex_knowledge::Kind::Fact,
+                text: "The parser lives in src/lex.rs.".to_owned(),
+                evidence: "read it".to_owned(),
+                check: None,
+                session: None,
+            },
+            None,
+        )
+        .unwrap();
+    let id = stored.changed[0].id.clone();
+    project
+        .update(&[change_of(&id, EntryAction::Accept)], &[], None)
+        .unwrap();
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let promote = || {
+            Op::ProjectUpdate(ProjectUpdateParams {
+                session_id: Some(front.session.clone()),
+                workspace: None,
+                changes: vec![change_of(&id, EntryAction::Promote)],
+                add: Vec::new(),
+            })
+        };
+        front.prompt("go").await;
+        front
+            .until(|seen| {
+                seen.iter().any(|outgoing| {
+                    matches!(
+                        outgoing,
+                        cortex_core::events::Outgoing::Event(SessionEvent {
+                            event: cortex_protocol::event::Event::TurnStarted(_),
+                            ..
+                        })
+                    )
+                })
+            })
+            .await;
+        let refused = front.op(promote()).await.unwrap_err();
+        assert_eq!(refused.code, "turn_running", "{}", refused.message);
+        let shared = world.workspace.join(".cortex").join("profile.toml");
+        assert!(!shared.exists(), "written while the turn ran");
+        gate.open();
+        front.turns(1).await;
+        front.op(promote()).await.unwrap();
+        assert!(shared.exists(), "not written once the turn ended");
+        front.close().await;
+    });
+}

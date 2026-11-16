@@ -469,3 +469,48 @@ fn what_waits_for_the_next_epoch_comes_in_with_a_compaction() {
         front.close().await;
     });
 }
+
+/// A session's stored artifact is read back whole (step 24's
+/// `session/artifact`, for a check's whole output in the viewer), and one
+/// the session does not have is refused.
+#[test]
+fn an_artifact_is_read_back_whole_and_one_not_there_is_refused() {
+    let world = World::new(
+        "reads_artifact",
+        [
+            crate::calls(&[("c1", "read", serde_json::json!({"path": "pixel.png"}))]),
+            says("A pixel."),
+        ],
+    );
+    world.put("pixel.png", crate::provider::PIXEL);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("look").await;
+        let read = |artifact: &str| {
+            Op::SessionArtifact(cortex_protocol::methods::SessionArtifactParams {
+                session_id: front.session.clone(),
+                artifact: cortex_protocol::ArtifactId::from(artifact),
+            })
+        };
+        let OpResult::SessionArtifact(result) = front.op(read("a_0001")).await.unwrap() else {
+            panic!("not the result of session/artifact");
+        };
+        assert_eq!(result.bytes, crate::provider::PIXEL.len() as u64);
+        assert!(!result.cut);
+        let refused = front.op(read("a_9999")).await.unwrap_err();
+        assert_eq!(refused.code, "unknown_artifact");
+        // Reading ahead answers at once, whatever it is given.
+        let warmed = front
+            .op(Op::WorkspaceWarm(
+                cortex_protocol::methods::WorkspaceWarmParams {
+                    session_id: front.session.clone(),
+                    paths: vec!["pixel.png".to_owned(), "../elsewhere".to_owned()],
+                },
+            ))
+            .await
+            .unwrap();
+        assert!(matches!(warmed, OpResult::WorkspaceWarm(_)));
+        front.close().await;
+    });
+}

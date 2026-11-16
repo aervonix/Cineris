@@ -255,7 +255,7 @@ pub struct CoreOptions {
     /// The process's log, whose level a reload of `log.level` changes when
     /// neither `--log-level` nor `CORTEX_LOG` set it (step 24). `None`: a
     /// reload leaves the log as it is.
-    pub log: Option<cortex_base::log::LogHandle>,
+    pub log: Option<Arc<cortex_base::log::LogHandle>>,
     /// Whether an answer to a question the core puts may stop the turn:
     /// the interactive application's, whose interrupt key stops it from a
     /// dialog (`docs/architecture/03-agent-loop.md`, "Approve"). With it,

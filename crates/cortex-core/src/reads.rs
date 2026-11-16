@@ -149,7 +149,42 @@ pub(crate) fn warm_files(
 
 #[cfg(test)]
 mod tests {
+    use cortex_base::AbsPath;
+    use cortex_testkit::Scratch;
+
     use super::*;
+
+    /// A gate that refuses every path named `secret`.
+    struct NoSecrets;
+
+    impl cortex_tools::ReadGate for NoSecrets {
+        fn may_read(&self, path: &AbsPath) -> bool {
+            path.file_name() != Some("secret")
+        }
+    }
+
+    /// Only a file inside the workspace that the gate lets through is read
+    /// ahead: one outside it, one the gate refuses, a directory and one that
+    /// is not there are passed over.
+    #[test]
+    fn only_a_file_inside_the_workspace_the_gate_lets_through_is_read_ahead() {
+        let scratch = Scratch::outside("cortex-core-unit", "warm_files");
+        scratch.file("ws/src/lib.rs", "pub fn f() {}\n");
+        scratch.file("ws/secret", "key\n");
+        scratch.file("outside.txt", "not the workspace's\n");
+        std::fs::create_dir_all(scratch.join("ws/dir")).unwrap();
+        let paths: Vec<String> = [
+            "src/lib.rs",
+            "secret",
+            "../outside.txt",
+            "dir",
+            "missing.rs",
+        ]
+        .iter()
+        .map(|path| (*path).to_owned())
+        .collect();
+        assert_eq!(warm_files(&scratch.dir("ws"), &paths, &NoSecrets), 1);
+    }
 
     #[test]
     fn a_cut_text_leaves_out_the_character_it_split() {
