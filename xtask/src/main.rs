@@ -21,6 +21,7 @@ mod ab;
 mod alias;
 mod api_diff;
 mod apply;
+mod branch;
 mod checks;
 mod ci_log;
 mod combine;
@@ -104,10 +105,14 @@ Checks and tests
                     `<OS>, both trees on one runner`, and the PR's CI section,
                     then each tier's crates and tests that moved, by OS.
   try-result RUN [--os linux|windows|linux-22.04] [--top N] [--tail N]
+             [--queued-warn MIN]
                     What a try run found, in one step: for each OS, the A/B's
-                    tables or the tiers or the stress summary, every failed
-                    test with its message, and for a job that failed with no
-                    report the end of its log. Fails when the run did.
+                    tables (each side's wall time by round among them) or the
+                    tiers or the stress summary, every failed test with its
+                    message, and for a job that failed with no report the end
+                    of its log. Fails when the run did. A run not finished
+                    that has sat queued with no jobs past MIN minutes (10;
+                    --queued-limit is the same) is named as one.
   ci-log RUN|JOB [--job NAME] [--all] [--grep RE] [--context N] [--tail N]
                     A CI job's log through gh, escape codes taken out, for any
                     workflow (the nightly's too): a run's failed jobs, the jobs
@@ -155,14 +160,18 @@ On the runners, without a pull request (the `try` workflow runs this)
                     -p CRATE` is the crate's ignored perf_ tests in a release
                     build; `--dependents` is resolved to the crates it adds.
                     --dry-run prints the command the job would run and fails
-                    as the job would, building nothing.
+                    as the job would, building nothing. --dispatch BRANCH
+                    starts the run, --against REF resolved to its commit
+                    first, and names a run on BRANCH that has sat queued with
+                    no jobs past --queued-warn MIN (10).
   ab --base DIR [--label NAME] [--count N] [--keep-going] [-p CRATE]...
      [-- NEXTEST ARGS]
                     This tree's tests and those of the tree at DIR, each built
                     once, run in turn N rounds on this machine, and compared
                     by each test's median: a change's cost apart from the
-                    runner's speed. --keep-going records a round with a
-                    failing test and carries on.
+                    runner's speed, and each side's wall time by round (kept
+                    in target/ab/wall-times.json). --keep-going records a
+                    round with a failing test and carries on.
 
   perf-ab --base DIR [--label NAME] [--count N] [--cargo-profile release|dist]
           -p CRATE... [NAME]...
@@ -195,6 +204,18 @@ Before a push
                     order, in a scratch worktree under the build directory,
                     and run `cargo xtask ci` there. This worktree and branch
                     are not touched. `combine --help` has the rest.
+  branch commit-records --branch BRANCH --message MESSAGE FILE...
+                    Commit records (docs/**/*.md, mutations/*.breaks), as the
+                    working tree has them, to a branch no worktree has checked
+                    out, in an index of its own: the working tree and the
+                    branch checked out are not touched. Pushes nothing.
+  branch fold COMMIT [--last] [--base REF]
+  branch to-end COMMIT [--base REF]
+                    Fold the staged changes (or the last commit) into an
+                    earlier commit of the current branch, or move a commit to
+                    its tip: the current branch alone, from COMMIT on, made
+                    without touching the working tree, its old tip kept as
+                    refs/xtask-backup/BRANCH/TIME. `branch --help` has the rest.
 
 Not blocking (the `main` and `nightly` workflows run these)
   size [--check] [--target TRIPLE] [--against-main] [--profile release|dist]
@@ -395,6 +416,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "ab" => ab::run(rest),
         "api-diff" => api_diff::run(rest),
         "combine" => combine::run(rest),
+        "branch" => branch::run(rest),
         "scratch-test" => scratch_test::run(rest),
         "owner-guard" => owner_guard::run(rest),
         "fuzz" => outside::fuzz(rest),
