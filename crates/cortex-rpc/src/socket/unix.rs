@@ -17,6 +17,13 @@
 //!   is covered by the folder and by the peer check.
 //! - **Every peer's credentials** (`SO_PEERCRED`, held at `connect`) must
 //!   name the server's own effective uid.
+//! - **The server's own commands are refused** (the design note's point 1,
+//!   "The harness's own commands"): a peer whose line of parents reaches the
+//!   server's process is one of the commands its sessions started, which
+//!   could otherwise answer its own session's approvals. A command that
+//!   detaches itself from that line escapes this, so it is defence in depth
+//!   beside the sandbox, which keeps a confined command from any Unix
+//!   socket.
 
 #![allow(
     clippy::disallowed_methods,
@@ -91,6 +98,31 @@ fn check_named_folder(folder: &Path, uid: u32) -> io::Result<()> {
     }
 }
 
+/// The parent of `pid`, from `/proc/<pid>/stat`: the field after the
+/// command's name, which is in parentheses and may hold anything, so it is
+/// read from the last `)`.
+fn parent_of(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after = &stat[stat.rfind(')')? + 1..];
+    after.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Whether the server's process `server` is a parent, near or far, of
+/// `pid` (not `pid` itself: the server may connect to itself).
+fn descends_from(pid: u32, server: u32) -> bool {
+    let mut at = pid;
+    // A line of parents is short; the bound only stops a loop the table
+    // could show while it changes.
+    for _ in 0..4096 {
+        match parent_of(at) {
+            Some(parent) if parent == server => return true,
+            Some(parent) if parent > 1 && parent != at => at = parent,
+            _ => return false,
+        }
+    }
+    false
+}
+
 fn refused(message: String) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, message)
 }
@@ -158,7 +190,10 @@ fn clear(socket: &Path) -> io::Result<()> {
 pub(super) struct Listener {
     place: Place,
     path: PathBuf,
-    listener: tokio::net::UnixListener,
+    /// The bound socket, until the first `accept` takes it into the
+    /// runtime it runs in: binding needs no runtime.
+    bound: Option<std::os::unix::net::UnixListener>,
+    listener: Option<tokio::net::UnixListener>,
     uid: u32,
     /// Held for the listener's life; let go after the socket is removed.
     lock: Option<File>,
@@ -196,7 +231,8 @@ impl Listener {
         Ok(Self {
             place: place.clone(),
             path: path.clone(),
-            listener: tokio::net::UnixListener::from_std(listener)?,
+            bound: Some(listener),
+            listener: None,
             uid,
             lock: Some(lock),
         })
@@ -207,7 +243,13 @@ impl Listener {
     }
 
     pub(super) async fn accept(&mut self) -> io::Result<Accepted> {
-        let (stream, _) = self.listener.accept().await?;
+        if let Some(bound) = self.bound.take() {
+            self.listener = Some(tokio::net::UnixListener::from_std(bound)?);
+        }
+        let Some(listener) = &self.listener else {
+            return Err(io::Error::other("the listener is gone"));
+        };
+        let (stream, _) = listener.accept().await?;
         let peer = match stream.peer_cred() {
             Ok(peer) => peer,
             Err(error) => return Ok(Accepted::Refused(format!("no credentials: {error}"))),
@@ -218,6 +260,13 @@ impl Listener {
                 peer.uid(),
                 peer.pid()
                     .map_or_else(|| "unknown".to_owned(), |pid| pid.to_string())
+            )));
+        }
+        if let Some(pid) = peer.pid().and_then(|pid| u32::try_from(pid).ok())
+            && descends_from(pid, std::process::id())
+        {
+            return Ok(Accepted::Refused(format!(
+                "one of the server's own commands (pid {pid})"
             )));
         }
         let described = format!(
