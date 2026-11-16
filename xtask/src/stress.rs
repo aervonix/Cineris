@@ -21,9 +21,11 @@ use std::process::Command;
 
 use crate::Result;
 use crate::checks;
+use crate::flaky::{self, Listed};
 use crate::junit::{self, TestCase};
 use crate::load::Squeeze;
 use crate::stall;
+use crate::stall::rerun::{self, Verdict};
 use crate::workspace;
 
 const USAGE: &str = "\
@@ -37,6 +39,12 @@ a filter, `-E`, `--run-ignored`.
 --cores K pins the run to K cores and --load N runs N busy loops beside it,
 on the same cores: a race that needs the machine to be slow at the wrong
 moment shows far more often. The tests are built first, unpinned.
+
+A test that an open item names as flaky (`- Flaky:` in docs/outstanding/)
+and that failed is named with its item and run once more, under the seed it
+first failed with; if that passes, it is not a failure of the run. Every
+such run is printed and counted. --strict runs nothing again: every failure
+counts (for a session that is fixing a known flake).
 
 A test that failed is run again in the same order with
     CORTEX_TEST_SEED=<seed> cargo xtask test -p <crate> -E 'test(=<name>)'";
@@ -61,6 +69,8 @@ struct Request {
     squeeze: Squeeze,
     /// Arguments for nextest.
     rest: Vec<String>,
+    /// `--strict`: a known flake is not run again.
+    strict: bool,
 }
 
 impl Request {
@@ -71,6 +81,7 @@ impl Request {
             first_seed: 0,
             squeeze: Squeeze::default(),
             rest: Vec::new(),
+            strict: false,
         };
         let mut arguments = arguments.iter();
         while let Some(argument) = arguments.next() {
@@ -112,6 +123,7 @@ impl Request {
                         .parse()
                         .map_err(|_| format!("`--first-seed {text}` is not a whole number"))?;
                 }
+                "--strict" => request.strict = true,
                 "--help" | "-h" => return Err(USAGE.to_owned()),
                 "--stress-count" | "--stress-duration" | "--profile" | "-P" => {
                     return Err(format!(
@@ -156,6 +168,20 @@ impl Request {
         command.extend(crate::workspace::implied_features(&self.packages));
         command.extend(self.rest.iter().cloned());
         command
+    }
+
+    /// One run of the tests `filter` chooses, in place of the request's own
+    /// filters, with the rest of what the request gives nextest.
+    fn once_command(&self, filter: &str) -> Vec<String> {
+        let mut command: Vec<String> = ["nextest", "run", "--profile", "stress"]
+            .map(str::to_owned)
+            .to_vec();
+        for package in &self.packages {
+            command.extend(["-p".to_owned(), package.clone()]);
+        }
+        command.extend(crate::workspace::implied_features(&self.packages));
+        command.extend(self.rest.iter().cloned());
+        rerun::with_filter(&command, filter)
     }
 }
 
@@ -229,16 +255,121 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     if let Some(stalled) = watch.explain(&failures) {
         print!("\n{stalled}");
     }
-    conclude(&summary, status.success(), request.count)
+    let excused = if summary.failing > 0 {
+        known_flakes(&request, &root, &report, &xml, &cases)?
+    } else {
+        0
+    };
+    conclude(&summary, status.success(), request.count, excused)
+}
+
+/// The known flakes among the tests that failed on some repeat of `cases`,
+/// each with the seed of the first repeat it failed on, in the order of
+/// their names.
+fn flakes_to_run(cases: &[TestCase], listed: &[Listed], first_seed: u64) -> Vec<(Listed, u64)> {
+    let mut first: BTreeMap<(&str, &str), u32> = BTreeMap::new();
+    for case in cases.iter().filter(|case| case.failed || case.retried) {
+        let repeat = case.repeat.unwrap_or(0);
+        let entry = first
+            .entry((case.binary.as_str(), case.name.as_str()))
+            .or_insert(repeat);
+        *entry = (*entry).min(repeat);
+    }
+    first
+        .into_iter()
+        .filter_map(|((binary, name), repeat)| {
+            flaky::find(listed, binary, name)
+                .map(|one| (one.clone(), first_seed.wrapping_add(u64::from(repeat))))
+        })
+        .collect()
+}
+
+/// The known flakes that failed on some repeat, named, and each run once
+/// more under the seed it first failed with: how many passed. Nothing is
+/// run with `--strict`. The stress run's report is left as it was.
+fn known_flakes(
+    request: &Request,
+    root: &std::path::Path,
+    report: &std::path::Path,
+    xml: &str,
+    cases: &[TestCase],
+) -> Result<usize> {
+    let (listed, warning) = flaky::listed(root);
+    if let Some(warning) = warning {
+        println!("\nwarning: {warning}");
+    }
+    let flakes = flakes_to_run(cases, &listed, request.first_seed);
+    if flakes.is_empty() {
+        return Ok(0);
+    }
+    println!();
+    for (flake, _) in &flakes {
+        println!("{}", flaky::named(flake));
+    }
+    if request.strict {
+        println!("--strict: not run again, so each counts as a failure of this run.");
+        return Ok(0);
+    }
+    let mut passed = 0;
+    for (flake, seed) in &flakes {
+        let filter = rerun::filter(std::slice::from_ref(&flake.test));
+        let arguments = request.once_command(&filter);
+        println!(
+            "Running {} {} once more, under seed {seed}, the first it failed with:\n$ {SEED}={seed} \
+             cargo {}",
+            flake.test.binary,
+            flake.test.name,
+            arguments.join(" ")
+        );
+        let status = Command::new(workspace::cargo())
+            .args(&arguments)
+            .env(SEED, seed.to_string())
+            .env_remove(FIRST_SEED)
+            .current_dir(root)
+            .status()
+            .map_err(|error| format!("could not run cargo nextest: {error}"))?;
+        let verdict = std::fs::read_to_string(report).map_or(Verdict::Missing, |second| {
+            rerun::verdicts(std::slice::from_ref(&flake.test), &second)[0]
+        });
+        let ok = status.success() && verdict == Verdict::Passed;
+        println!(
+            "  {} {} {}",
+            flake.test.binary,
+            flake.test.name,
+            if ok || verdict != Verdict::Passed {
+                flaky::says(verdict)
+            } else {
+                "passed, but nextest failed: counted as a failure"
+            }
+        );
+        passed += usize::from(ok);
+    }
+    // The report the summary pointed at is the stress run's.
+    std::fs::write(report, xml)
+        .map_err(|error| format!("could not write {} back: {error}", report.display()))?;
+    println!(
+        "{passed} of {} known flake(s) passed when run once more, and are not counted as \
+         failures of this run; a known flake that failed again is.",
+        flakes.len()
+    );
+    Ok(passed)
 }
 
 /// Whether the run found nothing: no test failed on any repeat, nextest
 /// agrees, and every repeat that was asked for is in the report.
-fn conclude(summary: &Summary, nextest_passed: bool, count: u32) -> Result<()> {
-    if summary.failing > 0 {
-        return Err(format!("{} test(s) failed on some repeat", summary.failing));
+/// `excused` of the failing tests are known flakes that passed when run
+/// once more: they are not failures, and nextest's failure is theirs.
+fn conclude(summary: &Summary, nextest_passed: bool, count: u32, excused: usize) -> Result<()> {
+    let failing = summary.failing.saturating_sub(excused);
+    if failing > 0 {
+        let besides = if excused > 0 {
+            format!(", besides {excused} known flake(s) that passed when run once more")
+        } else {
+            String::new()
+        };
+        return Err(format!("{failing} test(s) failed on some repeat{besides}"));
     }
-    if !nextest_passed {
+    if !nextest_passed && summary.failing == 0 {
         return Err(
             "nextest failed, and its report names no failed test. See its output above.".to_owned(),
         );
@@ -594,6 +725,7 @@ mod tests {
                 first_seed: 1000,
                 squeeze: Squeeze::default(),
                 rest: strings(&["denials::", "--run-ignored", "only"]),
+                strict: false,
             }
         );
         assert_eq!(
@@ -763,17 +895,106 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
         );
         let failing = summary(&report(), 4, 0);
 
-        assert_eq!(super::conclude(&clean, true, 4), Ok(()));
-        let error = super::conclude(&failing, false, 4).unwrap_err();
+        assert_eq!(super::conclude(&clean, true, 4, 0), Ok(()));
+        let error = super::conclude(&failing, false, 4, 0).unwrap_err();
         assert!(error.contains("2 test(s) failed on some repeat"), "{error}");
         // nextest failed and no test is named: a build that broke, say.
-        let error = super::conclude(&clean, false, 4).unwrap_err();
+        let error = super::conclude(&clean, false, 4, 0).unwrap_err();
         assert!(error.contains("names no failed test"), "{error}");
         // The run was cut short.
-        let error = super::conclude(&clean, true, 5).unwrap_err();
+        let error = super::conclude(&clean, true, 5, 0).unwrap_err();
         assert!(
             error.contains("4 repeat(s) where 5 were asked for"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn known_flakes_that_passed_once_more_are_not_failures_and_nothing_else_is_excused() {
+        let failing = summary(&report(), 4, 0);
+        assert_eq!(failing.failing, 2);
+        // Both failing tests were known flakes that passed: nextest's
+        // failure is theirs.
+        assert_eq!(super::conclude(&failing, false, 4, 2), Ok(()));
+        // One was: the other still fails the run, and the message says both.
+        let error = super::conclude(&failing, false, 4, 1).unwrap_err();
+        assert!(
+            error.contains(
+                "1 test(s) failed on some repeat, besides 1 known flake(s) that passed when run \
+                 once more"
+            ),
+            "{error}"
+        );
+    }
+
+    fn listed(binary: &str, name: &str) -> crate::flaky::Listed {
+        crate::flaky::Listed {
+            test: crate::stall::rerun::Test {
+                binary: binary.to_owned(),
+                name: name.to_owned(),
+            },
+            item: "an-item".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_known_flake_is_run_once_more_under_the_first_seed_it_failed_with() {
+        let case = |name: &str, repeat: u32, failed: bool, retried: bool| crate::junit::TestCase {
+            binary: "cx::it".to_owned(),
+            name: name.to_owned(),
+            seconds: 0.1,
+            failed,
+            retried,
+            repeat: Some(repeat),
+        };
+        let cases = [
+            case("flaky", 3, false, false),
+            case("flaky", 7, true, false),
+            case("flaky", 5, true, false),
+            // Failed only with a retry: a failure for stress.
+            case("retried", 2, false, true),
+            // Failed, and not listed: never run again.
+            case("other", 1, true, false),
+            // Listed, and passed every time.
+            case("fine", 0, false, false),
+        ];
+        let list = [
+            listed("cx::it", "flaky"),
+            listed("cx::it", "retried"),
+            listed("cx::it", "fine"),
+            listed("cx", "other"),
+        ];
+        let chosen: Vec<(String, u64)> = super::flakes_to_run(&cases, &list, 1000)
+            .into_iter()
+            .map(|(one, seed)| (one.test.name, seed))
+            .collect();
+        assert_eq!(
+            chosen,
+            [("flaky".to_owned(), 1005), ("retried".to_owned(), 1002)]
+        );
+    }
+
+    #[test]
+    fn the_run_once_more_is_of_the_flake_alone_with_the_requests_other_arguments() {
+        let request = Request::parse(&strings(&[
+            "-p",
+            "cortex-agent",
+            "--count",
+            "300",
+            "-E",
+            "test(/denials/)",
+            "--run-ignored",
+            "all",
+            "--strict",
+        ]))
+        .unwrap();
+        assert!(request.strict);
+        assert_eq!(
+            request
+                .once_command("(binary_id(=cortex-agent::it) and test(=a::b))")
+                .join(" "),
+            "nextest run --profile stress -p cortex-agent --run-ignored all -E \
+             (binary_id(=cortex-agent::it) and test(=a::b))"
         );
     }
 

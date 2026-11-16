@@ -29,6 +29,7 @@ mod corpus;
 mod decide;
 mod decision;
 mod dependents;
+mod flaky;
 mod junit;
 mod last_good;
 mod like_runner;

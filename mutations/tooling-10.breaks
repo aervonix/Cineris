@@ -222,3 +222,133 @@ find: [folder, _, _] => (*folder, ""),
 replace: [folder, ..] => (*folder, ""),
 caught-by:
     rules::layout::tests::a_steps_folder_holds_its_two_records_and_its_parts_and_nothing_else
+
+
+# The known-flake list (item 2).
+
+[break] flaky-any-binary-of-the-name
+rule: A failure is a known flake only by its binary and its name together: the same name in another binary is another test.
+file: xtask/src/flaky.rs
+in: find
+find: one.test.binary == binary && one.test.name == name
+replace: one.test.name == name
+caught-by:
+    flaky::tests::a_failure_is_a_known_flake_only_by_its_binary_and_its_name_exactly
+
+[break] flaky-a-name-that-begins-the-same
+rule: A failure is a known flake only by its name exactly, not one that begins or ends the same.
+file: xtask/src/flaky.rs
+in: find
+find: one.test.binary == binary && one.test.name == name
+replace: one.test.binary == binary && name.starts_with(one.test.name.as_str())
+caught-by:
+    flaky::tests::a_failure_is_a_known_flake_only_by_its_binary_and_its_name_exactly
+
+[break] flaky-a-flake-that-fails-again-is-not-said
+rule: A known flake that fails its second run is said to, and fails the run.
+file: xtask/src/flaky.rs
+in: after_failure
+find: if not_passed > 0 {
+replace: if false {
+caught-by:
+    flaky::tests::a_known_flake_that_fails_again_fails_the_run
+
+[break] flaky-other-failures-pass-beside-a-flake
+rule: A test that is not listed fails the run though the known flake beside it passed its second run.
+file: xtask/src/flaky.rs
+in: after_failure
+find: if other_failures > 0 {
+replace: if false {
+caught-by:
+    flaky::tests::a_test_that_is_not_listed_is_never_run_again
+
+[break] flaky-ci-runs-it-again
+rule: Where nothing is to be run again (CI), a known flake is named and not run.
+file: xtask/src/flaky.rs
+in: after_failure
+find: if !rerun {
+occurrence: 1
+replace: if false {
+caught-by:
+    flaky::tests::in_ci_a_known_flake_is_named_and_nothing_is_run_again
+
+[break] flaky-a-failed-second-command-passes
+rule: A second run whose command failed fails the run, whatever its report says.
+file: xtask/src/flaky.rs
+in: after_failure
+find: && problems.is_empty()
+replace: && false
+caught-by:
+    flaky::tests::a_second_run_that_is_missing_or_whose_command_failed_fails_the_run
+
+[break] flaky-stress-a-retry-is-no-failure
+rule: In `stress`, a known flake that needed nextest's retry failed that repeat, and is run once more.
+file: xtask/src/stress.rs
+in: flakes_to_run
+find: .filter(|case| case.failed || case.retried)
+replace: .filter(|case| case.failed)
+caught-by:
+    stress::tests::a_known_flake_is_run_once_more_under_the_first_seed_it_failed_with
+
+[break] flaky-stress-the-last-seed
+rule: `stress` runs a known flake once more under the first seed it failed with.
+file: xtask/src/stress.rs
+in: flakes_to_run
+find: *entry = (*entry).min(repeat);
+replace: *entry = (*entry).max(repeat);
+caught-by:
+    stress::tests::a_known_flake_is_run_once_more_under_the_first_seed_it_failed_with
+
+[break] flaky-stress-nothing-is-excused
+rule: A known flake that passed when run once more is not a failure of a stress run.
+file: xtask/src/stress.rs
+in: conclude
+find: summary.failing.saturating_sub(excused)
+replace: summary.failing
+caught-by:
+    stress::tests::known_flakes_that_passed_once_more_are_not_failures_and_nothing_else_is_excused
+
+[break] flaky-stress-nextests-failure-is-not-the-flakes
+rule: When every failing test was a known flake that passed once more, nextest's failure is theirs.
+file: xtask/src/stress.rs
+in: conclude
+find: if !nextest_passed && summary.failing == 0 {
+replace: if !nextest_passed {
+caught-by:
+    stress::tests::known_flakes_that_passed_once_more_are_not_failures_and_nothing_else_is_excused
+
+[break] flaky-stress-strict-is-not-read
+rule: `stress --strict` is read, so that nothing is run again.
+file: xtask/src/stress.rs
+in: Request::parse
+find: "--strict" => request.strict = true
+replace: "--strict" => {}
+caught-by:
+    stress::tests::the_run_once_more_is_of_the_flake_alone_with_the_requests_other_arguments
+
+[break] flaky-mutate-beside-another-failure
+rule: `mutate`'s baseline runs nothing again when a test that is not listed failed beside a known flake.
+file: xtask/src/mutate/drive.rs
+in: known_flakes_again
+find: if flakes.len() < failing.len() {
+replace: if false {
+caught-by:
+    mutate::drive::tests::a_known_flake_that_fails_again_or_beside_another_failure_stops_the_run
+
+[break] flaky-mutate-the-second-run-is-not-taken
+rule: A known flake that passed its second run with nothing broken counts as passing.
+file: xtask/src/mutate/drive.rs
+in: known_flakes_again
+find: *case = second.clone();
+replace:
+caught-by:
+    mutate::drive::tests::a_known_flake_that_fails_with_nothing_broken_is_run_again_once_and_the_run_goes_on
+
+[break] flaky-mutate-not-counted
+rule: `mutate` counts the known flakes that passed on their second run.
+file: xtask/src/mutate/drive.rs
+in: take_baseline
+find: .filter(|note| note.ends_with(flaky::says(Second::Passed)))
+replace: .filter(|_| false)
+caught-by:
+    mutate::drive::tests::a_known_flake_that_fails_with_nothing_broken_is_run_again_once_and_the_run_goes_on

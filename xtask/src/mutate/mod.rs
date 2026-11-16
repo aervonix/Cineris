@@ -722,10 +722,17 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
         .iter_mut()
         .map(|runner| runner as &mut dyn drive::Runner)
         .collect();
+    // A known flake that fails with nothing broken is run again once
+    // (`crate::flaky`).
+    let (flaky, warning) = crate::flaky::listed(&root);
+    if let Some(warning) = warning {
+        say(&format!("warning: {warning}"));
+    }
     let options = drive::Options {
         again: request.again,
         compile_check: request.compile_check,
         pause: None,
+        flaky,
     };
     let finished = drive::drive_jobs(
         &root,
