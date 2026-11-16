@@ -375,7 +375,7 @@ caught-by:
 rule: A client's events wait in the core's queue at the server's bound, where its deltas merge and give way to an `item.resync`, so what a slow client holds stays bounded.
 file: crates/cortex-rpc/src/connection.rs
 in: Connection::initialize
-find: queue: self.shared.options.queue,
-replace: queue: usize::MAX,
+find: queue: self.shared.options.queue
+replace: queue: usize::MAX
 caught-by:
     cortex-rpc::it wire::a_slow_client_is_sent_merged_deltas_and_a_resync
