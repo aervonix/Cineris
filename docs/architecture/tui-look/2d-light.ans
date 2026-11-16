@@ -1,0 +1,8 @@
+[0m◇ Done. [0;1;36m1_000[0m lexes as one integer, [0;1;36m1_[0m is an error with its own message, and the[0m
+[0m  new test covers both.[0m
+[0;1;33m?[0m [0;1mThis file was changed after the turn that changed it: `crates/parser/src/lex.rs`. Put it back as[0m
+[0m  [0;1mit was before that turn, losing those changes?[0m
+
+[0m  [0;1;38;2;122;60;251m1[0m Put them back   [0;1;38;2;122;60;251m2[0m Keep them as they are[0m
+
+[0m  [0;90mesc leaves it unanswered[0m                                                   [0;90mopus-5.5 high · [0;38;2;122;60;251mfast[0m  [0m

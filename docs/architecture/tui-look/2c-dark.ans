@@ -1,0 +1,13 @@
+[0;93m?[0m [0;1mTrust this project?[0m
+[0m  [0;96m~/src/parser[0m
+[0m  [0;90mTrusting it turns on what its files ask for:[0m
+[0m    [0;90mgit      [0;38;2;141;87;252mGit may read this repository's own configuration, which can name programs for git to[0m
+[0m             [0;38;2;141;87;252mrun: it is how the harness sees what a command changed, and reads the repository's[0m
+[0m             [0;38;2;141;87;252mstate.[0m
+[0m    [0;90mrule     [0;38;2;141;87;252mallow write .github/**[0m
+[0m    [0;90mrule     [0;38;2;141;87;252mallow exec make deploy (profile ci)[0m
+[0m    [0;90msetting  [0;38;2;141;87;252mmodel.main = "claude-haiku-5-5" (it can raise what you spend)[0m
+
+[0m  [0;1;38;2;141;87;252my[0m Trust it   [0;1;38;2;141;87;252mn[0m Not now   [0;1;38;2;141;87;252mx[0m Never for this project[0m
+
+[0m  [0;90mesc is not now · ctrl+o shows it whole[0m                                                           [0m

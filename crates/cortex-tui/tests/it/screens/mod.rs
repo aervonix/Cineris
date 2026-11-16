@@ -6,9 +6,13 @@
 //! - **Every row this step's views draw is compared,** text, style and wide
 //!   cells alike, as they are seen: a space is compared by its background
 //!   and by whether it is reversed or underlined, which is all of it that
-//!   shows. A row another step draws (the input box, menus, dialogs,
-//!   panels, the viewer's frame) is counted as not built, by screen, and is
-//!   never counted as compared.
+//!   shows. A row another step draws (step 24's panels) is counted as not
+//!   built, by screen, and is never counted as compared.
+//! - **A dialog is the application's own frame** (screens 2a to 2d): the
+//!   real [`cortex_tui::app::App`], given the request by a scripted core in
+//!   a window of the screen's size, draws it, so that its answers, their
+//!   order, its fitting to the window and its blank and hint rows are
+//!   compared as it shows them.
 //! - **The counts are held:** a screen's compared rows must be the number
 //!   [`COMPARED`] gives, so a row skipped by mistake fails the test.
 //! - `cargo xtask tui-screens` prints the report. With
@@ -29,10 +33,10 @@ use cortex_testkit::vterm::{Cell, VTerm};
 use self::scenario::{BACKGROUNDS, Row, SPECS, Spec, compose};
 
 /// The rows each screen compares, by screen: what the views built so far
-/// draw (step 22's, step 21's input box and menus, and step 23's dialogs,
-/// placeholder and viewer frame). When a later step builds the rows it
-/// owns, its counts go up here.
-const COMPARED: [(&str, usize); 17] = [
+/// draw (step 22's, step 21's input box and menus, and step 23's
+/// placeholder and viewer frame), and the application's dialogs. When a
+/// later step builds the rows it owns, its counts go up here.
+const COMPARED: [(&str, usize); 19] = [
     ("0", 11),
     ("1", 40),
     ("1b", 11),
@@ -40,6 +44,8 @@ const COMPARED: [(&str, usize); 17] = [
     ("1d", 21),
     ("2a", 18),
     ("2b", 19),
+    ("2c", 13),
+    ("2d", 8),
     ("3a", 11),
     ("3b", 11),
     ("4", 36),
