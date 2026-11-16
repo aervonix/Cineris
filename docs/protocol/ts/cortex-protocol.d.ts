@@ -886,6 +886,18 @@ export interface ModelsListResult {
 /** Whether sandboxed processes may use the network. There is no per-host list. */
 export type NetworkAccess = "off" | "full";
 
+/** An entry the user writes: it is active at once. Added in step 17. */
+export interface NewEntry {
+  /** A test that shows it still holds. */
+  check?: EntryCheck | null;
+  /** For a `command` entry: the command. */
+  command?: EntryCommand | null;
+  /** What it is. */
+  kind: EntryKind;
+  /** The entry in words. */
+  text: string;
+}
+
 /** Something transient that front ends should show. It is never sent to the model and is not an item. Every notice has a `message` in words, so a client can show a kind of notice it does not know. */
 export type Notice = ({
     kind: "retry";
@@ -918,7 +930,7 @@ export interface NoticeItem {
 }
 
 /** Why the harness added a notice to the conversation. */
-export type NoticeSource = "instructions" | "plan" | "repetition" | "verification" | "limit" | "harness" | "map" | (string & {});
+export type NoticeSource = "instructions" | "plan" | "repetition" | "verification" | "limit" | "harness" | "map" | "profile" | (string & {});
 
 /** What produced an assistant message. Raw blocks are valid only for replay to the same protocol, and to a model that can read them. */
 export interface Origin {
@@ -1110,10 +1122,14 @@ export interface Prices {
 export interface ProjectEntriesResult {
   /** The entries: all of them for `project/list`, the changed ones for `project/update`. */
   entries: Array<ProjectEntry>;
+  /** What is wrong with the project's files, each in a sentence: a file that cannot be read as it is, and what is used in its place. Added in step 17. */
+  problems?: Array<string>;
 }
 
 /** One entry of the project profile or memory. */
 export interface ProjectEntry {
+  /** When the user accepted it. For a `command` entry this is what puts it on the project's safe list; an entry that became active by itself has none. Added in step 17. */
+  accepted_at?: Timestamp | null;
   /** How the harness came to hold it. Absent for an entry the user wrote. */
   basis?: EntryBasis | null;
   /** A test that shows it still holds. */
@@ -1130,6 +1146,8 @@ export interface ProjectEntry {
   id: EntryId;
   /** What it is. */
   kind: EntryKind;
+  /** For an observed entry: how many times the harness saw it hold. Added in step 17. */
+  observations?: number | null;
   /** Which file it lives in. */
   scope: EntryScope;
   /** Where it came from. */
@@ -1153,8 +1171,10 @@ export interface ProjectListParams {
 
 /** `project/update` */
 export interface ProjectUpdateParams {
+  /** Entries the user writes, added after the changes. Each is active at once. Added in step 17. */
+  add?: Array<NewEntry>;
   /** The changes, applied in order. */
-  changes: Array<EntryChange>;
+  changes?: Array<EntryChange>;
   /** A session of the project. Exactly one of this and `workspace` is set. */
   session_id?: SessionId | null;
   /** The project's workspace root. */

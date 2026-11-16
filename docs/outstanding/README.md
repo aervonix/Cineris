@@ -68,6 +68,10 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [what-start-up-opens-traced](what-start-up-opens-traced.md): The blocking check that start-up opens no file outside an allow-list does not exist; the index's part is checked with a held gate. Owner: the next start-up step, or step 33.
 - [the-shell-version-after-a-shell-update](the-shell-version-after-a-shell-update.md): The first session after a shell is installed or updated has no shell version in its prompt, so the next resume is a `resume` epoch. Owner: step 33.
 
+### cortex-knowledge
+
+- [the-item-an-entry-was-learned-from](the-item-an-entry-was-learned-from.md): An entry's source has the session and the date and not the item: the tools' contract gives a tool no call id. Owner: a step that changes the tools' contract, or step 24.
+
 ### cortex-llm
 
 - [a-price-that-depends-on-the-time-of-day](a-price-that-depends-on-the-time-of-day.md): The catalog's single rate card records DeepSeek's off-peak requests at the peak price, an upper bound. Owner: the owner, with step 16.

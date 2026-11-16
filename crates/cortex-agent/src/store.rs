@@ -153,6 +153,10 @@ pub struct EpochStart {
     /// The instruction files the prompt holds, by the name the model is
     /// shown, with the hash of what was read of each.
     pub instructions: Vec<(String, ContentHash)>,
+    /// The hash of the project profile as the prompt holds it (section 5),
+    /// and `None` when it holds none: what a later change to the profile
+    /// is measured against (since step 17).
+    pub profile: Option<ContentHash>,
     /// The log does not hold the prompt or the tools as they were sent:
     /// the secret filter masked something in them. Such an epoch is not
     /// gone on with when the session is read again. Set by the store when

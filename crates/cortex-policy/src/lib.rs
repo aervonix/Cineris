@@ -64,6 +64,7 @@ pub use approvals::{ApprovalError, ApprovalStore, SessionApprovals};
 pub use command::{Analysis, ShellSyntax, analyse};
 pub use engine::{
     Access, Engine, Lexical, Locate, Outcome, Parts, Question, Recorded, Request, StartError,
+    exact_command_rule,
 };
 pub use lease::{LeaseExt, NarrowError, StandingTerms, default_sandbox, standing_lease};
 pub use level::{Decider, LevelError, Matter, NoSandbox, SandboxState, check_standing};

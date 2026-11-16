@@ -462,6 +462,7 @@ mod tests {
                     reason: Some(reason.to_owned()),
                     base: None,
                     instructions: Vec::new(),
+                    profile: None,
                     variants: std::collections::BTreeMap::new(),
                 }),
                 false,

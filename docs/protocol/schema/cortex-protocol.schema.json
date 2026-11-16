@@ -3203,6 +3203,46 @@
       ],
       "description": "Whether sandboxed processes may use the network. There is no per-host list."
     },
+    "NewEntry": {
+      "description": "An entry the user writes: it is active at once. Added in step 17.",
+      "properties": {
+        "check": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntryCheck"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A test that shows it still holds."
+        },
+        "command": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntryCommand"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For a `command` entry: the command."
+        },
+        "kind": {
+          "$ref": "#/$defs/EntryKind",
+          "description": "What it is."
+        },
+        "text": {
+          "description": "The entry in words.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    },
     "Notice": {
       "anyOf": [
         {
@@ -3448,6 +3488,10 @@
         {
           "const": "map",
           "description": "The repository map: an epoch's view of the workspace, given once in it."
+        },
+        {
+          "const": "profile",
+          "description": "The project profile changed since the model was given it (since step 17)."
         },
         {
           "description": "A value this version of the protocol does not know. Receivers need a default branch.",
@@ -4154,6 +4198,13 @@
             "$ref": "#/$defs/ProjectEntry"
           },
           "type": "array"
+        },
+        "problems": {
+          "description": "What is wrong with the project's files, each in a sentence: a file\nthat cannot be read as it is, and what is used in its place. Added\nin step 17.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -4164,6 +4215,17 @@
     "ProjectEntry": {
       "description": "One entry of the project profile or memory.",
       "properties": {
+        "accepted_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the user accepted it. For a `command` entry this is what puts\nit on the project's safe list; an entry that became active by\nitself has none. Added in step 17."
+        },
         "basis": {
           "anyOf": [
             {
@@ -4234,6 +4296,15 @@
           "$ref": "#/$defs/EntryKind",
           "description": "What it is."
         },
+        "observations": {
+          "description": "For an observed entry: how many times the harness saw it hold.\nAdded in step 17.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "scope": {
           "$ref": "#/$defs/EntryScope",
           "description": "Which file it lives in."
@@ -4292,6 +4363,13 @@
     "ProjectUpdateParams": {
       "description": "`project/update`",
       "properties": {
+        "add": {
+          "description": "Entries the user writes, added after the changes. Each is active at\nonce. Added in step 17.",
+          "items": {
+            "$ref": "#/$defs/NewEntry"
+          },
+          "type": "array"
+        },
         "changes": {
           "description": "The changes, applied in order.",
           "items": {
@@ -4318,9 +4396,6 @@
           ]
         }
       },
-      "required": [
-        "changes"
-      ],
       "type": "object"
     },
     "ProjectUpdated": {

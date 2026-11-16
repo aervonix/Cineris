@@ -1,0 +1,384 @@
+# Step 17: the project profile and memory, in cortex-knowledge, and what it
+# added to cortex-policy (the exact rule of an accepted command, and a
+# running session's learned rules), cortex-agent (section 5 of the system
+# prompt, outside the epoch's base hash) and cortex-core (the epoch's
+# profile in the log).
+#
+# Each rule is broken here: what is in use and what runs without asking,
+# that a shared entry is a proposal until this user accepts it, the strict
+# reading of the two files, the store's lock, its good copy and its refusal
+# to write over a file a person broke, the ids that are never given twice,
+# expiry, the escaping and the budget of section 5, and that a learned rule
+# is one exact line that waits for trust.
+
+# ------------------------------------------------------------- the standing
+
+[break] an-expired-entry-is-in-use
+rule: An entry past its expiry is not in use: it leaves the prompt and the safe list by the clock, before anything marks it.
+file: crates/cortex-knowledge/src/entry.rs
+in: Entry::in_use
+find: self.status == Status::Active && !self.is_expired(now)
+replace: self.status == Status::Active
+caught-by:
+    cortex-knowledge entry::tests::an_entry_is_in_use_only_while_active_and_before_its_expiry
+    cortex-knowledge::it project::an_entry_past_its_expiry_drops_out_and_is_marked_once
+    cortex-knowledge::it render::nothing_that_is_not_in_use_is_in_the_section
+
+[break] a-proposal-is-in-use
+rule: A proposed entry is never in use: it reaches the prompt only after the user accepts it.
+file: crates/cortex-knowledge/src/entry.rs
+in: Entry::in_use
+find: self.status == Status::Active
+replace: self.status != Status::Disabled
+caught-by:
+    cortex-knowledge entry::tests::an_entry_is_in_use_only_while_active_and_before_its_expiry
+    cortex-knowledge::it project::a_proposal_waits_for_the_user
+    cortex-knowledge::it project::a_shared_entry_is_a_proposal_until_this_user_accepts_it
+    cortex-knowledge::it render::nothing_that_is_not_in_use_is_in_the_section
+
+[break] an-active-command-runs-unasked-without-acceptance
+rule: A command that became active by itself is in the prompt and still asks: only one the user accepted, or wrote, runs without asking.
+file: crates/cortex-knowledge/src/entry.rs
+in: Entry::runs_unasked
+find: self.in_use(now) && self.is_accepted()
+replace: self.in_use(now)
+caught-by:
+    cortex-knowledge entry::tests::only_an_accepted_command_in_use_runs_unasked
+    cortex-knowledge::it project::only_active_entries_are_in_use_and_only_accepted_commands_run_unasked
+
+[break] a-shared-entry-is-accepted-for-having-been-written
+rule: An entry of the repository's file is never the user's word for having been written there.
+file: crates/cortex-knowledge/src/entry.rs
+in: Entry::is_accepted
+find: (self.scope == Scope::Private && self.learned.is_none())
+replace: self.learned.is_none()
+caught-by:
+    cortex-knowledge entry::tests::a_shared_entry_is_not_accepted_for_having_been_written
+
+[break] a-shared-entry-is-active-until-decided
+rule: A shared entry the user has not decided about is a proposal, not an active entry.
+file: crates/cortex-knowledge/src/project.rs
+in: standing
+find: None => entry.status = Status::Proposed
+replace: None => entry.status = Status::Active
+caught-by:
+    cortex-knowledge::it project::a_shared_entry_is_a_proposal_until_this_user_accepts_it
+    cortex-knowledge::it project::a_shared_file_cannot_give_its_own_entries_a_standing
+    cortex-knowledge::it render::nothing_that_is_not_in_use_is_in_the_section
+
+[break] an-acceptance-outlives-a-changed-command
+rule: A user's acceptance of a shared entry is of what it said: the command line is part of the hash, so a changed command is a proposal again.
+file: crates/cortex-knowledge/src/entry.rs
+in: Entry::content_hash
+find: part(&command.run);
+replace: part("");
+caught-by:
+    cortex-knowledge entry::tests::the_content_hash_follows_what_the_entry_says_and_nothing_else
+    cortex-knowledge::it project::a_shared_entry_that_changes_is_a_proposal_again
+
+[break] a-degraded-store-feeds-the-safe-list
+rule: While the private store cannot be read as it is, the state in its place feeds the prompt and never the safe list.
+file: crates/cortex-knowledge/src/project.rs
+in: Snapshot::runs_unasked
+find: !degraded && entry.runs_unasked(now)
+replace: (degraded || true) && entry.runs_unasked(now)
+caught-by:
+    cortex-knowledge::it store::an_invalid_store_is_reported_and_never_written_over
+    cortex-knowledge::it store::a_session_keeps_what_it_had_when_an_edit_goes_wrong
+
+# ---------------------------------------------------------------- the files
+
+[break] an-unknown-key-of-the-store-is-passed-over
+rule: The private store is read strictly: a key this build does not know refuses the file.
+file: crates/cortex-knowledge/src/file.rs
+find: #[serde(deny_unknown_fields)] struct RawPrivate
+replace: struct RawPrivate
+caught-by:
+    cortex-knowledge file::tests::a_file_this_build_does_not_understand_in_full_is_refused_whole
+
+[break] a-shared-entry-may-carry-a-standing
+rule: An entry of the shared file has no status, date or acceptance of its own: one that claims any is left out.
+file: crates/cortex-knowledge/src/file.rs
+find: #[serde(deny_unknown_fields)] struct RawShared
+replace: struct RawShared
+caught-by:
+    cortex-knowledge file::tests::a_shared_entry_that_claims_a_standing_is_left_out
+    cortex-knowledge::it project::a_shared_file_cannot_give_its_own_entries_a_standing
+
+[break] a-newer-version-is-read
+rule: A file of a newer version is refused whole.
+file: crates/cortex-knowledge/src/file.rs
+in: check_version
+find: version == VERSION
+replace: version >= VERSION
+caught-by:
+    cortex-knowledge file::tests::a_file_this_build_does_not_understand_in_full_is_refused_whole
+    cortex-knowledge file::tests::a_shared_file_past_its_cap_or_of_a_later_version_is_refused
+
+[break] the-entry-cap-is-not-held
+rule: A private store past its cap on entries is invalid.
+file: crates/cortex-knowledge/src/file.rs
+in: parse_private
+find: read.entries.len() > MAX_PRIVATE_ENTRIES
+replace: false
+caught-by:
+    cortex-knowledge file::tests::a_store_past_its_cap_is_refused
+
+[break] an-id-is-given-again
+rule: The id of a deleted entry is not given again, so a change sent from an old listing cannot land on an entry the user never saw.
+file: crates/cortex-knowledge/src/file.rs
+in: PrivateState::next_number
+find: self.next.max(largest_number(&self.entries) + 1)
+replace: largest_number(&self.entries) + 1
+caught-by:
+    cortex-knowledge file::tests::an_id_is_never_given_twice
+    cortex-knowledge::it project::an_id_from_an_old_listing_does_not_land_on_a_new_entry
+
+[break] a-shared-id-is-a-short-prefix
+rule: A shared entry's id is 128 bits of its hash, so a repository cannot make two entries share one.
+file: crates/cortex-knowledge/src/file.rs
+in: shared_id
+find: hex.get(..32)
+replace: hex.get(..12)
+caught-by:
+    cortex-knowledge file::tests::every_shared_entry_is_a_proposal_named_by_what_it_says
+
+# ---------------------------------------------------------------- the store
+
+[break] a-change-writes-over-an-invalid-store
+rule: A store that cannot be read as it is, is never written over: a change is refused until a person puts the file right.
+file: crates/cortex-knowledge/src/store.rs
+in: Store::change
+find: self.read_strict().map_err(StoreError::Invalid)?
+replace: self.read_strict().unwrap_or_default()
+caught-by:
+    cortex-knowledge::it store::an_invalid_store_is_reported_and_never_written_over
+
+[break] the-store-is-not-owner-only
+rule: The private store and its good copy are written owner-only.
+file: crates/cortex-knowledge/src/store.rs
+in: Store::change
+find: owner_only: true
+replace: owner_only: false
+os: linux
+caught-by:
+    cortex-knowledge::it store::a_change_is_written_owner_only_with_its_good_copy_beside_it
+
+[break] a-change-takes-no-lock
+rule: A change holds the store's lock from before its read until after its write.
+file: crates/cortex-knowledge/src/store.rs
+in: Store::change
+find: let _lock = private::hold_lock(&self.file).map_err(io_error)?;
+replace: let _lock = { let _ = &io_error; None::<std::fs::File> };
+caught-by:
+    cortex-knowledge::it store::a_change_holds_the_lock_while_it_writes
+
+[break] the-good-copy-does-not-follow-a-valid-load
+rule: A load that reads a valid store brings the good copy up to it, so that a later invalid edit falls back to the person's last valid one.
+file: crates/cortex-knowledge/src/store.rs
+in: Store::load
+find: self.keep_good_copy(&read);
+replace: let _ = &read;
+caught-by:
+    cortex-knowledge::it store::the_good_copy_follows_a_valid_hand_edit
+    cortex-knowledge::it store::an_invalid_store_is_reported_and_never_written_over
+
+[break] a-removed-store-keeps-its-good-copy
+rule: A store that is not there has no good copy: a file made by hand afterwards cannot fall back to what was removed.
+file: crates/cortex-knowledge/src/store.rs
+in: Store::keep_good_copy
+find: let _ = std::fs::remove_file(&good);
+replace:
+caught-by:
+    cortex-knowledge::it store::a_store_that_is_removed_is_empty_and_its_good_copy_goes
+
+# -------------------------------------------------------------- the changes
+
+[break] a-proposal-is-stored-active
+rule: A model's proposal is stored as proposed: nothing a model does can make an entry active.
+file: crates/cortex-knowledge/src/project.rs
+in: Project::propose
+find: entry.status = Status::Proposed;
+replace: entry.status = Status::Active;
+caught-by:
+    cortex-knowledge::it project::a_proposal_waits_for_the_user
+
+[break] a-rejected-proposal-is-proposed-again
+rule: A proposal the user turned down is already known, and is not stored again.
+file: crates/cortex-knowledge/src/project.rs
+in: Project::propose
+find: entry.kind == proposal.kind && one_spaced(&entry.text) == text
+replace: entry.status != Status::Disabled && entry.kind == proposal.kind && one_spaced(&entry.text) == text
+caught-by:
+    cortex-knowledge::it project::a_proposal_waits_for_the_user
+
+[break] the-cap-on-waiting-proposals-is-not-held
+rule: A store full of a model's proposals takes no more until some are reviewed.
+file: crates/cortex-knowledge/src/project.rs
+in: Project::propose
+find: waiting >= MAX_PENDING_PROPOSALS
+replace: false
+caught-by:
+    cortex-knowledge::it project::a_store_full_of_proposals_takes_no_more_until_some_are_reviewed
+
+[break] a-lapsed-entry-keeps-its-acceptance
+rule: An acceptance does not outlast the entry: a lapsed command must be accepted again before it runs without asking.
+file: crates/cortex-knowledge/src/project.rs
+in: Project::lapse
+find: entry.accepted = None;
+replace:
+caught-by:
+    cortex-knowledge::it project::an_entry_past_its_expiry_drops_out_and_is_marked_once
+
+[break] an-unaccepted-entry-is-promoted
+rule: Only an entry the user stands behind goes to the shared file.
+file: crates/cortex-knowledge/src/project.rs
+in: Work::promote
+find: !entry.is_accepted()
+replace: false
+caught-by:
+    cortex-knowledge::it project::only_an_entry_the_user_stands_behind_is_promoted
+    cortex-knowledge::it project::an_update_is_all_or_nothing
+
+[break] a-linked-cortex-directory-is-read-through
+rule: The shared file is read only from a `.cortex` that is a directory of the workspace itself.
+file: crates/cortex-knowledge/src/project.rs
+in: Project::read_shared
+find: Ok(found) if found.file_type().is_symlink() =>
+replace: Ok(found) if false && found.file_type().is_symlink() =>
+os: linux
+caught-by:
+    cortex-knowledge::it project::a_shared_file_behind_a_link_is_not_read
+
+[break] an-edit-reaches-a-shared-entry
+rule: An entry of the shared file is edited and removed in that file, never through the user's store.
+file: crates/cortex-knowledge/src/project.rs
+in: Work::not_private
+find: Ok(Some(_)) => ChangeError::SharedReadOnly(id.clone())
+replace: Ok(Some(_)) => ChangeError::UnknownEntry(id.clone())
+caught-by:
+    cortex-knowledge::it project::an_update_is_all_or_nothing
+
+# ---------------------------------------------------------------- section 5
+
+[break] an-entry-is-rendered-unescaped
+rule: Every piece of an entry goes through `visible`, so an entry is one list line and cannot begin a line of its own.
+file: crates/cortex-knowledge/src/render.rs
+in: line
+find: let text = visible(&entry.text);
+replace: let text = entry.text.as_str();
+caught-by:
+    cortex-knowledge::it render::no_entry_can_write_anything_but_its_own_line
+
+[break] a-commands-directory-is-rendered-unescaped
+rule: A command's directory is escaped as its text is.
+file: crates/cortex-knowledge/src/render.rs
+in: line
+find: visible(cwd)
+replace: cwd
+caught-by:
+    cortex-knowledge::it render::no_entry_can_write_anything_but_its_own_line
+
+[break] the-section-passes-its-budget
+rule: Section 5 stays inside its budget, and says how many entries it left out.
+file: crates/cortex-knowledge/src/render.rs
+in: render_with
+find: text.len() + cost(*kind, line, first) > room
+replace: false
+caught-by:
+    cortex-knowledge::it render::the_section_stays_inside_its_budget_and_says_what_it_left_out
+
+[break] commands-are-not-first
+rule: The section lists commands first, so that a cut leaves them in.
+file: crates/cortex-knowledge/src/render.rs
+in: render_with
+find: for kind in Kind::ALL
+replace: for kind in [Kind::Fact, Kind::Flaky, Kind::Convention, Kind::Command]
+caught-by:
+    cortex-knowledge::it render::the_section_lists_what_is_in_use_commands_first_in_a_fixed_order
+    cortex-knowledge::it render::the_section_stays_inside_its_budget_and_says_what_it_left_out
+
+[break] the-filter-is-not-asked
+rule: An entry whose line the caller's filter refuses is left out of the section.
+file: crates/cortex-knowledge/src/render.rs
+in: render_with
+find: if keep(&line) {
+replace: if keep(&line) || true {
+caught-by:
+    cortex-knowledge::it render::an_entry_the_filter_refuses_is_left_out_and_counted
+
+[break] the-profile-is-in-the-base-hash
+rule: Section 5 is outside the epoch's base hash: a profile that changed between processes does not make a resume a new epoch.
+file: crates/cortex-agent/src/context/prompt.rs
+in: build
+find: profile.is_some() && index == profile_at
+replace: false
+caught-by:
+    cortex-agent context::prompt::tests::the_base_hash_leaves_the_project_profile_out
+
+[break] the-epochs-profile-is-not-written
+rule: The `epoch` entry records the hash of the profile its prompt holds.
+file: crates/cortex-core/src/store.rs
+in: epoch_body
+find: profile: epoch.profile
+replace: profile: None
+caught-by:
+    cortex-core store::tests::the_epochs_of_a_branch_are_placed_among_its_items
+
+# ------------------------------------------------------ the learned safe list
+
+[break] an-exact-rule-takes-a-wildcard
+rule: The rule of an accepted command is that line and no other: a word a pattern would read as a wildcard gives no rule.
+file: crates/cortex-policy/src/engine.rs
+in: plain_word
+find: character.is_whitespace() || matches!(character, '*' | '?' | '[' | ']')
+replace: character.is_whitespace()
+caught-by:
+    cortex-policy::it learned::an_exact_rule_is_the_line_word_for_word_or_no_rule_at_all
+    cortex-policy engine::tests::an_approval_covers_the_program_and_its_subcommand
+
+[break] an-exact-rule-takes-the-first-of-two-commands
+rule: A line of more than one command gives no rule.
+file: crates/cortex-policy/src/engine.rs
+in: exact_command_rule
+find: let [part] = parts.as_slice() else
+replace: let Some(part) = parts.first() else
+caught-by:
+    cortex-policy::it learned::an_exact_rule_is_the_line_word_for_word_or_no_rule_at_all
+
+[break] an-exact-rule-takes-a-redirection
+rule: A command with a redirection gives no rule: the pattern would not say where it writes.
+file: crates/cortex-policy/src/engine.rs
+in: exact_command_rule
+find: !part.redirects.is_empty()
+replace: false
+caught-by:
+    cortex-policy::it learned::an_exact_rule_is_the_line_word_for_word_or_no_rule_at_all
+
+[break] learned-rules-are-added-to-the-ones-before
+rule: A session's learned rules are replaced whole, so a command the user turned off asks again at once.
+file: crates/cortex-policy/src/engine.rs
+in: Engine::set_learned
+find: held.configured.retain(|rule| rule.source != RuleSource::Learned);
+replace:
+caught-by:
+    cortex-policy::it learned::an_accepted_command_no_longer_asks_and_a_rejected_one_does
+    cortex-policy::it learned::learned_rules_change_nothing_else_about_the_engine
+
+[break] a-learned-list-may-do-more-than-allow-a-command
+rule: A learned rule only ever allows a command: a list with anything else is refused whole.
+file: crates/cortex-policy/src/engine.rs
+in: Engine::set_learned
+find: rule.rule.effect != Effect::Exec || rule.rule.action != RuleAction::Allow
+replace: false
+caught-by:
+    cortex-policy::it learned::a_learned_list_with_anything_but_an_exec_allow_leaves_none_in_force
+
+[break] a-refused-learned-list-leaves-the-old-rules-in-force
+rule: When a learned list is refused, no learned rule is in force, the ones from before included.
+file: crates/cortex-policy/src/engine.rs
+in: Engine::set_learned
+find: self.recompile(&mut held);
+replace: let _ = &mut held;
+caught-by:
+    cortex-policy::it learned::a_learned_list_with_anything_but_an_exec_allow_leaves_none_in_force

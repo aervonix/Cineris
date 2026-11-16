@@ -1443,6 +1443,7 @@ fn resumed(world: &World, system: &str) -> (Rig, MemorySessionStore) {
                 reason: Some(EpochReason::Start),
                 base: None,
                 instructions: vec![("AGENTS.md".to_owned(), ContentHash::of(b"x"))],
+                profile: None,
                 altered: false,
                 variants: None,
             }),

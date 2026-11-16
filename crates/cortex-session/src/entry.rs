@@ -490,6 +490,12 @@ pub struct Epoch {
     /// told the model as a notice, measured against this. Added in step 15.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub instructions: Vec<InstructionMark>,
+    /// The hash of the project profile as the system prompt holds it
+    /// (section 5). A later change to the profile is told the model as a
+    /// notice, measured against this. Absent when the prompt holds no
+    /// profile. Added in step 17.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ContentHash>,
     /// The choice at each variant point the epoch's requests are made with
     /// (`edit_format`, `tool_schema`, `prompt_style`), fixed for the epoch.
     /// Added in step 16; absent before.
@@ -1327,6 +1333,7 @@ mod tests {
                 path: "AGENTS.md".into(),
                 hash: ContentHash::of(b"be brief"),
             }],
+            profile: Some(ContentHash::of(b"Project profile")),
             variants: [("tool_schema".to_owned(), "loose".to_owned())]
                 .into_iter()
                 .collect(),
