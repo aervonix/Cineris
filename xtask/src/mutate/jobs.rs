@@ -7,10 +7,19 @@
 //! started the jobs, which alone writes the results and the report, in the
 //! order the pieces finished. With one job there is no thread: the pieces
 //! are done in order, and the time is asked before each, as it always was.
+//!
+//! **The answer "the time is up" is binding.** A job takes the next piece
+//! under a lock that the starting thread holds while it asks the time and
+//! writes the answer down, so a job either took its piece before the
+//! question, or finds the answer when it asks for one. Without the lock a
+//! job could be let go by something the question did (a gate a test opens,
+//! a piece it was waiting on) and look for its next piece before the answer
+//! was written: the cause of the one failure in 50 repeats of the test of
+//! this, found by reading it.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
 use super::drive::Runner;
@@ -23,7 +32,8 @@ const ASK_EVERY: Duration = Duration::from_millis(250);
 /// Does `work` for each item, on the jobs, and hands each result to `done`
 /// on this thread. Returns whether every item was done: not when the time
 /// ran out (`out_of_time`), which stops new pieces being started while the
-/// ones under way finish and are kept. An error from `done` stops the jobs
+/// ones under way finish and are kept: a piece is started only by a job that
+/// took it before `out_of_time` said so. An error from `done` stops the jobs
 /// in the same way and is returned once they have.
 pub(crate) fn for_each<T, R>(
     runners: &mut [&mut dyn Runner],
@@ -49,8 +59,9 @@ where
     }
 
     // Asked once before any job starts, so that a run with no time left
-    // starts nothing. After this it is asked as pieces finish, and a job
-    // may start one more piece in the moment before the answer reaches it.
+    // starts nothing. After this it is asked as pieces finish, and every few
+    // moments while all are busy. A job that took its piece before the
+    // answer "up" is written down keeps it; none takes one after.
     if items.is_empty() {
         return Ok(true);
     }
@@ -59,18 +70,26 @@ where
     }
     let next = AtomicUsize::new(0);
     let halt = AtomicBool::new(false);
+    // Held to take a piece, and to ask the time and write the answer down.
+    let claim = Mutex::new(());
     let (sender, received) = mpsc::channel::<(usize, R)>();
     std::thread::scope(|scope| {
         for (runner, copy) in runners.iter_mut().zip(copies) {
-            let (sender, next, halt) = (sender.clone(), &next, &halt);
+            let (sender, next, halt, claim) = (sender.clone(), &next, &halt, &claim);
             scope.spawn(move || {
                 loop {
-                    if halt.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    let index = next.fetch_add(1, Ordering::SeqCst);
-                    let Some(item) = items.get(index) else {
-                        return;
+                    let (index, item) = {
+                        let _claiming = claim
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if halt.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        let index = next.fetch_add(1, Ordering::SeqCst);
+                        let Some(item) = items.get(index) else {
+                            return;
+                        };
+                        (index, item)
                     };
                     let outcome = work(&mut **runner, copy, item);
                     if sender.send((index, outcome)).is_err() {
@@ -84,8 +103,13 @@ where
         let mut finished = 0;
         let mut failure = None;
         loop {
-            if failure.is_none() && !halt.load(Ordering::SeqCst) && out_of_time() {
-                halt.store(true, Ordering::SeqCst);
+            if failure.is_none() && !halt.load(Ordering::SeqCst) {
+                let _asking = claim
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if out_of_time() {
+                    halt.store(true, Ordering::SeqCst);
+                }
             }
             match received.recv_timeout(ASK_EVERY) {
                 Ok((index, outcome)) => {
@@ -94,6 +118,9 @@ where
                     if failure.is_none() {
                         finished += 1;
                         if let Err(error) = done(&items[index], outcome) {
+                            let _stopping = claim
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
                             halt.store(true, Ordering::SeqCst);
                             failure = Some(error);
                         }
@@ -177,7 +204,19 @@ mod tests {
             &mut || {
                 asked += 1;
                 if asked >= 2 {
+                    // The jobs are let go before the answer is written
+                    // down. Each is given the chance to look for a next
+                    // piece in that moment: they find the answer, since
+                    // taking a piece waits for the lock this question is
+                    // asked under. A bound on yields, not on time: a job
+                    // that is let go takes microseconds to look.
                     gate.open();
+                    for _ in 0..2_000 {
+                        if started.lock().unwrap().len() > 2 {
+                            break;
+                        }
+                        std::thread::yield_now();
+                    }
                 }
                 asked >= 2
             },
