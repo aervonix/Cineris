@@ -1,0 +1,128 @@
+# Step 19: verification. The project's checks at the end of a turn that
+# changed files: `[verify]` in cortex-config, what a call changed in
+# cortex-tools, the stage in cortex-agent's loop, and the verifier in
+# cortex-core, which chooses the checks and runs them through the session's
+# own shell.
+#
+# Each rule is broken here: what counts as a change, when a round runs,
+# what an interrupt, a stop and a time limit do to it, what a project may
+# set, and, in the core, who may choose a check, where it runs and what the
+# model is told of it.
+
+# ------------------------------------------------- what a call changed
+
+[break] a-commands-declared-write-is-a-change
+rule: A command declares a write of the whole workspace; only what its look found is a change, or every successful command would send its turn to the checks.
+file: crates/cortex-tools/src/touched.rs
+in: changed_by
+find: if command {
+replace: if false {
+caught-by:
+    cortex-tools touched::tests::a_command_changed_what_its_look_found_and_not_the_workspace_it_declared
+    cortex-agent::it verifying::a_command_sends_the_turn_to_the_checks_by_what_its_look_found
+
+[break] a-write-that-found-its-content-there-is-a-change
+rule: A `write` or `edit` whose payload says `unchanged` changed nothing, and does not send its turn to the checks.
+file: crates/cortex-tools/src/touched.rs
+in: changed_by
+find: == Some("unchanged");
+replace: == Some("never written");
+caught-by:
+    cortex-tools touched::tests::a_write_that_found_its_content_there_changed_nothing
+    cortex-agent::it verifying::a_write_that_found_its_content_there_does_not_send_the_turn_to_the_checks
+
+[break] a-command-that-failed-changed-nothing
+rule: A command that ran and failed has still changed what its look found: `sed -i … && make` that fails has edited.
+file: crates/cortex-tools/src/touched.rs
+in: changed_by
+find: ToolOutcome::Denied => Vec::new(),
+replace: ToolOutcome::Denied | ToolOutcome::Error => Vec::new(),
+caught-by:
+    cortex-tools touched::tests::a_command_changed_what_its_look_found_and_not_the_workspace_it_declared
+    cortex-agent::it verifying::a_command_sends_the_turn_to_the_checks_by_what_its_look_found
+
+[break] a-look-that-did-not-finish-is-no-change
+rule: A look for what a command changed that did not finish means a change may have been made: the workspace stands for it.
+file: crates/cortex-tools/src/touched.rs
+in: by_command
+find: if !finished {
+replace: if false {
+caught-by:
+    cortex-tools touched::tests::a_command_changed_what_its_look_found_and_not_the_workspace_it_declared
+    cortex-agent::it verifying::a_command_sends_the_turn_to_the_checks_by_what_its_look_found
+
+# --------------------------------------------------------- the stage
+
+[break] a-round-runs-again-on-the-same-state
+rule: A round of checks runs only when something changed since the last: the same checks on the same files say the same.
+file: crates/cortex-agent/src/turn.rs
+in: Session::verify
+find: turn.changed = false;
+replace: let _ = turn.changed;
+caught-by:
+    cortex-agent::it verifying::after_a_failure_the_checks_run_again_only_when_something_changed
+
+[break] a-round-starts-with-the-turns-time-spent
+rule: No round starts once the turn's or the session's time limit is spent: the checks would run past it.
+file: crates/cortex-agent/src/turn.rs
+find: && self.ledger.time_left() != Some(Duration::ZERO)
+replace: && self.ledger.time_left() != Some(Duration::MAX)
+caught-by:
+    cortex-agent::it verifying::no_round_starts_once_the_turns_time_is_spent
+
+[break] a-round-is-not-told-the-time-left
+rule: A round is told the time the turn's and the session's limits leave, so that no check runs past them.
+file: crates/cortex-agent/src/turn.rs
+in: Session::verify
+find: deadline: self.ledger.time_left(),
+replace: deadline: None,
+caught-by:
+    cortex-agent::it verifying::a_round_is_told_its_place_and_the_time_the_turns_limits_leave
+
+[break] an-interrupt-drops-the-round
+rule: On an interrupt the loop waits for the round to stop what it runs, so that nothing of a check is left running and what it changed is recorded.
+file: crates/cortex-agent/src/turn.rs
+in: Session::verify
+find: let outcome = self.verifier.verify(cx).await;
+replace: let Some(outcome) = turn.cancel.race(self.verifier.verify(cx)).await else { return Phase::Interrupted(None); };
+caught-by:
+    cortex-agent::it verifying::an_interrupt_waits_for_the_round_to_stop_what_it_runs
+
+[break] a-check-that-stops-the-turn-completes-it
+rule: A check that made the turn stop (a protected path changed, a process that could not be cleared) ends the turn `denied`, as a tool round the policy stopped does.
+file: crates/cortex-agent/src/turn.rs
+in: Session::verify
+find: outcome: TurnOutcome::Denied,
+replace: outcome: TurnOutcome::Completed,
+caught-by:
+    cortex-agent::it verifying::a_check_that_stops_the_turn_ends_it_denied_and_the_model_is_told_why
+
+[break] the-verdict-is-lost-with-the-turns-limit
+rule: The verdict of the turn's checks is carried whenever a round ran, however the turn then ended: a failure is not lost when the turn runs out of time.
+file: crates/cortex-agent/src/turn.rs
+in: Session::finish
+find: (Some(verdict), _) => Some(verdict.clone()),
+replace: (Some(_), _) if end.outcome != TurnOutcome::Completed => None, (Some(verdict), _) => Some(verdict.clone()),
+caught-by:
+    cortex-agent::it verifying::the_verdict_stays_with_a_turn_that_then_runs_out_of_time
+
+# ---------------------------------------------------------- the settings
+
+[break] a-project-turns-verification-up
+rule: A project may turn verification down (`off` < `ask` < `auto`) and never up: up is the user's alone.
+file: crates/cortex-config/src/schema/mod.rs
+in: Trust::class
+find: (Some(wanted), Some(now)) if wanted <= now => TrustClass::Preference,
+replace: (Some(_), Some(_)) => TrustClass::Preference,
+caught-by:
+    cortex-config::it trust::a_project_may_turn_verification_down_and_never_choose_its_commands
+
+[break] a-trusted-project-chooses-the-checks
+rule: `verify.commands` is the user's alone: a repository proposes its checks in its shared profile, which each user accepts by hash.
+file: crates/cortex-config/src/schema/sections.rs
+find: [UserOnly, Now, joined]
+replace: [RunsCode, Now, joined]
+caught-by:
+    cortex-config::it trust::a_project_may_turn_verification_down_and_never_choose_its_commands
+    cortex-config::it trust::the_documented_classes_hold
+    cortex-config::it trust::every_key_has_a_trust_class

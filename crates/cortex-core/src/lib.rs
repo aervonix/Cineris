@@ -46,6 +46,7 @@ mod shell_cache;
 mod stats;
 mod store;
 mod usage;
+mod verify;
 
 pub use crate::clients::{ClientId, ClientInfo};
 pub use crate::core::{Client, Core, CoreOptions, OpError};

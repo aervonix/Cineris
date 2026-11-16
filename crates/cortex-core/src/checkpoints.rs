@@ -519,6 +519,62 @@ impl Tool for RecordingShell {
         cx: &'a RunCx,
         out: &'a mut dyn ToolOutput,
     ) -> BoxFuture<'a, ToolResult> {
+        self.run_by(plan, cx, out, By::Model)
+    }
+}
+
+/// Who chose to run a command: what the command observer learns from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum By {
+    /// The model, through a `shell` call (or the user, as the model's
+    /// call they approved).
+    Model,
+    /// The harness: one of the project's checks (step 19). It confirms
+    /// what the profile holds and teaches it nothing new.
+    Harness,
+}
+
+/// The session's shell as the project's checks run it (step 19): every
+/// confined command's looks and records, and the command observer told
+/// that the run was the harness's. It is what the verifier hands to
+/// `cortex_tools::execute`, so that a check's result passes the same output
+/// policy as a call's.
+#[derive(Debug)]
+pub(crate) struct AsCheck<'a>(pub(crate) &'a RecordingShell);
+
+impl Tool for AsCheck<'_> {
+    fn spec(&self) -> &ToolSpec {
+        self.0.spec()
+    }
+
+    fn plan(&self, args: &Json, cx: &PlanCx) -> Result<Plan, ToolError> {
+        self.0.plan(args, cx)
+    }
+
+    fn preview(&self, plan: &Plan, cx: &RunCx) -> Option<Preview> {
+        self.0.preview(plan, cx)
+    }
+
+    fn run<'a>(
+        &'a self,
+        plan: Plan,
+        cx: &'a RunCx,
+        out: &'a mut dyn ToolOutput,
+    ) -> BoxFuture<'a, ToolResult> {
+        self.0.run_by(plan, cx, out, By::Harness)
+    }
+}
+
+impl RecordingShell {
+    /// Runs a planned command, as [`Tool::run`] does for the model's call,
+    /// or for the harness's own check.
+    pub(crate) fn run_by<'a>(
+        &'a self,
+        plan: Plan,
+        cx: &'a RunCx,
+        out: &'a mut dyn ToolOutput,
+        by: By,
+    ) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
             // A turn a command of it stopped runs no more of its calls:
             // [`StopsWithTurn`], around every tool, sees to that.
@@ -607,14 +663,18 @@ impl Tool for RecordingShell {
                 note_changed(changes, cx);
             }
             if let (Some(knowledge), Some((command, cwd))) = (&self.knowledge, observed) {
-                knowledge.observed(&observed_run(
+                let run = observed_run(
                     command,
                     cwd,
                     result.payload(),
                     changes.as_ref(),
                     !unconfined && self.sandbox.confines(),
                     read_only,
-                ));
+                );
+                match by {
+                    By::Model => knowledge.observed(&run),
+                    By::Harness => knowledge.observed_check(&run),
+                }
             }
             let mut by_hand = found
                 .as_ref()
