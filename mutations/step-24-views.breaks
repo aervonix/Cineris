@@ -185,8 +185,8 @@ caught-by:
 rule: `Enter` on a check whose output was kept opens it in the viewer.
 file: crates/cortex-tui/src/app/panels/review.rs
 in: ReviewPanel::activate
-find: Some(artifact) => Act::Artifact {
-replace: Some(_) if false => Act::Taken, Some(artifact) if false => Act::Artifact {
+find: None => match self.check_output(focused) {
+replace: None => match None::<&cortex_protocol::item::ArtifactRef> {
 caught-by:
     cortex-tui app::tests::panels::enter_on_a_check_opens_its_whole_output_in_the_viewer
 
