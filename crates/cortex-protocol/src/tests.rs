@@ -146,6 +146,13 @@ fn the_golden_values_round_trip_exactly() {
                     "a headless record is read as the type it says it is"
                 );
             }
+            Some("TrustStanding") => {
+                let standing = round_trip::<crate::session::TrustStanding>(value);
+                assert!(
+                    !matches!(standing, crate::session::TrustStanding::Unknown(_)),
+                    "each standing is one this version knows"
+                );
+            }
             other => panic!("the values file names a type this test does not read: {other:?}"),
         }
     }
