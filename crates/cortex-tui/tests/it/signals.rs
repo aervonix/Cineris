@@ -114,6 +114,40 @@ pub(crate) fn enter() {
         std::process::exit(0);
     }
     let parent = std::os::unix::process::parent_id();
+    // Should the end stall, the report says where each thread waits in the
+    // kernel, every 5 s: a test's run out of time then says why.
+    std::thread::spawn(|| {
+        loop {
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(5) {
+                std::thread::park_timeout(Duration::from_secs(5));
+            }
+            let mut said = String::from("still running:");
+            for task in std::fs::read_dir("/proc/self/task")
+                .into_iter()
+                .flatten()
+                .flatten()
+            {
+                let wchan = std::fs::read_to_string(task.path().join("wchan")).unwrap_or_default();
+                let stat = std::fs::read_to_string(task.path().join("stat")).unwrap_or_default();
+                let state = stat
+                    .rsplit(')')
+                    .next()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("?")
+                    .to_owned();
+                said.push_str(&format!(
+                    " [{} {state} {wchan}]",
+                    task.file_name().to_string_lossy()
+                ));
+            }
+            if let Some(report) = report() {
+                append(&report, &said);
+            }
+        }
+    });
     let history: Box<dyn HistoryStore + Send> = if case == "key" {
         Box::new(RaisesOnPush)
     } else {
@@ -183,6 +217,8 @@ fn sys_a_signal_while_a_key_is_taken_ends_as_that_signal() {
     let mut session = start("key");
     session.send(b"hi\r");
     session.wait_exit(LIMIT);
+    // What the child wrote last can still be on its way once it has ended.
+    session.wait_for(LIMIT, "the result", |t| t.shows("RESULT"));
     let screen = shown(&session);
     assert!(
         screen.contains("RESULT Ok(Signal(130))"),

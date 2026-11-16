@@ -89,7 +89,14 @@ fn play(case: &str) {
     let code = loop {
         let read = terminal.next(None);
         // A signal handed over: what came after it (a reply to a query,
-        // which a write then answers) may have failed, the terminal put back.
+        // which a write then answers) may have failed, the terminal put back
+        // by the handler, on another thread, a moment before it hands over.
+        if read.is_err() {
+            let deadline = std::time::Instant::now() + LIMIT;
+            while terminal.ending().is_none() && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+        }
         if let Some(code) = terminal.ending() {
             break code;
         }
@@ -169,6 +176,8 @@ fn kill(session: &cortex_testkit::pty::Session, signal: &str) {
 fn sys_a_signal_handed_over_sets_the_watchdog_and_erases_the_whole_region() {
     let mut session = start("watchdog");
     kill(&session, "TERM");
+    // What the child wrote last can still be on its way once it has ended.
+    session.wait_for(LIMIT, "the hand-over", |t| t.shows(HANDED));
     let status = session.wait_exit(LIMIT);
     let screen = session.screen();
     let said = screen
@@ -221,6 +230,9 @@ fn sys_a_second_signal_ends_the_process_at_once() {
 fn sys_a_second_sighup_is_the_same_end() {
     let mut session = start("sighup-twice");
     kill(&session, "HUP");
+    session.wait_for(LIMIT, "the child to survive the second", |t| {
+        t.shows("survived the second SIGHUP")
+    });
     let status = session.wait_exit(LIMIT);
     let screen = session.screen();
     assert!(
