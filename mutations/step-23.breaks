@@ -705,3 +705,27 @@ replace: .position(|pending| matches!(pending, Pending::Steer(_)))?;
 packages: cortex-agent
 caught-by:
     context::a_compaction_asked_for_during_the_last_request_runs_when_the_turn_ends
+
+[break] the-interface-not-withdrawn-at-the-end
+rule: When the interface ends, what it was asked and never answered is withdrawn outside the lane, so that a question nobody will answer does not hold the end.
+file: crates/cortex-cli/src/interactive.rs
+in: CoreThread::start
+find: core.disconnect(client.id).await;
+replace: ;
+packages: cortex-cli
+caught-by:
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
+
+[break] the-end-behind-the-lane
+rule: The operations that change a session run on a task of their own, so that the end of the interface is never behind the one in progress.
+file: crates/cortex-cli/src/interactive.rs
+in: CoreThread::start
+find: let _ = writes.send((ticket, op));
+replace: push(&thread_done, Inbound::Done(ticket, core.handle(client.id, op).await.map_err(|e| *e))); thread_slot.wake();
+packages: cortex-cli
+caught-by:
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
