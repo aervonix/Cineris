@@ -56,9 +56,9 @@ use cortex_protocol::jsonrpc::{Message, Request, RequestId, Response};
 use cortex_protocol::methods::{
     ApprovalChoice, ApprovalResponse, ClientCapabilities, ClientRole, ConfigGetParams, Empty,
     InitializeParams, Op, OpResult, PROTOCOL_VERSION, PeerInfo, ServerNotification, ServerRequest,
-    ServerResponse, SessionListParams, SessionNewParams, SessionReadParams, SessionRef,
-    SessionRewindParams, TurnInterruptParams, TurnStartParams, UsageReportParams,
-    WorkspaceFilesParams,
+    ServerResponse, SessionArtifactParams, SessionListParams, SessionNewParams, SessionReadParams,
+    SessionRef, SessionRewindParams, TurnInterruptParams, TurnStartParams, UsageReportParams,
+    WorkspaceFilesParams, WorkspaceWarmParams,
 };
 use cortex_protocol::{ErrorData, ErrorKind, ItemId, SessionId};
 use serde_json::{Map, Value, json};
@@ -480,6 +480,18 @@ pub fn scenarios() -> Vec<Scenario> {
                 }),
                 call(|_| Op::McpStatus(Empty {})),
                 call(|_| Op::ExtensionsStatus(Empty {})),
+                call(|ctx| {
+                    Op::WorkspaceWarm(WorkspaceWarmParams {
+                        session_id: ctx.session(),
+                        paths: vec!["src/main.rs".to_owned()],
+                    })
+                }),
+                call(|ctx| {
+                    Op::SessionArtifact(SessionArtifactParams {
+                        session_id: ctx.session(),
+                        artifact: cortex_protocol::ArtifactId::new("a_not_there"),
+                    })
+                }),
                 call(|ctx| {
                     Op::SessionList(SessionListParams {
                         workspace: Some(ctx.workspace.clone()),
