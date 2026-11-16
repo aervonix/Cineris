@@ -37,7 +37,7 @@ usage: cargo xtask perf-ab --base DIR [--label NAME] [--count N]
 
 Builds the ignored `perf_` tests of the crates in this tree (the head) and in
 the tree at DIR (the base), once each, as `cargo xtask perf -p CRATE` builds
-them; runs them in turn on this machine, N rounds (3 when not given, 2 to 20)
+them; runs them in turn on this machine, N rounds (3 when not given, 3 to 20)
 in alternating order, one test at a time with their output shown; and compares
 the measurements they print as lines `perf: NAME VALUE UNIT`
 (`cortex_testkit::numbers::report`): each side's median over the rounds and its
@@ -55,6 +55,11 @@ const ROUNDS: usize = 3;
 
 /// The most rounds a run may ask for.
 const MOST_ROUNDS: usize = 20;
+
+/// The fewest: with two a side, two runs of one tree have ranges that do
+/// not overlap one time in three, and the base's cold first run is half of
+/// its median.
+const FEWEST_ROUNDS: usize = 3;
 
 /// What `cargo xtask perf-ab` was asked for.
 #[derive(Debug, PartialEq)]
@@ -95,9 +100,13 @@ impl Request {
                     request.rounds = text
                         .parse()
                         .ok()
-                        .filter(|rounds| (2..=MOST_ROUNDS).contains(rounds))
+                        .filter(|rounds| (FEWEST_ROUNDS..=MOST_ROUNDS).contains(rounds))
                         .ok_or_else(|| {
-                            format!("`--count {text}`: a number of rounds from 2 to {MOST_ROUNDS}")
+                            format!(
+                                "`--count {text}`: a number of rounds from {FEWEST_ROUNDS} to \
+                                 {MOST_ROUNDS} (with two, two runs of one tree read `apart` a \
+                                 third of the time)"
+                            )
                         })?;
                 }
                 "--cargo-profile" => {
@@ -617,8 +626,8 @@ mod tests {
         for (words, expected) in [
             (&["-p", "c"][..], "say which tree is the base"),
             (&["--base", "b"], "name the crates"),
-            (&["--base", "b", "-p", "c", "--count", "1"], "from 2 to 20"),
-            (&["--base", "b", "-p", "c", "--count", "21"], "from 2 to 20"),
+            (&["--base", "b", "-p", "c", "--count", "2"], "from 3 to 20"),
+            (&["--base", "b", "-p", "c", "--count", "21"], "from 3 to 20"),
             (
                 &["--base", "b", "-p", "c", "--cargo-profile", "ci"],
                 "release or dist",

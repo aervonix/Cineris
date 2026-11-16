@@ -830,14 +830,21 @@ pub(crate) mod pty {
             if console == 0 {
                 return Ok(());
             }
-            std::thread::Builder::new()
+            let closing = std::thread::Builder::new()
                 .name("close-pseudo-console".to_owned())
                 .spawn(move || {
                     // SAFETY: the handle was `self`'s and is taken out of it
                     // above, so nothing else uses it or closes it again.
                     unsafe { ClosePseudoConsole(console) };
-                })
-                .map(drop)
+                });
+            match closing {
+                Ok(_) => Ok(()),
+                Err(error) => {
+                    // Not closed: `self` keeps it, and `Drop` closes it.
+                    self.console = console;
+                    Err(error)
+                }
+            }
         }
     }
 
