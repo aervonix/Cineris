@@ -237,15 +237,12 @@ fn a_file_read_under_one_spelling_is_edited_under_another() {
     assert_eq!(ws.read_bytes("Src/new.rs"), b"one\ntwo\n");
     // And the names Windows gives a second meaning are refused when the
     // call is planned.
-    let devices = hostile::of(Kind::Reserved).into_iter().map(|name| name.text);
-    for path in devices.chain(
-        [
-            "notes.txt.",
-            "notes.txt::$DATA",
-            r"\\server\share\x.txt",
-        ]
-        .map(String::from),
-    ) {
+    let devices = hostile::of(Kind::Reserved)
+        .into_iter()
+        .map(|name| name.text);
+    for path in
+        devices.chain(["notes.txt.", "notes.txt::$DATA", r"\\server\share\x.txt"].map(String::from))
+    {
         let refused = ws.plan(
             &WriteTool::new(ws.editing()),
             json!({"path": path, "content": "x"}),
