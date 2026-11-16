@@ -64,3 +64,7 @@ An independent reviewer read the whole diff against the specification. Each find
 - **`- Owner: .` gave an empty owner, and a test's name of single colons passed:** both refused (`outstanding-an-owner-of-a-full-stop`, `outstanding-a-test-name-of-single-colons`); the full stop of an item's line has its break (`outstanding-a-line-without-its-full-stop`).
 - **The record said the index's lines were unchanged, and that parts were linked below:** corrected (two lines gained an owner; this step's record is one file).
 - **Left, as small:** a part's group may be any hyphenated name (`ci/` too), and its heading is not held to name the step.
+
+## The later pull requests
+
+Each later pull request of this step has its record in [parts/](parts/), one file each, in the convention item 1 made.
