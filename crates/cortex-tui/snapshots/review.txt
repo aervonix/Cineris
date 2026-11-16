@@ -1,0 +1,616 @@
+== 60 columns, unicode, true colour, dark — files, checks not run, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4|
+
+== 60 columns, unicode, true colour, dark — files, checks not run, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=#8D57FC b}…rser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+
+== 60 columns, unicode, true colour, dark — files, a round running, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · checks running · round 1 of 2|
+
+== 60 columns, unicode, true colour, dark — files, a round running, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · checks running · round 1 of 2|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=#8D57FC b}…rser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+  {fg=a8}checks running · round 1 of 2|
+  {fg=#7A3CFB}⣾{} {b}cargo test -p parser{fg=a8}  crates/parser|
+  {fg=#7A3CFB}⣾{} {b}cargo clippy -- -D warnings|
+
+== 60 columns, unicode, true colour, dark — files, a round ended, commands ran, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · {fg=a9}checks failed|
+
+== 60 columns, unicode, true colour, dark — files, a round ended, commands ran, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · {fg=a9}checks failed|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=#8D57FC b}…rser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+  {fg=a10}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a9}✗{} {b}cargo clippy -- -D warnings{}  {fg=a9}exit 101 · 8.1s{fg=a8}  2 warnin…|
+  {fg=a11}⊘{} {b}cargo deny check{}  {fg=a8}0.2s  the sandbox has no network|
+  {fg=a11}■{} {b}./slow-check{}  {fg=a9}timed out · 1m 0s|
+  {fg=a9}checks failed{fg=a8} · round 1 of 2|
+  {fg=a8}commands ran too: /view shows them|
+
+== 60 columns, unicode, true colour, dark — files, checks offered, collapsed
+◇ {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}−1{fg=a8} · checks not run: /verify runs them|
+
+== 60 columns, unicode, true colour, dark — files, checks offered, focused
+◇ {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}−1{fg=a8} · checks not run: /verify runs them|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=a8}checks not run: /verify runs them|
+  {fg=a8}·{} {fg=#8D57FC b}cargo test|
+
+== 60 columns, unicode, true colour, dark — checks alone, passed, collapsed
+◇ {b}Checks passed|
+
+== 60 columns, unicode, true colour, dark — checks alone, passed, focused
+◇ {b}Checks passed|
+  {fg=a10}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a10}checks passed{fg=a8} · round 1 of 2|
+
+== 60 columns, ascii, true colour, dark — files, checks not run, collapsed
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4|
+
+== 60 columns, ascii, true colour, dark — files, checks not run, focused
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=#8D57FC b}...er/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}-3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}-0|
+  assets/big.bin|
+
+== 60 columns, ascii, true colour, dark — files, a round running, collapsed
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | checks running | round 1 of 2|
+
+== 60 columns, ascii, true colour, dark — files, a round running, focused
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | checks running | round 1 of 2|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=#8D57FC b}...er/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}-3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}-0|
+  assets/big.bin|
+  {fg=a8}checks running | round 1 of 2|
+  {fg=#7A3CFB}|{} {b}cargo test -p parser{fg=a8}  crates/parser|
+  {fg=#7A3CFB}|{} {b}cargo clippy -- -D warnings|
+
+== 60 columns, ascii, true colour, dark — files, a round ended, commands ran, collapsed
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | {fg=a9}checks failed|
+
+== 60 columns, ascii, true colour, dark — files, a round ended, commands ran, focused
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | {fg=a9}checks failed|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=#8D57FC b}...er/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}-3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}-0|
+  assets/big.bin|
+  {fg=a10}+{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a9}x{} {b}cargo clippy -- -D warnings{}  {fg=a9}exit 101 | 8.1s{fg=a8}  2 warn...|
+  {fg=a11}-{} {b}cargo deny check{}  {fg=a8}0.2s  the sandbox has no network|
+  {fg=a11}#{} {b}./slow-check{}  {fg=a9}timed out | 1m 0s|
+  {fg=a9}checks failed{fg=a8} | round 1 of 2|
+  {fg=a8}commands ran too: /view shows them|
+
+== 60 columns, ascii, true colour, dark — files, checks offered, collapsed
+o {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}-1{fg=a8} | checks not run: /verify runs them|
+
+== 60 columns, ascii, true colour, dark — files, checks offered, focused
+o {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}-1{fg=a8} | checks not run: /verify runs them|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=a8}checks not run: /verify runs them|
+  {fg=a8}.{} {fg=#8D57FC b}cargo test|
+
+== 60 columns, ascii, true colour, dark — checks alone, passed, collapsed
+o {b}Checks passed|
+
+== 60 columns, ascii, true colour, dark — checks alone, passed, focused
+o {b}Checks passed|
+  {fg=a10}+{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a10}checks passed{fg=a8} | round 1 of 2|
+
+== 80 columns, unicode, true colour, dark — files, checks not run, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4|
+
+== 80 columns, unicode, true colour, dark — files, checks not run, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+
+== 80 columns, unicode, true colour, dark — files, a round running, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · checks running · round 1 of 2|
+
+== 80 columns, unicode, true colour, dark — files, a round running, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · checks running · round 1 of 2|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+  {fg=a8}checks running · round 1 of 2|
+  {fg=#7A3CFB}⣾{} {b}cargo test -p parser{fg=a8}  crates/parser|
+  {fg=#7A3CFB}⣾{} {b}cargo clippy -- -D warnings|
+
+== 80 columns, unicode, true colour, dark — files, a round ended, commands ran, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · {fg=a9}checks failed|
+
+== 80 columns, unicode, true colour, dark — files, a round ended, commands ran, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · {fg=a9}checks failed|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+  {fg=a10}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a9}✗{} {b}cargo clippy -- -D warnings{}  {fg=a9}exit 101 · 8.1s{fg=a8}  2 warnings|
+  {fg=a11}⊘{} {b}cargo deny check{}  {fg=a8}0.2s  the sandbox has no network|
+  {fg=a11}■{} {b}./slow-check{}  {fg=a9}timed out · 1m 0s|
+  {fg=a9}checks failed{fg=a8} · round 1 of 2|
+  {fg=a8}commands ran too: /view shows them|
+
+== 80 columns, unicode, true colour, dark — files, checks offered, collapsed
+◇ {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}−1{fg=a8} · checks not run: /verify runs them|
+
+== 80 columns, unicode, true colour, dark — files, checks offered, focused
+◇ {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}−1{fg=a8} · checks not run: /verify runs them|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=a8}checks not run: /verify runs them|
+  {fg=a8}·{} {fg=#8D57FC b}cargo test|
+
+== 80 columns, unicode, true colour, dark — checks alone, passed, collapsed
+◇ {b}Checks passed|
+
+== 80 columns, unicode, true colour, dark — checks alone, passed, focused
+◇ {b}Checks passed|
+  {fg=a10}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a10}checks passed{fg=a8} · round 1 of 2|
+
+== 80 columns, ascii, true colour, dark — files, checks not run, collapsed
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4|
+
+== 80 columns, ascii, true colour, dark — files, checks not run, focused
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}-3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}-0|
+  assets/big.bin|
+
+== 80 columns, ascii, true colour, dark — files, a round running, collapsed
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | checks running | round 1 of 2|
+
+== 80 columns, ascii, true colour, dark — files, a round running, focused
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | checks running | round 1 of 2|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}-3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}-0|
+  assets/big.bin|
+  {fg=a8}checks running | round 1 of 2|
+  {fg=#7A3CFB}|{} {b}cargo test -p parser{fg=a8}  crates/parser|
+  {fg=#7A3CFB}|{} {b}cargo clippy -- -D warnings|
+
+== 80 columns, ascii, true colour, dark — files, a round ended, commands ran, collapsed
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | {fg=a9}checks failed|
+
+== 80 columns, ascii, true colour, dark — files, a round ended, commands ran, focused
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | {fg=a9}checks failed|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}-3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}-0|
+  assets/big.bin|
+  {fg=a10}+{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a9}x{} {b}cargo clippy -- -D warnings{}  {fg=a9}exit 101 | 8.1s{fg=a8}  2 warnings|
+  {fg=a11}-{} {b}cargo deny check{}  {fg=a8}0.2s  the sandbox has no network|
+  {fg=a11}#{} {b}./slow-check{}  {fg=a9}timed out | 1m 0s|
+  {fg=a9}checks failed{fg=a8} | round 1 of 2|
+  {fg=a8}commands ran too: /view shows them|
+
+== 80 columns, ascii, true colour, dark — files, checks offered, collapsed
+o {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}-1{fg=a8} | checks not run: /verify runs them|
+
+== 80 columns, ascii, true colour, dark — files, checks offered, focused
+o {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}-1{fg=a8} | checks not run: /verify runs them|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=a8}checks not run: /verify runs them|
+  {fg=a8}.{} {fg=#8D57FC b}cargo test|
+
+== 80 columns, ascii, true colour, dark — checks alone, passed, collapsed
+o {b}Checks passed|
+
+== 80 columns, ascii, true colour, dark — checks alone, passed, focused
+o {b}Checks passed|
+  {fg=a10}+{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a10}checks passed{fg=a8} | round 1 of 2|
+
+== 120 columns, unicode, true colour, dark — files, checks not run, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4|
+
+== 120 columns, unicode, true colour, dark — files, checks not run, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+
+== 120 columns, unicode, true colour, dark — files, a round running, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · checks running · round 1 of 2|
+
+== 120 columns, unicode, true colour, dark — files, a round running, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · checks running · round 1 of 2|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+  {fg=a8}checks running · round 1 of 2|
+  {fg=#7A3CFB}⣾{} {b}cargo test -p parser{fg=a8}  crates/parser|
+  {fg=#7A3CFB}⣾{} {b}cargo clippy -- -D warnings|
+
+== 120 columns, unicode, true colour, dark — files, a round ended, commands ran, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · {fg=a9}checks failed|
+
+== 120 columns, unicode, true colour, dark — files, a round ended, commands ran, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · {fg=a9}checks failed|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+  {fg=a10}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a9}✗{} {b}cargo clippy -- -D warnings{}  {fg=a9}exit 101 · 8.1s{fg=a8}  2 warnings|
+  {fg=a11}⊘{} {b}cargo deny check{}  {fg=a8}0.2s  the sandbox has no network|
+  {fg=a11}■{} {b}./slow-check{}  {fg=a9}timed out · 1m 0s|
+  {fg=a9}checks failed{fg=a8} · round 1 of 2|
+  {fg=a8}commands ran too: /view shows them|
+
+== 120 columns, unicode, true colour, dark — files, checks offered, collapsed
+◇ {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}−1{fg=a8} · checks not run: /verify runs them|
+
+== 120 columns, unicode, true colour, dark — files, checks offered, focused
+◇ {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}−1{fg=a8} · checks not run: /verify runs them|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=a8}checks not run: /verify runs them|
+  {fg=a8}·{} {fg=#8D57FC b}cargo test|
+
+== 120 columns, unicode, true colour, dark — checks alone, passed, collapsed
+◇ {b}Checks passed|
+
+== 120 columns, unicode, true colour, dark — checks alone, passed, focused
+◇ {b}Checks passed|
+  {fg=a10}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a10}checks passed{fg=a8} · round 1 of 2|
+
+== 120 columns, ascii, true colour, dark — files, checks not run, collapsed
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4|
+
+== 120 columns, ascii, true colour, dark — files, checks not run, focused
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}-3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}-0|
+  assets/big.bin|
+
+== 120 columns, ascii, true colour, dark — files, a round running, collapsed
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | checks running | round 1 of 2|
+
+== 120 columns, ascii, true colour, dark — files, a round running, focused
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | checks running | round 1 of 2|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}-3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}-0|
+  assets/big.bin|
+  {fg=a8}checks running | round 1 of 2|
+  {fg=#7A3CFB}|{} {b}cargo test -p parser{fg=a8}  crates/parser|
+  {fg=#7A3CFB}|{} {b}cargo clippy -- -D warnings|
+
+== 120 columns, ascii, true colour, dark — files, a round ended, commands ran, collapsed
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | {fg=a9}checks failed|
+
+== 120 columns, ascii, true colour, dark — files, a round ended, commands ran, focused
+o {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}-4{fg=a8} | {fg=a9}checks failed|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=#8D57FC b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}-3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}-0|
+  assets/big.bin|
+  {fg=a10}+{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a9}x{} {b}cargo clippy -- -D warnings{}  {fg=a9}exit 101 | 8.1s{fg=a8}  2 warnings|
+  {fg=a11}-{} {b}cargo deny check{}  {fg=a8}0.2s  the sandbox has no network|
+  {fg=a11}#{} {b}./slow-check{}  {fg=a9}timed out | 1m 0s|
+  {fg=a9}checks failed{fg=a8} | round 1 of 2|
+  {fg=a8}commands ran too: /view shows them|
+
+== 120 columns, ascii, true colour, dark — files, checks offered, collapsed
+o {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}-1{fg=a8} | checks not run: /verify runs them|
+
+== 120 columns, ascii, true colour, dark — files, checks offered, focused
+o {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}-1{fg=a8} | checks not run: /verify runs them|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}-1|
+  {fg=a8}checks not run: /verify runs them|
+  {fg=a8}.{} {fg=#8D57FC b}cargo test|
+
+== 120 columns, ascii, true colour, dark — checks alone, passed, collapsed
+o {b}Checks passed|
+
+== 120 columns, ascii, true colour, dark — checks alone, passed, focused
+o {b}Checks passed|
+  {fg=a10}+{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a10}checks passed{fg=a8} | round 1 of 2|
+
+== 80 columns, unicode, true colour, light — files, checks not run, collapsed
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4|
+
+== 80 columns, unicode, true colour, light — files, checks not run, focused
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4|
+  src/lex.rs  {fg=a2 b}+5{} {fg=a1 b}−1|
+  {fg=#7A3CFB b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a2 b}+6{} {fg=a1 b}−3|
+  tests/lex.rs  {fg=a2 b}+1{} {fg=a1 b}−0|
+  assets/big.bin|
+
+== 80 columns, unicode, true colour, light — files, a round running, collapsed
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4{fg=a8} · checks running · round 1 of 2|
+
+== 80 columns, unicode, true colour, light — files, a round running, focused
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4{fg=a8} · checks running · round 1 of 2|
+  src/lex.rs  {fg=a2 b}+5{} {fg=a1 b}−1|
+  {fg=#7A3CFB b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a2 b}+6{} {fg=a1 b}−3|
+  tests/lex.rs  {fg=a2 b}+1{} {fg=a1 b}−0|
+  assets/big.bin|
+  {fg=a8}checks running · round 1 of 2|
+  {fg=#7A3CFB}⣾{} {b}cargo test -p parser{fg=a8}  crates/parser|
+  {fg=#7A3CFB}⣾{} {b}cargo clippy -- -D warnings|
+
+== 80 columns, unicode, true colour, light — files, a round ended, commands ran, collapsed
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4{fg=a8} · {fg=a1 b}checks failed|
+
+== 80 columns, unicode, true colour, light — files, a round ended, commands ran, focused
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4{fg=a8} · {fg=a1 b}checks failed|
+  src/lex.rs  {fg=a2 b}+5{} {fg=a1 b}−1|
+  {fg=#7A3CFB b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a2 b}+6{} {fg=a1 b}−3|
+  tests/lex.rs  {fg=a2 b}+1{} {fg=a1 b}−0|
+  assets/big.bin|
+  {fg=a2 b}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a1 b}✗{} {b}cargo clippy -- -D warnings{}  {fg=a1 b}exit 101 · 8.1s{fg=a8}  2 warnings|
+  {fg=a3 b}⊘{} {b}cargo deny check{}  {fg=a8}0.2s  the sandbox has no network|
+  {fg=a3 b}■{} {b}./slow-check{}  {fg=a1 b}timed out · 1m 0s|
+  {fg=a1 b}checks failed{fg=a8} · round 1 of 2|
+  {fg=a8}commands ran too: /view shows them|
+
+== 80 columns, unicode, true colour, light — files, checks offered, collapsed
+◇ {b}Changed 1 file{}  {fg=a2 b}+5{} {fg=a1 b}−1{fg=a8} · checks not run: /verify runs them|
+
+== 80 columns, unicode, true colour, light — files, checks offered, focused
+◇ {b}Changed 1 file{}  {fg=a2 b}+5{} {fg=a1 b}−1{fg=a8} · checks not run: /verify runs them|
+  src/lex.rs  {fg=a2 b}+5{} {fg=a1 b}−1|
+  {fg=a8}checks not run: /verify runs them|
+  {fg=a8}·{} {fg=#7A3CFB b}cargo test|
+
+== 80 columns, unicode, true colour, light — checks alone, passed, collapsed
+◇ {b}Checks passed|
+
+== 80 columns, unicode, true colour, light — checks alone, passed, focused
+◇ {b}Checks passed|
+  {fg=a2 b}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a2 b}checks passed{fg=a8} · round 1 of 2|
+
+== 80 columns, unicode, 16 colours, dark — files, checks not run, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4|
+
+== 80 columns, unicode, 16 colours, dark — files, checks not run, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+
+== 80 columns, unicode, 16 colours, dark — files, a round running, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · checks running · round 1 of 2|
+
+== 80 columns, unicode, 16 colours, dark — files, a round running, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · checks running · round 1 of 2|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+  {fg=a8}checks running · round 1 of 2|
+  {fg=a13}⣾{} {b}cargo test -p parser{fg=a8}  crates/parser|
+  {fg=a13}⣾{} {b}cargo clippy -- -D warnings|
+
+== 80 columns, unicode, 16 colours, dark — files, a round ended, commands ran, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · {fg=a9}checks failed|
+
+== 80 columns, unicode, 16 colours, dark — files, a round ended, commands ran, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · {fg=a9}checks failed|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+  {fg=a10}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a9}✗{} {b}cargo clippy -- -D warnings{}  {fg=a9}exit 101 · 8.1s{fg=a8}  2 warnings|
+  {fg=a11}⊘{} {b}cargo deny check{}  {fg=a8}0.2s  the sandbox has no network|
+  {fg=a11}■{} {b}./slow-check{}  {fg=a9}timed out · 1m 0s|
+  {fg=a9}checks failed{fg=a8} · round 1 of 2|
+  {fg=a8}commands ran too: /view shows them|
+
+== 80 columns, unicode, 16 colours, dark — files, checks offered, collapsed
+◇ {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}−1{fg=a8} · checks not run: /verify runs them|
+
+== 80 columns, unicode, 16 colours, dark — files, checks offered, focused
+◇ {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}−1{fg=a8} · checks not run: /verify runs them|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=a8}checks not run: /verify runs them|
+  {fg=a8}·{} {b}cargo test|
+
+== 80 columns, unicode, 16 colours, dark — checks alone, passed, collapsed
+◇ {b}Checks passed|
+
+== 80 columns, unicode, 16 colours, dark — checks alone, passed, focused
+◇ {b}Checks passed|
+  {fg=a10}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a10}checks passed{fg=a8} · round 1 of 2|
+
+== 80 columns, unicode, 16 colours, light — files, checks not run, collapsed
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4|
+
+== 80 columns, unicode, 16 colours, light — files, checks not run, focused
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4|
+  src/lex.rs  {fg=a2 b}+5{} {fg=a1 b}−1|
+  {fg=a5 b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a2 b}+6{} {fg=a1 b}−3|
+  tests/lex.rs  {fg=a2 b}+1{} {fg=a1 b}−0|
+  assets/big.bin|
+
+== 80 columns, unicode, 16 colours, light — files, a round running, collapsed
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4{fg=a8} · checks running · round 1 of 2|
+
+== 80 columns, unicode, 16 colours, light — files, a round running, focused
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4{fg=a8} · checks running · round 1 of 2|
+  src/lex.rs  {fg=a2 b}+5{} {fg=a1 b}−1|
+  {fg=a5 b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a2 b}+6{} {fg=a1 b}−3|
+  tests/lex.rs  {fg=a2 b}+1{} {fg=a1 b}−0|
+  assets/big.bin|
+  {fg=a8}checks running · round 1 of 2|
+  {fg=a5}⣾{} {b}cargo test -p parser{fg=a8}  crates/parser|
+  {fg=a5}⣾{} {b}cargo clippy -- -D warnings|
+
+== 80 columns, unicode, 16 colours, light — files, a round ended, commands ran, collapsed
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4{fg=a8} · {fg=a1 b}checks failed|
+
+== 80 columns, unicode, 16 colours, light — files, a round ended, commands ran, focused
+◇ {b}Changed 4 files{}  {fg=a2 b}+12{} {fg=a1 b}−4{fg=a8} · {fg=a1 b}checks failed|
+  src/lex.rs  {fg=a2 b}+5{} {fg=a1 b}−1|
+  {fg=a5 b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a2 b}+6{} {fg=a1 b}−3|
+  tests/lex.rs  {fg=a2 b}+1{} {fg=a1 b}−0|
+  assets/big.bin|
+  {fg=a2 b}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a1 b}✗{} {b}cargo clippy -- -D warnings{}  {fg=a1 b}exit 101 · 8.1s{fg=a8}  2 warnings|
+  {fg=a3 b}⊘{} {b}cargo deny check{}  {fg=a8}0.2s  the sandbox has no network|
+  {fg=a3 b}■{} {b}./slow-check{}  {fg=a1 b}timed out · 1m 0s|
+  {fg=a1 b}checks failed{fg=a8} · round 1 of 2|
+  {fg=a8}commands ran too: /view shows them|
+
+== 80 columns, unicode, 16 colours, light — files, checks offered, collapsed
+◇ {b}Changed 1 file{}  {fg=a2 b}+5{} {fg=a1 b}−1{fg=a8} · checks not run: /verify runs them|
+
+== 80 columns, unicode, 16 colours, light — files, checks offered, focused
+◇ {b}Changed 1 file{}  {fg=a2 b}+5{} {fg=a1 b}−1{fg=a8} · checks not run: /verify runs them|
+  src/lex.rs  {fg=a2 b}+5{} {fg=a1 b}−1|
+  {fg=a8}checks not run: /verify runs them|
+  {fg=a8}·{} {fg=a5 b}cargo test|
+
+== 80 columns, unicode, 16 colours, light — checks alone, passed, collapsed
+◇ {b}Checks passed|
+
+== 80 columns, unicode, 16 colours, light — checks alone, passed, focused
+◇ {b}Checks passed|
+  {fg=a2 b}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a2 b}checks passed{fg=a8} · round 1 of 2|
+
+== 80 columns, unicode, 256 colours, dark — files, checks not run, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4|
+
+== 80 columns, unicode, 256 colours, dark — files, checks not run, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=i99 b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+
+== 80 columns, unicode, 256 colours, dark — files, a round running, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · checks running · round 1 of 2|
+
+== 80 columns, unicode, 256 colours, dark — files, a round running, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · checks running · round 1 of 2|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=i99 b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+  {fg=a8}checks running · round 1 of 2|
+  {fg=i99}⣾{} {b}cargo test -p parser{fg=a8}  crates/parser|
+  {fg=i99}⣾{} {b}cargo clippy -- -D warnings|
+
+== 80 columns, unicode, 256 colours, dark — files, a round ended, commands ran, collapsed
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · {fg=a9}checks failed|
+
+== 80 columns, unicode, 256 colours, dark — files, a round ended, commands ran, focused
+◇ {b}Changed 4 files{}  {fg=a10}+12{} {fg=a9}−4{fg=a8} · {fg=a9}checks failed|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=i99 b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  {fg=a10}+6{} {fg=a9}−3|
+  tests/lex.rs  {fg=a10}+1{} {fg=a9}−0|
+  assets/big.bin|
+  {fg=a10}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a9}✗{} {b}cargo clippy -- -D warnings{}  {fg=a9}exit 101 · 8.1s{fg=a8}  2 warnings|
+  {fg=a11}⊘{} {b}cargo deny check{}  {fg=a8}0.2s  the sandbox has no network|
+  {fg=a11}■{} {b}./slow-check{}  {fg=a9}timed out · 1m 0s|
+  {fg=a9}checks failed{fg=a8} · round 1 of 2|
+  {fg=a8}commands ran too: /view shows them|
+
+== 80 columns, unicode, 256 colours, dark — files, checks offered, collapsed
+◇ {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}−1{fg=a8} · checks not run: /verify runs them|
+
+== 80 columns, unicode, 256 colours, dark — files, checks offered, focused
+◇ {b}Changed 1 file{}  {fg=a10}+5{} {fg=a9}−1{fg=a8} · checks not run: /verify runs them|
+  src/lex.rs  {fg=a10}+5{} {fg=a9}−1|
+  {fg=a8}checks not run: /verify runs them|
+  {fg=a8}·{} {fg=i99 b}cargo test|
+
+== 80 columns, unicode, 256 colours, dark — checks alone, passed, collapsed
+◇ {b}Checks passed|
+
+== 80 columns, unicode, 256 colours, dark — checks alone, passed, focused
+◇ {b}Checks passed|
+  {fg=a10}✓{} {b}cargo test -p parser{fg=a8}  crates/parser{}  {fg=a8}3.4s|
+  {fg=a10}checks passed{fg=a8} · round 1 of 2|
+
+== 80 columns, unicode, no colour, dark — files, checks not run, collapsed
+◇ {b}Changed 4 files{}  +12 {b}−4|
+
+== 80 columns, unicode, no colour, dark — files, checks not run, focused
+◇ {b}Changed 4 files{}  +12 {b}−4|
+  src/lex.rs  +5 {b}−1|
+  {b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  +6 {b}−3|
+  tests/lex.rs  +1 {b}−0|
+  assets/big.bin|
+
+== 80 columns, unicode, no colour, dark — files, a round running, collapsed
+◇ {b}Changed 4 files{}  +12 {b}−4{d} · checks running · round 1 of 2|
+
+== 80 columns, unicode, no colour, dark — files, a round running, focused
+◇ {b}Changed 4 files{}  +12 {b}−4{d} · checks running · round 1 of 2|
+  src/lex.rs  +5 {b}−1|
+  {b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  +6 {b}−3|
+  tests/lex.rs  +1 {b}−0|
+  assets/big.bin|
+  {d}checks running · round 1 of 2|
+  ⣾ {b}cargo test -p parser{d}  crates/parser|
+  ⣾ {b}cargo clippy -- -D warnings|
+
+== 80 columns, unicode, no colour, dark — files, a round ended, commands ran, collapsed
+◇ {b}Changed 4 files{}  +12 {b}−4{d} · {b}checks failed|
+
+== 80 columns, unicode, no colour, dark — files, a round ended, commands ran, focused
+◇ {b}Changed 4 files{}  +12 {b}−4{d} · {b}checks failed|
+  src/lex.rs  +5 {b}−1|
+  {b}crates/parser/src/lexer/numbers/separators_and_suffixes.rs{}  +6 {b}−3|
+  tests/lex.rs  +1 {b}−0|
+  assets/big.bin|
+  ✓ {b}cargo test -p parser{d}  crates/parser{}  {d}3.4s|
+  {b}✗{} {b}cargo clippy -- -D warnings{}  {b}exit 101 · 8.1s{d}  2 warnings|
+  ⊘ {b}cargo deny check{}  {d}0.2s  the sandbox has no network|
+  ■ {b}./slow-check{}  {b}timed out · 1m 0s|
+  {b}checks failed{d} · round 1 of 2|
+  {d}commands ran too: /view shows them|
+
+== 80 columns, unicode, no colour, dark — files, checks offered, collapsed
+◇ {b}Changed 1 file{}  +5 {b}−1{d} · checks not run: /verify runs them|
+
+== 80 columns, unicode, no colour, dark — files, checks offered, focused
+◇ {b}Changed 1 file{}  +5 {b}−1{d} · checks not run: /verify runs them|
+  src/lex.rs  +5 {b}−1|
+  {d}checks not run: /verify runs them|
+  {d}·{} {b}cargo test|
+
+== 80 columns, unicode, no colour, dark — checks alone, passed, collapsed
+◇ {b}Checks passed|
+
+== 80 columns, unicode, no colour, dark — checks alone, passed, focused
+◇ {b}Checks passed|
+  ✓ {b}cargo test -p parser{d}  crates/parser{}  {d}3.4s|
+  checks passed{d} · round 1 of 2|
+

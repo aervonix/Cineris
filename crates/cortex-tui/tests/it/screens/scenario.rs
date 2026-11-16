@@ -7,13 +7,16 @@
 //! A dialog is the application's own: [`App`] is given the request through
 //! a scripted core, in a window of the screen's size, and its live region
 //! is taken from the frame it draws once the dialog takes keys (the review
-//! of step 23). The rows other steps draw (the panels) are marked as not
-//! built yet, with the step that builds them.
+//! of step 23). The plan panel's rows are its view's (step 24), with the
+//! blank row the panels' block ends in. The rows other steps draw (the
+//! usage panel's limit line) are marked as not built yet, with the step
+//! that builds them.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use cortex_protocol::item::{Plan, PlanItem, PlanStatus};
 use cortex_protocol::jsonrpc::RequestId;
 use cortex_protocol::lease::Effect;
 use cortex_protocol::methods::{
@@ -22,8 +25,8 @@ use cortex_protocol::methods::{
 };
 use cortex_protocol::session::{RoleState, SandboxStatus, SessionSettings, SessionState};
 use cortex_protocol::{
-    CallId, Level, ModelId, ModelRole, Op, OpResult, ProviderId, ServerRequest, ServerResponse,
-    SessionId, Speed as Pace, Timestamp, TurnId,
+    CallId, Level, ModelId, ModelRole, Op, OpResult, PlanItemId, ProviderId, ServerRequest,
+    ServerResponse, SessionId, Speed as Pace, Timestamp, TurnId,
 };
 use cortex_term::{ColorDepth, Event, Key, KeyCode, Line};
 use cortex_tui::app::{App, GlyphSet, Inbound, Link, Open, Settings, Start, Ticket};
@@ -799,7 +802,27 @@ fn viewer_title() -> ViewerTitle {
 /// What the steering message says.
 const STEER: &str = "also run clippy when that's done";
 
-const PANELS: &str = "panels (step 24)";
+/// The usage panel's line of a limit near, which step 24's third pull
+/// request draws.
+const USAGE: &str = "the usage panel (step 24, third pull request)";
+
+/// Screen 4's plan: one item done, the one being worked on, two to do.
+fn screen_plan() -> Plan {
+    let item = |id: &str, text: &str, status| PlanItem {
+        id: PlanItemId::from(id),
+        text: text.to_owned(),
+        status,
+    };
+    Plan {
+        items: vec![
+            item("p1", "allow _ between digits", PlanStatus::Done),
+            item("p2", "reject a trailing _", PlanStatus::Active),
+            item("p3", "add a test for 1_000", PlanStatus::Pending),
+            item("p4", "run clippy", PlanStatus::Pending),
+        ],
+        revision: 1,
+    }
+}
 
 /// The screen `spec` on `background`.
 pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
@@ -945,8 +968,16 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
                 ),
             )])));
             screen.transcript(&mut transcript, 0);
-            screen.not_built(6, PANELS);
-            screen.not_built(1, PANELS);
+            // The plan, focused on the item being worked on, then the usage
+            // panel's line, and the blank row that ends the block.
+            screen.lines(
+                view::plan::plan_rows(&screen_plan(), Some(1), width, &look)
+                    .into_iter()
+                    .map(|row| row.line)
+                    .collect(),
+            );
+            screen.not_built(1, USAGE);
+            screen.lines(vec![Line::new()]);
             screen.input_running(true);
             screen.hint(&hint(
                 Hint::Running {

@@ -15,10 +15,21 @@
 //! | The workspace's paths, listed with the ignore rules | [`Input::set_files`] |
 //! | The slash commands | [`Input::set_commands`] |
 //! | Earlier prompts for this project | the [`HistoryStore`] given to [`Input::new`]; each prompt sent is pushed to it |
-//! | The key bindings from `[keys]` | the [`KeyMap`] given to [`Input::new`] ([`KeyMap::with_table`]) |
+//! | The key bindings from `[keys]` | the [`KeyMap`] given to [`Input::new`] ([`KeyMap::with_table`]), and a new one from a reload ([`Input::set_keymap`]) |
 //! | Whether a turn is running | [`Input::set_running`] |
 //! | The live tool boxes and the panels | [`Input::focus_mut`] and [`Ring::update`](crate::focus::Ring::update) |
 //! | The width of the editor's text | [`Input::set_width`] |
+//! | An item to reword in the prompt's own editor (a plan item, a project entry) | [`Input::begin_item_edit`] |
+//!
+//! **Since step 24,** a key that types a character and is not taken while a
+//! box or a panel has the focus goes to the editor, and the focus goes back
+//! to the input with it ([`Input::pass_to_editor`]); a panel's own keys
+//! ([`crate::keys::PANEL_KEYS`]) come back as [`Outcome::Panel`] while a
+//! panel has the focus, for the application to take or pass on. **An item
+//! edit** sets the draft aside and edits the item's text in the editor:
+//! `Enter` gives [`Outcome::ItemEdited`] (never a prompt, and nothing is
+//! pushed to the history) and `Esc` [`Outcome::ItemEditCancelled`]; either
+//! way the draft comes back as it was.
 
 use cortex_term::{Event, Key};
 
@@ -105,6 +116,30 @@ pub enum Outcome {
     Removed(String, usize),
     /// An action that has no meaning where the keyboard is now.
     Ignored(Action),
+    /// One of a panel's own keys ([`crate::keys::PANEL_KEYS`]) while that
+    /// panel has the focus (since step 24). The caller decides whether the
+    /// panel takes it; one it does not take that types a character goes to
+    /// the editor through [`Input::pass_to_editor`].
+    Panel(Target, Action),
+    /// `Enter` in an item edit ([`Input::begin_item_edit`]): the item's new
+    /// text. Nothing was pushed to the history, and the draft set aside is
+    /// back in the editor.
+    ItemEdited(String),
+    /// `Esc` in an item edit: nothing is saved, and the draft set aside is
+    /// back in the editor.
+    ItemEditCancelled,
+}
+
+/// An item being edited in the prompt's own editor (since step 24): the
+/// draft set aside, whole, and what `Enter` does.
+#[derive(Debug)]
+struct ItemEdit {
+    /// The prompt being written, with its cursor, its chips and its undo.
+    draft: Editor,
+    /// The first row of the draft in view.
+    scroll: usize,
+    /// What `Enter` does, as the hint row says it: `saves the item`.
+    hint: String,
 }
 
 /// The input's state. See the [module documentation](self).
@@ -139,6 +174,8 @@ pub struct Input {
     send_mode: SendMode,
     /// `Ctrl+C` was pressed once, idle and empty.
     quit_armed: bool,
+    /// An item being edited in the editor, and the draft set aside for it.
+    item_edit: Option<ItemEdit>,
 }
 
 impl Input {
@@ -166,6 +203,7 @@ impl Input {
             running: false,
             send_mode: SendMode::Steer,
             quit_armed: false,
+            item_edit: None,
         }
     }
 
@@ -211,6 +249,35 @@ impl Input {
     #[must_use]
     pub fn keymap(&self) -> &KeyMap {
         &self.keymap
+    }
+
+    /// Whether an item is being edited ([`begin_item_edit`]), and then the
+    /// keys the hint row shows for it: `enter saves the item`, `esc
+    /// cancels`, each key as the map names it.
+    ///
+    /// [`begin_item_edit`]: Self::begin_item_edit
+    #[must_use]
+    pub fn item_edit(&self) -> Option<Vec<String>> {
+        let edit = self.item_edit.as_ref()?;
+        let named = |action: Action, fallback: &str| {
+            self.keymap
+                .keys_of(action)
+                .into_iter()
+                .map(keys::name)
+                .find(|text| text == fallback)
+                .or_else(|| {
+                    self.keymap
+                        .keys_of(action)
+                        .into_iter()
+                        .next()
+                        .map(keys::name)
+                })
+                .unwrap_or_else(|| fallback.to_owned())
+        };
+        Some(vec![
+            format!("{} {}", named(Action::Submit, "enter"), edit.hint),
+            format!("{} cancels", named(Action::Stop, "esc")),
+        ])
     }
 
     /// Whether a turn is running.
@@ -272,6 +339,56 @@ impl Input {
     pub fn set_width(&mut self, width: usize) {
         self.width = width.max(1);
         self.keep_cursor_in_view();
+    }
+
+    /// Replaces the key map (since step 24: a reload of `[keys]`). A key
+    /// already taken was taken with the old map; the next is looked up in
+    /// this one. Whoever has a dialog or a panel up starts its readiness
+    /// again: what the person saw offered was the old map's.
+    pub fn set_keymap(&mut self, keymap: KeyMap) {
+        self.keymap = keymap;
+    }
+
+    /// Edits `text` in the prompt's own editor (since step 24): a plan
+    /// item being reworded, or added from nothing, a project entry. What is
+    /// being written is set aside whole (its text, chips, cursor and undo),
+    /// the editor holds `text` with the cursor at its end, and the input
+    /// takes the focus. Until it ends, `Enter` gives
+    /// [`Outcome::ItemEdited`] and `Esc` [`Outcome::ItemEditCancelled`],
+    /// and either brings the draft back; the hint row says so
+    /// ([`item_edit`](Self::item_edit)), `hint` being what `Enter` does
+    /// (`saves the item`). Every other rule of the editor holds, but an item
+    /// is one line, with no completion menu and no history. An item edit
+    /// already under way is ended first, as if cancelled.
+    pub fn begin_item_edit(&mut self, text: &str, hint: &str) {
+        self.cancel_item_edit();
+        let draft = std::mem::take(&mut self.editor);
+        let scroll = std::mem::take(&mut self.scroll);
+        self.editor.type_str(text);
+        self.item_edit = Some(ItemEdit {
+            draft,
+            scroll,
+            hint: hint.to_owned(),
+        });
+        self.search = None;
+        self.menu = None;
+        self.dismissed = None;
+        self.quit_armed = false;
+        self.focus.to_input();
+        self.after_edit();
+    }
+
+    /// Ends an item edit with nothing saved, the draft back in the editor.
+    /// Whether one was under way. For the caller, when what the item was
+    /// of is gone (another session is open, the panel closed).
+    pub fn cancel_item_edit(&mut self) -> bool {
+        let Some(edit) = self.item_edit.take() else {
+            return false;
+        };
+        self.editor = edit.draft;
+        self.scroll = edit.scroll;
+        self.after_edit();
+        true
     }
 
     /// Whether a turn is running. When it ends, the send mode goes back to
@@ -405,15 +522,47 @@ impl Input {
     fn key(&mut self, key: Key) -> Outcome {
         let contexts = self.contexts();
         if let Some(action) = self.keymap.lookup(&contexts, key) {
-            return self.act(action);
+            let outcome = self.act(action);
+            // A panel's own key that a focused box has no use for is a key
+            // the box does not take: one that types goes to the editor.
+            if matches!(outcome, Outcome::Ignored(ignored) if ignored.is_panel_key())
+                && !self.focus.on_input()
+            {
+                return self.pass_to_editor(key);
+            }
+            return outcome;
         }
         self.quit_armed = false;
+        if !self.focus.on_input() {
+            return self.pass_to_editor(key);
+        }
         let Some(c) = keys::typed(key) else {
             return Outcome::Nothing;
         };
-        if !self.focus.on_input() {
+        self.type_char(c)
+    }
+
+    /// A key that a focused box or panel did not take (since step 24): one
+    /// that types a character goes to the editor, and the focus goes back
+    /// to the input with it, so that no keystroke is lost and none is taken
+    /// by surprise; any other does nothing. [`Outcome::Focused`] when the
+    /// focus moved.
+    pub fn pass_to_editor(&mut self, key: Key) -> Outcome {
+        let Some(c) = keys::typed(key) else {
             return Outcome::Nothing;
+        };
+        self.quit_armed = false;
+        if self.focus.on_input() {
+            return self.type_char(c);
         }
+        self.focus.to_input();
+        self.type_char(c);
+        Outcome::Focused(Target::Input)
+    }
+
+    /// `c` typed where the input has the keyboard: the history search, a
+    /// picker's filter, or the editor.
+    fn type_char(&mut self, c: char) -> Outcome {
         if let Some(search) = &mut self.search {
             search.push(self.history.as_ref(), c);
             return Outcome::Changed;
@@ -496,10 +645,21 @@ impl Input {
             }
 
             // ---------------------------------------------------- editor
+            Action::Submit if self.item_edit.is_some() => {
+                let text = self.editor.expanded();
+                self.cancel_item_edit();
+                Outcome::ItemEdited(text)
+            }
             Action::Submit => self.submit(),
+            // An item is one line.
+            Action::NewLine if self.item_edit.is_some() => Outcome::Ignored(action),
             Action::NewLine => {
                 self.editor.new_line();
                 edited(self, true)
+            }
+            Action::Stop if self.item_edit.is_some() => {
+                self.cancel_item_edit();
+                Outcome::ItemEditCancelled
             }
             Action::Stop => {
                 if self.running {
@@ -551,6 +711,10 @@ impl Input {
                 if self.editor.up(width) {
                     return edited(self, true);
                 }
+                // An item being edited is not stepped away from.
+                if self.item_edit.is_some() {
+                    return Outcome::Nothing;
+                }
                 match self
                     .steps
                     .older(self.history.as_ref(), self.editor.fragment())
@@ -567,6 +731,9 @@ impl Input {
             Action::Down => {
                 if self.editor.down(width) {
                     return edited(self, true);
+                }
+                if self.item_edit.is_some() {
+                    return Outcome::Nothing;
                 }
                 match self
                     .steps
@@ -620,6 +787,7 @@ impl Input {
                 let changed = self.editor.expand_chip();
                 edited(self, changed)
             }
+            Action::HistorySearch if self.item_edit.is_some() => Outcome::Ignored(action),
             Action::HistorySearch => {
                 self.menu = None;
                 self.search = Some(Search::new());
@@ -705,6 +873,24 @@ impl Input {
             }
             Action::FocusUp => self.on_focus(action, |target| Outcome::Move(target, false)),
             Action::FocusDown => self.on_focus(action, |target| Outcome::Move(target, true)),
+            // A panel's own keys are the focused panel's to take or pass on;
+            // a box has no use for them.
+            Action::FocusSkip
+            | Action::FocusEdit
+            | Action::FocusAdd
+            | Action::FocusDelete
+            | Action::FocusMoveUp
+            | Action::FocusMoveDown
+            | Action::FocusAccept
+            | Action::FocusDisable
+            | Action::FocusPromote
+            | Action::FocusRefresh
+            | Action::FocusRange
+            | Action::FocusGroup
+            | Action::FocusClose => match self.focus.focused() {
+                target @ Target::Panel(_) => Outcome::Panel(target, action),
+                Target::Input | Target::ToolBox(_) => Outcome::Ignored(action),
+            },
 
             // ---------------------------------------------------- dialog
             // A dialog's keys are the dialog's: the input never has them.
@@ -910,6 +1096,12 @@ impl Input {
         {
             return;
         }
+        // An item being edited is text, not a prompt: `/` and `@` open
+        // nothing, and `Enter` saves it.
+        if self.item_edit.is_some() {
+            self.menu = None;
+            return;
+        }
         let trigger = complete::trigger(self.editor.text(), self.editor.cursor());
         let file_menu = matches!(trigger, Some(Trigger::File { .. }));
         if !matches!(&trigger, Some(Trigger::File { start, .. }) if self.unlisted == Some(*start)) {
@@ -1021,3 +1213,6 @@ fn same_place(a: &Trigger, b: &Trigger) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests;

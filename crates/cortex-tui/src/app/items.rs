@@ -126,6 +126,15 @@ impl Mapper {
         &self.last_answer
     }
 
+    /// The round that holds `call`, by the number the viewer counts boxes
+    /// with (since step 24): rounds are numbered from 1 in the order their
+    /// boxes were pushed, which is the order they commit in. Known until
+    /// the turn ends.
+    #[must_use]
+    pub(crate) fn round_of(&self, call: &CallId) -> Option<u64> {
+        self.calls.get(call).map(|place| place.round)
+    }
+
     /// The rounds whose boxes are live, in the order drawn, by the numbers
     /// the focus ring knows them by.
     pub(crate) fn live_rounds(&mut self, transcript: &mut Transcript) -> Vec<u64> {

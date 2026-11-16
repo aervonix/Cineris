@@ -35,6 +35,8 @@ pub(crate) mod dialog;
 mod files;
 mod items;
 pub mod link;
+mod panels;
+mod ready;
 mod state;
 mod tools;
 mod wording;
