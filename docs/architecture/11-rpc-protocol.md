@@ -151,7 +151,7 @@ The first-release set. Each maps to one `Op`.
 | `initialize` | Handshake. |
 | `session/new` | Create a session: workspace, settings (models per role, reasoning level, speed, level), title, configuration overrides, and where its commands start when that is below the root (`cwd`, since the follow-ups of step 23; refused with `invalid_cwd` when it is not inside the workspace). |
 | `session/open` | Open a stored session by id. Returns its metadata and current state. |
-| `session/list` | List stored sessions for a workspace, the one added to last first (by `updated_at`). |
+| `session/list` | List stored sessions for a workspace, the one added to last first (by `updated_at`). Paged by a cursor that is the last summary given (since step 27): a page holds what comes after it in that order. |
 | `session/read` | Read items of a session, paged, from the log, or one item by id. Also used to resynchronise: an item in progress comes back with the content it has so far, and the result says which items are incomplete. |
 | `session/fork`, `session/rewind`, `session/undo` | Branching, as in [07-sessions-and-context.md](07-sessions-and-context.md). `session/undo` (since step 23) steps back before the last turn, its first included, and records the step as an undo. A rewind or an undo that would put back a file edited since may ask a question first (below, "As built in step 23"). |
 | `session/close` | Stop using a session on this connection. |
@@ -330,6 +330,7 @@ The server's first part: `cortex serve --stdio` (`cortex-rpc`; `docs/steps/27/an
 - **Closing a view, as recommended, pending the owner's word** (`cortex-core`; the open items [an-observer-that-ends-a-session](../outstanding/an-observer-that-ends-a-session.md) and [a-closed-view-can-still-answer](../outstanding/a-closed-view-can-still-answer.md)).
   - An observer's `session/close` or disconnect never ends a session: only a client that may drive it ends one, when no other client has it open. Outside `--socket` an observer is never the last client of a session, so nothing else changes.
   - A client that closes its view of a session leaves the session's open questions, as one that disconnects does: its answer to them is refused (`role_not_allowed`), a question that ends with its askers and has none left ends as no answer, and opening the session again puts what is still open to it again.
+- **`session/list` pages by the last summary given** (`cortex-core`), not by position. The cursor is that summary's `updated_at` and id, as opaque text, and the next page holds what comes after it in the list's order (the one used longer ago, the id breaking a tie). A session used between two pages moves ahead of the cursor and heads the next listing; every other session is listed once, none twice and none skipped. A cursor the server did not give is refused (`invalid_cursor`). No protocol type changed.
 - **The conformance test** runs one list of scenarios (`cortex_testkit::conformance`) in process, over the connection's in-memory ends, and through the real binary's `serve --stdio`, and compares what the client was sent.
 
 ## Network listening

@@ -1,8 +1,0 @@
-`session/list`'s cursor is a position, so a session used between two pages can be skipped or listed twice.
-
-- Area: cortex-core
-- Owner: step 27
-
-| Item | Who | When |
-|---|---|---|
-| **`session/list` pages by position, so a session used between two pages can be skipped or listed twice** (found by the review of step 23). The cursor is an index into the list ordered by `updated_at` with the id breaking ties (`crates/cortex-core/src/core.rs`, `Op::SessionList`); a session updated while a client pages moves to the front, and every session after it shifts by one. One client listing its own sessions rarely meets it; a second client (step 27's `attach`, a server with several front ends) will. Recommendation: make the cursor the last summary's (`updated_at`, id), and list what comes after it in that order; the cursor is opaque text in the protocol, so this needs no new protocol version. | Step 27 (several clients) | With step 27 |

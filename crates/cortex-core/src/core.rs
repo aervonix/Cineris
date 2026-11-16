@@ -1301,17 +1301,30 @@ impl Core {
             Op::SessionList(params) => {
                 let sessions = self.list(params.workspace).await?;
                 let limit = params.limit.map_or(usize::MAX, |limit| limit as usize);
-                let start = params
-                    .cursor
-                    .as_deref()
-                    .and_then(|cursor| cursor.parse::<usize>().ok())
-                    .unwrap_or(0);
-                let page: Vec<SessionSummary> =
-                    sessions.iter().skip(start).take(limit).cloned().collect();
-                let next = start + page.len();
+                // What comes after the last summary of the page before, in
+                // the list's order: a session used between two pages moves
+                // ahead of the cursor, and nothing after it moves (the
+                // review of step 23; settled in step 27).
+                let after = match params.cursor.as_deref() {
+                    Some(cursor) => Some(ListCursor::read(cursor)?),
+                    None => None,
+                };
+                let page: Vec<SessionSummary> = sessions
+                    .iter()
+                    .filter(|summary| after.as_ref().is_none_or(|after| after.is_before(summary)))
+                    .take(limit)
+                    .cloned()
+                    .collect();
+                let more = page.last().is_some_and(|last| {
+                    let at = ListCursor::of(last);
+                    sessions.iter().any(|summary| at.is_before(summary))
+                });
                 Ok(OpResult::SessionList(SessionListResult {
+                    next_cursor: page
+                        .last()
+                        .filter(|_| more)
+                        .map(|last| ListCursor::of(last).text()),
                     sessions: page,
-                    next_cursor: (next < sessions.len()).then(|| next.to_string()),
                 }))
             }
             Op::SessionRead(params) => {
@@ -2314,6 +2327,62 @@ impl Core {
     }
 }
 
+/// Where a page of `session/list` ended: the last summary's `updated_at`
+/// and id, which order the list (the one used last first, the id breaking a
+/// tie). As text it is the cursor a client is given, opaque to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ListCursor {
+    updated_at: cortex_base::UtcTime,
+    session: SessionId,
+}
+
+impl ListCursor {
+    /// The time a summary was last used, as the list orders it: a time
+    /// that cannot be read is the earliest.
+    fn time(stamp: &cortex_protocol::Timestamp) -> cortex_base::UtcTime {
+        cortex_base::UtcTime::parse(stamp.as_str()).unwrap_or(cortex_base::UtcTime::UNIX_EPOCH)
+    }
+
+    fn of(summary: &SessionSummary) -> Self {
+        Self {
+            updated_at: Self::time(&summary.updated_at),
+            session: summary.session_id.clone(),
+        }
+    }
+
+    /// Whether `summary` comes after this place in the list: used longer
+    /// ago, or at the same time with a smaller id.
+    fn is_before(&self, summary: &SessionSummary) -> bool {
+        let time = Self::time(&summary.updated_at);
+        time < self.updated_at || (time == self.updated_at && summary.session_id < self.session)
+    }
+
+    fn text(&self) -> String {
+        format!("{} {}", self.updated_at, self.session)
+    }
+
+    /// The cursor a client sent back.
+    fn read(text: &str) -> Result<Self, OpError> {
+        let refused = || {
+            error(
+                ErrorKind::Usage,
+                "invalid_cursor",
+                "That cursor is not one this server gave for `session/list`: list again from \
+                 the start.",
+            )
+        };
+        let (time, session) = text.split_once(' ').ok_or_else(refused)?;
+        let updated_at = cortex_base::UtcTime::parse(time).map_err(|_| refused())?;
+        if session.is_empty() {
+            return Err(refused());
+        }
+        Ok(Self {
+            updated_at,
+            session: SessionId::new(session),
+        })
+    }
+}
+
 fn session_error(failure: &cortex_session::SessionError) -> OpError {
     Box::new(cortex_base::Classified::to_error_data(failure))
 }
@@ -2420,4 +2489,47 @@ fn config_overrides(
         &mut overrides,
     )?;
     Ok(overrides)
+}
+
+#[cfg(test)]
+mod tests {
+    use cortex_protocol::Timestamp;
+
+    use super::*;
+
+    fn summary(id: &str, at: &str) -> SessionSummary {
+        SessionSummary {
+            session_id: SessionId::new(id),
+            workspace: "/work/app".to_owned(),
+            title: None,
+            created_at: Timestamp::from("2026-11-13T09:00:00Z"),
+            updated_at: Timestamp::from(at),
+            parent: None,
+            model: None,
+            turns: 1,
+        }
+    }
+
+    /// A page of `session/list` after a cursor holds what comes after the
+    /// last summary of the page before, in the list's order: used longer
+    /// ago, or at the same moment with a smaller id. A time is compared as
+    /// a time, whatever its spelling, and the cursor reads back as it was
+    /// written.
+    #[test]
+    fn a_list_cursor_gives_what_comes_after_it_ties_broken_by_the_id() {
+        let at = ListCursor::of(&summary("s_b", "2026-11-13T10:00:00Z"));
+        let after = |id: &str, time: &str| at.is_before(&summary(id, time));
+        assert!(after("s_z", "2026-11-13T09:59:59Z"), "used longer ago");
+        assert!(after("s_a", "2026-11-13T10:00:00Z"), "a tie, a smaller id");
+        assert!(after("s_a", "2026-11-13T11:00:00+01:00"), "the same moment");
+        assert!(!after("s_b", "2026-11-13T10:00:00Z"), "the cursor's own");
+        assert!(!after("s_c", "2026-11-13T10:00:00Z"), "a tie, a larger id");
+        assert!(!after("s_a", "2026-11-13T10:00:01Z"), "used since");
+
+        assert_eq!(ListCursor::read(&at.text()).unwrap(), at);
+        for wrong in ["", "2", "s_b", "2026-11-13T10:00:00Z", "yesterday s_b"] {
+            let refused = ListCursor::read(wrong).unwrap_err();
+            assert_eq!(refused.code, "invalid_cursor", "{wrong:?}");
+        }
+    }
 }

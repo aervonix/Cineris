@@ -253,3 +253,32 @@ find: !open.ends_with_askers || open.asked.iter().any(|asked| clients.contains_k
 replace: !open.ends_with_askers || !clients.is_empty()
 caught-by:
     cortex-core::it closing::an_undos_question_ends_when_its_asker_closes_its_view
+
+# ------------------------------------------------- paging
+
+[break] the-list-cursor-is-ignored
+rule: A page of `session/list` holds what comes after the last summary of the page before, in the list's order.
+file: crates/cortex-core/src/core.rs
+in: handle
+find: .is_none_or(|after| after.is_before(summary))
+replace: .is_none_or(|after| after.is_before(summary) || !after.session.as_str().is_empty())
+caught-by:
+    cortex-core::it turns::the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages
+
+[break] the-lists-tie-is-not-broken-by-the-id
+rule: Two sessions used at the same moment are told apart by their ids, so a page boundary between them skips neither.
+file: crates/cortex-core/src/core.rs
+in: ListCursor::is_before
+find: time < self.updated_at || (time == self.updated_at && summary.session_id < self.session)
+replace: time < self.updated_at
+caught-by:
+    cortex-core core::tests::a_list_cursor_gives_what_comes_after_it_ties_broken_by_the_id
+
+[break] the-list-says-there-is-no-more
+rule: A page that has sessions after it gives the cursor to them.
+file: crates/cortex-core/src/core.rs
+in: handle
+find: sessions.iter().any(|summary| at.is_before(summary))
+replace: sessions.iter().any(|summary| at.is_before(summary) && summary.turns == u64::MAX)
+caught-by:
+    cortex-core::it turns::the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages
