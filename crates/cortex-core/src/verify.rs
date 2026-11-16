@@ -404,7 +404,7 @@ pub(crate) fn too_long(
 /// A length of time as the reports say it.
 fn shown_time(time: Duration) -> String {
     let seconds = time.as_secs();
-    if seconds >= 60 && seconds % 60 == 0 {
+    if seconds >= 60 && seconds.is_multiple_of(60) {
         format!("{}m", seconds / 60)
     } else if seconds >= 60 {
         format!("{}m {}s", seconds / 60, seconds % 60)
@@ -919,10 +919,10 @@ impl CoreVerifier {
                     Ended::Passed | Ended::Flaky => {
                         memory.failing.retain(|held| held.key() != check.key());
                     }
-                    Ended::Failed => {
-                        if !memory.failing.iter().any(|held| held.key() == check.key()) {
-                            memory.failing.push(check.clone());
-                        }
+                    Ended::Failed
+                        if !memory.failing.iter().any(|held| held.key() == check.key()) =>
+                    {
+                        memory.failing.push(check.clone());
                     }
                     _ => {}
                 }

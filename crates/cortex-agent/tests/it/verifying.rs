@@ -164,11 +164,18 @@ fn a_round_whose_checks_did_not_all_run_ends_the_turn_incomplete() {
     assert_eq!(world.provider.requests().len(), 2);
 }
 
+/// What a round was told: the turn's number, the round's, the most rounds,
+/// the time the limits leave, and the time earlier rounds took.
+type Place = (u32, u32, u32, Option<Duration>, Duration);
+
+/// How a test's verifier ends a round.
+type Ending = Box<dyn Fn(&VerifyCx<'_>) -> VerifyOutcome + Send + Sync>;
+
 /// A verifier that keeps what each round was told, and ends each round
 /// with what `then` says.
 struct Told {
-    seen: std::sync::Mutex<Vec<(u32, u32, u32, Option<Duration>, Duration)>>,
-    then: Box<dyn Fn(&VerifyCx<'_>) -> VerifyOutcome + Send + Sync>,
+    seen: std::sync::Mutex<Vec<Place>>,
+    then: Ending,
 }
 
 impl Verifier for Told {
