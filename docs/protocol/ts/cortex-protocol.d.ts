@@ -610,6 +610,8 @@ export interface HeadlessResult {
   tool_calls: number;
   /** Tokens, by class. */
   usage: TokenUsage;
+  /** What the project's checks said of the run's turn (since step 19). Absent when the turn ended with no verdict: it was interrupted, or ended another way before any round of checks ran. */
+  verification?: HeadlessVerification | null;
 }
 
 /** The first line of `jsonl`: which session the run is, on which model, in which workspace. */
@@ -622,6 +624,16 @@ export interface HeadlessStart {
   session_id: SessionId;
   /** The workspace root: an absolute path. */
   workspace: string;
+}
+
+/** What the project's checks said of a headless run's turn (`docs/architecture/10-headless.md`, "`json`"; since step 19). */
+export interface HeadlessVerification {
+  /** The checks of the last round that ran, as each ended. */
+  checks?: Array<CheckReport>;
+  /** How many rounds of checks ran. */
+  rounds?: number;
+  /** The turn's verdict, as `turn.completed` gave it. */
+  verdict: Verification;
 }
 
 /** An image. Input only. */

@@ -2293,6 +2293,17 @@
         "usage": {
           "$ref": "#/$defs/TokenUsage",
           "description": "Tokens, by class."
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HeadlessVerification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the project's checks said of the run's turn (since step 19).\nAbsent when the turn ended with no verdict: it was interrupted, or\nended another way before any round of checks ran."
         }
       },
       "required": [
@@ -2335,6 +2346,33 @@
         "session_id",
         "model",
         "workspace"
+      ],
+      "type": "object"
+    },
+    "HeadlessVerification": {
+      "description": "What the project's checks said of a headless run's turn\n(`docs/architecture/10-headless.md`, \"`json`\"; since step 19).",
+      "properties": {
+        "checks": {
+          "description": "The checks of the last round that ran, as each ended.",
+          "items": {
+            "$ref": "#/$defs/CheckReport"
+          },
+          "type": "array"
+        },
+        "rounds": {
+          "default": 0,
+          "description": "How many rounds of checks ran.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "verdict": {
+          "$ref": "#/$defs/Verification",
+          "description": "The turn's verdict, as `turn.completed` gave it."
+        }
+      },
+      "required": [
+        "verdict"
       ],
       "type": "object"
     },
