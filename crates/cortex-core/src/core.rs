@@ -338,8 +338,13 @@ pub(crate) struct Live {
     pub(crate) template: Mutex<EngineTemplate>,
     pub(crate) images: Arc<dyn ImageSource>,
     /// The session's configuration: what is in force, and what a reload
-    /// works from (step 24).
+    /// works from (step 24). Locked only to read or commit.
     pub(crate) config: Mutex<crate::reload::SessionConfig>,
+    /// The files the configuration was read from, stamped: locked only by a
+    /// reload, across its reads.
+    pub(crate) watched: Mutex<crate::reload::Watched>,
+    /// One reload of the session at a time, from its look to its commit.
+    pub(crate) reloading: tokio::sync::Mutex<()>,
     /// The accounts the ledger draws on, the lease's first.
     pub(crate) accounts: Mutex<Vec<cortex_agent::Account>>,
     /// The session's verifier, for `verify/run`, whose settings a reload
@@ -744,6 +749,7 @@ impl Core {
             repo,
             knowledge,
             config,
+            watched,
             verifier,
             accounts,
             shell_live,
@@ -783,6 +789,8 @@ impl Core {
             template: Mutex::new(template),
             images,
             config: Mutex::new(config),
+            watched: Mutex::new(watched),
+            reloading: tokio::sync::Mutex::new(()),
             accounts: Mutex::new(accounts),
             verifier,
             shell_live,

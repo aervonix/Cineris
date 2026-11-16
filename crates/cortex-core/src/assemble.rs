@@ -215,6 +215,8 @@ pub(crate) struct Assembled {
     /// What a reload of the configuration works from and changes (step
     /// 24): the configuration in force and how it was loaded.
     pub(crate) config: crate::reload::SessionConfig,
+    /// The files the session's configuration was read from, stamped.
+    pub(crate) watched: crate::reload::Watched,
     /// The session's verifier, which `verify/run` asks first whether any
     /// check could run, and whose settings a reload changes.
     pub(crate) verifier: Arc<crate::verify::CoreVerifier>,
@@ -299,6 +301,10 @@ pub(crate) struct Trust {
     /// trusts the project.
     repository: bool,
     loaded: Loaded,
+    /// The files `loaded` was read from, stamped as they were read: what a
+    /// reload of the session looks at (step 24). `None` where the trust was
+    /// worked out otherwise; the session's first reload then makes it.
+    watched: Option<cortex_config::LiveConfig>,
     /// What went wrong reading the trust store, for the user.
     problem: Option<String>,
     /// What the user has said of the project, for a front end's status.
@@ -725,6 +731,7 @@ fn trusted_unkept(
             rules: true,
             repository: true,
             loaded: peek,
+            watched: None,
             problem: Some(format!(
                 "Your answer could not be kept, so this project is trusted for this session \
                  only, and will be asked about again: {failure}"
@@ -736,6 +743,7 @@ fn trusted_unkept(
             rules: false,
             repository: true,
             loaded: load(false, None)?,
+            watched: None,
             problem: Some(format!(
                 "Your answer could not be kept, so this project is trusted for this session \
                  only; its permission rules changed while you were asked, so its settings and \
@@ -770,6 +778,8 @@ fn trust(
     root: &AbsPath,
     options: &LoadOptions,
 ) -> Result<Trust, Box<ErrorData>> {
+    // Loaded with its files stamped as they are read, for the session's
+    // reloads to look at later: no load of its own.
     let load = |trusted: bool| {
         let mut options = options.clone();
         options.trust = if trusted {
@@ -777,20 +787,25 @@ fn trust(
         } else {
             cortex_config::ProjectTrust::Untrusted
         };
-        cortex_config::load(&options).map_err(|failure| {
-            Box::new(ErrorData::new(
-                ErrorKind::Config,
-                "invalid_configuration",
-                failure.render(&inner.options.env),
-            ))
-        })
+        cortex_config::LiveConfig::start(options, Arc::clone(&inner.options.clock)).map_err(
+            |failure| {
+                Box::new(ErrorData::new(
+                    ErrorKind::Config,
+                    "invalid_configuration",
+                    failure.render(&inner.options.env),
+                ))
+            },
+        )
     };
+    let made = |live: cortex_config::LiveConfig| ((*live.current()).clone(), Some(live));
     if inner.options.trust_project {
         // The user's own command line says so, for this run.
+        let (loaded, watched) = made(load(true)?);
         return Ok(Trust {
             rules: true,
             repository: true,
-            loaded: load(true)?,
+            loaded,
+            watched,
             problem: None,
             standing: TrustStanding::ForTheRun,
         });
@@ -827,10 +842,12 @@ fn trust(
         } else {
             TrustStanding::Untrusted
         };
+        let (loaded, watched) = made(load(false)?);
         return Ok(Trust {
             rules: false,
             repository: false,
-            loaded: load(false)?,
+            loaded,
+            watched,
             problem,
             standing,
         });
@@ -852,11 +869,13 @@ fn trust(
             ))
         })
     };
-    if stored.project_rules_approved(&pinned_rules(&peek, &with_profile)?) {
+    if stored.project_rules_approved(&pinned_rules(&peek.current(), &with_profile)?) {
+        let (loaded, watched) = made(peek);
         Ok(Trust {
             rules: true,
             repository: true,
-            loaded: peek,
+            loaded,
+            watched,
             problem,
             standing: TrustStanding::Trusted,
         })
@@ -864,10 +883,12 @@ fn trust(
         // The user still trusts the project; what they have not seen is
         // its rules as they are now. What the rules could loosen is set
         // aside, and what has nothing to do with them is not.
+        let (loaded, watched) = made(load(false)?);
         Ok(Trust {
             rules: false,
             repository: true,
-            loaded: load(false)?,
+            loaded,
+            watched,
             problem: Some(
                 "This project's permission rules have changed since it was trusted, so its \
                  settings and its allow rules are set aside until the change is approved."
@@ -1106,6 +1127,43 @@ pub(crate) fn reloaded_parts(
     parts.trusted = trusted;
     parts.repository_trusted = repository_trusted;
     parts
+}
+
+/// Whether the project's rules in `loaded`, a configuration loaded with the
+/// project trusted, are the ones the trust store pinned: checked on what a
+/// reload actually loaded, after the judgement that let it load trusted, so
+/// that a file written in between is never in force unchecked (the review
+/// of step 24's first part). `false` when it cannot be told. Blocks.
+pub(crate) fn pins_approved(
+    inner: &Inner,
+    state: Option<&StateDir>,
+    root: &AbsPath,
+    loaded: &Loaded,
+    options: &LoadOptions,
+) -> bool {
+    let Some(state) = state else {
+        return false;
+    };
+    let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
+    let Ok(stored) = store.project(&root.project_key()) else {
+        return false;
+    };
+    if !stored.is_trusted() {
+        return false;
+    }
+    let with_profile = |profile: &str| {
+        let mut options = options.clone();
+        options.trust = cortex_config::ProjectTrust::Trusted;
+        options.profile = Some(profile.to_owned());
+        cortex_config::load(&options).map_err(|failure| {
+            Box::new(ErrorData::new(
+                ErrorKind::Config,
+                "invalid_configuration",
+                failure.render(&inner.options.env),
+            ))
+        })
+    };
+    pinned_rules(loaded, &with_profile).is_ok_and(|pins| stored.project_rules_approved(&pins))
 }
 
 /// The project's trust now, judged as a start judges it (`trust`), and
@@ -1577,6 +1635,7 @@ pub(crate) fn assemble(
         rules: rules_trusted,
         repository: repository_trusted,
         loaded,
+        watched,
         problem,
         standing,
     } = match looked {
@@ -2297,9 +2356,9 @@ pub(crate) fn assemble(
             },
             standing,
             root.clone(),
-            state_dir,
-            &inner.options,
+            state_dir.clone(),
         ),
+        watched: crate::reload::Watched::new(watched, state_dir.as_ref(), &inner.options),
         verifier,
         accounts,
         shell_live,

@@ -36,13 +36,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
-use cortex_agent::{Compaction, EpochChange, EpochContext, Reconfigure};
+use cortex_agent::{Compaction, EpochChange, EpochContext, Reconfigure, RoleModel};
 use cortex_base::{AbsPath, SharedClock, WatchList};
 use cortex_config::schema::Effect;
 use cortex_config::{KeyPath, LiveConfig, LoadOptions, Loaded, Override, ProjectTrust, Reload};
 use cortex_protocol::ErrorKind;
 use cortex_protocol::event::{ConfigChanged, Event};
 use cortex_protocol::methods::{ClientRole, ConfigReloadParams, ConfigReloadResult};
+use cortex_protocol::model::ModelRole;
 use cortex_protocol::session::TrustStanding;
 
 use crate::assemble;
@@ -67,7 +68,8 @@ pub(crate) struct Trusted {
     pub(crate) repository: bool,
 }
 
-/// What a session's configuration is loaded from, and what is in force.
+/// What a session's configuration is loaded from, and what is in force: a
+/// lock held only to read or to commit, never across a file's read.
 pub(crate) struct SessionConfig {
     /// How it is loaded, without the session's own choices.
     options: LoadOptions,
@@ -79,16 +81,11 @@ pub(crate) struct SessionConfig {
     latest: Arc<Loaded>,
     /// The keys whose values in `latest` wait, and for what.
     waiting: BTreeMap<KeyPath, Effect>,
-    /// The files of the last load, stamped: made by the first reload.
-    live: Option<LiveConfig>,
-    /// The trust store's file, stamped.
-    trust_file: Option<WatchList>,
     /// The trust in force.
     trusted: Trusted,
     standing: TrustStanding,
     root: AbsPath,
     state: Option<cortex_config::StateDir>,
-    clock: SharedClock,
     /// The error last said, so that a broken file is said once, and again
     /// only when asked (`/reload`) or once it has changed.
     reported: Option<String>,
@@ -103,14 +100,41 @@ impl std::fmt::Debug for SessionConfig {
     }
 }
 
+/// The files a session's configuration was read from, and the trust
+/// store's, each stamped: what a reload looks at. Only a reload, which holds
+/// the session's reload lock, takes this lock, across the reads it makes.
+pub(crate) struct Watched {
+    live: Option<LiveConfig>,
+    trust_file: Option<WatchList>,
+    clock: SharedClock,
+}
+
+impl Watched {
+    /// The session's, made from the files its configuration was read from
+    /// (`None`: the first reload reads them again) and the trust store's.
+    pub(crate) fn new(
+        live: Option<LiveConfig>,
+        state: Option<&cortex_config::StateDir>,
+        core: &CoreOptions,
+    ) -> Self {
+        let clock = Arc::clone(&core.clock);
+        let trust_file = state.map(|state| {
+            let mut watch = WatchList::new(Arc::clone(&clock));
+            watch.watch(state.trust_file());
+            watch
+        });
+        Self {
+            live,
+            trust_file,
+            clock,
+        }
+    }
+}
+
 impl SessionConfig {
     /// A session's, as it was put together: `options` with the session's
     /// own `choices` last among its overrides, the configuration it was
     /// loaded as, and the trust it was judged with.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each is one thing a session's configuration was made from"
-    )]
     pub(crate) fn new(
         mut options: LoadOptions,
         choices: Vec<Override>,
@@ -119,7 +143,6 @@ impl SessionConfig {
         standing: TrustStanding,
         root: AbsPath,
         state: Option<cortex_config::StateDir>,
-        core: &CoreOptions,
     ) -> Self {
         // The choices were put last among the overrides (`place`): kept
         // apart, so that a profile can drop them.
@@ -127,25 +150,16 @@ impl SessionConfig {
             let base = options.overrides.len() - choices.len();
             options.overrides.truncate(base);
         }
-        let clock = Arc::clone(&core.clock);
-        let trust_file = state.as_ref().map(|state| {
-            let mut watch = WatchList::new(Arc::clone(&clock));
-            watch.watch(state.trust_file());
-            watch
-        });
         Self {
             options,
             choices,
             latest: Arc::clone(&in_force),
             in_force,
             waiting: BTreeMap::new(),
-            live: None,
-            trust_file,
             trusted,
             standing,
             root,
             state,
-            clock,
             reported: None,
         }
     }
@@ -164,21 +178,11 @@ impl SessionConfig {
         }
     }
 
-    /// The roles whose model, provider or reasoning level the person chose
-    /// in the session.
-    fn chosen_roles(&self) -> BTreeSet<String> {
+    /// The keys the person chose in the session.
+    fn chosen_keys(&self) -> BTreeSet<String> {
         self.choices
             .iter()
-            .filter_map(|choice| {
-                let parts: Vec<&str> = choice.key.split('.').collect();
-                match parts.as_slice() {
-                    ["model", role] if !role.starts_with("speed") && *role != "effort" => {
-                        Some((*role).to_owned())
-                    }
-                    ["model", "roles", role, "provider" | "effort"] => Some((*role).to_owned()),
-                    _ => None,
-                }
-            })
+            .map(|choice| choice.key.clone())
             .collect()
     }
 
@@ -198,6 +202,25 @@ impl SessionConfig {
         };
         options
     }
+}
+
+/// The roles a set of chosen keys sets the model, provider or reasoning
+/// level of.
+fn chosen_roles(chosen: &BTreeSet<String>) -> BTreeSet<String> {
+    chosen
+        .iter()
+        .filter_map(|key| {
+            let parts: Vec<&str> = key.split('.').collect();
+            match parts.as_slice() {
+                ["model", role] if !role.starts_with("speed") && *role != "effort" => {
+                    Some((*role).to_owned())
+                }
+                ["model", "effort"] => Some("main".to_owned()),
+                ["model", "roles", role, "provider" | "effort"] => Some((*role).to_owned()),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// The core's own configuration: the user's, with no project.
@@ -425,7 +448,13 @@ async fn reload_core(core: &Core, asked: &Asked) -> ConfigChanged {
 
 // ----------------------------------------------------------- a session's
 
-/// What the look at a session's files found, off the core's thread.
+/// What the judgement of trust found, before the load that uses it.
+struct Judging {
+    judged: assemble::Judged,
+    trusted: Trusted,
+}
+
+/// What the load found, off the core's thread.
 struct Looked {
     trusted: Trusted,
     standing: TrustStanding,
@@ -433,16 +462,24 @@ struct Looked {
     /// The configuration loaded, when one was.
     latest: Option<Arc<Loaded>>,
     errors: Vec<String>,
-    /// The session's own choices were dropped for a profile.
-    dropped: Vec<Override>,
+    /// The profile this reload loads with (`/profile`), committed with the
+    /// rest only once it is applied.
+    profile: Option<String>,
 }
 
-/// One session's reload, start to end.
+/// One session's reload, start to end. Says whether anything was new:
+/// applied, waiting since this reload, or wrong. Only then are the
+/// session's clients told.
 async fn reload_session(
     core: &Core,
     live: &Arc<Live>,
     asked: &Asked,
 ) -> Result<(ConfigChanged, bool), OpError> {
+    // One reload of a session at a time, from its look to its commit: two
+    // (another client's, the look before a turn) never interleave, and an
+    // older one never commits over a newer one (the review of step 24's
+    // first part).
+    let _one = live.reloading.lock().await;
     let (inner, held, asked_now) = (Arc::clone(&core.inner), Arc::clone(live), asked.clone());
     let judging = Core::blocking(move || Ok(judge(&inner, &held, &asked_now))).await?;
     let Some(judging) = judging else {
@@ -475,102 +512,131 @@ async fn reload_session(
     Ok((changed, news))
 }
 
-/// What the judgement of trust found, before the load that uses it.
-struct Judging {
-    judged: assemble::Judged,
-    trusted: Trusted,
-}
-
-/// Looks at the session's files and the trust store and judges trust,
-/// from loads that are never in force. `None`: nothing changed. Blocks.
+/// Looks at the session's files and the trust store and judges trust, from
+/// loads that are never in force. `None`: nothing changed. Blocks.
 fn judge(inner: &Inner, live: &Live, asked: &Asked) -> Option<Judging> {
-    let mut config = lock(&live.config);
-    let files = match config.live.as_mut() {
-        Some(watched) => watched.has_changed(),
-        None => true,
-    };
-    let trust_file = config
-        .trust_file
-        .as_mut()
-        .is_some_and(|watch| !watch.check().is_empty());
-    if asked.changed_only && !files && !trust_file && asked.profile.is_none() {
-        return None;
-    }
     let keep_choices = asked.profile.is_none();
+    let (judging, state, root, in_force) = {
+        let config = lock(&live.config);
+        (
+            config.options_with(true, asked.profile.as_deref(), keep_choices),
+            config.state.clone(),
+            config.root.clone(),
+            config.trusted,
+        )
+    };
+    {
+        let mut watched = lock(&live.watched);
+        let files = match watched.live.as_mut() {
+            Some(files) => files.has_changed(),
+            None => true,
+        };
+        let trust_file = watched
+            .trust_file
+            .as_mut()
+            .is_some_and(|watch| !watch.check().is_empty());
+        if asked.changed_only && !files && !trust_file && asked.profile.is_none() {
+            return None;
+        }
+    }
     // Judged first: what the project may do is decided before anything of
     // it is loaded to be used.
-    let judging = config.options_with(true, asked.profile.as_deref(), keep_choices);
-    let judged = assemble::judge(inner, config.state.as_ref(), &config.root, &judging);
+    let judged = assemble::judge(inner, state.as_ref(), &root, &judging);
     let trusted = Trusted {
-        rules: judged.rules.unwrap_or(config.trusted.rules),
+        rules: judged.rules.unwrap_or(in_force.rules),
         repository: judged.repository,
     };
     Some(Judging { judged, trusted })
 }
 
-/// Loads the session's configuration once, with the trust `judging` found:
-/// a change of the trust store since is the next look's. Blocks.
+/// The sentence of a trusted project whose rules are not the ones pinned.
+const RULES_CHANGED: &str = "This project's permission rules have changed since it was trusted, so \
+                             its settings and its allow rules are set aside until the change is \
+                             approved.";
+
+/// Loads the session's configuration once, with the trust `judging` found;
+/// a change of the trust store since is the next look's. A load trusted is
+/// checked against the pins once more, on what was loaded: a file written
+/// since the judgement's look-ahead is never loaded as trusted unchecked.
+/// Blocks.
 fn load(inner: &Inner, live: &Live, asked: &Asked, judging: Judging) -> Option<Looked> {
-    let Judging { judged, trusted } = judging;
-    let mut config = lock(&live.config);
+    let Judging {
+        mut judged,
+        mut trusted,
+    } = judging;
     let keep_choices = asked.profile.is_none();
-    let options = config.options_with(trusted.rules, asked.profile.as_deref(), keep_choices);
-    let clock = Arc::clone(&config.clock);
-    let reload = match config.live.as_mut() {
-        Some(watched) => watched.update(|now| *now = options),
-        None => match LiveConfig::start(options, clock) {
-            Ok(watched) => {
-                config.live = Some(watched);
+    let (options, untrusted, in_force, state, root) = {
+        let config = lock(&live.config);
+        (
+            config.options_with(trusted.rules, asked.profile.as_deref(), keep_choices),
+            config.options_with(false, asked.profile.as_deref(), keep_choices),
+            config.trusted,
+            config.state.clone(),
+            config.root.clone(),
+        )
+    };
+    let mut watched = lock(&live.watched);
+    let clock = Arc::clone(&watched.clock);
+    let start_or_update = |watched: &mut Watched, options: LoadOptions| match watched.live.as_mut()
+    {
+        Some(files) => files.update(|now| *now = options),
+        None => match LiveConfig::start(options, Arc::clone(&clock)) {
+            Ok(files) => {
+                watched.live = Some(files);
                 Reload::Unchanged
             }
             Err(failure) => Reload::Rejected(failure),
         },
     };
+    let mut reload = start_or_update(&mut watched, options.clone());
+    if trusted.rules
+        && !inner.options.trust_project
+        && !matches!(reload, Reload::Rejected(_))
+        && let Some(loaded) = watched.live.as_ref().map(LiveConfig::current)
+    {
+        let approved = assemble::pins_approved(inner, state.as_ref(), &root, &loaded, &options);
+        if !approved {
+            trusted.rules = false;
+            judged.standing = TrustStanding::RulesChanged;
+            judged.problem = Some(RULES_CHANGED.to_owned());
+            reload = start_or_update(&mut watched, untrusted);
+        }
+    }
+    let latest = watched.live.as_ref().map(LiveConfig::current);
+    drop(watched);
     let env = &inner.options.env;
-    let (latest, errors, trusted) = match reload {
+    let mut config = lock(&live.config);
+    let (latest, errors) = match reload {
         Reload::Rejected(failure) => {
-            // Nothing loaded: what is in force stays, its trust with it.
-            // The same error is said once, unless the person asks again.
+            // Nothing loaded: what is in force stays. Trust the judgement
+            // lowered is lowered all the same, where nothing needs loading
+            // for it: git's reading of the repository, the verifier, and the
+            // engine's setting aside of the project's allow rules.
+            trusted = Trusted {
+                rules: in_force.rules && trusted.rules,
+                repository: in_force.repository && trusted.repository,
+            };
             let text = failure.render(env);
             let said = config.reported.as_deref() == Some(text.as_str());
             config.reported = Some(text.clone());
-            if said && !asked.explicit {
+            if said && !asked.explicit && trusted == in_force {
                 return None;
             }
-            (None, vec![text], config.trusted)
+            (None, vec![text])
         }
-        Reload::TrustLowered { failure, .. } => (
-            config.live.as_ref().map(LiveConfig::current),
-            vec![failure.render(env)],
-            trusted,
-        ),
+        Reload::TrustLowered { failure, .. } => (latest, vec![failure.render(env)]),
         Reload::Unchanged | Reload::Applied { .. } => {
             config.reported = None;
-            (
-                config.live.as_ref().map(LiveConfig::current),
-                Vec::new(),
-                trusted,
-            )
+            (latest, Vec::new())
         }
     };
-    let mut dropped = Vec::new();
-    if latest.is_some()
-        && let Some(profile) = &asked.profile
-    {
-        config.options.profile = Some(profile.clone());
-        dropped = std::mem::take(&mut config.choices);
-    }
     Some(Looked {
         trusted,
-        standing: if latest.is_some() {
-            judged.standing
-        } else {
-            config.standing.clone()
-        },
+        standing: judged.standing,
         problem: judged.problem,
+        profile: latest.is_some().then(|| asked.profile.clone()).flatten(),
         latest,
         errors,
-        dropped,
     })
 }
 
@@ -592,34 +658,68 @@ fn provider_field(keys: &[KeyPath], fields: &[&str]) -> bool {
     })
 }
 
-/// What the `Now` keys need, built before anything is applied.
+/// The keys whose building can fail for reasons of their own (a credential
+/// missing, statistics off): what a lowering of trust leaves out, rather
+/// than not lower trust at all.
+const MAY_FAIL: &[&str] = &["model", "providers", "adapt", "retry", "limits.day"];
+
+/// What waits for the next epoch, built with the rest.
+struct EpochPrepared {
+    models: Vec<(ModelRole, RoleModel)>,
+    context: Option<EpochContext>,
+    /// The configuration the keys are taken from when the epoch begins.
+    latest: Arc<Loaded>,
+    keys: Vec<KeyPath>,
+    profile_tokens: u64,
+    map_tokens: u64,
+}
+
+/// What the changes need, built before anything is applied.
 #[derive(Default)]
 struct Prepared {
     engine: Option<cortex_policy::Parts>,
-    grant: bool,
+    policy: Option<cortex_sandbox::policy::Policy>,
     models: Option<cortex_agent::Models>,
     speeds: Option<cortex_agent::SpeedSettings>,
+    accounts: Option<Vec<cortex_agent::Account>>,
     reconfigure: Reconfigure,
     verify: Option<crate::verify::VerifyLive>,
     key_variables: Option<Vec<String>>,
     repository: Option<bool>,
+    epoch: Option<EpochPrepared>,
 }
 
-/// Builds what applying `now` and the trust needs, checking it whole.
+/// What a reload builds before it applies anything.
+struct Building<'a> {
+    mix: &'a Arc<Loaded>,
+    now: &'a [KeyPath],
+    trusted: Trusted,
+    was: Trusted,
+    /// The keys that wait for the next epoch, and what they are taken from.
+    epoch: Option<(&'a Arc<Loaded>, &'a [KeyPath])>,
+    /// The roles the person chose in the session.
+    chosen_roles: &'a BTreeSet<String>,
+}
+
+/// Builds what applying the changes needs, checking it whole: off the core's
+/// thread wherever a file or a credential is read.
 async fn prepare(
     core: &Core,
     live: &Arc<Live>,
-    mix: &Arc<Loaded>,
-    now: &[KeyPath],
-    trusted: Trusted,
-    was: Trusted,
+    building: Building<'_>,
 ) -> Result<Prepared, String> {
+    let Building {
+        mix,
+        now,
+        trusted,
+        was,
+        epoch,
+        chosen_roles,
+    } = building;
     let inner = &core.inner;
-    let trust_changed = trusted != was;
     let mut prepared = Prepared::default();
-    let session = live.handle.id().clone();
 
-    if trust_changed
+    if trusted != was
         || touches(
             now,
             &[
@@ -631,46 +731,52 @@ async fn prepare(
         )
     {
         let template = lock(&live.template).parts.clone();
-        let parts = assemble::reloaded_parts(
-            inner,
-            &template,
-            mix,
-            trusted.rules,
-            trusted.repository,
-            &session,
+        let session = live.handle.id().clone();
+        let state = lock(&live.config).state.clone();
+        let (held, loaded, sandbox) = (
+            Arc::clone(inner),
+            Arc::clone(mix),
+            Arc::clone(&live.sandbox),
         );
-        let grant = parts.sandbox_policy != template.sandbox_policy;
-        if grant
-            && live.sandbox.enforces()
-            && assemble::holds_harness_files(
-                &parts.sandbox_policy,
-                mix,
-                lock(&live.config).state.as_ref(),
-                inner.sandbox.program(),
-            )
-        {
-            return Err(
-                "`sandbox.write` would let a confined command write the harness's own files, so \
-                 the session's sandbox is left as it was."
-                    .to_owned(),
+        let built = Core::blocking(move || {
+            let parts = assemble::reloaded_parts(
+                &held,
+                &template,
+                &loaded,
+                trusted.rules,
+                trusted.repository,
+                &session,
             );
-        }
-        prepared.grant = grant;
-        prepared.engine = Some(parts);
+            let mut policy = None;
+            if parts.sandbox_policy != template.sandbox_policy && sandbox.enforces() {
+                if assemble::holds_harness_files(
+                    &parts.sandbox_policy,
+                    &loaded,
+                    state.as_ref(),
+                    held.sandbox.program(),
+                ) {
+                    return Err(error(
+                        ErrorKind::Config,
+                        "harness_files_writable",
+                        "`sandbox.write` would let a confined command write the harness's own \
+                         files, so the session's sandbox is left as it was.",
+                    ));
+                }
+                policy = sandbox.policy_for(&parts.sandbox_policy);
+            }
+            Ok((parts, policy))
+        })
+        .await
+        .map_err(|failure| failure.message)?;
+        prepared.engine = Some(built.0);
+        prepared.policy = built.1;
     }
 
-    let models_now = touches(now, &["retry", "model.speed_fallback", "model.speed_wait"])
-        || touches(now, &["model.speed_cooldown", "model.speed_cooldown_min"])
+    let models_now = touches(now, &["retry", "model", "adapt"])
         || provider_field(
             now,
             &["key_env", "headers", "idle_timeout", "first_event_timeout"],
-        )
-        || touches(
-            now,
-            &["model.main", "model.fast", "model.judge", "model.effort"],
-        )
-        || touches(now, &["model.max_output", "model.reasoning", "model.roles"])
-        || touches(now, &["adapt"]);
+        );
     if models_now {
         let settings = mix.settings.clone();
         let images = Arc::clone(&live.images);
@@ -700,7 +806,7 @@ async fn prepare(
                 accounts.push(day);
             }
         }
-        prepared.reconfigure.accounts = Some(accounts);
+        prepared.accounts = Some(accounts);
     }
     if touches(now, &["limits.turn"]) {
         prepared.reconfigure.turn_budget = Some(assemble::budget(&mix.settings.limits.turn));
@@ -726,7 +832,7 @@ async fn prepare(
         prepared.reconfigure.verify_rounds =
             Some(u32::try_from(mix.settings.verify.rounds).unwrap_or(u32::MAX));
     }
-    if trust_changed || touches(now, &["verify"]) {
+    if trusted != was || touches(now, &["verify"]) {
         let in_force = lock(&live.config).in_force();
         let origin = mix.origin(&KeyPath::new(["verify", "mode"]));
         prepared.verify = Some(crate::verify::VerifyLive {
@@ -749,17 +855,59 @@ async fn prepare(
     if trusted.repository != was.repository {
         prepared.repository = Some(trusted.repository);
     }
+
+    // What waits for the next epoch is built now too, so that a model whose
+    // credential is missing refuses the reload rather than wait to fail.
+    if let Some((latest, keys)) = epoch
+        && !keys.is_empty()
+    {
+        let at_epoch = Arc::new(
+            mix.taking(latest, keys)
+                .map_err(|failure| failure.render(&inner.options.env))?,
+        );
+        let mut models = Vec::new();
+        if touches(keys, &["model", "providers", "adapt"]) {
+            let settings = at_epoch.settings.clone();
+            let images = Arc::clone(&live.images);
+            let held = Arc::clone(inner);
+            let built = Core::blocking(move || assemble::models(&held, &settings, &images))
+                .await
+                .map_err(|failure| failure.message)?;
+            for (role, model) in built.roles() {
+                // A role the person set in the session keeps what they set.
+                if !chosen_roles.contains(role.as_str()) {
+                    models.push((role.clone(), model.clone()));
+                }
+            }
+        }
+        let context = touches(keys, &["context"]).then(|| {
+            let settings = assemble::context_settings(&at_epoch.settings);
+            EpochContext {
+                keep_recent_tokens: settings.keep_recent_tokens,
+                instruction_names: settings.instruction_names,
+                instructions_cap: settings.instructions_cap,
+            }
+        });
+        prepared.epoch = Some(EpochPrepared {
+            models,
+            context,
+            latest: Arc::clone(latest),
+            keys: keys.to_vec(),
+            profile_tokens: at_epoch.settings.project.profile_tokens,
+            map_tokens: at_epoch.settings.index.map_tokens,
+        });
+    }
     Ok(prepared)
 }
 
-/// Puts what was prepared in force.
+/// Puts what was prepared in force. Only the engine's lease records can
+/// fail, and they are written first.
 async fn put(core: &Core, live: &Arc<Live>, prepared: Prepared) -> Result<(), OpError> {
     if let Some(parts) = prepared.engine {
-        let grant = parts.sandbox_policy.clone();
         core.put_engine(live, parts).await?;
-        if prepared.grant {
-            live.sandbox.set_grant(&grant);
-        }
+    }
+    if let Some(policy) = prepared.policy {
+        live.sandbox.set_policy(policy);
     }
     if let Some(models) = prepared.models {
         for (role, model) in models.roles() {
@@ -772,7 +920,13 @@ async fn put(core: &Core, live: &Arc<Live>, prepared: Prepared) -> Result<(), Op
             live.handle.set_role_speed(role, speed);
         }
     }
-    live.handle.reconfigure(prepared.reconfigure);
+    let mut reconfigure = prepared.reconfigure;
+    if let Some(accounts) = prepared.accounts {
+        // Kept, so that the next change of a limit starts from these.
+        lock(&live.accounts).clone_from(&accounts);
+        reconfigure.accounts = Some(accounts);
+    }
+    live.handle.reconfigure(reconfigure);
     if let Some(verify) = prepared.verify {
         live.verifier.set_live(verify);
     }
@@ -786,7 +940,25 @@ async fn put(core: &Core, live: &Arc<Live>, prepared: Prepared) -> Result<(), Op
     Ok(())
 }
 
+/// Builds and puts in force; on a failure, the reason.
+async fn build_and_put(
+    core: &Core,
+    live: &Arc<Live>,
+    building: Building<'_>,
+) -> Result<Option<EpochPrepared>, String> {
+    let mut prepared = prepare(core, live, building).await?;
+    let epoch = prepared.epoch.take();
+    put(core, live, prepared)
+        .await
+        .map_err(|failure| failure.message)?;
+    Ok(epoch)
+}
+
 /// Applies what a look loaded to a running session, and says what it did.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one reload from what was loaded to what is said, each way it ends in its place"
+)]
 async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> ConfigChanged {
     let Looked {
         trusted,
@@ -794,28 +966,24 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> ConfigChanged {
         problem,
         latest,
         mut errors,
-        dropped,
+        profile,
     } = looked;
     let (in_force, was, chosen) = {
         let config = lock(&live.config);
-        let chosen: BTreeSet<String> = config
-            .choices
-            .iter()
-            .map(|choice| choice.key.clone())
-            .collect();
+        // A profile starts from itself: the session's own choices go.
+        let chosen = if profile.is_some() {
+            BTreeSet::new()
+        } else {
+            config.chosen_keys()
+        };
         (config.in_force(), config.trusted, chosen)
     };
-    let Some(latest) = latest else {
-        return ConfigChanged {
-            errors,
-            ..ConfigChanged::default()
-        };
-    };
+    let loaded = latest.is_some();
+    let latest = latest.unwrap_or_else(|| Arc::clone(&in_force));
     let lowered = (was.rules && !trusted.rules) || (was.repository && !trusted.repository);
     let changes = latest.changes_since(&in_force);
-    // What applies now: the keys that apply at once, and, when trust was
-    // taken away, what it had given, whatever its effect (a project's
-    // dearer model does not wait for the next epoch).
+    // When trust was taken away, what it gave goes at once, whatever its
+    // effect: a project's dearer model does not wait for the next epoch.
     let newly_held: BTreeSet<KeyPath> = if lowered {
         latest
             .withheld
@@ -826,9 +994,17 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> ConfigChanged {
     } else {
         BTreeSet::new()
     };
-    let (mut now, mut waiting): (Vec<KeyPath>, BTreeMap<KeyPath, Effect>) =
-        (Vec::new(), BTreeMap::new());
+    let mut now: Vec<KeyPath> = Vec::new();
+    let mut silent: Vec<KeyPath> = Vec::new();
+    let mut waiting: BTreeMap<KeyPath, Effect> = BTreeMap::new();
     for change in &changes {
+        if chosen.contains(&change.key.to_string()) {
+            // In force already, as `session/set` put it: taken into the
+            // configuration, neither applied again nor said, whatever its
+            // effect.
+            silent.push(change.key.clone());
+            continue;
+        }
         let held_back = newly_held
             .iter()
             .any(|held| change.key.is_at_or_under(held) || held.is_at_or_under(&change.key));
@@ -838,15 +1014,9 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> ConfigChanged {
             waiting.insert(change.key.clone(), change.effect);
         }
     }
-    // A key the person chose in the session is in force already, as
-    // `session/set` put it: taken into the configuration, and neither
-    // applied again nor said.
-    let applying: Vec<KeyPath> = now
-        .iter()
-        .filter(|key| !chosen.contains(&key.to_string()))
-        .cloned()
-        .collect();
-    let mix = match in_force.taking(&latest, &now) {
+    let chosen_roles = chosen_roles(&chosen);
+    let mut taken: Vec<KeyPath> = now.iter().chain(&silent).cloned().collect();
+    let mut mix = match in_force.taking(&latest, &taken) {
         Ok(mix) => Arc::new(mix),
         Err(failure) => {
             errors.push(failure.render(&core.inner.options.env));
@@ -856,39 +1026,106 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> ConfigChanged {
             };
         }
     };
-    if !applying.is_empty() || trusted != was {
-        let prepared = match prepare(core, live, &mix, &applying, trusted, was).await {
-            Ok(prepared) => prepared,
+    let epoch_keys: Vec<KeyPath> = waiting
+        .iter()
+        .filter(|(_, effect)| **effect == Effect::NextEpoch)
+        .map(|(key, _)| key.clone())
+        .collect();
+    let mut applied = now.clone();
+    let mut epoch = None;
+    let mut ready = now.is_empty() && trusted == was && epoch_keys.is_empty();
+    if !ready {
+        match build_and_put(
+            core,
+            live,
+            Building {
+                mix: &mix,
+                now: &now,
+                trusted,
+                was,
+                epoch: Some((&latest, &epoch_keys)),
+                chosen_roles: &chosen_roles,
+            },
+        )
+        .await
+        {
+            Ok(prepared) => {
+                epoch = prepared;
+                ready = true;
+            }
             Err(reason) => {
                 errors.push(format!(
                     "The configuration's changes were not applied to this session: {reason}"
                 ));
-                return ConfigChanged {
-                    errors,
-                    ..ConfigChanged::default()
-                };
             }
-        };
-        if let Err(failure) = put(core, live, prepared).await {
-            errors.push(format!(
-                "The configuration's changes were not applied to this session: {}",
-                failure.message
-            ));
-            return ConfigChanged {
-                errors,
-                ..ConfigChanged::default()
-            };
         }
     }
+    if !ready && lowered {
+        // Trust taken away is taken away even when something else of the
+        // reload cannot be built: what can fail for reasons of its own
+        // waits, and the rest, trust's part included, is applied.
+        let safe: Vec<KeyPath> = now
+            .iter()
+            .filter(|key| !touches(std::slice::from_ref(*key), MAY_FAIL))
+            .cloned()
+            .collect();
+        for key in now.iter().filter(|key| !safe.contains(key)) {
+            waiting.insert(key.clone(), Effect::Now);
+        }
+        taken = safe.iter().chain(&silent).cloned().collect();
+        if let Ok(trust_only) = in_force.taking(&latest, &taken) {
+            mix = Arc::new(trust_only);
+            match build_and_put(
+                core,
+                live,
+                Building {
+                    mix: &mix,
+                    now: &safe,
+                    trusted,
+                    was,
+                    epoch: None,
+                    chosen_roles: &chosen_roles,
+                },
+            )
+            .await
+            {
+                Ok(_) => {
+                    applied = safe;
+                    ready = true;
+                }
+                Err(reason) => errors.push(format!(
+                    "Trust taken away could not be applied to this session: {reason}"
+                )),
+            }
+        }
+    }
+    if !ready {
+        return ConfigChanged {
+            errors,
+            ..ConfigChanged::default()
+        };
+    }
+
     let mut notes = Vec::new();
-    {
+    let dropped = {
         let mut config = lock(&live.config);
         config.in_force = Arc::clone(&mix);
-        config.latest = Arc::clone(&latest);
+        if loaded {
+            config.latest = Arc::clone(&latest);
+        }
         config.waiting = waiting.clone();
         config.trusted = trusted;
-        config.standing = standing.clone();
-    }
+        if trusted != was || loaded {
+            config.standing = standing.clone();
+        }
+        match profile {
+            Some(profile) => {
+                config.options.profile = Some(profile);
+                std::mem::take(&mut config.choices)
+            }
+            None => Vec::new(),
+        }
+    };
     if trusted != was {
         live.handle.set_trust(standing);
         if let Some(problem) = problem {
@@ -906,15 +1143,10 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> ConfigChanged {
             keys.join(", ")
         ));
     }
-    let epoch_keys: Vec<KeyPath> = waiting
-        .iter()
-        .filter(|(_, effect)| **effect == Effect::NextEpoch)
-        .map(|(key, _)| key.clone())
-        .collect();
-    set_next_epoch(core, live, &mix, &latest, &epoch_keys).await;
+    install_epoch(live, epoch);
     notes.extend(waiting_notes(&waiting, &mix, &latest));
     ConfigChanged {
-        applied: applying.iter().map(ToString::to_string).collect(),
+        applied: applied.iter().map(ToString::to_string).collect(),
         pending: waiting.keys().map(ToString::to_string).collect(),
         errors,
         notes,
@@ -934,14 +1166,23 @@ fn waiting_notes(
             .map(|(key, _)| format!("`{key}`"))
             .collect()
     };
+    let plural = |keys: &[String]| if keys.len() == 1 { "s" } else { "" };
     let mut notes = Vec::new();
+    let now = named(Effect::Now);
+    if !now.is_empty() {
+        notes.push(format!(
+            "{} could not be applied with trust taken away, and wait{} for the next reload.",
+            now.join(", "),
+            plural(&now)
+        ));
+    }
     let epoch = named(Effect::NextEpoch);
     if !epoch.is_empty() {
         notes.push(format!(
             "{} take{} effect at this session's next context epoch: a compaction, or the session \
              opened again.",
             epoch.join(", "),
-            if epoch.len() == 1 { "s" } else { "" }
+            plural(&epoch)
         ));
     }
     let session = named(Effect::NextSession);
@@ -949,7 +1190,7 @@ fn waiting_notes(
         notes.push(format!(
             "{} take{} effect in sessions opened from now on, not in this one.",
             session.join(", "),
-            if session.len() == 1 { "s" } else { "" }
+            plural(&session)
         ));
         // What would tighten the sandbox is said with more weight: this
         // session's stays as it was.
@@ -988,58 +1229,27 @@ fn waiting_notes(
         notes.push(format!(
             "{} take{} effect when Cortex-Harness is next started.",
             restart.join(", "),
-            if restart.len() == 1 { "s" } else { "" }
+            plural(&restart)
         ));
     }
     notes
 }
 
 /// Gives the session's loop what waits for its next epoch, or nothing.
-async fn set_next_epoch(
-    core: &Core,
-    live: &Arc<Live>,
-    in_force: &Arc<Loaded>,
-    latest: &Arc<Loaded>,
-    keys: &[KeyPath],
-) {
-    if keys.is_empty() {
-        live.handle.at_next_epoch(None);
-        return;
-    }
-    let Ok(at_epoch) = in_force.taking(latest, keys) else {
+fn install_epoch(live: &Arc<Live>, epoch: Option<EpochPrepared>) {
+    let Some(epoch) = epoch else {
         live.handle.at_next_epoch(None);
         return;
     };
-    let at_epoch = Arc::new(at_epoch);
-    let chosen = lock(&live.config).chosen_roles();
-    let mut models = Vec::new();
-    if touches(keys, &["model", "providers", "adapt"]) {
-        let settings = at_epoch.settings.clone();
-        let images = Arc::clone(&live.images);
-        let held = Arc::clone(&core.inner);
-        if let Ok(built) = Core::blocking(move || assemble::models(&held, &settings, &images)).await
-        {
-            for (role, model) in built.roles() {
-                // A role the person set in the session keeps what they set.
-                if chosen.contains(role.as_str()) {
-                    continue;
-                }
-                models.push((role.clone(), model.clone()));
-            }
-        }
-    }
-    let context = touches(keys, &["context", "compat"]).then(|| {
-        let settings = assemble::context_settings(&at_epoch.settings);
-        EpochContext {
-            keep_recent_tokens: settings.keep_recent_tokens,
-            instruction_names: settings.instruction_names,
-            instructions_cap: settings.instructions_cap,
-        }
-    });
+    let EpochPrepared {
+        models,
+        context,
+        latest,
+        keys,
+        profile_tokens,
+        map_tokens,
+    } = epoch;
     let weak: Weak<Live> = Arc::downgrade(live);
-    let taken_keys: Vec<KeyPath> = keys.to_vec();
-    let profile_tokens = at_epoch.settings.project.profile_tokens;
-    let map_tokens = at_epoch.settings.index.map_tokens;
     let taken = Box::new(move || {
         let Some(live) = weak.upgrade() else {
             return;
@@ -1050,22 +1260,24 @@ async fn set_next_epoch(
         if let Some(repo) = &live.repo {
             repo.set_tokens(usize::try_from(map_tokens).unwrap_or(usize::MAX));
         }
+        // What the loop took is what this change held: the configuration it
+        // was built from, not one a later reload loaded.
         let applied: Vec<KeyPath> = {
             let mut config = lock(&live.config);
-            let latest = Arc::clone(&config.latest);
-            let keys: Vec<KeyPath> = taken_keys
+            let still: Vec<KeyPath> = keys
                 .iter()
                 .filter(|key| config.waiting.get(*key) == Some(&Effect::NextEpoch))
                 .cloned()
                 .collect();
-            if let Ok(mix) = config.in_force.taking(&latest, &keys) {
-                config.in_force = Arc::new(mix);
-                for key in &keys {
-                    config.waiting.remove(key);
+            match config.in_force.taking(&latest, &still) {
+                Ok(mix) => {
+                    config.in_force = Arc::new(mix);
+                    for key in &still {
+                        config.waiting.remove(key);
+                    }
+                    still
                 }
-                keys
-            } else {
-                Vec::new()
+                Err(_) => Vec::new(),
             }
         };
         if !applied.is_empty() {
@@ -1092,7 +1304,8 @@ pub(crate) async fn chosen(core: &Core, live: &Arc<Live>, choices: Vec<Override>
     if choices.is_empty() {
         return;
     }
-    let (in_force, latest, keys) = {
+    let _one = live.reloading.lock().await;
+    let (in_force, latest, keys, chosen) = {
         let mut config = lock(&live.config);
         config.choose(choices);
         let keys: Vec<KeyPath> = config
@@ -1101,7 +1314,32 @@ pub(crate) async fn chosen(core: &Core, live: &Arc<Live>, choices: Vec<Override>
             .filter(|(_, effect)| **effect == Effect::NextEpoch)
             .map(|(key, _)| key.clone())
             .collect();
-        (config.in_force(), Arc::clone(&config.latest), keys)
+        (
+            config.in_force(),
+            Arc::clone(&config.latest),
+            keys,
+            config.chosen_keys(),
+        )
     };
-    set_next_epoch(core, live, &in_force, &latest, &keys).await;
+    if keys.is_empty() {
+        return;
+    }
+    let roles = chosen_roles(&chosen);
+    let trust = lock(&live.config).trusted;
+    let built = prepare(
+        core,
+        live,
+        Building {
+            mix: &in_force,
+            now: &[],
+            trusted: trust,
+            was: trust,
+            epoch: Some((&latest, &keys)),
+            chosen_roles: &roles,
+        },
+    )
+    .await;
+    if let Ok(mut prepared) = built {
+        install_epoch(live, prepared.epoch.take());
+    }
 }

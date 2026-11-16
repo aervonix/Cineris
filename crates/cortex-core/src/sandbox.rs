@@ -279,16 +279,22 @@ impl SessionSandbox {
             .clone()
     }
 
-    /// Makes the launcher again from `grant` (a reload changed its write
-    /// roots or network), for the commands started from now on; one
-    /// running keeps its own. Nothing changes where the sandbox does not
-    /// enforce. What it watches of the protected paths is not changed:
-    /// `sandbox.protect` takes effect in a new session.
-    pub(crate) fn set_grant(&self, grant: &SandboxPolicy) {
-        let Some((program, prefix, landlock)) = &self.made_with else {
+    /// The launcher's policy for `grant` (a reload changed its write roots
+    /// or network): `None` where the sandbox does not enforce. Blocks: each
+    /// root is found where it really is.
+    pub(crate) fn policy_for(&self, grant: &SandboxPolicy) -> Option<Policy> {
+        let (_, _, landlock) = self.made_with.as_ref()?;
+        Some(policy_of(grant, &self.temp, *landlock))
+    }
+
+    /// Makes the launcher again with `policy` ([`Self::policy_for`]), for
+    /// the commands started from now on; one running keeps its own. What it
+    /// watches of the protected paths is not changed: `sandbox.protect`
+    /// takes effect in a new session.
+    pub(crate) fn set_policy(&self, policy: Policy) {
+        let Some((program, prefix, _)) = &self.made_with else {
             return;
         };
-        let policy = policy_of(grant, &self.temp, *landlock);
         *self
             .launcher
             .write()

@@ -338,19 +338,30 @@ pub(crate) fn insert(table: &mut toml::Table, key: &KeyPath, value: Value) {
     table.insert(last.clone(), value);
 }
 
-/// Takes the value at a key path out, leaving the tables on the way.
+/// Takes the value at a key path out, and the tables on the way that it
+/// leaves empty: an entry of a named collection with nothing left in it is
+/// gone, not an entry of defaults.
 pub(crate) fn remove(table: &mut toml::Table, key: &KeyPath) {
-    let Some((last, tables)) = key.parts().split_last() else {
-        return;
-    };
-    let mut table = table;
-    for name in tables {
-        let Some(Value::Table(next)) = table.get_mut(name) else {
+    fn go(table: &mut toml::Table, parts: &[String]) {
+        let Some((first, rest)) = parts.split_first() else {
             return;
         };
-        table = next;
+        if rest.is_empty() {
+            table.remove(first);
+            return;
+        }
+        let emptied = match table.get_mut(first) {
+            Some(Value::Table(next)) => {
+                go(next, rest);
+                next.is_empty()
+            }
+            _ => false,
+        };
+        if emptied {
+            table.remove(first);
+        }
     }
-    table.remove(last);
+    go(table, key.parts());
 }
 
 /// Adds an entry to the list at a key path, creating the list.
