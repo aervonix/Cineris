@@ -123,8 +123,17 @@ enum Line {
 }
 
 /// Where the line of parents of `pid` leads, `server` being the server's
-/// process (not `pid` itself: the server may connect to itself).
-fn line_of(pid: u32, server: u32) -> Line {
+/// process (not `pid` itself: the server may connect to itself), with
+/// `parent_of` reading a process's parent.
+///
+/// Only the peer's own process must be readable: one that is gone is
+/// `Unknown`. A parent that cannot be read ends the line `Elsewhere`: it is
+/// another user's process that `/proc` hides (`hidepid`, a unit's
+/// `ProtectProc`: an SSH session's `sshd`, a `sudo`), never one of the
+/// server's commands, which are the server's user's and visible to it; or
+/// it went in the moment between two reads, as a client's launcher may
+/// (the second review of step 27's second part).
+fn line_of(pid: u32, server: u32, parent_of: impl Fn(u32) -> Option<u32>) -> Line {
     let mut at = pid;
     // A line of parents is short; the bound only stops a loop the table
     // could show while it changes.
@@ -133,7 +142,8 @@ fn line_of(pid: u32, server: u32) -> Line {
             Some(parent) if parent == server => return Line::Server,
             Some(parent) if parent <= 1 || parent == at => return Line::Elsewhere,
             Some(parent) => at = parent,
-            None => return Line::Unknown,
+            None if at == pid => return Line::Unknown,
+            None => return Line::Elsewhere,
         }
     }
     Line::Unknown
@@ -289,7 +299,7 @@ impl Listener {
                     .to_owned(),
             ));
         };
-        match line_of(pid, std::process::id()) {
+        match line_of(pid, std::process::id(), parent_of) {
             Line::Server => {
                 return Ok(Accepted::Refused(format!(
                     "one of the server's own commands (pid {pid})"
@@ -322,5 +332,47 @@ impl Drop for Listener {
         // the lock free and this socket still there.
         let _ = std::fs::remove_file(&self.path);
         drop(self.lock.take());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A table of parents, as `/proc` would give it: `None` for a process
+    /// that cannot be read.
+    fn table(parents: &[(u32, Option<u32>)]) -> impl Fn(u32) -> Option<u32> + '_ {
+        move |pid| {
+            parents
+                .iter()
+                .find(|(child, _)| *child == pid)
+                .and_then(|(_, parent)| *parent)
+        }
+    }
+
+    /// The server's own command, near or far, is the server's; a line that
+    /// reaches the first process is not; a peer that cannot be read is not
+    /// known; a parent that cannot be read (another user's, hidden) ends
+    /// the line elsewhere.
+    #[test]
+    fn a_line_of_parents_is_the_servers_elsewhere_or_unknown() {
+        const SERVER: u32 = 100;
+        let parents = [
+            (300, Some(200)),
+            (200, Some(SERVER)),
+            (SERVER, Some(50)),
+            (50, Some(1)),
+            (400, Some(350)),
+            (350, Some(1)),
+            (500, Some(450)),
+            (450, None),
+        ];
+        let read = table(&parents);
+        assert_eq!(line_of(300, SERVER, &read), Line::Server);
+        assert_eq!(line_of(200, SERVER, &read), Line::Server);
+        assert_eq!(line_of(SERVER, SERVER, &read), Line::Elsewhere);
+        assert_eq!(line_of(400, SERVER, &read), Line::Elsewhere);
+        assert_eq!(line_of(500, SERVER, &read), Line::Elsewhere);
+        assert_eq!(line_of(999, SERVER, &read), Line::Unknown);
     }
 }
