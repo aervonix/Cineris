@@ -77,6 +77,10 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [what-start-up-opens-traced](what-start-up-opens-traced.md): The blocking check that start-up opens no file outside an allow-list does not exist; the index's part is checked with a held gate. Owner: the next start-up step, or step 33.
 - [the-shell-version-after-a-shell-update](the-shell-version-after-a-shell-update.md): The first session after a shell is installed or updated has no shell version in its prompt, so the next resume is a `resume` epoch. Owner: step 33.
 
+### cortex-index
+
+- [a-memory-peak-test-near-its-limit](a-memory-peak-test-near-its-limit.md): `outlines::outlining_a_name_of_a_megabyte_takes_little_memory` went 84 KiB over its 4 MiB peak once on a hosted Linux runner, in a pull request that did not touch `cortex-index`. Owner: `cortex-index`'s next change, or a tooling step.
+
 ### cortex-knowledge
 
 - [a-promote-while-a-confined-command-runs](a-promote-while-a-confined-command-runs.md): A promote made while a confined command of the same project runs is taken for a change from outside, and stops that command's turn. Owner: step 24, or a fix session that changes the continuity check.
