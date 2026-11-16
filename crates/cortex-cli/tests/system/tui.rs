@@ -45,6 +45,12 @@ const LIMIT: Duration = Duration::from_secs(30);
 /// binary: five times the runner's budget for the interface's first frame
 /// (`docs/performance-budgets.md`), for a binary built without
 /// optimisation. The budget itself is measured by `cargo xtask startup`.
+///
+/// The binary has been started once before (`--version`, by the shell), as
+/// the budget's runs have: a runner's first start of an executable it has
+/// never run (its scan by the system's antivirus, its pages read from disk)
+/// is the runner's cost, not the interface's, and took a cold Windows
+/// runner's first frame to 790 ms (try run 43883744404).
 const FIRST_FRAME: Duration = if cfg!(windows) {
     Duration::from_millis(600)
 } else {
@@ -84,7 +90,18 @@ pub fn child() {
     };
     let spec: Value =
         serde_json::from_str(&std::fs::read_to_string(&spec).expect("the spec")).expect("JSON");
-    let mut command = Command::new(spec["program"].as_str().expect("a program"));
+    let program = spec["program"].as_str().expect("a program");
+    // Started once first, to no terminal: what is measured is a start of a
+    // binary the system has run before ([`FIRST_FRAME`]).
+    let warmed = Command::new(program)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("start the binary once");
+    assert!(warmed.success(), "`--version` failed: {warmed}");
+    let mut command = Command::new(program);
     command.current_dir(spec["cwd"].as_str().expect("a directory"));
     for argument in spec["args"].as_array().expect("arguments") {
         command.arg(argument.as_str().expect("an argument"));
