@@ -31,6 +31,10 @@ Without them any process of another user, or a lower-integrity process of the sa
 2. The crate rules keep `cortex-rpc` off `cortex-sandbox`, and a pipe server is not what `cortex-base`'s private-file module is for.
 3. Keeping the Windows half beside the Unix half keeps the two transports' guarantees in one place to read and test.
 
+## What is given up
+
+The pipe's security keeps out other users and lower-integrity processes of the user. It cannot keep out a process of the user at the server's own integrity, which may open the server's process, a client's, or the pipe's name with full rights by default. The refusal of the server's own commands, by the job the server joins, is therefore a thin check on Windows ([security.md](../security.md), section 5, "Residual risk"): the person who approves a command is what keeps it from answering its own session's approvals.
+
 ## Revisit when
 
 tokio or the standard library can make a named pipe with a given security descriptor, and query a pipe client's token, without `unsafe`; or a second crate needs to serve a pipe.

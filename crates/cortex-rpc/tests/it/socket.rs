@@ -64,7 +64,13 @@ fn serve(
 
 /// A client of the socket at `path`, speaking lines.
 fn client(path: &Path) -> Lines {
+    client_and_stream(path).0
+}
+
+/// A client of the socket at `path`, and its stream, to end it with.
+fn client_and_stream(path: &Path) -> (Lines, UnixStream) {
     let stream = UnixStream::connect(path).expect("the socket takes a client");
+    let kept = stream.try_clone().unwrap();
     let mut writing = stream.try_clone().unwrap();
     let (lines_read, read) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -81,12 +87,13 @@ fn client(path: &Path) -> Lines {
             }
         }
     });
-    Lines::new(
+    let lines = Lines::new(
         move |bytes| {
             let _ = writing.write_all(&bytes);
         },
         move || read.recv().ok(),
-    )
+    );
+    (lines, kept)
 }
 
 fn new_session(workspace: &Path) -> Op {
@@ -319,6 +326,125 @@ fn sys_one_of_the_servers_own_commands_is_refused() {
     // The server goes on: a client that is not its command is served.
     let mut lines = client(&path);
     assert!(lines.initialize(conformance::initialize()).is_ok());
+    stop.cancel();
+    done.recv().unwrap();
+}
+
+/// A connection gives its place back when it stops serving: at the most at
+/// once, the place of a client that has gone is the next client's.
+#[test]
+fn the_place_of_a_client_that_went_is_the_next_ones() {
+    let world = World::new("socket-place");
+    let core = world.core();
+    let path = folder(&world, "named", 0o700).join("rpc.sock");
+    let listener = bind(&path, false).unwrap();
+    let (stop, done) = serve(&core, listener, world.serve_options(), 1);
+    let (mut first, stream) = client_and_stream(&path);
+    first
+        .initialize(conformance::initialize())
+        .expect("initialize");
+    // Its input ends; the server ends the connection, and closes it.
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    assert!(first.read().is_none(), "the server wrote past the end");
+    let mut second = client(&path);
+    second
+        .initialize(conformance::initialize())
+        .expect("the place the first client left is the second's");
+    stop.cancel();
+    done.recv().unwrap();
+}
+
+/// An `accept` that fails for want of a resource is tried again after a
+/// wait that doubles, and the client waiting is served once one passes.
+#[test]
+fn an_accept_that_fails_for_want_of_a_resource_is_tried_again() {
+    let world = World::new("socket-retry");
+    let core = world.core();
+    let path = folder(&world, "named", 0o700).join("rpc.sock");
+    let failing = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(2));
+    let mut options = ListenOptions::new(false);
+    options.failing_accepts = Some(std::sync::Arc::clone(&failing));
+    let listener = Listener::bind(&Place::Path(path.clone()), &options).unwrap();
+    let (stop, done) = serve(&core, listener, world.serve_options(), 64);
+    let mut lines = client(&path);
+    // Two failures, each waited out on the timer: 50 ms, then 100 ms.
+    for wait in [Duration::from_millis(50), Duration::from_millis(100)] {
+        cortex_testkit::block_on(world.timer.sleeping_for(wait));
+        world.timer.advance(wait);
+    }
+    lines
+        .initialize(conformance::initialize())
+        .expect("the client is served once an accept passes");
+    assert_eq!(failing.load(std::sync::atomic::Ordering::SeqCst), 0);
+    stop.cancel();
+    done.recv().unwrap();
+}
+
+/// A peer whose line of parents cannot be read is refused: here the
+/// process that connected handed the socket to a child of its own and
+/// exited before the server looked (the independent review of step 27's
+/// second part). Held at the point before the look, the test waits for that
+/// process to be gone; then the child speaks, and is closed unanswered.
+#[test]
+fn sys_a_peer_whose_process_is_gone_is_refused() {
+    let world = World::new("socket-gone");
+    let core = world.core();
+    let path = folder(&world, "named", 0o700).join("rpc.sock");
+    let listener = bind(&path, false).unwrap();
+    let looking = cortex_testkit::Hold::new(cortex_rpc::socket::BEFORE_A_PEERS_PARENTS_ARE_READ);
+    let (stop, done) = serve(&core, listener, world.serve_options(), 64);
+    let initialize = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": conformance::initialize()});
+    // The child waits for its standard input to end before it speaks.
+    let script = "import os, socket, sys\n\
+        s = socket.socket(socket.AF_UNIX)\n\
+        s.connect(sys.argv[1])\n\
+        if os.fork() != 0:\n    os._exit(0)\n\
+        sys.stdin.read()\n\
+        try:\n    s.sendall(sys.argv[2].encode() + b'\\n')\n    data = s.recv(4096)\n\
+        except OSError:\n    data = b''\n\
+        sys.stdout.write(repr(data))\n\
+        sys.stdout.flush()\n";
+    let started = std::process::Command::new("python3")
+        .args([
+            "-c",
+            script,
+            path.to_str().unwrap(),
+            &initialize.to_string(),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn();
+    let mut connecting = match started {
+        Ok(child) => child,
+        Err(error) => {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "python3 is not on this runner: {error}"
+            );
+            eprintln!("not run: python3 cannot be started here ({error})");
+            looking.release();
+            stop.cancel();
+            done.recv().unwrap();
+            return;
+        }
+    };
+    looking.reach();
+    // The process that connected is gone, and reaped.
+    assert!(connecting.wait().unwrap().success());
+    looking.release();
+    drop(connecting.stdin.take());
+    let mut said = String::new();
+    std::io::Read::read_to_string(&mut connecting.stdout.take().unwrap(), &mut said).unwrap();
+    assert_eq!(
+        said, "b''",
+        "a peer whose process was gone was served: {said}"
+    );
+    assert_eq!(
+        looking.timed_out(),
+        0,
+        "the server was let go, not timed out"
+    );
     stop.cancel();
     done.recv().unwrap();
 }

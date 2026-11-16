@@ -28,6 +28,12 @@ mod sys;
 #[path = "socket/windows.rs"]
 mod sys;
 
+/// A peer of the user was taken and its line of parents is not read yet
+/// (Unix): an awaited point (`cortex_base::hook::await_point!`), on the
+/// server's task, for a test to make a peer's process go first.
+pub const BEFORE_A_PEERS_PARENTS_ARE_READ: &str =
+    "socket: a peer of the user was taken, and its line of parents is not read yet";
+
 /// How much is read from a connection at a time.
 const CHUNK: usize = 64 * 1024;
 
@@ -97,6 +103,11 @@ pub struct ListenOptions {
     /// by itself. Off in every server.
     #[cfg(feature = "test-hooks")]
     pub widen_access_for_tests: bool,
+    /// Test only: as many of the listener's next `accept`s as this counts
+    /// fail at once as if the process were out of descriptors, so that a
+    /// test shows the server trying again. None in every server.
+    #[cfg(feature = "test-hooks")]
+    pub failing_accepts: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 impl ListenOptions {
@@ -108,6 +119,8 @@ impl ListenOptions {
             own_folder,
             #[cfg(feature = "test-hooks")]
             widen_access_for_tests: false,
+            #[cfg(feature = "test-hooks")]
+            failing_accepts: None,
         }
     }
 }
@@ -133,6 +146,8 @@ pub enum Accepted {
 #[derive(Debug)]
 pub struct Listener {
     inner: sys::Listener,
+    #[cfg(feature = "test-hooks")]
+    failing: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 impl Listener {
@@ -146,6 +161,8 @@ impl Listener {
     pub fn bind(place: &Place, options: &ListenOptions) -> io::Result<Self> {
         Ok(Self {
             inner: sys::Listener::bind(place, options)?,
+            #[cfg(feature = "test-hooks")]
+            failing: options.failing_accepts.clone(),
         })
     }
 
@@ -159,8 +176,26 @@ impl Listener {
     ///
     /// # Errors
     ///
-    /// When listening itself fails: the server cannot go on.
+    /// When listening fails: for want of a resource for the moment (the
+    /// process's descriptors, memory), or for good.
     pub async fn accept(&mut self) -> io::Result<Accepted> {
+        #[cfg(feature = "test-hooks")]
+        if let Some(failing) = &self.failing
+            && failing
+                .try_update(
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                    |left| left.checked_sub(1),
+                )
+                .is_ok()
+        {
+            // EMFILE, and ERROR_TOO_MANY_OPEN_FILES.
+            return Err(io::Error::from_raw_os_error(if cfg!(windows) {
+                4
+            } else {
+                24
+            }));
+        }
         self.inner.accept().await
     }
 }

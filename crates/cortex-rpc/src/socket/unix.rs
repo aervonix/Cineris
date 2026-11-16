@@ -20,10 +20,14 @@
 //! - **The server's own commands are refused** (the design note's point 1,
 //!   "The harness's own commands"): a peer whose line of parents reaches the
 //!   server's process is one of the commands its sessions started, which
-//!   could otherwise answer its own session's approvals. A command that
-//!   detaches itself from that line escapes this, so it is defence in depth
-//!   beside the sandbox, which keeps a confined command from any Unix
-//!   socket.
+//!   could otherwise answer its own session's approvals. A peer whose line
+//!   cannot be read is refused too: its process, or a parent of it, is gone
+//!   (a command can connect, hand the socket to a child and exit at once,
+//!   the independent review of step 27's second part), or it is in another
+//!   pid namespace. A command that detaches itself from that line escapes
+//!   this, and so could one whose process id was taken by another process in
+//!   between, so it is defence in depth beside the sandbox, which keeps a
+//!   confined command from any Unix socket.
 
 #![allow(
     clippy::disallowed_methods,
@@ -107,20 +111,32 @@ fn parent_of(pid: u32) -> Option<u32> {
     after.split_whitespace().nth(1)?.parse().ok()
 }
 
-/// Whether the server's process `server` is a parent, near or far, of
-/// `pid` (not `pid` itself: the server may connect to itself).
-fn descends_from(pid: u32, server: u32) -> bool {
+/// Where a peer's line of parents leads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Line {
+    /// To the server's process: the peer is one of its commands.
+    Server,
+    /// To the system's first process without passing the server's.
+    Elsewhere,
+    /// Not known: the peer, or one of its parents, could not be read.
+    Unknown,
+}
+
+/// Where the line of parents of `pid` leads, `server` being the server's
+/// process (not `pid` itself: the server may connect to itself).
+fn line_of(pid: u32, server: u32) -> Line {
     let mut at = pid;
     // A line of parents is short; the bound only stops a loop the table
     // could show while it changes.
     for _ in 0..4096 {
         match parent_of(at) {
-            Some(parent) if parent == server => return true,
-            Some(parent) if parent > 1 && parent != at => at = parent,
-            _ => return false,
+            Some(parent) if parent == server => return Line::Server,
+            Some(parent) if parent <= 1 || parent == at => return Line::Elsewhere,
+            Some(parent) => at = parent,
+            None => return Line::Unknown,
         }
     }
-    false
+    Line::Unknown
 }
 
 fn refused(message: String) -> io::Error {
@@ -262,12 +278,30 @@ impl Listener {
                     .map_or_else(|| "unknown".to_owned(), |pid| pid.to_string())
             )));
         }
-        if let Some(pid) = peer.pid().and_then(|pid| u32::try_from(pid).ok())
-            && descends_from(pid, std::process::id())
-        {
-            return Ok(Accepted::Refused(format!(
-                "one of the server's own commands (pid {pid})"
-            )));
+        cortex_base::hook::await_point!(super::BEFORE_A_PEERS_PARENTS_ARE_READ);
+        let Some(pid) = peer
+            .pid()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .filter(|pid| *pid != 0)
+        else {
+            return Ok(Accepted::Refused(
+                "a peer whose process is not known (in another pid namespace, or none given)"
+                    .to_owned(),
+            ));
+        };
+        match line_of(pid, std::process::id()) {
+            Line::Server => {
+                return Ok(Accepted::Refused(format!(
+                    "one of the server's own commands (pid {pid})"
+                )));
+            }
+            Line::Unknown => {
+                return Ok(Accepted::Refused(format!(
+                    "a peer whose line of parents could not be read (pid {pid}): its process, \
+                     or a parent of it, is gone"
+                )));
+            }
+            Line::Elsewhere => {}
         }
         let described = format!(
             "pid {}",
