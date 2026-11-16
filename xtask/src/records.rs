@@ -244,6 +244,11 @@ pub(crate) struct Sides {
     /// did: as `ab` does, the round is compared, and they are left out of
     /// every round's medians on both sides.
     pub(crate) skipped: Vec<String>,
+    /// The tests that failed on one side of a round whose runs failed by
+    /// tests alone: as `ab` does since the ninth tooling step, the round is
+    /// compared and they are left out of every round, and the run is a
+    /// failure all the same. Also in `skipped`.
+    pub(crate) one_sided: Vec<String>,
 }
 
 /// What an A/B of one OS came to: each tier's time above the start, and
@@ -266,6 +271,9 @@ pub(crate) struct Compared {
     pub(crate) left_out: Vec<String>,
     /// The tests left out of every round: they failed on both sides.
     pub(crate) skipped: Vec<String>,
+    /// The tests left out of every round that failed on one side only: a
+    /// failure of the run.
+    pub(crate) one_sided: Vec<String>,
 }
 
 /// The rounds both sides finished, or none when there is no such round. A
@@ -321,6 +329,7 @@ pub(crate) fn compare(os: Os, sides: &Sides) -> Compared {
         head,
         left_out: sides.left_out.clone(),
         skipped: sides.skipped.clone(),
+        one_sided: sides.one_sided.clone(),
     }
 }
 
@@ -700,11 +709,12 @@ fn write_sections(file: &Path, sections: &[Section]) -> Result<()> {
 
 /// What an A/B run's artifact for one OS held: its reports by side and
 /// round, read as `ab` reads them. A round is kept when both sides' reports
-/// are there and either no test failed or the same tests failed on both
-/// sides (those are then left out of every round, and named in `skipped`).
-/// It is left out, and `left_out` says why, when a side's run broke (its
-/// report kept as `<side>-round-<n>-broke.xml`), when a test failed on one
-/// side only, or when a side kept no report or one that lists nothing.
+/// are there and nothing went wrong but tests failing: those tests are left
+/// out of every round, and named in `skipped` (both sides failed them) or in
+/// `one_sided` (one side did, a failure of the run). It is left out, and
+/// `left_out` says why, when a side's run broke (its report kept as
+/// `<side>-round-<n>-broke.xml`), or when a side kept no report or one that
+/// lists nothing.
 pub(crate) fn sides_of(run: u64, artifact: &str, files: &[PathBuf]) -> Result<Sides> {
     let mut rounds: BTreeMap<usize, (Option<&PathBuf>, Option<&PathBuf>)> = BTreeMap::new();
     let mut broke: BTreeMap<usize, Vec<&str>> = BTreeMap::new();
@@ -739,6 +749,7 @@ pub(crate) fn sides_of(run: u64, artifact: &str, files: &[PathBuf]) -> Result<Si
     };
     let mut sides = Sides::default();
     let mut skipped: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut one_sided: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for (round, (base, head)) in rounds {
         if let Some(which) = broke.get(&round) {
             sides.left_out.push(format!(
@@ -768,35 +779,19 @@ pub(crate) fn sides_of(run: u64, artifact: &str, files: &[PathBuf]) -> Result<Si
                 .collect()
         };
         let (base_failed, head_failed) = (failed_ids(&base), failed_ids(&head));
-        // The same tests failed on both sides, and nothing else went wrong
-        // (a run that broke is named above): compared, without them.
-        let both_sided = !base_failed.is_empty() && base_failed == head_failed;
-        let failed = |name: &str, ids: &std::collections::BTreeSet<String>| -> Option<String> {
-            (!ids.is_empty()).then(|| {
-                format!(
-                    "{name} failed: {}",
-                    ids.iter().cloned().collect::<Vec<_>>().join(", ")
-                )
-            })
-        };
-        let reasons: Vec<String> = if both_sided {
-            Vec::new()
-        } else {
-            [failed("base", &base_failed), failed("head", &head_failed)]
-                .into_iter()
-                .flatten()
-                .collect()
-        };
-        if !reasons.is_empty() {
-            sides
-                .left_out
-                .push(format!("round {round}: {}", reasons.join("; ")));
-        } else if base.is_empty() || head.is_empty() {
+        // Tests failed, and nothing else went wrong (a run that broke is
+        // named above): compared, without them, as `ab` compares it. One
+        // that failed on one side only is a failure of the run.
+        if base.is_empty() || head.is_empty() {
             sides
                 .left_out
                 .push(format!("round {round}: a report lists no tests"));
         } else {
+            for id in base_failed.symmetric_difference(&head_failed) {
+                one_sided.insert(id.clone());
+            }
             skipped.extend(base_failed);
+            skipped.extend(head_failed);
             sides.base.push(base);
             sides.head.push(head);
             sides.numbers.push(round);
@@ -807,7 +802,11 @@ pub(crate) fn sides_of(run: u64, artifact: &str, files: &[PathBuf]) -> Result<Si
     for cases in sides.base.iter_mut().chain(sides.head.iter_mut()) {
         cases.retain(|case| !skipped.contains(&case.id()));
     }
-    sides.skipped = skipped.into_iter().collect();
+    sides.skipped = skipped
+        .into_iter()
+        .filter(|id| !one_sided.contains(id))
+        .collect();
+    sides.one_sided = one_sided.into_iter().collect();
     Ok(sides)
 }
 
@@ -846,6 +845,17 @@ pub(crate) fn ab_detail_text(one: &Compared, against: &str, top: usize) -> Strin
             "Tests left out of every round, on both sides: they failed on both sides of a round."
         );
         for id in &one.skipped {
+            let _ = writeln!(text, "  {id}");
+        }
+        text.push('\n');
+    }
+    if !one.one_sided.is_empty() {
+        let _ = writeln!(
+            text,
+            "TESTS THAT FAILED ON ONE SIDE ONLY, left out of every round on both sides, and a \
+             failure of the run: the comparison is of the other tests."
+        );
+        for id in &one.one_sided {
             let _ = writeln!(text, "  {id}");
         }
         text.push('\n');
@@ -1468,6 +1478,7 @@ mod tests {
             numbers: (1..=rounds).collect(),
             left_out: vec!["round 9: head failed: a b".to_owned()],
             skipped: Vec::new(),
+            one_sided: Vec::new(),
         };
         compare(os, &sides)
     }
@@ -1619,17 +1630,21 @@ mod tests {
 
         let sides = sides_of(7, "try-windows", &files).unwrap();
 
-        // Rounds 2 and 5 were finished by both, and keep their numbers.
-        assert_eq!(sides.numbers, [2, 5]);
-        assert_eq!((sides.base.len(), sides.head.len()), (2, 2));
-        assert_eq!(
-            sides.left_out,
-            [
-                "round 1: head failed: cortex-base t::a",
-                "round 3: base failed: cortex-base t::a",
-                "round 4: head kept no report",
-            ]
-        );
+        // Rounds 1 and 3 failed only by a test, on one side: compared
+        // without it, as `ab` compares them, and the test named as a
+        // failure. Round 4 kept no report on one side. The rest keep their
+        // numbers.
+        assert_eq!(sides.numbers, [1, 2, 3, 5]);
+        assert_eq!((sides.base.len(), sides.head.len()), (4, 4));
+        assert_eq!(sides.left_out, ["round 4: head kept no report"]);
+        assert_eq!(sides.one_sided, ["cortex-base t::a"]);
+        assert!(sides.skipped.is_empty(), "{:?}", sides.skipped);
+        for cases in sides.base.iter().chain(&sides.head) {
+            assert!(
+                !cases.iter().any(|case| case.id() == "cortex-base t::a"),
+                "the failed test is out of every round"
+            );
+        }
         let none = sides_of(7, "try-windows", &files[..0]).unwrap_err();
         assert!(none.contains("holds no A/B reports"), "{none}");
         let _ = std::fs::remove_dir_all(dir);
@@ -1679,13 +1694,18 @@ mod tests {
             assert_eq!(ids, ["cortex-base t::b"], "t::a is out of every round");
         }
 
-        // Failed on one side only in another round: that round is left out,
-        // and t::a is still out of the others.
+        assert!(sides.one_sided.is_empty());
+
+        // Failed on one side only in another round: that round is compared
+        // too, t::a is out of every round, and it is named as a test that
+        // failed on one side, no longer as one both sides failed.
         keep(&mut files, "base-round-4.xml", report_of_two(true));
         keep(&mut files, "head-round-4.xml", report_of_two(false));
         let sides = sides_of(7, "try-windows", &files).unwrap();
-        assert_eq!(sides.numbers, [1, 2, 3]);
-        assert_eq!(sides.left_out, ["round 4: base failed: cortex-base t::a"]);
+        assert_eq!(sides.numbers, [1, 2, 3, 4]);
+        assert_eq!(sides.left_out, Vec::<String>::new());
+        assert_eq!(sides.one_sided, ["cortex-base t::a"]);
+        assert!(sides.skipped.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1725,6 +1745,7 @@ mod tests {
             numbers: vec![1, 4],
             left_out: vec![],
             skipped: Vec::new(),
+            one_sided: Vec::new(),
         };
         let one = compare(Os::Linux, &sides);
         assert_eq!(one.numbers, [1, 4]);
