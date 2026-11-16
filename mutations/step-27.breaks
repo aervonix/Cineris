@@ -181,3 +181,84 @@ find: stop.cancel();
 replace: let _ = stop;
 caught-by:
     cortex-cli::system serve::sys_a_signal_ends_the_server_with_its_code
+
+[break] the-ends-bound-begins-after-the-lane
+rule: The end's bound begins when serving stops, before the client's disconnect and the wait for its lane, which nothing else bounds.
+file: crates/cortex-rpc/src/connection.rs
+in: Connection::run
+find:
+        let ended = self.serve(stop, ending).await;
+        ending.cancel();
+replace:
+        let ended = self.serve(stop, ending).await;
+caught-by:
+    cortex-rpc::it wire::the_ends_bound_begins_before_the_lane_is_waited_for
+
+[break] the-ends-bound-begins-after-the-cores-end
+rule: A `shutdown` begins the end's bound before it ends the core, which waits for each session's close.
+file: crates/cortex-rpc/src/connection.rs
+in: Connection::shutdown
+find: ending.cancel();
+replace: let _ = ending;
+caught-by:
+    cortex-rpc::it wire::the_ends_bound_begins_before_a_shutdown_ends_the_core
+
+[break] a-refused-shutdown-begins-the-end
+rule: Only a `shutdown` the core takes begins the end: a refused one leaves the server serving, with no bound running on it.
+file: crates/cortex-rpc/src/connection.rs
+in: Connection::shutdown
+find: if matches!(self.role, Some(ClientRole::User | ClientRole::Supervisor)) {
+replace: if true {
+caught-by:
+    cortex-rpc::it wire::a_refused_shutdown_does_not_begin_the_end
+
+[break] a-refused-initialize-is-not-counted
+rule: An answer to `initialize` counts until it is written, so a client that repeats it and reads nothing is closed.
+file: crates/cortex-rpc/src/connection.rs
+in: Connection::initialize
+find:
+        if !self.shared.take_refusal() {
+            return Served::Ended(Ended::Flooded);
+        }
+        let core = self.shared.core.clone();
+replace:
+        let core = self.shared.core.clone();
+caught-by:
+    cortex-rpc::it wire::a_client_that_repeats_a_refused_initialize_and_reads_nothing_is_closed
+
+[break] the-writer-gives-results-first
+rule: Over the wire, a result is written after the events queued when it was ready, so a read's result comes after every event at or below its `seq`.
+file: crates/cortex-rpc/src/connection.rs
+in: write
+find: Some(queue) => order.next(queue, &shared.results),
+replace: Some(queue) => lock(&shared.results).pop_front().map(Next::Result).or_else(|| queue.try_next().map(Next::Core)),
+caught-by:
+    cortex-rpc::it wire::a_reads_result_comes_after_the_events_at_or_below_its_seq
+
+[break] a-result-counts-only-its-request
+rule: A result counts against the budget by its own size once it is larger than its request's line.
+file: crates/cortex-rpc/src/connection.rs
+in: Shared::answered
+find: let more = line.len().saturating_sub(bytes);
+replace: let more = 0;
+caught-by:
+    cortex-rpc::it wire::a_result_counts_against_the_budget_by_its_own_size
+
+[break] the-requests-after-a-shutdown-go-unanswered
+rule: The requests read with a `shutdown`, after it, are answered `shutting_down`.
+file: crates/cortex-rpc/src/connection.rs
+in: Connection::lines
+find: self.after_shutdown();
+replace: let _ = 0;
+caught-by:
+    cortex-rpc::it wire::the_requests_after_a_shutdown_are_answered
+
+[break] no-approval-time-limit-is-a-limit-of-nothing
+rule: `rpc.approval_timeout = "0s"` is no limit, never a limit of nothing that denies every approval at once.
+file: crates/cortex-cli/src/serve.rs
+in: approval_timeout
+find: (!rpc.approval_timeout.is_zero()).then_some(rpc.approval_timeout)
+replace: Some(rpc.approval_timeout)
+caught-by:
+    cortex-cli::bin/cortex serve::tests::the_approval_time_limit_is_the_settings_and_nothing_is_none
+

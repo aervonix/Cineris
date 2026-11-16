@@ -267,6 +267,8 @@ pub struct InProcess {
     bell: Arc<Bell>,
     dispatcher: Dispatcher<u64>,
     results: std::sync::mpsc::Receiver<(u64, Result<OpResult, ErrorData>)>,
+    /// Results that came while another was awaited.
+    early: std::collections::BTreeMap<u64, Result<OpResult, ErrorData>>,
     next: u64,
 }
 
@@ -311,21 +313,28 @@ impl InProcess {
             bell,
             dispatcher,
             results,
+            early: std::collections::BTreeMap::new(),
             next: 0,
         }
     }
 }
 
 impl Carrier for InProcess {
-    fn call(&mut self, op: Op) -> Result<OpResult, ErrorData> {
+    fn start(&mut self, op: Op) -> u64 {
         self.next += 1;
-        {
-            let _inside = self.handle.enter();
-            self.dispatcher.send(self.next, op);
+        let _inside = self.handle.enter();
+        self.dispatcher.send(self.next, op);
+        self.next
+    }
+
+    fn finish(&mut self, ticket: u64) -> Result<OpResult, ErrorData> {
+        loop {
+            if let Some(result) = self.early.remove(&ticket) {
+                return result;
+            }
+            let (answered, result) = self.results.recv().expect("the lane answered");
+            self.early.insert(answered, result);
         }
-        let (ticket, result) = self.results.recv().expect("the lane answered");
-        assert_eq!(ticket, self.next);
-        result
     }
 
     fn next(&mut self) -> Option<Inbound> {
@@ -353,6 +362,8 @@ impl Carrier for InProcess {
 pub struct Wire {
     pub lines: Lines,
     pub ended: std::sync::mpsc::Receiver<Ended>,
+    /// Cancelled when the server's end begins.
+    pub ending: CancelToken,
 }
 
 impl Wire {
@@ -362,12 +373,14 @@ impl Wire {
         let (transport, ends) = Transport::pair(lines);
         let (finished, ended) = std::sync::mpsc::channel();
         let core = thread.core.clone();
+        let ending = CancelToken::new();
+        let told = ending.clone();
         thread.handle.spawn(async move {
-            let (stop, ending) = (CancelToken::new(), CancelToken::new());
-            let how = cortex_rpc::serve_one(core, transport, options, &stop, &ending).await;
+            let stop = CancelToken::new();
+            let how = cortex_rpc::serve_one(core, transport, options, &stop, &told).await;
             let _ = finished.send(how);
         });
-        Self::client(ends, ended)
+        Self::client(ends, ended, ending)
     }
 
     /// One connection, run and finished, of a server that does not end with
@@ -378,14 +391,20 @@ impl Wire {
         let core = thread.core.clone();
         thread.handle.spawn(async move {
             let mut connection = cortex_rpc::Connection::start(core, transport, options);
-            let how = connection.run(&CancelToken::new()).await;
+            let how = connection
+                .run(&CancelToken::new(), &CancelToken::new())
+                .await;
             connection.finish(how).await;
             let _ = finished.send(how);
         });
-        Self::client(ends, ended)
+        Self::client(ends, ended, CancelToken::new())
     }
 
-    fn client(ends: cortex_rpc::Ends, ended: std::sync::mpsc::Receiver<Ended>) -> Self {
+    fn client(
+        ends: cortex_rpc::Ends,
+        ended: std::sync::mpsc::Receiver<Ended>,
+        ending: CancelToken,
+    ) -> Self {
         let input = ends.input;
         let mut output = ends.output;
         let lines = Lines::new(
@@ -394,7 +413,11 @@ impl Wire {
             },
             move || output.blocking_recv(),
         );
-        Self { lines, ended }
+        Self {
+            lines,
+            ended,
+            ending,
+        }
     }
 
     /// The same, said `initialize` to.

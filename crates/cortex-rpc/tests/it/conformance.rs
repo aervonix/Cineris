@@ -57,11 +57,15 @@ pub fn compare(name: &str, first: &Transcript, second: &Transcript) {
 /// Every scenario gives the same transcript in process and over the wire.
 #[test]
 fn every_scenario_is_the_same_in_process_and_over_the_wire() {
-    for (number, scenario) in conformance::scenarios().iter().enumerate() {
-        let in_process = transcript(scenario, &format!("in-process-{number}"), |_, core| {
+    // A list for each carrier: a gate a scenario opens is opened for good.
+    let count = conformance::scenarios().len();
+    for number in 0..count {
+        let first = conformance::scenarios().swap_remove(number);
+        let in_process = transcript(&first, &format!("carrier-a-{number}"), |_, core| {
             Box::new(InProcess::connect(core))
         });
-        let over_the_wire = transcript(scenario, &format!("wire-{number}"), |world, core| {
+        let scenario = conformance::scenarios().swap_remove(number);
+        let over_the_wire = transcript(&scenario, &format!("carrier-b-{number}"), |world, core| {
             Box::new(Wire::connect(core, world.serve_options()).lines)
         });
         assert!(

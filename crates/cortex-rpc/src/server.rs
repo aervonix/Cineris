@@ -17,9 +17,12 @@ use crate::transport::Transport;
 /// session being put together when the end began ends itself in the core
 /// rather than being cut off by the exit (the open item
 /// `shutdown-and-a-session-being-put-together`); a `shutdown` is answered;
-/// and what is queued is written, each wait bounded by `options`.
-/// `ending` is cancelled when the end begins, for a caller that bounds the
-/// whole of it: `Core::shutdown` waits for each session's close.
+/// and what is queued is written, each wait bounded by `options`. After a
+/// `shutdown`, the core's end comes first, as the request asks.
+/// `ending` is cancelled when the end begins (before a `shutdown` ends the
+/// core, or when serving stops), for a caller that bounds the whole of it:
+/// `Core::shutdown` and the client's disconnect wait for each session's
+/// close, which nothing bounds.
 pub async fn serve_one(
     core: Core,
     transport: Transport,
@@ -28,8 +31,7 @@ pub async fn serve_one(
     ending: &CancelToken,
 ) -> Ended {
     let mut connection = Connection::start(core.clone(), transport, options);
-    let ended = connection.run(stop).await;
-    ending.cancel();
+    let ended = connection.run(stop, ending).await;
     // A `shutdown` request has shut the core down already.
     if ended != Ended::Shutdown {
         core.shutdown().await;

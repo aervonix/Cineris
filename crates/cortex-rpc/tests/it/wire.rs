@@ -134,7 +134,9 @@ fn each_bad_line_is_answered_and_reading_goes_on() {
 fn a_stream_cut_mid_line_is_a_parse_error_and_the_end() {
     let world = World::new("cut");
     let core = world.core();
-    let Wire { mut lines, ended } = Wire::connect(&core, world.serve_options());
+    let Wire {
+        mut lines, ended, ..
+    } = Wire::connect(&core, world.serve_options());
     lines.write_raw(b"{\"jsonrpc\":\"2.0\",\"id\":7,\"meth");
     // The end of the server's input; the client keeps reading.
     lines.end_input();
@@ -155,7 +157,9 @@ fn the_end_of_the_input_ends_the_clients_sessions_and_the_server() {
     let world = World::new("eof");
     let core = world.core();
     let wire = Wire::connect(&core, world.serve_options());
-    let Wire { mut lines, ended } = wire;
+    let Wire {
+        mut lines, ended, ..
+    } = wire;
     let opened = lines.call(new_session(&world)).expect("a session opens");
     let cortex_protocol::methods::OpResult::SessionNew(opened) = opened else {
         panic!("not a session");
@@ -188,7 +192,9 @@ fn the_end_of_the_input_ends_the_clients_sessions_and_the_server() {
 fn shutdown_is_answered_once_the_core_has_stopped() {
     let world = World::new("shutdown");
     let core = world.core();
-    let Wire { mut lines, ended } = Wire::connect(&core, world.serve_options());
+    let Wire {
+        mut lines, ended, ..
+    } = Wire::connect(&core, world.serve_options());
     lines.call(new_session(&world)).expect("a session opens");
     let stopped = lines.call(Op::Shutdown(Empty {})).expect("shutdown");
     assert_eq!(stopped.result().unwrap(), json!({}));
@@ -261,7 +267,9 @@ fn a_client_that_takes_nothing_is_closed_and_the_session_goes_on() {
     options.queue = 4;
     options.stalled_client = Duration::from_secs(30);
     // One connection of a server that outlives it, as a socket's are.
-    let Wire { mut lines, ended } = Wire::connection(&core, options, 1);
+    let Wire {
+        mut lines, ended, ..
+    } = Wire::connection(&core, options, 1);
     lines
         .initialize(conformance::initialize())
         .expect("initialize");
@@ -313,7 +321,9 @@ fn a_client_that_takes_nothing_is_closed_and_the_session_goes_on() {
     );
     // Its writer waits on it, and looks at its queue: past the limit, the
     // connection is closed.
-    cortex_testkit::block_on(world.timer.sleeping());
+    // The writer's look while a line waits: one second, told apart from
+    // the core's own waits on the same timer.
+    cortex_testkit::block_on(world.timer.sleeping_for(Duration::from_secs(1)));
     world.timer.advance(Duration::from_secs(31));
     assert_eq!(ended.recv().unwrap(), Ended::Stalled);
     assert_eq!(
@@ -360,7 +370,7 @@ fn a_client_that_leaves_while_its_open_waits_on_a_question_ends_at_once() {
     wire.lines.write(&Message::Request(open));
     let (_, method) = until_request(&mut wire);
     assert_eq!(method, "trust/request");
-    let Wire { lines, ended } = wire;
+    let Wire { lines, ended, .. } = wire;
     drop(lines);
     assert_eq!(ended.recv().unwrap(), Ended::Closed);
     assert!(
@@ -455,4 +465,277 @@ fn a_shutdown_waits_for_an_operation_still_running_past_the_lanes_bound() {
     }
     assert_eq!(answered, [RequestId::Number(7), RequestId::Number(8)]);
     assert_eq!(wire.ended.recv().unwrap(), Ended::Shutdown);
+}
+
+/// The end's bound begins when serving stops, before the client's
+/// disconnect and the wait for its lane, which wait for what holds them:
+/// here a change to the project's store, held as it is written, keeps the
+/// lane, and the end has begun all the same.
+#[test]
+fn the_ends_bound_begins_before_the_lane_is_waited_for() {
+    let world = World::new("ending-before-the-lane");
+    let core = world.core();
+    let mut wire = Wire::connect(&core, world.serve_options());
+    let hold = cortex_testkit::Hold::new(AFTER_THE_STORE);
+    wire.lines.write_raw(&request(
+        7,
+        "project/update",
+        json!({"workspace": world.workspace, "add": [{"kind": "fact", "text": "It builds with make."}]}),
+    ));
+    hold.reach();
+    wire.lines.end_input();
+    cortex_testkit::block_on(wire.ending.cancelled());
+    hold.release();
+    assert_eq!(wire.ended.recv().unwrap(), Ended::Closed);
+}
+
+/// The end's bound begins before a `shutdown` ends the core, which waits
+/// for each session's close: here a change of level, held as it puts its
+/// engine in force, which the core's end waits for.
+#[test]
+fn the_ends_bound_begins_before_a_shutdown_ends_the_core() {
+    let world = World::new("ending-before-the-core");
+    let core = world.core();
+    let mut wire = Wire::connect(&core, world.serve_options());
+    let opened = wire
+        .lines
+        .call(new_session(&world))
+        .expect("a session opens");
+    let cortex_protocol::methods::OpResult::SessionNew(opened) = opened else {
+        panic!("not a session");
+    };
+    let hold = cortex_testkit::Hold::new(cortex_core::BEFORE_THE_NEW_LEVEL_IS_IN_FORCE);
+    wire.lines.write_raw(&request(
+        7,
+        "session/set",
+        json!({"session_id": opened.session.session_id, "settings": {"level": "read-only"}}),
+    ));
+    hold.reach();
+    wire.lines.write_raw(&request(8, "shutdown", json!({})));
+    cortex_testkit::block_on(wire.ending.cancelled());
+    hold.release();
+    assert_eq!(wire.ended.recv().unwrap(), Ended::Shutdown);
+}
+
+/// An observer's `shutdown` is refused, and does not begin the end: the
+/// server goes on.
+#[test]
+fn a_refused_shutdown_does_not_begin_the_end() {
+    let world = World::new("observer-shutdown");
+    let core = world.core();
+    let mut wire = Wire::serve(&core, world.serve_options(), 64);
+    let mut params = conformance::initialize();
+    params.role = cortex_protocol::methods::ClientRole::Observer;
+    wire.lines.initialize(params).expect("initialize");
+    let refused = wire.lines.call(Op::Shutdown(Empty {})).unwrap_err();
+    assert_eq!(refused.code, "role_not_allowed");
+    assert!(
+        !wire.ending.is_cancelled(),
+        "a refused shutdown began the end"
+    );
+    assert!(wire.lines.call(Op::ModelsList(Empty {})).is_ok());
+}
+
+/// A client that says `initialize` over and over and reads nothing is
+/// closed, as one that floods with other requests is: each answer counts
+/// until it is written.
+#[test]
+fn a_client_that_repeats_a_refused_initialize_and_reads_nothing_is_closed() {
+    let world = World::new("initialize-flood");
+    let core = world.core();
+    let mut options = world.serve_options();
+    options.max_requests = 2;
+    let mut wire = Wire::serve(&core, options, 1);
+    let mut params = serde_json::to_value(conformance::initialize()).unwrap();
+    params["protocol_version"] = json!(99);
+    let mut burst = Vec::new();
+    for id in 10..40 {
+        burst.extend(request(id, "initialize", params.clone()));
+    }
+    wire.lines.write_raw(&burst);
+    assert_eq!(wire.ended.recv().unwrap(), Ended::Flooded);
+}
+
+/// Over the wire, a `session/read`'s result comes after every event at or
+/// below its `seq` that the client was sent, however far behind the
+/// client is: here it reads nothing while a turn's events wait for it,
+/// then asks for the history, then reads everything.
+#[test]
+fn a_reads_result_comes_after_the_events_at_or_below_its_seq() {
+    let world = World::new("read-after-events");
+    let pieces: Vec<String> = (0..12).map(|piece| format!("piece {piece} ")).collect();
+    let pieces: Vec<&str> = pieces.iter().map(String::as_str).collect();
+    world.server.push(anthropic::text(&pieces));
+    let core = world.core();
+    let Wire { mut lines, .. } = Wire::serve(&core, world.serve_options(), 1);
+    lines
+        .initialize(conformance::initialize())
+        .expect("initialize");
+    let opened = lines.call(new_session(&world)).expect("a session opens");
+    let cortex_protocol::methods::OpResult::SessionNew(opened) = opened else {
+        panic!("not a session");
+    };
+    let session: SessionId = opened.session.session_id;
+    let watcher = core.core.connect(ClientInfo::observer());
+    let watching = {
+        let core = core.core.clone();
+        let session = session.clone();
+        async move {
+            core.handle(
+                watcher.id,
+                Op::SessionOpen(SessionRef {
+                    session_id: session,
+                }),
+            )
+            .await
+        }
+    };
+    core.on(watching)
+        .expect("the observer opens the running session");
+    lines.write_raw(&request(
+        50,
+        "turn/start",
+        json!({"session_id": session, "input": [{"kind": "text", "text": "go"}]}),
+    ));
+    loop {
+        match cortex_testkit::block_on(watcher.queue.next()) {
+            Some(Outgoing::Event(event)) if matches!(event.event, Event::SessionIdle(_)) => break,
+            Some(_) => {}
+            None => panic!("the watcher's queue closed"),
+        }
+    }
+    // The client's writer waits on it, with the turn's events queued.
+    lines.write_raw(&request(51, "session/read", json!({"session_id": session})));
+    let mut seqs = Vec::new();
+    let mut read_at = None;
+    while read_at.is_none() {
+        match lines.read() {
+            Some(Message::Notification(notification)) => {
+                if let Some(seq) = notification
+                    .params
+                    .as_ref()
+                    .and_then(|params| params["seq"].as_u64())
+                {
+                    seqs.push(seq);
+                }
+            }
+            Some(Message::Response(Response {
+                id: Some(RequestId::Number(51)),
+                result,
+            })) => {
+                read_at = result.unwrap()["seq"].as_u64();
+            }
+            Some(_) => {}
+            None => panic!("the connection ended before the read was answered"),
+        }
+    }
+    let read_at = read_at.unwrap();
+    assert!(!seqs.is_empty(), "no event came before the read");
+    // Nothing at or below the read's `seq` comes after its result.
+    lines.end_input();
+    while let Some(message) = lines.read() {
+        if let Message::Notification(notification) = message
+            && let Some(seq) = notification
+                .params
+                .as_ref()
+                .and_then(|params| params["seq"].as_u64())
+        {
+            assert!(
+                seq > read_at,
+                "event {seq} came after the read at {read_at}"
+            );
+        }
+    }
+}
+
+/// A result counts against the budget by its own size: a client that
+/// leaves large results unread is refused before they pile up.
+#[test]
+fn a_result_counts_against_the_budget_by_its_own_size() {
+    let world = World::new("result-bytes");
+    world
+        .server
+        .push(anthropic::text(&[&"many words ".repeat(400)]));
+    let core = world.core();
+    let mut options = world.serve_options();
+    options.max_request_bytes = 4096;
+    let Wire { mut lines, .. } = Wire::serve(&core, options, 1);
+    lines
+        .initialize(conformance::initialize())
+        .expect("initialize");
+    let opened = lines.call(new_session(&world)).expect("a session opens");
+    let cortex_protocol::methods::OpResult::SessionNew(opened) = opened else {
+        panic!("not a session");
+    };
+    let session = opened.session.session_id;
+    lines
+        .call(Op::TurnStart(TurnStartParams {
+            session_id: session.clone(),
+            input: vec![Part::text("go")],
+            delivery: None,
+        }))
+        .expect("the turn starts");
+    loop {
+        if let Some(conformance::Inbound::Event(event)) = lines.next()
+            && matches!(event.event, Event::SessionIdle(_))
+        {
+            break;
+        }
+    }
+    // Two reads of the history, unread: the first fills the channel, the
+    // second waits in the server, its writer waiting on the client.
+    lines.write_raw(&request(60, "session/read", json!({"session_id": session})));
+    lines.write_raw(&request(61, "session/read", json!({"session_id": session})));
+    cortex_testkit::block_on(world.timer.sleeping_for(Duration::from_secs(1)));
+    // Small as its line is, the next is past the bytes the results hold.
+    lines.write_raw(&request(62, "session/read", json!({"session_id": session})));
+    let mut refused = None;
+    while refused.is_none() {
+        match lines.read() {
+            Some(Message::Response(Response {
+                id: Some(RequestId::Number(62)),
+                result,
+            })) => {
+                refused = Some(result.unwrap_err().error_data().map(|data| data.code));
+            }
+            Some(_) => {}
+            None => panic!("the connection ended"),
+        }
+    }
+    assert_eq!(refused.unwrap().as_deref(), Some("overloaded"));
+}
+
+/// The requests read with a `shutdown`, after it, are answered
+/// `shutting_down`: none goes unanswered.
+#[test]
+fn the_requests_after_a_shutdown_are_answered() {
+    let world = World::new("after-shutdown");
+    let core = world.core();
+    let mut wire = Wire::connect(&core, world.serve_options());
+    let mut burst = request(8, "shutdown", json!({}));
+    burst.extend(request(9, "models/list", json!({})));
+    wire.lines.write_raw(&burst);
+    let mut answered = Vec::new();
+    while let Some(message) = wire.lines.read() {
+        if let Message::Response(Response {
+            id: Some(id),
+            result,
+        }) = message
+        {
+            answered.push((
+                id,
+                result
+                    .err()
+                    .and_then(|error| error.error_data())
+                    .map(|data| data.code),
+            ));
+        }
+    }
+    assert_eq!(
+        answered,
+        [
+            (RequestId::Number(9), Some("shutting_down".to_owned())),
+            (RequestId::Number(8), None),
+        ]
+    );
 }

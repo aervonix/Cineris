@@ -58,7 +58,7 @@ use cortex_core::{Client, ClientInfo, Core, EventQueue, Outgoing, QUEUE_CAPACITY
 use cortex_protocol::error::code;
 use cortex_protocol::event::Event;
 use cortex_protocol::jsonrpc::{ErrorObject, Request, RequestId, Response};
-use cortex_protocol::methods::{Empty, InitializeParams, Op, OpResult, ServerResponse};
+use cortex_protocol::methods::{ClientRole, Empty, InitializeParams, Op, OpResult, ServerResponse};
 use cortex_protocol::{ErrorData, ErrorKind};
 use tokio::sync::{Notify, mpsc};
 
@@ -234,6 +234,18 @@ impl Shared {
             )
         });
         if written.is_ok() {
+            // A result counts against the budget by its own size, once it
+            // is larger than the request's line: a client that asks for
+            // whole histories and reads none of them is refused more
+            // before they pile up.
+            let frees = match frees {
+                Frees::Request(bytes) => {
+                    let more = line.len().saturating_sub(bytes);
+                    lock(&self.budget).bytes += more;
+                    Frees::Request(bytes + more)
+                }
+                other => other,
+            };
             self.ready(line, frees);
         } else {
             // Nothing can be said; its place is given back all the same.
@@ -245,12 +257,8 @@ impl Shared {
     /// False when the client has too many unread already: it is flooding.
     #[must_use]
     fn refuse(&self, id: Option<RequestId>, error: ErrorObject) -> bool {
-        {
-            let mut budget = lock(&self.budget);
-            if budget.refusals >= self.options.max_requests.max(1) {
-                return false;
-            }
-            budget.refusals += 1;
+        if !self.take_refusal() {
+            return false;
         }
         let mut line = Vec::new();
         if wire::error(id, error, &mut line).is_ok() {
@@ -259,6 +267,28 @@ impl Shared {
             self.free(Frees::Refusal);
         }
         true
+    }
+
+    /// Counts an answer given outside the lane (a refusal, `initialize`,
+    /// `shutdown`) until it is written. False when the client has as many
+    /// unread as requests may run: it sends and does not read.
+    #[must_use]
+    fn take_refusal(&self) -> bool {
+        let mut budget = lock(&self.budget);
+        if budget.refusals >= self.options.max_requests.max(1) {
+            return false;
+        }
+        budget.refusals += 1;
+        true
+    }
+
+    /// Whether the client is near a bound, so that the reader lets the
+    /// writer catch up before it reads on: a client that reads is then
+    /// not taken for one that floods.
+    fn near_a_bound(&self) -> bool {
+        let budget = lock(&self.budget);
+        let most = self.options.max_requests.max(1);
+        budget.refusals * 2 >= most || budget.requests * 2 >= most
     }
 
     /// The same, for an error of the protocol's own kind.
@@ -297,6 +327,8 @@ pub struct Connection {
     /// The `shutdown` request that ended the connection, answered once the
     /// server has stopped.
     shutdown: Option<RequestId>,
+    /// The role the client said in `initialize`.
+    role: Option<ClientRole>,
 }
 
 impl std::fmt::Debug for Connection {
@@ -337,6 +369,7 @@ impl Connection {
             writer,
             writer_done: false,
             shutdown: None,
+            role: None,
         }
     }
 
@@ -350,8 +383,14 @@ impl Connection {
     /// it gone or stalled, it floods, it asks for `shutdown`, or `stop` is
     /// cancelled. Then disconnects it from the core and waits for its
     /// lane's operation at most [`ServeOptions::lane_end`].
-    pub async fn run(&mut self, stop: &CancelToken) -> Ended {
-        let ended = self.serve(stop).await;
+    ///
+    /// `ending` is cancelled when the end begins: when serving stops, and
+    /// before a `shutdown` ends the core, for a caller that bounds the
+    /// whole end (the core's end waits for each session's close, which
+    /// nothing bounds).
+    pub async fn run(&mut self, stop: &CancelToken, ending: &CancelToken) -> Ended {
+        let ended = self.serve(stop, ending).await;
+        ending.cancel();
         // What it was asked and never answered is withdrawn, which ends an
         // operation waiting on the answer, before the lane is waited for.
         if let Some(client) = self.client() {
@@ -404,7 +443,7 @@ impl Connection {
         }
     }
 
-    async fn serve(&mut self, stop: &CancelToken) -> Ended {
+    async fn serve(&mut self, stop: &CancelToken, ending: &CancelToken) -> Ended {
         loop {
             let writer = &mut self.writer;
             let input = &mut self.input;
@@ -437,7 +476,7 @@ impl Connection {
                 }
                 Step::Chunk(Some(Ok(bytes))) => {
                     self.decoder.push(&bytes);
-                    if let Some(ended) = self.lines().await {
+                    if let Some(ended) = self.lines(ending).await {
                         return ended;
                     }
                 }
@@ -447,9 +486,12 @@ impl Connection {
 
     /// Serves every whole line the decoder holds. An end when one of them
     /// ended the connection.
-    async fn lines(&mut self) -> Option<Ended> {
+    async fn lines(&mut self, ending: &CancelToken) -> Option<Ended> {
         let long_line = self.shared.options.long_line;
         loop {
+            if self.shared.near_a_bound() {
+                tokio::task::yield_now().await;
+            }
             let (bytes, incoming) = match self.decoder.next_line() {
                 None => return None,
                 Some(Err(error)) => {
@@ -466,20 +508,55 @@ impl Connection {
                     let read = tokio::task::spawn_blocking(move || wire::read(&line)).await;
                     match read {
                         Ok(incoming) => (bytes, incoming),
-                        Err(_) => continue,
+                        Err(_) => (
+                            bytes,
+                            Incoming::Bad {
+                                id: None,
+                                error: ErrorObject {
+                                    code: cortex_protocol::jsonrpc::code::INTERNAL_ERROR,
+                                    message: "the line could not be read".to_owned(),
+                                    data: None,
+                                },
+                            },
+                        ),
                     }
                 }
                 Some(Ok(line)) => (line.len(), wire::read(line)),
             };
-            match self.line(bytes, incoming).await {
+            match self.line(bytes, incoming, ending).await {
                 Served::On => {}
+                Served::Ended(Ended::Shutdown) => {
+                    self.after_shutdown();
+                    return Some(Ended::Shutdown);
+                }
                 Served::Ended(ended) => return Some(ended),
             }
         }
     }
 
+    /// The requests read with a `shutdown`, after it: each is answered
+    /// `shutting_down`, so that none goes unanswered. Answers to requests
+    /// the server put are still taken.
+    fn after_shutdown(&mut self) {
+        while let Some(line) = self.decoder.next_line() {
+            let Ok(line) = line else { continue };
+            match wire::read(line) {
+                Incoming::Request(request) => {
+                    let _ = self.shared.refuse_with(
+                        request.id,
+                        ErrorKind::Usage,
+                        code::SHUTTING_DOWN,
+                        "The server is shutting down, and takes nothing more.",
+                    );
+                }
+                Incoming::Response(response) => self.answer(response),
+                Incoming::Notification | Incoming::Bad { .. } => {}
+            }
+        }
+    }
+
     /// Serves one line.
-    async fn line(&mut self, bytes: usize, incoming: Incoming) -> Served {
+    async fn line(&mut self, bytes: usize, incoming: Incoming, ending: &CancelToken) -> Served {
         match incoming {
             Incoming::Bad { id, error } => {
                 if self.shared.refuse(id, error) {
@@ -493,7 +570,7 @@ impl Connection {
                 self.answer(response);
                 Served::On
             }
-            Incoming::Request(request) => self.request(bytes, request).await,
+            Incoming::Request(request) => self.request(bytes, request, ending).await,
         }
     }
 
@@ -543,7 +620,7 @@ impl Connection {
     }
 
     /// A request.
-    async fn request(&mut self, bytes: usize, request: Request) -> Served {
+    async fn request(&mut self, bytes: usize, request: Request, ending: &CancelToken) -> Served {
         let Request { id, method, params } = request;
         if self.dispatcher.is_none() {
             if method == "initialize" {
@@ -569,7 +646,7 @@ impl Connection {
                 code::ALREADY_INITIALIZED,
                 "This connection has said `initialize` already.",
             )),
-            Op::Shutdown(params) => self.shutdown(id, params).await,
+            Op::Shutdown(params) => self.shutdown(id, params, ending).await,
             op => {
                 let taken = {
                     let mut budget = lock(&self.shared.budget);
@@ -609,16 +686,21 @@ impl Connection {
         }
     }
 
-    /// `shutdown`: the core stops, outside the lane.
-    async fn shutdown(&mut self, id: RequestId, params: Empty) -> Served {
+    /// `shutdown`: the core stops, outside the lane. The end begins before
+    /// the core's own end, which waits for each session's close.
+    async fn shutdown(&mut self, id: RequestId, params: Empty, ending: &CancelToken) -> Served {
         let Some(client) = self.client() else {
             return Served::On;
         };
         // Counted as a refusal until its answer is written, as it is
         // answered outside the lane.
-        {
-            let mut budget = lock(&self.shared.budget);
-            budget.refusals += 1;
+        if !self.shared.take_refusal() {
+            return Served::Ended(Ended::Flooded);
+        }
+        // Only a role the core lets end it: a refused `shutdown` must not
+        // start the bound on an end that is not coming.
+        if matches!(self.role, Some(ClientRole::User | ClientRole::Supervisor)) {
+            ending.cancel();
         }
         match self
             .shared
@@ -650,24 +732,32 @@ impl Connection {
         let InitializeParams {
             role, capabilities, ..
         } = &params;
+        let role = role.clone();
         let info = ClientInfo {
             role: role.clone(),
             capabilities: capabilities.clone(),
             queue: self.shared.options.queue,
         };
+        // Counted as a refusal until its answer is written, as it is
+        // answered outside the lane: a client that says `initialize` over
+        // and over and reads nothing is flooding.
+        if !self.shared.take_refusal() {
+            return Served::Ended(Ended::Flooded);
+        }
         let core = self.shared.core.clone();
         let client = core.connect(info);
-        {
-            let mut budget = lock(&self.shared.budget);
-            budget.refusals += 1;
-        }
         match core.handle(client.id, Op::Initialize(params)).await {
             Ok(result) => {
-                let wake = Arc::clone(&self.shared);
-                client
-                    .queue
-                    .set_wake(Arc::new(move || wake.wake.notify_one()));
+                // Weak: the queue is the client's, which the connection
+                // holds, and a strong hold back would keep both for good.
+                let wake = Arc::downgrade(&self.shared);
+                client.queue.set_wake(Arc::new(move || {
+                    if let Some(shared) = wake.upgrade() {
+                        shared.wake.notify_one();
+                    }
+                }));
                 *lock(&self.shared.client) = Some(client.clone());
+                self.role = Some(role);
                 let client_id = client.id;
                 let run: Run = Arc::new(move |op| {
                     let core = core.clone();

@@ -27,6 +27,15 @@
 //! does not depend on timing. Each carrier's `seq` is checked to increase,
 //! and [`Lines`] checks that no event at or below a `session/read`'s `seq`
 //! arrives after the read's result.
+//!
+//! **What it does not see,** by design: events after a scenario's last
+//! step that waits for one, and where a result falls among the events
+//! (each is kept at its step: when it arrives beside the events is the
+//! carrier's timing, and the one rule about it, a read's fence, is checked
+//! on the wire as said). An answer the server does not take shows as a
+//! scenario that waits for good, which the test's time limit ends: the
+//! wire gives no reply to an answer. A request is kept with its method and
+//! its parameters.
 
 #![expect(
     clippy::result_large_err,
@@ -207,18 +216,30 @@ pub type MakeAnswer = Box<dyn Fn(&ServerRequest) -> ServerResponse + Send + Sync
 pub enum Step {
     /// Sends an operation, and keeps its result.
     Call(MakeOp),
+    /// Sends an operation and goes on: its result is kept at the
+    /// [`Finish`](Self::Finish) after it (an open that asks a question
+    /// first, which a step must answer meanwhile).
+    Start(MakeOp),
+    /// Waits for the result of the oldest operation started and not yet
+    /// finished, and keeps it.
+    Finish,
     /// Takes events until a request comes, and answers it.
     Answer(MakeAnswer),
     /// Takes events until one of this type (`turn.completed`).
     Until(&'static str),
+    /// Opens a gate a scripted reply waits on: the model goes on.
+    Open(crate::Gate),
 }
 
 impl std::fmt::Debug for Step {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Call(_) => f.write_str("Call"),
+            Self::Start(_) => f.write_str("Start"),
+            Self::Finish => f.write_str("Finish"),
             Self::Answer(_) => f.write_str("Answer"),
             Self::Until(event) => write!(f, "Until({event})"),
+            Self::Open(_) => f.write_str("Open"),
         }
     }
 }
@@ -238,6 +259,25 @@ pub struct Scenario {
 
 fn call(make: impl Fn(&Ctx) -> Op + Send + Sync + 'static) -> Step {
     Step::Call(Box::new(make))
+}
+
+/// An operation from its method and its parameters as JSON: for the
+/// methods whose parameters a scenario only writes out.
+fn json_call(method: &'static str, params: impl Fn(&Ctx) -> Value + Send + Sync + 'static) -> Step {
+    call(move |ctx| {
+        Op::from_wire(method, Some(params(ctx)))
+            .unwrap_or_else(|error| panic!("a scenario's `{method}` does not read: {error}"))
+    })
+}
+
+fn prompt_with(text: &'static str, delivery: cortex_protocol::item::Delivery) -> Step {
+    call(move |ctx| {
+        Op::TurnStart(TurnStartParams {
+            session_id: ctx.session(),
+            input: vec![cortex_protocol::Part::text(text)],
+            delivery: Some(delivery.clone()),
+        })
+    })
 }
 
 fn answer(make: impl Fn(&ServerRequest) -> ServerResponse + Send + Sync + 'static) -> Step {
@@ -429,6 +469,134 @@ pub fn scenarios() -> Vec<Scenario> {
                 close(),
             ],
         },
+        {
+            let held = crate::Gate::new();
+            Scenario {
+                name: "steering a running turn",
+                files: vec![],
+                model: vec![
+                    anthropic::text(&["First."]).hold_until(&held),
+                    anthropic::text(&["Also done."]),
+                ],
+                steps: vec![
+                    new_session(),
+                    prompt("first"),
+                    Step::Until("turn.started"),
+                    prompt_with("and this too", cortex_protocol::item::Delivery::Steer),
+                    Step::Open(held),
+                    Step::Until("session.idle"),
+                    read(),
+                    close(),
+                ],
+            }
+        },
+        {
+            let held = crate::Gate::new();
+            Scenario {
+                name: "a prompt queued behind a turn",
+                files: vec![],
+                model: vec![
+                    anthropic::text(&["First."]).hold_until(&held),
+                    anthropic::text(&["Second."]),
+                ],
+                steps: vec![
+                    new_session(),
+                    prompt("first"),
+                    Step::Until("turn.started"),
+                    prompt_with("then this", cortex_protocol::item::Delivery::Queue),
+                    Step::Open(held),
+                    Step::Until("session.idle"),
+                    read(),
+                    close(),
+                ],
+            }
+        },
+        Scenario {
+            name: "compacting an idle session",
+            files: vec![],
+            model: vec![
+                anthropic::text(&["One."]),
+                anthropic::text(&["The user said one thing, and it was answered."]),
+            ],
+            steps: vec![
+                new_session(),
+                prompt("one"),
+                Step::Until("session.idle"),
+                json_call(
+                    "session/compact",
+                    |ctx| json!({"session_id": ctx.session()}),
+                ),
+                Step::Until("session.idle"),
+                read(),
+                close(),
+            ],
+        },
+        Scenario {
+            name: "trusting the project when asked",
+            files: vec![(
+                ".cortex/config.toml",
+                "[[permissions.rules]]\neffect = \"exec\"\nmatch = \"cargo *\"\naction = \"allow\"\n",
+            )],
+            model: vec![],
+            steps: vec![
+                Step::Start(Box::new(|ctx| {
+                    Op::SessionNew(SessionNewParams {
+                        workspace: ctx.workspace.clone(),
+                        settings: cortex_protocol::session::SessionSettings::default(),
+                        title: None,
+                        config: Map::new(),
+                        ephemeral: false,
+                    })
+                })),
+                answer(|_| {
+                    ServerResponse::Trust(cortex_protocol::methods::TrustResponse {
+                        trusted: true,
+                        never: false,
+                    })
+                }),
+                Step::Finish,
+                call(|ctx| Op::PermissionsList(ctx.session_ref())),
+                close(),
+            ],
+        },
+        Scenario {
+            name: "the writes of the method table",
+            files: vec![],
+            model: vec![anthropic::text(&["Done."])],
+            steps: vec![
+                new_session(),
+                prompt("one"),
+                Step::Until("session.idle"),
+                json_call(
+                    "session/set",
+                    |ctx| json!({"session_id": ctx.session(), "settings": {"level": "read-only"}}),
+                ),
+                json_call(
+                    "plan/update",
+                    |ctx| json!({"session_id": ctx.session(), "edits": []}),
+                ),
+                json_call(
+                    "permissions/revoke",
+                    |ctx| json!({"session_id": ctx.session(), "ids": ["a_not_there"]}),
+                ),
+                json_call("usage/refresh", |_| json!({"providers": []})),
+                json_call("project/list", |ctx| json!({"workspace": ctx.workspace})),
+                json_call("project/update", |ctx| {
+                    json!({"workspace": ctx.workspace,
+                        "add": [{"kind": "fact", "text": "It builds with make."}]})
+                }),
+                json_call("config/reload", |_| json!({})),
+                json_call("verify/run", |ctx| json!({"session_id": ctx.session()})),
+                call(|ctx| Op::TurnInterrupt(TurnInterruptParams::new(ctx.session()))),
+                json_call(
+                    "session/undo",
+                    |ctx| json!({"session_id": ctx.session(), "restore_files": false}),
+                ),
+                read(),
+                json_call("session/fork", |ctx| json!({"session_id": ctx.session()})),
+                close(),
+            ],
+        },
     ]
 }
 
@@ -443,13 +611,28 @@ pub enum Inbound {
 
 /// A way to the core: in process, or over the wire.
 pub trait Carrier {
-    /// Sends an operation and waits for its result. Events and requests
-    /// that come meanwhile are kept for [`next`](Self::next).
+    /// Sends an operation, and returns a ticket for its result. Never
+    /// waits.
+    fn start(&mut self, op: Op) -> u64;
+
+    /// Waits for the result of the operation `ticket` names. Events and
+    /// requests that come meanwhile are kept for [`next`](Self::next), and
+    /// other results for their own tickets.
     ///
     /// # Errors
     ///
     /// The operation's error.
-    fn call(&mut self, op: Op) -> Result<OpResult, ErrorData>;
+    fn finish(&mut self, ticket: u64) -> Result<OpResult, ErrorData>;
+
+    /// Sends an operation and waits for its result.
+    ///
+    /// # Errors
+    ///
+    /// The operation's error.
+    fn call(&mut self, op: Op) -> Result<OpResult, ErrorData> {
+        let ticket = self.start(op);
+        self.finish(ticket)
+    }
 
     /// The next event or request, waiting for one. `None` when the
     /// connection ended.
@@ -532,10 +715,29 @@ pub fn run(
                 Some((kind, None))
             }
             Inbound::Request(id, request) => {
-                kept.push(json!({"request": request.params().unwrap_or(Value::Null)}));
+                kept.push(json!({"request": request.method(),
+                    "params": request.params().unwrap_or(Value::Null)}));
                 Some((String::new(), Some((id, request))))
             }
         }
+    };
+    let mut started: VecDeque<(u64, &'static str)> = VecDeque::new();
+    let keep = |ctx: &mut Ctx,
+                kept: &mut Vec<Value>,
+                method: &str,
+                result: Result<OpResult, ErrorData>| {
+        if let Ok(
+            OpResult::SessionNew(opened)
+            | OpResult::SessionOpen(opened)
+            | OpResult::SessionFork(opened),
+        ) = &result
+        {
+            ctx.session = Some(opened.session.session_id.clone());
+        }
+        kept.push(match result {
+            Ok(result) => json!({"method": method, "result": result.result().unwrap_or(Value::Null)}),
+            Err(error) => json!({"method": method, "error": serde_json::to_value(error).unwrap_or(Value::Null)}),
+        });
     };
     for step in &scenario.steps {
         match step {
@@ -543,14 +745,21 @@ pub fn run(
                 let op = make(&ctx);
                 let method = op.method();
                 let result = carrier.call(op);
-                if let Ok(OpResult::SessionNew(opened) | OpResult::SessionOpen(opened)) = &result {
-                    ctx.session = Some(opened.session.session_id.clone());
-                }
-                kept.push(match result {
-                    Ok(result) => json!({"method": method, "result": result.result().unwrap_or(Value::Null)}),
-                    Err(error) => json!({"method": method, "error": serde_json::to_value(error).unwrap_or(Value::Null)}),
-                });
+                keep(&mut ctx, &mut kept, method, result);
             }
+            Step::Start(make) => {
+                let op = make(&ctx);
+                let method = op.method();
+                started.push_back((carrier.start(op), method));
+            }
+            Step::Finish => {
+                let (ticket, method) = started
+                    .pop_front()
+                    .unwrap_or_else(|| panic!("{}: a finish with nothing started", scenario.name));
+                let result = carrier.finish(ticket);
+                keep(&mut ctx, &mut kept, method, result);
+            }
+            Step::Open(gate) => gate.open(),
             Step::Answer(make) => loop {
                 if let Some((_, Some((id, request)))) = take(carrier, &mut ctx, &mut kept) {
                     carrier.respond(id, make(&request));
@@ -753,6 +962,11 @@ pub struct Lines {
     /// For each session, the `seq` of the last read's result: no event at
     /// or below it may come after it.
     fences: BTreeMap<SessionId, u64>,
+    /// The operations sent and not yet answered: each one's method, and
+    /// the session a read is of.
+    pending: BTreeMap<u64, (&'static str, Option<SessionId>)>,
+    /// Results that came while another was awaited.
+    results: BTreeMap<u64, Result<Value, ErrorData>>,
 }
 
 impl std::fmt::Debug for Lines {
@@ -775,6 +989,8 @@ impl Lines {
             next_id: 0,
             kept: VecDeque::new(),
             fences: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            results: BTreeMap::new(),
         }
     }
 
@@ -860,41 +1076,64 @@ impl Lines {
 }
 
 impl Carrier for Lines {
-    fn call(&mut self, op: Op) -> Result<OpResult, ErrorData> {
+    fn start(&mut self, op: Op) -> u64 {
         self.next_id += 1;
-        let id = RequestId::Number(self.next_id);
+        let ticket = u64::try_from(self.next_id).unwrap_or(u64::MAX);
         let method = op.method();
         let read_session = match &op {
             Op::SessionRead(params) => Some(params.session_id.clone()),
             _ => None,
         };
-        let request = op.to_request(id.clone()).unwrap_or_else(|error| {
-            panic!("`{method}` cannot be written: {error}");
-        });
+        let request = op
+            .to_request(RequestId::Number(self.next_id))
+            .unwrap_or_else(|error| panic!("`{method}` cannot be written: {error}"));
+        self.pending.insert(ticket, (method, read_session));
         self.write(&Message::Request(request));
-        loop {
+        ticket
+    }
+
+    fn finish(&mut self, ticket: u64) -> Result<OpResult, ErrorData> {
+        let (method, read_session) = self
+            .pending
+            .get(&ticket)
+            .cloned()
+            .unwrap_or_else(|| panic!("no operation {ticket} was started"));
+        let value = loop {
+            if let Some(result) = self.results.remove(&ticket) {
+                break result;
+            }
             let message = self
                 .read()
                 .unwrap_or_else(|| panic!("the connection ended before `{method}` was answered"));
             match self.inbound(message) {
-                Some(Ok((answered, result))) => {
-                    assert_eq!(answered, id, "a response to a request not sent");
-                    let result = result.and_then(|value| {
-                        OpResult::from_wire(method, value).map_err(|error| {
-                            ErrorData::new(ErrorKind::Internal, "unreadable", error.to_string())
-                        })
-                    });
-                    if let (Ok(OpResult::SessionRead(read)), Some(session)) =
-                        (&result, read_session.clone())
+                Some(Ok((RequestId::Number(answered), result))) => {
+                    let answered = u64::try_from(answered).unwrap_or(u64::MAX);
+                    assert!(
+                        self.pending.contains_key(&answered),
+                        "a response to a request not sent"
+                    );
+                    // A read's result is the fence of the events after it,
+                    // from when it arrives.
+                    if let (Ok(value), Some((_, Some(session)))) =
+                        (&result, self.pending.get(&answered))
+                        && let Some(seq) = value.get("seq").and_then(Value::as_u64)
                     {
-                        self.fences.insert(session, read.seq);
+                        self.fences.insert(session.clone(), seq);
                     }
-                    return result;
+                    self.results.insert(answered, result);
                 }
+                Some(Ok((other, _))) => panic!("a response to `{other}`, which was not sent"),
                 Some(Err(inbound)) => self.kept.push_back(inbound),
                 None => {}
             }
-        }
+        };
+        self.pending.remove(&ticket);
+        let _ = read_session;
+        value.and_then(|value| {
+            OpResult::from_wire(method, value).map_err(|error| {
+                ErrorData::new(ErrorKind::Internal, "unreadable", error.to_string())
+            })
+        })
     }
 
     fn next(&mut self) -> Option<Inbound> {
