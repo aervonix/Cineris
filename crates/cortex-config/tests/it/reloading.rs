@@ -133,7 +133,7 @@ fn a_valid_change_is_applied_and_says_when_each_part_takes_effect() {
         &machine,
         LayerKind::User,
         "[model]\nmain = \"second\"\nspeed = \"fast\"\n[retry]\nattempts = 2\n\
-         [session]\ndata_dir = \"~/elsewhere\"\n[tui]\ntheme = \"dusk\"\n[rpc]\nsocket = \"x\"\n",
+         [session]\ndata_dir = \"~/elsewhere\"\n[tui]\ntheme = \"dusk\"\n[http]\nproxy = \"x\"\n",
         30,
     );
     let Some(Reload::Applied { previous, changes }) = live.check() else {
@@ -147,11 +147,11 @@ fn a_valid_change_is_applied_and_says_when_each_part_takes_effect() {
     assert_eq!(
         changes,
         [
+            // A section whose keys are not declared yet: the cautious answer.
+            ("http.proxy".to_owned(), Effect::NextEpoch),
             ("model.main".to_owned(), Effect::NextEpoch),
             ("model.speed".to_owned(), Effect::Now),
             ("retry.attempts".to_owned(), Effect::Now),
-            // A section whose keys are not declared yet: the cautious answer.
-            ("rpc.socket".to_owned(), Effect::NextEpoch),
             ("session.data_dir".to_owned(), Effect::Restart),
             ("tui.theme".to_owned(), Effect::Now),
         ]

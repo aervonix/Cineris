@@ -25,4 +25,4 @@ mod wire;
 
 pub use crate::connection::{Connection, Ended, ServeOptions};
 pub use crate::server::serve_one;
-pub use crate::transport::{Ends, Transport};
+pub use crate::transport::{Ends, Transport, Written};

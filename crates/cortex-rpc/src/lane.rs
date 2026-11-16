@@ -128,7 +128,9 @@ impl Drop for Running {
     clippy::result_large_err,
     reason = "the result goes straight to the client's results, which hold it so"
 )]
-async fn contained(work: Pin<Box<dyn Future<Output = Outcome> + Send>>) -> Result<OpResult, ErrorData> {
+async fn contained(
+    work: Pin<Box<dyn Future<Output = Outcome> + Send>>,
+) -> Result<OpResult, ErrorData> {
     match tokio::spawn(work).await {
         Ok(result) => result.map_err(|error| *error),
         Err(_) => Err(ErrorData::new(
@@ -286,10 +288,7 @@ mod tests {
         let routes = Routes::default();
         assert_eq!(routes.route(&list(&session)), Route::Beside);
         assert_eq!(routes.route(&revoke(&session)), Route::Lane { write: true });
-        assert_eq!(
-            routes.route(&list(&session)),
-            Route::Lane { write: false }
-        );
+        assert_eq!(routes.route(&list(&session)), Route::Lane { write: false });
         let files = Op::WorkspaceFiles(WorkspaceFilesParams {
             session_id: session.clone(),
             limit: None,

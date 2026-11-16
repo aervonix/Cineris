@@ -41,9 +41,9 @@ use cortex_protocol::SessionEvent;
 use cortex_protocol::jsonrpc::{Message, Request, RequestId, Response};
 use cortex_protocol::methods::{
     ApprovalChoice, ApprovalResponse, ClientCapabilities, ClientRole, ConfigGetParams, Empty,
-    InitializeParams, Op, OpResult, PROTOCOL_VERSION, PeerInfo, ServerNotification,
-    ServerRequest, ServerResponse, SessionListParams, SessionNewParams, SessionReadParams,
-    SessionRef, SessionRewindParams, TurnInterruptParams, TurnStartParams, UsageReportParams,
+    InitializeParams, Op, OpResult, PROTOCOL_VERSION, PeerInfo, ServerNotification, ServerRequest,
+    ServerResponse, SessionListParams, SessionNewParams, SessionReadParams, SessionRef,
+    SessionRewindParams, TurnInterruptParams, TurnStartParams, UsageReportParams,
     WorkspaceFilesParams,
 };
 use cortex_protocol::{ErrorData, ErrorKind, ItemId, SessionId};
@@ -671,7 +671,13 @@ fn rename(value: &Value, names: &mut Names, known: &[(&str, &str)], key: Option<
         Value::Object(map) => {
             let mut out = Map::new();
             for (key, value) in map {
-                if key == "seq" || key.ends_with("_at") || key.ends_with("_ms") {
+                // When things happened, how long they took, and a rate
+                // measured against the clock.
+                if key == "seq"
+                    || key.ends_with("_at")
+                    || key.ends_with("_ms")
+                    || key.ends_with("_per_second")
+                {
                     continue;
                 }
                 out.insert(key.clone(), rename(value, names, known, Some(key)));
@@ -788,9 +794,11 @@ impl Lines {
         let line = (self.receive)()?;
         let text = String::from_utf8_lossy(&line);
         let text = text.trim_end_matches(['\n', '\r']);
-        Some(serde_json::from_str::<Message>(text).unwrap_or_else(|error| {
-            panic!("the server wrote a line that is not a JSON-RPC message ({error}): {text:?}")
-        }))
+        Some(
+            serde_json::from_str::<Message>(text).unwrap_or_else(|error| {
+                panic!("the server wrote a line that is not a JSON-RPC message ({error}): {text:?}")
+            }),
+        )
     }
 
     fn inbound(&mut self, message: Message) -> Option<Read> {

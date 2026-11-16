@@ -229,8 +229,11 @@ fn transcript(
 ) -> Transcript {
     // The repository map is background work whose notice comes when it
     // likes: off on both sides, as the scenarios ask.
-    let machine = Machine::with_config(test, "index.map = false
-");
+    let machine = Machine::with_config(
+        test,
+        "index.map = false
+",
+    );
     for (path, text) in &scenario.files {
         let path = machine.workspace.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -266,7 +269,12 @@ fn sys_serve_stdio_conforms_to_the_core_in_process() {
                 .initialize(conformance::initialize())
                 .expect("initialize");
             let transcript = run(&mut served.lines);
-            assert_eq!(served.end(), Some(0), "{}: the server's exit", scenario.name);
+            assert_eq!(
+                served.end(),
+                Some(0),
+                "{}: the server's exit",
+                scenario.name
+            );
             transcript
         });
         for (at, (one, other)) in in_process.0.iter().zip(&over_stdio.0).enumerate() {
@@ -290,7 +298,9 @@ fn sys_a_signal_ends_the_server_with_its_code() {
     let (input, mut writer) = std::io::pipe().unwrap();
     let (output, written) = std::io::pipe().unwrap();
     let mut command = machine.command(&["serve", "--stdio"]);
-    command.stdin(Stdio::from(input)).stdout(Stdio::from(written));
+    command
+        .stdin(Stdio::from(input))
+        .stdout(Stdio::from(written));
     // Spawning takes the command, and with it this side's copies of the
     // binary's ends.
     let tree = Tree::spawn(command, None).expect("the binary starts");
@@ -318,4 +328,26 @@ fn sys_a_signal_ends_the_server_with_its_code() {
         serde_json::from_str::<cortex_protocol::jsonrpc::Message>(line)
             .unwrap_or_else(|error| panic!("not a message ({error}): {line}"));
     }
+}
+
+/// `shutdown` is answered before the binary exits, and the exit is 0: the
+/// last line is written before the process ends.
+#[test]
+fn sys_shutdown_is_answered_before_the_server_exits() {
+    let machine = Machine::with_config("serve-shutdown", "index.map = false\n");
+    let mut served = serve(&machine);
+    served
+        .lines
+        .initialize(conformance::initialize())
+        .expect("initialize");
+    let stopped = served
+        .lines
+        .call(Op::Shutdown(cortex_protocol::methods::Empty {}))
+        .expect("shutdown is answered");
+    assert_eq!(stopped.result().unwrap(), serde_json::json!({}));
+    assert!(
+        served.lines.read().is_none(),
+        "the server wrote past its end"
+    );
+    assert_eq!(served.child.wait().unwrap().code(), Some(0));
 }

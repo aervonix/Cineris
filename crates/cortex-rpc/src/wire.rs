@@ -157,7 +157,10 @@ mod tests {
     fn each_kind_of_line_is_told_apart() {
         assert!(matches!(
             line(r#"{"jsonrpc":"2.0","id":1,"method":"models/list"}"#),
-            Incoming::Request(Request { id: RequestId::Number(1), .. })
+            Incoming::Request(Request {
+                id: RequestId::Number(1),
+                ..
+            })
         ));
         assert!(matches!(
             line(r#"{"jsonrpc":"2.0","id":"a","result":{}}"#),
@@ -252,7 +255,11 @@ mod tests {
         out.clear();
         result(
             RequestId::Number(2),
-            Err(ErrorData::new(ErrorKind::Usage, "turn_running", "A turn runs.")),
+            Err(ErrorData::new(
+                ErrorKind::Usage,
+                "turn_running",
+                "A turn runs.",
+            )),
             &mut out,
         )
         .unwrap();

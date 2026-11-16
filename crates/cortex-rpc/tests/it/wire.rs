@@ -74,7 +74,10 @@ fn nothing_is_taken_before_initialize_and_initialize_is_taken_once() {
         .initialize(conformance::initialize())
         .expect("a second initialize is taken after a refused one");
     assert!(wire.lines.call(Op::ModelsList(Empty {})).is_ok());
-    let again = wire.lines.initialize(conformance::initialize()).unwrap_err();
+    let again = wire
+        .lines
+        .initialize(conformance::initialize())
+        .unwrap_err();
     assert_eq!(again.code, "already_initialized");
 }
 
@@ -86,22 +89,38 @@ fn each_bad_line_is_answered_and_reading_goes_on() {
     let core = world.core();
     let mut wire = Wire::connect(&core, world.serve_options());
     wire.lines.write_raw(b"{not json\n\n");
-    assert_eq!(error_of(&mut wire), (None, jsonrpc::code::PARSE_ERROR, None));
+    assert_eq!(
+        error_of(&mut wire),
+        (None, jsonrpc::code::PARSE_ERROR, None)
+    );
     wire.lines.write_raw(b"{\"jsonrpc\":\"2.0\",\"id\":3}\n");
     assert_eq!(
         error_of(&mut wire),
-        (Some(RequestId::Number(3)), jsonrpc::code::INVALID_REQUEST, None)
+        (
+            Some(RequestId::Number(3)),
+            jsonrpc::code::INVALID_REQUEST,
+            None
+        )
     );
-    wire.lines.write_raw(&request(4, "session/teleport", json!({})));
+    wire.lines
+        .write_raw(&request(4, "session/teleport", json!({})));
     assert_eq!(
         error_of(&mut wire),
-        (Some(RequestId::Number(4)), jsonrpc::code::METHOD_NOT_FOUND, None)
+        (
+            Some(RequestId::Number(4)),
+            jsonrpc::code::METHOD_NOT_FOUND,
+            None
+        )
     );
     wire.lines
         .write_raw(&request(5, "session/read", json!({"limit": 3})));
     assert_eq!(
         error_of(&mut wire),
-        (Some(RequestId::Number(5)), jsonrpc::code::INVALID_PARAMS, None)
+        (
+            Some(RequestId::Number(5)),
+            jsonrpc::code::INVALID_PARAMS,
+            None
+        )
     );
     // A response to a request the server never put is dropped.
     wire.lines
@@ -141,10 +160,16 @@ fn the_end_of_the_input_ends_the_clients_sessions_and_the_server() {
     let cortex_protocol::methods::OpResult::SessionNew(opened) = opened else {
         panic!("not a session");
     };
-    assert_eq!(core.core.open_sessions(), std::slice::from_ref(&opened.session.session_id));
+    assert_eq!(
+        core.core.open_sessions(),
+        std::slice::from_ref(&opened.session.session_id)
+    );
     drop(lines);
     assert_eq!(ended.recv().unwrap(), Ended::Closed);
-    assert!(core.core.open_sessions().is_empty(), "the session outlived its client");
+    assert!(
+        core.core.open_sessions().is_empty(),
+        "the session outlived its client"
+    );
 }
 
 /// `shutdown` stops the core, and is answered `{}` once it has.
@@ -226,7 +251,9 @@ fn a_client_that_takes_nothing_is_closed_and_the_session_goes_on() {
     options.stalled_client = Duration::from_secs(30);
     // One connection of a server that outlives it, as a socket's are.
     let Wire { mut lines, ended } = Wire::connection(&core, options, 1);
-    lines.initialize(conformance::initialize()).expect("initialize");
+    lines
+        .initialize(conformance::initialize())
+        .expect("initialize");
     let opened = lines.call(new_session(&world)).expect("a session opens");
     let cortex_protocol::methods::OpResult::SessionNew(opened) = opened else {
         panic!("not a session");
@@ -239,11 +266,17 @@ fn a_client_that_takes_nothing_is_closed_and_the_session_goes_on() {
         let core = core.core.clone();
         let session = session.clone();
         async move {
-            core.handle(watcher.id, Op::SessionOpen(SessionRef { session_id: session }))
-                .await
+            core.handle(
+                watcher.id,
+                Op::SessionOpen(SessionRef {
+                    session_id: session,
+                }),
+            )
+            .await
         }
     };
-    core.on(watching).expect("the observer opens the running session");
+    core.on(watching)
+        .expect("the observer opens the running session");
 
     // The first client sends a prompt and reads nothing more.
     lines.write(&Message::Request(
@@ -310,14 +343,19 @@ fn a_client_that_leaves_while_its_open_waits_on_a_question_ends_at_once() {
     untrusted_project(&world);
     let core = world.core();
     let mut wire = Wire::connect(&core, world.serve_options());
-    let open = new_session(&world).to_request(RequestId::Number(5)).unwrap();
+    let open = new_session(&world)
+        .to_request(RequestId::Number(5))
+        .unwrap();
     wire.lines.write(&Message::Request(open));
     let (_, method) = until_request(&mut wire);
     assert_eq!(method, "trust/request");
     let Wire { lines, ended } = wire;
     drop(lines);
     assert_eq!(ended.recv().unwrap(), Ended::Closed);
-    assert!(core.core.open_sessions().is_empty(), "a session outlived its client");
+    assert!(
+        core.core.open_sessions().is_empty(),
+        "a session outlived its client"
+    );
 }
 
 /// `shutdown` while a session is being put together: the core stops, the
@@ -330,7 +368,9 @@ fn a_shutdown_waits_for_the_requests_under_way_before_it_answers() {
     untrusted_project(&world);
     let core = world.core();
     let mut wire = Wire::connect(&core, world.serve_options());
-    let open = new_session(&world).to_request(RequestId::Number(5)).unwrap();
+    let open = new_session(&world)
+        .to_request(RequestId::Number(5))
+        .unwrap();
     wire.lines.write(&Message::Request(open));
     let (_, method) = until_request(&mut wire);
     assert_eq!(method, "trust/request");
@@ -340,8 +380,15 @@ fn a_shutdown_waits_for_the_requests_under_way_before_it_answers() {
     wire.lines.write(&Message::Request(stop));
     let mut answered = Vec::new();
     while let Some(message) = wire.lines.read() {
-        if let Message::Response(Response { id: Some(id), result }) = message {
-            answered.push((id, result.map_err(|error| error.error_data().map(|data| data.code))));
+        if let Message::Response(Response {
+            id: Some(id),
+            result,
+        }) = message
+        {
+            answered.push((
+                id,
+                result.map_err(|error| error.error_data().map(|data| data.code)),
+            ));
         }
     }
     assert_eq!(

@@ -1377,13 +1377,22 @@ mod tests {
             (&["serve", "--stdio", "-p"][..], "-p"),
             (&["serve", "--stdio", "fix", "it"], "a prompt"),
             (&["serve", "--stdio", "--output", "json"], "--output"),
-            (&["serve", "--stdio", "--include-deltas"], "--include-deltas"),
+            (
+                &["serve", "--stdio", "--include-deltas"],
+                "--include-deltas",
+            ),
             (&["serve", "--stdio", "--continue"], "--continue"),
             (&["serve", "--stdio", "--resume", "s_1"], "--resume"),
             (&["serve", "--stdio", "--fork", "s_1"], "--fork"),
             (&["serve", "--stdio", "--no-session"], "--no-session"),
-            (&["serve", "--stdio", "--fail-on-denial"], "--fail-on-denial"),
-            (&["serve", "--stdio", "--max-requests", "3"], "--max-requests"),
+            (
+                &["serve", "--stdio", "--fail-on-denial"],
+                "--fail-on-denial",
+            ),
+            (
+                &["serve", "--stdio", "--max-requests", "3"],
+                "--max-requests",
+            ),
             (&["serve", "--stdio", "--max-cost", "1"], "--max-cost"),
             (&["serve", "--stdio", "--max-time", "1m"], "--max-time"),
         ] {
