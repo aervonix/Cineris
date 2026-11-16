@@ -829,29 +829,40 @@ fn sys_once_the_turns_time_for_checks_is_spent_a_failure_stands_and_nothing_runs
             says("Never."),
         ],
     );
-    // It fails, after the test has moved the clock past the turn's time
-    // for checks while it ran.
-    let check = program(
-        &world,
-        "check",
-        "echo started > started\nwhile [ ! -f go ]; do sleep 0.01; done\nexit 1",
-        "",
-    );
-    user_checks(&world, &[&check], "");
+    // One check fails at once; the other runs until the turn's time for
+    // checks, thirty seconds, stops it. The time passes on the world's
+    // timer, which moves the clock with it.
+    let failing = program(&world, "failing", "exit 1", "");
+    let slow = program(&world, "slow", "echo started > slow.started\nsleep 600", "");
+    user_checks(&world, &[&failing, &slow], "turn_time = \"30s\"\n");
     let core = world.core_with(|options| options.trust_project = true);
     world.run(async {
         let front = Front::start(&world, &core).await;
-        front.prompt("change it").await;
-        while !world.workspace.join("started").exists() {
-            tokio::task::yield_now().await;
-        }
-        world.clock.advance(std::time::Duration::from_secs(5 * 60));
-        world.put("go", "");
-        front.turns(1).await;
-        let ended = front.ends().pop().expect("the turn ended");
-        assert_eq!(ended.verification, Some(Verification::Failed));
-        // One round ran, and was told; the second started nothing and told
-        // the model nothing.
+        // Time passes once the slow check runs, never before: the first
+        // check ends by itself.
+        let started = world.workspace.join("slow.started");
+        let mut turn = std::pin::pin!(front.turn("change it"));
+        let ended = std::future::poll_fn(|context| {
+            if let std::task::Poll::Ready(ended) = turn.as_mut().poll(context) {
+                return std::task::Poll::Ready(ended);
+            }
+            if started.exists()
+                && let Some(wait) = world.timer.running().into_iter().min()
+            {
+                world.timer.advance(wait);
+            }
+            context.waker().wake_by_ref();
+            std::task::Poll::Pending
+        })
+        .await;
+        assert_eq!(
+            ended.verification,
+            Some(Verification::Failed),
+            "{:?}",
+            told(&front)
+        );
+        // The first round ran both, and the model was told of the failure.
+        // The second started nothing and told the model nothing.
         let phases: Vec<VerificationPhase> = told(&front)
             .into_iter()
             .map(|notice| notice.phase)
@@ -860,12 +871,15 @@ fn sys_once_the_turns_time_for_checks_is_spent_a_failure_stands_and_nothing_runs
             phases,
             [VerificationPhase::Started, VerificationPhase::Finished]
         );
+        let finished = told(&front).pop().expect("a finished round");
+        assert_eq!(finished.checks[0].outcome, Some(CheckOutcome::Failed));
+        assert_eq!(finished.checks[1].outcome, Some(CheckOutcome::TimedOut));
         assert_eq!(world.provider.requests().len(), 4);
         assert!(
             front
                 .notices()
                 .iter()
-                .any(|notice| notice.contains("this turn's time for them (4m) is spent")),
+                .any(|notice| notice.contains("this turn's time for them (30s) is spent")),
             "{:?}",
             front.notices()
         );
