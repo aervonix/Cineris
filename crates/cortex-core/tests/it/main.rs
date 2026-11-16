@@ -45,6 +45,7 @@ mod secrets;
 mod settings;
 mod shell;
 mod start;
+mod supervising;
 mod trust;
 mod trusting;
 mod turns;

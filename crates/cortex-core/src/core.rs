@@ -38,7 +38,7 @@ use cortex_protocol::error::code;
 use cortex_protocol::event::{Actor, Event, PlanUpdated, RequestResolved, Resolution};
 use cortex_protocol::item::NoticeSource;
 use cortex_protocol::jsonrpc::RequestId;
-use cortex_protocol::lease::{Level, Rule};
+use cortex_protocol::lease::{Lease, Level, Rule};
 use cortex_protocol::methods::{
     ApprovalScope, ClientRole, ConfigGetResult, Empty, ExtensionsStatusResult, InitializeResult,
     McpStatusResult, ModelsListResult, Op, OpResult, PROTOCOL_VERSION, PeerInfo,
@@ -348,7 +348,9 @@ pub(crate) struct Live {
     pub(crate) board: Arc<PlanBoard>,
     /// The session's sandbox: its launcher and its temporary directory.
     pub(crate) sandbox: Arc<crate::sandbox::SessionSandbox>,
-    pub(crate) template: Mutex<EngineTemplate>,
+    /// Shared with the session's policy, which judges a supervisor's grant
+    /// with it.
+    pub(crate) template: Arc<Mutex<EngineTemplate>>,
     pub(crate) images: Arc<dyn ImageSource>,
     /// The session's configuration: what is in force, and what a reload
     /// works from (step 24). Locked only to read or commit.
@@ -580,7 +582,24 @@ impl Core {
     /// Connects a front end.
     #[must_use]
     pub fn connect(&self, info: ClientInfo) -> Client {
-        let (id, queue) = self.inner.clients.connect(info);
+        self.connect_with_grant(info, None)
+    }
+
+    /// Connects a front end, and gives a `supervisor` its grant: what it
+    /// may approve in the sessions it opens
+    /// (`docs/architecture/17-coordinator.md`, "Approval routing"). With
+    /// one, a supervisor that answers approvals is put each approval of its
+    /// session at once with the users, and its allow is taken where the
+    /// grant, held inside the session's own scope, allows the call
+    /// (`docs/architecture/06-permissions-and-sandbox.md`, "When a session
+    /// is supervised"). With none, or for any other role, it is
+    /// [`connect`](Self::connect): a supervisor is then asked nothing and
+    /// may answer nothing. Nothing on the wire gives a grant: a server
+    /// gives it from its own options, and the steps of task and team
+    /// leases decide where a real one comes from.
+    #[must_use]
+    pub fn connect_with_grant(&self, info: ClientInfo, grant: Option<Lease>) -> Client {
+        let (id, queue) = self.inner.clients.connect(info, grant);
         Client { id, queue }
     }
 
@@ -816,7 +835,7 @@ impl Core {
             policy,
             board,
             sandbox,
-            template: Mutex::new(template),
+            template,
             images,
             config: Mutex::new(config),
             watched: Mutex::new(watched),
@@ -886,6 +905,7 @@ impl Core {
             self.inner.clients.close(&id);
         }
         let answered = self.inner.options.cancel.race(answer).await;
+        let answered = answered.map(|got| got.map(|answer| answer.response));
         self.inner.clients.close(&id);
         let answer = match answered {
             // Only a yes and nothing else is a yes: an answer that says
@@ -1227,7 +1247,23 @@ impl Core {
                     let Some(queue) = self.inner.clients.queue(client) else {
                         return Err(Self::not_connected());
                     };
-                    live.sink.subscribe(client.0, queue);
+                    // A session has at most one supervisor: a second is
+                    // refused, looked at and added under one lock.
+                    let clients = &self.inner.clients;
+                    let supervisor = clients.is_supervisor(client.0);
+                    if !live.sink.subscribe_unless(client.0, queue, |other| {
+                        supervisor && clients.is_supervisor(other)
+                    }) {
+                        return Err(error(
+                            ErrorKind::Usage,
+                            code::SUPERVISOR_PRESENT,
+                            format!(
+                                "The session `{}` has a supervisor already: a session has at \
+                                 most one.",
+                                params.session_id
+                            ),
+                        ));
+                    }
                     // A client that left in the meantime is not left on it.
                     self.still_wanted(client, &live, false).await?;
                     // A question that is waiting is put to a client that
@@ -1879,6 +1915,7 @@ impl Core {
             self.inner.clients.close(&id);
         }
         let answered = self.inner.options.cancel.race(answer).await;
+        let answered = answered.map(|got| got.map(|answer| answer.response));
         // Answered only when an answer came: a request withdrawn because its
         // askers left is closed already, and was not answered (the
         // re-review of step 23's second pull request).

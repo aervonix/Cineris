@@ -94,3 +94,123 @@ replace:
 caught-by:
     cortex-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
     cortex-core::it events::a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync
+
+# ------------------------------------------------- supervisor routing
+
+[break] a-supervisor-with-a-grant-is-asked-nothing
+rule: A `supervisor` that declared `approvals` and has a grant is put every approval of its session.
+file: crates/cortex-core/src/clients.rs
+in: Clients::askable
+find: kind == Kind::Approval && entry.grant.is_some()
+replace: false
+caught-by:
+    cortex-core clients::tests::a_supervisor_with_a_grant_is_put_approvals_and_nothing_else
+
+[break] a-supervisor-without-a-grant-is-asked
+rule: A `supervisor` without a grant is asked nothing.
+file: crates/cortex-core/src/clients.rs
+in: Clients::askable
+find: kind == Kind::Approval && entry.grant.is_some()
+replace: kind == Kind::Approval
+caught-by:
+    cortex-core clients::tests::a_supervisor_with_a_grant_is_put_approvals_and_nothing_else
+    cortex-core::it approvals::only_a_user_client_is_asked_and_only_its_answer_counts
+
+[break] a-supervisor-is-put-questions-and-trust
+rule: Questions and trust are a person's: a supervisor is put approvals only.
+file: crates/cortex-core/src/clients.rs
+in: Clients::askable
+find: kind == Kind::Approval && entry.grant.is_some()
+replace: entry.grant.is_some()
+caught-by:
+    cortex-core clients::tests::a_supervisor_with_a_grant_is_put_approvals_and_nothing_else
+
+[break] an-allow-beyond-the-grant-is-taken
+rule: A supervisor's allow is taken only where its grant covers the call; beyond it the request stays open for the users.
+file: crates/cortex-core/src/clients.rs
+in: Clients::answer
+find: let within = judge.is_some_and(|judge| judge(&grant));
+replace: let within = judge.is_some() || !grant.id.as_str().is_empty();
+caught-by:
+    cortex-core clients::tests::a_supervisors_allow_is_taken_only_within_its_grant_and_as_once
+    cortex-core::it supervising::a_call_beyond_the_grant_is_not_taken_from_the_supervisor_and_the_user_answers
+
+[break] a-supervisors-allow-is-taken-as-it-named
+rule: A supervisor's allow within its grant is taken as `allow_once`, whatever scope it named.
+file: crates/cortex-core/src/clients.rs
+in: Clients::answer
+find:
+                    choice: ApprovalChoice::AllowOnce,
+                    note,
+                });
+replace:
+                    choice: asked_for,
+                    note,
+                });
+caught-by:
+    cortex-core clients::tests::a_supervisors_allow_is_taken_only_within_its_grant_and_as_once
+    cortex-core::it supervising::a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
+
+[break] a-supervisors-answer-is-recorded
+rule: A supervisor's answer never reaches `Engine::record`.
+file: crates/cortex-core/src/policy.rs
+in: ask
+find: if by_supervisor {
+replace: if by_supervisor && response.note.as_deref() == Some("never") {
+caught-by:
+    cortex-core::it supervising::a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
+
+[break] a-second-supervisor-joins
+rule: A session has at most one supervisor: a second one's `session/open` is refused `supervisor_present`.
+file: crates/cortex-core/src/core.rs
+in: handle
+find: supervisor && clients.is_supervisor(other)
+replace: supervisor && clients.is_supervisor(other) && other == u64::MAX
+caught-by:
+    cortex-core::it supervising::a_session_has_at_most_one_supervisor
+
+[break] a-user-is-refused-beside-a-supervisor
+rule: Only a second supervisor is refused: a user may join a supervised session.
+file: crates/cortex-core/src/core.rs
+in: handle
+find: supervisor && clients.is_supervisor(other)
+replace: clients.is_supervisor(other)
+caught-by:
+    cortex-core::it supervising::a_session_has_at_most_one_supervisor
+
+[break] the-grant-takes-the-sessions-level
+rule: Who decides is the grant's: its level, not the session's under which the call was asked.
+file: crates/cortex-core/src/policy.rs
+in: within_grant
+find: lease.grant.level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
+replace: let _ = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
+caught-by:
+    cortex-core policy::tests::a_grant_covers_what_its_rules_and_level_allow
+
+[break] unrestricted-is-handed-on
+rule: A grant's level is at most `autonomous`: `unrestricted` is never handed on.
+file: crates/cortex-core/src/policy.rs
+in: within_grant
+find: lease.grant.level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
+replace: lease.grant.level = grant.grant.level.clone();
+caught-by:
+    cortex-core policy::tests::a_grant_never_widens_what_the_session_holds
+
+[break] the-grants-allow-rules-are-left-out
+rule: The grant's allow rules decide what it covers.
+file: crates/cortex-core/src/policy.rs
+in: within_grant
+find: if rule.action == RuleAction::Allow && !lease.grant.rules.contains(rule) {
+replace: if rule.action == RuleAction::Allow && lease.grant.rules.contains(rule) {
+caught-by:
+    cortex-core policy::tests::a_grant_covers_what_its_rules_and_level_allow
+    cortex-core::it supervising::a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
+
+[break] the-grant-is-not-narrowed-by-the-session
+rule: A grant never widens what the session holds: its scope is `standing.narrow(grant)`, with the session's `ask` and `deny` rules.
+file: crates/cortex-core/src/policy.rs
+in: within_grant
+find: let Ok(mut lease) = standing.narrow(grant, template.sandbox) else {
+replace: let Ok(mut lease) = Ok::<Lease, cortex_policy::NarrowError>(grant.clone()) else {
+caught-by:
+    cortex-core policy::tests::a_grant_never_widens_what_the_session_holds
