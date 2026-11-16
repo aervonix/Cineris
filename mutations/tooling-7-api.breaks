@@ -1,0 +1,414 @@
+# The seventh tooling step, `api-diff` and the options of `scratch-test` that
+# make it a measurement. Written with the code, and run with
+# `cargo xtask mutate tooling-7-api`.
+
+# ----------------------------------------------------------- api-diff: reading
+
+[break] api-reads-a-format-it-was-not-written-for
+rule: A rustdoc JSON file of a format this reader was not written for is refused, with the numbers.
+file: xtask/src/api_diff/read.rs
+in: read
+find: if !SUPPORTED_FORMATS.contains(&version) {
+replace: if false {
+caught-by:
+    api_diff::read::tests::a_format_the_reader_was_not_written_for_is_refused_with_both_numbers
+
+[break] api-reads-json-that-has-private-items
+rule: JSON made with the private items in it is refused: it would list what a user cannot reach.
+file: xtask/src/api_diff/read.rs
+in: read
+find: if json.get("includes_private").and_then(Value::as_bool) == Some(true) {
+replace: if false {
+caught-by:
+    api_diff::read::tests::json_with_private_items_is_refused
+
+[break] api-lists-what-is-not-public
+rule: Only an item that is public is listed.
+file: xtask/src/api_diff/read.rs
+in: walk
+find: if child["visibility"] != "public" {
+replace: if false {
+caught-by:
+    api_diff::read::tests::only_what_is_public_is_listed
+
+[break] api-compares-the-names-of-arguments
+rule: The names of a function's arguments are shown and do not make a change: a caller does not see them.
+file: xtask/src/api_diff/read.rs
+in: both_styles
+find: (make(Style { names: true }), make(Style { names: false }))
+replace: (make(Style { names: true }), make(Style { names: true }))
+caught-by:
+    api_diff::read::tests::the_names_of_arguments_are_shown_and_do_not_count
+
+[break] api-lists-the-impls-rustdoc-adds-to-every-type
+rule: The auto-trait and blanket impls rustdoc adds to every type are left out.
+file: xtask/src/api_diff/read.rs
+in: impl_rows
+find: if !imp["blanket_impl"].is_null()
+replace: if false
+caught-by:
+    api_diff::read::tests::what_rustdoc_adds_to_every_type_is_left_out_and_a_type_that_is_not_send_is_not
+
+[break] api-lists-the-auto-trait-impls
+rule: An auto-trait impl rustdoc adds (`Sync`) is left out.
+file: xtask/src/api_diff/read.rs
+in: impl_rows
+find: (flag(&imp["is_synthetic"]) && !flag(&imp["is_negative"]))
+replace: false
+caught-by:
+    api_diff::read::tests::what_rustdoc_adds_to_every_type_is_left_out_and_a_type_that_is_not_send_is_not
+
+[break] api-drops-the-impl-of-a-type-that-is-not-send
+rule: A type that is not `Send` is an `impl !Send` and stays in the list: becoming not `Send` is a change.
+file: xtask/src/api_diff/read.rs
+in: impl_rows
+find: (flag(&imp["is_synthetic"]) && !flag(&imp["is_negative"]))
+replace: flag(&imp["is_synthetic"])
+caught-by:
+    api_diff::read::tests::what_rustdoc_adds_to_every_type_is_left_out_and_a_type_that_is_not_send_is_not
+
+[break] api-merges-members-of-one-path
+rule: Two entries of one path (a method of one name in two `impl`s) are told apart by their `impl`, not one over the other.
+file: xtask/src/api_diff/read.rs
+in: finish
+find: if counts.get(&key).copied().unwrap_or(0) > 1 {
+replace: if false {
+caught-by:
+    api_diff::read::tests::methods_of_one_name_in_two_impls_are_told_apart_by_the_impl
+
+[break] api-prefers-a-reexport-to-where-an-item-is-defined
+rule: An item defined in a public module is full at that path, and a reexport of it is a `use`.
+file: xtask/src/api_diff/read.rs
+in: api
+find: !exposure.direct
+replace: exposure.direct
+caught-by:
+    api_diff::read::tests::an_item_defined_in_a_public_module_is_there_and_a_reexport_is_a_use_of_it
+
+[break] api-prefers-the-longest-path-of-a-reexport
+rule: An item that is reached only by reexports is full at the shortest of the paths, and a `use` at the others.
+file: xtask/src/api_diff/read.rs
+in: api
+find: exposure.path.matches("::").count()
+replace: 0
+caught-by:
+    api_diff::read::tests::an_item_in_a_private_module_is_at_the_shortest_of_the_paths_that_reexport_it
+
+[break] api-puts-a-field-in-the-namespace-of-methods
+rule: A field and a method of one name are two entries.
+file: xtask/src/api_diff/read.rs
+in: field_rows
+find: Space::Field
+replace: Space::Value
+caught-by:
+    api_diff::read::tests::a_field_and_a_method_of_one_name_are_not_one_entry
+
+[break] api-forgets-non-exhaustive
+rule: An item that is `#[non_exhaustive]` says so: it cannot be built or matched by hand.
+file: xtask/src/api_diff/read.rs
+in: attr_prefix
+find: if attr == "non_exhaustive" {
+replace: if false {
+caught-by:
+    api_diff::read::tests::a_real_crate_is_read_as_the_signatures_its_source_has
+
+[break] api-forgets-that-a-trait-method-has-a-default
+rule: A trait method with a default says so; a required one does not (adding a required method breaks implementors).
+file: xtask/src/api_diff/read.rs
+in: member_row
+find: if in_trait && flag(&inner["has_body"]) {
+replace: if false {
+caught-by:
+    api_diff::read::tests::a_trait_method_with_a_default_says_so_and_a_required_one_does_not
+
+[break] api-forgets-the-private-fields-of-a-struct
+rule: A struct with a private field says so: it cannot be built with a literal.
+file: xtask/src/api_diff/read.rs
+in: item_rows
+find: if flag(&plain["has_stripped_fields"]) {
+replace: if false {
+caught-by:
+    api_diff::read::tests::a_real_crate_is_read_as_the_signatures_its_source_has
+
+[break] api-lists-the-generics-impl-trait-makes-up
+rule: The parameter that `impl Trait` in an argument makes up is not a generic parameter of the function.
+file: xtask/src/api_diff/read.rs
+in: params
+find: .filter(|param| !is_synthetic(param))
+replace: .filter(|_| true)
+caught-by:
+    api_diff::read::tests::bounds_are_written_as_rust_writes_them
+
+[break] api-writes-a-maybe-bound-as-a-bound
+rule: `?Sized` is written as it is: it relaxes a bound.
+file: xtask/src/api_diff/read.rs
+in: bound
+find: Some("maybe") => "?".to_owned(),
+replace: Some("maybe") => String::new(),
+caught-by:
+    api_diff::read::tests::bounds_are_written_as_rust_writes_them
+
+[break] api-forgets-the-variadic-argument
+rule: A C-variadic function says so.
+file: xtask/src/api_diff/read.rs
+in: function
+find: if flag(&sig["is_c_variadic"]) {
+replace: if false {
+caught-by:
+    api_diff::read::tests::a_real_crate_is_read_as_the_signatures_its_source_has
+
+[break] api-says-nothing-of-the-impl-a-method-is-in
+rule: A method of an `impl` with generics or bounds says which `impl`: its bounds are part of when it can be called.
+file: xtask/src/api_diff/read.rs
+in: member_row
+find: shown.push_str(&format!(" (in {context})"));
+replace: let _ = &context;
+caught-by:
+    api_diff::read::tests::methods_of_one_name_in_two_impls_are_told_apart_by_the_impl
+
+[break] api-gives-an-impl-no-owner
+rule: An `impl` belongs to the local type or trait it is for, so that it is left out of a report beside the type that was added with it.
+file: xtask/src/api_diff/read.rs
+in: impl_rows
+find: let owner = self_home.or(trait_home).cloned();
+replace: let owner: Option<String> = None;
+caught-by:
+    api_diff::read::tests::an_impl_and_what_it_fixes_belong_to_the_type_they_are_for
+
+[break] api-gives-what-an-impl-fixes-no-owner
+rule: The associated type an `impl` fixes belongs to the same owner as the `impl`.
+file: xtask/src/api_diff/read.rs
+in: impl_rows
+find: row.entry.owner.clone_from(&owner);
+replace: let _ = &owner;
+caught-by:
+    api_diff::read::tests::an_impl_and_what_it_fixes_belong_to_the_type_they_are_for
+
+# ----------------------------------------------------------- api-diff: comparing
+
+[break] api-judges-a-change-on-what-is-shown
+rule: A change is judged on the signature without the names of arguments, not on how it is shown.
+file: xtask/src/api_diff/diff.rs
+in: compare
+find: old.kind != entry.kind || old.identity != entry.identity
+replace: old.kind != entry.kind || old.shown != entry.shown
+caught-by:
+    api_diff::diff::tests::a_change_is_judged_on_the_identity_and_not_on_what_is_shown
+
+[break] api-ignores-a-change-of-kind
+rule: An item that became another kind is changed even if its signature reads the same.
+file: xtask/src/api_diff/diff.rs
+in: compare
+find: old.kind != entry.kind ||
+replace: false ||
+caught-by:
+    api_diff::diff::tests::an_item_that_became_another_kind_is_changed_even_with_one_signature
+
+[break] api-lists-the-impls-of-an-added-type
+rule: The impls of a type added in the same change come with the type and are not listed beside it.
+file: xtask/src/api_diff/diff.rs
+in: compare
+find: .is_some_and(|owner| added_paths.contains(owner));
+replace: .is_some_and(|owner| owner.is_empty());
+caught-by:
+    api_diff::diff::tests::the_impls_of_a_type_added_or_removed_with_it_are_not_listed_beside_it
+
+[break] api-lists-the-impls-of-a-removed-type
+rule: The impls of a type removed in the same change go with the type and are not listed beside it.
+file: xtask/src/api_diff/diff.rs
+in: compare
+find: .is_some_and(|owner| removed_paths.contains(owner));
+replace: .is_some_and(|owner| owner.is_empty());
+caught-by:
+    api_diff::diff::tests::the_impls_of_a_type_added_or_removed_with_it_are_not_listed_beside_it
+
+[break] api-lists-in-the-wrong-order
+rule: The report is in the order of the paths, the same every run.
+file: xtask/src/api_diff/diff.rs
+in: compare
+find: deltas.sort_by(|a, b| a.key.cmp(&b.key));
+replace: deltas.sort_by(|a, b| b.key.cmp(&a.key));
+caught-by:
+    api_diff::diff::tests::items_added_removed_and_changed_come_out_in_the_order_of_their_paths
+
+[break] api-breaks-a-markdown-table-on-a-bar
+rule: A `|` in a signature is escaped in a Markdown table, or it ends the cell.
+file: xtask/src/api_diff/diff.rs
+in: code
+find: text.replace('|', "\\|")
+replace: text.to_owned()
+caught-by:
+    api_diff::diff::tests::the_report_as_markdown_is_a_table_for_each_crate_with_changes
+
+[break] api-names-the-crates-that-changed-as-unchanged
+rule: The crates with no difference are named on one line, and those with differences are not.
+file: xtask/src/api_diff/diff.rs
+in: unchanged
+find: .filter(|krate| krate.deltas.is_empty())
+replace: .filter(|krate| !krate.deltas.is_empty())
+caught-by:
+    api_diff::diff::tests::the_report_as_text_has_a_line_for_an_addition_and_three_for_a_change
+    api_diff::diff::tests::the_report_as_markdown_is_a_table_for_each_crate_with_changes
+
+# ----------------------------------------------------------- api-diff: the command
+
+[break] api-names-a-crate-twice
+rule: A crate named twice is compared once.
+file: xtask/src/api_diff.rs
+in: select
+find: if !chosen.contains(name) {
+replace: if true {
+caught-by:
+    api_diff::tests::the_crates_are_those_named_or_every_one_with_a_library_in_either_tree
+
+[break] api-compares-a-crate-with-no-library
+rule: A crate with no library is refused by name, where there is no API to compare.
+file: xtask/src/api_diff.rs
+in: select
+find: } else if packages.iter().any(|package| &package.name == name) {
+replace: } else if false {
+caught-by:
+    api_diff::tests::the_crates_are_those_named_or_every_one_with_a_library_in_either_tree
+
+[break] api-has-no-proc-macro-libraries
+rule: A proc-macro crate has a library to compare.
+file: xtask/src/api_diff.rs
+in: libraries
+find: "lib" | "rlib" | "proc-macro"
+replace: "lib" | "rlib"
+caught-by:
+    api_diff::tests::a_library_is_a_package_with_a_lib_target_and_its_file_has_underscores
+
+[break] api-looks-for-a-json-file-with-dashes
+rule: rustdoc writes a library's JSON file under its name with underscores.
+file: xtask/src/api_diff.rs
+in: libraries
+find: target.name.replace('-', "_")
+replace: target.name.clone()
+caught-by:
+    api_diff::tests::a_library_is_a_package_with_a_lib_target_and_its_file_has_underscores
+
+[break] api-has-no-main-to-fall-back-from
+rule: Where there is no `main` the default ref is `origin/main`, which a checkout of a branch from the remote has.
+file: xtask/src/api_diff.rs
+in: resolve
+find: _ if reference.is_none() => git(
+replace: _ if false => git(
+caught-by:
+    api_diff::tests::sys_main_is_the_default_ref_and_falls_back_to_origin_main
+
+[break] api-checks-out-in-a-clone-that-is-not-one
+rule: A damaged clone is not checked out in: git would find the session's own repository above it.
+file: xtask/src/api_diff.rs
+in: prepare_base
+find: .is_ok_and(|dir| dir == ".git")
+replace: .is_ok()
+caught-by:
+    api_diff::tests::sys_the_other_tree_moves_between_commits_and_the_repository_is_left_alone
+
+[break] api-runs-two-at-once
+rule: One `api-diff` at a time: a second is refused while the first holds the lock.
+file: xtask/src/api_diff.rs
+in: lock
+find: match file.try_lock() {
+replace: match Ok::<(), fs::TryLockError>(()) {
+caught-by:
+    api_diff::tests::a_second_run_is_refused_while_the_first_holds_the_lock
+
+[break] api-takes-markdown-for-text
+rule: `--format markdown` is read, and anything else but `text` is refused.
+file: xtask/src/api_diff.rs
+in: parse
+find: "markdown" | "md" => Format::Markdown,
+replace: "markdown" | "md" => Format::Text,
+caught-by:
+    api_diff::tests::a_request_is_read
+
+[break] api-documents-with-the-stable-compiler-alone
+rule: rustdoc's JSON needs unstable options, which the pinned stable toolchain takes with RUSTC_BOOTSTRAP=1.
+file: xtask/src/api_diff.rs
+in: document
+find: .env("RUSTC_BOOTSTRAP", "1")
+replace: .env("RUSTC_BOOTSTRAP", "0")
+expect: survives
+
+[break] api-asks-rustdoc-for-html
+rule: The flags ask rustdoc for JSON. Only the ignored `sys_the_real` test of `api_diff` runs rustdoc, and `mutate` runs no ignored test, so it is not caught here; `cargo xtask test -p xtask --run-ignored only sys_the_real` is what catches it.
+file: xtask/src/api_diff.rs
+find: const RUSTDOCFLAGS: &str = "-Z unstable-options --output-format json";
+replace: const RUSTDOCFLAGS: &str = "-Z unstable-options";
+expect: survives
+
+# ----------------------------------------------------------- scratch-test options
+
+[break] scratch-test-drops-the-cargo-profile
+rule: `--cargo-profile P` builds and runs the file in profile P.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: command.extend(["--cargo-profile".to_owned(), profile.clone()]);
+replace: let _ = profile;
+caught-by:
+    scratch_test::tests::a_cargo_profile_is_passed_to_nextest
+
+[break] scratch-test-ignored-runs-everything
+rule: `--ignored` runs the file's ignored tests alone.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: Ignored::Only => command.extend(["--run-ignored".to_owned(), "only".to_owned()]),
+replace: Ignored::Only => command.extend(["--run-ignored".to_owned(), "all".to_owned()]),
+caught-by:
+    scratch_test::tests::the_ignored_tests_are_run_alone_one_at_a_time_with_their_output_under_the_perf_profile
+
+[break] scratch-test-measures-under-the-default-limit
+rule: A run of ignored tests is a measurement and has nextest's `perf` profile, whose limit is half an hour.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: if measuring && !says(rest, "--profile", Some("-P")) {
+replace: if false {
+caught-by:
+    scratch_test::tests::the_ignored_tests_are_run_alone_one_at_a_time_with_their_output_under_the_perf_profile
+
+[break] scratch-test-overrides-the-callers-profile
+rule: A nextest profile the caller gave after `--` is theirs.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: if measuring && !says(rest, "--profile", Some("-P")) {
+replace: if measuring {
+caught-by:
+    scratch_test::tests::a_profile_or_no_capture_of_the_callers_is_not_given_twice
+
+[break] scratch-test-shows-no-output-of-a-measurement
+rule: A run of ignored tests shows the tests' output: a measurement is its output.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: if (measuring || options.no_capture) && !says(rest, "--no-capture", None) {
+replace: if options.no_capture && !says(rest, "--no-capture", None) {
+caught-by:
+    scratch_test::tests::the_ignored_tests_are_run_alone_one_at_a_time_with_their_output_under_the_perf_profile
+
+[break] scratch-test-gives-no-capture-twice
+rule: `--no-capture` is not given to nextest twice, which it refuses.
+file: xtask/src/scratch_test.rs
+in: nextest_command
+find: (measuring || options.no_capture) && !says(rest, "--no-capture", None)
+replace: measuring || options.no_capture
+caught-by:
+    scratch_test::tests::a_profile_or_no_capture_of_the_callers_is_not_given_twice
+
+[break] scratch-test-takes-a-profile-that-is-a-flag
+rule: A cargo profile is a name, and `--cargo-profile=--x` is not one.
+file: xtask/src/scratch_test.rs
+in: parse
+find: profile.starts_with(['-', '_'])
+replace: false
+caught-by:
+    scratch_test::tests::the_options_are_read_and_a_bad_one_is_refused
+
+[break] scratch-test-takes-both-ignored-flags
+rule: `--ignored` and `--include-ignored` are two answers to one question: one is given.
+file: xtask/src/scratch_test.rs
+in: parse
+find: if options.ignored != Ignored::No && options.ignored != wanted {
+replace: if false {
+caught-by:
+    scratch_test::tests::the_options_are_read_and_a_bad_one_is_refused
