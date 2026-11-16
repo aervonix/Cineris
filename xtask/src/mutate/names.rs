@@ -279,6 +279,9 @@ pub(crate) struct Checked {
     pub(crate) names: usize,
     /// The sets of crates with no fresh list of tests, and so no check.
     pub(crate) unchecked: Vec<String>,
+    /// How many names of breaks of the other system's code were looked for
+    /// in the words of the source ([`by_source`]).
+    pub(crate) by_source: usize,
 }
 
 /// What lists the tests of a set of crates: `cargo nextest list`, or a test's own.
@@ -297,16 +300,28 @@ pub(crate) fn check(
     let mut checked = Checked::default();
     // The breaks that name tests, by the set of crates they run.
     let mut by_set: BTreeMap<String, Vec<&Break>> = BTreeMap::new();
+    let mut elsewhere: Vec<&Break> = Vec::new();
     for one in breaks {
+        if one.expect == Expect::Survives || one.caught_by.is_empty() {
+            continue;
+        }
         // A break of the other system's code has no tests built here: its
-        // names are looked for where it runs.
-        if one.expect == Expect::Survives || one.caught_by.is_empty() || !one.runs_here() {
+        // names are looked for in the words of the source, and where it
+        // runs, in the list of what is built.
+        if !one.runs_here() {
+            elsewhere.push(one);
             continue;
         }
         // A break that runs no crate has said so in the checks before.
         if let Ok(packages) = one.test_packages() {
             by_set.entry(set_name(&packages)).or_default().push(one);
         }
+    }
+    if !elsewhere.is_empty() {
+        let files = workspace::repository_files(root)?;
+        let (names, problems) = by_source(root, &files, &elsewhere);
+        checked.by_source = names;
+        checked.problems.extend(problems);
     }
     if by_set.is_empty() {
         return Ok(checked);
@@ -351,6 +366,86 @@ pub(crate) fn check(
         lists.save(&path)?;
     }
     Ok(checked)
+}
+
+/// The `caught-by` names of breaks of the other system's code, looked for
+/// in the words of the source: a name passes when its last segment (or, for
+/// an entry that ends in `*`, its beginning) is a word of some Rust file of
+/// the crates the break runs. How many names were looked for, and a message
+/// for each that no file has.
+///
+/// A list of tests is of what the build here builds, and a test of Windows
+/// only (`#[cfg(windows)]`) is not in it, so on Linux nothing checked
+/// these names until the break was run on Windows: a test that was renamed
+/// or removed was found by a run there. This finds that, on any system, from
+/// the files alone. It cannot tell a test from a helper of its name, a
+/// module path that is wrong, or a test that is `#[ignore]`d, and a name
+/// that a macro makes from pieces is not a word of any file (an entry that
+/// ends in `::*` is not looked for at all). The list of tests that
+/// `--check --tests` keeps for a set of crates is what such a check needs
+/// to be exact, and it is built by the system that builds the code.
+fn by_source(root: &Path, files: &[String], breaks: &[&Break]) -> (usize, Vec<String>) {
+    let mut names = 0;
+    let mut problems = Vec::new();
+    // The words of each crate's Rust files, read once.
+    let mut words: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for one in breaks {
+        let Ok(packages) = one.test_packages() else {
+            continue;
+        };
+        for entry in &one.caught_by {
+            let name = entry
+                .split_once(char::is_whitespace)
+                .map_or(entry.as_str(), |(_, name)| name.trim());
+            let (name, prefix) = match name.strip_suffix('*') {
+                Some(name) => (name, true),
+                None => (name, false),
+            };
+            let word = name.rsplit("::").next().unwrap_or(name);
+            if word.is_empty() {
+                continue;
+            }
+            names += 1;
+            let found = packages.iter().any(|package| {
+                let of_crate = words.entry(package.clone()).or_insert_with(|| {
+                    let folder = if package == "xtask" {
+                        "xtask/".to_owned()
+                    } else {
+                        format!("crates/{package}/")
+                    };
+                    let mut all = BTreeSet::new();
+                    for file in files {
+                        if file.starts_with(&folder)
+                            && file.ends_with(".rs")
+                            && let Ok(text) = fs::read_to_string(root.join(file))
+                        {
+                            all.extend(super::lex::names_in(&text).into_iter().map(str::to_owned));
+                        }
+                    }
+                    all
+                });
+                if prefix {
+                    of_crate.iter().any(|known| known.starts_with(word))
+                } else {
+                    of_crate.contains(word)
+                }
+            });
+            if !found {
+                let system = one.os.map_or("the other system", |os| os.name());
+                problems.push(format!(
+                    "{}: break `{}` is of code only {system} builds, and its `caught-by` names                      `{entry}`, whose name (`{word}`) is a word of no Rust file of {}.\n  There \
+                     is no list of the tests of {system}'s build here, so the names are looked \
+                     for among the words of the source. The test was renamed or removed: \
+                     correct the name. (A test a macro makes from pieces is no word of any \
+                     file: name it by the beginning of a word that is there, with a `*`.)",
+                    one.place(),
+                    one.id,
+                    packages.join(", ")
+                ));
+            }
+        }
+    }
+    (names, problems)
 }
 
 /// A message for each `caught-by` entry of `one` that no test of `listed`
@@ -643,7 +738,8 @@ mod tests {
             Checked {
                 problems: vec![],
                 names: 1,
-                unchecked: vec![]
+                unchecked: vec![],
+                by_source: 0
             }
         );
         assert_eq!(bad.problems.len(), 1, "{:#?}", bad.problems);
@@ -661,7 +757,8 @@ mod tests {
             Checked {
                 problems: vec![],
                 names: 0,
-                unchecked: vec!["demo".to_owned()]
+                unchecked: vec!["demo".to_owned()],
+                by_source: 0
             }
         );
     }
@@ -728,8 +825,87 @@ mod tests {
         let local = check(&root, &breaks(&format!("os: {here}\n{gone}")), None).unwrap();
         let _ = std::fs::remove_dir_all(&root);
 
-        assert_eq!(elsewhere, Checked::default());
+        // No list of its tests is read, and none is built for it: its names
+        // are looked for in the words of the source, and `gone` is in none.
+        assert_eq!(elsewhere.by_source, 1);
+        assert_eq!(elsewhere.names, 0);
+        assert_eq!(elsewhere.unchecked, [] as [String; 0]);
+        assert_eq!(elsewhere.problems.len(), 1, "{:#?}", elsewhere.problems);
         assert_eq!(local.problems.len(), 1, "{:#?}", local.problems);
+    }
+
+    /// The problems with the names of a break of the other system's code,
+    /// against a crate whose source has a test of Windows only.
+    fn by_words(test: &str, names: &str) -> (usize, Vec<String>) {
+        let root = tree(
+            test,
+            &[
+                ("crates/demo/Cargo.toml", "[package]\n"),
+                (
+                    "crates/demo/src/lib.rs",
+                    "pub fn x() {}\n// fn only_in_a_comment() {}\n\
+                     #[cfg(windows)]\nmod windows_only {\n    #[test]\n    fn follows_a_link() {}\n}\n",
+                ),
+                (
+                    "crates/demo/tests/it/main.rs",
+                    "#[test]\nfn sys_opens_a_pipe() {}\n",
+                ),
+            ],
+        );
+        let (other, _) = if cfg!(windows) {
+            ("linux", "windows")
+        } else {
+            ("windows", "linux")
+        };
+        let mut never = |_: &[String]| -> super::Result<Listed> { unreachable!() };
+        let checked = check(
+            &root,
+            &breaks(&format!("os: {other}\ncaught-by:\n{names}")),
+            Some(&mut never),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        (checked.by_source, checked.problems)
+    }
+
+    #[test]
+    fn the_names_of_a_break_of_the_other_systems_code_are_looked_for_in_the_words_of_the_source() {
+        // A test of the other system's only is a word of the source, in a
+        // module or an integration binary, however the entry names it.
+        let (names, problems) = by_words(
+            "names_by_words_found",
+            "    windows_only::follows_a_link\n    demo::it sys_opens_a_pipe\n    sys_opens*\n    \
+             windows_only::*\n",
+        );
+
+        assert_eq!(problems, [] as [String; 0]);
+        // The entry that ends in `::*` has no word to look for.
+        assert_eq!(names, 3);
+    }
+
+    #[test]
+    fn a_renamed_test_of_the_other_systems_code_is_found_without_a_windows_build() {
+        for gone in [
+            "windows_only::follows_a_link_to_a_file",
+            "only_in_a_comment",
+            "follows_b_*",
+            "demo::it sys_opens_a_socket",
+        ] {
+            let (names, problems) = by_words("names_by_words_gone", &format!("    {gone}\n"));
+
+            assert_eq!(names, 1, "{gone}");
+            assert_eq!(problems.len(), 1, "{gone}: {problems:#?}");
+            assert!(
+                problems[0].contains("is a word of no Rust file of demo"),
+                "{}",
+                problems[0]
+            );
+            assert!(
+                problems[0].contains("only Windows builds"),
+                "{}",
+                problems[0]
+            );
+        }
     }
 
     #[test]

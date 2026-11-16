@@ -326,13 +326,7 @@ impl<'a> Crates<'a> {
         self.words.entry(directory.to_owned()).or_insert_with(|| {
             let mut words: HashMap<String, Vec<String>> = HashMap::new();
             let mut add = |path: &str, text: &str| {
-                let code = lex::code_tokens(text);
-                for word in code
-                    .iter()
-                    .map(|token| token.text(text))
-                    .filter(|text| is_word(text))
-                    .collect::<HashSet<_>>()
-                {
+                for word in lex::names_in(text) {
                     let files = words.entry(word.to_owned()).or_default();
                     if !files.iter().any(|file| file == path) {
                         files.push(path.to_owned());
@@ -362,14 +356,6 @@ impl<'a> Crates<'a> {
             words
         })
     }
-}
-
-/// Whether a token is a name: letters, digits and `_`, and not a number.
-fn is_word(text: &str) -> bool {
-    text.chars()
-        .next()
-        .is_some_and(|first| first.is_alphabetic() || first == '_')
-        && text.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// The directory a crate is in: `crates/<name>`, and `xtask`.
@@ -968,7 +954,10 @@ mod tests {
         );
         // The text at the reference, and now; the Rust files are those of
         // the tree, a new one among them.
-        assert_eq!(opened.old("crates/demo/src/a.rs").unwrap(), "pub fn a() {}\n");
+        assert_eq!(
+            opened.old("crates/demo/src/a.rs").unwrap(),
+            "pub fn a() {}\n"
+        );
         assert_eq!(opened.old("crates/demo/src/new.rs"), None);
         assert_eq!(opened.new("crates/demo/src/b.rs"), None);
         assert!(
