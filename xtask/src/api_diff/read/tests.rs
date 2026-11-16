@@ -358,3 +358,121 @@ fn bounds_are_written_as_rust_writes_them() {
     ], "where_predicates": []});
     assert_eq!(style.params(&generics), "<T: Clone>");
 }
+
+fn unit_struct(id: u64, name: &str) -> Value {
+    item(
+        id,
+        name,
+        "public",
+        json!({"struct": {"kind": "unit", "generics": {"params": [], "where_predicates": []}}}),
+    )
+}
+
+fn module(id: u64, name: &str, visibility: &str, members: &[u64]) -> Value {
+    item(
+        id,
+        name,
+        visibility,
+        json!({"module": {"is_crate": false, "items": members, "is_stripped": false}}),
+    )
+}
+
+fn use_of(id: u64, name: &str, target: Value, source: &str) -> Value {
+    item(
+        id,
+        "",
+        "public",
+        json!({"use": {"source": source, "name": name, "id": target, "is_glob": false}}),
+    )
+}
+
+fn entry_at<'a>(api: &'a Api, path: &str) -> &'a Entry {
+    api.iter()
+        .find(|(key, _)| key.path == path)
+        .map(|(_, entry)| entry)
+        .unwrap_or_else(|| panic!("no entry at {path}: {:?}", paths(api)))
+}
+
+#[test]
+fn an_item_defined_in_a_public_module_is_there_and_a_reexport_is_a_use_of_it() {
+    let json = document(
+        &[1, 3],
+        &[
+            module(1, "inner", "public", &[2]),
+            unit_struct(2, "X"),
+            use_of(3, "X", json!(2), "inner::X"),
+        ],
+    );
+    let api = read(&json).unwrap();
+    assert_eq!(entry_at(&api, "demo::inner::X").kind, "struct");
+    let reexport = entry_at(&api, "demo::X");
+    assert_eq!(
+        (reexport.kind.as_str(), reexport.shown.as_str()),
+        ("use", "pub use demo::inner::X")
+    );
+}
+
+#[test]
+fn an_item_in_a_private_module_is_at_the_shortest_of_the_paths_that_reexport_it() {
+    // `hid` is not among any module's items: it is private. `Y` is brought
+    // out at the root and again, renamed, in the module `m`; `Display` is
+    // another crate's.
+    let json = document(
+        &[3, 4, 5],
+        &[
+            unit_struct(2, "Y"),
+            use_of(3, "Y", json!(2), "hid::Y"),
+            module(4, "m", "public", &[6]),
+            use_of(6, "Z", json!(2), "super::hid::Y"),
+            use_of(5, "Display", Value::Null, "std::fmt::Display"),
+            module(7, "hid", "default", &[2]),
+        ],
+    );
+    let api = read(&json).unwrap();
+    assert_eq!(entry_at(&api, "demo::Y").kind, "struct");
+    assert_eq!(entry_at(&api, "demo::m::Z").shown, "pub use demo::Y");
+    assert_eq!(
+        entry_at(&api, "demo::Display").shown,
+        "pub use std::fmt::Display"
+    );
+    assert!(api.keys().all(|key| !key.path.contains("hid")));
+}
+
+#[test]
+fn an_impl_and_what_it_fixes_belong_to_the_type_they_are_for() {
+    let json = document(
+        &[1],
+        &[
+            unit_struct(1, "T"),
+            item(
+                10,
+                "",
+                "default",
+                json!({"impl": {
+                    "is_unsafe": false,
+                    "generics": {"params": [], "where_predicates": []},
+                    "trait": {"path": "Iterator", "id": 99, "args": null},
+                    "for": {"resolved_path": {"path": "T", "id": 1, "args": null}},
+                    "items": [11], "is_negative": false, "is_synthetic": false,
+                    "blanket_impl": null,
+                }}),
+            ),
+            item(
+                11,
+                "Item",
+                "default",
+                json!({"assoc_type": {"generics": {"params": [], "where_predicates": []},
+                    "bounds": [], "type": {"primitive": "u8"}}}),
+            ),
+        ],
+    );
+    let api = read(&json).unwrap();
+    let owner = Some("demo::T".to_owned());
+    let impl_ = entry_at(&api, "impl Iterator for demo::T");
+    assert_eq!(impl_.owner, owner);
+    let fixed = entry_at(&api, "<demo::T as Iterator>::Item");
+    assert_eq!(fixed.shown, "type Item = u8");
+    assert_eq!(fixed.owner, owner);
+    // A type is not its own owner.
+    assert_eq!(entry_at(&api, "demo::T").owner, None);
+}
