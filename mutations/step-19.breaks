@@ -515,3 +515,21 @@ replace: notes.push(if false {
 caught-by:
     cortex-core verify::tests::only_the_launchers_refusal_is_blocked_and_a_compiler_error_is_a_failure
 
+
+[break] ask-mode-runs-the-checks
+rule: With `verify.mode = "ask"` the checks are offered, and do not run by themselves.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::round
+find: if settings.mode == VerifyMode::Ask {
+replace: if false {
+caught-by:
+    cortex-core::it verify::in_ask_mode_the_checks_are_offered_and_in_off_mode_nothing_is_said
+
+[break] off-mode-runs-the-checks
+rule: With `verify.mode = "off"` nothing runs and nothing is said.
+file: crates/cortex-core/src/verify.rs
+in: CoreVerifier::round
+find: if settings.mode == VerifyMode::Off {
+replace: if false {
+caught-by:
+    cortex-core::it verify::in_ask_mode_the_checks_are_offered_and_in_off_mode_nothing_is_said
