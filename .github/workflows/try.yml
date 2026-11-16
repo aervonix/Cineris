@@ -314,6 +314,7 @@ jobs:
             target/nextest/stress/junit.xml
             target/nextest/perf/junit.xml
             target/ab/*.xml
+            target/ab/wall-times.json
             target/perf-ab/results.json
             target/size/*.json
             target/testkit-profile/

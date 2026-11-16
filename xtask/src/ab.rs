@@ -12,7 +12,10 @@
 //! is the median of its runs, and the two sides are compared as
 //! `ci --tiers --compare` compares two CI runs. Each round's tier totals are
 //! printed too: their spread on one side is the noise a difference has to
-//! stand out of.
+//! stand out of. So is each side's wall time in each round, kept in
+//! `target/ab/wall-times.json` for `try-result`: a round in which both sides
+//! were slow is the runner's moment, and a side slow in every round is its
+//! tree.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -147,6 +150,144 @@ pub(crate) fn order(round: usize) -> [Which; 2] {
 pub(crate) enum Which {
     Base,
     Head,
+}
+
+/// How long one round's runs took on each side, from the start of the side's
+/// job to its end, its runs one after the other: what the machine took, apart
+/// from what the tests' own times say.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Wall {
+    /// Counted from 1.
+    pub(crate) round: usize,
+    /// Seconds, base then head.
+    pub(crate) seconds: [f64; 2],
+    /// Whether each side's job ended without a failure, base then head. A
+    /// side that failed is shown, and left out of its median.
+    pub(crate) passed: [bool; 2],
+}
+
+/// Where `ab` keeps the wall times, under the head's `target/ab/`, beside the
+/// rounds' reports, for the `try` workflow to upload.
+pub(crate) const WALL_TIMES_FILE: &str = "wall-times.json";
+
+/// The wall times as `ab` keeps them: JSON, with what the base is called.
+pub(crate) fn walls_json(label: &str, walls: &[Wall]) -> String {
+    let rounds: Vec<serde_json::Value> = walls
+        .iter()
+        .map(|wall| {
+            serde_json::json!({
+                "round": wall.round,
+                "base": wall.seconds[0],
+                "head": wall.seconds[1],
+                "base_passed": wall.passed[0],
+                "head_passed": wall.passed[1],
+            })
+        })
+        .collect();
+    let mut text = serde_json::json!({ "label": label, "rounds": rounds }).to_string();
+    text.push('\n');
+    text
+}
+
+/// The label and the wall times of a file [`walls_json`] wrote.
+pub(crate) fn walls_from_json(text: &str) -> Result<(String, Vec<Wall>)> {
+    let value: serde_json::Value = serde_json::from_str(text)
+        .map_err(|error| format!("the wall times are not JSON: {error}"))?;
+    let label = value
+        .get("label")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("the wall times name no base")?
+        .to_owned();
+    let mut walls = Vec::new();
+    for round in value
+        .get("rounds")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("the wall times have no rounds")?
+    {
+        let number = |key: &str| round.get(key).and_then(serde_json::Value::as_f64);
+        let flag = |key: &str| round.get(key).and_then(serde_json::Value::as_bool);
+        let (Some(at), Some(base), Some(head), Some(base_passed), Some(head_passed)) = (
+            round.get("round").and_then(serde_json::Value::as_u64),
+            number("base"),
+            number("head"),
+            flag("base_passed"),
+            flag("head_passed"),
+        ) else {
+            return Err(format!("a round of the wall times is not whole: {round}"));
+        };
+        walls.push(Wall {
+            round: usize::try_from(at).map_err(|_| format!("round {at}?"))?,
+            seconds: [base, head],
+            passed: [base_passed, head_passed],
+        });
+    }
+    Ok((label, walls))
+}
+
+/// The median of `values`, none when there are none.
+fn median_of(mut values: Vec<f64>) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+    let middle = values.len() / 2;
+    Some(if values.len() % 2 == 1 {
+        values[middle]
+    } else {
+        f64::midpoint(values[middle - 1], values[middle])
+    })
+}
+
+/// Each round's wall time on each side, which side ran first, and each
+/// side's median over the rounds it passed: a round both sides took long
+/// over is the machine's moment, and a side that took long in every round is
+/// its tree's.
+pub(crate) fn walls_table(label: &str, walls: &[Wall]) -> String {
+    let base = format!("base ({label})");
+    let width = base.len().max(10);
+    let cell = |seconds: f64, passed: bool| {
+        format!(
+            "{:>width$}",
+            format!("{seconds:.1}{}", if passed { "  " } else { " !" })
+        )
+    };
+    let mut text = format!(
+        "Each round's wall time, each side's runs from start to end, in seconds:\n\n\
+         round  first  {base:>width$}  {:>width$}\n",
+        "head  "
+    );
+    for wall in walls {
+        let first = match order(wall.round.saturating_sub(1))[0] {
+            Which::Base => "base",
+            Which::Head => "head",
+        };
+        let _ = writeln!(
+            text,
+            "{:>5}  {first}   {}  {}",
+            wall.round,
+            cell(wall.seconds[0], wall.passed[0]),
+            cell(wall.seconds[1], wall.passed[1])
+        );
+    }
+    let median = |side: usize| {
+        let passed: Vec<f64> = walls
+            .iter()
+            .filter(|wall| wall.passed[side])
+            .map(|wall| wall.seconds[side])
+            .collect();
+        match median_of(passed) {
+            Some(seconds) => format!("{:>width$}", format!("{seconds:.1}  ")),
+            None => format!("{:>width$}", "-  "),
+        }
+    };
+    let _ = writeln!(text, "median        {}  {}", median(0), median(1));
+    if walls
+        .iter()
+        .any(|wall| !wall.passed.iter().all(|passed| *passed))
+    {
+        text.push_str("! the side's run failed: it is left out of the median\n");
+    }
+    text
 }
 
 /// Each test's median time over the runs of one side. A test that is not in
@@ -805,8 +946,15 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         build_in(tree(which), nextest(tree(which), &build))?;
     }
     let mut rounds: Vec<Round> = Vec::new();
+    let mut walls: Vec<Wall> = Vec::new();
+    let walls_file = head.join("target").join("ab").join(WALL_TIMES_FILE);
     for round in 0..request.rounds {
         let mut attempts: [Option<Attempt>; 2] = [None, None];
+        let mut wall = Wall {
+            round: round + 1,
+            seconds: [0.0; 2],
+            passed: [false; 2],
+        };
         for which in order(round) {
             println!(
                 "== round {} of {}: the {} ==",
@@ -816,7 +964,10 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             );
             let at = tree(which);
             let report = workspace::nextest_report(at, "ci");
+            let started = std::time::Instant::now();
             let job = run_job(at, &request);
+            wall.seconds[which as usize] = started.elapsed().as_secs_f64();
+            wall.passed[which as usize] = job.error.is_none();
             if let Some(error) = &job.error {
                 if !request.keep_going {
                     return Err(error.clone());
@@ -851,7 +1002,15 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             return Err("a round ran only one side".to_owned());
         };
         rounds.push(Round { base, head });
+        walls.push(wall);
+        // Written after every round, so that a run that is stopped keeps
+        // the rounds it made.
+        std::fs::create_dir_all(walls_file.parent().unwrap_or(Path::new(".")))
+            .and_then(|()| std::fs::write(&walls_file, walls_json(&label, &walls)))
+            .map_err(|error| format!("could not write {}: {error}", walls_file.display()))?;
     }
+    let walls_text = walls_table(&label, &walls);
+    println!("\n{walls_text}");
     let (compared, skipped) = comparable(&rounds);
     let failed = failed_rounds(&rounds, &label);
     let left_out = skipped_text(&skipped);
@@ -864,7 +1023,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let (base_runs, head_runs) = (&compared.base, &compared.head);
     if base_runs.is_empty() {
         crate::steps::append_job_summary(&format!(
-            "### Two trees on one runner\n\n```text\n{left_out}{failed}```\n"
+            "### Two trees on one runner\n\n```text\n{left_out}{failed}\n{walls_text}```\n"
         ));
         return Err(format!(
             "no round finished on both sides: all {} had a failing run",
@@ -894,7 +1053,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         println!("{left_out}");
     }
     crate::steps::append_job_summary(&format!(
-        "### Two trees on one runner\n\n```text\n{left_out}{}\n{table}\n{failed}```\n",
+        "### Two trees on one runner\n\n```text\n{left_out}{}\n{walls_text}\n{table}\n{failed}```\n",
         rounds_table(&compared)
     ));
     conclusion(rounds.len(), compared.numbers.len(), &skipped)
@@ -958,8 +1117,9 @@ fn name(which: Which, label: &str) -> String {
 mod tests {
     use super::{
         Attempt, Compared, FailedOn, FailedTest, Failure, JobEnd, Report, Request, Round, RunEnd,
-        Skipped, TEST_RUN_FAILED, Which, attempt_of, comparable, conclusion, drive_job, end_of,
-        failed_rounds, failure_of, medians, order, rounds_table, skipped_text,
+        Skipped, TEST_RUN_FAILED, Wall, Which, attempt_of, comparable, conclusion, drive_job,
+        end_of, failed_rounds, failure_of, medians, order, rounds_table, skipped_text,
+        walls_from_json, walls_json, walls_table,
     };
     use crate::junit::TestCase;
 
@@ -1075,6 +1235,87 @@ mod tests {
         assert!(lines[0].trim_start().starts_with("1  base"), "{table}");
         // A round left out keeps the numbers of the others.
         assert!(lines[3].trim_start().starts_with("3  head"), "{table}");
+    }
+
+    fn wall(round: usize, base: f64, head: f64, passed: [bool; 2]) -> Wall {
+        Wall {
+            round,
+            seconds: [base, head],
+            passed,
+        }
+    }
+
+    #[test]
+    fn each_round_shows_each_sides_wall_time_and_each_side_its_median() {
+        let walls = [
+            wall(1, 312.44, 305.1, [true, true]),
+            wall(2, 290.0, 288.0, [true, true]),
+            wall(3, 401.0, 180.0, [true, false]),
+        ];
+        let table = walls_table("main", &walls);
+        let lines: Vec<&str> = table.lines().collect();
+        assert_eq!(
+            lines[2].split_whitespace().collect::<Vec<_>>(),
+            ["round", "first", "base", "(main)", "head"],
+            "{table}"
+        );
+        // Round 1 ran the base first, round 2 the head, round 3 the base.
+        assert_eq!(
+            lines[3].split_whitespace().collect::<Vec<_>>(),
+            ["1", "base", "312.4", "305.1"],
+            "{table}"
+        );
+        assert_eq!(
+            lines[4].split_whitespace().collect::<Vec<_>>(),
+            ["2", "head", "290.0", "288.0"],
+            "{table}"
+        );
+        // A side that failed is marked, and left out of its median.
+        assert_eq!(
+            lines[5].split_whitespace().collect::<Vec<_>>(),
+            ["3", "base", "401.0", "180.0", "!"],
+            "{table}"
+        );
+        assert_eq!(
+            lines[6].split_whitespace().collect::<Vec<_>>(),
+            ["median", "312.4", "296.6"],
+            "{table}"
+        );
+        assert!(table.contains("left out of the median"), "{table}");
+        // A clean run has no note, and a side with no round passed no median.
+        let clean = walls_table("main", &walls[..2]);
+        assert!(!clean.contains('!'), "{clean}");
+        let none = walls_table("main", &[wall(1, 9.0, 8.0, [false, true])]);
+        let last = none
+            .lines()
+            .find(|line| line.starts_with("median"))
+            .unwrap();
+        assert_eq!(
+            last.split_whitespace().collect::<Vec<_>>(),
+            ["median", "-", "8.0"],
+            "{none}"
+        );
+    }
+
+    #[test]
+    fn the_wall_times_are_kept_and_read_back_whole() {
+        let walls = vec![
+            wall(1, 312.25, 305.5, [true, true]),
+            wall(2, 30.0, 288.0, [false, true]),
+        ];
+        let text = walls_json("0123456789ab", &walls);
+        assert_eq!(
+            walls_from_json(&text),
+            Ok(("0123456789ab".to_owned(), walls))
+        );
+        for broken in [
+            "not json",
+            r#"{"rounds":[]}"#,
+            r#"{"label":"main"}"#,
+            r#"{"label":"main","rounds":[{"round":1,"base":1.0,"head":2.0,"base_passed":true}]}"#,
+        ] {
+            assert!(walls_from_json(broken).is_err(), "{broken}");
+        }
     }
 
     fn finished(seconds: f64) -> Attempt {
