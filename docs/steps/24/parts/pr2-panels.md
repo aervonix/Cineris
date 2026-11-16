@@ -105,3 +105,39 @@ All tier-1 unit tests of `cortex-tui`, with no real waiting (the application's t
 - `cargo xtask ci` on a2fb9d21 (the first pull request merged) with this part on top, after the second review's fixes: formatting, the rules, the breaks, the generated files, clippy, licences, tiers 1 and 2 (4076 tests), the system tests (270) and the tier budgets pass. Tier 1 used 68% of its budget, `cortex-tui` 4.6 s of it above the start of the tests' processes, at a desk whose disk stalled for most of the run.
 - `cargo xwin clippy --target x86_64-pc-windows-msvc -p cortex-tui --all-targets --locked -- -D warnings`: clean.
 - `cargo xtask api-diff --against origin/main --features cortex-tui/test-kit -p cortex-tui`: 57 public items added, none removed or changed; the test kit is unchanged. `App` stays `Send` (a panel is `Send`). The second review's changes add no public item and no code for one system alone.
+
+## CI times
+
+<!-- written by cargo xtask ci-times, section "CI times": it replaces this up to the end mark -->
+Pull request 88, on `main` at `327cfaa`. "Main" is main's own run at `327cfaa` (run 43947714781).
+The PR's run is 43969660183, at `19a7441`.
+
+| Job | Main, `327cfaa` | The PR at `19a7441` |
+|---|---|---|
+| `lint-linux` | 55 s | 54 s |
+| `test-linux` | 104 s | 104 s |
+| `lint-windows` | 88 s | 71 s |
+| `test-windows` | 283 s | 274 s |
+| `pr-size-linux` (blocks nothing) | — | 193 s |
+| `pr-size-windows` (blocks nothing) | — | 369 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `19a7441` (3 ms) | Windows, main (8 ms) | Windows, `19a7441` (8 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 12.6 s | 11.3 s | 14.6 s | 14.0 s |
+| Tier 2, integration (40 s) | 34.2 s | 19.8 s | 38.2 s | 36.7 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 21.6 s | 20.6 s | 81.6 s | 79.0 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "CI times" -->
+
+## Windows, both trees on one runner
+
+<!-- written by cargo xtask ci-times: it replaces this up to the end mark -->
+`try` with `-f against=main` (run 43967628821), the median of 5 runs each, on one runner at 8.0 ms a process start:
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 6.0 s (410 tests) | 4.2 s (339) | +1.7 s | 20 s |
+| 2, integration | 1.0 s (48 tests) | 0.9 s (48) | +0.0 s | 40 s |
+| 3, system | 0.8 s (10 tests) | 0.8 s (10) | +0.0 s | 90 s |
+
+<!-- end of what cargo xtask ci-times wrote -->
