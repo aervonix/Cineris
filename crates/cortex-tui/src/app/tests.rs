@@ -2558,3 +2558,96 @@ fn view_shows_the_session_full_screen_and_q_closes_it() {
     assert!(!app.viewing());
     let _ = link;
 }
+
+/// A resumed session's history is drawn under its header; of the events
+/// that came while it was read, those it already holds are dropped and the
+/// later ones follow it.
+#[test]
+fn a_resumed_session_draws_its_history_then_what_came_after() {
+    let now = Instant::now();
+    let (mut app, link) = app_opening(now, None, Open::Resume(SessionId::from(SESSION)));
+    let _ = app.frame(now);
+    app.drawn(now);
+    let (open, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::SessionOpen(_)))
+        .expect("the open");
+    let mut stored = state();
+    stored.seq = 5;
+    link.give(Inbound::Done(
+        open,
+        Ok(OpResult::SessionOpen(SessionResult { session: stored })),
+    ));
+    drain(&mut app, now);
+    let (read, params) = link
+        .take_sent()
+        .into_iter()
+        .find_map(|(ticket, op)| match op {
+            Op::SessionRead(params) => Some((ticket, params)),
+            _ => None,
+        })
+        .expect("the history is read");
+    assert_eq!(params.session_id, SessionId::from(SESSION));
+    let notice = |seq: u64, text: &str| {
+        Inbound::Event(SessionEvent {
+            session_id: SessionId::from(SESSION),
+            seq,
+            turn_id: None,
+            event: Event::Notice(cortex_protocol::event::Notice::Info(
+                cortex_protocol::event::InfoNotice {
+                    message: text.to_owned(),
+                },
+            )),
+        })
+    };
+    link.give(notice(4, "already in the history"));
+    link.give(notice(6, "after the read"));
+    drain(&mut app, now);
+    let user = Item::UserMessage(UserMessageItem {
+        id: ItemId::from("i_1"),
+        parts: vec![Part::text("fix the build")],
+        delivery: None,
+        created_at: None,
+    });
+    let answer = Item::AssistantMessage(AssistantMessageItem {
+        id: ItemId::from("i_2"),
+        parts: vec![Part::text("It builds now.\n")],
+        stop_reason: Some(StopReason::End),
+        raw_stop: None,
+        stop_detail: None,
+        truncated: false,
+        origin: None,
+        usage: None,
+        error: None,
+        created_at: None,
+    });
+    link.give(Inbound::Done(
+        read,
+        Ok(OpResult::SessionRead(
+            cortex_protocol::methods::SessionReadResult {
+                items: vec![user, answer],
+                incomplete: Vec::new(),
+                next_cursor: None,
+                seq: 5,
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    let mut scrollback = Vec::new();
+    let live = screen(&mut app, now, &mut scrollback);
+    let all = [scrollback, live].concat();
+    let at = |what: &str| {
+        all.iter()
+            .position(|line| line.contains(what))
+            .unwrap_or_else(|| panic!("{what}: {all:#?}"))
+    };
+    assert!(at("Cortex-Harness") < at("fix the build"));
+    assert!(at("fix the build") < at("It builds now."));
+    assert!(at("It builds now.") < at("after the read"));
+    assert!(
+        !all.iter()
+            .any(|line| line.contains("already in the history")),
+        "{all:#?}"
+    );
+}
