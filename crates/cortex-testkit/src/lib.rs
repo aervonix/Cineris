@@ -9,6 +9,7 @@
 //! | [`canary`] | [`assert_never_printed`]: no `Debug` or `Display` form of a value holds a made-up key. |
 //! | [`timer`] | [`FakeTimer`]: waits that move the fake clock instead of waiting. |
 //! | [`gate`] | [`Gate`]: how two sides of a test take turns without sleeping. |
+//! | [`hostile`] | The hostile names every test takes its names from: control and format characters, bidirectional controls, line breaks, escape sequences, very long names, Windows device names, and what a file system takes as a file name. The same set on every system. |
 //! | [`untouched`] | [`Untouched`]: something the start-up path must not touch (the repository index, the statistics), held while a session opens. |
 //! | [`scratch`] | [`Scratch`]: a directory of a test's own, with files, a git repository when the test needs one, and nothing left behind. |
 //! | [`seed`] | The seed of a test whose order of events is seeded: 0 in an ordinary run, the next one for each repeat of `cargo xtask stress`, and printed so that a failure can be run again. |
@@ -53,6 +54,7 @@ pub mod exec;
 pub mod fixture;
 pub mod fixtures;
 pub mod gate;
+pub mod hostile;
 pub mod phases;
 pub mod profile;
 pub mod protocol;
