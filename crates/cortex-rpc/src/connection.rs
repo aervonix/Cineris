@@ -53,7 +53,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use cortex_base::framing::{DEFAULT_MAX_LINE_LEN, FrameDecoder};
-use cortex_base::{CancelToken, SharedTimer};
+use cortex_base::{CancelToken, SharedClock, SharedTimer, SystemClock};
 use cortex_core::{Client, ClientInfo, Core, EventQueue, Outgoing, QUEUE_CAPACITY};
 use cortex_protocol::error::code;
 use cortex_protocol::event::Event;
@@ -78,6 +78,9 @@ pub struct ServeOptions {
     /// Every wait of the server: the core's timer, so that a test's waits
     /// are on its fake clock.
     pub timer: SharedTimer,
+    /// How long a client has taken nothing is read from it: the core's
+    /// clock, which a test's timer moves.
+    pub clock: SharedClock,
     /// How long a client may take no line while whole events wait past its
     /// queue's capacity, before its connection is closed (`rpc.stalled_client`).
     pub stalled_client: Duration,
@@ -102,11 +105,12 @@ pub struct ServeOptions {
 }
 
 impl ServeOptions {
-    /// The defaults, on `timer`.
+    /// The defaults, on `timer` and the system's clock.
     #[must_use]
     pub fn new(timer: SharedTimer) -> Self {
         Self {
             timer,
+            clock: Arc::new(SystemClock::new()),
             stalled_client: Duration::from_secs(30),
             queue: QUEUE_CAPACITY,
             max_requests: 256,
@@ -786,13 +790,13 @@ async fn send(
     let options = &shared.options;
     let look = LOOK.min(options.stalled_client).max(Duration::from_millis(1));
     let mut sending = pin!(output.send(line));
-    let mut waited = Duration::ZERO;
+    let began = options.clock.monotonic();
     loop {
         match within(&options.timer, look, sending.as_mut()).await {
             Some(Ok(())) => return Ok(()),
             Some(Err(_)) => return Err(Ended::Gone),
             None => {
-                waited += look;
+                let waited = options.clock.monotonic().saturating_sub(began);
                 let Some(queue) = queue else {
                     continue;
                 };

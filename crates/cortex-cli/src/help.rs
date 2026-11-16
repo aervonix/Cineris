@@ -255,6 +255,7 @@ mod tests {
             Topic::Usage,
             Topic::Stats,
             Topic::Project,
+            Topic::Serve,
         ] {
             let as_cx = help(topic, "cx");
             assert!(as_cx.contains("Usage: cx "), "{topic:?}");

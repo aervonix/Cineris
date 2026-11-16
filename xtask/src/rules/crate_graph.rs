@@ -78,11 +78,10 @@ const CRATES: &[(&str, &[&str])] = &[
 ];
 
 /// Workspace crates a crate's tests may use beside the ones it may depend
-/// on: a dev-dependency only. `cortex-rpc`'s tests make a core with a
-/// scripted model, as `cortex-core`'s own do, which takes the model client's
-/// types, the configuration's environment and the seeded order of the
-/// loop's blocking work (step 27).
-const DEV_ONLY: &[(&str, &[&str])] = &[(RPC, &[CONFIG, LLM, TOOLS])];
+/// on: a dev-dependency only. `cortex-rpc`'s tests make a core as the binary
+/// makes one, which takes the configuration's environment, and the shell
+/// and the process runner on the fake timer (step 27).
+const DEV_ONLY: &[(&str, &[&str])] = &[(RPC, &[CONFIG, TOOLS])];
 
 /// Third-party crates that only their owner may depend on directly (rule 5),
 /// so that a change elsewhere never rebuilds them and replacing one touches

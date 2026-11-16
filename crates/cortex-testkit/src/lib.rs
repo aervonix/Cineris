@@ -56,6 +56,7 @@ pub mod cadence;
 pub mod canary;
 pub mod cases;
 pub mod children;
+pub mod conformance;
 pub mod corpus;
 pub mod exec;
 pub mod exit;

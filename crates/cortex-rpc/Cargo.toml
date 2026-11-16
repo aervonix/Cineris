@@ -24,13 +24,11 @@ tracing.workspace = true
 
 [dev-dependencies]
 cortex-testkit.workspace = true
-# A core with a scripted model, for the tests only: its configuration's
-# environment (`cortex-config`), the model client it is given
-# (`cortex-llm`), and the seeded order of the loop's blocking work
-# (`cortex-tools`).
+# A core for the tests only, as the binary makes one: its configuration's
+# environment (`cortex-config`), and its shell and process runner on the
+# fake timer (`cortex-tools`).
 cortex-config.workspace = true
-cortex-llm.workspace = true
-cortex-tools = { workspace = true, features = ["test-hooks"] }
+cortex-tools.workspace = true
 
 [lints]
 workspace = true
