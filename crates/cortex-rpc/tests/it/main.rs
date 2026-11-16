@@ -21,6 +21,8 @@
 )]
 
 mod conformance;
+#[cfg(unix)]
+mod socket;
 mod wire;
 
 use std::future::Future;
