@@ -1397,3 +1397,115 @@ fn a_closed_session_lets_its_knowledge_go() {
         );
     });
 }
+
+/// An accepted test command of the project, made by the user: the session
+/// is given it as an exact allow rule at its first turn.
+fn accepted(world: &World, line: &str) -> String {
+    let added = other_process(world)
+        .update(
+            &[],
+            &[NewEntry {
+                kind: EntryKind::Command,
+                text: "Runs the tests.".to_owned(),
+                command: Some(cortex_protocol::project::NewCommand {
+                    purpose: cortex_protocol::project::CommandPurpose::Test,
+                    command: line.to_owned(),
+                    cwd: None,
+                    read_only: false,
+                }),
+                check: None,
+            }],
+            None,
+        )
+        .unwrap();
+    added.changed[0].id.as_str().to_owned()
+}
+
+/// Step 17's case, closed by the re-decide step of step 12: a learned
+/// command turned off while an earlier call of the same response waits
+/// for its answer. The command was allowed when it was planned, and waits
+/// behind the question (an answer may stop the turn); when its turn comes
+/// the rules have narrowed, and it is decided again, and asked about.
+#[test]
+fn sys_a_learned_command_turned_off_while_an_earlier_call_waits_is_asked_about() {
+    let mut world = World::new("knowledge_turned_off_while_waiting", []);
+    let line = passing(&world);
+    let outside = world.dir.join("outside.txt");
+    std::fs::write(&outside, "outside\n").unwrap();
+    world.provider = cortex_testkit::ScriptedProvider::new([
+        says("Hello."),
+        calls(&[
+            ("c1", "read", json!({"path": outside.to_str().unwrap()})),
+            ("c2", "shell", json!({ "command": line })),
+        ]),
+        says("Done."),
+    ]);
+    let id = accepted(&world, &line);
+    let core = world.core_with(|options| {
+        options.trust_project = true;
+        options.answers_may_stop = true;
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        // The store is read at the first turn: the command is learned.
+        front.turn("hello").await;
+        front.prompt("test it").await;
+        let (question, request) = front.approval().await;
+        assert_eq!(request.tool, "read", "the command was allowed: {request:?}");
+        // While the read's question is open, the user turns the command off.
+        change(&front, &id, EntryAction::Disable).await;
+        front.answer(&question, ApprovalChoice::AllowOnce).unwrap();
+        let (asked, request) = front.approval().await;
+        assert_eq!(request.call_id.as_str(), "c2", "the command is asked about");
+        front.answer(&asked, ApprovalChoice::Deny).unwrap();
+        front.turns(2).await;
+        // Results are listed as they completed: the command's is found by
+        // its tool.
+        assert_eq!(
+            front
+                .results()
+                .into_iter()
+                .find(|result| result.0 == "shell")
+                .map(|result| result.1)
+                .as_deref(),
+            Some("denied"),
+            "{:?}",
+            front.results()
+        );
+        front.close().await;
+    });
+}
+
+/// A command turned off while a change of level is being made stays off
+/// in the engine the change puts in force: the change reads the learned
+/// commands when it puts its engine in force, under step 17's lock, and
+/// hands them over with the swap (the re-decide step of step 12). Each
+/// blocking piece waits one turn, so the test turns the command off after
+/// the change has made its engine and before it is in force.
+#[test]
+fn sys_a_command_turned_off_while_the_level_changes_stays_off() {
+    let mut world = World::new("knowledge_off_during_level", []);
+    let line = passing(&world);
+    world.provider = cortex_testkit::ScriptedProvider::new([says("Hello."), run("c1", &line)]);
+    world.one_turn_each();
+    let id = accepted(&world, &line);
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("hello").await;
+        let mut level = std::pin::pin!(front.op(Op::SessionSet(SessionSetParams {
+            session_id: front.session.clone(),
+            settings: SessionSettings {
+                level: Some(Level::ReadOnly),
+                ..SessionSettings::default()
+            },
+        })));
+        assert!(crate::poll_once(level.as_mut()).await.is_pending());
+        change(&front, &id, EntryAction::Disable).await;
+        level.await.unwrap();
+        // At `read-only` a command no rule allows is asked about; the
+        // learned rule would have let it run.
+        assert_eq!(turn_denying(&front, "test it").await, ["shell"]);
+        front.close().await;
+    });
+}

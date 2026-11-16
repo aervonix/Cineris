@@ -1905,11 +1905,11 @@ impl Core {
         })
         .await?;
         lock(&live.template).parts = parts;
-        live.policy.replace(engine);
         // The new engine is given the project's learned rules from the one
-        // place that holds them.
-        if let Some(knowledge) = &live.knowledge {
-            knowledge.reapply();
+        // place that holds them, as it is put in force.
+        match &live.knowledge {
+            Some(knowledge) => knowledge.put_in_force(engine),
+            None => live.policy.replace(engine),
         }
         // Nothing is confined at `unrestricted`, and everything is again
         // below it.
