@@ -146,6 +146,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-tui
 
+- [a-leader-close-test-under-heavy-load](a-leader-close-test-under-heavy-load.md): The test of a leader's terminal closing died once in a hundred under heavy synthetic load, likely the 3 s watchdog in a starved child; not confirmed. Owner: the next tooling step, or step 32.
 - [a-signal-while-the-external-editor-runs](a-signal-while-the-external-editor-runs.md): A signal sent to the program alone while the external editor runs leaves the editor running, and the watchdog ends the program without its graceful end, leaving the prompt's folder. Owner: step 32.
 - [copy-where-the-clipboard-sequence-is-not-taken](copy-where-the-clipboard-sequence-is-not-taken.md): `/copy` cannot tell whether the terminal took OSC 52, and shows no text for copying by hand where it is known not to. Owner: step 25.
 - [editor-cost-on-very-large-text](editor-cost-on-very-large-text.md): The prompt editor lays out all its text on every key; a shortened `@` query refilters all paths. Owner: step 33.
