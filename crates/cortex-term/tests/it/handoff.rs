@@ -57,6 +57,10 @@ pub(crate) fn enter() {
     if case == "race" {
         race::play();
     }
+    #[cfg(target_os = "linux")]
+    if let Some(then) = case.strip_prefix("term-gone-then-") {
+        race::ending_when_the_terminal_goes(then);
+    }
     #[cfg(unix)]
     play(&case);
     #[cfg(not(unix))]
@@ -327,12 +331,32 @@ fn sys_a_terminal_that_goes_away_under_a_read_is_sighups_end() {
 fn sys_a_sighup_handled_on_another_thread_as_the_read_finds_the_end_is_the_same_end() {
     use std::os::unix::process::ExitStatusExt as _;
 
-    let scratch = cortex_testkit::Scratch::outside("cortex-term-handoff", "race");
+    let (status, said) = alone("race");
+    assert_ne!(
+        status.and_then(|status| status.signal()),
+        Some(libc::SIGHUP),
+        "the SIGHUP that came as the read found the end killed the process: {said}"
+    );
+    assert!(
+        said.contains("handed over 129, and the SIGHUP's handler returned"),
+        "{status:?}: {said}"
+    );
+    assert!(
+        status.is_some_and(|status| status.success()),
+        "{status:?}: {said}"
+    );
+}
+
+/// Runs `case` in a child whose terminal is not its controlling one, so
+/// that the only signals it gets are its own, and returns how it ended
+/// (`None` if it had not within [`LIMIT`]) and what it reported.
+#[cfg(target_os = "linux")]
+fn alone(case: &str) -> (Option<std::process::ExitStatus>, String) {
+    let scratch = cortex_testkit::Scratch::outside("cortex-term-handoff", case);
     let report = scratch.path().join("report.txt");
-    // Not its controlling terminal: the only SIGHUP is the child's own.
     let mut pty = cortex_term::pty::Pty::spawn_without_control(
         &super::this_binary(),
-        &HANDOFF.arguments("race"),
+        &HANDOFF.arguments(case),
         &[(REPORT.to_owned(), report.display().to_string())],
         80,
         24,
@@ -349,20 +373,60 @@ fn sys_a_sighup_handled_on_another_thread_as_the_read_finds_the_end_is_the_same_
         }
         std::thread::yield_now();
     };
-    let said = std::fs::read_to_string(&report).unwrap_or_default();
+    (status, std::fs::read_to_string(&report).unwrap_or_default())
+}
+
+/// A SIGTERM handed over, then the window closed while the program ends
+/// for it: the read finds the terminal gone, and the SIGHUP that follows
+/// the hang-up is that same end, not a second signal. The program ends as
+/// the SIGTERM asked, 143, through its own end; it was killed by SIGHUP
+/// part-way through that end before (the review of the third pull request
+/// of step 23's fixes).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_sighup_after_the_terminal_went_away_during_a_sigterms_end_is_that_end() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let (status, said) = alone("term-gone-then-hup");
     assert_ne!(
         status.and_then(|status| status.signal()),
         Some(libc::SIGHUP),
-        "the SIGHUP that came as the read found the end killed the process: {said}"
+        "the hang-up's SIGHUP ended the SIGTERM's end part-way: {said}"
     );
     assert!(
-        said.contains("handed over 129, and the SIGHUP's handler returned"),
+        said.contains("ended for 143, past the SIGHUP"),
         "{status:?}: {said}"
     );
-    assert!(
-        status.is_some_and(|status| status.success()),
+    assert_eq!(
+        status.and_then(|status| status.code()),
+        Some(143),
         "{status:?}: {said}"
     );
+}
+
+/// The same, with a second signal a person sends in place of the hang-up's
+/// SIGHUP (another SIGTERM, or `Ctrl+C`'s SIGINT): it still ends the
+/// process at once by its own action, the terminal gone or not. Without
+/// the terminal going, `sys_a_second_signal_ends_the_process_at_once` shows
+/// it for a second SIGTERM.
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_second_signal_after_the_terminal_went_away_during_a_sigterms_end_ends_it_at_once() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    for (then, signal) in [("term", libc::SIGTERM), ("int", libc::SIGINT)] {
+        let (status, said) = alone(&format!("term-gone-then-{then}"));
+        assert!(
+            said.contains("the terminal went away during 143's end"),
+            "{then}: {status:?}: {said}"
+        );
+        assert!(!said.contains("past the"), "{then}: {status:?}: {said}");
+        assert_eq!(
+            status.and_then(|status| status.signal()),
+            Some(signal),
+            "a second SIG{then} did not end the process at once: {status:?}: {said}"
+        );
+    }
 }
 
 /// The child's side of the race: everything is the child's own, with no
@@ -510,5 +574,48 @@ mod race {
         cortex_term::signal_ended();
         #[expect(clippy::exit, reason = "the child ends when it has said so")]
         std::process::exit(0);
+    }
+
+    /// SIGTERM handed over, then the terminal gone under the loop's read
+    /// (its input a pipe whose writing end is closed), then `then`: `hup`,
+    /// `term` or `int`, raised on this thread, whose handler has run when
+    /// the raise returns.
+    pub(super) fn ending_when_the_terminal_goes(then: &str) {
+        let signal = match then {
+            "hup" => libc::SIGHUP,
+            "term" => libc::SIGTERM,
+            "int" => libc::SIGINT,
+            other => panic!("no signal `{other}`"),
+        };
+        let mut terminal = Terminal::enter(Overrides::default()).expect("enter the terminal");
+        terminal.hand_signals_over();
+        // SAFETY: SIGTERM goes to this thread, whose handler hands it over.
+        unsafe { libc::raise(libc::SIGTERM) };
+        assert_eq!(terminal.ending(), Some(143), "SIGTERM handed over");
+        // The hand-over's wake: a wait that reads nothing.
+        terminal.next(Some(LIMIT)).expect("the wake");
+        let (input, input_end) = pipe();
+        // SAFETY: the pipe's ends are this process's own; standard input
+        // becomes its reading end, and the writing end is closed.
+        unsafe {
+            libc::dup2(input, 0);
+            libc::close(input_end);
+        }
+        // One wait, which reads the end of input: the terminal has gone
+        // while the program ends for the SIGTERM.
+        terminal.next(Some(LIMIT)).expect("the read of the end");
+        report(&format!("the terminal went away during {}'s end", 143));
+        // SAFETY: the signal goes to this thread; its handler has run when
+        // this returns, or the process has ended.
+        unsafe { libc::raise(signal) };
+        let code = terminal.ending().expect("the end asked for");
+        report(&format!(
+            "ended for {code}, past the SIG{}",
+            then.to_uppercase()
+        ));
+        drop(terminal);
+        cortex_term::signal_ended();
+        #[expect(clippy::exit, reason = "the child ends with the code it was asked for")]
+        std::process::exit(i32::from(code));
     }
 }
