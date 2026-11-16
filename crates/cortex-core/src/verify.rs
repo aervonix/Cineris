@@ -74,26 +74,42 @@ const LEAST_TIME: Duration = Duration::from_secs(10);
 /// The longest line of `verify.commands` that runs.
 const LONGEST_LINE: usize = 400;
 
+/// How the sandbox's launcher begins the line it gives a command it refused
+/// to start (`cortex_sandbox::explain`): a check it refused never ran.
+const LAUNCHER_STOPPED: &str = "[The sandbox launcher stopped:";
+
+/// What is said of a check the sandbox may have stopped, to the user and
+/// to the model.
+const SANDBOX_REMEDY: &str = "A check that needs the network (to fetch dependencies, say), or to \
+                              write outside the workspace, runs only outside the sandbox (once, \
+                              by hand) or with `sandbox.network = \"full\"` or `sandbox.write` in \
+                              the user's own configuration.";
+
 /// What begins every line of a check's output in the report to the model:
 /// no line of it can begin with anything of the report's own.
 pub(crate) const MARK: &str = "| ";
 
-/// `[verify]`, as the verifier reads it.
+/// `[verify]`, as the verifier reads it, with the longest time limit the
+/// shell gives a command.
 #[derive(Debug, Clone)]
 pub(crate) struct Settings {
     pub(crate) mode: VerifyMode,
     pub(crate) commands: Vec<String>,
     pub(crate) round_time: Duration,
     pub(crate) turn_time: Duration,
+    /// `shell.max_timeout`: a check runs no longer than this, whatever its
+    /// round leaves, and is said to have had no more.
+    pub(crate) max_timeout: Duration,
 }
 
-impl From<&VerifySettings> for Settings {
-    fn from(settings: &VerifySettings) -> Self {
+impl Settings {
+    pub(crate) fn of(verify: &VerifySettings, max_timeout: Duration) -> Self {
         Self {
-            mode: settings.mode,
-            commands: settings.commands.clone(),
-            round_time: settings.round_time,
-            turn_time: settings.turn_time,
+            mode: verify.mode,
+            commands: verify.commands.clone(),
+            round_time: verify.round_time,
+            turn_time: verify.turn_time,
+            max_timeout,
         }
     }
 }
@@ -252,10 +268,13 @@ pub(crate) struct Ran {
     /// What it printed, as its result holds it, for a check that failed.
     pub(crate) output: Option<String>,
     pub(crate) artifact: Option<ArtifactRef>,
+    /// Whether it was stopped at its time limit: such a check is not run
+    /// again as a flaky test.
+    pub(crate) stopped_at_limit: bool,
 }
 
 impl Ran {
-    fn not(ended: Ended, note: impl Into<String>) -> Self {
+    pub(crate) fn not(ended: Ended, note: impl Into<String>) -> Self {
         Self {
             ended,
             exit_code: None,
@@ -264,6 +283,7 @@ impl Ran {
             note: Some(note.into()),
             output: None,
             artifact: None,
+            stopped_at_limit: false,
         }
     }
 
@@ -294,6 +314,7 @@ pub(crate) fn classify(result: &ToolResult, limit: Duration, usual: Option<Durat
         note: None,
         output: None,
         artifact: result.artifacts().first().cloned(),
+        stopped_at_limit: flag("timed_out"),
     };
     let mut notes: Vec<String> = Vec::new();
     match result.outcome() {
@@ -317,8 +338,14 @@ pub(crate) fn classify(result: &ToolResult, limit: Duration, usual: Option<Durat
         ran.note = Some(visible(&result.text()).into_owned());
         return ran;
     }
-    let blocked = field("sandbox").and_then(Json::as_str);
-    ran.ended = if flag("timed_out") {
+    // What the launcher said its confinement did. Only its own refusal
+    // (the command never ran) is the sandbox's for certain: its other lines
+    // are read from what the command printed, and a compiler's "failed to
+    // resolve" reads like a name that could not be looked up. So those
+    // leave the result as it is, and are said beside it.
+    let sandbox = field("sandbox").and_then(Json::as_str);
+    let refused = sandbox.is_some_and(|line| line.starts_with(LAUNCHER_STOPPED));
+    ran.ended = if ran.stopped_at_limit {
         // It hung only if it usually ends well within what it had.
         if usual.is_some_and(|usual| usual.saturating_mul(2) <= limit) {
             notes.push(format!(
@@ -334,16 +361,27 @@ pub(crate) fn classify(result: &ToolResult, limit: Duration, usual: Option<Durat
             ));
             Ended::TimedOut
         }
-    } else if let (Some(line), false) = (blocked, ran.exit_code == Some(0)) {
-        notes.push(visible(line).into_owned());
+    } else if refused && ran.exit_code != Some(0) {
         Ended::Blocked
     } else if ran.exit_code == Some(0) && *result.outcome() == ToolOutcome::Success {
         Ended::Passed
     } else {
         Ended::Failed
     };
+    if let Some(line) = sandbox
+        && ran.ended != Ended::Passed
+    {
+        notes.push(format!("{} {SANDBOX_REMEDY}", visible(line)));
+    }
     if flag("background_stopped") {
         notes.push("It left processes running, and they were stopped.".to_owned());
+    }
+    if flag("outlived") {
+        notes.push(
+            "A process it started is still running outside its process tree, and could not be \
+             stopped."
+                .to_owned(),
+        );
     }
     if !notes.is_empty() {
         ran.note = Some(notes.join(" "));
@@ -357,7 +395,7 @@ pub(crate) fn classify(result: &ToolResult, limit: Duration, usual: Option<Durat
 /// The time a check may have, `in_round` into its round: what is left of
 /// the round's limit, of the turn's (`used` by its earlier rounds), and of
 /// the turn's and the session's own time limits (`deadline`, as the round
-/// began).
+/// began); and no more than the shell gives a command (`max_timeout`).
 pub(crate) fn time_left(
     settings: &Settings,
     used: Duration,
@@ -371,7 +409,7 @@ pub(crate) fn time_left(
     if let Some(deadline) = deadline {
         left = left.min(deadline.saturating_sub(in_round));
     }
-    left
+    left.min(settings.max_timeout)
 }
 
 /// Why a check is not started for its time, when it is not: it usually
@@ -465,15 +503,26 @@ pub(crate) fn report(
             Keep::Important,
             Compression::Structural,
         );
-        let mut first = true;
-        for line in shaped.text.split('\n') {
-            if !first {
-                text.push('\n');
+        // The share binds what is sent, after escaping: a line of unseen
+        // characters is longer escaped than it was printed.
+        let mut block = String::new();
+        let lines: Vec<&str> = shaped.text.split('\n').collect();
+        for (at, line) in lines.iter().enumerate() {
+            let marked = format!("{MARK}{}", visible_keeping(line, &['\t']));
+            if block.len() + marked.len() + 1 > share && !block.is_empty() {
+                let _ = write!(
+                    block,
+                    "\n{MARK}… ({} more lines are not shown)",
+                    lines.len() - at
+                );
+                break;
             }
-            first = false;
-            text.push_str(MARK);
-            text.push_str(&visible_keeping(line, &['\t']));
+            if !block.is_empty() {
+                block.push('\n');
+            }
+            block.push_str(&marked);
         }
+        text.push_str(&block);
         if let Some(artifact) = &ran.artifact {
             let _ = write!(
                 text,
@@ -547,9 +596,131 @@ fn check_report(check: &Check, ran: Option<&Ran>) -> CheckReport {
 
 /// The checks that failed in a turn and have not passed since.
 #[derive(Debug, Default)]
-struct Memory {
+pub(crate) struct Memory {
     turn: Option<TurnId>,
     failing: Vec<Check>,
+}
+
+/// A round's verdict, with what is left failing in its turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    Passed,
+    /// A check failed in this round: the model is told.
+    Failed,
+    /// No check failed in this round, and one that failed earlier in the
+    /// turn has not passed since: nothing new to tell the model.
+    StillFailing,
+    Incomplete,
+    Skipped,
+    /// A check stopped the turn.
+    Stopped(String),
+}
+
+impl Memory {
+    /// The checks that fail in `turn`, now that a round ended with
+    /// `results`; and the round's verdict. `chosen` is how many checks the
+    /// round chose. Pure: it only reads and writes the memory.
+    pub(crate) fn judge(
+        &mut self,
+        turn: &TurnId,
+        chosen: usize,
+        results: &[(Check, Ran)],
+    ) -> (Verdict, Vec<Check>) {
+        if self.turn.as_ref() != Some(turn) {
+            *self = Self {
+                turn: Some(turn.clone()),
+                failing: Vec::new(),
+            };
+        }
+        let mut failed_now = false;
+        for (check, ran) in results {
+            match ran.ended {
+                Ended::Passed | Ended::Flaky => {
+                    self.failing.retain(|held| held.key() != check.key());
+                }
+                Ended::Failed => {
+                    failed_now = true;
+                    if !self.failing.iter().any(|held| held.key() == check.key()) {
+                        self.failing.push(check.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        let started = results.iter().filter(|(_, ran)| ran.started()).count();
+        let all_passed = results.len() == chosen
+            && chosen > 0
+            && results
+                .iter()
+                .all(|(_, ran)| matches!(ran.ended, Ended::Passed | Ended::Flaky));
+        let stopped = results.iter().find_map(|(_, ran)| match &ran.ended {
+            Ended::Stopped(reason) => Some(reason.clone()),
+            _ => None,
+        });
+        let verdict = if let Some(reason) = stopped {
+            Verdict::Stopped(reason)
+        } else if failed_now {
+            Verdict::Failed
+        } else if !self.failing.is_empty() {
+            Verdict::StillFailing
+        } else if all_passed {
+            Verdict::Passed
+        } else if started == 0 {
+            Verdict::Skipped
+        } else {
+            Verdict::Incomplete
+        };
+        (verdict, self.failing.clone())
+    }
+
+    /// The verdict of a round that ran nothing in `turn`: what is still
+    /// failing in it, if anything is.
+    pub(crate) fn unresolved(&self, turn: &TurnId) -> bool {
+        self.turn.as_ref() == Some(turn) && !self.failing.is_empty()
+    }
+}
+
+/// Whether a check that ended as `first` runs once more: it failed, and is
+/// a known flaky test, and it was not stopped at its time limit (a test
+/// that hangs is not retried).
+pub(crate) fn retries(first: &Ran, flaky: bool) -> bool {
+    first.ended == Ended::Failed && flaky && !first.stopped_at_limit
+}
+
+/// What a check that failed and was run again ended as: flaky when the
+/// second run passed, a failure when it failed; and when the second run
+/// did not run to a result, the first failure, with a note.
+pub(crate) fn after_retry(first: Ran, second: Ran) -> Ran {
+    match second.ended {
+        Ended::Passed => Ran {
+            ended: Ended::Flaky,
+            note: Some(format!(
+                "It failed with {}, then passed when run again: it is a known flaky test.",
+                first.exit_code.map_or_else(
+                    || "no exit code".to_owned(),
+                    |code| format!("exit code {code}")
+                )
+            )),
+            ..second
+        },
+        // A failure after the retry is a failure, never "flaky".
+        Ended::Failed => second,
+        _ => {
+            let why = second.note.unwrap_or_default();
+            Ran {
+                note: Some(
+                    format!(
+                        "{} It is a known flaky test, and was to run once more, which it did \
+                         not: {why}",
+                        first.note.clone().unwrap_or_default()
+                    )
+                    .trim_start()
+                    .to_owned(),
+                ),
+                ..first
+            }
+        }
+    }
 }
 
 /// Everything a session's verifier is made of.
@@ -629,14 +800,14 @@ impl CoreVerifier {
 
     async fn round(&self, cx: VerifyCx<'_>) -> VerifyOutcome {
         let settings = &self.parts.settings;
+        if self.parts.lowered_by_project && settings.mode != VerifyMode::Auto {
+            self.tell_once(format!(
+                "The project's configuration sets `verify.mode` to `{}`: its checks do not run by \
+                 themselves at the end of a turn.",
+                settings.mode.as_str()
+            ));
+        }
         if settings.mode == VerifyMode::Off {
-            if self.parts.lowered_by_project {
-                self.tell_once(
-                    "The project's configuration turns verification off: its checks do not \
-                     run at the end of a turn."
-                        .to_owned(),
-                );
-            }
             return VerifyOutcome::Skipped;
         }
         let current = self.current(&cx).await;
@@ -673,6 +844,21 @@ impl CoreVerifier {
             self.tell_once("The project's checks do not run: no shell was found.".to_owned());
             return VerifyOutcome::Skipped;
         };
+        // The turn's time for checks, or its own time limit, is spent:
+        // nothing is started, and what still fails stays failed.
+        if settings.turn_time.saturating_sub(cx.used).is_zero()
+            || cx.deadline.is_some_and(|deadline| deadline.is_zero())
+        {
+            self.tell_once(format!(
+                "The project's checks did not run again: this turn's time for them ({}) is spent.",
+                shown_time(settings.turn_time)
+            ));
+            return if lock(&self.memory).unresolved(cx.turn) {
+                VerifyOutcome::StillFailing
+            } else {
+                VerifyOutcome::Skipped
+            };
+        }
         let reports: Vec<CheckReport> = chosen
             .checks
             .iter()
@@ -747,28 +933,14 @@ impl CoreVerifier {
     /// One check, and its retry when it is a known flaky test.
     async fn check(&self, round: &mut Round<'_, '_>, check: &Check, flaky: &BTreeSet<Key>) -> Ran {
         let first = self.run_once(round, check).await;
-        if first.ended != Ended::Failed
-            || !flaky.contains(&check.key())
-            || round.cx.cancel.is_cancelled()
-        {
+        if !retries(&first, flaky.contains(&check.key())) || round.cx.cancel.is_cancelled() {
             return first;
         }
         let second = self.run_once(round, check).await;
-        match second.ended {
-            Ended::Passed => Ran {
-                ended: Ended::Flaky,
-                note: Some(format!(
-                    "It failed with {}, then passed when run again: it is a known flaky test.",
-                    first.exit_code.map_or_else(
-                        || "no exit code".to_owned(),
-                        |code| format!("exit code {code}")
-                    )
-                )),
-                ..second
-            },
-            // A failure after the retry is a failure, never "flaky".
-            _ => second,
+        if matches!(second.ended, Ended::Stopped(_) | Ended::Interrupted) {
+            return second;
         }
+        after_retry(first, second)
     }
 
     /// One run of a check: its time, its entry, its plan, the engine's
@@ -776,10 +948,18 @@ impl CoreVerifier {
     async fn run_once(&self, round: &mut Round<'_, '_>, check: &Check) -> Ran {
         let cx = round.cx;
         let settings = &self.parts.settings;
-        // The time it may have.
+        // The level may have been lowered since the round began.
+        if *self.parts.policy.engine().level() == Level::ReadOnly {
+            return Ran::not(
+                Ended::NotRun,
+                "The session is at the read-only level now, where no check runs.",
+            );
+        }
+        // The time it may have: what the round, the turn and the limits
+        // leave, and no more than the shell gives a command.
         let in_round = self.parts.clock.monotonic().saturating_sub(round.started);
-        let left = time_left(settings, cx.used, cx.deadline, in_round);
-        if let Some(why) = too_long(check.usual, settings.round_time, left) {
+        let limit = time_left(settings, cx.used, cx.deadline, in_round);
+        if let Some(why) = too_long(check.usual, settings.round_time, limit) {
             return Ran::not(Ended::Skipped, why);
         }
         // An entry of the profile must still be one that runs unasked: it
@@ -804,7 +984,7 @@ impl CoreVerifier {
         // before it did is what its plan sees.
         let mut arguments = json!({
             "command": check.line,
-            "timeout_ms": u64::try_from(left.as_millis()).unwrap_or(u64::MAX).max(1),
+            "timeout_ms": u64::try_from(limit.as_millis()).unwrap_or(u64::MAX).max(1),
         });
         if let (Some(cwd), Some(fields)) = (&check.cwd, arguments.as_object_mut()) {
             fields.insert("cwd".to_owned(), Json::String(cwd.clone()));
@@ -840,7 +1020,15 @@ impl CoreVerifier {
                     visible(&error.into_result().text()).into_owned(),
                 );
             }
-            Err(_) => return Ran::not(Ended::Interrupted, "The turn was interrupted."),
+            Err(cortex_tools::BlockingError::Cancelled) => {
+                return Ran::not(Ended::Interrupted, "The turn was interrupted.");
+            }
+            Err(cortex_tools::BlockingError::Panicked(why)) => {
+                return Ran::not(
+                    Ended::NotRun,
+                    format!("Planning it failed: {}", visible(&why)),
+                );
+            }
         };
         // What the engine says decides, but for one thing: the user's own
         // line runs where the engine would ask, as the user's word. A check
@@ -889,7 +1077,7 @@ impl CoreVerifier {
         let result =
             cortex_tools::execute(&AsCheck(round.shell.as_ref()), plan, &run_cx, &mut NoOutput)
                 .await;
-        let mut ran = classify(&result, left, check.usual);
+        let mut ran = classify(&result, limit, check.usual);
         // The look after it, or the look before it, may have stopped the
         // turn: nothing more of it runs, and the turn ends.
         if let Some(reason) = self.parts.policy.stopped_turn(cx.number) {
@@ -906,63 +1094,42 @@ impl CoreVerifier {
         chosen: &[Check],
         results: Vec<(Check, Ran)>,
     ) -> VerifyOutcome {
-        let failing: Vec<Check> = {
-            let mut memory = lock(&self.memory);
-            if memory.turn.as_ref() != Some(cx.turn) {
-                *memory = Memory {
-                    turn: Some(cx.turn.clone()),
-                    failing: Vec::new(),
-                };
-            }
-            for (check, ran) in &results {
-                match ran.ended {
-                    Ended::Passed | Ended::Flaky => {
-                        memory.failing.retain(|held| held.key() != check.key());
-                    }
-                    Ended::Failed
-                        if !memory.failing.iter().any(|held| held.key() == check.key()) =>
-                    {
-                        memory.failing.push(check.clone());
-                    }
-                    _ => {}
-                }
-            }
-            memory.failing.clone()
-        };
-        let stopped = results.iter().find_map(|(_, ran)| match &ran.ended {
-            Ended::Stopped(reason) => Some(reason.clone()),
-            _ => None,
-        });
-        let started = results.iter().filter(|(_, ran)| ran.started()).count();
-        let all_passed = results.len() == chosen.len()
-            && results
-                .iter()
-                .all(|(_, ran)| matches!(ran.ended, Ended::Passed | Ended::Flaky));
-        let (outcome, verdict) = if let Some(reason) = stopped {
-            (VerifyOutcome::Stopped { reason }, Verification::Incomplete)
-        } else if !failing.is_empty() {
-            let earlier: Vec<&Check> = failing
-                .iter()
-                .filter(|held| {
-                    !results
-                        .iter()
-                        .any(|(check, ran)| check.key() == held.key() && ran.ended == Ended::Failed)
-                })
-                .collect();
-            (
-                VerifyOutcome::Failed {
-                    report: report(cx.round, cx.rounds, &results, &earlier),
+        let (verdict, failing) = lock(&self.memory).judge(cx.turn, chosen.len(), &results);
+        let failed = !failing.is_empty();
+        let (outcome, said) = match verdict {
+            Verdict::Stopped(reason) => (
+                VerifyOutcome::Stopped {
+                    reason,
+                    failing: failed,
                 },
-                Verification::Failed,
-            )
-        } else if all_passed {
-            (VerifyOutcome::Passed, Verification::Passed)
-        } else if started == 0 {
-            (VerifyOutcome::Skipped, Verification::Skipped)
-        } else {
-            (VerifyOutcome::Incomplete, Verification::Incomplete)
+                if failed {
+                    Verification::Failed
+                } else {
+                    Verification::Incomplete
+                },
+            ),
+            Verdict::Failed => {
+                let earlier: Vec<&Check> = failing
+                    .iter()
+                    .filter(|held| {
+                        !results.iter().any(|(check, ran)| {
+                            check.key() == held.key() && ran.ended == Ended::Failed
+                        })
+                    })
+                    .collect();
+                (
+                    VerifyOutcome::Failed {
+                        report: report(cx.round, cx.rounds, &results, &earlier),
+                    },
+                    Verification::Failed,
+                )
+            }
+            Verdict::StillFailing => (VerifyOutcome::StillFailing, Verification::Failed),
+            Verdict::Passed => (VerifyOutcome::Passed, Verification::Passed),
+            Verdict::Skipped => (VerifyOutcome::Skipped, Verification::Skipped),
+            Verdict::Incomplete => (VerifyOutcome::Incomplete, Verification::Incomplete),
         };
-        let message = match &verdict {
+        let message = match &said {
             Verification::Passed => "The project's checks passed.".to_owned(),
             Verification::Failed => format!("The project's checks failed: {}.", names(&failing)),
             Verification::Skipped => "None of the project's checks ran.".to_owned(),
@@ -977,7 +1144,7 @@ impl CoreVerifier {
                 .iter()
                 .map(|(check, ran)| check_report(check, Some(ran)))
                 .collect(),
-            verdict: Some(verdict),
+            verdict: Some(said),
         });
         outcome
     }

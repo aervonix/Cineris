@@ -366,10 +366,13 @@ open_enum! {
     pub enum Verification {
         /// They passed.
         Passed => "passed",
-        /// They still failed when the round limit was reached.
+        /// A check failed in the turn and had not passed when the turn
+        /// ended: at the round limit, after a round with nothing new, or a
+        /// turn that then ended another way.
         Failed => "failed",
-        /// They did not run: no files changed, no check is known, or the
-        /// mode is off.
+        /// They did not run to a result: no files changed, no check is
+        /// known, the mode is not `auto`, the project is not trusted, the
+        /// level is `read-only`, or none had time or was allowed.
         Skipped => "skipped",
         /// None failed, and some did not run to a result: blocked by the
         /// sandbox, stopped at their time limit, skipped or not allowed

@@ -7585,11 +7585,11 @@
         },
         {
           "const": "failed",
-          "description": "They still failed when the round limit was reached."
+          "description": "A check failed in the turn and had not passed when the turn ended: at the round limit, after a round with nothing new, or a turn that then ended another way."
         },
         {
           "const": "skipped",
-          "description": "They did not run: no files changed, no check is known, or the mode is off."
+          "description": "They did not run to a result: no files changed, no check is known, the mode is not `auto`, the project is not trusted, the level is `read-only`, or none had time or was allowed."
         },
         {
           "const": "incomplete",

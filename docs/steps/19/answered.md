@@ -181,3 +181,29 @@ The stage, the settings, choosing and running, on `worktree-step-19-stage`. Wher
 
 **Windows.** The core's system tests that start a shell there are three: a failure fed back and fixed (two runs), a time limit, and a flaky test's retry (two runs). The rest, the same code on both systems, run on Linux; the loop's rules run on both, with a verifier a test writes and no process.
 
+### After the review of the first pull request
+
+An independent reviewer read the whole diff against the specification, without the author's reasoning. Its findings, each with the fix and the test that holds it (the breaks are in `mutations/step-19.breaks`, "after the review of the first pull request"):
+
+| # | Finding | Fix | Held by |
+|---|---|---|---|
+| a1 | **A user's check ran at `read-only` when the level was lowered while its round ran:** the level was looked at once, at the round's start, and an `ask` let the user's line through. | The level is looked at again before each check. | `verify::sys_a_check_after_the_level_was_lowered_mid_round_does_not_run` |
+| b1 | **A real failure was classed blocked and never fed back:** the sandbox's guesses match ordinary output (`error[E0433]: failed to resolve`, `dial tcp`, `connection refused`). | Only the launcher's own refusal is blocked; the other lines leave the result, and are said beside it with the remedy. | `verify::tests::only_the_launchers_refusal_is_blocked_and_a_compiler_error_is_a_failure` (through the sandbox's real `explain`) |
+| b2 | **The flaky retry threw away the first failure** when the retry was skipped or refused, and retried a test that hung. | A test stopped at its limit is not retried; a retry that did not run to a result leaves the first failure, with a note. | `verify::tests::a_flaky_test_is_run_again_only_after_a_failure_that_was_not_a_hang`, `a_retry_that_did_not_run_to_a_result_leaves_the_first_failure` |
+| b3 | **A stop hid a failure from the same round:** the verdict was `incomplete`. | `VerifyOutcome::Stopped` carries whether a check of the turn still fails. | `verify::tests::a_rounds_verdict_says_what_ran_to_a_result`; `cortex-agent`'s `verifying::a_stop_after_a_failure_in_its_round_ends_the_turn_failed` |
+| b4 | **A round that ran nothing was fed back as a failure** while an earlier one stood, and one started with the turn's time for checks spent. | `VerifyOutcome::StillFailing`: the turn ends `failed`, with no notice and no request; no check starts once the turn's time for checks is spent. The verdict is a function of its own, `Memory::judge`. | `verify::tests::a_failure_stands_until_its_check_passes_and_is_forgotten_with_its_turn`; `verifying::a_round_with_nothing_new_ends_the_turn_failed_and_tells_the_model_nothing`; `verify::sys_once_the_turns_time_for_checks_is_spent_a_failure_stands_and_nothing_runs` |
+| b5 | **The docs promised what the code did not say:** the remedy for a blocked check, a project's `ask`, a process that outlived its tree. | Each is said; the docs follow the code. | `verify::tests::a_process_left_outside_the_checks_tree_is_said`; the remedy in the b1 test |
+| b6 | **The time a check was said to have, and the hang rule, used a limit the shell clamps** (`shell.max_timeout`). | `time_left` holds a check to `shell.max_timeout`. | `verify::tests::a_check_has_the_least_of_what_the_round_the_turn_and_the_limits_leave` |
+| b7 | **A panic in planning was reported as an interrupt.** | A panic is `not_run`, with its message; only a cancel is an interrupt. | by reading |
+| c1 | **The interrupt test did not look for the check's processes.** | It reads the shell's and its child's numbers and finds neither running. | `verify::sys_an_interrupt_during_a_check_stops_it_and_the_next_prompt_is_answered` (Linux) |
+| c6 | **The report's bound was before escaping:** an unseen character is eight bytes escaped. | The share binds the escaped lines; what is past it is counted. | `verify::tests::the_report_is_bounded_after_escaping_too` |
+
+**From the run of the breaks,** before the review: `an-entry-turned-off-still-runs` was caught by no test, since the engine refuses the entry too (its learned rule goes with it); the test now asserts why the check did not run. Four breaks of `touched.rs` name tests in `cortex-agent` too, and say so (`packages`).
+
+**Written down, not changed:**
+
+- **A managed `ask` rule** does not hold back the user's own check line: an `ask` from any layer lets the user's own line through. The managed file is the machine's administrator's; a `deny` there still refuses it.
+- **Trust is read when the session is put together,** as for the engine's rules: trust taken away from a running session stops its checks at its next session.
+- **The look after a check that stopped the turn** has no break: its test (`verify::sys_a_check_that_changes_a_protected_path_stops_the_turn_and_undo_puts_it_back`) returns early where the sandbox does not enforce, which the desk's machine does not; CI's Linux runner does.
+- **`lowered_by_project`** is true whenever a project's file gave the value; the notice says that the project's configuration sets it, which is so whatever the user's own file says.
+

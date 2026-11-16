@@ -2053,7 +2053,7 @@ pub(crate) fn assemble(
             None => Arc::new(NoStats),
         },
         verifier: Arc::new(crate::verify::CoreVerifier::new(crate::verify::Parts {
-            settings: crate::verify::Settings::from(&settings.verify),
+            settings: crate::verify::Settings::of(&settings.verify, shell_limits(settings).1),
             shell: checks_shell,
             policy: Arc::clone(&policy),
             knowledge: knowledge.clone(),
