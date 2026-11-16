@@ -1030,8 +1030,8 @@ caught-by:
 rule: A break given with `--break` has both `--find` and `--replace`.
 file: xtask/src/mutate/mod.rs
 in: refuse_what_does_not_go_together
-find: self.one_off.find.is_none() || self.one_off.replace.is_none()
-replace: self.one_off.find.is_none() && self.one_off.replace.is_none()
+find: || self.one_off.replace.is_none()
+replace: && self.one_off.replace.is_none()
 caught-by:
     mutate::tests::a_request_that_makes_no_sense_is_refused
 
