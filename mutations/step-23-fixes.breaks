@@ -1,0 +1,128 @@
+# The fixes of the review of step 23 (the interactive application): the
+# rules the review found untested or broken, broken one at a time, with
+# the tests that must fail. Written with the code.
+
+[break] a-hang-up-is-a-read-error
+rule: The terminal closing under a read (end of input, EIO) ends the application as SIGHUP's end, exit code 129, while signals are handed to it.
+file: crates/cortex-term/src/sys/unix.rs
+in: gone
+find: if super::hang_up() {
+replace: if false {
+packages: cortex-tui
+caught-by:
+    cortex-tui::it signals::sys_closing_the_terminal_ends_as_sighup
+    cortex-tui::it signals::sys_closing_the_terminal_of_a_leader_ends_as_sighup
+
+[break] the-sighup-after-a-hang-up-ends-the-process
+rule: The SIGHUP that follows a hang-up already taken as SIGHUP's end is that same end, not a second signal that ends the process part-way.
+file: crates/cortex-term/src/sys/unix.rs
+in: on_ending
+find: if signal == libc::SIGHUP && super::hung_up_already(129) {
+replace: if false {
+packages: cortex-tui
+caught-by:
+    cortex-tui::it signals::sys_closing_the_terminal_ends_as_sighup
+
+[break] leaving-puts-back-the-default-handlers
+rule: While signals are handed to the program, leaving the terminal keeps the handlers of the signals that end it until signal_ended: one that comes while the program ends is handed over, not the default action's.
+file: crates/cortex-term/src/sys/unix.rs
+in: leave
+find: if keep && ENDING.contains(&signal) && !(guarding && is_interrupt(signal)) {
+replace: if false && keep && ENDING.contains(&signal) && !(guarding && is_interrupt(signal)) {
+packages: cortex-tui
+caught-by:
+    cortex-tui::it signals::sys_closing_the_terminal_ends_as_sighup
+
+[break] no-watchdog
+rule: A signal handed to the program sets the watchdog, which ends the process if the program has not ended itself within 3 s.
+file: crates/cortex-term/src/sys/unix.rs
+in: on_ending
+find: unsafe { libc::alarm(WATCHDOG_SECONDS) };
+replace: let _ = WATCHDOG_SECONDS;
+caught-by:
+    cortex-term::it handoff::sys_a_signal_handed_over_sets_the_watchdog_and_erases_the_whole_region
+
+[break] a-second-signal-is-handed-over-too
+rule: A second signal, while the program ends what the first asked, ends the process at once by its own action.
+file: crates/cortex-term/src/sys/mod.rs
+in: hand_over
+find: .compare_exchange(0, code, Ordering::SeqCst, Ordering::SeqCst)
+replace: .swap(code, Ordering::SeqCst).checked_add(0).ok_or(())
+caught-by:
+    cortex-term::it handoff::sys_a_second_signal_ends_the_process_at_once
+
+[break] the-restore-erases-from-the-cursor-down
+rule: The emergency restore moves up to the live region's first row before it erases, so none of the region stays on the screen.
+file: crates/cortex-term/src/sys/mod.rs
+in: restore
+find: if rows > 0 {
+replace: if false {
+packages: cortex-term,cortex-tui
+caught-by:
+    sys::tests::the_restore_moves_up_to_the_live_regions_first_row_before_it_erases
+    cortex-term::it handoff::sys_a_signal_handed_over_sets_the_watchdog_and_erases_the_whole_region
+    cortex-tui::it signals::sys_a_signal_while_a_key_is_taken_ends_as_that_signal
+
+[break] the-presenter-never-says-where-the-cursor-is
+rule: Each frame tells the terminal how many rows of the live region are above the cursor, for the emergency restore.
+file: crates/cortex-term/src/inline.rs
+in: Inline::draw
+find: sink.region(at);
+replace: let _ = at;
+caught-by:
+    inline::tests::each_frame_tells_the_sink_how_many_rows_are_above_the_cursor
+    cortex-term::it handoff::sys_a_signal_handed_over_sets_the_watchdog_and_erases_the_whole_region
+
+[break] a-signal-mid-key-is-an-io-error
+rule: A signal that lands while the loop takes a key or draws a frame ends the application as that signal, not with the failed write's error.
+file: crates/cortex-tui/src/app.rs
+in: interactive
+find: if let Some(code) = cortex_term::signalled() {
+replace: if let Some(code) = None::<u8> {
+caught-by:
+    cortex-tui::it signals::sys_a_signal_while_a_key_is_taken_ends_as_that_signal
+
+[break] the-viewer-is-left-after-the-region-is-erased
+rule: The application leaves the viewer's alternate screen before the presenter erases the live region, so the main screen is left as a plain quit leaves it.
+file: crates/cortex-tui/src/app.rs
+in: run_with
+find: terminal.alternate(false)?;
+replace: let _ = ();
+caught-by:
+    cortex-tui::it signals::sys_quitting_from_the_viewer_leaves_the_main_screen_clean
+
+[break] the-core-is-not-waited-for
+rule: The binary waits for the core's end (its last records on disk) before it exits: after a signal, the stopped turn's records are written by that end.
+file: crates/cortex-cli/src/interactive.rs
+in: CoreThread::end
+find: let deadline = end_deadline(began, within, signalled);
+replace: let deadline = began;
+caught-by:
+    cortex-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
+
+[break] a-signal-does-not-shorten-the-cores-end
+rule: After a signal the core is given at most 1.5 s, from the signal, so the program ends before its watchdog does.
+file: crates/cortex-cli/src/interactive.rs
+in: end_deadline
+find: signalled.map_or(deadline, |at| deadline.min(at + SIGNAL_END))
+replace: signalled.map_or(deadline, |_| deadline)
+caught-by:
+    interactive::tests::the_cores_end_is_cut_short_by_a_signal
+
+[break] the-log-flush-waits-for-ever
+rule: The log's flush at the end waits at most its limit for a writer stuck on its disk.
+file: crates/cortex-base/src/log/file.rs
+in: FileSink::flush_within
+find: wait.recv_timeout(left)
+replace: Ok::<(), std::sync::mpsc::RecvTimeoutError>(wait.recv().unwrap_or(()))
+caught-by:
+    log::tests::a_flush_within_a_limit_gives_up_on_a_stuck_writer
+
+[break] the-terminal-is-taken-back-after-a-signal
+rule: A signal that comes while the external editor has the terminal leaves the terminal to the shell: it is not entered again, and the program ends as the signal asks.
+file: crates/cortex-tui/src/external.rs
+in: TerminalHandoff::reclaim
+find: if self.terminal.is_some() || cortex_term::signalled().is_some() {
+replace: if self.terminal.is_some() {
+caught-by:
+    cortex-tui::it external::sys_a_signal_while_the_editor_runs_leaves_the_terminal_to_the_shell
