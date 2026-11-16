@@ -1,6 +1,7 @@
 //! `cargo xtask decision new "TITLE"`: the next numbered decision record in
-//! `docs/decisions/`, written from the format the index gives, and its row
-//! added to the index (`docs/decisions/README.md`, "Format of a record").
+//! `docs/decisions/`, with the headings of the format the index describes
+//! (`docs/decisions/README.md`, "Format of a record"), written here as the
+//! records write them (`- **Status:**`), and its row added to the index.
 //!
 //! A record was written by hand: the number found by listing the folder, the
 //! file named, the headings copied, the row added to the table. A slip in
@@ -90,7 +91,7 @@ fn record(number: u32, title: &str, status: &str, date: &str) -> String {
     )
 }
 
-/// The index with the record's row after the last row of its first table
+/// The index with the record's row after the last row of a record in it
 /// (the rows begin `| [NNNN]`), or why it cannot be added.
 fn indexed(index: &str, number: u32, file: &str, title: &str, status: &str) -> Result<String> {
     let lines: Vec<&str> = index.split_inclusive('\n').collect();
@@ -102,9 +103,13 @@ fn indexed(index: &str, number: u32, file: &str, title: &str, status: &str) -> R
                 "{FOLDER}/README.md has no row of a record (`| [NNNN](…) | … |`) to add one after"
             )
         })?;
-    // The title is a cell: a `|` in it would end the cell.
-    let cell = title.replace('|', "\\|");
-    let row = format!("| [{number:04}]({file}) | {cell} | {status} |\n");
+    // The title and the status are cells: a `|` in one would end it.
+    let cell = |text: &str| text.replace('|', "\\|");
+    let row = format!(
+        "| [{number:04}]({file}) | {} | {} |\n",
+        cell(title),
+        cell(status)
+    );
     let mut text = String::with_capacity(index.len() + row.len());
     for (at, line) in lines.iter().enumerate() {
         text.push_str(line);
@@ -207,8 +212,13 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     }
     fs::write(folder.join(&file), text)
         .map_err(|error| format!("could not write {FOLDER}/{file}: {error}"))?;
-    fs::write(&index_path, index)
-        .map_err(|error| format!("could not write {FOLDER}/README.md: {error}"))?;
+    if let Err(error) = fs::write(&index_path, index) {
+        // No record without its row.
+        let _ = fs::remove_file(folder.join(&file));
+        return Err(format!(
+            "could not write {FOLDER}/README.md: {error}. The record was not kept."
+        ));
+    }
     println!("wrote {FOLDER}/{file}, and its row in {FOLDER}/README.md");
     Ok(())
 }
@@ -302,6 +312,18 @@ The owner's answers.
         )
         .unwrap();
         assert!(index.contains("| [0002](0002-a-b.md) | A \\| B | Accepted |\n"));
+        let (_, _, index) = plan(
+            &names(&["0001-a.md"]),
+            INDEX,
+            "C",
+            "Mine | yours",
+            "2026-11-16",
+        )
+        .unwrap();
+        assert!(
+            index.contains("| [0002](0002-c.md) | C | Mine \\| yours |\n"),
+            "{index}"
+        );
     }
 
     #[test]
