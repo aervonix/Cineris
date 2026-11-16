@@ -160,6 +160,8 @@ pub struct App {
     /// The viewer, while it is open: how many rows up from the end it is
     /// scrolled.
     viewer: Option<usize>,
+    /// The person asked for the external editor (`Ctrl+G`).
+    editor_wanted: bool,
     /// The settings `/new` opens a session with, and whether it is kept in
     /// memory only: as the command line asked for the first.
     fresh: (SessionSettings, bool),
@@ -261,6 +263,7 @@ impl App {
             picker: None,
             kept: Vec::new(),
             viewer: None,
+            editor_wanted: false,
             reading: false,
             forked_from: None,
             opening: false,
@@ -319,6 +322,60 @@ impl App {
         }
         if let Some(dialog) = self.dialogs.front_mut() {
             dialog.drawn(at);
+        }
+    }
+
+    /// Whether the person asked for the external editor, taken: the loop
+    /// hands the terminal over, runs it on [`editor_text`], and gives the
+    /// result to [`edited`].
+    ///
+    /// [`editor_text`]: Self::editor_text
+    /// [`edited`]: Self::edited
+    pub fn take_editor(&mut self) -> bool {
+        std::mem::take(&mut self.editor_wanted)
+    }
+
+    /// The prompt to edit, with its chips.
+    #[must_use]
+    pub fn editor_text(&self) -> crate::editor::Fragment {
+        self.input.external_text()
+    }
+
+    /// The folders an editor found by its name is never taken from: the
+    /// session's write roots, where a command the agent ran could have put
+    /// a program.
+    #[must_use]
+    pub fn write_roots(&self) -> Vec<std::path::PathBuf> {
+        self.session
+            .as_ref()
+            .map(|session| {
+                session
+                    .write_roots
+                    .iter()
+                    .map(std::path::PathBuf::from)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// What the external editor gave back, or why it gave nothing.
+    pub fn edited(
+        &mut self,
+        result: Result<crate::external::Edited, crate::external::EditorError>,
+    ) {
+        match result {
+            Ok(crate::external::Edited::Changed(fragment)) => {
+                self.input.external_result(Some(fragment));
+            }
+            Ok(crate::external::Edited::Unchanged) => self.input.external_result(None),
+            Ok(crate::external::Edited::Empty) => {
+                self.input.external_result(None);
+                self.say("The editor left the prompt empty, so it is kept as it was.");
+            }
+            Err(error) => {
+                self.input.external_result(None);
+                self.say(&format!("The external editor gave nothing back: {error}"));
+            }
         }
     }
 
@@ -526,6 +583,7 @@ impl App {
             Outcome::Removed(name, index) => self.removed(&name, index),
             Outcome::PickerClosed(_) => self.picker = None,
             Outcome::OpenViewer => self.viewer = Some(0),
+            Outcome::ExternalEditor => self.editor_wanted = true,
             _ => {}
         }
     }

@@ -2741,3 +2741,47 @@ fn at_completes_from_the_workspace_files_the_core_lists() {
     let menu = app.input().menu().cloned().expect("the file menu");
     assert_eq!(menu.rows[0].label, "src/lexer.rs");
 }
+
+/// `Ctrl+G` hands the terminal back from the loop for the external editor;
+/// with a terminal that cannot be handed over (the test's own) the prompt
+/// stays as it was and the reason is said.
+#[test]
+fn ctrl_g_leaves_the_loop_for_the_editor_and_the_prompt_stays() {
+    use cortex_term::Ready;
+    let base = Instant::now();
+    let (mut app, link) = app(base);
+    link.give(Inbound::Done(
+        Ticket(1),
+        Ok(OpResult::SessionNew(SessionResult { session: state() })),
+    ));
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let device = Played {
+        steps: [
+            (Ready::Woken, Vec::new()),
+            (Ready::Input, b"hi".to_vec()),
+            (Ready::Timeout, Vec::new()),
+            // Ctrl+G.
+            (Ready::Input, b"\x07".to_vec()),
+            (Ready::Timeout, Vec::new()),
+        ]
+        .into_iter()
+        .collect(),
+        written: Arc::clone(&written),
+        waits: Arc::new(Mutex::new(Vec::new())),
+        base,
+        elapsed: Duration::ZERO,
+    };
+    let mut terminal = cortex_term::Terminal::with_device(device, caps()).expect("the terminal");
+    let ended = run(&mut terminal, &mut app);
+    assert!(
+        matches!(&ended, Err(error) if error.to_string() == "the script has ended"),
+        "{ended:?}"
+    );
+    assert_eq!(app.input().editor().expanded(), "hi");
+    let shown = String::from_utf8_lossy(&written.lock().unwrap_or_else(PoisonError::into_inner))
+        .into_owned();
+    assert!(
+        shown.contains("The external editor gave nothing back"),
+        "{shown}"
+    );
+}
