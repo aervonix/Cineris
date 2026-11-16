@@ -115,9 +115,22 @@ fn sys_a_copy_through_a_link_an_earlier_command_made_is_asked_about_again() {
     world.provider.push(says("Done."));
     world.put("evil", "echo evil\n");
     let core = world.core();
+    // The link is held as it is about to run until the copy has been
+    // asked about once: a round decides a call when it plans it, and under
+    // load the copy's planning could start after the link had run, which
+    // left nothing to decide again (1 in 50 under load).
+    let link_runs = std::rc::Rc::new(cortex_testkit::Hold::new(cortex_agent::BEFORE_A_CALL_RUNS));
     world.run(async {
         let front = Front::start(&world, &core).await;
-        front.answering(Answering::with(|request| {
+        let held = std::rc::Rc::clone(&link_runs);
+        let waiting_at_the_copys_question = std::rc::Rc::new(std::cell::Cell::new(None));
+        let seen = std::rc::Rc::clone(&waiting_at_the_copys_question);
+        front.answering(Answering::with(move |request| {
+            if request.call_id.as_str() == "c2" && seen.get().is_none() {
+                // The copy is decided while the link waits to run.
+                seen.set(Some(held.stopped()));
+                held.release();
+            }
             if asks_about_protected(request, "app/.bashrc") {
                 ApprovalChoice::Deny
             } else {
@@ -125,6 +138,17 @@ fn sys_a_copy_through_a_link_an_earlier_command_made_is_asked_about_again() {
             }
         }));
         let end = front.turn("go").await;
+        assert_eq!(
+            waiting_at_the_copys_question.get(),
+            Some(1),
+            "the link was held, not yet run, when the copy was first asked about"
+        );
+        assert_eq!(
+            link_runs.timed_out(),
+            0,
+            "the link waited for the copy's question"
+        );
+        assert_eq!(link_runs.stopped(), 0);
         assert_eq!(end.outcome, TurnOutcome::Completed);
         let approvals = front.approvals();
         assert_eq!(approvals.len(), 3, "{approvals:#?}");

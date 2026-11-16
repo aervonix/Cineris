@@ -76,6 +76,12 @@
 //! mistakes it for something the model saw, the files it read are forgotten
 //! by the session's table of seen files.
 
+/// An awaited point ([`cortex_base::hook::await_point!`]): a call has
+/// started and its tool is about to run, on the call's own task. A test
+/// that needs a later call of the round decided before an earlier one has
+/// changed anything holds the earlier one here. Nothing in a build without
+/// `test-hooks`.
+pub const BEFORE_A_CALL_RUNS: &str = "round: a call has started, and its tool is about to run";
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1365,6 +1371,7 @@ impl Round {
             &name,
             tracing::Instrument::instrument(
                 async move {
+                    cortex_base::hook::await_point!(BEFORE_A_CALL_RUNS);
                     let started = clock.monotonic();
                     let result = execute(tool.as_ref(), plan, &cx, &mut out).await;
                     let stat = match result.outcome() {
