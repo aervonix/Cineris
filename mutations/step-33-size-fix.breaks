@@ -1,0 +1,146 @@
+# Step 33's size fix (docs/steps/33/answered.md, "The size fix"): the
+# shipped binary's home paths, the host outside ASCII the IDNA pin refuses,
+# and the pull-request size job's lines, broken one rule at a time.
+#
+# Not here: the pin itself (`idna_adapter = "~1.0.0"` in the root
+# Cargo.toml), which a break could only move with a new lockfile; the test
+# that holds it is `transport::the_url_library_is_built_without_icu_and_takes_the_xn_form`,
+# which fails when the lockfile's adapter is not 1.0. And the paths that
+# decide whether a pull request can change the binary, which are a shell
+# `case` in .github/actions/changes, outside any crate's tests.
+
+[break] a-home-path-is-not-looked-for-in-the-binary
+rule: A built binary is read for every path under a home folder.
+file: xtask/src/shipped.rs
+in: home_paths
+find: for (start, path) in home_paths::find_in_binary(bytes) {
+replace: for (start, path) in home_paths::find_in_binary(&bytes[..0]) {
+caught-by:
+    shipped::tests::home_paths_in_a_binary_are_found_without_the_users_name
+    shipped::tests::a_path_packed_against_the_string_before_it_is_found
+
+[break] a-packed-path-is-passed-over
+rule: In a binary, a home path packed against the string before it is still found.
+file: xtask/src/rules/home_paths.rs
+in: find_in
+find: if !packed && previous.is_some_and(is_name_byte) {
+replace: if previous.is_some_and(is_name_byte) {
+caught-by:
+    shipped::tests::a_path_packed_against_the_string_before_it_is_found
+
+[break] cargo-home-in-one-spelling-only
+rule: The build's cargo home is found with either separator.
+file: xtask/src/shipped.rs
+in: home_paths
+find: vec![text.to_string(), text.replace('\\', "/")]
+replace: vec![text.to_string()]
+caught-by:
+    shipped::tests::the_builds_cargo_home_is_found_in_either_spelling_and_any_case
+
+[break] cargo-home-by-its-exact-case
+rule: The build's cargo home is found whatever its case, as Windows names it.
+file: xtask/src/shipped.rs
+in: find_all
+find: .eq_ignore_ascii_case(needle)
+replace: == *needle
+caught-by:
+    shipped::tests::the_builds_cargo_home_is_found_in_either_spelling_and_any_case
+
+[break] the-users-name-is-shown
+rule: What the check prints of a home path leaves the user's name out.
+file: xtask/src/shipped.rs
+in: without_the_user
+find: format!("{}<user>", &path[..cut])
+replace: path.to_owned()
+caught-by:
+    shipped::tests::home_paths_in_a_binary_are_found_without_the_users_name
+
+[break] no-folder-is-remapped
+rule: Every build of the shipped binary through xtask is given a remapping for each folder.
+file: xtask/src/shipped.rs
+in: encoded_rustflags
+find: for (from, to) in remaps {
+replace: for (from, to) in remaps.iter().take(0) {
+caught-by:
+    shipped::tests::the_remaps_follow_the_flags_already_set
+
+[break] the-flags-already-set-are-dropped
+rule: The remappings are added to the flags the build already had, never in their place.
+file: xtask/src/shipped.rs
+in: encoded_rustflags
+find: (_, Some(plain)) => plain.split_whitespace().map(str::to_owned).collect(),
+replace: (_, Some(_)) => Vec::new(),
+caught-by:
+    shipped::tests::the_remaps_follow_the_flags_already_set
+
+[break] the-home-folder-overrides-cargos-home
+rule: Folders are given from the most general to the most specific, as rustc applies the last that matches.
+file: xtask/src/shipped.rs
+in: Folders::remaps
+find: (&self.home, "~"), (&self.cargo_home, "cargo")
+replace: (&self.cargo_home, "cargo"), (&self.home, "~")
+caught-by:
+    shipped::tests::each_folder_is_remapped_from_the_most_general_to_the_most_specific
+
+[break] a-home-path-passes-a-run-without-check
+rule: A home path in the binary fails every run of `size`, with `--check` or without.
+file: xtask/src/nonblocking.rs
+in: verdict
+find: paths?;
+replace: let _ = paths;
+caught-by:
+    nonblocking::tests::a_home_path_fails_every_run_and_the_budget_only_a_check
+
+[break] over-the-budget-passes
+rule: A binary over its budget fails `size --check` with a line saying by how much.
+file: xtask/src/nonblocking.rs
+in: report
+find: let over = (bytes > limit).then(|| {
+replace: let over = (bytes > limit + limit).then(|| {
+caught-by:
+    nonblocking::tests::a_binary_over_its_budget_fails_with_a_line_that_says_by_how_much
+
+[break] the-difference-from-main-loses-its-sign
+rule: The difference from main's last recorded size is signed, so a shrink reads as one.
+file: xtask/src/nonblocking.rs
+in: report
+find: let difference = i128::from(bytes) - i128::from(main.bytes);
+replace: let difference = (i128::from(bytes) - i128::from(main.bytes)).abs();
+caught-by:
+    nonblocking::tests::the_difference_from_mains_last_size_is_signed
+
+[break] a-host-outside-ascii-is-not-found
+rule: A URL whose host has letters outside ASCII is found, whatever is around the host.
+file: crates/cortex-llm/src/http.rs
+in: host_outside_ascii
+find: (!host.is_ascii()).then_some(host)
+replace: (!authority.is_ascii()).then_some(host)
+caught-by:
+    http::tests::a_host_outside_ascii_is_found_and_nothing_else_is
+
+[break] a-port-is-taken-for-the-host
+rule: The port is not part of the host.
+file: crates/cortex-llm/src/http.rs
+in: host_outside_ascii
+find: .filter(|(_, port)| port.bytes().all(|byte| byte.is_ascii_digit()))
+replace: .filter(|_| false)
+caught-by:
+    http::tests::a_host_outside_ascii_is_found_and_nothing_else_is
+
+[break] the-transport-sends-a-host-outside-ascii-to-the-url-library
+rule: The transport refuses a host outside ASCII itself, naming the xn-- form, before any client is made.
+file: crates/cortex-llm/src/transport.rs
+in: HttpTransport::send
+find: if let Some(host) = crate::http::host_outside_ascii(&request.url) {
+replace: if let Some(host) = crate::http::host_outside_ascii(&request.url[..0]) {
+caught-by:
+    cortex-llm::it transport::a_host_outside_ascii_is_refused_with_its_ascii_form_named
+
+[break] a-providers-host-outside-ascii-is-taken
+rule: A provider whose base_url has a host outside ASCII is refused when the core reads it, naming the key and the xn-- form.
+file: crates/cortex-core/src/provider.rs
+in: provider_info
+find: if let Some(host) = cortex_llm::http::host_outside_ascii(&info.base_url) {
+replace: if let Some(host) = cortex_llm::http::host_outside_ascii(&info.base_url[..0]) {
+caught-by:
+    provider::tests::a_base_url_whose_host_is_outside_ascii_is_refused_with_its_xn_form_named
