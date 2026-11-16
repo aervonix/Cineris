@@ -1,0 +1,309 @@
+# Tooling 7, the `mutate` part: a break given on the command line, `--flagged`,
+# `--merge`, the `os:` key of a break, and the copy's lock that is tried again.
+# Written with the code, and run with `cargo xtask mutate tooling-7-mutate`.
+
+# ----------------------------------------------------------- a one-off break
+
+[break] one-off-is-not-marked-in-its-results
+rule: A break given with `--break` is kept by its own mark, so that its result is never the result of a list's break of the same code.
+file: xtask/src/mutate/list.rs
+in: definition
+find: if self.is_one_off() {
+replace: if self.is_one_off() && false {
+caught-by:
+    mutate::list::tests::a_break_given_on_the_command_line_is_one_of_its_own
+    mutate::drive::tests::a_break_given_on_its_own_is_run_once_and_its_result_is_never_a_lists
+
+[break] one-off-has-one-name-for-all-text
+rule: A break given with `--break` is named for what it is made of, so that the same text is the same break and another text is another.
+file: xtask/src/mutate/list.rs
+in: to_break
+find: hash.0 >> 32
+replace: 0
+caught-by:
+    mutate::list::tests::a_break_given_on_the_command_line_is_one_of_its_own
+
+[break] one-off-takes-a-file-outside-the-repository
+rule: The file of a break given with `--break` is a path inside the repository, as in a list.
+file: xtask/src/mutate/list.rs
+in: to_break
+find: if !is_repository_path(&file) {
+replace: if false {
+caught-by:
+    mutate::list::tests::a_break_given_on_the_command_line_is_refused_for_what_a_list_would_refuse
+
+[break] one-off-takes-occurrence-zero
+rule: An occurrence is counted from 1, here as in a list.
+file: xtask/src/mutate/list.rs
+in: to_break
+find: if self.occurrence == Some(0) {
+replace: if false {
+caught-by:
+    mutate::list::tests::a_break_given_on_the_command_line_is_refused_for_what_a_list_would_refuse
+
+[break] one-off-goes-with-a-lists-names
+rule: A break given with `--break` is refused beside break names, a list's name and `--file`.
+file: xtask/src/mutate/mod.rs
+in: refuse_what_does_not_go_together
+find: if !self.only.is_empty() || !self.files.is_empty() {
+replace: if false {
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+[break] one-off-needs-only-one-of-find-and-replace
+rule: A break given with `--break` has both `--find` and `--replace`.
+file: xtask/src/mutate/mod.rs
+in: refuse_what_does_not_go_together
+find: self.one_off.find.is_none() || self.one_off.replace.is_none()
+replace: self.one_off.find.is_none() && self.one_off.replace.is_none()
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+[break] one-off-options-are-not-read
+rule: The options of a break given with `--break` are read into its parts: the item, the occurrence, the crates and each test.
+file: xtask/src/mutate/mod.rs
+in: parse
+find: "--test" => one.tests.push(value),
+replace: "--test" => one.tests = vec![value],
+caught-by:
+    mutate::tests::a_break_given_on_the_command_line_is_read_with_all_its_options
+
+# ----------------------------------------------------------------- --flagged
+
+[break] flagged-skips-a-run-that-could-not-be-judged
+rule: A break whose test run failed without naming a failed test is left without a verdict, and `--flagged` chooses it.
+file: xtask/src/mutate/drive.rs
+in: without_a_verdict
+find: Some(("COULD NOT BE JUDGED", detail))
+replace: None
+caught-by:
+    mutate::drive::tests::only_the_breaks_left_without_a_verdict_are_chosen_and_each_says_why
+
+[break] flagged-skips-a-break-that-does-not-compile
+rule: A break that does not compile (found by the compile of every break) is left without a verdict, and `--flagged` chooses it.
+file: xtask/src/mutate/drive.rs
+in: without_a_verdict
+find: Some(Some(error)) => Some(Outcome::DoesNotCompile(error)),
+replace: Some(Some(_)) => None,
+caught-by:
+    mutate::drive::tests::a_break_that_does_not_compile_is_chosen_and_a_change_to_the_code_forgets_what_was_left
+
+[break] flagged-chooses-a-verdict-too
+rule: A break with a verdict of the tests (caught, NOT CAUGHT) is not chosen by `--flagged`: asking again gives the same.
+file: xtask/src/mutate/drive.rs
+in: without_a_verdict
+find: Some(Outcome::Ran { .. }) | None => None
+replace:
+    Some(Outcome::Ran { .. }) => Some(("NOT CAUGHT", String::new())),
+    None => None
+caught-by:
+    mutate::drive::tests::only_the_breaks_left_without_a_verdict_are_chosen_and_each_says_why
+
+[break] flagged-is-asked-of-another-codes-results
+rule: What `--flagged` reads is what was found for the code as it is: after a change to the code nothing is left without a verdict.
+file: xtask/src/mutate/drive.rs
+in: without_a_verdict
+find: let code = code_hash(root, &files)?;
+replace: let code = 0;
+caught-by:
+    mutate::drive::tests::a_break_that_does_not_compile_is_chosen_and_a_change_to_the_code_forgets_what_was_left
+
+# ------------------------------------------------------------------- --merge
+
+[break] merge-takes-the-parts-of-other-steps
+rule: A step's parts are the files named `<step>-<part>.breaks`: step-9's do not include step-10's list.
+file: xtask/src/mutate/merge.rs
+in: plan
+find: .strip_prefix(&format!("{step}-"))
+replace: .strip_prefix("step-")
+caught-by:
+    mutate::merge::tests::the_parts_become_the_list_with_their_comments_and_each_part_named
+
+[break] merge-forgets-the-list-that-is-there
+rule: A list that is already there is kept, and the parts follow it.
+file: xtask/src/mutate/merge.rs
+in: merged_text
+find: text.push_str(existing.trim_end());
+replace: let _ = existing;
+caught-by:
+    mutate::merge::tests::a_list_that_is_there_is_kept_and_the_parts_follow_it
+
+[break] merge-does-not-say-where-a-block-came-from
+rule: Each part is put under a comment line that names the part it came from.
+file: xtask/src/mutate/merge.rs
+in: merged_text
+find: part.file, part.name
+replace: part.file, ""
+caught-by:
+    mutate::merge::tests::the_parts_become_the_list_with_their_comments_and_each_part_named
+
+[break] merge-allows-two-breaks-of-one-name
+rule: Two breaks of one name cannot be one list: the merge refuses them and says which files.
+file: xtask/src/mutate/merge.rs
+in: name_problems
+find: seen.iter().find(|(seen, _)| *seen == name)
+replace: seen.iter().find(|(seen, _)| *seen == name && false)
+caught-by:
+    mutate::merge::tests::two_breaks_of_one_name_are_refused_with_both_files_and_nothing_is_written
+
+[break] merge-skips-the-preflight
+rule: The whole pre-flight is run on the merged list before anything is written.
+file: xtask/src/mutate/merge.rs
+in: run
+find: problems = preflight(root, &plan)?;
+replace: problems = Vec::new();
+caught-by:
+    mutate::merge::tests::two_breaks_that_make_one_change_are_refused_by_the_preflight
+    mutate::merge::tests::a_break_that_does_not_apply_stops_the_merge_and_a_dry_run_changes_nothing
+
+[break] merge-dry-run-writes
+rule: With `--dry-run` nothing is written and no part is deleted.
+file: xtask/src/mutate/merge.rs
+in: run
+find:
+    if dry_run {
+        println!("--dry-run: nothing was written and no part deleted.");
+replace:
+    if false {
+        println!("--dry-run: nothing was written and no part deleted.");
+caught-by:
+    mutate::merge::tests::a_break_that_does_not_apply_stops_the_merge_and_a_dry_run_changes_nothing
+
+[break] merge-leaves-the-parts
+rule: The parts are deleted once the merged list is written.
+file: xtask/src/mutate/merge.rs
+in: run
+find: fs::remove_file(&path)
+replace: Ok::<(), std::io::Error>(())
+caught-by:
+    mutate::merge::tests::the_parts_become_the_list_with_their_comments_and_each_part_named
+    mutate::merge::tests::a_list_that_is_there_is_kept_and_the_parts_follow_it
+
+[break] merge-goes-with-other-options
+rule: `--merge` goes with no option but `--dry-run`.
+file: xtask/src/mutate/mod.rs
+in: refuse_what_does_not_go_together
+find: if others {
+replace: if false {
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+[break] dry-run-without-merge
+rule: `--dry-run` is for use with `--merge`.
+file: xtask/src/mutate/mod.rs
+in: refuse_what_does_not_go_together
+find: } else if self.dry_run {
+replace: } else if false {
+caught-by:
+    mutate::tests::a_request_that_makes_no_sense_is_refused
+
+# ------------------------------------------------------------------ the `os:`
+
+[break] os-windows-is-read-as-linux
+rule: `os: windows` is the system `cfg!(windows)` decides.
+file: xtask/src/mutate/list.rs
+in: parse
+find: "windows" => Some(Os::Windows),
+replace: "windows" => Some(Os::Linux),
+caught-by:
+    mutate::list::tests::a_break_of_one_system_says_so_and_runs_only_there
+
+[break] os-takes-any-word
+rule: An `os` other than `windows` and `linux` is refused.
+file: xtask/src/mutate/list.rs
+in: parse
+find: "linux" => Some(Os::Linux),
+replace: "linux" | "macos" | "unix" | "" => Some(Os::Linux),
+caught-by:
+    mutate::list::tests::a_break_of_one_system_says_so_and_runs_only_there
+
+[break] os-runs-on-the-other-system
+rule: A break of one system's code is run on that system only.
+file: xtask/src/mutate/list.rs
+in: runs_here
+find: self.os.is_none_or(|os| os == Os::here())
+replace: self.os.is_none_or(|os| os != Os::here())
+caught-by:
+    mutate::list::tests::a_break_of_one_system_says_so_and_runs_only_there
+    mutate::tests::the_breaks_are_split_by_the_system_that_builds_their_code
+
+[break] os-is-not-in-what-results-are-kept-by
+rule: A break of one system and the same code for any are not one break: what is kept for one is not kept for the other.
+file: xtask/src/mutate/list.rs
+in: definition
+find: if let Some(os) = self.os {
+replace: if let Some(os) = self.os.filter(|_| false) {
+caught-by:
+    mutate::list::tests::a_break_of_one_system_says_so_and_runs_only_there
+
+[break] os-break-is-not-applied-by-the-preflight-on-the-other-system
+rule: The pre-flight applies a break of the other system's code in memory, on every system, so that its code is held.
+file: xtask/src/mutate/mod.rs
+in: check
+find: for one in breaks {
+replace: for one in breaks.iter().filter(|one| one.runs_here()) {
+caught-by:
+    mutate::tests::a_break_of_the_other_systems_code_is_applied_by_the_preflight_here
+
+[break] os-break-names-are-checked-against-tests-not-built-here
+rule: A `caught-by` check against the kept lists of tests skips a break of the other system's code: its tests are not built here.
+file: xtask/src/mutate/names.rs
+in: check
+find: || !one.runs_here()
+replace:
+caught-by:
+    mutate::names::tests::a_break_of_the_other_systems_code_has_no_tests_built_here_and_is_not_checked_for_names
+
+[break] os-break-names-the-wrong-runner
+rule: What is left to the other system is said with the command that runs it on that system.
+file: xtask/src/mutate/mod.rs
+in: left_elsewhere
+find: os.word(), first.id
+replace: os.name(), first.id
+caught-by:
+    mutate::tests::what_is_left_to_the_other_system_is_said_with_the_command_that_runs_it_there
+
+# The Windows-only rule that demonstrates `os: windows`: run it on a Windows
+# runner, `gh workflow run try --ref <branch> -f os=windows -f
+# command="mutate tooling-7-mutate/nofollow-windows-follows-a-reparse-point"`.
+[break] nofollow-windows-follows-a-reparse-point
+rule: On Windows a reparse point that is not a placeholder (a symbolic link, a junction) is never followed: the open is refused as a link.
+file: crates/cortex-base/src/nofollow.rs
+in: open_unfollowed
+find: if !is_placeholder_tag(tag) { return Err(OpenError::Link); }
+replace: if !is_placeholder_tag(tag) && false { return Err(OpenError::Link); }
+os: windows
+packages: cortex-base
+caught-by:
+    cortex-base::it nofollow::windows::sys_a_junction_is_never_followed
+    cortex-base::it nofollow::windows::a_symbolic_link_is_never_followed
+    cortex-base::it nofollow::windows::a_file_swapped_for_a_link_after_the_look_is_not_followed
+
+# ----------------------------------------------------------- the copy's lock
+
+[break] lock-is-not-tried-again
+rule: A lock that is held a moment by a process another thread forked is tried again for a short while, and taken when it is let go.
+file: xtask/src/mutate/drive.rs
+in: lock
+find: Err(fs::TryLockError::WouldBlock) if tries < LOCK_TRIES => {
+replace: Err(fs::TryLockError::WouldBlock) if false => {
+caught-by:
+    mutate::drive::tests::a_lock_a_forked_child_still_holds_for_a_moment_is_taken_when_it_lets_go
+
+[break] lock-is-tried-for-too-short-a-time
+rule: A lock that another run really holds is tried for 200 ms (20 times, 10 ms apart) and then refused.
+file: xtask/src/mutate/drive.rs
+find: const LOCK_TRIES: u32 = 20;
+replace: const LOCK_TRIES: u32 = 2;
+caught-by:
+    mutate::drive::tests::a_lock_that_stays_held_is_refused_after_a_short_wait_that_took_no_time
+
+[break] lock-is-tried-again-with-no-wait
+rule: The tries of a lock that is held are apart: each is after a wait.
+file: xtask/src/mutate/drive.rs
+in: lock
+find: pause(LOCK_EVERY);
+replace:
+caught-by:
+    mutate::drive::tests::a_lock_a_forked_child_still_holds_for_a_moment_is_taken_when_it_lets_go
+    mutate::drive::tests::a_lock_that_stays_held_is_refused_after_a_short_wait_that_took_no_time

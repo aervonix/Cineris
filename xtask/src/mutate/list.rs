@@ -47,6 +47,10 @@
 //! - `expect: survives` marks a break that no test can catch because it
 //!   changes nothing that can be seen, kept so that the next person does
 //!   not try it again. `expect: caught` is what a break is without it.
+//! - `os`: `windows` or `linux`. The break is of code that only one system
+//!   builds, and only that system runs it: on the other `mutate` reports it
+//!   as left to a run there. The pre-flight applies it on every system.
+//!   Optional: without it the break is run everywhere.
 //!
 //! Anything else is an error, with its line: a key that is not known, a key
 //! given twice, a break without a required key.
@@ -71,6 +75,45 @@ pub(crate) enum Expect {
     Survives,
 }
 
+/// The system a break's code is built on, when it is only built on one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Os {
+    Linux,
+    Windows,
+}
+
+impl Os {
+    /// The system this build runs on: Windows where `cfg!(windows)`, and
+    /// otherwise Linux, which stands for every `cfg!(unix)` system.
+    pub(crate) const fn here() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else {
+            Self::Linux
+        }
+    }
+
+    /// The word a list writes, and a run says.
+    pub(crate) const fn word(self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::Windows => "windows",
+        }
+    }
+
+    /// The name of the system in a sentence.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Linux => "Linux",
+            Self::Windows => "Windows",
+        }
+    }
+}
+
+/// The list name of a break given on the command line (`--break`), in the
+/// place of a file of `mutations/`.
+pub(crate) const ONE_OFF: &str = "(one-off)";
+
 /// One break of a list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Break {
@@ -90,12 +133,31 @@ pub(crate) struct Break {
     pub(crate) packages: Vec<String>,
     pub(crate) caught_by: Vec<String>,
     pub(crate) expect: Expect,
+    /// The one system that builds the code it changes. `None`: any.
+    pub(crate) os: Option<Os>,
 }
 
 impl Break {
-    /// `mutations/step-12.breaks:41`
+    /// `mutations/step-12.breaks:41`; for a break given on the command line,
+    /// where it came from.
     pub(crate) fn place(&self) -> String {
-        format!("{}:{}", self.list, self.line)
+        if self.is_one_off() {
+            "the break given with `--break`".to_owned()
+        } else {
+            format!("{}:{}", self.list, self.line)
+        }
+    }
+
+    /// Whether the break was given on the command line, not in a list.
+    pub(crate) fn is_one_off(&self) -> bool {
+        self.list == ONE_OFF
+    }
+
+    /// Whether this system is the one the break is for (any, when none is
+    /// named). Where it is not, the break is applied by the pre-flight and
+    /// not run.
+    pub(crate) fn runs_here(&self) -> bool {
+        self.os.is_none_or(|os| os == Os::here())
     }
 
     /// The crates whose tests this break runs: the ones it names, or the
@@ -117,8 +179,13 @@ impl Break {
 
     /// Everything that decides what the break does, as one text. A result
     /// is kept for exactly this.
+    ///
+    /// What a list's breaks have never had is added at the end, only when
+    /// it is there, so that the results kept for them stay valid: a break
+    /// given with `--break` is marked, so that its results are never those
+    /// of a list's break of the same code.
     pub(crate) fn definition(&self) -> String {
-        format!(
+        let mut text = format!(
             "{}\n{:?}\n{}\n{}\n{:?}\n{}\n{}\n{:?}",
             self.file,
             self.anchor,
@@ -128,7 +195,14 @@ impl Break {
             self.packages.join(","),
             self.caught_by.join(","),
             self.expect,
-        )
+        );
+        if let Some(os) = self.os {
+            text.push_str(&format!("\nos {}", os.word()));
+        }
+        if self.is_one_off() {
+            text.push_str("\none-off");
+        }
+        text
     }
 }
 
@@ -185,7 +259,7 @@ pub(crate) fn load_all(root: &Path) -> Result<Vec<Break>> {
 }
 
 /// The keys of a break, in the order the format's description gives them.
-const KEYS: [&str; 9] = [
+const KEYS: [&str; 10] = [
     "rule",
     "file",
     "in",
@@ -195,6 +269,7 @@ const KEYS: [&str; 9] = [
     "packages",
     "caught-by",
     "expect",
+    "os",
 ];
 
 /// A break as it is being read: its keys, with the line of each.
@@ -386,6 +461,17 @@ pub(crate) fn parse(list: &str, text: &str) -> Result<Vec<Break>> {
                 }
             },
         };
+        let os = match draft.take("os") {
+            None => None,
+            Some((line, value)) => match value.as_str() {
+                "linux" => Some(Os::Linux),
+                "windows" => Some(Os::Windows),
+                other => {
+                    error(line, format!("`os: {other}`: say `windows` or `linux`"));
+                    None
+                }
+            },
+        };
         if expect == Expect::Survives && !caught_by.is_empty() {
             error(
                 draft.line,
@@ -396,9 +482,7 @@ pub(crate) fn parse(list: &str, text: &str) -> Result<Vec<Break>> {
             );
         }
         if let Some(file) = &file
-            && (file.starts_with('/')
-                || file.contains(['\\', ':'])
-                || file.split('/').any(|part| part == ".." || part.is_empty()))
+            && !is_repository_path(file)
         {
             error(
                 draft.line,
@@ -422,6 +506,7 @@ pub(crate) fn parse(list: &str, text: &str) -> Result<Vec<Break>> {
                 packages,
                 caught_by,
                 expect,
+                os,
             });
         }
     }
@@ -430,6 +515,109 @@ pub(crate) fn parse(list: &str, text: &str) -> Result<Vec<Break>> {
         Ok(breaks)
     } else {
         Err(errors.join("\n"))
+    }
+}
+
+/// Whether `file` is a path inside the repository, written with `/`.
+fn is_repository_path(file: &str) -> bool {
+    !(file.starts_with('/')
+        || file.contains(['\\', ':'])
+        || file.split('/').any(|part| part == ".." || part.is_empty()))
+}
+
+/// What a break given on the command line (`--break`) is made of: the keys
+/// of a list's break, but for the rule, the name and the `expect`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OneOff {
+    pub(crate) file: Option<String>,
+    pub(crate) anchor: Option<String>,
+    pub(crate) find: Option<String>,
+    pub(crate) replace: Option<String>,
+    pub(crate) occurrence: Option<usize>,
+    pub(crate) packages: Vec<String>,
+    pub(crate) tests: Vec<String>,
+}
+
+impl OneOff {
+    /// Whether anything was given.
+    pub(crate) fn is_given(&self) -> bool {
+        *self != Self::default()
+    }
+
+    /// The break, named `one-off/<file's name>-<eight hex digits of what it
+    /// is>`: the same text is the same break, so a second identical run
+    /// finds its result kept.
+    pub(crate) fn to_break(&self) -> Result<Break> {
+        let file = self
+            .file
+            .clone()
+            .ok_or("`--find` and the others need `--break FILE`")?;
+        let find = self.find.clone().ok_or("`--break` needs `--find CODE`")?;
+        let replace = self
+            .replace
+            .clone()
+            .ok_or("`--break` needs `--replace CODE`")?;
+        if find.trim().is_empty() {
+            return Err("`--find` is empty: give the code to replace".to_owned());
+        }
+        if !is_repository_path(&file) {
+            return Err(format!(
+                "`--break {file}` must be a path inside the repository, with `/`"
+            ));
+        }
+        if self.occurrence == Some(0) {
+            return Err("`--occurrence 0`: a number counted from 1".to_owned());
+        }
+        let mut one = Break {
+            id: String::new(),
+            list: ONE_OFF.to_owned(),
+            line: 0,
+            rule: format!(
+                "A one-off break of {file}: `{}` made `{}`.",
+                shortened(&find),
+                shortened(&replace)
+            ),
+            file,
+            anchor: self
+                .anchor
+                .clone()
+                .filter(|anchor| !anchor.trim().is_empty()),
+            find,
+            replace,
+            occurrence: self.occurrence,
+            packages: self.packages.clone(),
+            caught_by: self.tests.clone(),
+            expect: Expect::Caught,
+            os: None,
+        };
+        let mut hash = super::drive::Fnv::new();
+        hash.add(one.definition().as_bytes());
+        let stem = Path::new(&one.file)
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let stem: String = stem
+            .chars()
+            .map(|c| {
+                if c.is_ascii_lowercase() || c.is_ascii_digit() {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        one.id = format!("one-off/{stem}-{:08x}", hash.0 >> 32);
+        Ok(one)
+    }
+}
+
+/// Code on one line, cut at 60 characters, for a sentence.
+fn shortened(code: &str) -> String {
+    let line = code.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() > 60 {
+        format!("{}...", line.chars().take(57).collect::<String>())
+    } else {
+        line
     }
 }
 
@@ -522,7 +710,7 @@ pub(crate) fn with_anchor(text: &str, break_line: usize, anchor: &str) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::{Break, Expect, names_test, parse};
+    use super::{Break, Expect, OneOff, Os, names_test, parse};
 
     const LIST: &str = "\
 # The loop's breaks.
@@ -578,6 +766,7 @@ expect: survives
                         "cortex-agent::it interrupt::sys_*".to_owned(),
                     ],
                     expect: Expect::Caught,
+                    os: None,
                 },
                 Break {
                     id: "loop/no-difference".to_owned(),
@@ -592,10 +781,135 @@ expect: survives
                     packages: vec!["xtask".to_owned(), "cortex-base".to_owned()],
                     caught_by: vec![],
                     expect: Expect::Survives,
+                    os: None,
                 },
             ]
         );
         assert_eq!(breaks[0].place(), "mutations/loop.breaks:3");
+    }
+
+    #[test]
+    fn a_break_of_one_system_says_so_and_runs_only_there() {
+        let list = |os: &str| format!("[break] a\nrule: r\nfile: f\nfind: x\nreplace: y\n{os}");
+
+        let windows = parse("mutations/x.breaks", &list("os: windows\n")).unwrap();
+        let linux = parse("mutations/x.breaks", &list("os: linux\n")).unwrap();
+        let any = parse("mutations/x.breaks", &list("")).unwrap();
+
+        assert_eq!(windows[0].os, Some(Os::Windows));
+        assert_eq!(linux[0].os, Some(Os::Linux));
+        assert_eq!(any[0].os, None);
+        assert_eq!(windows[0].runs_here(), cfg!(windows));
+        assert_eq!(linux[0].runs_here(), !cfg!(windows));
+        assert!(any[0].runs_here());
+        for wrong in ["macos", "Windows", "unix", ""] {
+            errors(
+                &list(&format!("os: {wrong}\n")),
+                &[format!("mutations/x.breaks:6: `os: {wrong}`").as_str()],
+            );
+        }
+        // The system's words are the ones the file is read by.
+        assert_eq!(
+            Os::here().word(),
+            if cfg!(windows) { "windows" } else { "linux" }
+        );
+        // An `os` is a difference the results are kept by, and a list that
+        // has none keeps the results it has.
+        assert_ne!(windows[0].definition(), any[0].definition());
+        assert!(!any[0].definition().contains("os "));
+    }
+
+    #[test]
+    fn a_break_given_on_the_command_line_is_one_of_its_own() {
+        let given = OneOff {
+            file: Some("crates/demo/src/lib.rs".to_owned()),
+            find: Some("seconds >\n  budget".to_owned()),
+            replace: Some(String::new()),
+            ..OneOff::default()
+        };
+
+        let one = given.to_break().unwrap();
+
+        assert!(one.is_one_off());
+        assert!(one.id.starts_with("one-off/lib-"), "{}", one.id);
+        assert_eq!(one.id.len(), "one-off/lib-".len() + 8);
+        assert_eq!(one.place(), "the break given with `--break`");
+        assert_eq!(one.test_packages().unwrap(), ["demo"]);
+        assert!(
+            one.rule.contains("`seconds > budget` made ``"),
+            "{}",
+            one.rule
+        );
+        // The same text, the same name; another text, another.
+        assert_eq!(given.to_break().unwrap().id, one.id);
+        let other = OneOff {
+            replace: Some("true".to_owned()),
+            ..given.clone()
+        };
+        assert_ne!(other.to_break().unwrap().id, one.id);
+        // Marked, so that no list's break of the same code is it.
+        let mut listed = one.clone();
+        listed.list = "mutations/x.breaks".to_owned();
+        assert_ne!(listed.definition(), one.definition());
+    }
+
+    #[test]
+    fn a_break_given_on_the_command_line_is_refused_for_what_a_list_would_refuse() {
+        let base = OneOff {
+            file: Some("crates/demo/src/lib.rs".to_owned()),
+            find: Some("x".to_owned()),
+            replace: Some("y".to_owned()),
+            ..OneOff::default()
+        };
+        for (given, expected) in [
+            (
+                OneOff {
+                    file: Some("/etc/passwd".to_owned()),
+                    ..base.clone()
+                },
+                "must be a path inside the repository",
+            ),
+            (
+                OneOff {
+                    find: Some("  ".to_owned()),
+                    ..base.clone()
+                },
+                "`--find` is empty",
+            ),
+            (
+                OneOff {
+                    occurrence: Some(0),
+                    ..base.clone()
+                },
+                "a number counted from 1",
+            ),
+            (
+                OneOff {
+                    find: None,
+                    ..base.clone()
+                },
+                "needs `--find CODE`",
+            ),
+            (
+                OneOff {
+                    replace: None,
+                    ..base.clone()
+                },
+                "needs `--replace CODE`",
+            ),
+            (
+                OneOff {
+                    file: None,
+                    ..base.clone()
+                },
+                "need `--break FILE`",
+            ),
+        ] {
+            let error = given.to_break().unwrap_err();
+            assert!(error.contains(expected), "{expected}: {error}");
+        }
+        assert!(!OneOff::default().is_given());
+        assert!(base.is_given());
     }
 
     #[test]

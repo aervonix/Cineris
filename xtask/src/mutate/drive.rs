@@ -10,7 +10,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -37,6 +37,9 @@ pub(crate) struct Options {
     pub(crate) again: bool,
     /// Compile every break before the first is run.
     pub(crate) compile_check: bool,
+    /// What waits while the copy's lock is held by another: the thread's
+    /// sleep when none is given. A test gives one that waits for nothing.
+    pub(crate) pause: Option<fn(Duration)>,
 }
 
 /// What a test run of the copy came to.
@@ -793,13 +796,29 @@ fn some_of(tests: &[String]) -> String {
 
 // -------------------------------------------------------------------- run
 
+/// How many times, and how long apart, a lock that is held is tried again
+/// before the copy is called busy: 20 times, 10 ms apart, 200 ms in all.
+const LOCK_TRIES: u32 = 20;
+const LOCK_EVERY: Duration = Duration::from_millis(10);
+
 /// Takes the copy for this run, for as long as the file returned is held.
 ///
 /// Two runs on one copy would undo each other's breaks: the second brings
 /// the copy up to date while the first is running a break's tests, and the
 /// first then reports a break as survived that was no longer made. The lock
 /// is the operating system's, so a run that is killed lets go of it.
-fn lock(scratch: &Path) -> Result<File> {
+///
+/// **A lock that is held is tried again for a short while** (`pause` waits
+/// between the tries). Where one process has threads that start processes
+/// (`cargo test`, which runs `xtask`'s tests as threads of one), a process
+/// forked by another thread holds the descriptor of the lock a moment, from
+/// its fork to its `exec`, after the run that took the lock has let go of
+/// it: the next run found it held. Descriptors are not inherited by what
+/// runs (the standard library opens every file close-on-exec, and on
+/// Windows a handle is not inheritable), so the moment is that of the fork
+/// alone, and a few tens of milliseconds are more than enough. Another run
+/// that really holds it is still told so, 200 ms later.
+fn lock(scratch: &Path, pause: &mut dyn FnMut(Duration)) -> Result<File> {
     let path = scratch.join("lock");
     let file = OpenOptions::new()
         // For reading and writing: Windows locks no file that is open only
@@ -810,7 +829,17 @@ fn lock(scratch: &Path) -> Result<File> {
         .truncate(false)
         .open(&path)
         .map_err(|error| format!("could not open {}: {error}", path.display()))?;
-    match file.try_lock() {
+    let mut tries = 0;
+    let taken = loop {
+        match file.try_lock() {
+            Err(fs::TryLockError::WouldBlock) if tries < LOCK_TRIES => {
+                tries += 1;
+                pause(LOCK_EVERY);
+            }
+            taken => break taken,
+        }
+    };
+    match taken {
         Ok(()) => Ok(file),
         Err(fs::TryLockError::WouldBlock) => Err(format!(
             "another `cargo xtask mutate` is running on the copy in {}. Two runs on one copy \
@@ -943,7 +972,8 @@ pub(crate) fn drive_jobs(
 ) -> Result<Finished> {
     fs::create_dir_all(scratch)
         .map_err(|error| format!("could not create {}: {error}", scratch.display()))?;
-    let _lock = lock(scratch)?;
+    let pause = options.pause.unwrap_or(std::thread::sleep);
+    let _lock = lock(scratch, &mut |time| pause(time))?;
     let files = tree_files(root)?;
     let code = code_hash(root, &files)?;
     let copies: Vec<PathBuf> = (0..runners.len())
@@ -1194,6 +1224,56 @@ fn take_baseline(
     say(&format!("  {} tests pass.", tests.len()));
     results.put(baseline_key, json!({ "tests": tests }))?;
     Ok(true)
+}
+
+/// `--flagged`: of `breaks`, the ones the last run left **without a
+/// verdict**, each with what happened, for the tree as it is.
+///
+/// A break has no verdict when what was kept for it says only that the run
+/// failed, and not what the tests did: its tests were run and the run
+/// failed naming no failed test (`COULD NOT BE JUDGED`, which is also what
+/// a stall is kept as), or the code did not build with it made (`DOES NOT
+/// COMPILE`, found by the compile of every break or by its test run). A
+/// break that has a verdict, good or flagged (`NOT CAUGHT` and the rest are
+/// judgments of the tests, and asking again gives the same), and one that
+/// has not been run, are not chosen: the first is for `--again`, and the
+/// second is for the same command run again, which carries on. These are
+/// the results the next run forgets and tries anew whichever breaks it
+/// runs, so the command that runs the chosen ones is the same one that
+/// would have run them in the full run. Nothing is run here.
+pub(crate) fn without_a_verdict(
+    root: &Path,
+    scratch: &Path,
+    breaks: &[Break],
+) -> Result<Vec<(Break, String)>> {
+    let files = tree_files(root)?;
+    let code = code_hash(root, &files)?;
+    let results = Results::load(&scratch.join("results.jsonl"));
+    let keys = Keys::all(code, breaks)?;
+    let mut chosen = Vec::new();
+    for (one, keys) in breaks.iter().zip(&keys) {
+        let outcome = match results.compiled(&keys.compile) {
+            Some(Some(error)) => Some(Outcome::DoesNotCompile(error)),
+            _ => results.outcome(&keys.run),
+        };
+        let why = match outcome {
+            Some(Outcome::DoesNotCompile(detail)) => Some(("DOES NOT COMPILE", detail)),
+            Some(Outcome::Broken(detail)) => Some(("COULD NOT BE JUDGED", detail)),
+            Some(Outcome::Ran { .. }) | None => None,
+        };
+        if let Some((label, detail)) = why {
+            let first = detail.lines().find(|line| !line.trim().is_empty());
+            let said = match first {
+                Some(line) if line.chars().count() > 100 => {
+                    format!("{label}: {}...", line.chars().take(97).collect::<String>())
+                }
+                Some(line) => format!("{label}: {line}"),
+                None => label.to_owned(),
+            };
+            chosen.push((one.clone(), said));
+        }
+    }
+    Ok(chosen)
 }
 
 /// `--report`: what is known for the tree as it is, without running
@@ -1478,6 +1558,7 @@ replace: \"inside\"
             let options = Options {
                 again: false,
                 compile_check: true,
+                pause: Some(|_| {}),
             };
             drive(
                 &self.root,
@@ -1625,6 +1706,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             &Options {
                 again: false,
                 compile_check: true,
+                pause: Some(|_| {}),
             },
             &mut runners,
             &mut || {
@@ -1692,6 +1774,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             &Options {
                 again: false,
                 compile_check: true,
+                pause: Some(|_| {}),
             },
             &mut again,
             &mut || false,
@@ -1987,6 +2070,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
         let options = Options {
             again: true,
             compile_check: true,
+            pause: Some(|_| {}),
         };
 
         drive(
@@ -2055,6 +2139,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
         let options = Options {
             again: false,
             compile_check: false,
+            pause: Some(|_| {}),
         };
 
         let finished = drive(
@@ -2158,7 +2243,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
     fn a_second_run_on_the_same_copy_is_refused_while_the_first_holds_it() {
         let mut run = Run::new("locked");
         let list = breaks("demo", LIST);
-        let held = super::lock(&run.scratch).unwrap();
+        let held = super::lock(&run.scratch, &mut |_| {}).unwrap();
 
         let error = run.go(&list).unwrap_err();
 
@@ -2173,6 +2258,42 @@ error: could not compile `demo` (lib test) due to 2 previous errors
         // A run that ends, or is killed, lets go.
         drop(held);
         assert_eq!(run.go(&list).unwrap(), Finished::Complete { flagged: 1 });
+    }
+
+    #[test]
+    fn a_lock_a_forked_child_still_holds_for_a_moment_is_taken_when_it_lets_go() {
+        let run = Run::new("lock-retry");
+        let mut held = Some(super::lock(&run.scratch, &mut |_| {}).unwrap());
+        let mut waited = Vec::new();
+
+        // The holder lets go during the third wait, as a child that has
+        // run its program does.
+        let taken = super::lock(&run.scratch, &mut |time| {
+            waited.push(time);
+            if waited.len() == 3 {
+                held = None;
+            }
+        });
+
+        assert!(taken.is_ok(), "{:?}", taken.err());
+        assert_eq!(waited, [super::LOCK_EVERY; 3]);
+        assert!(held.is_none());
+    }
+
+    #[test]
+    fn a_lock_that_stays_held_is_refused_after_a_short_wait_that_took_no_time() {
+        let run = Run::new("lock-refused");
+        let _held = super::lock(&run.scratch, &mut |_| {}).unwrap();
+        let mut waited = std::time::Duration::ZERO;
+
+        let error = super::lock(&run.scratch, &mut |time| waited += time).unwrap_err();
+
+        assert!(
+            error.contains("another `cargo xtask mutate` is running"),
+            "{error}"
+        );
+        // 20 tries, 10 ms apart, counted and not slept.
+        assert_eq!(waited, std::time::Duration::from_millis(200));
     }
 
     #[test]
@@ -2244,6 +2365,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             &Options {
                 again: false,
                 compile_check: false,
+                pause: Some(|_| {}),
             },
             &mut runners,
             &mut || false,
@@ -2546,6 +2668,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
         let options = Options {
             again: false,
             compile_check: false,
+            pause: Some(|_| {}),
         };
         let mut runner = Together(Pretend::default());
 
@@ -2602,6 +2725,133 @@ error: could not compile `demo` (lib test) due to 2 previous errors
         assert_eq!(run.runner.asked, [] as [&str; 0]);
     }
 
+    #[test]
+    fn only_the_breaks_left_without_a_verdict_are_chosen_and_each_says_why() {
+        let mut run = Run::new("flagged");
+        run.runner.runs_to_lose = 1;
+        let list = breaks("demo", LIST);
+        // Nothing run yet: nothing was left without a verdict.
+        assert!(
+            super::without_a_verdict(&run.root, &run.scratch, &list)
+                .unwrap()
+                .is_empty()
+        );
+        run.go(&list).unwrap();
+
+        let picked = super::without_a_verdict(&run.root, &run.scratch, &list).unwrap();
+
+        // The lost run is chosen. The break no test catches has a verdict
+        // (NOT CAUGHT), flagged as it is, and is not chosen; nor is the one
+        // that was caught.
+        let ids: Vec<&str> = picked.iter().map(|(one, _)| one.id.as_str()).collect();
+        assert_eq!(ids, ["demo/over-is-strict"]);
+        assert_eq!(
+            picked[0].1, "COULD NOT BE JUDGED: the disk was full",
+            "{picked:?}"
+        );
+        // Named alone, and in another order, the same.
+        let one = &list[..1];
+        assert_eq!(
+            super::without_a_verdict(&run.root, &run.scratch, one)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            super::without_a_verdict(&run.root, &run.scratch, &list[1..])
+                .unwrap()
+                .is_empty()
+        );
+
+        // Run again, it has its verdict, and nothing is left.
+        run.go(&list).unwrap();
+        assert!(
+            super::without_a_verdict(&run.root, &run.scratch, &list)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_break_that_does_not_compile_is_chosen_and_a_change_to_the_code_forgets_what_was_left() {
+        let mut run = Run::new("flagged-compile");
+        let list = breaks(
+            "demo",
+            "[break] wont-build\nrule: r\nfile: crates/demo/src/lib.rs\nfind: seconds > budget\n\
+             replace: does not compile\n\n[break] builds\nrule: r\nfile: crates/demo/src/lib.rs\n\
+             find: 1.5 * budget\nreplace: 1.0 * budget\n",
+        );
+        run.go(&list).unwrap();
+
+        let picked = super::without_a_verdict(&run.root, &run.scratch, &list).unwrap();
+
+        assert_eq!(picked.len(), 1);
+        assert_eq!(picked[0].0.id, "demo/wont-build");
+        assert!(
+            picked[0].1.starts_with("DOES NOT COMPILE: error[E0425]"),
+            "{picked:?}"
+        );
+        // The code is not what it was: what was known is not known.
+        fs::write(
+            run.root.join("crates/demo/src/lib.rs"),
+            format!("{LIB}// changed\n"),
+        )
+        .unwrap();
+        assert!(
+            super::without_a_verdict(&run.root, &run.scratch, &list)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// The one-off break that is the first break of `LIST` to the letter.
+    fn the_first_break_of_the_list_given_on_its_own() -> Break {
+        list::OneOff {
+            file: Some("crates/demo/src/lib.rs".to_owned()),
+            anchor: Some("over".to_owned()),
+            find: Some("seconds > budget".to_owned()),
+            replace: Some("seconds >= budget".to_owned()),
+            tests: vec!["tests::at_the_budget_is_not_over".to_owned()],
+            ..list::OneOff::default()
+        }
+        .to_break()
+        .unwrap()
+    }
+
+    #[test]
+    fn a_break_given_on_its_own_is_run_once_and_its_result_is_never_a_lists() {
+        let mut run = Run::new("one-off");
+        let listed = breaks("demo", LIST);
+        let given = the_first_break_of_the_list_given_on_its_own();
+        // The same code, the same tests: its own name and its own results.
+        assert_eq!(given.find, listed[0].find);
+        assert_eq!(given.caught_by, listed[0].caught_by);
+        assert!(given.id.starts_with("one-off/lib-"), "{}", given.id);
+
+        run.go(&listed[..1]).unwrap();
+        run.runner.asked.clear();
+        run.said.clear();
+        // Run as a list's break, it is not served by the list's result:
+        // the tests with nothing broken are the same and are kept, its own
+        // compile and run are not.
+        let finished = run.go(std::slice::from_ref(&given)).unwrap();
+        assert_eq!(finished, Finished::Complete { flagged: 0 });
+        assert_eq!(run.runner.asked, ["compile demo", "test demo"]);
+        assert!(
+            run.said
+                .contains(&format!("{}  caught by 1 test(s)", given.id)),
+            "{}",
+            run.said
+        );
+        // Given again, the result is there.
+        run.runner.asked.clear();
+        run.go(std::slice::from_ref(&given)).unwrap();
+        assert_eq!(run.runner.asked, [] as [&str; 0]);
+        // And the list's own is as it was.
+        run.go(&listed[..1]).unwrap();
+        assert_eq!(run.runner.asked, [] as [&str; 0]);
+    }
+
     /// The whole of it against the real cargo and nextest: the workspace in
     /// `xtask/fixtures/mutate`, with two breaks that are caught, one that
     /// nothing catches, one that is expected to survive and one that does
@@ -2632,6 +2882,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
         let options = Options {
             again: false,
             compile_check: true,
+            pause: Some(|_| {}),
         };
         let mut said = String::new();
 
@@ -2702,6 +2953,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
         let unchecked = Options {
             again: true,
             compile_check: false,
+            pause: Some(|_| {}),
         };
         let mut said = String::new();
         let met_in_its_run = drive(

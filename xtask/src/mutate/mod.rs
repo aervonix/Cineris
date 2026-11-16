@@ -31,6 +31,7 @@ mod fix;
 mod jobs;
 pub(crate) mod lex;
 mod list;
+mod merge;
 mod names;
 
 pub(crate) use drive::{sync, tree_files};
@@ -76,6 +77,32 @@ Without one, every break.
                  or is gone.
   --write        With --fix-in: rewrite those `in:` lines in the lists, and
                  nothing else, then check again.
+  --break FILE   Run one break that is in no list: with --find and --replace
+                 (and the options below), the same checks, baseline, build and
+                 judging as a list's break, and its result kept by its own
+                 text, so a second identical run is instant. It is named
+                 `one-off/<file>-<hash>`. Nothing in mutations/ is written.
+                 Not with break names, a list or --file.
+  --find CODE    The code to replace, read by token, there once in FILE (or
+                 in --in's item). Needs --break.
+  --replace CODE What to put there (may be empty). Needs --break.
+  --in ITEM      The item the code is in, as a list's `in:` (`Round::spawn`).
+  --occurrence N Which match of --find is meant, counted from 1.
+  --packages A,B The crates whose tests to run (the crate of FILE if none).
+  --test NAME    A test that must fail, as a list's `caught-by` entry; given
+                 more than once, each. Without one any failing test catches
+                 the break.
+  --flagged      Run again only the breaks the last run left without a verdict
+                 for this code: COULD NOT BE JUDGED (a stall included) and
+                 DOES NOT COMPILE. Says which it chose and why; with none it
+                 says so and exits 0. BREAK names narrow the choice. Breaks
+                 with a verdict that is flagged (NOT CAUGHT ...) are not
+                 chosen: run them with --again.
+  --merge STEP   Merge mutations/STEP-*.breaks (the lists of a step's
+                 sub-agents) into mutations/STEP.breaks, each part under a
+                 comment line naming it, after the whole pre-flight passes on
+                 the result, and delete the parts. All or nothing.
+  --dry-run      With --merge: say what it would do, and do none of it.
   --list         Print the breaks chosen, and stop.
   --report       Print what is known so far for the tree as it is. Runs nothing.
   --minutes N    Stop starting new work after N minutes, and carry on from
@@ -89,6 +116,11 @@ Without one, every break.
                  To carry on after the time ran out, leave it off.
   --no-compile-check
                  Do not compile every break before the first is run.
+
+A break with `os: windows` (or `linux`) is run only on that system. On the other
+it is checked and not run, and reported as left to a run there, which is neither
+a pass nor a failure: `gh workflow run try --ref BRANCH -f os=windows -f
+command=\"mutate NAME\"` runs it on a hosted Windows runner.
 
 Exit status: 0 when every chosen break did what its list expects; 1 when one
 did not, or something failed; 2 when the time ran out with work left: run
@@ -122,6 +154,14 @@ struct Request {
     /// `--file PATH`: lists read from anywhere, whose breaks are the ones
     /// run (a reviewer's, kept out of `mutations/`).
     files: Vec<std::path::PathBuf>,
+    /// `--break` and the options that go with it: one break, in no list.
+    one_off: list::OneOff,
+    /// `--flagged`: only the breaks the last run left without a verdict.
+    flagged: bool,
+    /// `--merge STEP`: put the parts of a step's list together.
+    merge: Option<String>,
+    /// `--dry-run`, with `--merge`.
+    dry_run: bool,
 }
 
 /// The breaks of the lists `--file` names, each read as a list of
@@ -199,6 +239,8 @@ enum Mode {
     Check,
     List,
     Report,
+    /// `--merge`.
+    Merge,
 }
 
 /// Whether `cargo xtask mutate` would take `arguments`, which it reads and
@@ -220,6 +262,10 @@ impl Request {
             fix_in: false,
             write: false,
             files: Vec::new(),
+            one_off: list::OneOff::default(),
+            flagged: false,
+            merge: None,
+            dry_run: false,
         };
         let mut rest = arguments.iter();
         while let Some(argument) = rest.next() {
@@ -229,7 +275,7 @@ impl Request {
                     Ok(())
                 } else {
                     Err(format!(
-                        "`{argument}`: say one of --check, --list and --report"
+                        "`{argument}`: say one of --check, --list, --report and --merge"
                     ))
                 }
             };
@@ -247,6 +293,51 @@ impl Request {
                         .into(),
                 ),
                 "--write" => request.write = true,
+                "--flagged" => request.flagged = true,
+                "--dry-run" => request.dry_run = true,
+                "--merge" => {
+                    let step = rest
+                        .next()
+                        .ok_or_else(|| format!("`--merge` needs a step's name\n\n{USAGE}"))?;
+                    mode(Mode::Merge)?;
+                    request.merge = Some(step.clone());
+                }
+                "--break" | "--find" | "--replace" | "--in" | "--packages" | "--test"
+                | "--occurrence" => {
+                    let value = rest
+                        .next()
+                        .ok_or_else(|| format!("`{argument}` needs a value\n\n{USAGE}"))?
+                        .clone();
+                    let one = &mut request.one_off;
+                    match argument.as_str() {
+                        "--break" => one.file = Some(value),
+                        "--find" => one.find = Some(value),
+                        "--replace" => one.replace = Some(value),
+                        "--in" => one.anchor = Some(value),
+                        "--test" => one.tests.push(value),
+                        "--packages" => one.packages.extend(
+                            value
+                                .split(',')
+                                .map(str::trim)
+                                .filter(|name| !name.is_empty())
+                                .map(str::to_owned),
+                        ),
+                        _ => {
+                            one.occurrence = Some(
+                                value
+                                    .parse()
+                                    .ok()
+                                    .filter(|number: &usize| *number > 0)
+                                    .ok_or_else(|| {
+                                        format!(
+                                            "`--occurrence {value}` is not a number counted \
+                                             from 1"
+                                        )
+                                    })?,
+                            );
+                        }
+                    }
+                }
                 "--jobs" | "-j" => {
                     let text = rest
                         .next()
@@ -301,7 +392,62 @@ impl Request {
                 return Err(format!("`{flag}` is for use with `{needs}`\n\n{USAGE}"));
             }
         }
+        request.refuse_what_does_not_go_together()?;
         Ok(request)
+    }
+
+    /// The options that make no sense beside each other.
+    fn refuse_what_does_not_go_together(&self) -> Result<()> {
+        let one_off = self.one_off.is_given();
+        if one_off {
+            if self.one_off.file.is_none() {
+                return Err(format!(
+                    "`--find`, `--replace`, `--in`, `--occurrence`, `--packages` and `--test` \
+                     are for use with `--break FILE`\n\n{USAGE}"
+                ));
+            }
+            if !self.only.is_empty() || !self.files.is_empty() {
+                return Err(format!(
+                    "`--break` runs one break of its own: it does not go with a break's or a \
+                     list's name, or with `--file`\n\n{USAGE}"
+                ));
+            }
+            if self.flagged {
+                return Err(format!(
+                    "`--break` and `--flagged` do not go together: a one-off break is run by \
+                     giving it again\n\n{USAGE}"
+                ));
+            }
+            if matches!(self.mode, Mode::Merge) {
+                return Err(format!("`--merge` goes with no other option\n\n{USAGE}"));
+            }
+            if self.one_off.find.is_none() || self.one_off.replace.is_none() {
+                return Err(format!(
+                    "`--break FILE` needs `--find CODE` and `--replace CODE`\n\n{USAGE}"
+                ));
+            }
+        }
+        if self.mode == Mode::Merge {
+            let others = !self.only.is_empty()
+                || !self.files.is_empty()
+                || self.flagged
+                || self.again
+                || self.tests
+                || self.fix_in;
+            if others {
+                return Err(format!(
+                    "`--merge` goes with no other option but `--dry-run`\n\n{USAGE}"
+                ));
+            }
+        } else if self.dry_run {
+            return Err(format!("`--dry-run` is for use with `--merge`\n\n{USAGE}"));
+        }
+        if self.flagged && !matches!(self.mode, Mode::Run | Mode::List | Mode::Report) {
+            return Err(format!(
+                "`--flagged` is for a run, `--list` or `--report`: a check reads no results\n\n{USAGE}"
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -346,10 +492,21 @@ fn conclusion(outcome: &Result<drive::Finished>, again: bool) -> (u8, Option<Str
 fn run(arguments: &[String]) -> Result<drive::Finished> {
     let request = Request::parse(arguments)?;
     let root = workspace::root();
-    let mut all = list::load_all(&root)?;
-    let from_files = load_files(&all, &request.files)?;
-    all.extend(from_files.iter().cloned());
     let done = drive::Finished::Complete { flagged: 0 };
+    if let Some(step) = &request.merge {
+        merge::run(&root, step, request.dry_run)?;
+        return Ok(done);
+    }
+    // A break given with `--break` is the only break there is: no list is
+    // read, and nothing of `mutations/` is checked or changed.
+    let (all, from_files) = if request.one_off.is_given() {
+        (vec![request.one_off.to_break()?], Vec::new())
+    } else {
+        let mut all = list::load_all(&root)?;
+        let from_files = load_files(&all, &request.files)?;
+        all.extend(from_files.iter().cloned());
+        (all, from_files)
+    };
 
     if request.mode == Mode::Check {
         // The whole list, whatever was chosen: a break that does not apply
@@ -377,14 +534,47 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
         }
         return Ok(done);
     }
-    let chosen = if request.files.is_empty() {
+    let mut chosen = if request.files.is_empty() {
         choose(&all, &request.only)?
     } else {
         choose(&from_files, &request.only)?
     };
+    // Read only when it is needed: a list that does not apply is told before
+    // anything asks cargo where the target directory is.
+    let mut scratch = None;
+    if request.flagged {
+        let directory = scratch_directory(&root)?;
+        let picked = drive::without_a_verdict(&root, &directory, &chosen)?;
+        scratch = Some(directory);
+        if picked.is_empty() {
+            println!(
+                "Nothing is flagged: no break of the {} chosen was left without a verdict by \
+                 the last run on this code (COULD NOT BE JUDGED, DOES NOT COMPILE).",
+                chosen.len()
+            );
+            return Ok(done);
+        }
+        println!(
+            "Running again the {} break(s) left without a verdict, of the {} chosen:",
+            picked.len(),
+            chosen.len()
+        );
+        for (one, why) in &picked {
+            println!("  {}  {why}", one.id);
+        }
+        chosen = picked.into_iter().map(|(one, _)| one).collect();
+    }
     if request.mode == Mode::List {
         for chosen in &chosen {
-            println!("{}  ({})\n    {}", chosen.id, chosen.place(), chosen.rule);
+            let only = chosen
+                .os
+                .map_or_else(String::new, |os| format!("  [{} only]", os.word()));
+            println!(
+                "{}  ({}){only}\n    {}",
+                chosen.id,
+                chosen.place(),
+                chosen.rule
+            );
         }
         println!("{} break(s)", chosen.len());
         return Ok(done);
@@ -394,8 +584,21 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
         return Ok(done);
     }
     report_check(&root, &all, &Names::Not)?;
+    let scratch = match scratch {
+        Some(scratch) => scratch,
+        None => scratch_directory(&root)?,
+    };
 
-    let scratch = scratch_directory(&root)?;
+    // A break of code that only the other system builds is applied above, as
+    // on every system, and left to a run there.
+    let (chosen, elsewhere): (Vec<Break>, Vec<Break>) =
+        chosen.into_iter().partition(Break::runs_here);
+    if let Some(said) = left_elsewhere(&elsewhere) {
+        println!("{said}");
+    }
+    if chosen.is_empty() {
+        return Ok(done);
+    }
     let mut say = |line: &str| println!("{line}");
     if request.mode == Mode::Report {
         return drive::report_only(&root, &scratch, &chosen, &mut say);
@@ -418,8 +621,9 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     let options = drive::Options {
         again: request.again,
         compile_check: request.compile_check,
+        pause: None,
     };
-    drive::drive_jobs(
+    let finished = drive::drive_jobs(
         &root,
         &scratch,
         &chosen,
@@ -427,7 +631,42 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
         &mut runners,
         &mut || budget.is_some_and(|budget| started.elapsed() >= budget),
         &mut say,
-    )
+    );
+    if !elsewhere.is_empty() && finished.is_ok() {
+        println!(
+            "\n{} break(s) were left to a run on the other system, as listed above: they are \
+             neither a pass nor a failure of this run.",
+            elsewhere.len()
+        );
+    }
+    finished
+}
+
+/// What to say of the breaks this system does not run, and how to run them
+/// where their code is built: `os: windows` on Linux, and the other way
+/// round. `None` when there are none.
+fn left_elsewhere(elsewhere: &[Break]) -> Option<String> {
+    // Every one is for the system that is not this one.
+    let first = elsewhere.first()?;
+    let os = first.os.unwrap_or(list::Os::Windows);
+    let mut said = format!(
+        "{} break(s) are of code only {} builds, applied here by the pre-flight and left to a \
+         {} run, which is neither a pass nor a failure of this one:\n",
+        elsewhere.len(),
+        os.name(),
+        os.name()
+    );
+    for one in elsewhere {
+        said.push_str(&format!("  {}  ({})\n", one.id, one.place()));
+    }
+    said.push_str(&format!(
+        "Run one on a hosted {} runner: `gh workflow run try --ref <branch> -f os={} -f \
+         command=\"mutate {}\"`.\n",
+        os.name(),
+        os.word(),
+        first.id
+    ));
+    Some(said)
 }
 
 /// Where the copy of the tree, its build and the results are kept: under
@@ -518,11 +757,15 @@ fn report_check(root: &Path, breaks: &[Break], names: &Names<'_>) -> Result<()> 
         problems.extend(checked.problems.iter().cloned());
     }
     if problems.is_empty() {
-        println!(
-            "Every break applies: {} in {}/.",
-            breaks.len(),
-            list::DIRECTORY
-        );
+        if breaks.iter().all(Break::is_one_off) {
+            println!("The break given with `--break` applies.");
+        } else {
+            println!(
+                "Every break applies: {} in {}/.",
+                breaks.len(),
+                list::DIRECTORY
+            );
+        }
         if let Some(checked) = &checked {
             println!("{}", names_said(checked));
         }
@@ -1175,9 +1418,13 @@ impl fmt::Debug for Budget {
 }
 ";
 
-    fn problems_with(list: &str) -> Vec<String> {
+    /// The pre-flight's problems with `list`, against `PREFLIGHT`, in a tree
+    /// named for `test`: two tests of one name would share one folder, and
+    /// under `cargo test`, where they are threads, one would remove the
+    /// other's.
+    fn problems_with(test: &str, list: &str) -> Vec<String> {
         let root = super::drive::tests::tree(
-            "preflight",
+            test,
             &[
                 ("crates/demo/Cargo.toml", "[package]\n"),
                 ("crates/demo/src/lib.rs", PREFLIGHT),
@@ -1225,7 +1472,7 @@ in: Budget::fmt
 find: f.write_str(\"budget\")
 replace: f.write_str(\"other\")
 ";
-        assert_eq!(problems_with(list), [] as [String; 0]);
+        assert_eq!(problems_with("preflight-passes", list), [] as [String; 0]);
     }
 
     #[test]
@@ -1321,7 +1568,7 @@ in: limit
 find: clamp(seconds, 1, 600)
 replace: clamp(seconds, 1, 6000)
 ";
-        let problems = problems_with(list);
+        let problems = problems_with("preflight-kinds", list);
         let said = |name: &str, what: &str| {
             problems.iter().any(|problem| {
                 problem.contains(&format!("`demo/{name}`")) && problem.contains(what)
@@ -1554,6 +1801,10 @@ replace: 5
                 fix_in: false,
                 write: false,
                 files: Vec::new(),
+                one_off: list::OneOff::default(),
+                flagged: false,
+                merge: None,
+                dry_run: false,
             }
         );
         assert_eq!(
@@ -1591,6 +1842,133 @@ replace: 5
     }
 
     #[test]
+    fn a_break_given_on_the_command_line_is_read_with_all_its_options() {
+        let request = Request::parse(&strings(&[
+            "--break",
+            "crates/demo/src/lib.rs",
+            "--find",
+            "seconds > budget",
+            "--replace",
+            "",
+            "--in",
+            "over",
+            "--occurrence",
+            "2",
+            "--packages",
+            "demo, other",
+            "--test",
+            "tests::a",
+            "--test",
+            "demo::it tests::b*",
+        ]))
+        .unwrap();
+
+        assert_eq!(
+            request.one_off,
+            list::OneOff {
+                file: Some("crates/demo/src/lib.rs".to_owned()),
+                anchor: Some("over".to_owned()),
+                find: Some("seconds > budget".to_owned()),
+                replace: Some(String::new()),
+                occurrence: Some(2),
+                packages: strings(&["demo", "other"]),
+                tests: strings(&["tests::a", "demo::it tests::b*"]),
+            }
+        );
+        assert_eq!(request.mode, Mode::Run);
+        // A value that begins with a dash is a value, not an option.
+        let request = Request::parse(&strings(&[
+            "--break",
+            "f.rs",
+            "--find",
+            "a - b",
+            "--replace",
+            "-1",
+        ]))
+        .unwrap();
+        assert_eq!(request.one_off.replace.as_deref(), Some("-1"));
+    }
+
+    #[test]
+    fn flagged_and_merge_are_read() {
+        let request = Request::parse(&strings(&["--flagged", "step-12"])).unwrap();
+        assert!(request.flagged);
+        assert_eq!(request.only, strings(&["step-12"]));
+        assert_eq!(
+            Request::parse(&strings(&["--flagged", "--report"]))
+                .unwrap()
+                .mode,
+            Mode::Report
+        );
+
+        let request = Request::parse(&strings(&["--merge", "tooling-7", "--dry-run"])).unwrap();
+        assert_eq!(request.mode, Mode::Merge);
+        assert_eq!(request.merge.as_deref(), Some("tooling-7"));
+        assert!(request.dry_run);
+    }
+
+    #[test]
+    fn the_breaks_are_split_by_the_system_that_builds_their_code() {
+        let other = if cfg!(windows) { "linux" } else { "windows" };
+        let body = "rule: r\nfile: f\nfind: x\nreplace: y\n";
+        let all = breaks(
+            "loop",
+            &format!(
+                "[break] anywhere\n{body}[break] elsewhere\n{body}os: {other}\n\
+                 [break] here\n{body}os: {}\n",
+                if cfg!(windows) { "windows" } else { "linux" }
+            ),
+        );
+
+        let (here, elsewhere): (Vec<Break>, Vec<Break>) =
+            all.into_iter().partition(Break::runs_here);
+
+        let ids = |breaks: &[Break]| breaks.iter().map(|one| one.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&here), ["loop/anywhere", "loop/here"]);
+        assert_eq!(ids(&elsewhere), ["loop/elsewhere"]);
+    }
+
+    #[test]
+    fn what_is_left_to_the_other_system_is_said_with_the_command_that_runs_it_there() {
+        let other = if cfg!(windows) { "linux" } else { "windows" };
+        let all = breaks(
+            "loop",
+            &format!("[break] a\nrule: r\nfile: f\nfind: x\nreplace: y\nos: {other}\n"),
+        );
+
+        let said = super::left_elsewhere(&all).unwrap();
+
+        assert!(said.contains("1 break(s) are of code only"), "{said}");
+        assert!(said.contains("neither a pass nor a failure"), "{said}");
+        assert!(said.contains("loop/a  (mutations/loop.breaks:1)"), "{said}");
+        assert!(
+            said.contains(&format!(
+                "gh workflow run try --ref <branch> -f os={other} -f command=\"mutate loop/a\""
+            )),
+            "{said}"
+        );
+        assert_eq!(super::left_elsewhere(&[]), None);
+    }
+
+    #[test]
+    fn a_break_of_the_other_systems_code_is_applied_by_the_preflight_here() {
+        let other = if cfg!(windows) { "linux" } else { "windows" };
+        let list = format!(
+            "[break] fine\nrule: r\nfile: crates/demo/src/lib.rs\nin: limit\n\
+             find: clamp(seconds, 1, 600)\nreplace: clamp(seconds, 1, 6000)\nos: {other}\n\n\
+             [break] gone\nrule: r\nfile: crates/demo/src/lib.rs\nfind: clamp(seconds, 2, 600)\n\
+             replace: 0\nos: {other}\n"
+        );
+
+        let problems = problems_with("preflight-other-system", &list);
+
+        // Held, whichever system builds it: the one that cannot be made is
+        // told, the other is not.
+        assert_eq!(problems.len(), 1, "{problems:#?}");
+        assert!(problems[0].contains("`demo/gone`"), "{problems:#?}");
+    }
+
+    #[test]
     fn a_request_that_makes_no_sense_is_refused() {
         for (arguments, expected) in [
             (&["--minutes"][..], "needs a number"),
@@ -1608,6 +1986,79 @@ replace: 5
                 &["--check", "--write"],
                 "`--write` is for use with `--fix-in`",
             ),
+            (&["--find", "x"], "are for use with `--break FILE`"),
+            (&["--test", "a::b"], "are for use with `--break FILE`"),
+            (
+                &["--break", "f.rs"],
+                "needs `--find CODE` and `--replace CODE`",
+            ),
+            (
+                &["--break", "f.rs", "--find", "a"],
+                "needs `--find CODE` and `--replace CODE`",
+            ),
+            (
+                &[
+                    "--break",
+                    "f.rs",
+                    "--find",
+                    "a",
+                    "--replace",
+                    "b",
+                    "step-12",
+                ],
+                "does not go with a break's or a list's name",
+            ),
+            (
+                &[
+                    "--break",
+                    "f.rs",
+                    "--find",
+                    "a",
+                    "--replace",
+                    "b",
+                    "--file",
+                    "x.breaks",
+                ],
+                "does not go with a break's or a list's name",
+            ),
+            (
+                &[
+                    "--break",
+                    "f.rs",
+                    "--find",
+                    "a",
+                    "--replace",
+                    "b",
+                    "--flagged",
+                ],
+                "do not go together",
+            ),
+            (
+                &[
+                    "--break",
+                    "f.rs",
+                    "--find",
+                    "a",
+                    "--replace",
+                    "b",
+                    "--occurrence",
+                    "0",
+                ],
+                "is not a number counted from 1",
+            ),
+            (&["--break"], "needs a value"),
+            (&["--merge"], "needs a step's name"),
+            (
+                &["--merge", "step-9", "step-10"],
+                "goes with no other option",
+            ),
+            (
+                &["--merge", "step-9", "--flagged"],
+                "goes with no other option",
+            ),
+            (&["--merge", "step-9", "--check"], "say one of"),
+            (&["--dry-run"], "`--dry-run` is for use with `--merge`"),
+            (&["--check", "--flagged"], "`--flagged` is for a run"),
         ] {
             let error = Request::parse(&strings(arguments)).unwrap_err();
             assert!(error.contains(expected), "{arguments:?}: {error}");

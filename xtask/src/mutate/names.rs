@@ -298,7 +298,9 @@ pub(crate) fn check(
     // The breaks that name tests, by the set of crates they run.
     let mut by_set: BTreeMap<String, Vec<&Break>> = BTreeMap::new();
     for one in breaks {
-        if one.expect == Expect::Survives || one.caught_by.is_empty() {
+        // A break of the other system's code has no tests built here: its
+        // names are looked for where it runs.
+        if one.expect == Expect::Survives || one.caught_by.is_empty() || !one.runs_here() {
             continue;
         }
         // A break that runs no crate has said so in the checks before.
@@ -704,6 +706,30 @@ mod tests {
 
         assert_eq!(none, Checked::default());
         assert_eq!(survives, Checked::default());
+    }
+
+    #[test]
+    fn a_break_of_the_other_systems_code_has_no_tests_built_here_and_is_not_checked_for_names() {
+        let root = kept("names_other_system");
+        let mut never = |_: &[String]| -> super::Result<Listed> { unreachable!() };
+        let (other, here) = if cfg!(windows) {
+            ("linux", "windows")
+        } else {
+            ("windows", "linux")
+        };
+        let gone = "caught-by:\n    budget::tests::gone\n";
+
+        let elsewhere = check(
+            &root,
+            &breaks(&format!("os: {other}\n{gone}")),
+            Some(&mut never),
+        )
+        .unwrap();
+        let local = check(&root, &breaks(&format!("os: {here}\n{gone}")), None).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(elsewhere, Checked::default());
+        assert_eq!(local.problems.len(), 1, "{:#?}", local.problems);
     }
 
     #[test]
