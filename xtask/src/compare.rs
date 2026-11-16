@@ -35,6 +35,57 @@ fn tenths(seconds: f64) -> f64 {
     if rounded == 0.0 { 0.0 } else { rounded }
 }
 
+/// What makes a comparison of `new` with `old` no measurement of the
+/// tests: a test that failed on either side (a timeout reads as a test of
+/// its limit's length), and a tier with tests on one side and none on the
+/// other (a run that never happened reads as a tier that got faster). One
+/// line each; empty when the two are comparable.
+pub(crate) fn problems(new: &Side, old: &Side) -> Vec<String> {
+    let mut problems = Vec::new();
+    for side in [new, old] {
+        let failed: Vec<String> = side
+            .cases
+            .iter()
+            .filter(|case| case.failed)
+            .map(TestCase::id)
+            .collect();
+        if !failed.is_empty() {
+            let shown: Vec<&str> = failed.iter().take(5).map(String::as_str).collect();
+            problems.push(format!(
+                "{}: {} test(s) failed ({}{}): their times are not the tests' work",
+                side.label,
+                failed.len(),
+                shown.join(", "),
+                if failed.len() > shown.len() {
+                    ", …"
+                } else {
+                    ""
+                }
+            ));
+        }
+    }
+    for tier in Tier::ALL {
+        let count = |side: &Side| {
+            side.cases
+                .iter()
+                .filter(|case| Tier::of(&case.binary, &case.name) == tier)
+                .count()
+        };
+        let (on_new, on_old) = (count(new), count(old));
+        for (side, here, there) in [(new, on_new, on_old), (old, on_old, on_new)] {
+            if here == 0 && there > 0 {
+                problems.push(format!(
+                    "{}: tier {} has no test, where the other side has {there}: its run did not \
+                     happen, or its report is of part of the job",
+                    side.label,
+                    tier.name()
+                ));
+            }
+        }
+    }
+    problems
+}
+
 /// The comparison of `new` with `old`, for the terminal: each tier above the
 /// start on both sides, each crate's change, and each tier's `top` tests
 /// that moved most.
@@ -383,6 +434,50 @@ mod tests {
     use super::{Moved, Side, compare, detail, moved};
     use crate::junit;
     use crate::tiers::{Os, Tier};
+
+    #[test]
+    fn a_side_with_a_failed_test_or_a_tier_missing_is_named() {
+        use super::problems;
+        use crate::junit::TestCase;
+        let case = |binary: &str, name: &str, seconds: f64, failed: bool| TestCase {
+            binary: binary.to_owned(),
+            name: name.to_owned(),
+            seconds,
+            failed,
+            retried: false,
+            repeat: None,
+        };
+        let whole = |failed: bool| {
+            vec![
+                case("cortex-base", "t::unit", 0.010, false),
+                case("cortex-base::it", "t::integration", 0.020, failed),
+                case("cortex-cli::system", "sys_run", 0.300, false),
+            ]
+        };
+        let side = |label: &str, cases: Vec<TestCase>| Side {
+            label: label.to_owned(),
+            cases,
+        };
+        assert_eq!(
+            problems(&side("new", whole(false)), &side("old", whole(false))),
+            Vec::<String>::new()
+        );
+        let failed = problems(&side("new", whole(true)), &side("old", whole(false)));
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert!(
+            failed[0].starts_with("new: 1 test(s) failed (cortex-base::it t::integration)"),
+            "{failed:?}"
+        );
+        // The system run of the new side never happened.
+        let mut short = whole(false);
+        short.pop();
+        let missing = problems(&side("new", short), &side("old", whole(false)));
+        assert_eq!(missing.len(), 1, "{missing:?}");
+        assert!(
+            missing[0].starts_with("new: tier 3, system has no test, where the other side has 1"),
+            "{missing:?}"
+        );
+    }
 
     /// Two reports of one made-up workspace: the branch made one
     /// integration test slower, added a unit test and removed another, and

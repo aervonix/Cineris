@@ -2468,3 +2468,23 @@ find: if named.is_empty() {
 replace: if false {
 caught-by:
     mutate::merge::tests::only_the_parts_named_are_merged_and_a_list_of_its_own_is_left_alone
+
+# The review's fixes: a comparison whose side failed or is missing a tier fails.
+
+[break] compare-takes-a-failed-side-for-a-measurement
+rule: `ci --tiers --compare` names a side with a failed test and fails: a timeout is not a measurement.
+file: xtask/src/compare.rs
+in: problems
+find: .filter(|case| case.failed)
+replace: .filter(|case| case.failed && false)
+caught-by:
+    compare::tests::a_side_with_a_failed_test_or_a_tier_missing_is_named
+
+[break] compare-reads-a-missing-tier-as-faster
+rule: A tier with tests on one side and none on the other is named: its run did not happen.
+file: xtask/src/compare.rs
+in: problems
+find: if here == 0 && there > 0 {
+replace: if false {
+caught-by:
+    compare::tests::a_side_with_a_failed_test_or_a_tier_missing_is_named

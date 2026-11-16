@@ -600,7 +600,20 @@ fn compare_reports(new: &Source, old: &Source, oses: &[tiers::Os], top: usize) -
                 let new = compare::Side { label, cases };
                 let (label, cases) = runs::report_of(&old, *os)?;
                 let old = compare::Side { label, cases };
-                Ok(compare::compare(&new, &old, *os, top))
+                let table = compare::compare(&new, &old, *os, top);
+                let problems = compare::problems(&new, &old);
+                if problems.is_empty() {
+                    Ok(table)
+                } else {
+                    // The table is printed all the same, and the command
+                    // fails: a side that failed or is missing a tier is no
+                    // measurement.
+                    print!("{table}");
+                    Err(format!(
+                        "not a comparison of the tests' times: {}",
+                        problems.join("; ")
+                    ))
+                }
             })();
             (*os, compared)
         })
