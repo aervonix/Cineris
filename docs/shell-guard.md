@@ -44,6 +44,7 @@ Only the whole word is refused (`complet` is not). So search for such a word wit
 
 ## The forms to use
 
+- **An edit and its check in one call: `cargo xtask apply SCRIPT`** (since the eighth tooling step; [below](#one-command-for-an-edit-and-its-check)). Write the script with the Write tool, then run the command as a call of its own.
 - **Edit and run.** Use the Edit or Write tool for a file. One heredoc a call. **For many edits across many files, `cargo xtask replace --script FILE` is the sanctioned way** (since the fifth tooling step): Write the script with the Write tool, then run the command as a call of its own. It makes every edit, Rust by its tokens and any other file by its text, or none of them, and names the edit that could not be made. Otherwise Write a script to `$CLAUDE_JOB_DIR/tmp/<name>.py` and run it as `python3 <file>`. Inside a script, `.git` can be written as it is. A heredoc to a file is fine when the redirect comes first: `cat > file <<'EOF'`, never `cat <<'EOF' > file`. For one Rust edit that must survive `rustfmt`, `cargo xtask replace FILE --from … --to …` matches by token.
 - **After a refusal, check that every edit landed.** In wave 8 a refused call silently skipped an edit that the session went on as if made. A refusal is of the whole call: nothing in it ran, an edit before a `&&` included.
 - **Stage and commit.** `git add <paths> && git commit -m "Subject" -m "Body."`, or `git commit -F <file>`, or `git commit -F - <<'EOF'`. Check the identity once: `git log -1 --format='%an <%ae>'`.
@@ -85,6 +86,46 @@ Seen by the nine-settings fix (wave 11's first session) and by the seventh tooli
 | `git switch -c B origin/main && printf … > F && python3 -c "…" F` | **Refused**, the same | `git switch -c B origin/main` alone; the edit with the Edit tool; then the commit. |
 | `mkdir -p D && cat > D/f <<'EOF'` … `EOF` then `&& rustc …`, no git | **Refused**, "too complex to verify" | Write the file with the Write tool, then run the build. |
 | `rx -- bash -c '… git status …'` | **Refused**: "hands text naming git to a shell" | Run git on the laptop, as its own call; `rx` only for the build. |
+
+## One command for an edit and its check
+
+**`cargo xtask apply SCRIPT`** (since the eighth tooling step) takes a script of changes and the checks to run on them, and is one command with one argument, which the guard accepts. Wave 11's seven sessions met about 40 refusals between them, and every edit became a script run in a call of its own and its check another: this is both in one call.
+
+- **The changes** are `replace --script`'s edits (`@@ file:` … `@@ from` … `@@ to` … `@@ end`, a `.rs` file by its tokens and any other by its text), and two more: `@@ write: PATH`, the file's lines, `@@ end` (a whole file, made or replaced, its parent folders made), and `@@ delete: PATH` on a line of its own. They are made in order, each on what the one before left.
+- **The checks** are lines of their own, run in the order written: `@@ check: fmt` (rustfmt on the `.rs` files the script touched), `rules`, `links`, `check STEP…` (`cargo xtask check` of those steps, such as `check breaks generated`), `build -p CRATE…` (`cargo check --all-targets`), `clippy -p CRATE…` (warnings denied) and `test ARGUMENT…` (`cargo xtask test` with them, such as `test -p cortex-tui -E 'test(/dialog/)'`). A word with a space in it is quoted.
+- **All or none.** Every change is made in memory first; if one cannot be made, nothing is written and no check runs. When a check fails, the checks after it do not run, and every file the script touched is put back as it was: an edited file gets its old text, a file it made is removed, one it deleted comes back. `--keep` leaves the changes in place to be mended; `--dry-run` says whether every change can be made and which checks would run, and does neither.
+- **Where it runs.** On the laptop, or at the desk as `rx --back -- cargo xtask apply SCRIPT`, so that the files it wrote there come back.
+
+```text
+# One edit, one new file, then their checks.
+@@ file: xtask/src/stall.rs
+@@ from
+pub(crate) const AT_LEAST: usize = 3;
+@@ to
+pub(crate) const AT_LEAST: usize = 4;
+@@ end
+@@ write: target/coordinator/notes.md
+| What | Who | When |
+|---|---|---|
+| A note | the session | now |
+@@ end
+@@ check: fmt
+@@ check: links
+@@ check: test -p xtask -E 'test(/stall::/)'
+```
+
+**What wave 11 met, and the form that works for each.** Tried again in the eighth tooling step on 2026-11-16 (Claude Code 2.1.325, a worktree-isolated session) with read-only commands where the form allowed it:
+
+| Refused | Tried as | Result | The form that works |
+|---|---|---|---|
+| A heredoc beside git: `git … && cat > f <<'EOF'`, `cat <<'EOF' > f` naming `.git` | As in the tables above | **Refused**, as before | `cargo xtask apply` with a `@@ write:`; or the Write tool, then git in a call of its own |
+| A heredoc into an interpreter: `python3 - <<'EOF'` | An edit script | **Refused at times** | `cargo xtask apply`; or Write the script to `$CLAUDE_JOB_DIR/tmp/` and run `python3 FILE` alone |
+| A heredoc appended to a file and a command after it, no git: `cat >> f <<'EOF'` … `EOF`, then `grep` on the next line | A scratch module appended to a source file | **Refused**, "too complex to verify" (met in this step) | The Edit tool, or `apply` with an edit |
+| `&&` chains: an edit, a build, then `git diff` | `python3 FILE && cargo check …; git diff --stat` | **Refused** | `cargo xtask apply SCRIPT` with `@@ check: build -p CRATE`; then `git diff --stat` alone |
+| `xargs` into git | `git ls-files F \| xargs git log --oneline -1` | **Refused**: "feeds git its arguments from stdin at runtime (xargs/parallel)" | git with its arguments written out: `git log --oneline -1 -- F` |
+| A path holding `.github` | `ls .github/workflows && git status --short`; `git log --oneline -1 -- .github/workflows/try.yml` | **Accepted; not reproduced** | As tried. If refused, give the path to a command of its own |
+| A path or pattern holding `complete` | `grep -c x docs/outstanding/caught-by-names-checked-only-at-the-desk.md && git status --short` | **Accepted** for a path that only holds the letters; the whole word as a pattern is refused (above) | A bracket round one letter: `compl[e]te` |
+| `cargo xtask apply …` then `git status` | `cargo xtask apply --help \| head -3 && git status --short` | **Accepted** | As tried |
 
 ## False positives
 

@@ -43,8 +43,8 @@ none, or more than one (overlapping ones included), changes nothing.";
 
 /// What `replace` was asked to do.
 #[derive(Debug, Default, PartialEq)]
-struct Request {
-    file: PathBuf,
+pub(crate) struct Request {
+    pub(crate) file: PathBuf,
     from: String,
     to: String,
     within: Option<String>,
@@ -180,7 +180,7 @@ fn replaced(
 }
 
 /// The edited source, and what to print about it.
-fn edit(source: &str, request: &Request, shown_as: &str) -> Result<(String, String)> {
+pub(crate) fn edit(source: &str, request: &Request, shown_as: &str) -> Result<(String, String)> {
     if request.text {
         return edit_text(source, request, shown_as);
     }
@@ -280,15 +280,15 @@ begin with `#`, and empty ones, are comments.";
 
 /// One edit of a script, and where it was written.
 #[derive(Debug, PartialEq)]
-struct ScriptEdit {
+pub(crate) struct ScriptEdit {
     /// Its number in the script, from 1, and its first line.
-    number: usize,
-    line: usize,
-    request: Request,
+    pub(crate) number: usize,
+    pub(crate) line: usize,
+    pub(crate) request: Request,
 }
 
 /// Reads a script of edits ([`SCRIPT_USAGE`]).
-fn parse_script(script: &str) -> Result<Vec<ScriptEdit>> {
+pub(crate) fn parse_script(script: &str) -> Result<Vec<ScriptEdit>> {
     #[derive(PartialEq)]
     enum In {
         Between,
