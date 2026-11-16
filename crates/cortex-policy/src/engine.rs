@@ -167,6 +167,11 @@ pub struct Question {
     /// Whether "always allow in this project" can be kept: the engine was
     /// given a store ([`Parts::store`]).
     pub storable: bool,
+    /// Whether an `ask` rule of the managed configuration is among what
+    /// asks: an administrator's word that a person decides each time,
+    /// which a check of the user's own does not pass (step 19, the owner's
+    /// decision of 2026-11-16).
+    pub managed: bool,
 }
 
 impl Question {
@@ -483,6 +488,8 @@ enum Finding {
         reason: String,
         /// The allow rule that would settle it next time, if one could.
         lift: Option<Rule>,
+        /// Whether an `ask` rule of the managed configuration asks it.
+        managed: bool,
     },
     Deny {
         reason: String,
@@ -498,6 +505,17 @@ impl Finding {
         Self::Ask {
             reason: reason.into(),
             lift: None,
+            managed: false,
+        }
+    }
+
+    /// An `ask` that the rule of `hit` decided: managed when the rule is
+    /// the managed configuration's.
+    fn asked_by(reason: impl Into<String>, hit: &Hit<'_>) -> Self {
+        Self::Ask {
+            reason: reason.into(),
+            lift: None,
+            managed: matches!(hit.by, By::Rule(rule) if rule.source == RuleSource::Managed),
         }
     }
 
@@ -1347,9 +1365,10 @@ impl Engine {
                 reason: format!("{what} is protected by {}.", hit.describe()),
                 built_in: matches!(hit.by, By::Builtin(_)),
             },
-            Some(hit) if hit.action == RuleAction::Ask => {
-                Finding::ask(format!("{what} is asked about by {}.", hit.describe()))
-            }
+            Some(hit) if hit.action == RuleAction::Ask => Finding::asked_by(
+                format!("{what} is asked about by {}.", hit.describe()),
+                &hit,
+            ),
             Some(_) => Finding::Allow,
             None if decider == Decider::Holder => Finding::Allow,
             None => Finding::Ask {
@@ -1362,6 +1381,7 @@ impl Engine {
                     pattern: literal_pattern(path),
                     action: RuleAction::Allow,
                 }),
+                managed: false,
             },
         }
     }
@@ -1382,10 +1402,13 @@ impl Engine {
                 };
             }
             Some(hit) if hit.action == RuleAction::Ask => {
-                return Finding::ask(format!(
-                    "A command may write anywhere in `{path}`, which is asked about by {}.",
-                    hit.describe()
-                ));
+                return Finding::asked_by(
+                    format!(
+                        "A command may write anywhere in `{path}`, which is asked about by {}.",
+                        hit.describe()
+                    ),
+                    &hit,
+                );
             }
             Some(_) => return Finding::Allow,
             None => {}
@@ -1414,10 +1437,10 @@ impl Engine {
                 "Reaching {shown} is refused by {}.",
                 hit.describe()
             )),
-            Some(hit) if hit.action == RuleAction::Ask => Finding::ask(format!(
-                "Reaching {shown} is asked about by {}.",
-                hit.describe()
-            )),
+            Some(hit) if hit.action == RuleAction::Ask => Finding::asked_by(
+                format!("Reaching {shown} is asked about by {}.", hit.describe()),
+                &hit,
+            ),
             Some(_) => Finding::Allow,
             None if level::decider(self.level(), Matter::Network) == Decider::Holder => {
                 Finding::Allow
@@ -1432,6 +1455,7 @@ impl Engine {
                     pattern: literal_name(&host.trim_end_matches('.').to_ascii_lowercase()),
                     action: RuleAction::Allow,
                 }),
+                managed: false,
             },
         }
     }
@@ -1461,10 +1485,10 @@ impl Engine {
             Some(hit) => {
                 return match hit.action {
                     RuleAction::Allow => Finding::Allow,
-                    RuleAction::Ask => Finding::ask(format!(
-                        "The tool `{tool}` is asked about by {}.",
-                        hit.describe()
-                    )),
+                    RuleAction::Ask => Finding::asked_by(
+                        format!("The tool `{tool}` is asked about by {}.", hit.describe()),
+                        &hit,
+                    ),
                     RuleAction::Deny => Finding::deny(format!(
                         "The tool `{tool}` is refused by {}.",
                         hit.describe()
@@ -1489,6 +1513,7 @@ impl Engine {
                     pattern: literal_name(tool),
                     action: RuleAction::Allow,
                 }),
+                managed: false,
             },
         }
     }
@@ -1504,10 +1529,10 @@ impl Engine {
                 let reason = format!("The command is refused by {}.", hit.describe());
                 return (vec![Finding::deny(reason)], false);
             }
-            Some(hit) => findings.push(Finding::ask(format!(
-                "The command is asked about by {}.",
-                hit.describe()
-            ))),
+            Some(hit) => findings.push(Finding::asked_by(
+                format!("The command is asked about by {}.", hit.describe()),
+                &hit,
+            )),
             None => {}
         }
         let parts = match &analysis {
@@ -1631,7 +1656,11 @@ impl Engine {
                         self.level().as_str()
                     ),
                 };
-                findings.push(Finding::Ask { reason, lift });
+                findings.push(Finding::Ask {
+                    reason,
+                    lift,
+                    managed: false,
+                });
             }
         }
         (findings, only_reads)
@@ -3036,6 +3065,7 @@ fn combine(findings: Vec<Finding>, read_only: bool, storable: bool) -> Outcome {
     let mut reasons = Vec::new();
     let mut lifts: Vec<Rule> = Vec::new();
     let mut every_ask_lifts = true;
+    let mut managed = false;
     for finding in findings {
         match finding {
             Finding::Allow => {}
@@ -3044,7 +3074,12 @@ fn combine(findings: Vec<Finding>, read_only: bool, storable: bool) -> Outcome {
                     reason: escaped(reason),
                 };
             }
-            Finding::Ask { reason, lift } => {
+            Finding::Ask {
+                reason,
+                lift,
+                managed: by_managed,
+            } => {
+                managed |= by_managed;
                 let reason = escaped(reason);
                 if !reasons.contains(&reason) {
                     reasons.push(reason);
@@ -3069,6 +3104,7 @@ fn combine(findings: Vec<Finding>, read_only: bool, storable: bool) -> Outcome {
         reasons,
         lifts,
         storable,
+        managed,
     })
 }
 

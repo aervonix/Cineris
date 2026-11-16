@@ -1,0 +1,32 @@
+# The tenth tooling step's pull request of the owner's decisions of
+# 2026-11-16.
+
+# A managed `ask` holds back the user's own check.
+
+[break] managed-ask-is-not-marked
+rule: A finding an `ask` rule of the managed configuration makes says so, and the question carries it.
+file: crates/cortex-policy/src/engine.rs
+in: Finding::asked_by
+find: managed: matches!(hit.by, By::Rule(rule) if rule.source == RuleSource::Managed)
+replace: managed: false
+packages: cortex-policy, cortex-core
+caught-by:
+    cortex-core::it verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does
+
+[break] managed-ask-lets-the-users-line-run
+rule: The verifier holds back the user's own line where a managed `ask` rule is among what asks.
+file: crates/cortex-core/src/verify.rs
+find: Decision::Ask if managed =>
+replace: Decision::Ask if managed && false =>
+caught-by:
+    verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does
+
+[break] any-ask-holds-the-users-line-back
+rule: A user's own `ask` rule does not hold back the user's own line: only the managed configuration's does.
+file: crates/cortex-policy/src/engine.rs
+in: Finding::asked_by
+find: matches!(hit.by, By::Rule(rule) if rule.source == RuleSource::Managed)
+replace: matches!(hit.by, By::Rule(_))
+packages: cortex-policy, cortex-core
+caught-by:
+    cortex-core::it verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does

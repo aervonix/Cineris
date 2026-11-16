@@ -14,7 +14,8 @@
 //!   once; at most [`MOST_CHECKS`] run a round.
 //! - **Each is planned and decided just before it runs**, its retry too:
 //!   the engine is asked, and a `deny` or a stop wins. An `ask` holds back
-//!   an entry of the profile and not the user's own line. A profile entry is
+//!   an entry of the profile and not the user's own line, unless an `ask`
+//!   rule of the managed configuration is among what asks. A profile entry is
 //!   looked up again first, so one turned off elsewhere does not run.
 //! - **Each runs through the session's own shell** (`RecordingShell`, as
 //!   the harness's run): the same runner, sandbox, environment, looks at
@@ -1176,7 +1177,7 @@ impl CoreVerifier {
         let turn = cx.turn.clone();
         let planned = run_blocking(cx.cancel, move |_| {
             let plan = shell.plan(&arguments, &PlanCx::new(paths))?;
-            let decision = policy.decide(&PlannedCall {
+            let planned_call = PlannedCall {
                 session: &session,
                 turn: &turn,
                 call_id: &call,
@@ -1185,14 +1186,19 @@ impl CoreVerifier {
                 arguments: &arguments,
                 plan: &plan,
                 preview: None,
-            });
+            };
+            let decision = policy.decide(&planned_call);
+            // Whether an `ask` rule of the managed configuration is among
+            // what asks: that holds back the user's own line too.
+            let managed = decision == Decision::Ask
+                && matches!(policy.outcome(&planned_call), cortex_policy::engine::Outcome::Ask(question) if question.managed);
             // The level is read after the decision, so that one lowered
             // since the round began, or while this check was planned, holds.
             let read_only = *policy.engine().level() == Level::ReadOnly;
-            Ok::<_, cortex_tools::ToolError>((plan, decision, read_only))
+            Ok::<_, cortex_tools::ToolError>((plan, decision, read_only, managed))
         })
         .await;
-        let (mut plan, decision, read_only) = match planned {
+        let (mut plan, decision, read_only, managed) = match planned {
             Ok(Ok(planned)) => planned,
             Ok(Err(error)) => {
                 return Ran::not(
@@ -1211,14 +1217,23 @@ impl CoreVerifier {
             }
         };
         // What the engine says decides, but for one thing: the user's own
-        // line runs where the engine would ask, as the user's word. A check
-        // never puts a question.
+        // line runs where the engine would ask, as the user's word, unless
+        // the managed configuration's `ask` rule is among what asks: an
+        // administrator's word binds the user's check as a managed `deny`
+        // does (the owner's decision of 2026-11-16). A check never puts a
+        // question.
         let refused = match decision {
             Decision::Allow => None,
             Decision::AllowReadOnly => {
                 plan.concurrency = Concurrency::ReadOnly;
                 None
             }
+            Decision::Ask if managed => Some(Ran::not(
+                Ended::NotRun,
+                "It would ask before it runs, by a rule of the managed configuration, which an \
+                 administrator wrote for a person to decide each time, and a check never asks: \
+                 run it by hand, or ask for an `allow` rule.",
+            )),
             Decision::Ask if check.source == CheckSource::User => None,
             Decision::Ask => Some(Ran::not(
                 Ended::NotRun,

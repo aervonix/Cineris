@@ -202,7 +202,7 @@ An independent reviewer read the whole diff against the specification, without t
 
 **Written down, not changed:**
 
-- **A managed `ask` rule** does not hold back the user's own check line: an `ask` from any layer lets the user's own line through. The managed file is the machine's administrator's; a `deny` there still refuses it. Whether a managed `ask` should hold it back is the owner's choice, and [an item](../../outstanding/a-managed-ask-and-the-users-own-check.md) of its own, with a recommendation.
+- **A managed `ask` rule** does not hold back the user's own check line: an `ask` from any layer lets the user's own line through. (Changed by the owner's decision of 2026-11-16: a managed `ask` rule holds the user's own line back, as a managed `deny` does; built by the tenth tooling step.) The managed file is the machine's administrator's; a `deny` there still refuses it. Whether a managed `ask` should hold it back is the owner's choice, and an item (`a-managed-ask-and-the-users-own-check`, settled on 2026-11-16) of its own, with a recommendation.
 - **Trust is read when the session is put together,** as for the engine's rules: trust taken away from a running session stops its checks at its next session.
 - **The look after a check that stopped the turn** has no break: its test (`verify::sys_a_check_that_changes_a_protected_path_stops_the_turn_and_undo_puts_it_back`) returns early where the sandbox does not enforce, which the desk's machine does not; CI's Linux runner does.
 - **`lowered_by_project`** is true whenever a project's file gave the value; the notice says that the project's configuration sets it, which is so whatever the user's own file says.
@@ -231,7 +231,7 @@ Headless's report, `verify/run`, the measurements on the hosted runners and the 
 |---|---|
 | **Headless's result** | `HeadlessResult::verification` (`HeadlessVerification`): the turn's verdict as `turn.completed` gave it, how many rounds ended, and the last round's checks. Absent for a turn with no verdict. The exit code does not follow it ([architecture/10-headless.md](../../architecture/10-headless.md), "`json`"). |
 | **What later steps inherit** | In the build plan, step 19's "What later steps inherit": the notices and the verdict for step 24, the stage's contract for step 42, the harness's run and its policy for step 43. |
-| **A managed `ask`** | [An item](../../outstanding/a-managed-ask-and-the-users-own-check.md) for the owner, with the recommendation that it holds the user's line back. |
+| **A managed `ask`** | An item for the owner, `a-managed-ask-and-the-users-own-check`, with the recommendation that it holds the user's line back. The owner chose that on 2026-11-16, and the tenth tooling step built it ([tooling-10/parts/decisions.md](../tooling-10/parts/decisions.md)). |
 
 ### `verify/run`: the two ways
 
