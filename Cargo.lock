@@ -324,8 +324,17 @@ dependencies = [
 name = "cortex-rpc"
 version = "0.0.0"
 dependencies = [
+ "cortex-base",
+ "cortex-config",
  "cortex-core",
+ "cortex-llm",
  "cortex-protocol",
+ "cortex-testkit",
+ "cortex-tools",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -176,6 +176,63 @@ pub(crate) enum Command {
     Stats(StatsCommand),
     /// `cortex project …`
     Project(ProjectCommand),
+    /// `cortex serve …`: the RPC server (step 27).
+    Serve(Box<Serve>),
+}
+
+/// `cortex serve --stdio [FLAGS]`: the RPC server, and the flags of a run
+/// that set the core up rather than one run (`docs/steps/27/answered.md`,
+/// point 4).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Serve {
+    /// `--stdio`: one client, the process that started the server, over
+    /// standard input and output.
+    pub(crate) stdio: bool,
+    /// The core's flags, read as a run reads them. The ones only a run
+    /// takes are refused by name ([`Serve::run_only`]).
+    pub(crate) run: Run,
+}
+
+impl Serve {
+    /// The first flag given that only a run takes: a server has no prompt,
+    /// no one session and no one turn.
+    pub(crate) fn run_only(&self) -> Option<&'static str> {
+        let run = &self.run;
+        let limit = |key: &str| {
+            run.common
+                .settings
+                .iter()
+                .find(|(set, _, flag)| set == key && flag.is_some())
+                .is_some()
+        };
+        if run.print {
+            Some("-p")
+        } else if run.prompt.is_some() {
+            Some("a prompt")
+        } else if run.format != Format::Text {
+            Some("--output")
+        } else if run.include_deltas {
+            Some("--include-deltas")
+        } else if run.choice != Choice::New {
+            Some(match run.choice {
+                Choice::Continue => "--continue",
+                Choice::Resume(_) => "--resume",
+                _ => "--fork",
+            })
+        } else if run.no_session {
+            Some("--no-session")
+        } else if run.fail_on_denial {
+            Some("--fail-on-denial")
+        } else if limit("limits.turn.requests") {
+            Some("--max-requests")
+        } else if limit("limits.turn.cost") {
+            Some("--max-cost")
+        } else if limit("limits.turn.time") {
+            Some("--max-time")
+        } else {
+            None
+        }
+    }
 }
 
 /// `cortex project …`: what the harness knows about this project.
@@ -253,6 +310,7 @@ pub(crate) enum Topic {
     Usage,
     Stats,
     Project,
+    Serve,
 }
 
 /// What a headless run writes on standard output.
@@ -417,6 +475,7 @@ pub(crate) fn parse(arguments: Vec<OsString>) -> Result<Command, UsageError> {
             "usage" => Some(Topic::Usage),
             "stats" => Some(Topic::Stats),
             "project" => Some(Topic::Project),
+            "serve" => Some(Topic::Serve),
             _ => None,
         };
         if let Some(topic) = topic {
@@ -432,91 +491,167 @@ fn run(parser: &mut Parser) -> Result<Command, UsageError> {
     let mut run = Run::default();
     let mut words: Vec<String> = Vec::new();
     let mut choices = 0;
+    while let Some(argument) = parser.next()? {
+        let argument = Owned::from(argument);
+        if let Some(command) = run_flag(parser, &mut run, &mut words, &mut choices, argument)? {
+            return Ok(command);
+        }
+    }
+    finish_run(run, &words, choices).map(|run| Command::Run(Box::new(run)))
+}
+
+/// `cortex serve`: `--stdio`, and a run's flags.
+fn serve(parser: &mut Parser) -> Result<Command, UsageError> {
+    let mut serve = Serve::default();
+    let mut words: Vec<String> = Vec::new();
+    let mut choices = 0;
+    while let Some(argument) = parser.next()? {
+        match argument {
+            Arg::Short('h') | Arg::Long("help") => return Ok(Command::Help(Topic::Serve)),
+            Arg::Long("stdio") => serve.stdio = true,
+            argument => {
+                let argument = Owned::from(argument);
+                if let Some(command) =
+                    run_flag(parser, &mut serve.run, &mut words, &mut choices, argument)?
+                {
+                    return Ok(command);
+                }
+            }
+        }
+    }
+    serve.run = finish_run(serve.run, &words, choices)?;
+    if !serve.stdio {
+        return Err(UsageError(
+            "serve needs --stdio: the client is the process that started it".to_owned(),
+        ));
+    }
+    Ok(Command::Serve(Box::new(serve)))
+}
+
+/// An argument as lexopt reads it, holding its own text, so that the parser
+/// can be asked for a flag's value while the flag is looked at.
+enum Owned {
+    Short(char),
+    Long(String),
+    Value(OsString),
+}
+
+impl From<Arg<'_>> for Owned {
+    fn from(argument: Arg<'_>) -> Self {
+        match argument {
+            Arg::Short(short) => Self::Short(short),
+            Arg::Long(long) => Self::Long(long.to_owned()),
+            Arg::Value(value) => Self::Value(value),
+        }
+    }
+}
+
+/// One argument of a run. A command when the argument is one by itself
+/// (`--help`, `--version`).
+fn run_flag(
+    parser: &mut Parser,
+    run: &mut Run,
+    words: &mut Vec<String>,
+    choices: &mut usize,
+    argument: Owned,
+) -> Result<Option<Command>, UsageError> {
+    let long;
+    let argument = match argument {
+        Owned::Short(short) => Arg::Short(short),
+        Owned::Long(text) => {
+            long = text;
+            Arg::Long(&long)
+        }
+        Owned::Value(value) => Arg::Value(value),
+    };
     let set = |run: &mut Run, key: &str, value: String, flag: &str| {
         run.common
             .settings
             .push((key.to_owned(), value, Some(flag.to_owned())));
     };
-    while let Some(argument) = parser.next()? {
-        match argument {
-            Arg::Short('h') | Arg::Long("help") => return Ok(Command::Help(Topic::Main)),
-            Arg::Short('V') | Arg::Long("version") => return Ok(Command::Version),
-            Arg::Short('p') | Arg::Long("print") => {
-                run.print = true;
-                // `--print=TEXT`: the prompt attached to the flag.
-                if let Some(attached) = parser.optional_value() {
-                    words.push(attached.string()?);
-                }
+    match argument {
+        Arg::Short('h') | Arg::Long("help") => return Ok(Some(Command::Help(Topic::Main))),
+        Arg::Short('V') | Arg::Long("version") => return Ok(Some(Command::Version)),
+        Arg::Short('p') | Arg::Long("print") => {
+            run.print = true;
+            // `--print=TEXT`: the prompt attached to the flag.
+            if let Some(attached) = parser.optional_value() {
+                words.push(attached.string()?);
             }
-            Arg::Long("output") => {
-                run.format = match text(parser)?.as_str() {
-                    "text" => Format::Text,
-                    "json" => Format::Json,
-                    "jsonl" => Format::Jsonl,
-                    other => {
-                        return Err(UsageError(format!(
-                            "'{other}' is not an output format: use text, json or jsonl"
-                        )));
-                    }
-                };
-            }
-            Arg::Long("include-deltas") => run.include_deltas = true,
-            Arg::Long("continue") => {
-                choices += 1;
-                run.choice = Choice::Continue;
-            }
-            Arg::Long("resume") => {
-                choices += 1;
-                run.choice = Choice::Resume(text(parser)?);
-            }
-            Arg::Long("fork") => {
-                choices += 1;
-                run.choice = Choice::Fork(text(parser)?);
-            }
-            Arg::Long("no-session") => run.no_session = true,
-            Arg::Long("model") => set(&mut run, "model.main", text(parser)?, "--model"),
-            Arg::Long("effort") => set(&mut run, "model.effort", text(parser)?, "--effort"),
-            Arg::Long("speed") => set(&mut run, "model.speed", text(parser)?, "--speed"),
-            Arg::Long("permission-mode") => {
-                let mode = text(parser)?;
-                set(&mut run, "permissions.mode", mode, "--permission-mode");
-            }
-            Arg::Long("allow") => run.allow.push(text(parser)?),
-            Arg::Long("deny") => run.deny.push(text(parser)?),
-            Arg::Long("trust-project") => run.trust_project = true,
-            Arg::Long("fail-on-denial") => run.fail_on_denial = true,
-            Arg::Long("max-requests") => {
-                let value = text(parser)?;
-                set(&mut run, "limits.turn.requests", value, "--max-requests");
-            }
-            Arg::Long("max-cost") => {
-                let value = text(parser)?;
-                set(&mut run, "limits.turn.cost", value, "--max-cost");
-            }
-            Arg::Long("max-time") => {
-                let value = text(parser)?;
-                set(&mut run, "limits.turn.time", value, "--max-time");
-            }
-            Arg::Long("system-append") => run.system_append = Some(text(parser)?),
-            Arg::Long("profile") => run.common.profile = Some(text(parser)?),
-            Arg::Short('c') => {
-                let given = text(parser)?;
-                let Some((key, value)) = given.split_once('=') else {
-                    return Err(UsageError(
-                        "-c takes KEY=VALUE, as in -c retry.attempts=3".to_owned(),
-                    ));
-                };
-                run.common
-                    .settings
-                    .push((key.trim().to_owned(), value.to_owned(), None));
-            }
-            Arg::Long("log-level") => run.log_level = Some(text(parser)?),
-            Arg::Short('q') | Arg::Long("quiet") => run.quiet = true,
-            Arg::Short('v') | Arg::Long("verbose") => run.verbose = true,
-            Arg::Value(word) => words.push(word.string()?),
-            other => return Err(unexpected(&other)),
         }
+        Arg::Long("output") => {
+            run.format = match text(parser)?.as_str() {
+                "text" => Format::Text,
+                "json" => Format::Json,
+                "jsonl" => Format::Jsonl,
+                other => {
+                    return Err(UsageError(format!(
+                        "'{other}' is not an output format: use text, json or jsonl"
+                    )));
+                }
+            };
+        }
+        Arg::Long("include-deltas") => run.include_deltas = true,
+        Arg::Long("continue") => {
+            *choices += 1;
+            run.choice = Choice::Continue;
+        }
+        Arg::Long("resume") => {
+            *choices += 1;
+            run.choice = Choice::Resume(text(parser)?);
+        }
+        Arg::Long("fork") => {
+            *choices += 1;
+            run.choice = Choice::Fork(text(parser)?);
+        }
+        Arg::Long("no-session") => run.no_session = true,
+        Arg::Long("model") => set(run, "model.main", text(parser)?, "--model"),
+        Arg::Long("effort") => set(run, "model.effort", text(parser)?, "--effort"),
+        Arg::Long("speed") => set(run, "model.speed", text(parser)?, "--speed"),
+        Arg::Long("permission-mode") => {
+            let mode = text(parser)?;
+            set(run, "permissions.mode", mode, "--permission-mode");
+        }
+        Arg::Long("allow") => run.allow.push(text(parser)?),
+        Arg::Long("deny") => run.deny.push(text(parser)?),
+        Arg::Long("trust-project") => run.trust_project = true,
+        Arg::Long("fail-on-denial") => run.fail_on_denial = true,
+        Arg::Long("max-requests") => {
+            let value = text(parser)?;
+            set(run, "limits.turn.requests", value, "--max-requests");
+        }
+        Arg::Long("max-cost") => {
+            let value = text(parser)?;
+            set(run, "limits.turn.cost", value, "--max-cost");
+        }
+        Arg::Long("max-time") => {
+            let value = text(parser)?;
+            set(run, "limits.turn.time", value, "--max-time");
+        }
+        Arg::Long("system-append") => run.system_append = Some(text(parser)?),
+        Arg::Long("profile") => run.common.profile = Some(text(parser)?),
+        Arg::Short('c') => {
+            let given = text(parser)?;
+            let Some((key, value)) = given.split_once('=') else {
+                return Err(UsageError(
+                    "-c takes KEY=VALUE, as in -c retry.attempts=3".to_owned(),
+                ));
+            };
+            run.common
+                .settings
+                .push((key.trim().to_owned(), value.to_owned(), None));
+        }
+        Arg::Long("log-level") => run.log_level = Some(text(parser)?),
+        Arg::Short('q') | Arg::Long("quiet") => run.quiet = true,
+        Arg::Short('v') | Arg::Long("verbose") => run.verbose = true,
+        Arg::Value(word) => words.push(word.string()?),
+        other => return Err(unexpected(&other)),
     }
+    Ok(None)
+}
+
+/// The checks of a run as a whole, once every argument is read.
+fn finish_run(mut run: Run, words: &[String], choices: usize) -> Result<Run, UsageError> {
     if choices > 1 {
         return Err(UsageError(
             "choose one of --continue, --resume and --fork".to_owned(),
@@ -532,10 +667,13 @@ fn run(parser: &mut Parser) -> Result<Command, UsageError> {
     if !words.is_empty() {
         run.prompt = Some(words.join(" "));
     }
-    Ok(Command::Run(Box::new(run)))
+    Ok(run)
 }
 
 fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> {
+    if topic == Topic::Serve {
+        return serve(parser);
+    }
     if topic == Topic::Models {
         return match parser.next()? {
             None => Ok(Command::Models),
@@ -588,6 +726,7 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 Topic::Usage => "usage",
                 Topic::Stats => "stats",
                 Topic::Project => "project",
+                Topic::Serve => "serve",
                 Topic::Main => "",
             }
         ))
@@ -698,9 +837,12 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 other => Err(wrong(other)),
             }
         }
-        Topic::Main | Topic::Models | Topic::Usage | Topic::Stats | Topic::Project => {
-            Err(wrong(&action))
-        }
+        Topic::Main
+        | Topic::Models
+        | Topic::Usage
+        | Topic::Stats
+        | Topic::Project
+        | Topic::Serve => Err(wrong(&action)),
     }
 }
 

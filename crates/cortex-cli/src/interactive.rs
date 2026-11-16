@@ -28,10 +28,9 @@
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
-use std::future::Future;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -44,9 +43,11 @@ use cortex_config::schema::{
 use cortex_config::{Dirs, Env, LoadOptions, Loaded, StateDir};
 use cortex_core::{ClientId, ClientInfo, Core, CoreOptions, EventQueue, Outgoing, TokioTimer};
 use cortex_protocol::jsonrpc::RequestId;
-use cortex_protocol::methods::{Op, OpResult, ServerResponse};
+use cortex_protocol::methods::{Op, ServerResponse};
 use cortex_protocol::session::SessionSettings;
 use cortex_protocol::{ErrorData, ErrorKind, SessionId};
+use cortex_rpc::lane::Dispatcher;
+use cortex_rpc::order::{Next, Order};
 use cortex_tui::app::{
     self, ColorDepth, Exit, Inbound, Link, Open, Overrides, Start, Ticket, Waker,
 };
@@ -327,7 +328,7 @@ fn shown_folder(workspace: &Path, home: Option<&Path>) -> String {
 }
 
 /// The core's options: as headless mode's, but for a person at a terminal.
-fn core_options(
+pub(crate) fn core_options(
     run: &Run,
     env: &Env,
     loaded: &Loaded,
@@ -621,150 +622,6 @@ impl Drop for GoneGuard {
     }
 }
 
-/// Where an operation runs on the core thread.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Route {
-    /// On a task of its own, beside the lane.
-    Beside,
-    /// In the lane, in the order sent; `write` when it changes a session.
-    Lane { write: bool },
-}
-
-/// How the core thread orders what it is sent. What changes a session runs
-/// in the lane, one at a time in the order sent. A read runs beside it,
-/// unless a write sent before it is not done yet: then it goes into the
-/// lane after that write, so that a read sees every write sent before it
-/// (`/permissions`' list after a revoke, `/status` after `/model`), as when
-/// the loop ran each write itself (the review of step 23's second pull
-/// request).
-#[derive(Debug, Clone, Default)]
-struct Routes {
-    /// The writes routed and not yet done.
-    in_flight: Arc<AtomicUsize>,
-}
-
-impl Routes {
-    /// Where `op` runs.
-    fn route(&self, op: &Op) -> Route {
-        if !reads(op) {
-            self.in_flight.fetch_add(1, Ordering::SeqCst);
-            return Route::Lane { write: true };
-        }
-        // The workspace's files are asked for only once an open has
-        // answered, and depend on no write after it: they never wait in the
-        // lane, behind a fork's close of the session it forked (the
-        // re-review of step 23's second pull request).
-        if matches!(op, Op::WorkspaceFiles(_)) {
-            return Route::Beside;
-        }
-        if self.in_flight.load(Ordering::SeqCst) > 0 {
-            Route::Lane { write: false }
-        } else {
-            Route::Beside
-        }
-    }
-
-    /// A write the lane is running, counted as done when what this gives is
-    /// dropped: once it has answered, and also if it panicked.
-    fn running(&self, write: bool) -> Running {
-        Running {
-            routes: write.then(|| self.clone()),
-        }
-    }
-
-    /// A write the lane ran is done.
-    fn written(&self) {
-        self.in_flight.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-/// A write under way in the lane: done when dropped.
-struct Running {
-    routes: Option<Routes>,
-}
-
-impl Drop for Running {
-    fn drop(&mut self) {
-        if let Some(routes) = &self.routes {
-            routes.written();
-        }
-    }
-}
-
-/// The lane: runs what it is sent one at a time, in the order sent, and
-/// answers each. An operation that panics is answered `Internal` and the
-/// lane goes on: the ones queued behind it are run and answered, and its
-/// write is counted as done (the review of step 23: a panic ended the lane,
-/// leaving everything behind it unanswered and the app waiting for good).
-async fn run_lane<F, W>(
-    mut written: tokio::sync::mpsc::UnboundedReceiver<(Ticket, Op, bool)>,
-    routes: Routes,
-    handle: F,
-    done: Done,
-    wake: Slot,
-) where
-    F: Fn(Op) -> W,
-    W: Future<Output = Result<OpResult, Box<ErrorData>>> + Send + 'static,
-{
-    while let Some((ticket, op, write)) = written.recv().await {
-        let running = routes.running(write);
-        let result = contained(handle(op)).await;
-        drop(running);
-        push(&done, Inbound::Done(ticket, result));
-        wake.wake();
-    }
-}
-
-/// Runs one operation on a task of its own, so that a panic in it is that
-/// operation's failure and not its runner's.
-#[expect(
-    clippy::result_large_err,
-    reason = "the result goes straight into `Inbound::Done`, which holds it so"
-)]
-async fn contained<W>(work: W) -> Result<OpResult, ErrorData>
-where
-    W: Future<Output = Result<OpResult, Box<ErrorData>>> + Send + 'static,
-{
-    match tokio::spawn(work).await {
-        Ok(result) => result.map_err(|error| *error),
-        Err(_) => Err(ErrorData::new(
-            ErrorKind::Internal,
-            "operation_failed",
-            "The operation failed inside the core; the log file has the details.",
-        )),
-    }
-}
-
-/// The answer to an operation that could not be handed to the core.
-fn core_gone(ticket: Ticket) -> Inbound {
-    Inbound::Done(
-        ticket,
-        Err(ErrorData::new(
-            ErrorKind::Internal,
-            "core_gone",
-            "The core has stopped.",
-        )),
-    )
-}
-
-/// Whether an operation only reads, and so may run beside the ordered ones.
-fn reads(op: &Op) -> bool {
-    matches!(
-        op,
-        Op::SessionList(_)
-            | Op::SessionRead(_)
-            | Op::WorkspaceFiles(_)
-            | Op::ModelsList(_)
-            | Op::ConfigGet(_)
-            | Op::PermissionsList(_)
-            | Op::PlanGet(_)
-            | Op::UsageGet(_)
-            | Op::UsageReport(_)
-            | Op::McpStatus(_)
-            | Op::ExtensionsStatus(_)
-    )
-}
-
 impl CoreThread {
     /// Starts the core on a thread of its own and waits until it has
     /// started, or failed to.
@@ -811,59 +668,41 @@ impl CoreThread {
                     let client = core.connect(ClientInfo::user());
                     let _ = started.send(Ok((core.clone(), client.id, Arc::clone(&client.queue))));
                     // The lane: what changes a session runs on a task of
-                    // its own, one at a time in the order sent, so that the
-                    // end below is never behind it.
-                    let (writes, written) =
-                        tokio::sync::mpsc::unbounded_channel::<(Ticket, Op, bool)>();
-                    let routes = Routes::default();
-                    let lane_task = {
+                    // its own, one at a time in the order sent, and reads
+                    // beside it (`cortex_rpc::lane`, which an RPC
+                    // connection runs too), so that the end below is never
+                    // behind it.
+                    let mut dispatcher = {
                         let core = core.clone();
-                        tokio::spawn(run_lane(
-                            written,
-                            routes.clone(),
-                            move |op| {
-                                let core = core.clone();
-                                async move { core.handle(client.id, op).await }
-                            },
-                            Arc::clone(&thread_done),
-                            thread_slot.clone(),
-                        ))
-                    };
-                    while let Some((ticket, op)) = lane.recv().await {
-                        let route = routes.route(&op);
-                        if let Route::Lane { write } = route {
-                            // A lane task that is gone answers nothing: what
-                            // it is sent is answered here, as the link
-                            // answers what it cannot send.
-                            if writes.send((ticket, op, write)).is_err() {
-                                if write {
-                                    routes.written();
-                                }
-                                push(&thread_done, core_gone(ticket));
-                                thread_slot.wake();
-                            }
-                        } else {
+                        let id = client.id;
+                        let run: cortex_rpc::lane::Run = Arc::new(move |op| {
                             let core = core.clone();
-                            let (done, wake) = (Arc::clone(&thread_done), thread_slot.clone());
-                            tokio::spawn(async move {
-                                let result =
-                                    contained(async move { core.handle(client.id, op).await })
-                                        .await;
+                            Box::pin(async move { core.handle(id, op).await })
+                        });
+                        let (done, wake) = (Arc::clone(&thread_done), thread_slot.clone());
+                        Dispatcher::start(
+                            run,
+                            Arc::new(move |ticket: Ticket, result| {
                                 push(&done, Inbound::Done(ticket, result));
                                 wake.wake();
-                            });
-                        }
+                            }),
+                        )
+                    };
+                    while let Some((ticket, op)) = lane.recv().await {
+                        dispatcher.send(ticket, op);
                     }
                     // The interface is gone, outside the lane: what it was
                     // asked and never answered is withdrawn, which ends an
                     // operation waiting on the answer (the trust question of
                     // an open, the undo's question), and the sessions it
                     // had open are closed.
-                    drop(writes);
+                    let lane_task = dispatcher.close();
                     core.disconnect(client.id).await;
                     // Then the lane's last operation, for so long, and
                     // everything else in order.
-                    let _ = tokio::time::timeout(LANE_END, lane_task).await;
+                    if let Some(lane_task) = lane_task {
+                        let _ = tokio::time::timeout(LANE_END, lane_task).await;
+                    }
                     core.shutdown().await;
                     normal.store(true, Ordering::SeqCst);
                 });
@@ -909,7 +748,7 @@ impl CoreThread {
             done: Arc::clone(&self.done),
             slot: self.slot.clone(),
             next: 0,
-            ahead: None,
+            order: Order::default(),
             gone_said: false,
         }
     }
@@ -952,7 +791,7 @@ struct InProcess {
     next: u64,
     /// The events and requests still to be given before the result that is
     /// ready: see [`take`].
-    ahead: Option<usize>,
+    order: Order,
     /// Whether the end of the connection was told.
     gone_said: bool,
 }
@@ -993,44 +832,28 @@ impl Link for InProcess {
         take(
             &self.done,
             &self.queue,
-            &mut self.ahead,
+            &mut self.order,
             &mut self.gone_said,
         )
     }
 }
 
-/// What the link gives next: a result that is ready only after the events
-/// and requests that were queued when it was first seen (the review of step
-/// 23's fixes), so that a history read's result never overtakes the events
-/// it holds, which the application then takes while it reads and filters.
-/// Only those: a stream of events that goes on does not hold the result
-/// back. `ahead` counts them down; with no result ready, the queue in
-/// order.
+/// What the link gives next, in [`Order`]: a result that is ready only
+/// after the events and requests that were queued when it was first seen
+/// (the review of step 23's fixes), so that a history read's result never
+/// overtakes the events it holds; and once the queue is closed and empty,
+/// the end of the connection, said once.
 fn take(
     done: &Done,
     queue: &EventQueue,
-    ahead: &mut Option<usize>,
+    order: &mut Order,
     gone_said: &mut bool,
 ) -> Option<Inbound> {
-    let ready = !done
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .is_empty();
-    if ready {
-        let owed = ahead.get_or_insert_with(|| queue.len());
-        if *owed > 0 {
-            *owed -= 1;
-            if let Some(next) = queue.try_next() {
-                return inbound(Some(next), false, gone_said);
-            }
-        }
-        *ahead = None;
-        return done
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop_front();
+    match order.next(queue, done) {
+        Some(Next::Result(result)) => Some(result),
+        Some(Next::Core(next)) => inbound(Some(next), false, gone_said),
+        None => inbound(None, queue.is_closed(), gone_said),
     }
-    inbound(queue.try_next(), queue.is_closed(), gone_said)
 }
 
 /// What the link gives for what the client's queue gave: an event, a
@@ -1106,48 +929,6 @@ mod tests {
         assert_eq!(code, exit::USAGE);
     }
 
-    /// A read runs beside the lane while no write is under way, and after
-    /// the writes sent before it while one is: a list after a revoke sees
-    /// the revoke. The workspace's files never wait in the lane, and a write
-    /// is done when its run is dropped, whether it answered or panicked.
-    #[test]
-    fn a_read_after_a_write_waits_for_it_and_one_alone_runs_beside() {
-        use cortex_protocol::methods::{PermissionsRevokeParams, SessionRef};
-        let session = cortex_protocol::SessionId::from("s_1");
-        let routes = Routes::default();
-        let list = || {
-            Op::PermissionsList(SessionRef {
-                session_id: session.clone(),
-            })
-        };
-        assert_eq!(routes.route(&list()), Route::Beside);
-        let revoke = Op::PermissionsRevoke(PermissionsRevokeParams {
-            session_id: session.clone(),
-            ids: vec![cortex_protocol::ApprovalId::from("a_1")],
-        });
-        assert_eq!(routes.route(&revoke), Route::Lane { write: true });
-        assert_eq!(routes.route(&list()), Route::Lane { write: false });
-        let files = Op::WorkspaceFiles(cortex_protocol::methods::WorkspaceFilesParams {
-            session_id: session.clone(),
-            limit: None,
-        });
-        assert_eq!(
-            routes.route(&files),
-            Route::Beside,
-            "files waited in the lane"
-        );
-        drop(routes.running(true));
-        assert_eq!(routes.route(&list()), Route::Beside);
-        // A run that panics is done all the same.
-        let _ = routes.route(&revoke);
-        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _running = routes.running(true);
-            panic!("a write that panics");
-        }));
-        assert!(panicked.is_err());
-        assert_eq!(routes.route(&list()), Route::Beside);
-    }
-
     /// The crash report masks what the log masks: a panic that quotes a
     /// key does not put it in a file whose place is printed to be shared
     /// (the review of step 23).
@@ -1163,77 +944,6 @@ mod tests {
         assert!(!report.contains(key), "{report}");
         assert!(report.contains("not a char boundary"), "{report}");
         assert!(report.contains("the backtrace"), "{report}");
-    }
-
-    /// An operation that panics in the lane is answered as failed, and the
-    /// ones queued behind it are run and answered in order; its write is
-    /// done, so a read after it runs beside the lane again (the review of
-    /// step 23: a panic ended the lane, leaving the app waiting for good).
-    #[test]
-    fn a_panic_in_the_lane_answers_that_operation_and_the_lane_goes_on() {
-        use cortex_protocol::methods::{Empty, PermissionsRevokeParams, SessionRef};
-        let session = cortex_protocol::SessionId::from("s_1");
-        let revoke = || {
-            Op::PermissionsRevoke(PermissionsRevokeParams {
-                session_id: session.clone(),
-                ids: vec![cortex_protocol::ApprovalId::from("a_1")],
-            })
-        };
-        let close = Op::SessionClose(SessionRef {
-            session_id: session.clone(),
-        });
-        let routes = Routes::default();
-        let done: Done = Arc::new(Mutex::new(VecDeque::new()));
-        let (send, written) = tokio::sync::mpsc::unbounded_channel();
-        for (number, op) in [revoke(), revoke(), close].into_iter().enumerate() {
-            let Route::Lane { write } = routes.route(&op) else {
-                panic!("a write runs in the lane");
-            };
-            send.send((Ticket(number as u64), op, write)).unwrap();
-        }
-        drop(send);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        runtime.block_on(run_lane(
-            written,
-            routes.clone(),
-            |op| async move {
-                match op {
-                    Op::PermissionsRevoke(_) => panic!("an operation that panics"),
-                    _ => Ok::<_, Box<ErrorData>>(OpResult::SessionClose(Empty {})),
-                }
-            },
-            Arc::clone(&done),
-            Slot::default(),
-        ));
-        let answered: Vec<(u64, Result<(), String>)> = done
-            .lock()
-            .unwrap()
-            .drain(..)
-            .map(|inbound| match inbound {
-                Inbound::Done(ticket, result) => {
-                    (ticket.0, result.map(drop).map_err(|error| error.code))
-                }
-                other => panic!("not an answer: {other:?}"),
-            })
-            .collect();
-        assert_eq!(
-            answered,
-            [
-                (0, Err("operation_failed".to_owned())),
-                (1, Err("operation_failed".to_owned())),
-                (2, Ok(()))
-            ]
-        );
-        let list = Op::PermissionsList(SessionRef {
-            session_id: session.clone(),
-        });
-        assert_eq!(
-            routes.route(&list),
-            Route::Beside,
-            "a write is counted for good"
-        );
     }
 
     fn event(seq: u64, event: cortex_protocol::event::Event) -> cortex_protocol::SessionEvent {
@@ -1278,7 +988,7 @@ mod tests {
         use cortex_protocol::event::{Event, TurnStarted};
         let queue = EventQueue::new(64, true);
         let done: Done = Arc::new(Mutex::new(VecDeque::new()));
-        let (mut ahead, mut said) = (None, false);
+        let (mut ahead, mut said) = (Order::default(), false);
         queue.push(event(6, Event::TurnStarted(TurnStarted {})));
         queue.push(event(7, Event::TurnStarted(TurnStarted {})));
         queue.push(event(9, Event::TurnStarted(TurnStarted {})));
@@ -1297,7 +1007,7 @@ mod tests {
         use cortex_protocol::event::{Event, TurnStarted};
         let queue = EventQueue::new(64, true);
         let done: Done = Arc::new(Mutex::new(VecDeque::new()));
-        let (mut ahead, mut said) = (None, false);
+        let (mut ahead, mut said) = (Order::default(), false);
         queue.push(event(1, Event::TurnStarted(TurnStarted {})));
         queue.push(event(2, Event::TurnStarted(TurnStarted {})));
         push(&done, read_result());

@@ -61,6 +61,37 @@ them aside again until it is approved with `{name} permissions trust`. A
 project you said never to trust is not asked about; `trust` trusts it.
 "
         ),
+        Topic::Serve => format!(
+            "\
+Usage: {name} serve --stdio [OPTIONS]
+
+Serve the RPC protocol to one client, the process that started it: JSON-RPC
+2.0, one message a line, on standard input and output. Standard output
+carries nothing else; the log goes to standard error and the log file. The
+server ends when standard input ends, when the client asks it to
+(`shutdown`), or at a signal; a second signal ends it at once.
+
+Options:
+  --stdio              Serve over standard input and output
+  --profile NAME       Load configuration with the profile NAME
+  -c KEY=VALUE         Set a configuration key, as a run would
+  --model MODEL        The main model of the sessions it starts
+  --effort LEVEL       Their reasoning level
+  --speed TIER         Their speed tier
+  --permission-mode MODE
+                       Their permission mode
+  --allow RULE         Allow what a rule matches, in every session
+  --deny RULE          Deny what a rule matches, in every session
+  --trust-project      Treat the projects of its sessions as trusted
+  --system-append TEXT Add text to the end of the system prompt
+  --log-level LEVEL    What the log file takes
+  -q, --quiet          Write nothing to standard error
+  -v, --verbose        Write more to standard error
+
+The protocol is in docs/architecture/11-rpc-protocol.md; its schema and
+TypeScript declarations are in docs/protocol/.
+"
+        ),
         Topic::Project => format!(
             "\
 Usage: {name} project [COMMAND]
@@ -180,6 +211,7 @@ Commands:
   usage         What was used, what it cost, and where the time went
   stats         The local statistics: show or reset
   project       What is known about this project: review, accept, turn off
+  serve         Serve the RPC protocol to another program
 
 Options:
 "

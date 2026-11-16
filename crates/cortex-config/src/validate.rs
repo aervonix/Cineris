@@ -400,8 +400,10 @@ mod tests {
             [profiles.review]
             model.main = "other"
             permissions.mode = "read-only"
-            [rpc]
+            [http]
             anything = { goes = ["here", 1] }
+            [rpc]
+            approval_timeout = "5m"
             "#,
         );
         assert!(usable, "{said:?}");
