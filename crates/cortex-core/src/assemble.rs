@@ -39,7 +39,7 @@ use std::sync::{Arc, OnceLock};
 
 use cortex_agent::{
     Account, ContextParts, ContextSettings, Environment, Ledger, LoopConfig, Models, NoStats,
-    NoVerifier, SessionInfo, SessionParts, SpeedSettings, Workspace,
+    SessionInfo, SessionParts, SpeedSettings, Workspace,
 };
 use cortex_base::{AbsPath, CancelToken, PathOptions, PathResolver};
 use cortex_config::{LayerKind, LoadOptions, Loaded, Override, Settings, StateDir, TrustClass};
@@ -1805,6 +1805,8 @@ pub(crate) fn assemble(
             // proposed is kept for the session and no longer.
             None => Arc::new(MemoryProposals::new()),
         }));
+    // The session's shell, which the project's checks run through too.
+    let mut checks_shell: Option<Arc<RecordingShell>> = None;
     if let Some(shell) = shell {
         let mut env_remove = provider::key_variables(settings);
         env_remove.extend(settings.shell.env_remove.iter().cloned());
@@ -1826,19 +1828,23 @@ pub(crate) fn assemble(
         if let Some(inherited) = &options.shell_env {
             tool = tool.with_inherited_env(inherited.iter().cloned());
         }
-        if let Some(knowledge) = &knowledge {
-            tool =
-                tool.with_profile(
-                    Arc::clone(knowledge) as Arc<dyn cortex_tools::shell::CommandProfile>
-                );
-        }
-        toolbox = toolbox.with(RecordingShell::new(
+        // A check's output keeps the lines that report a problem, as a
+        // known build's or test run's does (step 19).
+        tool = tool.with_profile(Arc::new(crate::verify::ChecksProfile {
+            inner: knowledge.as_ref().map(|knowledge| {
+                Arc::clone(knowledge) as Arc<dyn cortex_tools::shell::CommandProfile>
+            }),
+            lines: settings.verify.commands.clone(),
+        }));
+        let recording = Arc::new(RecordingShell::new(
             tool,
             rounds.clone(),
             Arc::clone(&sandbox),
             Arc::clone(&policy),
             knowledge.clone(),
         ));
+        toolbox.insert(Arc::clone(&recording) as Arc<dyn cortex_tools::Tool>);
+        checks_shell = Some(recording);
     }
 
     // ------------------------------------------- what the log starts with
@@ -2046,12 +2052,35 @@ pub(crate) fn assemble(
             }
             None => Arc::new(NoStats),
         },
-        verifier: Arc::new(NoVerifier),
+        verifier: Arc::new(crate::verify::CoreVerifier::new(crate::verify::Parts {
+            settings: crate::verify::Settings::from(&settings.verify),
+            shell: checks_shell,
+            policy: Arc::clone(&policy),
+            knowledge: knowledge.clone(),
+            trusted: repository_trusted,
+            lowered_by_project: {
+                let origin = loaded.origin(&cortex_config::KeyPath::new(["verify", "mode"]));
+                matches!(
+                    rule_source(origin.layer, origin.defined_in),
+                    RuleSource::Project
+                )
+            },
+            sandbox: Arc::clone(&sandbox),
+            hooks: Arc::clone(&hooks),
+            paths: Arc::clone(&resolver),
+            content: Arc::clone(&workspace.content),
+            files: Arc::clone(&workspace.files),
+            limits: workspace.limits,
+            clock: Arc::clone(&clock),
+        })),
         clock,
         cooldowns: inner.providers.cooldowns.clone(),
         ledger,
         workspace,
-        config: LoopConfig::default(),
+        config: LoopConfig {
+            verify_rounds: u32::try_from(settings.verify.rounds).unwrap_or(u32::MAX),
+            ..LoopConfig::default()
+        },
         cancel,
         observer: None,
     };

@@ -259,6 +259,20 @@ impl std::fmt::Debug for Knowledge {
     }
 }
 
+/// Whether `learnt` is of an entry of the private store that is in use:
+/// one a check's run may confirm.
+fn confirms(snapshot: &Snapshot, learnt: &Learnt, now: cortex_base::UtcTime) -> bool {
+    snapshot.entries().iter().any(|entry| {
+        entry.scope == cortex_knowledge::Scope::Private
+            && entry.kind == learnt.kind
+            && entry.in_use(now)
+            && entry
+                .command
+                .as_ref()
+                .is_some_and(|command| command.run == learnt.line && command.cwd == learnt.cwd)
+    })
+}
+
 /// An entry's command as a person is shown it.
 fn shown(entry: &Entry) -> String {
     match &entry.command {
@@ -596,6 +610,28 @@ impl Knowledge {
     /// A `shell` call finished. What it showed is counted off the turn's
     /// path, on the blocking pool; this returns at once.
     pub(crate) fn observed(&self, run: &Run) {
+        self.observe(run, false);
+    }
+
+    /// One of the project's checks finished (step 19): the harness's run,
+    /// not the model's or the user's. It counts towards a flip, and it
+    /// confirms an entry this store already has in use, so that an
+    /// accepted command does not lapse while it runs every turn. It never
+    /// makes an entry: the observer learns from the commands a session
+    /// chose to run.
+    pub(crate) fn observed_check(&self, run: &Run) {
+        self.observe(run, true);
+    }
+
+    /// The project's knowledge as it is now, and the time by its clock:
+    /// read again when either file changed since the last read. Blocks,
+    /// and takes no lock (step 19's checks, which look again just before
+    /// each one runs).
+    pub(crate) fn current(&self) -> (Arc<Snapshot>, cortex_base::UtcTime) {
+        (self.refresh(false), self.project.now())
+    }
+
+    fn observe(&self, run: &Run, harness: bool) {
         // The watch sees every run, for what changed between two of them.
         let seen = lock(&self.watch).see(run, Some(&self.session));
         if !self.learn
@@ -619,6 +655,8 @@ impl Knowledge {
                     // a session kept in memory does not see what its file
                     // tools write.
                     && (learnt.kind != Kind::Flaky || self.rounds.is_some())
+                    // The harness's own run only confirms what is in use.
+                    && (!harness || held.as_ref().is_some_and(|held| confirms(held, learnt, now)))
             })
             .collect();
         if wanted.is_empty() {

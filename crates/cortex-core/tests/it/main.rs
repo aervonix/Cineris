@@ -48,6 +48,7 @@ mod trust;
 mod trusting;
 mod turns;
 mod usage;
+mod verify;
 
 use std::ffi::OsString;
 use std::future::Future;
