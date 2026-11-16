@@ -285,6 +285,23 @@ impl Clients {
         });
     }
 
+    /// Takes a client that closed its view of `session` out of the
+    /// session's open requests, as a disconnect takes it out of all of
+    /// them: its answer to them is refused from now on, and one that ends
+    /// with its askers, with none of them left, ends as no answer. It is
+    /// put them again if it opens the session again ([`join`](Self::join)).
+    pub(crate) fn leave(&self, session: &SessionId, client: ClientId) {
+        // In `disconnect`'s order: the clients, then the open requests.
+        let clients = lock(&self.clients);
+        lock(&self.open).retain(|_, open| {
+            if open.session != *session {
+                return true;
+            }
+            open.asked.retain(|asked| *asked != client.0);
+            !open.ends_with_askers || open.asked.iter().any(|asked| clients.contains_key(asked))
+        });
+    }
+
     pub(crate) fn queue(&self, client: ClientId) -> Option<Arc<EventQueue>> {
         lock(&self.clients)
             .get(&client.0)

@@ -605,15 +605,18 @@ impl Core {
 
     /// Disconnects a front end: it has no session open any more, and its
     /// queue takes nothing more. Sessions it alone had open are closed,
-    /// unless the core keeps sessions ([`CoreOptions::keep_sessions`]).
+    /// unless the core keeps sessions ([`CoreOptions::keep_sessions`]), or
+    /// it is an `observer`, which never ends a session (since step 27).
     ///
     /// The client is taken out first, and the sessions looked at after: a
     /// session that is put together for it meanwhile either is in the table
     /// by then, and is closed here, or finds the client gone when it is
     /// put in the table, and closes itself.
     pub async fn disconnect(&self, client: ClientId) {
+        // Whether it may end a session, asked while it is still known.
+        let drives = self.may_drive(client).is_ok();
         self.inner.clients.disconnect(client);
-        let keep = self.inner.options.keep_sessions;
+        let keep = self.inner.options.keep_sessions || !drives;
         let sessions: Vec<Arc<Live>> = lock(&self.inner.sessions).values().cloned().collect();
         for live in sessions {
             if live.sink.unsubscribe(client.0) && !keep && live.sink.subscribers().is_empty() {
@@ -1476,7 +1479,13 @@ impl Core {
             Op::SessionClose(params) => {
                 if let Ok(live) = self.live(&params.session_id) {
                     live.sink.unsubscribe(client.0);
-                    if live.sink.subscribers().is_empty() {
+                    // A client that closes its view leaves the session's
+                    // open questions, as one that disconnects does: its
+                    // answer to them is refused from now on.
+                    self.inner.clients.leave(&params.session_id, client);
+                    // Only a client that may drive a session ends it: an
+                    // observer's close never does.
+                    if self.may_drive(client).is_ok() && live.sink.subscribers().is_empty() {
                         self.end(&params.session_id).await;
                     }
                 }

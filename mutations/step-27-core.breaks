@@ -214,3 +214,42 @@ find: let Ok(mut lease) = standing.narrow(grant, template.sandbox) else {
 replace: let Ok(mut lease) = Ok::<Lease, cortex_policy::NarrowError>(grant.clone()) else {
 caught-by:
     cortex-core policy::tests::a_grant_never_widens_what_the_session_holds
+
+# ------------------------------------------------- closing a view
+
+[break] an-observers-close-ends-a-session
+rule: Only a client that may drive a session ends it by closing it: an observer's close never does.
+file: crates/cortex-core/src/core.rs
+in: handle
+find: if self.may_drive(client).is_ok() && live.sink.subscribers().is_empty() {
+replace: if live.sink.subscribers().is_empty() {
+caught-by:
+    cortex-core::it closing::an_observers_close_never_ends_a_session
+
+[break] an-observers-disconnect-ends-a-session
+rule: An observer's disconnect never ends a session.
+file: crates/cortex-core/src/core.rs
+in: disconnect
+find: let keep = self.inner.options.keep_sessions || !drives;
+replace: let keep = self.inner.options.keep_sessions;
+caught-by:
+    cortex-core::it closing::an_observers_disconnect_never_ends_a_session
+
+[break] a-closed-view-keeps-its-questions
+rule: A client that closes its view of a session leaves the session's open questions: its answer is refused.
+file: crates/cortex-core/src/core.rs
+in: handle
+find: self.inner.clients.leave(&params.session_id, client);
+replace: let _ = &params.session_id;
+caught-by:
+    cortex-core::it closing::a_client_that_closes_its_view_leaves_the_sessions_open_questions
+    cortex-core::it closing::an_undos_question_ends_when_its_asker_closes_its_view
+
+[break] a-question-left-by-its-last-asker-waits
+rule: A question that ends with its askers ends as no answer when its last asker closes its view.
+file: crates/cortex-core/src/clients.rs
+in: Clients::leave
+find: !open.ends_with_askers || open.asked.iter().any(|asked| clients.contains_key(asked))
+replace: !open.ends_with_askers || !clients.is_empty()
+caught-by:
+    cortex-core::it closing::an_undos_question_ends_when_its_asker_closes_its_view
