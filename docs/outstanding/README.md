@@ -173,7 +173,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-known-flake-in-a-breaks-own-run](a-known-flake-in-a-breaks-own-run.md): A known flake that fails in a break's own run of `mutate` makes a break that names no test look caught. Owner: a later tooling step.
 - [a-retried-tests-standard-error-in-the-report](a-retried-tests-standard-error-in-the-report.md): `xtask` reads a retried test's standard error from its first attempt, not the last. Owner: a later tooling step.
 - [actionlint-in-the-checks](actionlint-in-the-checks.md): The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary. Owner: the owner.
-- [caught-by-names-checked-only-at-the-desk](caught-by-names-checked-only-at-the-desk.md): `check` in CI keeps no list of tests, so it does not check `caught-by` names. Owner: the owner.
 - [perf-budgets-for-search-diff-and-decoding](perf-budgets-for-search-diff-and-decoding.md): The eighth tooling step measured search, a re-read's diff and JSON decoding on real code, and proposed budgets the owner has not set. Owner: the owner.
 - [perf-in-the-main-workflow](perf-in-the-main-workflow.md): `cargo xtask perf` is not yet run in the `main` workflow on both systems with stored baselines. Owner: a tooling step, or step 33.
 - [replace-and-the-comments-beside-a-match](replace-and-the-comments-beside-a-match.md): `replace` stacks a `--to`'s doc comment on the file's, and can leave a read-only file's temporary copy on Windows. Owner: a later tooling step.

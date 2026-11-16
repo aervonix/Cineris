@@ -1,8 +1,0 @@
-`check` in CI keeps no list of tests, so it does not check `caught-by` names.
-
-- Area: tooling
-- Owner: the owner
-
-| Item | Who | When |
-|---|---|---|
-| **`caught-by` names are checked only where a list of tests is kept.** `mutate --check --tests` builds each break's tests and keeps their lists; the `breaks` step of `check`, which `lint-linux` runs and which builds nothing, checks names only against lists that are there and fresh, and in CI there are none, so it says it did not check them. A blocking test job, which has built the tests already, could list them for about the cost of the listing. Whether to add that to a blocking job is the owner's choice (it adds time to it). | The owner | When a stale name next reaches `main` |

@@ -162,6 +162,28 @@ jobs:
       - name: The timeout report and the race pause
         run: cargo run --locked --quiet --package xtask -- test --locked -p cortex-testkit --run-ignored only watch::tests::sys_
 
+  # The tests a break's `caught-by` names, checked against the tests that
+  # exist (docs/testing-and-ci.md, "The tests a `caught-by` names"). The
+  # blocking `breaks` step builds no test and checks names only against a
+  # kept list, which CI has none of; this builds the lists, every set of
+  # crates the breaks run, so a name that a renamed or removed test left
+  # behind is found within a day. Minutes of building: not on a pull
+  # request (the tenth tooling step).
+  break-names:
+    if: ${{ !inputs.force_failure }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.151
+      - name: The names every break's caught-by gives
+        run: cargo run --locked --quiet --package xtask -- mutate --check --tests
+
   # Coverage-guided fuzzing of the stream decoders (docs/testing-and-ci.md,
   # "Not blocking"): the parser of server-sent events and the decoder of
   # each provider protocol, each for a fixed time, starting from the recorded
@@ -225,7 +247,7 @@ jobs:
   # session's own nightly run on its branch must not add to the main
   # branch's issue.
   report:
-    needs: [dependencies, release, properties, fuzz, partial-landlock]
+    needs: [dependencies, release, properties, break-names, fuzz, partial-landlock]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
