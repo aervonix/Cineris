@@ -37,6 +37,7 @@ mod headless;
 mod help;
 mod history;
 mod interactive;
+mod project_view;
 mod report;
 mod signals;
 mod usage_view;
@@ -107,6 +108,7 @@ fn dispatch(command: Command, name: &'static str, started: Instant) -> u8 {
         Command::Models => commands::models(name),
         Command::Usage(command) => commands::usage(command, name),
         Command::Stats(command) => commands::stats(command, name),
+        Command::Project(command) => commands::project(command, name),
     }
 }
 

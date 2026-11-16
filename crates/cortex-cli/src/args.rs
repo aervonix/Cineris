@@ -174,6 +174,46 @@ pub(crate) enum Command {
     Usage(UsageCommand),
     /// `cortex stats …`
     Stats(StatsCommand),
+    /// `cortex project …`
+    Project(ProjectCommand),
+}
+
+/// `cortex project …`: what the harness knows about this project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProjectCommand {
+    /// `list [--all] [--kind KIND] [--json]`, or nothing.
+    List {
+        /// `--all`: the entries that are turned off too.
+        all: bool,
+        /// `--kind`: `command`, `convention`, `flaky` or `fact`.
+        kind: Option<String>,
+        /// `--json`
+        json: bool,
+    },
+    /// `accept ID…`, `accept --shared`, `disable ID…`, `delete ID…`,
+    /// `promote ID…`.
+    Change {
+        /// `accept`, `disable`, `delete` or `promote`.
+        action: String,
+        /// The ids, or the starts of ids.
+        ids: Vec<String>,
+        /// `accept --shared`: every entry of the repository's file that
+        /// waits for this user.
+        shared: bool,
+    },
+    /// `edit ID TEXT`
+    Edit { id: String, text: String },
+    /// `add KIND TEXT [--purpose P --command LINE [--cwd DIR] [--read-only]]`
+    Add {
+        kind: String,
+        text: String,
+        purpose: Option<String>,
+        command: Option<String>,
+        cwd: Option<String>,
+        read_only: bool,
+    },
+    /// `path`: where the two files are.
+    Path,
 }
 
 /// `cortex usage [--range R] [--by G]… [--project KEY] [--json] [--refresh]`
@@ -212,6 +252,7 @@ pub(crate) enum Topic {
     Models,
     Usage,
     Stats,
+    Project,
 }
 
 /// What a headless run writes on standard output.
@@ -375,6 +416,7 @@ pub(crate) fn parse(arguments: Vec<OsString>) -> Result<Command, UsageError> {
             "models" => Some(Topic::Models),
             "usage" => Some(Topic::Usage),
             "stats" => Some(Topic::Stats),
+            "project" => Some(Topic::Project),
             _ => None,
         };
         if let Some(topic) = topic {
@@ -523,6 +565,9 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
             ))),
         };
     }
+    if topic == Topic::Project {
+        return project(parser);
+    }
     let Some(first) = parser.next()? else {
         return Ok(Command::Help(topic));
     };
@@ -542,6 +587,7 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 Topic::Models => "models",
                 Topic::Usage => "usage",
                 Topic::Stats => "stats",
+                Topic::Project => "project",
                 Topic::Main => "",
             }
         ))
@@ -652,8 +698,141 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 other => Err(wrong(other)),
             }
         }
-        Topic::Main | Topic::Models | Topic::Usage | Topic::Stats => Err(wrong(&action)),
+        Topic::Main | Topic::Models | Topic::Usage | Topic::Stats | Topic::Project => {
+            Err(wrong(&action))
+        }
     }
+}
+
+/// `cortex project …`
+fn project(parser: &mut Parser) -> Result<Command, UsageError> {
+    let help = Ok(Command::Help(Topic::Project));
+    let action = match parser.next()? {
+        // With nothing after it, the listing: what one most often wants.
+        None => {
+            return Ok(Command::Project(ProjectCommand::List {
+                all: false,
+                kind: None,
+                json: false,
+            }));
+        }
+        Some(Arg::Short('h') | Arg::Long("help")) => return help,
+        Some(Arg::Value(action)) => action.string()?,
+        Some(other) => return Err(unexpected(&other)),
+    };
+    let (mut all, mut json, mut shared, mut read_only) = (false, false, false, false);
+    let (mut kind, mut purpose, mut command, mut cwd) = (None, None, None, None);
+    let mut words: Vec<String> = Vec::new();
+    while let Some(argument) = parser.next()? {
+        match argument {
+            Arg::Short('h') | Arg::Long("help") => return help,
+            Arg::Long("all") if action == "list" => all = true,
+            Arg::Long("json") if action == "list" => json = true,
+            Arg::Long("kind") if action == "list" => kind = Some(text(parser)?),
+            Arg::Long("shared") if action == "accept" => shared = true,
+            Arg::Long("purpose") if action == "add" => purpose = Some(text(parser)?),
+            Arg::Long("command") if action == "add" => command = Some(text(parser)?),
+            Arg::Long("cwd") if action == "add" => cwd = Some(text(parser)?),
+            Arg::Long("read-only") if action == "add" => read_only = true,
+            Arg::Value(word) => words.push(word.string()?),
+            other => return Err(unexpected(&other)),
+        }
+    }
+    let takes = |what: &str| UsageError(format!("'project {action}' takes {what}"));
+    let kinds = ["command", "convention", "flaky", "fact"];
+    let parsed = match action.as_str() {
+        "list" => {
+            if let Some(word) = words.first() {
+                return Err(UsageError(format!("unexpected argument '{word}'")));
+            }
+            if let Some(kind) = &kind
+                && !kinds.contains(&kind.as_str())
+            {
+                return Err(UsageError(format!(
+                    "'{kind}' is not a kind of entry: use command, convention, flaky or fact"
+                )));
+            }
+            ProjectCommand::List { all, kind, json }
+        }
+        "accept" | "disable" | "delete" | "promote" => {
+            if shared != words.is_empty() {
+                return Err(takes(if action == "accept" {
+                    "the ids that 'project list' shows, or --shared for every entry of the \
+                     repository's file"
+                } else {
+                    "the ids that 'project list' shows"
+                }));
+            }
+            ProjectCommand::Change {
+                action,
+                ids: words,
+                shared,
+            }
+        }
+        "edit" => {
+            let [id, text] = <[String; 2]>::try_from(words)
+                .map_err(|_| takes("an id and the new text, as one argument"))?;
+            ProjectCommand::Edit { id, text }
+        }
+        "add" => {
+            let [kind, text] = <[String; 2]>::try_from(words)
+                .map_err(|_| takes("a kind and the entry's text, as one argument"))?;
+            if !kinds.contains(&kind.as_str()) {
+                return Err(UsageError(format!(
+                    "'{kind}' is not a kind of entry: use command, convention, flaky or fact"
+                )));
+            }
+            match (kind.as_str(), command.is_some()) {
+                ("command", false) => {
+                    return Err(UsageError(
+                        "a command entry takes --purpose and --command".to_owned(),
+                    ));
+                }
+                ("convention" | "fact", true) => {
+                    return Err(UsageError(format!(
+                        "--command is for a command or a flaky entry, not a {kind}"
+                    )));
+                }
+                _ => {}
+            }
+            if (purpose.is_some() || cwd.is_some() || read_only) && command.is_none() {
+                return Err(UsageError(
+                    "--purpose, --cwd and --read-only go with --command".to_owned(),
+                ));
+            }
+            if command.is_some() {
+                match purpose.as_deref() {
+                    Some("build" | "test" | "check" | "format" | "run") => {}
+                    Some(other) => {
+                        return Err(UsageError(format!(
+                            "'{other}' is not a purpose: use build, test, check, format or run"
+                        )));
+                    }
+                    None => {
+                        return Err(UsageError(
+                            "--command takes --purpose: build, test, check, format or run"
+                                .to_owned(),
+                        ));
+                    }
+                }
+            }
+            ProjectCommand::Add {
+                kind,
+                text,
+                purpose,
+                command,
+                cwd,
+                read_only,
+            }
+        }
+        "path" if words.is_empty() => ProjectCommand::Path,
+        other => {
+            return Err(UsageError(format!(
+                "'{other}' is not a subcommand of 'project'"
+            )));
+        }
+    };
+    Ok(Command::Project(parsed))
 }
 
 /// `cortex usage …`
@@ -813,6 +992,176 @@ mod tests {
                 "unexpected argument '--no-such-flag'".to_owned()
             ))
         );
+    }
+
+    #[test]
+    fn project_reads_its_subcommands_and_says_what_each_takes() {
+        let list = |all, kind: Option<&str>, json| {
+            Ok(Command::Project(ProjectCommand::List {
+                all,
+                kind: kind.map(str::to_owned),
+                json,
+            }))
+        };
+        // With nothing after it, the listing.
+        assert_eq!(parse_words(&["project"]), list(false, None, false));
+        assert_eq!(parse_words(&["project", "list"]), list(false, None, false));
+        assert_eq!(
+            parse_words(&["project", "list", "--all", "--kind", "fact", "--json"]),
+            list(true, Some("fact"), true)
+        );
+        for action in ["accept", "disable", "delete", "promote"] {
+            assert_eq!(
+                parse_words(&["project", action, "k_1", "s_0f"]),
+                Ok(Command::Project(ProjectCommand::Change {
+                    action: action.to_owned(),
+                    ids: vec!["k_1".to_owned(), "s_0f".to_owned()],
+                    shared: false,
+                }))
+            );
+        }
+        assert_eq!(
+            parse_words(&["project", "accept", "--shared"]),
+            Ok(Command::Project(ProjectCommand::Change {
+                action: "accept".to_owned(),
+                ids: Vec::new(),
+                shared: true,
+            }))
+        );
+        assert_eq!(
+            parse_words(&["project", "edit", "k_2", "Tabs, not spaces."]),
+            Ok(Command::Project(ProjectCommand::Edit {
+                id: "k_2".to_owned(),
+                text: "Tabs, not spaces.".to_owned(),
+            }))
+        );
+        assert_eq!(
+            parse_words(&[
+                "project",
+                "add",
+                "command",
+                "Runs the tests.",
+                "--purpose",
+                "test",
+                "--command",
+                "cargo test --workspace",
+                "--cwd",
+                "crates/app",
+                "--read-only",
+            ]),
+            Ok(Command::Project(ProjectCommand::Add {
+                kind: "command".to_owned(),
+                text: "Runs the tests.".to_owned(),
+                purpose: Some("test".to_owned()),
+                command: Some("cargo test --workspace".to_owned()),
+                cwd: Some("crates/app".to_owned()),
+                read_only: true,
+            }))
+        );
+        assert_eq!(
+            parse_words(&["project", "add", "fact", "The docs are in docs/."]),
+            Ok(Command::Project(ProjectCommand::Add {
+                kind: "fact".to_owned(),
+                text: "The docs are in docs/.".to_owned(),
+                purpose: None,
+                command: None,
+                cwd: None,
+                read_only: false,
+            }))
+        );
+        assert_eq!(
+            parse_words(&["project", "path"]),
+            Ok(Command::Project(ProjectCommand::Path))
+        );
+        assert_eq!(
+            parse_words(&["project", "--help"]),
+            Ok(Command::Help(Topic::Project))
+        );
+        assert_eq!(
+            parse_words(&["project", "accept", "-h"]),
+            Ok(Command::Help(Topic::Project))
+        );
+
+        // What each takes, said to the person who typed it.
+        for (words, says) in [
+            (&["project", "accept"][..], "takes the ids"),
+            (&["project", "accept", "k_1", "--shared"], "takes the ids"),
+            (&["project", "disable"], "takes the ids"),
+            (
+                &["project", "disable", "--shared"],
+                "unexpected argument '--shared'",
+            ),
+            (&["project", "edit", "k_1"], "takes an id and the new text"),
+            (
+                &["project", "edit", "k_1", "two", "words"],
+                "takes an id and the new text",
+            ),
+            (
+                &["project", "add", "fact"],
+                "takes a kind and the entry's text",
+            ),
+            (
+                &["project", "add", "rule", "x"],
+                "'rule' is not a kind of entry",
+            ),
+            (
+                &["project", "add", "command", "x"],
+                "takes --purpose and --command",
+            ),
+            (
+                &["project", "add", "command", "x", "--command", "make"],
+                "--command takes --purpose",
+            ),
+            (
+                &[
+                    "project",
+                    "add",
+                    "command",
+                    "x",
+                    "--command",
+                    "make",
+                    "--purpose",
+                    "ship",
+                ],
+                "'ship' is not a purpose",
+            ),
+            (
+                &[
+                    "project",
+                    "add",
+                    "fact",
+                    "x",
+                    "--command",
+                    "make",
+                    "--purpose",
+                    "test",
+                ],
+                "not a fact",
+            ),
+            (
+                &["project", "add", "fact", "x", "--cwd", "sub"],
+                "go with --command",
+            ),
+            (
+                &["project", "list", "--kind", "rule"],
+                "'rule' is not a kind of entry",
+            ),
+            (&["project", "list", "k_1"], "unexpected argument 'k_1'"),
+            (
+                &["project", "list", "--shared"],
+                "unexpected argument '--shared'",
+            ),
+            (&["project", "path", "x"], "'path' is not a subcommand"),
+            (
+                &["project", "forget"],
+                "'forget' is not a subcommand of 'project'",
+            ),
+        ] {
+            let Err(UsageError(message)) = parse_words(words) else {
+                panic!("{words:?} was read");
+            };
+            assert!(message.contains(says), "{words:?}: {message}");
+        }
     }
 
     #[test]

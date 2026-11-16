@@ -883,6 +883,91 @@ pub(crate) async fn list(
     .await
 }
 
+/// Makes a user's changes to a project's entries: the operation's, and
+/// the command line's. What the user writes must not put a credential
+/// into every later prompt, or into the repository, so each text a file
+/// would keep is looked at first; then the change is all or nothing.
+/// Blocks.
+pub(crate) fn apply(
+    project: &Project,
+    filter: &RwLock<SecretFilter>,
+    held: Option<&Snapshot>,
+    changes: &[cortex_protocol::project::EntryChange],
+    add: &[cortex_protocol::project::NewEntry],
+) -> Result<cortex_knowledge::Updated, OpError> {
+    let finds = |text: &str| {
+        filter
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finds(text)
+    };
+    let credential = |what: &str| {
+        error(
+            ErrorKind::Usage,
+            "invalid_entry",
+            format!(
+                "{what} holds what looks like a credential, so nothing was changed. Say it \
+                 without the credential."
+            ),
+        )
+    };
+    for new in add {
+        if !matches!(new.kind, EntryKind::Unknown(_))
+            && (finds(&new.text)
+                || new.command.as_ref().is_some_and(|command| {
+                    finds(&command.command) || command.cwd.as_deref().is_some_and(finds)
+                })
+                || new.check.as_ref().is_some_and(|check| {
+                    [&check.path, &check.pattern, &check.command]
+                        .into_iter()
+                        .flatten()
+                        .any(|text| finds(text))
+                }))
+        {
+            return Err(credential("An entry to add"));
+        }
+    }
+    for change in changes {
+        if change.text.as_deref().is_some_and(finds) {
+            return Err(credential("An entry's new text"));
+        }
+    }
+    if changes
+        .iter()
+        .any(|change| change.action == EntryAction::Promote)
+    {
+        // Everything of the entry that the repository's file would hold:
+        // its evidence and its check with its text.
+        let snapshot = project.load(held);
+        for change in changes {
+            if change.action == EntryAction::Promote
+                && let Some(entry) = snapshot.find(&change.id)
+                && entry_holds(entry, &finds)
+            {
+                return Err(credential("An entry to promote"));
+            }
+        }
+    }
+    project
+        .update(changes, add, held)
+        .map_err(|failure| refused(&failure))
+}
+
+/// Every entry of a project, for the command line: with what has expired
+/// marked first, since nothing here is on a turn's path. Blocks.
+pub(crate) fn listing(project: &Project) -> ProjectEntriesResult {
+    let mut snapshot = project.load(None);
+    if snapshot.has_lapsed(project.now())
+        && let Ok(lapsed) = project.lapse(Some(&snapshot))
+    {
+        snapshot = lapsed.snapshot;
+    }
+    ProjectEntriesResult {
+        entries: snapshot.listing(),
+        problems: snapshot.problems().to_vec(),
+    }
+}
+
 /// `project/update`: a `user` client's alone.
 pub(crate) async fn update(
     core: &Core,
@@ -910,67 +995,19 @@ pub(crate) async fn update(
         ),
         Target::Workspace(project, key) => (project.clone(), key.clone(), None),
     };
-    // What the user writes must not put a credential into every later
-    // prompt, or into the repository.
     let filter = Arc::clone(&core.inner.providers.filter);
     let promoted = params
         .changes
         .iter()
         .any(|change| change.action == EntryAction::Promote);
     let updated = Core::blocking(move || {
-        let finds = |text: &str| {
-            filter
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .finds(text)
-        };
-        let credential = |what: &str| {
-            error(
-                ErrorKind::Usage,
-                "invalid_entry",
-                format!(
-                    "{what} holds what looks like a credential, so nothing was changed. Say it \
-                     without the credential."
-                ),
-            )
-        };
-        for new in &params.add {
-            if !matches!(new.kind, EntryKind::Unknown(_))
-                && (finds(&new.text)
-                    || new.command.as_ref().is_some_and(|command| {
-                        finds(&command.command) || command.cwd.as_deref().is_some_and(finds)
-                    })
-                    || new.check.as_ref().is_some_and(|check| {
-                        [&check.path, &check.pattern, &check.command]
-                            .into_iter()
-                            .flatten()
-                            .any(|text| finds(text))
-                    }))
-            {
-                return Err(credential("An entry to add"));
-            }
-        }
-        for change in &params.changes {
-            if change.text.as_deref().is_some_and(finds) {
-                return Err(credential("An entry's new text"));
-            }
-        }
-        if promoted {
-            // Everything of the entry that the repository's file would
-            // hold: its evidence and its check with its text.
-            let snapshot = project.load(held.as_deref());
-            for change in &params.changes {
-                if change.action == EntryAction::Promote
-                    && let Some(entry) = snapshot.find(&change.id)
-                    && entry_holds(entry, &finds)
-                {
-                    return Err(credential("An entry to promote"));
-                }
-            }
-        }
-        project
-            .update(&params.changes, &params.add, held.as_deref())
-            .map_err(|failure| refused(&failure))
+        apply(
+            &project,
+            &filter,
+            held.as_deref(),
+            &params.changes,
+            &params.add,
+        )
     })
     .await?;
 

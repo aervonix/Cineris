@@ -61,6 +61,39 @@ them aside again until it is approved with `{name} permissions trust`. A
 project you said never to trust is not asked about; `trust` trusts it.
 "
         ),
+        Topic::Project => format!(
+            "\
+Usage: {name} project [COMMAND]
+
+What the harness knows about the project of this directory: its build,
+test and check commands, its conventions, its flaky tests and facts.
+
+Commands:
+  list           The entries (the default). Options: --all adds the ones
+                 that are turned off, --kind KIND keeps one kind, --json
+  accept ID…     Put a proposal to use, or turn an entry on again. For a
+                 command it is also what lets it run without asking, once
+                 the project is trusted
+  accept --shared
+                 Accept every entry of the repository's file that waits
+  disable ID…    Take an entry out of use, and keep it
+  delete ID…     Remove an entry of your own store
+  promote ID…    Move an entry of yours to the repository's file
+  edit ID TEXT   Replace the text of an entry of your own store
+  add KIND TEXT  Write an entry: KIND is command, convention, flaky or
+                 fact. A command takes --purpose build|test|check|format|run
+                 and --command LINE, and may take --cwd DIR and --read-only
+  path           Where the two files are
+
+An ID may be cut short to a start that only one entry has.
+
+A command the harness saw succeed twice is listed as \"active, asks\": the
+model is told of it, and it still asks before it runs. `{name} project
+accept` is what lets it run without asking. An entry of the repository's
+file, .cortex/profile.toml, is a proposal until you accept it, whoever
+wrote it; a change to it is a proposal again.
+"
+        ),
         Topic::Usage => format!(
             "\
 Usage: {name} usage [--range R] [--by G] [--project KEY] [--json] [--refresh]
@@ -141,6 +174,7 @@ Commands:
   models        The models of the catalog
   usage         What was used, what it cost, and where the time went
   stats         The local statistics: show or reset
+  project       What is known about this project: review, accept, turn off
 
 Options:
 "
@@ -183,6 +217,7 @@ mod tests {
             Topic::Models,
             Topic::Usage,
             Topic::Stats,
+            Topic::Project,
         ] {
             let as_cx = help(topic, "cx");
             assert!(as_cx.contains("Usage: cx "), "{topic:?}");
