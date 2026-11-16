@@ -18,6 +18,7 @@
 use std::process::ExitCode;
 
 mod ab;
+mod apply;
 mod alias;
 mod api_diff;
 mod checks;
@@ -26,6 +27,7 @@ mod combine;
 mod compare;
 mod corpus;
 mod decide;
+mod decision;
 mod dependents;
 mod junit;
 mod last_good;
@@ -257,6 +259,14 @@ Working on the code
                     When xtask does not build, `./x replace …` runs the last
                     binary that worked, from target/xtask-last-good/ (it says
                     how old it is, and offers only `replace` and `links`).
+  apply SCRIPT [--dry-run] [--keep]
+                    A script's changes (replace's edits, whole files written
+                    or deleted) and the checks to run on them, in one command
+                    the shell guard accepts: all or none, and every file put
+                    back when a check fails. `apply --help` has the format.
+  decision new \"TITLE\" [--status TEXT] [--dry-run]
+                    The next numbered decision record, from the template, and
+                    its row in docs/decisions/README.md.
   schema [--check]  Regenerate the protocol's JSON Schema and TypeScript
                     declarations in docs/protocol/. --check only compares.
   gen               Regenerate every checked-in generated file: what `schema`
@@ -336,10 +346,12 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "ci-times" => runs::ci_times(rest),
         "ci-log" => ci_log::run(rest),
         "replace" => replace::run(rest),
+        "apply" => apply::run(rest),
         "rules" => checks::rules(),
         "links" => checks::links(),
         "fmt" => checks::fmt(),
         "decide" => decide::run(rest),
+        "decision" => decision::run(rest),
         "gen" => generate(),
         "regen" => regen::run(rest),
         "schema" => schema::run(rest),
