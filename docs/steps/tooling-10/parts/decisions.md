@@ -13,6 +13,11 @@ A pull request of its own, after the step's tools, made at the coordinator's req
 - **The review** (independent, of the whole pull request) found that a managed `ask` lost to another layer's `ask` on the same call (the last of rules of one strength was the hit), and that the asks for a path a command only names were never marked: both fixed, with the engine's tests above and a break each. It found the step 19 record's Q7 and a line of the build plan still saying `verify/run` answers `not_available`, and the seventh tooling step's record with no word of the reversal: corrected. Left: the verifier asks the engine twice for a line that would ask (a decision, then the question), which runs the policy's hook again; harmless, and a single call returning both would be cleaner.
 - **Documented** in 15-efficiency ("Automatic verification"), `security.md`, and step 19's record.
 
+## Windows' tiers 1 and 2 two at a time, measured
+
+One Windows runner at 8.0 ms a process start, this branch against `main` (`e146fe98`), three rounds of each (`try` 43943256274; the tables are in [ci.md](../ci.md)): tier 1 14.1 s against 21.3 s (−7.2 s), tier 2 35.7 s against 43.9 s (−8.2 s, back under its 40 s), tier 3 79.4 s against 77.3 s (+2.1 s, the turn that only verifies adds system tests).
+The job's wall time, each side's runs from start to end, was 84.8 s against 74.8 s at the median (+10 s): the cost of two at a time that the owner accepted, and the new tests.
+
 ## Records of the owner's decisions
 
 Each decision of 2026-11-16 below was already built; the records that still called it pending, reversible or with the owner now say "decided by the owner on 2026-11-16, as built", and keep what was measured and asked.
