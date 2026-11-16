@@ -60,6 +60,14 @@ pub trait Sink {
     ///
     /// When the terminal cannot be written to.
     fn write_frame(&mut self, bytes: &[u8]) -> io::Result<()>;
+
+    /// The frame just written left the cursor with `rows_above` rows of the
+    /// live region above it: what a restore after a signal or a panic moves
+    /// up, so that it erases the whole region (since the review of step
+    /// 23). Nothing, unless the sink is the program's terminal.
+    fn region(&mut self, rows_above: usize) {
+        let _ = rows_above;
+    }
 }
 
 impl Sink for Vec<u8> {
@@ -311,6 +319,7 @@ impl Inline {
         }
         self.scratch = std::mem::replace(&mut self.live, rows);
         self.cursor_row = at;
+        sink.region(at);
         self.cursor = cursor;
         self.target = Some(target);
         self.stale = false;
@@ -340,6 +349,7 @@ impl Inline {
         let written = sink.write_frame(&out);
         self.buffer = out;
         self.restart();
+        sink.region(0);
         written
     }
 
@@ -416,6 +426,48 @@ mod tests {
             )
             .unwrap();
         (drawn, String::from_utf8(sink).unwrap())
+    }
+
+    /// A sink that records what each frame said of the region.
+    #[derive(Default)]
+    struct Regions(Vec<usize>);
+
+    impl Sink for Regions {
+        fn write_frame(&mut self, _: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn region(&mut self, rows_above: usize) {
+            self.0.push(rows_above);
+        }
+    }
+
+    #[test]
+    fn each_frame_tells_the_sink_how_many_rows_are_above_the_cursor() {
+        let mut presenter = Inline::new(20, 10);
+        let mut sink = Regions::default();
+        let live = lines(&["one", "two", "three"]);
+        for cursor in [
+            Some(Cursor { row: 2, col: 0 }),
+            Some(Cursor { row: 1, col: 0 }),
+            None,
+        ] {
+            presenter
+                .draw(
+                    &Frame {
+                        commit: &[],
+                        live: &live,
+                        cursor,
+                    },
+                    &caps(),
+                    &mut sink,
+                )
+                .unwrap();
+        }
+        presenter.finish(&caps(), &mut sink).unwrap();
+        // With no cursor the frame ends where its writing did: the row it
+        // was on, unchanged here. Finished, nothing is above it.
+        assert_eq!(sink.0, [2, 1, 1, 0]);
     }
 
     #[test]

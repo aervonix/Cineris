@@ -26,6 +26,7 @@
     reason = "the demo is the example's, and this binary uses part of it"
 )]
 mod demo;
+mod handoff;
 mod perf;
 mod presenter;
 mod signals;
@@ -75,4 +76,5 @@ fn child_entry() {
         std::process::exit(0);
     }
     signals::enter();
+    handoff::enter();
 }

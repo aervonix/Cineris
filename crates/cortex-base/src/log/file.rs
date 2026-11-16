@@ -134,11 +134,42 @@ impl FileSink {
         }
     }
 
+    /// As [`flush`](Self::flush), for at most `limit`: whether it was all
+    /// written in time.
+    pub(crate) fn flush_within(&self, limit: std::time::Duration) -> bool {
+        let (done, wait) = sync_channel(1);
+        // A full queue is waited on no longer than the rest.
+        let deadline = std::time::Instant::now() + limit;
+        let mut message = Message::Flush(done);
+        loop {
+            match self.queue.try_send(message) {
+                Ok(()) => break,
+                Err(TrySendError::Disconnected(_)) => return true,
+                Err(TrySendError::Full(back)) => {
+                    if std::time::Instant::now() >= deadline {
+                        return false;
+                    }
+                    message = back;
+                    std::thread::yield_now();
+                }
+            }
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        !matches!(
+            wait.recv_timeout(left),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        )
+    }
+
     /// How many lines were dropped and not yet reported in the file.
     pub(crate) fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
 }
+
+/// The point the writer passes with a batch in hand, before it writes it:
+/// where a test holds a writer stuck on its disk.
+pub(crate) const WRITING_A_BATCH: &str = "log writer: a batch taken, before it is written";
 
 /// The writer thread: takes lines until every sender is gone.
 fn write_lines(lines: &Receiver<Message>, file: &mut Rotating, dropped: &AtomicU64) {
@@ -164,6 +195,7 @@ fn write_lines(lines: &Receiver<Message>, file: &mut Rotating, dropped: &AtomicU
                 .into_bytes(),
             );
         }
+        crate::hook::point(WRITING_A_BATCH);
         for line in batch.drain(..) {
             // A log that cannot be written has nowhere to say so.
             let _ = file.write_line(&line);

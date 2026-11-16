@@ -412,9 +412,17 @@ impl<D: Device> Terminal<D> {
             return Ok(());
         }
         self.alternate = on;
-        sys::set_alternate(on);
-        self.device
-            .write(if on { ALTERNATE_ON } else { ALTERNATE_OFF })
+        // The emergency restore's record says on before the screen is, and
+        // off only once it is not: a signal in between finds it on and
+        // leaves it, which on the main screen does nothing.
+        if on {
+            sys::set_alternate(true);
+            self.device.write(ALTERNATE_ON)
+        } else {
+            let written = self.device.write(ALTERNATE_OFF);
+            sys::set_alternate(false);
+            written
+        }
     }
 
     /// Whether the alternate screen is on.
@@ -574,6 +582,11 @@ impl<D: Device> Terminal<D> {
     /// was on.
     fn resume(&mut self) -> io::Result<()> {
         let mut again = START.to_vec();
+        // The stop's restore left the alternate screen, which the program
+        // still has on (since the review of step 23).
+        if self.alternate {
+            again.extend_from_slice(ALTERNATE_ON);
+        }
         if self.keyboard {
             again.extend_from_slice(KEYBOARD_ON);
         }
@@ -633,9 +646,8 @@ impl<D: Device> Terminal<D> {
             self.drain_replies();
         }
         let mut end = Vec::new();
-        if self.alternate {
-            self.alternate = false;
-            sys::set_alternate(false);
+        let alternate = std::mem::take(&mut self.alternate);
+        if alternate {
             end.extend_from_slice(ALTERNATE_OFF);
         }
         if self.keyboard {
@@ -646,6 +658,9 @@ impl<D: Device> Terminal<D> {
         }
         end.extend_from_slice(END);
         let written = self.device.write(&end);
+        if alternate {
+            sys::set_alternate(false);
+        }
         self.device.leave();
         if self.keyboard {
             sys::set_keyboard(false);
@@ -691,6 +706,18 @@ pub fn signal_ended() {
     sys::mark_ended();
     #[cfg(windows)]
     sys::signal_ended();
+    // The handlers kept past leaving the terminal go: the program has
+    // ended, and exits now.
+    sys::release_signals();
+}
+
+/// The exit code of a signal handed to the program ([`Terminal::ending`]),
+/// asked once the terminal is left: a signal can come while the program
+/// ends, after its loop (since the review of step 23). `None` while none
+/// has come.
+#[must_use]
+pub fn signalled() -> Option<u8> {
+    sys::ended_by()
 }
 
 /// `bytes` in the standard base64 alphabet, padded: what the clipboard
@@ -724,6 +751,10 @@ fn base64(bytes: &[u8]) -> Vec<u8> {
 impl<D: Device> Sink for Terminal<D> {
     fn write_frame(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.device.write(bytes)
+    }
+
+    fn region(&mut self, rows_above: usize) {
+        sys::set_rows_above(rows_above);
     }
 }
 

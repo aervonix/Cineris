@@ -233,6 +233,12 @@ fn sys_a_turn_with_tools_runs_in_the_interface_and_the_terminal_is_put_back() {
     assert!(body(&requests[1]).contains("the build needs the json feature"));
 
     quit(&mut session, &phases);
+    // The core ended in order before the process did: its last records
+    // reached the disk.
+    assert!(
+        turn_recorded(&machine),
+        "the turn's statistics never reached the disk"
+    );
 }
 
 #[test]
@@ -860,6 +866,20 @@ fn resident_kib(session: &Session) -> Option<u64> {
         .ok()
 }
 
+/// Whether a turn's record is in the statistics on disk: the last thing
+/// the core's end writes, after the session's own end.
+fn turn_recorded(machine: &Machine) -> bool {
+    let Some(state) = machine.dirs().state else {
+        return false;
+    };
+    std::fs::read_dir(state.join("stats"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+        .any(|text| text.contains("\"kind\":\"turn\""))
+}
+
 /// Each of SIGTERM, SIGHUP, SIGINT and SIGQUIT ends the application
 /// gracefully (`docs/steps/23/answered.md`, "Signals, a failed write and a
 /// panic"): the terminal is put back at once, the running turn is stopped,
@@ -905,6 +925,12 @@ fn sys_a_signal_ends_the_application_gracefully_with_its_code() {
             "SIG{signal}"
         );
         assert!(closed.wait(LIMIT), "SIG{signal}: the turn was not stopped");
+        // The session's last records reached the disk: the core ended, in
+        // order, before the process did (the review of step 23).
+        assert!(
+            turn_recorded(&machine),
+            "SIG{signal}: the stopped turn's statistics never reached the disk"
+        );
     }
     // SIGABRT is not handed over: the terminal is put back, and the abort
     // ends the process as it asks, by its default action.

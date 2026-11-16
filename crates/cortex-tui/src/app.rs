@@ -47,7 +47,7 @@ use cortex_protocol::{ErrorData, SessionId};
 /// What the binary hands the terminal layer, through this crate: the
 /// `[terminal]` overrides, the colour depth they name, the waker a link
 /// calls, and what the terminal can do.
-pub use cortex_term::{Capabilities, ColorDepth, Overrides, Waker, signal_ended};
+pub use cortex_term::{Capabilities, ColorDepth, Overrides, Waker, signal_ended, signalled};
 use cortex_term::{Device, Event, Frame, Inline, Scheduler, Terminal, Wake};
 
 pub use link::{Inbound, Link, Ticket};
@@ -327,10 +327,17 @@ pub fn interactive(
         }
     };
     let left = terminal.map_or(Ok(()), Terminal::leave);
-    // After a signal the terminal was put back already, and the layer
-    // writes nothing more: what leaving it again says is not news.
-    if let Some(Exit::Signal(code)) = app.exit() {
-        return Ok(Exit::Signal(*code));
+    // A signal ends the application as that signal, whenever it came: in
+    // the loop's own check, or while the loop took a key or drew a frame
+    // (whose write then failed, the terminal put back), or after the loop
+    // ended for another reason and before the terminal was left. The
+    // terminal was put back already, and what the loop and leaving said
+    // after it is not news (the review of step 23).
+    if let Some(code) = cortex_term::signalled() {
+        if !matches!(app.exit(), Some(Exit::Signal(_))) {
+            app.signalled(code);
+        }
+        return Ok(Exit::Signal(code));
     }
     ran?;
     left?;
@@ -473,6 +480,10 @@ fn run_with<D: Device>(
             break;
         }
     }
+    // The main screen first, if the viewer has the screen: the live region
+    // is erased there, so that the shell finds the screen as a plain quit
+    // leaves it (the review of step 23).
+    terminal.alternate(false)?;
     let caps = *terminal.caps();
     presenter.finish(&caps, terminal)?;
     Ok(Ran::Ended)
@@ -514,6 +525,9 @@ fn take<D: Device>(
             Effect::Redraw => presenter.redraw(),
             Effect::Copy(text) => terminal.copy(&text)?,
             Effect::Suspend => {
+                // As at the end: the live region is on the main screen. The
+                // next frame takes the viewer's screen again.
+                terminal.alternate(false)?;
                 let caps = *terminal.caps();
                 presenter.finish(&caps, terminal)?;
                 terminal.suspend();

@@ -360,6 +360,22 @@ impl LogHandle {
         }
     }
 
+    /// As [`flush`](Self::flush), waiting for the file at most `limit`: at
+    /// the end of a process whose time is bounded (a signal's watchdog), a
+    /// writer stuck on its disk does not hold it (since the review of step
+    /// 23). Says whether everything reached the file.
+    pub fn flush_within(&self, limit: std::time::Duration) -> bool {
+        let written = self
+            .shared
+            .file
+            .as_ref()
+            .is_none_or(|file| file.flush_within(limit));
+        if let Some(stderr) = crate::sync::lock(&self.shared.stderr).as_mut() {
+            let _ = stderr.out.flush();
+        }
+        written
+    }
+
     /// How many lines were dropped because the writer could not keep up
     /// and have not been reported in the file yet.
     #[must_use]
