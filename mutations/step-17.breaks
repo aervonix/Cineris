@@ -169,7 +169,7 @@ rule: A change holds the store's lock from before its read until after its write
 file: crates/cortex-knowledge/src/store.rs
 in: Store::change
 find: let _lock = private::hold_lock(&self.file).map_err(io_error)?;
-replace: let _lock = { let _ = &io_error; None::<std::fs::File> };
+replace: let _lock = private::hold_lock(&self.file).map_err(io_error).map(|_| None::<std::fs::File>)?;
 caught-by:
     cortex-knowledge::it store::a_change_holds_the_lock_while_it_writes
 
@@ -335,7 +335,6 @@ find: character.is_whitespace() || matches!(character, '*' | '?' | '[' | ']')
 replace: character.is_whitespace()
 caught-by:
     cortex-policy::it learned::an_exact_rule_is_the_line_word_for_word_or_no_rule_at_all
-    cortex-policy engine::tests::an_approval_covers_the_program_and_its_subcommand
 
 [break] an-exact-rule-takes-the-first-of-two-commands
 rule: A line of more than one command gives no rule.
