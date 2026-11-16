@@ -910,6 +910,46 @@ mod tests {
         (text, artifact, store)
     }
 
+    /// What a reload changes reaches the next command (step 24): a key
+    /// variable named since is taken from it, beside the configured ones,
+    /// and the look at what it changes asks git only while the project is
+    /// trusted, its detector made again when that changes.
+    #[test]
+    fn a_reload_reaches_the_next_command() {
+        let live = Arc::new(ShellLive::new(true, vec!["OLD_KEY".to_owned()]));
+        let tool = ShellTool::new(
+            Shell::new("/bin/sh"),
+            ShellConfig {
+                env_remove: vec!["MINE".to_owned()],
+                ..ShellConfig::default()
+            },
+        )
+        .with_live(Arc::clone(&live));
+        assert_eq!(tool.removed(), ["MINE", "OLD_KEY"]);
+        assert!(tool.repository_trusted());
+        live.set_key_variables(vec!["NEW_KEY".to_owned()]);
+        live.set_repository_trusted(false);
+        assert_eq!(tool.removed(), ["MINE", "NEW_KEY"]);
+        assert!(!tool.repository_trusted());
+
+        let root = AbsPath::parse(
+            if cfg!(windows) { "C:\\work" } else { "/work" },
+            cortex_base::PathStyle::NATIVE,
+        )
+        .unwrap();
+        live.set_repository_trusted(true);
+        let trusted = tool.detector(&root);
+        assert!(
+            Arc::ptr_eq(&trusted, &tool.detector(&root)),
+            "made again for nothing"
+        );
+        live.set_repository_trusted(false);
+        assert!(
+            !Arc::ptr_eq(&trusted, &tool.detector(&root)),
+            "the detector of a trusted project was kept"
+        );
+    }
+
     #[test]
     fn a_result_ends_with_how_the_command_ended() {
         let limits = OutputLimits::default();

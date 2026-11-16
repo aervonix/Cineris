@@ -121,5 +121,6 @@
 {"jsonrpc":"2.0","method":"session/event","params":{"session_id":"s_01JCX4T9Q2","seq":38,"type":"config.changed","applied":["permissions.mode"],"pending":["model.main","shell.program"],"notes":["`shell.program` takes effect in sessions opened from now on."]}}
 {"jsonrpc":"2.0","id":40,"method":"config/get","params":{"session_id":"s_01JCX4T9Q2","keys":["model.main"]}}
 {"jsonrpc":"2.0","id":40,"result":{"config":{"model":{"main":"claude-opus-5-5"}},"origins":{"model.main":{"layer":"user","file":"~/.config/cortex-harness/config.toml","line":2}}}}
+{"jsonrpc":"2.0","method":"session/event","params":{"session_id":"s_01JCX4T9Q2","seq":39,"type":"usage.updated","usage":{"totals":{"tokens":{"input":1200,"cache_read":15000,"cache_write":2100,"output":340},"requests":1},"context_tokens":18640,"context":{"system":3100,"tools":4200,"summary":0,"user":900,"assistant":2400,"tool_results":7800,"notices":240,"estimate":18640,"limit":180000,"window":200000}}}}
 {"jsonrpc":"2.0","id":31,"method":"shutdown","params":{}}
 {"jsonrpc":"2.0","id":31,"result":{}}

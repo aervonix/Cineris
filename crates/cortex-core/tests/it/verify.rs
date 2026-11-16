@@ -1093,3 +1093,47 @@ fn sys_verify_run_runs_the_checks_in_a_turn_of_their_own_and_sends_the_model_not
         });
     }
 }
+
+/// `[verify]` reloaded reaches the next round (step 24, the seam step 19
+/// left): checks off when the session opened, offered after the user's file
+/// turns them to `ask` and the configuration is reloaded.
+#[test]
+fn a_reload_of_verify_reaches_the_next_round() {
+    let world = World::new(
+        "verify_reloaded",
+        [
+            writes("c1", "a.txt"),
+            says("Done."),
+            writes("c2", "b.txt"),
+            says("Done again."),
+        ],
+    );
+    user_checks(&world, &["./missing-check"], "mode = \"off\"\n");
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("change it").await;
+        assert!(told(&front).is_empty(), "checks were said while off");
+        user_checks(&world, &["./missing-check"], "mode = \"ask\"\n");
+        let reloaded = front
+            .op(cortex_protocol::methods::Op::ConfigReload(
+                cortex_protocol::methods::ConfigReloadParams::default(),
+            ))
+            .await
+            .unwrap();
+        let cortex_protocol::methods::OpResult::ConfigReload(result) = reloaded else {
+            panic!("not the result of config/reload");
+        };
+        assert!(
+            result.applied.contains(&"verify.mode".to_owned()),
+            "{result:?}"
+        );
+        front.turn("change it again").await;
+        let phases: Vec<VerificationPhase> = told(&front)
+            .into_iter()
+            .map(|notice| notice.phase)
+            .collect();
+        assert_eq!(phases, [VerificationPhase::Offered]);
+        front.close().await;
+    });
+}

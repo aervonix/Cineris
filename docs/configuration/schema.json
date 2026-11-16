@@ -192,7 +192,7 @@
           "default": true,
           "description": "Whether each context epoch is given the repository map: the workspace's directories and its most relevant files with their main definitions. The `outline` tool works either way.",
           "type": "boolean",
-          "x-cortex-effect": "next epoch",
+          "x-cortex-effect": "next session",
           "x-cortex-trust": "preference"
         },
         "map_tokens": {
