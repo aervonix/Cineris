@@ -15,6 +15,8 @@ use cortex_testkit::{FakeClock, Scratch};
 use cortex_tools::ToolResult;
 use serde_json::json;
 
+use cortex_agent::VerifyOutcome;
+
 use super::*;
 
 fn settings(commands: &[&str]) -> Settings {
@@ -292,6 +294,7 @@ fn failed_with(output: &str) -> Ran {
             bytes: Some(90_000),
         }),
         stopped_at_limit: false,
+        stop: None,
     }
 }
 
@@ -425,21 +428,26 @@ fn a_check_has_the_least_of_what_the_round_the_turn_and_the_limits_leave() {
 #[test]
 fn a_check_is_not_started_when_it_usually_takes_longer_than_it_has() {
     let round = Duration::from_secs(120);
+    let half_hour = Duration::from_secs(30 * 60);
     let minutes = |m: u64| Duration::from_secs(m * 60);
+    // Longer than a command may run: `shell.max_timeout` is named.
+    let why = too_long(Some(minutes(3)), round, minutes(2), round).expect("skipped");
+    assert!(why.contains("`shell.max_timeout`, 2m"), "{why}");
     // Longer than a round's limit: 15-efficiency's rule.
-    let why = too_long(Some(minutes(3)), round, round).expect("skipped");
+    let why = too_long(Some(minutes(3)), round, half_hour, round).expect("skipped");
     assert!(
         why.contains("usually takes 3m, longer than a round's limit of 2m"),
         "{why}"
     );
     // Longer than what is left of the round.
-    let why = too_long(Some(minutes(1)), round, Duration::from_secs(45)).expect("skipped");
+    let why =
+        too_long(Some(minutes(1)), round, half_hour, Duration::from_secs(45)).expect("skipped");
     assert!(why.contains("45s"), "{why}");
     // Its usual time unknown: ten seconds at least.
-    assert!(too_long(None, round, Duration::from_secs(9)).is_some());
-    assert!(too_long(None, round, Duration::from_secs(10)).is_none());
-    assert!(too_long(Some(minutes(1)), round, round).is_none());
-    assert!(too_long(Some(minutes(1)), round, Duration::ZERO).is_some());
+    assert!(too_long(None, round, half_hour, Duration::from_secs(9)).is_some());
+    assert!(too_long(None, round, half_hour, Duration::from_secs(10)).is_none());
+    assert!(too_long(Some(minutes(1)), round, half_hour, round).is_none());
+    assert!(too_long(Some(minutes(1)), round, half_hour, Duration::ZERO).is_some());
 }
 
 /// What the sandbox's own `explain` says of a command that printed
@@ -477,7 +485,15 @@ fn only_the_launchers_refusal_is_blocked_and_a_compiler_error_is_a_failure() {
     let result = ToolResult::error(refusal.clone()).with_payload(json!({
         "exit_code": cortex_sandbox::launch::FAILED, "sandbox": line,
     }));
-    assert_eq!(classify(&result, two_minutes, None).ended, Ended::Blocked);
+    let blocked = classify(&result, two_minutes, None);
+    assert_eq!(blocked.ended, Ended::Blocked);
+    // The launcher's refusal says why itself: the remedy for a check that
+    // needs the network is not its.
+    let note = blocked.note.expect("the refusal is said");
+    assert!(
+        note.contains("landlock is missing") && !note.contains("sandbox.network"),
+        "{note}"
+    );
 }
 
 #[test]
@@ -501,7 +517,9 @@ fn the_report_is_bounded_after_escaping_too() {
     let results = vec![(check("cargo test"), failed_with(&unseen))];
     let text = report(1, 2, &results, &[]);
     assert!(text.len() < REPORT_BYTES + 2 * 1024, "{} bytes", text.len());
-    assert!(text.contains("more lines are not shown"), "{text}");
+    // Shaped again with fewer lines, not cut: what reports the problem, and
+    // the end, stay.
+    assert!(text.contains("| error: it broke"), "{text}");
 }
 
 fn ran(ended: Ended) -> Ran {
@@ -638,4 +656,75 @@ fn a_retry_that_did_not_run_to_a_result_leaves_the_first_failure() {
         kept.note
             .is_some_and(|note| note.contains("did not") && note.contains("4s")),
     );
+}
+
+#[test]
+fn a_check_that_failed_and_stopped_the_turn_still_fails() {
+    let mut memory = Memory::default();
+    let turn = TurnId::new("t_1");
+    let a = check("cargo test");
+    let stopped = Ran {
+        stop: Some("a hook changed".to_owned()),
+        ..ran(Ended::Failed)
+    };
+    let (verdict, failing) = memory.judge(&turn, 2, &[(a.clone(), stopped)]);
+    assert_eq!(verdict, Verdict::Stopped("a hook changed".to_owned()));
+    assert_eq!(failing, std::slice::from_ref(&a));
+    // And one that had failed and passes now, though it stopped the turn,
+    // fails no more.
+    let passed = Ran {
+        stop: Some("a hook changed".to_owned()),
+        ..ran(Ended::Passed)
+    };
+    let (_, failing) = memory.judge(&turn, 1, &[(a, passed)]);
+    assert!(failing.is_empty());
+}
+
+#[test]
+fn a_stop_says_whether_a_check_still_fails() {
+    let a = check("cargo test");
+    let (outcome, said) = outcome_of(
+        Verdict::Stopped("a hook changed".to_owned()),
+        std::slice::from_ref(&a),
+        String::new,
+    );
+    assert_eq!(
+        outcome,
+        VerifyOutcome::Stopped {
+            reason: "a hook changed".to_owned(),
+            failing: true
+        }
+    );
+    assert_eq!(said, Verification::Failed);
+    let (outcome, said) = outcome_of(Verdict::Stopped("x".to_owned()), &[], String::new);
+    assert!(matches!(
+        outcome,
+        VerifyOutcome::Stopped { failing: false, .. }
+    ));
+    assert_eq!(said, Verification::Incomplete);
+    assert_eq!(
+        outcome_of(Verdict::StillFailing, std::slice::from_ref(&a), String::new),
+        (VerifyOutcome::StillFailing, Verification::Failed)
+    );
+}
+
+#[test]
+fn a_stop_the_retry_met_goes_with_the_result() {
+    let first = failed_with("assertion failed");
+    // Refused before it ran again: the first failure, and the stop.
+    let refused = Ran::not(
+        Ended::Stopped("a hook changed".to_owned()),
+        "a hook changed",
+    );
+    let kept = after_retry(first.clone(), refused);
+    assert_eq!(kept.ended, Ended::Failed);
+    assert_eq!(kept.stop.as_deref(), Some("a hook changed"));
+    // It ran again, passed, and the look after it stopped the turn.
+    let passed = Ran {
+        stop: Some("a hook changed".to_owned()),
+        ..ran(Ended::Passed)
+    };
+    let flaky = after_retry(first, passed);
+    assert_eq!(flaky.ended, Ended::Flaky);
+    assert_eq!(flaky.stop.as_deref(), Some("a hook changed"));
 }

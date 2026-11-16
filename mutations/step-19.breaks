@@ -316,7 +316,7 @@ caught-by:
 [break] a-checks-output-is-not-marked
 rule: Every line of what a check printed is marked as the command's, so none can begin a line of the report.
 file: crates/cortex-core/src/verify.rs
-in: report
+in: printed_block
 find: format!("{MARK}{}", visible_keeping(line, &['\t']))
 replace: format!("{}", visible_keeping(line, &['\t']))
 caught-by:
@@ -326,7 +326,7 @@ caught-by:
 [break] a-checks-output-is-not-escaped
 rule: Every line of what a check printed passes `visible`: nothing unseen reaches the model.
 file: crates/cortex-core/src/verify.rs
-in: report
+in: printed_block
 find: format!("{MARK}{}", visible_keeping(line, &['\t']))
 replace: format!("{MARK}{}", line)
 caught-by:
@@ -363,8 +363,8 @@ caught-by:
 rule: The level is looked at again before each check: one lowered to read-only while a round runs stops the checks after it.
 file: crates/cortex-core/src/verify.rs
 in: CoreVerifier::run_once
-find: *self.parts.policy.engine().level() == Level::ReadOnly
-replace: *self.parts.policy.engine().level() == Level::Unrestricted
+find: let read_only = *policy.engine().level() == Level::ReadOnly;
+replace: let read_only = false;
 caught-by:
     cortex-core::it verify::sys_a_check_after_the_level_was_lowered_mid_round_does_not_run
 
@@ -390,9 +390,9 @@ caught-by:
 [break] the-report-grows-past-its-share-when-escaped
 rule: A check's share of the report binds what is sent, after escaping.
 file: crates/cortex-core/src/verify.rs
-in: report
-find: if block.len() + marked.len() + 1 > share && !block.is_empty() {
-replace: if false {
+in: printed_block
+find: if block.len() <= share {
+replace: if true {
 caught-by:
     cortex-core verify::tests::the_report_is_bounded_after_escaping_too
 
@@ -467,4 +467,51 @@ find: VerifyOutcome::StillFailing => {
 replace: VerifyOutcome::StillFailing => { return match self.record_notice(turn, NoticeSource::Verification, String::from("still failing")).await { Ok(()) => Phase::Preparing(Prep::default()), Err(error) => Phase::Finishing(End::store(&error)) };
 caught-by:
     cortex-agent::it verifying::a_round_with_nothing_new_ends_the_turn_failed_and_tells_the_model_nothing
+
+# ------------------------------------------- after the second read of the first pull request
+
+[break] a-stop-forgets-a-failure
+rule: A round that ends in a stop says whether a check of the turn still fails: the verdict is then failed.
+file: crates/cortex-core/src/verify.rs
+in: outcome_of
+find: failing: failed
+replace: failing: false
+caught-by:
+    cortex-core verify::tests::a_stop_says_whether_a_check_still_fails
+
+[break] a-retry-loses-the-stop
+rule: A stop the retry of a flaky test met goes with the check's result, whichever run's it is.
+file: crates/cortex-core/src/verify.rs
+in: after_retry
+find: if stop.is_some() {
+replace: if false {
+caught-by:
+    cortex-core verify::tests::a_stop_the_retry_met_goes_with_the_result
+
+[break] a-stop-hides-the-stopping-checks-result
+rule: The check whose look stopped the turn still counts for what fails.
+file: crates/cortex-core/src/verify.rs
+in: Memory::judge
+find: _ => ran.stop.clone()
+replace: _ => None
+caught-by:
+    cortex-core verify::tests::a_check_that_failed_and_stopped_the_turn_still_fails
+
+[break] the-longest-a-command-may-run-is-not-named
+rule: A check that usually takes longer than a command may run is skipped, and `shell.max_timeout` is named as why.
+file: crates/cortex-core/src/verify.rs
+in: too_long
+find: && usual > max_timeout
+replace: && false
+caught-by:
+    cortex-core verify::tests::a_check_is_not_started_when_it_usually_takes_longer_than_it_has
+
+[break] a-launcher-refusal-is-told-the-wrong-remedy
+rule: The remedy for a check that needs the network goes with the sandbox's guesses, not with the launcher's own refusal, which says why itself.
+file: crates/cortex-core/src/verify.rs
+in: classify
+find: notes.push(if refused {
+replace: notes.push(if false {
+caught-by:
+    cortex-core verify::tests::only_the_launchers_refusal_is_blocked_and_a_compiler_error_is_a_failure
 
