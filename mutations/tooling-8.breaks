@@ -215,3 +215,33 @@ replace: while false && registry.holds.iter().any(|hold| hold.point == point) {
 packages: cortex-base
 caught-by:
     hook::enabled::tests::a_second_hold_of_a_point_waits_for_the_first_to_end
+
+# The review of the first pull request: apply's all or none.
+
+[break] apply-an-unreadable-file-is-taken-as-absent
+rule: A file that is there and cannot be read is an error that writes nothing, never "not there", which putting back would delete.
+file: xtask/src/apply.rs
+in: run_with
+find: Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((None, None)),
+replace: Err(_) => Ok((None, None)),
+caught-by:
+    apply::tests::a_file_that_is_there_and_cannot_be_read_is_never_taken_as_absent
+
+[break] apply-one-file-spelt-two-ways-is-two
+rule: One file spelt two ways is one file of the plan, so neither change is lost.
+file: xtask/src/apply.rs
+in: same_file
+find: Component::CurDir => {}
+replace: Component::CurDir => kept.push("."),
+caught-by:
+    apply::tests::one_file_spelt_two_ways_is_one_file_of_the_plan
+
+[break] apply-a-deleted-file-comes-back-without-its-permissions
+rule: A file the script deleted comes back, when a check fails, with the permissions it had.
+file: xtask/src/apply.rs
+in: put
+find: .or_else(|| permissions.clone());
+replace: .or(None::<fs::Permissions>);
+os: linux
+caught-by:
+    apply::tests::a_deleted_file_comes_back_with_its_permissions

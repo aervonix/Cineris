@@ -300,36 +300,70 @@ fn parse(text: &str) -> Result<Script> {
 }
 
 /// What the files will be: each path the script touches, with its text
-/// before (`None`: it was not there) and after (`None`: deleted), in the
-/// order the script first touches them.
-type Plan = Vec<(PathBuf, Option<String>, Option<String>)>;
+/// before (`None`: it was not there) and after (`None`: deleted), and its
+/// permissions before, in the order the script first touches them.
+type Plan = Vec<(
+    PathBuf,
+    Option<String>,
+    Option<String>,
+    Option<fs::Permissions>,
+)>;
 
-/// Makes every change in memory, in order, with `read` giving a file's
-/// text as it is now. The first change that cannot be made is named, and
-/// nothing is planned. Also gives what to print.
+/// A file's text and permissions as it is now: `None` when it is not
+/// there. A file that is there and cannot be read is an error, never "not
+/// there", or putting it back would delete it.
+type Read = Result<(Option<String>, Option<fs::Permissions>)>;
+
+/// `path` with its `.` left out and each `..` taken back, so that one file
+/// spelt two ways (`a.md`, `./a.md`, `d/../a.md`) is one file of the plan.
+fn same_file(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut kept = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir
+                if kept
+                    .components()
+                    .next_back()
+                    .is_some_and(|last| matches!(last, Component::Normal(_))) =>
+            {
+                kept.pop();
+            }
+            other => kept.push(other),
+        }
+    }
+    kept
+}
+
+/// Makes every change in memory, in order, with `read` giving a file as it
+/// is now. The first change that cannot be made, or file that cannot be
+/// read, is named, and nothing is planned. Also gives what to print.
 fn plan(
     script: &Script,
     edits: &[replace::ScriptEdit],
-    mut read: impl FnMut(&Path) -> Option<String>,
+    mut read: impl FnMut(&Path) -> Read,
 ) -> Result<(Plan, String)> {
     let mut files: Plan = Vec::new();
     let mut shown = String::new();
     let index_of =
-        |files: &mut Plan, path: &Path, read: &mut dyn FnMut(&Path) -> Option<String>| {
-            if let Some(index) = files.iter().position(|(known, _, _)| known == path) {
-                index
-            } else {
-                let before = read(path);
-                files.push((path.to_path_buf(), before.clone(), before));
-                files.len() - 1
+        |files: &mut Plan, path: &Path, read: &mut dyn FnMut(&Path) -> Read| -> Result<usize> {
+            let path = same_file(path);
+            if let Some(index) = files.iter().position(|(known, ..)| *known == path) {
+                return Ok(index);
             }
+            let (before, permissions) = read(&path).map_err(|error| {
+                format!("{error}: a file that cannot be read is not changed. Nothing was written.")
+            })?;
+            files.push((path, before.clone(), before, permissions));
+            Ok(files.len() - 1)
         };
     for (line, change) in &script.changes {
         match change {
             Change::Edit(number) => {
                 let edit = &edits[number - 1];
                 let path = &edit.request.file;
-                let index = index_of(&mut files, path, &mut read);
+                let index = index_of(&mut files, path, &mut read)?;
                 let Some(current) = files[index].2.as_deref() else {
                     return Err(format!(
                         "the script's line {line}: {} is not there (deleted by the script, or \
@@ -350,7 +384,7 @@ fn plan(
                 shown.push_str(&lines);
             }
             Change::Write { path, text } => {
-                let index = index_of(&mut files, path, &mut read);
+                let index = index_of(&mut files, path, &mut read)?;
                 shown.push_str(&format!(
                     "{}: {} ({} line(s))\n",
                     path.display(),
@@ -364,7 +398,7 @@ fn plan(
                 files[index].2 = Some(text.clone());
             }
             Change::Delete(path) => {
-                let index = index_of(&mut files, path, &mut read);
+                let index = index_of(&mut files, path, &mut read)?;
                 if files[index].2.is_none() {
                     return Err(format!(
                         "the script's line {line}: {} is not there to delete. Nothing was \
@@ -384,7 +418,7 @@ fn plan(
 /// (false). Says which it could not.
 fn put(plan: &Plan, after: bool) -> Result<()> {
     let mut failed = Vec::new();
-    for (path, before, made) in plan {
+    for (path, before, made, permissions) in plan {
         let want = if after { made } else { before };
         let done = match want {
             Some(text) => {
@@ -398,9 +432,16 @@ fn put(plan: &Plan, after: bool) -> Result<()> {
                 let mut name = path.file_name().unwrap_or_default().to_os_string();
                 name.push(".apply-new");
                 let beside = path.with_file_name(name);
+                // The file keeps its permissions, and one the script deleted
+                // comes back with the ones it had (an executable hook stays
+                // one).
                 fs::write(&beside, text).and_then(|()| {
-                    if let Ok(metadata) = fs::metadata(path) {
-                        fs::set_permissions(&beside, metadata.permissions())?;
+                    let kept = fs::metadata(path)
+                        .ok()
+                        .map(|metadata| metadata.permissions())
+                        .or_else(|| permissions.clone());
+                    if let Some(kept) = kept {
+                        fs::set_permissions(&beside, kept)?;
                     }
                     fs::rename(&beside, path)
                 })
@@ -497,7 +538,16 @@ fn run_with(
     } else {
         Vec::new()
     };
-    let (plan, shown) = plan(&script, &edits, |path| fs::read_to_string(path).ok())?;
+    let (plan, shown) = plan(&script, &edits, |path| match fs::read_to_string(path) {
+        Ok(text) => Ok((
+            Some(text),
+            fs::metadata(path)
+                .ok()
+                .map(|metadata| metadata.permissions()),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((None, None)),
+        Err(error) => Err(format!("could not read {}: {error}", path.display())),
+    })?;
     print!("{shown}");
     if dry_run {
         println!(
@@ -525,7 +575,7 @@ fn run_with(
         script.changes.len(),
         plan.len()
     );
-    let touched: Vec<PathBuf> = plan.iter().map(|(path, _, _)| path.clone()).collect();
+    let touched: Vec<PathBuf> = plan.iter().map(|(path, ..)| path.clone()).collect();
     for (line, check) in &script.checks {
         println!(
             "\n== check: {} (the script's line {line}) ==",
@@ -686,7 +736,7 @@ text
 
     fn files(plan: &Plan) -> Vec<(String, Option<String>, Option<String>)> {
         plan.iter()
-            .map(|(path, before, after)| {
+            .map(|(path, before, after, _)| {
                 (path.display().to_string(), before.clone(), after.clone())
             })
             .collect()
@@ -701,7 +751,7 @@ text
         .unwrap();
         let edits = replace::parse_script(&script.edits).unwrap();
         let (plan, _) = plan(&script, &edits, |path| {
-            (path == Path::new("b.md")).then(|| "b\n".to_owned())
+            Ok(((path == Path::new("b.md")).then(|| "b\n".to_owned()), None))
         })
         .unwrap();
         assert_eq!(
@@ -718,16 +768,16 @@ text
         let script =
             parse("@@ file: a.md\n@@ from\nmissing\n@@ to\nx\n@@ end\n@@ delete: a.md\n").unwrap();
         let edits = replace::parse_script(&script.edits).unwrap();
-        let error = plan(&script, &edits, |_| Some("text\n".to_owned())).unwrap_err();
+        let error = plan(&script, &edits, |_| Ok((Some("text\n".to_owned()), None))).unwrap_err();
         assert!(error.contains("line 1"), "{error}");
         assert!(error.contains("Nothing was written"), "{error}");
         // A file deleted twice, and an edit of one not there.
         let script = parse("@@ delete: a\n@@ delete: a\n").unwrap();
-        assert!(plan(&script, &[], |_| Some(String::new())).is_err());
+        assert!(plan(&script, &[], |_| Ok((Some(String::new()), None))).is_err());
         let script = parse("@@ file: a.md\n@@ from\nx\n@@ to\ny\n@@ end\n").unwrap();
         let edits = replace::parse_script(&script.edits).unwrap();
         assert!(
-            plan(&script, &edits, |_| None)
+            plan(&script, &edits, |_| Ok((None, None)))
                 .unwrap_err()
                 .contains("is not there")
         );
@@ -845,6 +895,55 @@ made
         assert!(asked.is_empty());
         assert_eq!(fs::read_to_string(dir.join("a.md")).unwrap(), "old\n");
         assert!(dir.join("c.md").exists());
+    }
+
+    #[test]
+    fn a_file_that_is_there_and_cannot_be_read_is_never_taken_as_absent() {
+        let scratch = scratch("unreadable");
+        let dir = scratch.path();
+        // A folder where the script writes a file: there, and not readable
+        // as a file.
+        fs::create_dir_all(dir.join("a.md")).unwrap();
+        fs::write(dir.join("b.md"), "old\n").unwrap();
+        let script = "@@ file: DIR/b.md\n@@ from\nold\n@@ to\nnew\n@@ end\n\
+                      @@ write: DIR/a.md\nx\n@@ end\n@@ check: links\n";
+        let (result, asked) = apply(dir, script, &[], |_| Err("no".to_owned()));
+        let error = result.unwrap_err();
+        assert!(error.contains("cannot be read"), "{error}");
+        assert!(asked.is_empty(), "a check ran");
+        assert!(dir.join("a.md").is_dir(), "the folder was touched");
+        assert_eq!(fs::read_to_string(dir.join("b.md")).unwrap(), "old\n");
+    }
+
+    #[test]
+    fn one_file_spelt_two_ways_is_one_file_of_the_plan() {
+        let scratch = scratch("spelt");
+        let dir = scratch.path();
+        fs::write(dir.join("a.md"), "one\n").unwrap();
+        let script = "@@ file: DIR/a.md\n@@ from\none\n@@ to\ntwo\n@@ end\n\
+                      @@ file: DIR/./sub/../a.md\n@@ from\ntwo\n@@ to\nthree\n@@ end\n";
+        let (result, _) = apply(dir, script, &[], |_| Ok(()));
+        result.unwrap();
+        assert_eq!(fs::read_to_string(dir.join("a.md")).unwrap(), "three\n");
+        assert_eq!(same_file(Path::new("./x/./y/../z")), Path::new("x/z"));
+        assert_eq!(same_file(Path::new("../x")), Path::new("../x"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_deleted_file_comes_back_with_its_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = scratch("permissions");
+        let dir = scratch.path();
+        let hook = dir.join("hook");
+        fs::write(&hook, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        let (result, _) = apply(dir, "@@ delete: DIR/hook\n@@ check: links\n", &[], |_| {
+            Err("no".to_owned())
+        });
+        assert!(result.is_err());
+        let mode = fs::metadata(&hook).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755, "{mode:o}");
     }
 
     #[test]
