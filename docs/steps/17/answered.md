@@ -336,7 +336,7 @@ The second pull request's last round: a reviewer read the fixes above alone.
 | 4 | **A rewind's count of changed files could be skipped,** when the client that asked went away or the restore failed half way. | Counted before the files are touched. | `knowledge::sys_a_test_that_passes_after_an_undo_put_a_file_back_has_not_flipped` (the ordinary case; the two others by reading) |
 | 5 | **Telling the sessions before a promote's write did not close its window,** and could hide a change from outside after a refused promote. | Taken out again; the window is an item. | [the item](../../outstanding/a-promote-while-a-confined-command-runs.md) |
 
-**From its notes:** the flag that keeps one mark of expired entries at a time is reset however the mark ends, and if it never starts; a directory with a `:` is not observed (the store refuses one that could name a drive). **Written down then, and fixed in the third pull request** (below): a `took` that carries an older snapshot could put older rules in force for the moment between a command's look and its decision. **Written down, not changed:** Two `project/list` at once: the second may answer before the first one's wait is over.
+**From its notes:** the flag that keeps one mark of expired entries at a time is reset however the mark ends, and if it never starts; a directory with a `:` is not observed (the store refuses one that could name a drive). **Written down then, and fixed in the third pull request** (below): a `took` that carries an older snapshot could put older rules in force for the moment between a command's look and its decision. **Written down, not changed:** two `project/list` at once: the second may answer before the first one's wait is over.
 
 **No further round follows:** these last fixes were not read again by a reviewer. They are the table (stricter only, with its rows), a test's wait, comments, and two calls moved.
 
@@ -369,6 +369,16 @@ An independent reviewer read the commands, the move of `apply`, the budget rows 
 | 10 | **The load's budget was "pending the owner" with no item.** | [the item](../../outstanding/the-load-of-a-full-profile-on-a-hosted-runner.md) | the index |
 
 **From its notes,** fixed: an empty listing says why it is empty; a flaky test's command is listed; an entry that expired says so; the memory row's bound is one its arithmetic supports (2 MB). **Left as an item:** [the other `--json` outputs](../../outstanding/json-outputs-that-escape-what-json-does-not.md) escape such characters in a way that is not JSON's; they are not this step's code. **Written down, not changed:** the listing cannot say that the user's store is unreadable beyond printing its problem (the wire has no word for it), or that an accepted line is not one plain command and so asks every time (the help says which lines run unasked); a failure to write the repository's file is a usage error by the earlier mapping; `path` on Windows prints a path outside the home folder in its long form, as every subcommand prints the project.
+
+### The focused read of the rules' hand-over
+
+The one late path the bar allows a focused review of: an independent reviewer read the guard's commit alone. It found the guard sound for what it claims (every hand-over after a change looks at the files under the rules' lock; no lock is taken the other way round; the test holds the race at the right places and fails without the check) and one hole beside it:
+
+| Finding | Fix | Held by |
+|---|---|---|
+| **While the repository's file could not be read, an earlier reading's entries stood in for it, on the safe list too,** and were handed on from one load to the next. An accepted shared command that was taken out of the file, in a file that then became unreadable (a merge's marks), could come back through a snapshot made from an older reading, and stay for as long as the file stayed unreadable. The stamps say nothing of it: both were fresh. | Such a snapshot puts none of the shared file's commands on the safe list (`Snapshot::runs_unasked`), as an unreadable private store puts none at all. The prompt keeps what was read before, as the done criterion says. | `cortex-knowledge`'s `project::a_shared_file_that_cannot_be_read_puts_none_of_its_commands_on_the_safe_list` |
+
+**From its notes,** fixed: the test asserts that neither of its holds ran out, so it cannot pass by waiting; `project/update` hands the sessions their rules on the blocking pool, since the hand-over may read files; the budget row says how many looks a turn's start makes. **Written down:** files that change three times under one hand-over leave no learned rule in force until the next turn's start (it does not happen in ordinary use); a rewrite in place of the same size within a clock's tick is missed on some Unix file systems as on Windows (added to [the item](../../outstanding/a-same-size-rewrite-within-a-clock-tick-on-windows.md)). This last fix was not read again by a reviewer: it removes rules, and adds none.
 
 ## Measured
 

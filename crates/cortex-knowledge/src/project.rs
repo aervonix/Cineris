@@ -168,6 +168,10 @@ pub struct Snapshot {
     /// The private store could not be read as it is: what stands in its
     /// place feeds the prompt and never the safe list.
     degraded: bool,
+    /// The shared file could not be read as it is, and what an earlier
+    /// reading held of it stands in its place: that feeds the prompt, and
+    /// none of it the safe list.
+    shared_stands_in: bool,
     private_stamp: FileStamp,
     shared_stamp: FileStamp,
 }
@@ -211,11 +215,22 @@ impl Snapshot {
     /// ([`is_degraded`](Self::is_degraded)): the state that stands in its
     /// place is an older one, and the file that cannot be read may hold the
     /// edit that turned a command off.
+    ///
+    /// **And none of the shared file's while that cannot be read as it
+    /// is,** for the same reason: what stands in its place is what an
+    /// earlier reading held, and the file as it is now may be the one an
+    /// entry was taken out of. An older reading handed on from one load to
+    /// the next would otherwise keep a removed command on the safe list
+    /// for as long as the file stayed unreadable (found by the focused
+    /// read of the rules' hand-over, step 17).
     pub fn runs_unasked(&self, now: UtcTime) -> impl Iterator<Item = &Entry> {
         let degraded = self.degraded;
-        self.entries
-            .iter()
-            .filter(move |entry| !degraded && entry.runs_unasked(now))
+        let shared_stands_in = self.shared_stands_in;
+        self.entries.iter().filter(move |entry| {
+            !degraded
+                && !(shared_stands_in && entry.scope == Scope::Shared)
+                && entry.runs_unasked(now)
+        })
     }
 
     /// Whether the private store could not be read as it is when this was
@@ -363,12 +378,12 @@ impl Project {
         // The stamp before the read, so that a change between the two is
         // seen at the next look.
         let shared_stamp = FileStamp::of(&self.shared_file());
-        let shared = self.shared_or(previous, &mut problems);
+        let (shared, shared_stands_in) = self.shared_or(previous, &mut problems);
         snapshot(
             private,
             shared,
             problems,
-            degraded,
+            (degraded, shared_stands_in),
             loaded.stamp,
             shared_stamp,
         )
@@ -376,23 +391,29 @@ impl Project {
 
     /// The shared file's entries, or what `previous` held of it when it
     /// cannot be read as it is, with what is wrong added to `problems`.
-    fn shared_or(&self, previous: Option<&Snapshot>, problems: &mut Vec<String>) -> Vec<Entry> {
+    /// And whether it is the earlier reading that stands in.
+    fn shared_or(
+        &self,
+        previous: Option<&Snapshot>,
+        problems: &mut Vec<String>,
+    ) -> (Vec<Entry>, bool) {
         match self.read_shared() {
-            SharedRead::Absent => Vec::new(),
+            SharedRead::Absent => (Vec::new(), false),
             SharedRead::Entries(shared, _) => {
                 problems.extend(shared.left_out);
-                shared.entries
+                (shared.entries, false)
             }
             SharedRead::Problem(problem) => match previous {
                 Some(previous) => {
                     problems.push(format!(
-                        "{problem}. What was read of it before is still used."
+                        "{problem}. What was read of it before is still used, and none of its \
+                         commands runs without asking until it is put right."
                     ));
-                    previous.shared.clone()
+                    (previous.shared.clone(), true)
                 }
                 None => {
                     problems.push(format!("{problem}. Nothing of it is used."));
-                    Vec::new()
+                    (Vec::new(), false)
                 }
             },
         }
@@ -421,13 +442,13 @@ impl Project {
         cortex_base::hook::point(BEFORE_THE_SNAPSHOT);
         let shared_stamp = FileStamp::of(&self.shared_file());
         let mut problems = Vec::new();
-        let shared = self.shared_or(previous, &mut problems);
+        let (shared, shared_stands_in) = self.shared_or(previous, &mut problems);
         // A change was just written, so the store is one this build reads.
         snapshot(
             private,
             shared,
             problems,
-            false,
+            (false, shared_stands_in),
             private_stamp,
             shared_stamp,
         )
@@ -696,7 +717,7 @@ fn snapshot(
     private: PrivateState,
     shared: Vec<Entry>,
     problems: Vec<String>,
-    degraded: bool,
+    (degraded, shared_stands_in): (bool, bool),
     private_stamp: FileStamp,
     shared_stamp: FileStamp,
 ) -> Snapshot {
@@ -721,6 +742,7 @@ fn snapshot(
         entries,
         problems,
         degraded,
+        shared_stands_in,
         private_stamp,
         shared_stamp,
     }
