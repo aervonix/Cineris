@@ -309,6 +309,9 @@ pub(crate) enum PermissionsCommand {
     Trust,
     /// `untrust`
     Untrust,
+    /// `forget`: forget trust and never alike, so the next start asks
+    /// (since step 23).
+    Forget,
 }
 
 /// `cortex auth …`
@@ -619,6 +622,7 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 "revoke" => Ok(Command::Permissions(PermissionsCommand::Revoke { ids })),
                 "trust" => Ok(Command::Permissions(PermissionsCommand::Trust)),
                 "untrust" => Ok(Command::Permissions(PermissionsCommand::Untrust)),
+                "forget" => Ok(Command::Permissions(PermissionsCommand::Forget)),
                 other => Err(wrong(other)),
             }
         }

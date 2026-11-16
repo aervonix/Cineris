@@ -614,18 +614,21 @@ impl App {
     }
 
     fn request(&mut self, id: RequestId, request: ServerRequest) {
-        // This build shows approvals; any other kind is left for another
-        // client, or for the core's own default, and never answered for the
-        // person.
-        if let ServerRequest::Approval(approval) = request {
-            self.mapper.waiting(&mut self.transcript, &approval.call_id);
-            let confined = self
-                .session
-                .as_ref()
-                .is_some_and(|session| session.sandbox == SandboxStatus::Enforcing);
-            self.dialogs
-                .push_back(Dialog::approval(id, approval, confined));
-        }
+        let dialog = match request {
+            ServerRequest::Approval(approval) => {
+                self.mapper.waiting(&mut self.transcript, &approval.call_id);
+                let confined = self
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.sandbox == SandboxStatus::Enforcing);
+                Dialog::approval(id, approval, confined)
+            }
+            // Asked while the session is being opened, before anything of
+            // it is shown.
+            ServerRequest::Trust(trust) => Dialog::trust(id, trust),
+            ServerRequest::Question(question) => Dialog::question(id, question),
+        };
+        self.dialogs.push_back(dialog);
     }
 
     fn done(&mut self, ticket: Ticket, result: Result<OpResult, ErrorData>, now: Instant) {

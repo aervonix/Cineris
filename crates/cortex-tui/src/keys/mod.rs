@@ -205,6 +205,9 @@ pub enum Action {
     Deny,
     /// Deny the call with a note for the model (`e`).
     DenyWithNote,
+    /// Never trust the project: kept, so that it is not asked about at
+    /// later starts either (`x`).
+    Never,
     /// Show the request's detail whole, in the viewer (`Ctrl+O`).
     ShowWhole,
 }
@@ -438,6 +441,7 @@ pub const ACTIONS: &[Entry] = &[
         "deny_with_note",
         &["e"],
     ),
+    entry(Action::Never, Context::Dialog, "never", &["x"]),
     entry(
         Action::ShowWhole,
         Context::Dialog,

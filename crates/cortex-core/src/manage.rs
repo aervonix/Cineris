@@ -63,6 +63,9 @@ pub enum TrustState {
     /// Trusted, and its rules have changed since: what they could loosen is
     /// set aside until the change is approved.
     RulesChanged,
+    /// The user said never to trust it: it is not asked about, and nothing
+    /// of it that needs trust is used (since step 23).
+    Never,
 }
 
 /// What trusting a project pinned.
@@ -78,6 +81,8 @@ pub struct Trusted {
     /// Whether the project was trusted before (its rules are approved
     /// again) or is trusted now for the first time.
     pub was_trusted: bool,
+    /// Whether the user had said never to trust it: trusting it lifts that.
+    pub was_refused: bool,
 }
 
 impl Core {
@@ -189,6 +194,9 @@ impl Core {
             .trust_store()?
             .project(&project.key)
             .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))?;
+        if stored.is_refused() {
+            return Ok(TrustState::Never);
+        }
         if !stored.is_trusted() {
             return Ok(TrustState::Untrusted);
         }
@@ -216,7 +224,8 @@ impl Core {
         let failed = |failure: cortex_policy::TrustError| {
             error(ErrorKind::Internal, "store_failed", failure.to_string())
         };
-        let was_trusted = store.project(&project.key).map_err(failed)?.is_trusted();
+        let stored = store.project(&project.key).map_err(failed)?;
+        let (was_trusted, was_refused) = (stored.is_trusted(), stored.is_refused());
         let pin = [Definition::of_project_rules(&rules)];
         if was_trusted {
             store.approve(&project.key, &pin).map_err(failed)?;
@@ -232,6 +241,7 @@ impl Core {
                 .collect(),
             settings,
             was_trusted,
+            was_refused,
         })
     }
 
@@ -243,6 +253,19 @@ impl Core {
     pub fn untrust_project(&self, project: &Project) -> Result<bool, OpError> {
         self.trust_store()?
             .revoke(&project.key)
+            .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))
+    }
+
+    /// Forgets what the user said of a project, trust and never alike, so
+    /// that the next session there asks again. Says whether there was
+    /// anything to forget.
+    ///
+    /// # Errors
+    ///
+    /// When the trust store cannot be read or written.
+    pub fn forget_project(&self, project: &Project) -> Result<bool, OpError> {
+        self.trust_store()?
+            .forget(&project.key)
             .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))
     }
 

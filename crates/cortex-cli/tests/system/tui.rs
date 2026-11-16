@@ -23,7 +23,7 @@ use cortex_testkit::role::{ModeShell, NOT_RESTORED, RESTORED, Role, this_binary}
 use cortex_testkit::{Gate, Phases, ServerReply};
 use serde_json::{Value, json};
 
-use super::{CORTEX, LEFT_OUT, Machine};
+use super::{CORTEX, LEFT_OUT, MODEL, Machine};
 
 /// The role of the shell the binary runs under: its options are the path
 /// of the file that says how.
@@ -353,4 +353,144 @@ fn sys_a_steer_reaches_the_running_turn_and_a_queued_prompt_runs_after_it() {
     assert!(body(&requests[2]).contains("then summarise"));
 
     quit(&mut session, &phases);
+}
+
+/// Waits for the trust question's answers, so that a key answers it.
+fn trust_asked(session: &mut Session) {
+    wait_shows(session, "Trust this project?");
+    wait_shows(session, "x Never for this project");
+}
+
+/// A project whose file sets a model is asked about it when its session
+/// opens; after `Trust it` the session runs on the project's model.
+#[test]
+fn sys_a_project_is_trusted_from_its_dialog_and_its_model_is_used() {
+    let phases = Phases::new("sys_a_project_is_trusted_from_its_dialog_and_its_model_is_used");
+    let machine = Machine::new("tui_trust");
+    machine.project_config("[model]\nmain = \"claude-opus-5-5\"\n");
+    let mut session = machine.tui(&[]);
+    first_frame_before_trust(&mut session, &phases);
+
+    phases.mark("the trust question");
+    trust_asked(&mut session);
+    let shown = everything(&session);
+    assert!(shown.contains("model.main"), "{shown}");
+    assert!(shown.contains("claude-opus-5-5"), "{shown}");
+    session.send(b"y");
+    // The header's box names the model the session runs on (the dialog
+    // named it too, outside any box).
+    session.wait_for(LIMIT, "the header with the project's model", |t| {
+        let all = t.history();
+        all.iter()
+            .any(|row| row.trim_start().starts_with('│') && row.contains("claude-opus-5-5"))
+    });
+
+    quit(&mut session, &phases);
+}
+
+/// The owner's decision of 2026-11-16: an untrusted project's first limit
+/// waits for trust. The question lists it, and after `Trust it` it is in
+/// force: a limit of nothing stops the turn at once.
+#[test]
+fn sys_a_projects_first_limit_is_listed_and_in_force_once_trusted() {
+    let phases = Phases::new("sys_a_projects_first_limit_is_listed_and_in_force_once_trusted");
+    let machine = Machine::new("tui_first_limit");
+    machine.project_config("[limits.turn]\ntime = \"0s\"\n");
+    machine.reply_text("Not sent.");
+    let mut session = machine.tui(&[]);
+    first_frame_before_trust(&mut session, &phases);
+
+    phases.mark("the trust question");
+    trust_asked(&mut session);
+    let shown = everything(&session);
+    assert!(shown.contains("limits.turn.time"), "{shown}");
+    assert!(shown.contains("first limit"), "{shown}");
+    session.send(b"y");
+    session.wait_for(LIMIT, "the header", |t| t.shows("Cortex-Harness"));
+
+    phases.mark("the turn");
+    type_text(&mut session, "go\r");
+    wait_shows(&mut session, "time limit");
+    assert!(
+        machine.server.requests().is_empty(),
+        "a request was sent past a limit of nothing"
+    );
+
+    quit(&mut session, &phases);
+}
+
+/// The first frame, for a project that is asked about: its header comes
+/// only once the question is answered.
+fn first_frame_before_trust(session: &mut Session, phases: &Phases) {
+    phases.mark("the binary starts");
+    let starting = session.wait_for(LIMIT, "the shell to start the binary", |t| {
+        t.shows(STARTING)
+    });
+    let drawn = session.wait_for(LIMIT, "the first frame", |t| {
+        READY.iter().any(|ready| t.shows(ready))
+    });
+    let took = drawn - starting;
+    assert!(
+        took < FIRST_FRAME,
+        "the first frame took {took:?}, more than {FIRST_FRAME:?}"
+    );
+}
+
+/// The owner's test of "never for this project" (2026-11-15): a never
+/// survives a restart, which neither asks nor trusts and says why;
+/// `permissions list` names it, `permissions trust` clears it, and
+/// `permissions forget` makes the next start ask again.
+#[test]
+fn sys_a_never_survives_a_restart_and_permissions_trust_clears_it() {
+    let phases = Phases::new("sys_a_never_survives_a_restart_and_permissions_trust_clears_it");
+    let machine = Machine::new("tui_never");
+    machine.project_config("[model]\nmain = \"claude-opus-5-5\"\n");
+    let header_with = |session: &mut Session, model: &str| {
+        session.wait_for(LIMIT, "the header's model", |t| {
+            let all = t.history();
+            all.iter()
+                .any(|row| row.trim_start().starts_with('│') && row.contains(model))
+        });
+    };
+
+    let mut session = machine.tui(&[]);
+    first_frame_before_trust(&mut session, &phases);
+    phases.mark("never");
+    trust_asked(&mut session);
+    session.send(b"x");
+    header_with(&mut session, MODEL);
+    quit(&mut session, &phases);
+
+    phases.mark("a restart");
+    let mut session = machine.tui(&[]);
+    first_frame(&mut session, &phases);
+    header_with(&mut session, MODEL);
+    wait_shows(&mut session, "You said never to trust this project");
+    assert!(
+        !everything(&session).contains("Trust this project?"),
+        "a project marked never was asked about"
+    );
+    quit(&mut session, &phases);
+
+    phases.mark("the commands");
+    let listed = machine.run(&["permissions", "list"]);
+    listed.expect_code(0);
+    assert!(listed.stdout.contains("never trusted"), "{}", listed.stdout);
+    let trusted = machine.run(&["permissions", "trust"]);
+    trusted.expect_code(0);
+    assert!(
+        trusted.stdout.contains("which you had said never to trust"),
+        "{}",
+        trusted.stdout
+    );
+    let mut session = machine.tui(&[]);
+    first_frame(&mut session, &phases);
+    header_with(&mut session, "claude-opus-5-5");
+    quit(&mut session, &phases);
+
+    let forgot = machine.run(&["permissions", "forget"]);
+    forgot.expect_code(0);
+    assert!(forgot.stdout.contains("asks again"), "{}", forgot.stdout);
+    let listed = machine.run(&["permissions", "list"]);
+    assert!(listed.stdout.contains("not trusted"), "{}", listed.stdout);
 }
