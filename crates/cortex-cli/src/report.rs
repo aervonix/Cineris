@@ -7,9 +7,10 @@
 
 use std::collections::BTreeSet;
 
-use cortex_protocol::event::{Event, TurnOutcome};
+use cortex_protocol::event::{CheckReport, Event, Notice, TurnOutcome, VerificationPhase};
 use cortex_protocol::headless::{
-    HEADLESS_SCHEMA, HeadlessRecord, HeadlessResult, HeadlessStart, PermissionDenial,
+    HEADLESS_SCHEMA, HeadlessRecord, HeadlessResult, HeadlessStart, HeadlessVerification,
+    PermissionDenial,
 };
 use cortex_protocol::item::Item;
 use cortex_protocol::message::Part;
@@ -29,6 +30,10 @@ pub(crate) struct Collector {
     files: BTreeSet<String>,
     /// The turn's end, once it has come.
     end: Option<cortex_protocol::event::TurnCompleted>,
+    /// The rounds of the project's checks that ended, and the last one's
+    /// checks.
+    rounds: u32,
+    checks: Vec<CheckReport>,
 }
 
 impl Collector {
@@ -72,6 +77,12 @@ impl Collector {
                 }
                 _ => {}
             },
+            Event::Notice(Notice::Verification(notice))
+                if notice.phase == VerificationPhase::Finished =>
+            {
+                self.rounds += 1;
+                self.checks.clone_from(&notice.checks);
+            }
             Event::TurnCompleted(end) if self.turn.is_some() => {
                 self.end = Some(end.clone());
                 return true;
@@ -109,6 +120,7 @@ impl Collector {
             duration_ms,
             files_changed: self.files.iter().cloned().collect(),
             permission_denials: denials,
+            verification: None,
         };
         if let Some(end) = &self.end {
             result.outcome = end.outcome.clone();
@@ -117,6 +129,14 @@ impl Collector {
             result.usage = end.usage.tokens.clone();
             result.costs.clone_from(&end.usage.costs);
             result.requests = end.usage.requests;
+            result.verification = end
+                .verification
+                .clone()
+                .map(|verdict| HeadlessVerification {
+                    verdict,
+                    rounds: self.rounds,
+                    checks: self.checks.clone(),
+                });
         }
         if let Some((outcome, error)) = failure {
             result.outcome = outcome;
@@ -244,6 +264,54 @@ mod tests {
         json!({"type": "turn.completed", "outcome": outcome, "stop_reason": "end",
             "usage": {"tokens": {"input": 10, "cache_read": 2, "cache_write": 1, "output": 5},
                 "requests": 2, "costs": [{"usd_nanos": 1500, "basis": "metered"}]}})
+    }
+
+    fn round(round: u32, outcome: &str) -> Value {
+        json!({"type": "notice", "kind": "verification", "message": "The checks ended.",
+            "phase": "finished", "round": round, "rounds": 2,
+            "checks": [{"command": "cargo test", "source": "user", "outcome": outcome}],
+            "verdict": if outcome == "passed" { "passed" } else { "failed" }})
+    }
+
+    #[test]
+    fn the_result_says_what_the_checks_said_of_the_turn() {
+        let mut collector = Collector::new(SessionId::from("s_1"));
+        let mut ended = end("completed");
+        ended["verification"] = json!("passed");
+        let events = [
+            event(1, Some("t_1"), json!({"type": "turn.started"})),
+            event(
+                2,
+                Some("t_1"),
+                json!({"type": "notice", "kind": "verification",
+                "message": "Running the checks.", "phase": "started", "round": 1, "rounds": 2,
+                "checks": [{"command": "cargo test", "source": "user"}]}),
+            ),
+            event(3, Some("t_1"), round(1, "failed")),
+            event(4, Some("t_1"), round(2, "passed")),
+            event(5, Some("t_1"), ended),
+        ];
+        for one in &events {
+            collector.observe(one);
+        }
+        let result = collector.result(None, Vec::new(), 10);
+        let verification = result.verification.expect("the verdict is in the result");
+        assert_eq!(verification.verdict.as_str(), "passed");
+        assert_eq!(verification.rounds, 2, "the rounds that ended");
+        assert_eq!(verification.checks.len(), 1);
+        assert_eq!(
+            verification.checks[0]
+                .outcome
+                .as_ref()
+                .map(|outcome| outcome.as_str()),
+            Some("passed"),
+            "the last round's checks"
+        );
+        // A turn with no verdict (interrupted) says nothing of it.
+        let mut quiet = Collector::new(SessionId::from("s_1"));
+        quiet.observe(&event(1, Some("t_1"), json!({"type": "turn.started"})));
+        quiet.observe(&event(2, Some("t_1"), end("interrupted")));
+        assert_eq!(quiet.result(None, Vec::new(), 10).verification, None);
     }
 
     #[test]

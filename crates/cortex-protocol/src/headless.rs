@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::ErrorData;
-use crate::event::TurnOutcome;
+use crate::event::{CheckReport, TurnOutcome, Verification};
 use crate::ids::{CallId, ModelId, SessionId, TurnId};
 use crate::item::StopReason;
 use crate::open::open_union;
@@ -92,6 +92,26 @@ pub struct HeadlessResult {
     pub files_changed: Vec<String>,
     /// The calls that were refused because nothing could approve them.
     pub permission_denials: Vec<PermissionDenial>,
+    /// What the project's checks said of the run's turn (since step 19).
+    /// Absent when the turn ended with no verdict: it was interrupted, or
+    /// ended another way before any round of checks ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<HeadlessVerification>,
+}
+
+/// What the project's checks said of a headless run's turn
+/// (`docs/architecture/10-headless.md`, "`json`"; since step 19).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct HeadlessVerification {
+    /// The turn's verdict, as `turn.completed` gave it.
+    pub verdict: Verification,
+    /// How many rounds of checks ran.
+    #[serde(default)]
+    pub rounds: u32,
+    /// The checks of the last round that ran, as each ended.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<CheckReport>,
 }
 
 open_union! {

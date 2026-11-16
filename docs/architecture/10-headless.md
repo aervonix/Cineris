@@ -60,7 +60,8 @@ One JSON object, written when the run ends, on success and on failure alike.
   "tool_calls": 12,
   "duration_ms": 48211,
   "files_changed": ["src/build.rs"],
-  "permission_denials": []
+  "permission_denials": [],
+  "verification": {"verdict": "passed", "rounds": 2, "checks": [{"command": "cargo test", "source": "profile", "entry": "k_3", "outcome": "passed", "exit_code": 0, "duration_ms": 4100}]}
 }
 ```
 
@@ -70,6 +71,7 @@ One JSON object, written when the run ends, on success and on failure alike.
 - `usage` is the protocol's `TokenUsage`; `reasoning` is left out when the provider does not report it.
 - `files_changed` lists what the run's tools wrote, created or deleted: the editing tools' files, and what the shell tool saw a command change. A file that was only read is not in it.
 - `permission_denials` lists tool calls that were refused because nothing could approve them, which is the usual reason a headless run does less than expected. Each is `{ "turn_id", "call_id", "tool", "summary", "reason" }`.
+- `verification` (since step 19) is what the project's checks said of the turn: its `verdict` as `turn.completed` gave it (`passed`, `failed`, `incomplete`, or `skipped` when none ran), how many `rounds` ended, and the last round's `checks`, each with its line, where it came from, how it ended and why ([architecture/15-efficiency.md](15-efficiency.md), "Automatic verification"). Absent for a turn that ended with no verdict. The exit code does not follow it: a turn whose checks failed completed, and is 0; a script that must stop on failing checks reads `verification.verdict`. The `jsonl` stream carries each round as `verification` notices. A run in a project it does not trust (no `--trust-project`) runs no check, and says so in a notice.
 - `session_id` is left out of a run that failed before it had a session (an invalid configuration, say).
 
 ### `jsonl`
