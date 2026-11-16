@@ -33,13 +33,13 @@ mod working_directory;
 use std::sync::Arc;
 
 use cortex_base::{AbsPath, FakeClock, PathStyle, SharedClock};
-use cortex_policy::command::ShellSyntax;
+use cortex_policy::test_support::TestParts;
 use cortex_policy::{
-    Access, Engine, Lexical, Outcome, Parts, Protected, Question, Request, RuleSource,
-    SandboxState, SourcedRule, default_sandbox,
+    Access, Engine, Outcome, Parts, Protected, Question, Request, RuleSource, SourcedRule,
+    default_sandbox,
 };
-use cortex_protocol::ids::{LeaseId, ProjectKey};
-use cortex_protocol::lease::{Budget, Effect, HardLimits, Level, Rule, RuleAction};
+use cortex_protocol::ids::ProjectKey;
+use cortex_protocol::lease::{Effect, Level, Rule, RuleAction};
 pub(crate) use cortex_testkit::Scratch;
 
 /// The test this binary is started into by a test that needs a program
@@ -102,28 +102,16 @@ pub(crate) fn protected() -> Protected {
 /// is about.
 pub(crate) fn parts() -> Parts {
     let workspace = path(WORKSPACE);
-    Parts {
-        lease_id: LeaseId::new("l_1"),
-        level: Level::Supervised,
-        rules: Vec::new(),
-        approved: Vec::new(),
-        sandbox_policy: default_sandbox(&workspace, &["/tmp/cortex-s1".to_owned()], &[]),
-        sandbox: SandboxState::Enforcing,
-        models: Vec::new(),
-        budget: Budget::default(),
-        limits: HardLimits::default(),
-        workspace,
-        home: Some(path(HOME)),
-        trusted: true,
-        repository_trusted: true,
-        protected: protected(),
-        shell: ShellSyntax::Posix,
-        locate: Arc::new(Lexical {
-            home: Some(path(HOME)),
-        }),
-        store: None,
-        clock: clock(),
-    }
+    TestParts::at(workspace.clone())
+        .home(path(HOME))
+        .protected(protected())
+        .sandbox_policy(default_sandbox(
+            &workspace,
+            &["/tmp/cortex-s1".to_owned()],
+            &[],
+        ))
+        .clock(clock())
+        .parts()
 }
 
 pub(crate) fn engine_with(change: impl FnOnce(&mut Parts)) -> Engine {

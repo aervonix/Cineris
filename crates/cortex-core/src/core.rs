@@ -1956,6 +1956,7 @@ impl Core {
         })
         .await?;
         lock(&live.template).parts = parts;
+        cortex_base::hook::await_point!(crate::policy::BEFORE_THE_NEW_LEVEL_IS_IN_FORCE);
         // The new engine is given the project's learned rules from the one
         // place that holds them, as it is put in force.
         match &live.knowledge {

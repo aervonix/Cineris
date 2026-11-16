@@ -18,7 +18,16 @@ thiserror.workspace = true
 # directory (docs/architecture/08-configuration.md, "Other state").
 toml = { workspace = true, features = ["display"] }
 
+[features]
+# Code for tests only: `test_support::TestParts`, an engine's parts with
+# sane defaults for the tests of this crate and of the crates that make an
+# engine. Only dev-dependencies turn it on (`cargo xtask rules`).
+test-support = []
+
 [dev-dependencies]
+# This crate's own integration tests ask for its own `test-support`. Not an
+# edge of the crate table.
+cortex-policy = { workspace = true, features = ["test-support"] }
 cortex-testkit.workspace = true
 serde_json.workspace = true
 

@@ -508,13 +508,17 @@ fn sys_an_answer_is_not_carried_to_a_later_call_that_has_the_same_provider_id() 
 /// Found by the review of the design: a revoke that came while a change of
 /// level was being made reached the engine being replaced only, and the
 /// new engine, which had taken the approvals over before it, kept the
-/// approval. The count of narrowings depends on it too. Each blocking
-/// piece waits one turn here, so the test stops the change of level after
-/// it has made its engine and before it puts it in force, and revokes
-/// then.
+/// approval. The count of narrowings depends on it too. The change of
+/// level runs on the core's task, which is the test's own thread, so the
+/// test stops it at an awaited point, after it has made its engine and
+/// written its lease and before it puts the engine in force, and revokes
+/// then. Before the point it counted the turns of the blocking work to
+/// know where the change was (`World::one_turn_each`), and one more await
+/// in the change would have moved the revoke before the engine was made,
+/// where it tests nothing, with no test failing; under every seed now.
 #[test]
 fn a_revoke_made_while_the_level_changes_is_not_lost() {
-    let mut world = World::new(
+    let world = World::new(
         "redecide_revoke_race",
         [
             calls(&[(
@@ -525,7 +529,6 @@ fn a_revoke_made_while_the_level_changes_is_not_lost() {
             says("Set up."),
         ],
     );
-    world.one_turn_each();
     let core = world.core();
     // Every change of the approvals passes this point of the engine in
     // force, under the lock a change of level holds: the answer recorded
@@ -533,6 +536,7 @@ fn a_revoke_made_while_the_level_changes_is_not_lost() {
     // could be routed round it with no test failing).
     let changing = cortex_testkit::Hold::new("core.policy.changing-approvals");
     changing.release();
+    let in_force = cortex_testkit::Hold::new(cortex_core::BEFORE_THE_NEW_LEVEL_IS_IN_FORCE);
     world.run(async {
         let front = Front::start(&world, &core).await;
         front.prompt("set up CI").await;
@@ -554,8 +558,13 @@ fn a_revoke_made_while_the_level_changes_is_not_lost() {
             },
         })));
         // The new engine is made, with the approvals of the old one, and
-        // the change waits for its record to be written.
-        assert!(crate::poll_once(level.as_mut()).await.is_pending());
+        // waits at the point to be put in force.
+        in_force.drive_until_reached(level.as_mut()).await;
+        assert_eq!(
+            approvals_of(&front).await.len(),
+            1,
+            "the engine in force is still the old one, with the approval"
+        );
         front
             .op(Op::PermissionsRevoke(PermissionsRevokeParams {
                 session_id: front.session.clone(),
@@ -564,7 +573,13 @@ fn a_revoke_made_while_the_level_changes_is_not_lost() {
             .await
             .unwrap();
         assert_eq!(changing.arrivals(), 2, "the revoke was made round the lock");
+        in_force.release();
         level.await.unwrap();
+        assert_eq!(
+            in_force.timed_out(),
+            0,
+            "the change was let go, not timed out"
+        );
         assert_eq!(
             approvals_of(&front).await,
             Vec::new(),

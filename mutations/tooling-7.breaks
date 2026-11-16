@@ -814,7 +814,7 @@ caught-by:
 [break] one-let-go-lets-every-thread-go
 rule: `let_one_go` lets one stopped thread go and keeps the others.
 file: crates/cortex-base/src/hook.rs
-in: Shared::arrive
+in: Shared::may_go
 find: state.permits -= 1;
 replace:
 packages: cortex-base
@@ -824,7 +824,7 @@ caught-by:
 [break] the-first-arrival-stops-in-place-of-the-nth
 rule: With `skipping(n)` the first n arrivals pass and the next one stops.
 file: crates/cortex-base/src/hook.rs
-in: Shared::arrive
+in: Shared::stop
 find: state.arrivals <= state.skip
 replace: state.arrivals < state.skip
 packages: cortex-base
@@ -888,7 +888,7 @@ caught-by:
 [break] a-point-that-never-came-says-nothing-of-the-points-that-did
 rule: A test whose point never comes fails with the points the library did reach, so that a misspelled name is found.
 file: crates/cortex-testkit/src/hold.rs
-in: Hold::reach_within
+in: Hold::not_reached
 find: seen()
 replace: Vec::<&'static str>::new()
 packages: cortex-testkit

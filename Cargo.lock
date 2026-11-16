@@ -302,6 +302,7 @@ name = "cortex-policy"
 version = "0.0.0"
 dependencies = [
  "cortex-base",
+ "cortex-policy",
  "cortex-protocol",
  "cortex-testkit",
  "serde",

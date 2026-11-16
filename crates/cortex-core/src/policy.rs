@@ -275,6 +275,15 @@ pub(crate) struct PolicyParts {
 /// decided yet (a point a test can stop at: [`cortex_base::hook`]).
 pub const AFTER_THE_LOOK: &str = "policy: the look before a command is over, and it is not decided";
 
+/// A change of level has made its engine, with the approvals of the engine
+/// in force as they were then, and written its lease, and has not put the
+/// engine in force: a revoke or an answer recorded now must not be lost to
+/// it. An awaited point ([`cortex_base::hook::await_point!`]): the change
+/// runs on the core's task, which a test of the core runs on its own
+/// thread, and a blocking point there would stop the revoke too.
+pub const BEFORE_THE_NEW_LEVEL_IS_IN_FORCE: &str = "policy: a change of level has made its engine and written its lease, and the engine is not \
+     in force";
+
 impl EnginePolicy {
     pub(crate) fn new(parts: PolicyParts) -> Self {
         Self {
@@ -871,32 +880,9 @@ mod tests {
 
     /// An engine of a session at `supervised` in `/work/app`, with no rules.
     fn engine() -> Engine {
-        let workspace = path("/work/app");
-        Engine::start(cortex_policy::Parts {
-            lease_id: cortex_protocol::ids::LeaseId::new("l_1"),
-            level: cortex_protocol::lease::Level::Supervised,
-            rules: Vec::new(),
-            approved: Vec::new(),
-            sandbox_policy: cortex_policy::default_sandbox(&workspace, &[], &[]),
-            sandbox: cortex_policy::SandboxState::Enforcing,
-            models: Vec::new(),
-            budget: cortex_protocol::lease::Budget::default(),
-            limits: cortex_protocol::lease::HardLimits::default(),
-            workspace,
-            home: Some(path("/users/dev")),
-            trusted: true,
-            repository_trusted: true,
-            protected: cortex_policy::Protected::none(),
-            shell: cortex_policy::ShellSyntax::Posix,
-            locate: Arc::new(cortex_policy::Lexical {
-                home: Some(path("/users/dev")),
-            }),
-            store: None,
-            clock: Arc::new(
-                cortex_base::FakeClock::starting_at("2026-11-13T10:00:00Z").expect("a time"),
-            ),
-        })
-        .expect("an engine")
+        cortex_policy::test_support::TestParts::at(path("/work/app"))
+            .home(path("/users/dev"))
+            .engine()
     }
 
     /// The question about `cargo build`, which "allow for this session"

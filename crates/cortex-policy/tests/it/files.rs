@@ -2,15 +2,11 @@
 //! secrets, protected paths, the walk's gate and what a base state may
 //! keep.
 
-use std::sync::Arc;
-
 use cortex_base::{AbsPath, PathStyle};
 use cortex_policy::command::ShellSyntax;
-use cortex_policy::{
-    Access, Engine, Lexical, Parts, Protected, Request, SandboxState, default_sandbox,
-};
-use cortex_protocol::ids::LeaseId;
-use cortex_protocol::lease::{Budget, Effect, HardLimits, Level, RuleAction};
+use cortex_policy::test_support::TestParts;
+use cortex_policy::{Access, Engine, Parts, Protected, Request};
+use cortex_protocol::lease::{Effect, Level, RuleAction};
 use cortex_protocol::methods::ApprovalChoice;
 use cortex_testkit::hostile::{self, Kind};
 
@@ -380,29 +376,15 @@ fn windows_engine(rules: Vec<cortex_policy::SourcedRule>) -> Engine {
 }
 
 fn windows_parts(rules: Vec<cortex_policy::SourcedRule>) -> Parts {
-    let workspace = windows(r"C:\Work\App");
-    let home = windows(r"C:\People\Dev");
-    Parts {
-        lease_id: LeaseId::new("l_1"),
-        level: Level::Supervised,
-        rules,
-        approved: Vec::new(),
-        sandbox_policy: default_sandbox(&workspace, &[], &[]),
-        sandbox: SandboxState::Enforcing,
-        models: Vec::new(),
-        budget: Budget::default(),
-        limits: HardLimits::default(),
-        workspace,
-        home: Some(home.clone()),
-        trusted: true,
-        repository_trusted: true,
-        protected: Protected::none()
-            .closed(windows(r"C:\People\Dev\AppData\Roaming\cortex-harness")),
-        shell: ShellSyntax::PowerShell,
-        locate: Arc::new(Lexical { home: Some(home) }),
-        store: None,
-        clock: clock(),
-    }
+    TestParts::at(windows(r"C:\Work\App"))
+        .home(windows(r"C:\People\Dev"))
+        .rules(rules)
+        .protected(
+            Protected::none().closed(windows(r"C:\People\Dev\AppData\Roaming\cortex-harness")),
+        )
+        .shell(ShellSyntax::PowerShell)
+        .clock(clock())
+        .parts()
 }
 
 fn windows_read(engine: &Engine, file: &str) -> Said {
