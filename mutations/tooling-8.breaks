@@ -253,3 +253,12 @@ find: Some(record) if base.starts_with(record) || record.starts_with(&short) => 
 replace: Some(_) => None,
 caught-by:
     nonblocking::base_tests::a_record_of_another_commit_than_the_base_is_said_and_of_the_base_is_not
+
+[break] try-result-one-os-judged-by-the-whole-run
+rule: `try-result --os` judges the job it chose, not the whole run: a failed Windows job is not a failure of the Linux one.
+file: xtask/src/try_result.rs
+in: conclusion_read
+find: if one_os {
+replace: if false {
+caught-by:
+    try_result::tests::one_os_is_judged_by_its_own_job_and_the_whole_run_by_its_conclusion
