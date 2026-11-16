@@ -118,6 +118,13 @@ pub mod code {
     pub const NO_CHECKS: &str = "no_checks";
     /// The session already has a supervisor.
     pub const SUPERVISOR_PRESENT: &str = "supervisor_present";
+    /// A page's cursor is not one a page of this list gave (`session/list`,
+    /// `session/read`).
+    pub const INVALID_CURSOR: &str = "invalid_cursor";
+    /// A session at `unrestricted` was asked of a server that was not
+    /// started at it: only the server's own command line or configuration
+    /// may allow it.
+    pub const UNRESTRICTED_NOT_ALLOWED: &str = "unrestricted_not_allowed";
     /// A value named something this build does not know: a model, a level, a
     /// speed, an item.
     pub const UNKNOWN_VALUE: &str = "unknown_value";

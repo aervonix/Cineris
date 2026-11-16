@@ -56,7 +56,9 @@ pub use crate::core::{Client, Core, CoreOptions, OpError};
 pub use crate::events::{EventQueue, Outgoing, QUEUE_CAPACITY};
 pub use crate::knowledge::AFTER_THE_RULES;
 pub use crate::manage::{Project, ProjectFiles, ProviderCredential, TrustState, Trusted};
-pub use crate::policy::{AFTER_THE_LOOK, BEFORE_THE_NEW_LEVEL_IS_IN_FORCE, PermissionDenial};
+pub use crate::policy::{
+    AFTER_THE_LOOK, BEFORE_THE_APPROVAL_IS_OPEN, BEFORE_THE_NEW_LEVEL_IS_IN_FORCE, PermissionDenial,
+};
 pub use crate::provider::{ANTHROPIC_KEY_ENV, Connector, EFFORT_ALIASES, KeyFound};
 pub use crate::reload::{CHOICE_BEING_KEPT, TRUST_JUDGED};
 pub use crate::repo_map::Probe;

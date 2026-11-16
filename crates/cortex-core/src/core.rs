@@ -2349,7 +2349,7 @@ impl ListCursor {
         let refused = || {
             error(
                 ErrorKind::Usage,
-                "invalid_cursor",
+                code::INVALID_CURSOR,
                 "That cursor is not one this server gave for `session/list`: list again from \
                  the start.",
             )

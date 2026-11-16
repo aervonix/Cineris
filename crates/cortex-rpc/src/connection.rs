@@ -735,7 +735,7 @@ impl Connection {
                 .refused(self.shared.refuse_with(
                     id,
                     ErrorKind::Permission,
-                    "unrestricted_not_allowed",
+                    cortex_protocol::error::code::UNRESTRICTED_NOT_ALLOWED,
                     "A session at `unrestricted` is the server's command line's to allow: start \
                      the server with --permission-mode unrestricted.",
                 )),

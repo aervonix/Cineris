@@ -311,3 +311,13 @@ replace: let found: Vec<Item> = progress.into_iter().filter(|_| false).collect()
 caught-by:
     cortex-core paging::tests::an_item_is_given_once_and_one_can_be_read_by_its_id
     cortex-core::it events::an_item_in_progress_can_be_read_with_what_it_has_so_far
+
+[break] a-client-that-opens-while-an-approval-is-put-is-never-put-it
+rule: Once an approval's request is open, every client of the session that may answer and was not asked is put it: one that opened the session between the look at who may answer and the request being open included.
+file: crates/cortex-core/src/policy.rs
+in: EnginePolicy::ask
+find: if !asked.contains(&client) {
+replace: if false && !asked.contains(&client) {
+caught-by:
+    cortex-core::it approvals::a_client_that_opens_the_session_while_an_approval_is_being_put_is_put_it
+

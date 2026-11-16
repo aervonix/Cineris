@@ -78,7 +78,7 @@ pub(crate) fn page(
         Some(text) => text.parse::<usize>().map_err(|_| {
             error(
                 ErrorKind::Usage,
-                "invalid_cursor",
+                cortex_protocol::error::code::INVALID_CURSOR,
                 "That cursor is not one this server gave for `session/read`: read again from the \
                  start.",
             )

@@ -1076,3 +1076,46 @@ fn a_tool_outcome_compared_with_a_name_no_outcome_has_fails_the_test() {
         let _ = results[0].1 == "ok";
     });
 }
+
+/// A client that opens the session between the policy's look at who may
+/// answer an approval and the request being open is put it too (the review
+/// of step 27's core changes): the turn is held between the two, a second
+/// client opens the session there, and once the request is open both
+/// clients have it, under one id.
+#[test]
+fn a_client_that_opens_the_session_while_an_approval_is_being_put_is_put_it() {
+    let world = World::new(
+        "approval_join_race",
+        [
+            calls(&[("c1", "shell", json!({"command": "ninja"}))]),
+            says("Refused."),
+        ],
+    );
+    let core = world.core();
+    let opening = cortex_testkit::Hold::new(cortex_core::BEFORE_THE_APPROVAL_IS_OPEN);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("build it").await;
+        // The turn runs on the core's task until it stops at the point.
+        let mut nothing = std::pin::pin!(std::future::pending::<()>());
+        opening.drive_until_reached(nothing.as_mut()).await;
+        let other = front.join(ClientInfo::user()).await;
+        opening.release();
+        let (id, request) = front.approval().await;
+        assert_eq!(request.call_id.as_str(), "c1");
+        // Put to both in the same step of the turn's task, so the second
+        // client has it by now.
+        other.drain();
+        assert_eq!(
+            other.approvals().len(),
+            1,
+            "the client that opened the session while the approval was being put was never put it"
+        );
+        other.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        assert_eq!(front.results()[0].1, "denied");
+        assert_eq!(opening.timed_out(), 0, "the turn was let go, not timed out");
+        front.close().await;
+        other.close().await;
+    });
+}
