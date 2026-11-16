@@ -806,3 +806,163 @@ fn the_role_given_at_initialize_binds_the_client() {
         .unwrap_err();
     assert_eq!(refused.code, "role_not_allowed");
 }
+
+/// With the core keeping sessions, as `serve --socket` runs it, a session
+/// survives its client's going: the session runs on, and another client
+/// opens it again (an observer may open only a session that is running).
+#[test]
+fn a_kept_session_survives_its_client_and_another_opens_it() {
+    let world = World::new("kept");
+    world.server.push(anthropic::text(&["Hello."]));
+    let mut options = world.options();
+    options.keep_sessions = true;
+    let core = crate::CoreThread::start(options);
+    let Wire {
+        mut lines, ended, ..
+    } = Wire::connection(&core, world.serve_options(), 64);
+    lines
+        .initialize(conformance::initialize())
+        .expect("initialize");
+    let cortex_protocol::methods::OpResult::SessionNew(opened) =
+        lines.call(new_session(&world)).expect("a session opens")
+    else {
+        panic!("not a session");
+    };
+    let session: SessionId = opened.session.session_id;
+    lines
+        .call(Op::TurnStart(TurnStartParams {
+            session_id: session.clone(),
+            input: vec![Part::text("go")],
+            delivery: None,
+        }))
+        .expect("a turn starts");
+    // The client goes: its input ends, and its connection with it.
+    drop(lines);
+    assert_eq!(ended.recv().unwrap(), Ended::Closed);
+    assert_eq!(
+        core.core.open_sessions(),
+        std::slice::from_ref(&session),
+        "the session ended with its client"
+    );
+
+    let mut observer = Wire::serve(&core, world.serve_options(), 64);
+    let mut params = conformance::initialize();
+    params.role = cortex_protocol::methods::ClientRole::Observer;
+    observer.lines.initialize(params).expect("initialize");
+    observer
+        .lines
+        .call(Op::SessionOpen(SessionRef {
+            session_id: session,
+        }))
+        .expect("another client opens the kept session");
+}
+
+/// A supervisor connection is given the server's grant: it is put each
+/// approval of the session it opens, at once with the user; its allow of a
+/// call beyond the grant (the test lease allows `make` alone) is not taken;
+/// and the user's answer settles the request.
+#[test]
+fn a_supervisor_cannot_answer_beyond_the_servers_grant_and_the_user_does() {
+    use conformance::Inbound;
+    use cortex_protocol::methods::{
+        ApprovalChoice, ApprovalResponse, ClientRole, OpResult, ServerRequest, ServerResponse,
+    };
+
+    let world = World::new("supervisor");
+    world
+        .server
+        .push(anthropic::tool("c1", "shell", &json!({"command": "ninja"})));
+    world.server.push(anthropic::text(&["Refused."]));
+    let core = world.core();
+    let mut options = world.serve_options();
+    options.supervisor_grant = Some(
+        serde_json::from_value(json!({
+            "id": "l_test",
+            "grant": {
+                "level": "supervised",
+                "rules": [{"effect": "exec", "match": "make", "action": "allow"}],
+                "sandbox": {"read": {"all": true}, "write": {"all": true},
+                    "protect": {"all": false}, "network": "off"},
+                "budget": {},
+                "limits": {"merge_to_main": false}
+            },
+            "expires": {"kind": "end_of_session"},
+            "granted_by": {"kind": "user"}
+        }))
+        .expect("the test lease reads"),
+    );
+    let mut user = Wire::connect(&core, options.clone());
+    let OpResult::SessionNew(opened) = user.lines.call(new_session(&world)).expect("a session")
+    else {
+        panic!("not a session");
+    };
+    let session: SessionId = opened.session.session_id;
+    let mut layer = Wire::serve(&core, options, 64);
+    let mut params = conformance::initialize();
+    params.role = ClientRole::Supervisor;
+    layer.lines.initialize(params).expect("initialize");
+    layer
+        .lines
+        .call(Op::SessionOpen(SessionRef {
+            session_id: session.clone(),
+        }))
+        .expect("the supervisor opens the session");
+
+    user.lines
+        .call(Op::TurnStart(TurnStartParams {
+            session_id: session.clone(),
+            input: vec![Part::text("build it")],
+            delivery: None,
+        }))
+        .expect("a turn starts");
+    let approval = |lines: &mut conformance::Lines| loop {
+        match lines.next() {
+            Some(Inbound::Request(id, ServerRequest::Approval(_))) => break id,
+            Some(_) => {}
+            None => panic!("the connection closed"),
+        }
+    };
+    let id = approval(&mut layer.lines);
+    assert_eq!(approval(&mut user.lines), id, "the user was put it too");
+
+    layer.lines.respond(
+        id.clone(),
+        ServerResponse::Approval(ApprovalResponse {
+            choice: ApprovalChoice::AllowOnce,
+            note: None,
+        }),
+    );
+    // A request read after the answer: the answer was put to the core
+    // before it, and was not taken, or the user's below would be too late.
+    layer
+        .lines
+        .call(Op::PermissionsList(SessionRef {
+            session_id: session.clone(),
+        }))
+        .expect("a supervisor reads");
+    user.lines.respond(
+        id,
+        ServerResponse::Approval(ApprovalResponse {
+            choice: ApprovalChoice::Deny,
+            note: None,
+        }),
+    );
+    let mut outcomes = Vec::new();
+    loop {
+        match user.lines.next() {
+            Some(Inbound::Event(event)) => match &event.event {
+                Event::ItemCompleted(_) => {
+                    let value = serde_json::to_value(&event).unwrap();
+                    if let Some(outcome) = value.pointer("/item/outcome").and_then(Value::as_str) {
+                        outcomes.push(outcome.to_owned());
+                    }
+                }
+                Event::SessionIdle(_) => break,
+                _ => {}
+            },
+            Some(_) => {}
+            None => panic!("the user's connection closed"),
+        }
+    }
+    assert_eq!(outcomes, ["denied"], "the user's answer did not settle it");
+}
