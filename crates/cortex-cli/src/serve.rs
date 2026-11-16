@@ -80,12 +80,21 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
     let stop = CancelToken::new();
     let ending = CancelToken::new();
     let (done, finished) = oneshot::channel::<u8>();
+    // The core thread serves once the signals are watched: a signal that
+    // came before would end the process by its default action, part-way.
+    let (watched, ready) = std::sync::mpsc::channel::<()>();
     let (core_stop, core_ending) = (stop.clone(), ending.clone());
     // Not joined: past its bound the process ends without it.
     let core_thread = std::thread::Builder::new()
         .name("cortex-core".to_owned())
         .spawn(move || {
-            let code = core_thread(options, stalled_client, &core_stop, &core_ending, name);
+            let code = core_thread(
+                options,
+                stalled_client,
+                (&core_stop, &core_ending),
+                &ready,
+                name,
+            );
             let _ = done.send(code);
         });
     if let Err(error) = core_thread {
@@ -107,6 +116,7 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
                 interrupted,
                 &core_done,
                 (&stop, &ending),
+                watched,
                 &signalled,
             ))
         });
@@ -138,8 +148,10 @@ async fn watch(
     mut interrupted: mpsc::UnboundedReceiver<Interrupt>,
     core_done: &Arc<AtomicBool>,
     (stop, ending): (&CancelToken, &CancelToken),
+    watched: std::sync::mpsc::Sender<()>,
     signalled: &std::sync::Mutex<Option<u8>>,
 ) -> Option<u8> {
+    let mut watched = Some(watched);
     let mut watch = std::pin::pin!(signals::watch(interrupts, Arc::clone(core_done)));
     let mut watching = true;
     let mut began = std::pin::pin!(async {
@@ -177,6 +189,11 @@ async fn watch(
         if watching && watch.as_mut().poll(context).is_ready() {
             watching = false;
         }
+        // Polled once, the watcher has its handlers in place (or has found
+        // there are none to have): the core thread may serve.
+        if let Some(watched) = watched.take() {
+            let _ = watched.send(());
+        }
         std::task::Poll::Pending
     })
     .await
@@ -200,8 +217,8 @@ async fn poll_either(first: impl Future<Output = ()>, second: impl Future<Output
 fn core_thread(
     options: cortex_core::CoreOptions,
     stalled_client: Duration,
-    stop: &CancelToken,
-    ending: &CancelToken,
+    (stop, ending): (&CancelToken, &CancelToken),
+    ready: &std::sync::mpsc::Receiver<()>,
     name: &str,
 ) -> u8 {
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -226,6 +243,9 @@ fn core_thread(
                 );
             }
         };
+        // Nothing is read before the signals are watched; a main thread
+        // that could not watch them has let the channel go.
+        let _ = ready.recv();
         let (transport, written) = match Transport::blocking(io::stdin(), io::stdout()) {
             Ok(transport) => transport,
             Err(error) => {

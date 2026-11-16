@@ -302,7 +302,22 @@ fn sys_serve_stdio_conforms_to_the_core_in_process() {
     assert_eq!(in_process.len(), conformance::scenarios().len());
     for ((name, first), (_, second)) in in_process.iter().zip(&over_stdio) {
         for (at, (one, other)) in first.0.iter().zip(&second.0).enumerate() {
-            assert_eq!(one, other, "{name}: entry {at} differs");
+            if one != other {
+                let around = |entries: &[serde_json::Value]| -> Vec<String> {
+                    entries[at.saturating_sub(3)..(at + 3).min(entries.len())]
+                        .iter()
+                        .map(|entry| {
+                            let text = entry.to_string();
+                            text.chars().take(200).collect()
+                        })
+                        .collect()
+                };
+                panic!(
+                    "{name}: entry {at} differs.\nin process:\n{:#?}\nover standard I/O:\n{:#?}",
+                    around(&first.0),
+                    around(&second.0)
+                );
+            }
         }
         assert_eq!(
             first.0.len(),
