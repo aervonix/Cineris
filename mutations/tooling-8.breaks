@@ -193,3 +193,25 @@ find: .map(|(os, note)| (*os, ab_heading(*os), format!("{note}\n")))
 replace: .filter(|_| false).map(|(os, note)| (*os, ab_heading(*os), format!("{note}\n")))
 caught-by:
     records::tests::an_os_left_out_of_an_ab_is_written_as_its_note
+
+# Tests the seventh tooling step left thin (item 9).
+
+[break] hook-an-ended-hold-wakes-no-waiter
+rule: Ending a hold wakes a hold of the same point that waits for it.
+file: crates/cortex-base/src/hook.rs
+in: Hold::drop
+find: REGISTRY.freed.notify_all();
+replace: drop(&REGISTRY.freed);
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_second_hold_of_a_point_waits_for_the_first_to_end
+
+[break] hook-a-second-hold-does-not-wait
+rule: A second hold of a point waits until the first has ended.
+file: crates/cortex-base/src/hook.rs
+in: Hold::with_limit
+find: while registry.holds.iter().any(|hold| hold.point == point) {
+replace: while false && registry.holds.iter().any(|hold| hold.point == point) {
+packages: cortex-base
+caught-by:
+    hook::enabled::tests::a_second_hold_of_a_point_waits_for_the_first_to_end
