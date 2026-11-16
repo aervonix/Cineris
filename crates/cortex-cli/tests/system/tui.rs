@@ -648,6 +648,7 @@ fn resident_kib(session: &Session) -> Option<u64> {
         })
 }
 
+#[expect(clippy::print_stdout, reason = "a measurement prints what it measured")]
 fn percentiles(name: &str, mut times: Vec<f64>) {
     times.sort_by(f64::total_cmp);
     let at = |share: usize| times[(times.len() * share / 100).min(times.len() - 1)];
