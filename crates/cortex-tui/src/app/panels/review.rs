@@ -1,5 +1,5 @@
 //! The review panel (`docs/architecture/09-tui.md`, "Panels";
-//! `docs/steps/24/answered.md`, points 2 and 4b): what the last turn
+//! "The panels as built"): what the last turn
 //! changed, and what the project's checks said of it.
 //!
 //! **What it gathers,** turn by turn from `turn.started`: each file an

@@ -592,6 +592,7 @@ impl App {
             }));
             self.pending.insert(ticket, Pending::Said);
         }
+        self.left_session();
         self.had_turn = false;
         self.last_cost = None;
         self.usage = None;
