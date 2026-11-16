@@ -143,7 +143,7 @@ fn measure_prompt_to_request_with_a_long_history() {
 /// skips at once (step 19; `docs/performance-budgets.md`).
 #[test]
 #[ignore = "a measurement, run by hand in a release build"]
-fn measure_the_verification_stage_when_no_check_runs() {
+fn perf_the_verification_stage_when_no_check_runs() {
     let world = World::new("measure_verify_stage", []);
     let rig = Setup::new(&world).start(&world);
     let turns = 400;
