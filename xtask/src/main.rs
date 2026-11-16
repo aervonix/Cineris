@@ -18,9 +18,9 @@
 use std::process::ExitCode;
 
 mod ab;
-mod apply;
 mod alias;
 mod api_diff;
+mod apply;
 mod checks;
 mod ci_log;
 mod combine;

@@ -861,9 +861,12 @@ pub(crate) fn ab_detail_text(one: &Compared, against: &str, top: usize) -> Strin
     text
 }
 
+/// The OSes an A/B left out, each with the note that says why.
+pub(crate) type LeftOut = Vec<(Os, String)>;
+
 /// The A/B of each OS a `try` run has, as far as any round was finished by
 /// both sides. An OS with none is named in the returned notes, with why.
-pub(crate) fn ab_compared(run: u64) -> Result<(Vec<Compared>, Vec<(Os, String)>)> {
+pub(crate) fn ab_compared(run: u64) -> Result<(Vec<Compared>, LeftOut)> {
     let mut compared = Vec::new();
     let mut notes = Vec::new();
     for os in [Os::Windows, Os::Linux] {

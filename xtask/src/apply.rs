@@ -314,15 +314,16 @@ fn plan(
 ) -> Result<(Plan, String)> {
     let mut files: Plan = Vec::new();
     let mut shown = String::new();
-    let index_of = |files: &mut Plan, path: &Path, read: &mut dyn FnMut(&Path) -> Option<String>| {
-        if let Some(index) = files.iter().position(|(known, _, _)| known == path) {
-            index
-        } else {
-            let before = read(path);
-            files.push((path.to_path_buf(), before.clone(), before));
-            files.len() - 1
-        }
-    };
+    let index_of =
+        |files: &mut Plan, path: &Path, read: &mut dyn FnMut(&Path) -> Option<String>| {
+            if let Some(index) = files.iter().position(|(known, _, _)| known == path) {
+                index
+            } else {
+                let before = read(path);
+                files.push((path.to_path_buf(), before.clone(), before));
+                files.len() - 1
+            }
+        };
     for (line, change) in &script.changes {
         match change {
             Change::Edit(number) => {
@@ -487,7 +488,11 @@ fn run_with(
     let text =
         fs::read_to_string(&path).map_err(|error| format!("could not read {path}: {error}"))?;
     let script = parse(&text)?;
-    let edits = if script.changes.iter().any(|(_, c)| matches!(c, Change::Edit(_))) {
+    let edits = if script
+        .changes
+        .iter()
+        .any(|(_, c)| matches!(c, Change::Edit(_)))
+    {
         replace::parse_script(&script.edits)?
     } else {
         Vec::new()
@@ -522,7 +527,10 @@ fn run_with(
     );
     let touched: Vec<PathBuf> = plan.iter().map(|(path, _, _)| path.clone()).collect();
     for (line, check) in &script.checks {
-        println!("\n== check: {} (the script's line {line}) ==", check.shown());
+        println!(
+            "\n== check: {} (the script's line {line}) ==",
+            check.shown()
+        );
         if let Err(error) = checking(check, &touched) {
             if keep {
                 return Err(format!(
@@ -678,7 +686,9 @@ text
 
     fn files(plan: &Plan) -> Vec<(String, Option<String>, Option<String>)> {
         plan.iter()
-            .map(|(path, before, after)| (path.display().to_string(), before.clone(), after.clone()))
+            .map(|(path, before, after)| {
+                (path.display().to_string(), before.clone(), after.clone())
+            })
             .collect()
     }
 
