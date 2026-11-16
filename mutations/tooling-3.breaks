@@ -265,7 +265,7 @@ caught-by:
 [break] try-against-ignored
 rule: With --against, test is an A/B run of the two refs.
 file: xtask/src/try_run.rs
-in: Inputs::command
+in: Inputs::build
 find: if let Some(against) = &self.against {
 replace: if let Some(against) = self.against.as_ref().filter(|_| false) {
 caught-by:

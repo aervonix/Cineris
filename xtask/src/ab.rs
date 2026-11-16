@@ -126,6 +126,12 @@ impl Request {
     }
 }
 
+/// Whether `cargo xtask ab` would take `arguments`, which it reads and runs
+/// nothing: how `try` refuses what it cannot pass on before it builds.
+pub(crate) fn check_arguments(arguments: &[String]) -> Result<()> {
+    Request::parse(arguments).map(|_| ())
+}
+
 /// Which side runs first in round `round`, counted from 0: base, head,
 /// then head, base, and so on.
 pub(crate) fn order(round: usize) -> [Which; 2] {
@@ -176,7 +182,6 @@ pub(crate) fn medians(runs: &[Vec<TestCase>]) -> Vec<TestCase> {
         })
         .collect()
 }
-
 
 /// One side's run of one round: it finished, with its report, or a test
 /// failed in it (or the run could not be made).
@@ -855,7 +860,6 @@ pub(crate) fn attempt_of(job: JobEnd, report: Result<Report>) -> Result<Attempt>
     }
 }
 
-
 fn name(which: Which, label: &str) -> String {
     match which {
         Which::Base => format!("base ({label})"),
@@ -1118,6 +1122,10 @@ mod tests {
         );
         // A test that passed on its retry did not fail.
         assert_eq!(report.cases.len(), 7);
+        // The first line that says something: the failure's text may begin
+        // with a blank one.
+        let report = Report::of(&xml(&[("bad", Some("\n  \nthe real first line"))]));
+        assert_eq!(report.failed[0].message, "the real first line");
     }
 
     #[test]
@@ -1137,7 +1145,11 @@ mod tests {
         let none = failure_of(None, "x".to_owned(), true);
         assert!(none.tests.is_empty() && none.cases.is_empty() && !none.by_tests);
         // A report that names no failed test explains nothing either.
-        let clean = failure_of(Some(Report::of(&xml(&[("ok", None)]))), "x".to_owned(), true);
+        let clean = failure_of(
+            Some(Report::of(&xml(&[("ok", None)]))),
+            "x".to_owned(),
+            true,
+        );
         assert!(!clean.by_tests);
     }
 
@@ -1154,10 +1166,7 @@ mod tests {
         let attempt = attempt_of(job(Some("the tests failed"), true), report()).unwrap();
         assert!(matches!(&attempt, Attempt::Failed(failure) if failure.by_tests));
         // No report at all.
-        let attempt = attempt_of(
-            job(Some("the tests failed"), true),
-            Err("none".to_owned()),
-        );
+        let attempt = attempt_of(job(Some("the tests failed"), true), Err("none".to_owned()));
         assert_eq!(attempt, Ok(failed(&[])));
         // A run that passed is finished, and one that left no report is an
         // error, not a failed attempt: nothing says it failed.

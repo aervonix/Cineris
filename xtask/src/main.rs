@@ -140,9 +140,13 @@ Showing that the tests bite
 On the runners, without a pull request (the `try` workflow runs this)
   try --command 'COMMAND [ARGS]' [--profile ci|release|dist] [--count N]
       [--load N] [--cores K] [--filter 'EXPR; EXPR'] [--against REF]
-                    One of test, stress, startup, perf or ci, as the workflow's
-                    inputs ask: `try --help` has the rules. `perf -p CRATE`
-                    is the crate's ignored perf_ tests in a release build.
+      [--commit SHA] [--dry-run]
+                    One of test, stress, startup, perf, ci or mutate, as the
+                    workflow's inputs ask: `try --help` has the rules. `perf
+                    -p CRATE` is the crate's ignored perf_ tests in a release
+                    build; `--dependents` is resolved to the crates it adds.
+                    --dry-run prints the command the job would run and fails
+                    as the job would, building nothing.
   ab --base DIR [--label NAME] [--count N] [--keep-going] [-p CRATE]...
      [-- NEXTEST ARGS]
                     This tree's tests and those of the tree at DIR, each built
@@ -276,6 +280,8 @@ fn main() -> ExitCode {
         }
         // Its exit code says more than pass or fail.
         Some("mutate") => return mutate::main(&rest),
+        // It runs `mutate` too, and passes that one's exit code on.
+        Some("try") => return try_run::main(&rest),
         Some(command) => run(command, &rest),
     };
 
@@ -316,7 +322,6 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "advisories" => nonblocking::advisories(),
         "alias" => alias::run(rest),
         "stress" => stress::run(rest),
-        "try" => try_run::run(rest),
         "try-result" => try_result::run(rest),
         "ab" => ab::run(rest),
         "combine" => combine::run(rest),
