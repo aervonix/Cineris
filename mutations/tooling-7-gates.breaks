@@ -14,7 +14,7 @@ replace:
 packages: cortex-base, cortex-testkit
 caught-by:
     hook::enabled::tests::a_thread_stops_at_a_held_point_until_the_hold_releases_it
-    hook::tests::a_hold_stops_a_thread_of_the_library_until_the_test_lets_it_go
+    hold::tests::a_hold_stops_a_thread_of_the_library_until_the_test_lets_it_go
     cortex-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
 
 [break] a-release-does-not-release

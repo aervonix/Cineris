@@ -509,6 +509,10 @@ mod enabled {
             let hold = Hold::new("hook tests: never reached");
             assert!(!hold.wait_reached(Duration::ZERO));
             assert!(hold.wait_stopped(0, Duration::ZERO));
+            assert!(
+                !hold.wait_stopped(1, Duration::ZERO),
+                "nobody is stopped, and the wait says so at its bound"
+            );
         }
 
         #[test]
@@ -524,6 +528,7 @@ mod enabled {
             assert_eq!(hold.stopped(), 1);
             hold.release();
             third.join().unwrap();
+            assert_eq!(hold.timed_out(), 0, "the release let it go, not the bound");
         }
 
         #[test]
@@ -572,8 +577,14 @@ mod enabled {
             let hold = Hold::new(AT);
             let thread = std::thread::spawn(|| point(AT));
             assert!(hold.wait_reached(LIMIT));
+            let shared = Arc::clone(&hold.shared);
             drop(hold);
             thread.join().unwrap();
+            assert_eq!(
+                lock(&shared.state).timed_out,
+                0,
+                "the drop let it go, not the bound"
+            );
             point(AT);
         }
 
