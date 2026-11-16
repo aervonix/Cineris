@@ -500,3 +500,401 @@ find: if !chosen.contains(package) {
 replace: if false {
 caught-by:
     api_diff::tests::a_feature_of_a_crate_not_compared_or_that_the_crate_lacks_is_refused
+# From mutations/tooling-10-runs.breaks (part `runs`).
+# The tenth tooling step's breaks: `try --dispatch` and `try-result` on
+# the runs (against resolved at dispatch, a run queued with no jobs, each
+# side's wall time), and `cargo xtask branch`.
+
+# --against resolved at dispatch.
+
+[break] dispatch-sends-a-ref-unresolved
+rule: A dispatch resolves --against REF to a commit and passes no ref name.
+file: xtask/src/try_run.rs
+in: resolve_against
+find: if commit_hash(against)
+replace: if !against.is_empty()
+caught-by:
+    try_run::tests::against_is_resolved_to_its_commit_at_dispatch_and_a_hash_passes_as_it_is
+
+[break] dispatch-takes-any-answer-for-a-hash
+rule: What a ref resolves to is used only when it is a full commit hash.
+file: xtask/src/try_run.rs
+in: resolve_against
+find: if !commit_hash(resolved)
+replace: if resolved.is_empty()
+caught-by:
+    try_run::tests::against_is_resolved_to_its_commit_at_dispatch_and_a_hash_passes_as_it_is
+
+[break] dispatch-sends-the-name-it-resolved
+rule: The dispatch sends the hash it resolved, not the name it was given.
+file: xtask/src/try_run.rs
+in: for_dispatch
+find: inputs.against = Some(resolved);
+replace: inputs.against = Some(against);
+caught-by:
+    try_run::tests::against_is_resolved_to_its_commit_at_dispatch_and_a_hash_passes_as_it_is
+
+[break] ab-label-is-the-whole-hash
+rule: An A/B's report calls a base given by its hash by the first twelve digits.
+file: xtask/src/try_run.rs
+find: against[..12].to_owned()
+replace: against.to_owned()
+caught-by:
+    try_run::tests::against_is_resolved_to_its_commit_at_dispatch_and_a_hash_passes_as_it_is
+
+[break] dry-run-says-nothing-of-resolving
+rule: A dry run says that a dispatch would resolve --against REF.
+file: xtask/src/try_run.rs
+in: plan
+find: if inputs.dispatch.is_none()
+replace: if inputs.dispatch.is_some()
+caught-by:
+    try_run::tests::a_dry_run_says_it_would_resolve_against_and_asks_nothing
+
+# A run queued with no jobs.
+
+[break] queued-in-progress-with-a-job-started
+rule: A run in progress is named as waiting only while none of its jobs has started.
+file: xtask/src/runs.rs
+in: sat_queued
+find: "in_progress" => jobs_started == 0
+replace: "in_progress" => true
+caught-by:
+    runs::tests::a_run_that_sat_queued_with_no_jobs_past_the_limit_is_named_and_no_other
+
+[break] queued-at-the-limit-is-past-it
+rule: A run is named only when it has waited longer than the limit.
+file: xtask/src/runs.rs
+in: sat_queued
+find: sat > limit_minutes * 60
+replace: sat >= limit_minutes * 60
+caught-by:
+    runs::tests::a_run_that_sat_queued_with_no_jobs_past_the_limit_is_named_and_no_other
+
+[break] queued-a-waiting-job-counts-as-started
+rule: A job that is queued or waiting has not been given a runner.
+file: xtask/src/runs.rs
+in: jobs_started
+find: Some("in_progress" | "completed")
+replace: Some(_)
+caught-by:
+    runs::tests::a_run_that_sat_queued_with_no_jobs_past_the_limit_is_named_and_no_other
+
+[break] try-result-leaves-out-the-queued-line
+rule: try-result says of an unfinished run that it has sat queued past the limit.
+file: xtask/src/try_result.rs
+in: unfinished_text
+find: text.push_str(&queued);
+replace: let _ = &queued;
+caught-by:
+    try_result::tests::an_unfinished_run_says_so_and_names_a_run_that_sat_queued_too_long
+
+[break] try-result-has-no-queued-limit-alias
+rule: try-result takes --queued-limit as another name for --queued-warn, as ci-wait does.
+file: xtask/src/try_result.rs
+in: Request::parse
+find: "--queued-warn" | "--queued-limit"
+replace: "--queued-warn"
+caught-by:
+    try_result::tests::a_request_is_read_and_a_wrong_one_refused
+
+[break] dispatch-has-no-queued-limit-alias
+rule: try --dispatch takes --queued-limit as another name for --queued-warn.
+file: xtask/src/try_run.rs
+in: Inputs::parse
+find: "--queued-warn" | "--queued-limit"
+replace: "--queued-warn"
+caught-by:
+    try_run::tests::a_dispatch_takes_a_queued_limit_and_finds_the_runs_that_waited_past_it
+
+[break] dispatch-looks-at-every-run-of-the-branch
+rule: After a dispatch, only the runs that have waited past the limit are asked about.
+file: xtask/src/try_run.rs
+in: waiting_too_long
+find: crate::runs::sat_queued(status, created, now, 0, limit_minutes).map(|_| id)
+replace: Some(id)
+caught-by:
+    try_run::tests::a_dispatch_takes_a_queued_limit_and_finds_the_runs_that_waited_past_it
+
+# Each side's wall time.
+
+[break] walls-kept-with-the-sides-swapped
+rule: The wall times are kept with the base's as the base's.
+file: xtask/src/ab.rs
+in: walls_json
+find: "base": wall.seconds[0]
+replace: "base": wall.seconds[1]
+caught-by:
+    ab::tests::the_wall_times_are_kept_and_read_back_whole
+
+[break] walls-median-takes-a-failed-side
+rule: A side's run that failed is left out of its median wall time.
+file: xtask/src/ab.rs
+in: walls_table
+find: .filter(|wall| wall.passed[side])
+replace: .filter(|_| true)
+caught-by:
+    ab::tests::each_round_shows_each_sides_wall_time_and_each_side_its_median
+
+[break] walls-first-side-of-the-wrong-round
+rule: The wall times say which side ran first in each round, as the rounds alternate.
+file: xtask/src/ab.rs
+in: walls_table
+find: order(wall.round.saturating_sub(1))
+replace: order(wall.round)
+caught-by:
+    ab::tests::each_round_shows_each_sides_wall_time_and_each_side_its_median
+
+[break] try-result-prints-no-wall-times
+rule: try-result prints an A/B's wall times from the file the run kept.
+file: xtask/src/try_result.rs
+in: job_result
+find: if let Some(path) = &kept.walls
+replace: if let Some(path) = &None::<PathBuf>
+caught-by:
+    try_result::tests::an_ab_job_prints_its_tables_its_rounds_and_the_tests_that_failed
+
+# branch commit-records.
+
+[break] records-takes-any-file
+rule: commit-records commits records alone: docs/**/*.md and mutations/*.breaks.
+file: xtask/src/branch.rs
+in: record_path
+find: _ => false
+replace: _ => true
+caught-by:
+    branch::tests::only_a_record_is_committed_and_its_path_is_read_from_the_top
+    branch::tests::a_request_is_read_and_what_it_lacks_is_said
+
+[break] records-to-a-branch-checked-out
+rule: commit-records refuses a branch that a worktree has checked out.
+file: xtask/src/branch.rs
+in: Holds::uses
+find: .and_then(|head| head.strip_prefix("ref: ")) == Some(reference)
+replace: .and_then(|head| head.strip_prefix("ref: ")) == Some("refs/heads/none of them")
+caught-by:
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] records-written-into-the-worktrees-index
+rule: commit-records builds its commit in an index of its own, never the worktree's.
+file: xtask/src/branch.rs
+in: commit_records
+find: index: Some(&index.0), input: Some(entries.as_bytes())
+replace: index: None, input: Some(entries.as_bytes())
+caught-by:
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] records-commit-that-changes-nothing
+rule: commit-records refuses a commit that changes nothing.
+file: xtask/src/branch.rs
+in: commit_records
+find: if tree == old_tree
+replace: if false && tree == old_tree
+caught-by:
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+# branch fold and to-end.
+
+[break] rewrite-a-published-commit
+rule: fold and to-end refuse a commit that is on the base already.
+file: xtask/src/branch.rs
+in: rewrite
+find: &format!("{base}..{old}")
+replace: &old.clone()
+caught-by:
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] rewrite-over-changes-not-committed
+rule: to-end and fold --last refuse changes that are not committed.
+file: xtask/src/branch.rs
+in: rewrite
+find: !git.yes(&["diff", "--quiet", "HEAD"])?
+replace: false
+caught-by:
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] rewrite-backup-holds-the-new-tip
+rule: The backup ref holds the branch's old tip.
+file: xtask/src/branch.rs
+in: move_transaction
+in-string: create {backup} {old}
+replace: create {backup} {new}
+caught-by:
+    branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
+    branch::tests::sys_records_reach_a_branch_not_checked_out_and_a_fold_rewrites_only_the_current_one
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] rewrite-loses-the-authors-date
+rule: A commit made again keeps its author's date.
+file: xtask/src/branch.rs
+in: Builder::make
+find: format!("@{}", info.author_date)
+replace: "@1700000000 +0000".to_owned()
+caught-by:
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] rewrite-keeps-only-the-subject
+rule: A commit made again keeps its message byte for byte.
+file: xtask/src/branch.rs
+in: Builder::make
+find: input: Some(info.message.as_bytes())
+replace: input: Some(info.subject().as_bytes())
+caught-by:
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] rewrite-takes-a-conflict-for-a-clean-merge
+rule: A commit that conflicts where it would go is named, and nothing is changed.
+file: xtask/src/branch.rs
+in: Builder::merge
+find: Some(1) => false
+replace: Some(1) => true
+caught-by:
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] rewrite-through-a-merge
+rule: fold and to-end refuse a merge in the range they rewrite.
+file: xtask/src/branch.rs
+in: chain_after
+find: words.len() > 2
+replace: words.len() > 3
+caught-by:
+    branch::tests::the_commits_after_the_target_are_a_straight_line_or_refused
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] rewrite-moves-the-commit-to-the-wrong-place
+rule: to-end makes the commits after COMMIT again first, and COMMIT last.
+file: xtask/src/branch.rs
+in: rewrite
+find: (builder.pick(target, &onto)?, old_tree)
+replace: (onto, old_tree)
+caught-by:
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] rewrite-fold-reads-the-index-in-place
+rule: fold reads the staged tree from a copy of the index, so that it writes nothing to the index: write-tree may write its cache of trees into the index it reads. No test can tell that from what `git diff` itself may write there when it refreshes the index, and the tree is the same.
+file: xtask/src/branch.rs
+in: rewrite
+find: index: Some(&copy.0)
+replace: index: None
+expect: survives
+
+# The review's findings.
+
+[break] fold-undo-discards-the-staged-fix
+rule: After a fold of the staged changes, the undo printed is `git reset --soft`, which keeps the fix staged; `--keep` would take it out of the index and the files.
+file: xtask/src/branch.rs
+in: undo
+in-string: git reset --soft {backup}
+replace: git reset --keep {backup}
+caught-by:
+    branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
+
+[break] records-to-a-branch-being-rebased
+rule: A branch another worktree is rebasing (its HEAD detached) is in use, as git branch -f says.
+file: xtask/src/branch.rs
+in: Holds::uses
+find: is(&self.rebase_merge) || is(&self.rebase_apply)
+replace: false
+caught-by:
+    branch::tests::a_branch_a_worktree_has_checked_out_rebases_or_bisects_is_in_use
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] rewrite-a-branch-checked-out-twice
+rule: fold and to-end refuse a branch another worktree also has checked out (worktree add --force), or is rebasing or bisecting.
+file: xtask/src/branch.rs
+in: rewrite
+find: used_elsewhere(&git.dir.join(common), &head_ref, Some(Path::new(own)))
+replace: None::<String>
+caught-by:
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] records-follows-a-link
+rule: commit-records commits a record's own text, and refuses a link, whose target may be outside the repository.
+file: xtask/src/branch.rs
+in: regular_inside
+find: if !kind.is_file()
+replace: if kind.is_dir()
+caught-by:
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] records-through-a-folder-that-leads-out
+rule: commit-records refuses a record reached through a link that leads out of the repository.
+file: xtask/src/branch.rs
+in: regular_inside
+find: real.starts_with(&top)
+replace: real.starts_with(&top) || real.exists()
+caught-by:
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] records-written-over-another-version
+rule: commit-records refuses a record whose copy on the branch is not the one HEAD has: the working file was not written over the branch's version.
+file: xtask/src/branch.rs
+in: not_from_the_branch
+find: if theirs == ours
+replace: if true
+caught-by:
+    branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] rewrite-without-the-tree-check
+rule: The history made again must end at the tree it must (the old tip's, or the staged tree), or nothing is moved.
+file: xtask/src/branch.rs
+in: rewrite
+find: if builder.tree != expected
+replace: if false
+caught-by:
+    branch::tests::sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_a_conflict
+
+[break] rewrite-moves-the-branch-from-wherever-it-is
+rule: The move is from the old tip read at the start: a branch that moved meanwhile is left.
+file: xtask/src/branch.rs
+in: move_transaction
+in-string: update {branch} {new} {old}
+replace: update {branch} {new}
+caught-by:
+    branch::tests::what_each_command_prints_and_gives_git_is_what_it_must_be
+
+[break] records-takes-a-name-that-is-no-branchs
+rule: commit-records checks the branch's name with git check-ref-format --branch before it looks the branch up.
+file: xtask/src/branch.rs
+in: commit_records
+find: .run(&["check-ref-format", "--branch", &request.branch])
+replace: .run(&["rev-parse", "--sq-quote", &request.branch]).map(|_| request.branch.clone())
+caught-by:
+    branch::tests::sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_left_alone
+
+[break] records-takes-any-page-of-the-docs
+rule: The records are a step's pages, the items left open and the break lists, not every page of the docs.
+file: xtask/src/branch.rs
+in: record_path
+find: ["docs", "steps", _, .., name] | ["docs", "outstanding", name] => page(name)
+replace: ["docs", .., name] => page(name)
+caught-by:
+    branch::tests::only_a_record_is_committed_and_its_path_is_read_from_the_top
+
+[break] dispatch-labels-the-base-by-its-hash
+rule: A dispatch that resolves --against keeps the ref as typed as the label the report calls the base.
+file: xtask/src/try_run.rs
+in: for_dispatch
+find: let label = inputs.label.get_or_insert_with(|| against.clone());
+replace: let label = &against;
+caught-by:
+    try_run::tests::against_is_resolved_to_its_commit_at_dispatch_and_a_hash_passes_as_it_is
+
+[break] ab-ignores-the-label
+rule: An A/B's report calls the base by the label given, the ref as the user typed it.
+file: xtask/src/try_run.rs
+in: Inputs::label_of
+find: self.label.clone().unwrap_or_else(|| label_of(against))
+replace: label_of(against)
+caught-by:
+    try_run::tests::against_is_resolved_to_its_commit_at_dispatch_and_a_hash_passes_as_it_is
+
+[break] try-result-fails-on-bad-wall-times
+rule: A wall-times file that cannot be read is a note in try-result, not the end of what it prints.
+file: xtask/src/try_result.rs
+in: walls_text
+find: Err(error) => format!("(each side's wall time is not shown: {error})\n")
+replace: Err(error) => panic!("{error}")
+caught-by:
+    try_result::tests::a_wall_times_file_that_cannot_be_read_is_a_note_and_not_a_failure
