@@ -286,6 +286,7 @@ rule: A call with side effects written after one whose question may answer Stop 
 file: crates/cortex-agent/src/round.rs
 in: Round::pump
 find: && stop_may_answer
+occurrence: 1
 replace: && false
 caught-by:
     denials::a_later_write_waits_for_an_answer_that_may_stop_the_turn

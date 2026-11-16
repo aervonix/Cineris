@@ -471,6 +471,8 @@ pub struct Engine {
     /// The protected paths, read once.
     guarded: Vec<AbsPath>,
     rules: RwLock<Rules>,
+    /// How many times a rule in force was taken back: [`Engine::narrowed`].
+    narrowed: std::sync::atomic::AtomicU64,
 }
 
 /// What one access comes to.
@@ -964,7 +966,27 @@ impl Engine {
                 session: SessionApprovals::new(),
                 compiled,
             }),
+            narrowed: std::sync::atomic::AtomicU64::new(0),
         })
+    }
+
+    /// How many times a rule that let calls run has been taken back since
+    /// the engine was made: an approval revoked ([`revoke`](Self::revoke)),
+    /// a learned command taken off ([`set_learned`](Self::set_learned)).
+    /// It only grows, and it moves after the rules in force have changed,
+    /// so a decision made after it was read is made by the new rules. The
+    /// loop decides a call again when it has moved since the call's
+    /// decision (`docs/architecture/03-agent-loop.md`, "Tool rounds").
+    #[must_use]
+    pub fn narrowed(&self) -> u64 {
+        self.narrowed.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Counts a narrowing. Called with the rules' lock held, after they
+    /// changed.
+    fn narrow(&self) {
+        self.narrowed
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 
     /// The session's standing lease, as it was when the session started.
@@ -1020,6 +1042,24 @@ impl Engine {
         self.recompile(&mut rules);
     }
 
+    /// Takes over every approval `earlier` holds now, the session's and
+    /// those stored for the project, in place of this engine's. It is the
+    /// engine this one replaces, at the moment it is replaced, so what was
+    /// revoked after this one was made stays revoked, and what was approved
+    /// stays approved, each as what it is, under the ids it had. The
+    /// learned commands are not taken over: the core keeps a session's in
+    /// one place, which a change of level reads (step 17).
+    pub fn keep_approvals_of(&self, earlier: &Self) {
+        let (session, approved) = {
+            let held = earlier.read_rules();
+            (held.session.clone(), held.approved.clone())
+        };
+        let mut rules = self.rules.write().unwrap_or_else(PoisonError::into_inner);
+        rules.session = session;
+        rules.approved = approved;
+        self.recompile(&mut rules);
+    }
+
     /// Replaces the rules of the project's learned commands
     /// ([`RuleSource::Learned`]) with `rules`, and compiles the set again.
     /// The project's profile changes while a session runs: a command is
@@ -1037,6 +1077,12 @@ impl Engine {
     /// cannot be read as a whole may be the one that took a command off.
     pub fn set_learned(&self, rules: Vec<Rule>) -> Result<(), Vec<RuleError>> {
         let mut held = self.rules.write().unwrap_or_else(PoisonError::into_inner);
+        let before: Vec<Rule> = held
+            .configured
+            .iter()
+            .filter(|rule| rule.source == RuleSource::Learned)
+            .map(|rule| rule.rule.clone())
+            .collect();
         held.configured
             .retain(|rule| rule.source != RuleSource::Learned);
         let learned: Vec<SourcedRule> = rules
@@ -1072,11 +1118,25 @@ impl Engine {
             Ok(compiled) => {
                 held.configured = with;
                 held.compiled = compiled;
+                // A command that was learned and is not any more has been
+                // taken back.
+                let kept: Vec<&Rule> = held
+                    .configured
+                    .iter()
+                    .filter(|rule| rule.source == RuleSource::Learned)
+                    .map(|rule| &rule.rule)
+                    .collect();
+                if before.iter().any(|rule| !kept.contains(&rule)) {
+                    self.narrow();
+                }
                 Ok(())
             }
             Err(errors) => {
                 // The set without any of them compiled before.
                 self.recompile(&mut held);
+                if !before.is_empty() {
+                    self.narrow();
+                }
                 Err(errors)
             }
         }
@@ -1458,6 +1518,10 @@ impl Engine {
                      safe list applies to it."
                 )));
                 findings.extend(self.judge_unmodelled(rules, command, std::slice::from_ref(cwd)));
+                // It may write where it runs.
+                if self.in_scope(cwd) {
+                    findings.push(self.judge_command_write(rules, cwd));
+                }
                 return (findings, false);
             }
         };
@@ -1533,11 +1597,15 @@ impl Engine {
             let (standing, found) = self.judge_part(rules, part, &here, listing);
             findings.extend(found);
             only_reads &= standing == Standing::ReadOnly;
-            // A command that may write, run after a `cd`, writes where it
-            // runs: judged as the same command would be with the tool's
-            // working directory there. (One that only reads had its
-            // directory judged as a read.)
-            if standing != Standing::ReadOnly && here != *cwd {
+            // A command that may write writes where it runs: after a `cd`,
+            // judged as the same command would be with the tool's working
+            // directory there; and in the tool's working directory, when
+            // that is in the workspace (the tool declares a write of one
+            // outside it, which is judged with the call). So `make` run in
+            // `.git/hooks` is asked about whether a `cd` or the call's
+            // `cwd` took it there. (One that only reads had its directory
+            // judged as a read.)
+            if standing != Standing::ReadOnly && (here != *cwd || self.in_scope(cwd)) {
                 findings.push(self.judge_command_write(rules, &here));
             }
             let matter = match standing {
@@ -2712,6 +2780,9 @@ impl Engine {
             let mut rules = self.rules.write().unwrap_or_else(PoisonError::into_inner);
             let removed = rules.session.remove(ids);
             self.recompile(&mut rules);
+            if removed > 0 {
+                self.narrow();
+            }
             let stored = rules
                 .approved
                 .iter()
@@ -2731,6 +2802,9 @@ impl Engine {
                 .retain(|approval| !ids.contains(&approval.id));
             removed += before - rules.approved.len();
             self.recompile(&mut rules);
+            if rules.approved.len() < before {
+                self.narrow();
+            }
         }
         Ok(removed)
     }

@@ -46,6 +46,7 @@ mod order;
 mod plan;
 mod pressure;
 mod profile;
+mod redecide;
 mod retries;
 mod roles;
 mod rounds;
@@ -324,6 +325,9 @@ impl Seen {
 #[derive(Default)]
 pub struct Log {
     lines: Mutex<Vec<String>>,
+    /// The calls planned, by their plan's summary, in order: a call planned
+    /// again is here twice.
+    planned: Mutex<Vec<String>>,
     wake: Notify,
 }
 
@@ -361,6 +365,15 @@ impl Log {
         lock(&self.lines)
             .iter()
             .filter(|line| *line == wanted)
+            .count()
+    }
+
+    /// How many times the call whose plan's summary is `summary` was
+    /// planned.
+    pub fn plans(&self, summary: &str) -> usize {
+        lock(&self.planned)
+            .iter()
+            .filter(|line| *line == summary)
             .count()
     }
 }
@@ -416,6 +429,8 @@ pub enum Kind {
 ///   path was shown;
 /// - `fail`: end with an error result;
 /// - `session`: the call changes the session, as `plan` and `remember` do;
+/// - `link`: `[target, name]`: when it runs, make `name` in the workspace a
+///   link to the directory `target`, as `ln -s target name` would;
 /// - `bad`: refuse the arguments when the call is planned.
 pub struct Probe {
     spec: ToolSpec,
@@ -433,6 +448,8 @@ struct ProbeArgs {
     graceful: bool,
     record: bool,
     fail: bool,
+    /// The link to make, and the directory it leads to.
+    link: Option<(PathBuf, String)>,
 }
 
 impl Probe {
@@ -475,6 +492,15 @@ impl Tool for Probe {
             .map(|path| cx.paths.resolve(&path))
             .transpose()?;
         let label = text("id").or_else(|| text("path")).unwrap_or_default();
+        let link = match args.get("link").and_then(Json::as_array).map(Vec::as_slice) {
+            Some([target, name]) => {
+                let (Some(target), Some(name)) = (target.as_str(), name.as_str()) else {
+                    return Err(ToolError::invalid("`link` is two names."));
+                };
+                Some((cx.paths.root().to_fs_path().join(name), target.to_owned()))
+            }
+            _ => None,
+        };
         let mut plan = Plan::new(
             format!("{} {label}", self.spec.name),
             ProbeArgs {
@@ -486,6 +512,7 @@ impl Tool for Probe {
                 graceful: args.get("graceful").is_some(),
                 record: args.get("record").is_some(),
                 fail: args.get("fail").is_some(),
+                link,
             },
         );
         match (self.kind, path) {
@@ -509,6 +536,7 @@ impl Tool for Probe {
         if args.get("session").is_some() {
             plan = plan.with_session_change();
         }
+        lock(&self.log.planned).push(plan.summary.clone());
         Ok(plan)
     }
 
@@ -559,6 +587,9 @@ impl Tool for Probe {
                 };
                 cx.files.record_read(path, snapshot, shown);
             }
+            if let Some((link, target)) = &args.link {
+                make_link(target, link);
+            }
             self.log.push(format!("end {name} {label}"));
             if args.fail {
                 ToolResult::error(format!("{name} {label} failed"))
@@ -569,12 +600,35 @@ impl Tool for Probe {
     }
 }
 
+/// Makes `link` a link to the directory `target`, which is written as a
+/// link holds it: relative to the link's own directory. On Windows a
+/// directory link, which the hosted runners may make.
+pub fn make_link(target: &str, link: &std::path::Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).expect("make the link");
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(target, link).expect("make the link");
+}
+
 // ------------------------------------------------------------------ policy
+
+/// How a test decides a call itself, from what it is shown: `None` leaves
+/// it to the decisions scripted by name.
+pub type DecideBy = Arc<dyn Fn(&PlannedCall<'_>) -> Option<Decision> + Send + Sync>;
 
 /// A policy a test scripts by tool name.
 #[derive(Default)]
 pub struct ScriptedPolicy {
     decisions: Mutex<BTreeMap<String, Decision>>,
+    /// Decides before the decisions by name, when set.
+    decide_by: Mutex<Option<DecideBy>>,
+    /// What [`Policy::narrowed`] says.
+    narrowed: std::sync::atomic::AtomicU64,
+    /// The calls whose question was answered "allow": decided again, such
+    /// a call is allowed rather than asked again, as the core's policy
+    /// does with the same question (`docs/architecture/03-agent-loop.md`,
+    /// "A call is decided again").
+    allowed: Mutex<Vec<cortex_protocol::CallId>>,
     /// The answers to come for each tool's questions, in order. With none
     /// left the answer is [`ScriptedPolicy::answer_all`]'s.
     answers: Mutex<BTreeMap<String, VecDeque<Verdict>>>,
@@ -611,6 +665,25 @@ impl ScriptedPolicy {
     /// summary (`write a`), which comes first.
     pub fn decide_for(&self, what: &str, decision: Decision) {
         lock(&self.decisions).insert(what.to_owned(), decision);
+    }
+
+    /// Decides each call with `by` first.
+    pub fn decide_by(
+        &self,
+        by: impl Fn(&PlannedCall<'_>) -> Option<Decision> + Send + Sync + 'static,
+    ) {
+        *lock(&self.decide_by) = Some(Arc::new(by));
+    }
+
+    /// Says that the rules have narrowed: a rule was taken back.
+    pub fn narrow(&self) {
+        self.narrowed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The calls it was shown to decide, by their plan's summary, in order.
+    pub fn decided(&self) -> Vec<String> {
+        lock(&self.decided).clone()
     }
 
     /// Says whether an answer may be to stop the turn.
@@ -722,16 +795,27 @@ impl Policy for ScriptedPolicy {
             !lock(&self.panics_deciding).contains(&call.spec.name),
             "the policy was told to panic deciding"
         );
-        let decisions = lock(&self.decisions);
-        decisions
-            .get(&call.plan.summary)
-            .or_else(|| decisions.get(&call.spec.name))
-            .cloned()
-            .unwrap_or(Decision::Allow)
+        let by = lock(&self.decide_by).clone();
+        let decision = by.and_then(|by| by(call)).unwrap_or_else(|| {
+            let decisions = lock(&self.decisions);
+            decisions
+                .get(&call.plan.summary)
+                .or_else(|| decisions.get(&call.spec.name))
+                .cloned()
+                .unwrap_or(Decision::Allow)
+        });
+        if decision == Decision::Ask && lock(&self.allowed).contains(call.call_id) {
+            return Decision::Allow;
+        }
+        decision
     }
 
     fn answers_may_stop(&self) -> bool {
         lock(&self.may_stop).unwrap_or_else(|| cortex_agent::AllowAll.answers_may_stop())
+    }
+
+    fn narrowed(&self) -> u64 {
+        self.narrowed.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn read_gate(&self) -> Arc<dyn cortex_tools::ReadGate> {
@@ -769,12 +853,16 @@ impl Policy for ScriptedPolicy {
             // loop turns a question's panic into one), so the question is
             // refused, nothing runs, and the rig fails the test when it
             // goes ([`Rig`]'s `Drop`).
-            scripted.or(unscripted).unwrap_or_else(|| {
+            let verdict = scripted.or(unscripted).unwrap_or_else(|| {
                 lock(&self.unscripted_asked).push(call.plan.summary.clone());
                 Verdict::Deny {
                     note: Some("the test scripted no answer".to_owned()),
                 }
-            })
+            });
+            if verdict == Verdict::Allow {
+                lock(&self.allowed).push(call.call_id.clone());
+            }
+            verdict
         })
     }
 }

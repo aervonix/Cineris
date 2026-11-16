@@ -25,7 +25,7 @@
 
 use std::sync::Arc;
 
-use cortex_protocol::{CallId, SessionId, TurnId};
+use cortex_protocol::{CallId, ItemId, SessionId, TurnId};
 use cortex_tools::{BoxFuture, ChangePreview, Json, OpenGate, Plan, ReadGate, ToolSpec};
 
 /// One planned tool call, as the policy is shown it.
@@ -37,6 +37,12 @@ pub struct PlannedCall<'a> {
     pub turn: &'a TurnId,
     /// The provider's id for the call.
     pub call_id: &'a CallId,
+    /// The loop's own id for the call: its result's item, unique in the
+    /// session. A provider's id may repeat (a server that gives none has
+    /// ids made up for it), and a call made again by a response sent again
+    /// has a new one of these. So it is what an answer is kept by, for a
+    /// call that is decided again.
+    pub item: &'a ItemId,
     /// The tool's spec: its name, and what it does by default.
     pub spec: &'a ToolSpec,
     /// The arguments, as the model wrote them.
@@ -140,6 +146,19 @@ pub trait Policy: Send + Sync {
     /// and never wrong.
     fn answers_may_stop(&self) -> bool;
 
+    /// How many times the rules this policy decides by have narrowed: a
+    /// count that only grows, and moves whenever something that let calls
+    /// run is taken back (an approval revoked, a learned command turned
+    /// off, the level changed).
+    ///
+    /// The loop dates each decision by it, and decides a call again when
+    /// its turn to start comes if it has moved since
+    /// (`docs/architecture/03-agent-loop.md`, "Tool rounds"): a call
+    /// decided before a rule was taken back must not run on the rule.
+    /// It is read for every call that may start, so it must be cheap. A
+    /// policy whose rules never change returns a constant.
+    fn narrowed(&self) -> u64;
+
     /// What a directory walk may read, entry by entry.
     fn read_gate(&self) -> Arc<dyn ReadGate>;
 }
@@ -160,6 +179,10 @@ impl Policy for AllowAll {
 
     fn answers_may_stop(&self) -> bool {
         true
+    }
+
+    fn narrowed(&self) -> u64 {
+        0
     }
 
     fn read_gate(&self) -> Arc<dyn ReadGate> {
