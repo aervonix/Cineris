@@ -295,7 +295,7 @@ rule: Names at one address are one body: the linker's aliases are counted once.
 file: xtask/src/nonblocking.rs
 in: parse_nm
 find: if seen.insert(address) {
-replace: if true {
+replace: if seen.insert(address) || true {
 caught-by:
     nonblocking::tests::the_symbols_that_take_room_in_the_file_are_read_and_an_address_counts_once
 
@@ -377,8 +377,8 @@ caught-by:
 rule: A line is a measurement only with exactly a name, a value and a unit.
 file: crates/cortex-testkit/src/numbers.rs
 in: parse
-find: .is_none()
-replace: .is_none() || true
+find: words.next().is_none()
+replace: true
 caught-by:
     numbers::tests::what_is_not_a_measurement_is_refused_and_a_line_that_is_not_one_is_left_out
 

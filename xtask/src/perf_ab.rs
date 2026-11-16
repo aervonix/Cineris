@@ -661,10 +661,10 @@ mod tests {
     fn the_numbers_a_run_printed_are_read_and_a_repeated_name_is_its_median() {
         let output = "\
 running 1 test
-perf: index.warm 28.9 ms
-a table for a person: 1 2 3
 perf: index.warm 31 ms\r
+a table for a person: 1 2 3
 perf: index.warm 29.5 ms
+perf: index.warm 28.9 ms
 perf: index.bytes 1000 bytes
 perf: broken
 perf: index.warm 1 ms extra
