@@ -79,7 +79,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends musl-tools
       - name: Release build, binary size and crate count
-        run: cargo run --locked --quiet --package xtask -- size --check --target ${{ matrix.target }}
+        # On Linux with the bytes by crate, which a pull request's size job
+        # names the crates that grew most from (`size --against-main`): a
+        # second build with its symbols, about two minutes more, whose
+        # failure is said and fails nothing.
+        run: cargo run --locked --quiet --package xtask -- size --check --target ${{ matrix.target }} ${{ contains(matrix.target, 'linux') && '--record-crates' || '' }}
       # The start-up budgets (docs/performance-budgets.md, "Start-up"), on
       # the binary just built: `--version` under both names, and a headless
       # run to its request. Reported in the job's summary.

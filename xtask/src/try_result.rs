@@ -163,6 +163,13 @@ pub(crate) fn parse_status(json: &str) -> Result<Status> {
     })
 }
 
+/// Whether every job of the run has ended, with a conclusion: a run whose
+/// own status still says otherwise is finished all the same. A run with no
+/// job listed has not ended.
+pub(crate) fn every_job_ended(status: &Status) -> bool {
+    !status.jobs.is_empty() && status.jobs.iter().all(|job| job.conclusion.is_some())
+}
+
 /// The jobs of a `try` run the request names: `try-<runner>`, all of them
 /// or the one `--os` says. A run of another workflow, or one with no job
 /// of that runner, is an error that says what it has.
@@ -234,19 +241,22 @@ pub(crate) fn first_seed_of(log: &str) -> u64 {
 /// How many lines a block of skipped tests is read for at most.
 const SKIPPED_LINES: usize = 40;
 
-/// The tests an A/B run left out because they failed on both sides, as
-/// `ab` lists them ([`crate::ab::skipped_text`]): the line that says how
-/// many `TEST(S) FAILED ON BOTH SIDES`, and the indented lines after it.
-/// Nothing when the log has no such line. `ab` prints the block before its
-/// table and again after it; the first is taken.
+/// The tests an A/B run left out because they failed, as `ab` lists them
+/// ([`crate::ab::skipped_text`]): the line that says how many `TEST(S)
+/// FAILED ON BOTH SIDES`, or `ON ONE SIDE ONLY`, the indented lines after
+/// it, and the other kind's block when it follows. Nothing when the log has
+/// no such line. `ab` prints the blocks before its table and again after
+/// it; the first are taken.
 pub(crate) fn skipped_block(lines: &[String]) -> Option<String> {
-    let at = lines.iter().position(|line| {
+    let heading = |line: &str| {
         let lower = line.to_lowercase();
         lower.contains("test(s) failed on both sides")
-    })?;
+            || lower.contains("test(s) failed on one side only")
+    };
+    let at = lines.iter().position(|line| heading(line))?;
     let mut block = vec![lines[at].trim_end().to_owned()];
     for line in lines[at + 1..].iter().take(SKIPPED_LINES) {
-        if line.trim().is_empty() || !line.starts_with(char::is_whitespace) {
+        if line.trim().is_empty() || !(line.starts_with(char::is_whitespace) || heading(line)) {
             break;
         }
         block.push(line.trim_end().to_owned());
@@ -601,7 +611,17 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         "workflowName,status,conclusion,headSha,jobs",
     ])?)?;
     let jobs = chosen_jobs(&status, request.os.as_deref())?;
-    if status.status != "completed" {
+    if status.status != "completed" && every_job_ended(&status) {
+        println!(
+            "run {run} is {}, but every one of its jobs has ended: read as finished (GitHub \
+             can be slow to mark a run complete)",
+            if status.status.is_empty() {
+                "not marked complete"
+            } else {
+                &status.status
+            }
+        );
+    } else if status.status != "completed" {
         return Err(format!(
             "run {run} is {}, not finished: `ci-wait --runs {run}` waits for it",
             if status.status.is_empty() {
@@ -679,8 +699,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        Job, Request, Status, against_of, chosen_jobs, conclusion_read, first_seed_of, job_result,
-        os_of, parse_status, skipped_block,
+        Job, Request, Status, against_of, chosen_jobs, conclusion_read, every_job_ended,
+        first_seed_of, job_result, os_of, parse_status, skipped_block,
     };
 
     #[test]
@@ -742,6 +762,29 @@ mod tests {
     const STATUS: &str = r#"{"workflowName":"try","status":"completed","conclusion":"failure","headSha":"0123456789abcdef","jobs":[
         {"databaseId":11,"name":"try-linux","conclusion":"success"},
         {"databaseId":12,"name":"try-windows","conclusion":"failure"}]}"#;
+
+    #[test]
+    fn a_run_whose_jobs_have_all_ended_is_finished_whatever_its_status_says() {
+        let lagging = parse_status(
+            r#"{"workflowName":"try","status":"in_progress","conclusion":"","headSha":"0123456789abcdef","jobs":[
+                {"databaseId":1,"name":"try-linux","conclusion":"success"},
+                {"databaseId":2,"name":"try-windows","conclusion":"failure"}]}"#,
+        )
+        .unwrap();
+        assert!(every_job_ended(&lagging));
+        let running = parse_status(
+            r#"{"workflowName":"try","status":"in_progress","conclusion":"","headSha":"0123456789abcdef","jobs":[
+                {"databaseId":1,"name":"try-linux","conclusion":"success"},
+                {"databaseId":2,"name":"try-windows","conclusion":""}]}"#,
+        )
+        .unwrap();
+        assert!(!every_job_ended(&running), "a job is still running");
+        let queued = parse_status(
+            r#"{"workflowName":"try","status":"queued","conclusion":"","headSha":"0","jobs":[]}"#,
+        )
+        .unwrap();
+        assert!(!every_job_ended(&queued), "no job yet");
+    }
 
     #[test]
     fn a_request_is_read_and_a_wrong_one_refused() {
@@ -829,12 +872,21 @@ mod tests {
                 rounds: vec![1, 3],
                 base: "boom".to_owned(),
                 head: "boom".to_owned(),
+                on: crate::ab::FailedOn::Both,
             },
             crate::ab::Skipped {
                 id: "cortex-llm::it replay::b".to_owned(),
                 rounds: vec![2],
                 base: "left".to_owned(),
                 head: "right".to_owned(),
+                on: crate::ab::FailedOn::Both,
+            },
+            crate::ab::Skipped {
+                id: "cortex-tools::it shell::c".to_owned(),
+                rounds: vec![1, 2],
+                base: String::new(),
+                head: "a Windows-only bug".to_owned(),
+                on: crate::ab::FailedOn::OneSide,
             },
         ]);
         let mut lines = strings(&["Summary [  1.2s] 100 tests run: 98 passed, 2 skipped"]);
@@ -865,7 +917,8 @@ mod tests {
                 BRANCH,
             );
         }
-        // Round 2's head failed a test: it is left out, and named.
+        // Round 2's head failed a test: the round is compared without it,
+        // and it is named as a failure on one side.
         let failing = BRANCH.replace(
             "<testcase name=\"replay::quick\" classname=\"cortex-llm::it\" time=\"0.520\"/>",
             "<testcase name=\"replay::quick\" classname=\"cortex-llm::it\" time=\"0.510\"><failure message=\"boom\" type=\"test failure with exit code 101\">assertion failed: left == right</failure></testcase>",
@@ -890,10 +943,11 @@ mod tests {
 
         let text = &result.text;
         assert!(text.contains("A/B, the PR against origin/main:"), "{text}");
-        assert!(text.contains("the median of 2 runs each"), "{text}");
+        assert!(text.contains("the median of 3 runs each"), "{text}");
         assert!(text.contains("| Tier | The PR | `origin/main` |"), "{text}");
         assert!(
-            text.contains("round 2: head failed: cortex-llm::it replay::quick"),
+            text.contains("TESTS THAT FAILED ON ONE SIDE ONLY")
+                && text.contains("  cortex-llm::it replay::quick\n"),
             "{text}"
         );
         assert!(

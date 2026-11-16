@@ -465,6 +465,29 @@ impl<'a> Git<'a> {
                 "`--changed {reference}`: a branch, a tag or a commit, not an option"
             ));
         }
+        // The `.git` must be this tree's own: a copy whose `.git` is a
+        // worktree's pointer to a folder that is not there, or a tree inside
+        // another repository, would give another tree's diff, or none.
+        let top = crate::owner_guard::git(root, &["rev-parse", "--show-toplevel"]).map_err(|why| {
+            format!(
+                "`--changed {reference}` needs git's history, and git cannot read the `.git` of \
+                 {} ({why}). A copy of a worktree carries its `.git` as a pointer to the \
+                 worktree's folder, which is not in the copy: at the desk, `rx --git -- cargo \
+                 xtask mutate --changed {reference} ...`.",
+                root.display()
+            )
+        })?;
+        // Both read by the file system, which spells them alike: git gives
+        // `C:/…` on Windows.
+        let real = |path: &Path| std::fs::canonicalize(path).ok();
+        if real(Path::new(top.trim())).is_none() || real(Path::new(top.trim())) != real(root) {
+            return Err(format!(
+                "`--changed {reference}`: git's work tree is {}, not {}: the diff would be \
+                 another tree's.",
+                top.trim(),
+                root.display()
+            ));
+        }
         let commit = crate::owner_guard::git(
             root,
             &["rev-parse", "--verify", "--quiet", &format!("{reference}^{{commit}}")],
@@ -1092,6 +1115,58 @@ mod tests {
         let opened = super::Git::open(&root, "HEAD~1").unwrap();
         assert_eq!(opened.changed_files().unwrap().len(), 4);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sys_a_git_that_points_nowhere_is_refused_and_not_read_as_no_change() {
+        let root = crate::mutate::drive::tests::tree("changed-dangling-git", &[("a.txt", "x")]);
+        // A worktree's `.git` is a file that names its folder in the main
+        // repository: in a copy, that folder is not there.
+        std::fs::write(root.join(".git"), "gitdir: /nowhere/.git/worktrees/gone\n").unwrap();
+
+        let error = super::Git::open(&root, "main").err().unwrap();
+
+        assert!(error.contains("git cannot read the `.git`"), "{error}");
+        assert!(error.contains("rx --git"), "{error}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sys_a_tree_inside_another_repository_is_refused_and_not_read_as_its_diff() {
+        let outer = crate::mutate::drive::tests::tree("changed-outer", &[("b.txt", "y")]);
+        git(&outer, &["init", "-q"]);
+        // A copy with an empty `.git` of its own, inside the outer
+        // repository: git reads the outer one.
+        let root = outer.join("copy");
+        std::fs::create_dir_all(root.join(".g".to_owned() + "it")).unwrap();
+        std::fs::write(root.join("a.txt"), "x").unwrap();
+
+        let error = super::Git::open(&root, "HEAD").err().unwrap();
+
+        assert!(
+            error.contains("git's work tree is") && error.contains("another tree's"),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(&outer);
+    }
+
+    #[test]
+    fn a_refused_diff_has_an_exit_status_of_its_own() {
+        let (status, said) = super::super::conclusion(
+            &Err(format!("{}no `.git` here", super::super::NO_DIFF_MARK)),
+            false,
+        );
+        assert_eq!(status, 3);
+        let said = said.unwrap();
+        assert!(
+            said.contains("nothing was run") && said.contains("no `.git` here"),
+            "{said}"
+        );
+        // Any other failure is 1, as before.
+        assert_eq!(
+            super::super::conclusion(&Err("boom".to_owned()), false).0,
+            1
+        );
     }
 
     #[test]

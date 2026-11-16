@@ -145,10 +145,19 @@ command=\"mutate NAME\"` runs it on a hosted Windows runner.
 
 Exit status: 0 when every chosen break did what its list expects; 1 when one
 did not, or something failed; 2 when the time ran out with work left: run
-the same command again.";
+the same command again; 3 when --changed cannot read the diff (no history of
+the tree's own, a reference that is no commit), and nothing was run.";
 
 /// The exit status of a run that stopped at its time budget with work left.
 const UNFINISHED: u8 = 2;
+
+/// The exit status of `--changed` that could not read the diff: nothing was
+/// run, and that is neither a pass nor a break left uncaught.
+const NO_DIFF: u8 = 3;
+
+/// What an error of `--changed`'s diff starts with, so that [`conclusion`]
+/// gives it [`NO_DIFF`].
+const NO_DIFF_MARK: &str = "--changed could not read the diff: ";
 
 /// The minutes a run may start new work for, when it is not told.
 const MINUTES: f64 = 5.0;
@@ -551,7 +560,15 @@ fn conclusion(outcome: &Result<drive::Finished>, again: bool) -> (u8, Option<Str
                 )),
             )
         }
-        Err(message) => (1, Some(message.clone())),
+        Err(message) => match message.strip_prefix(NO_DIFF_MARK) {
+            Some(why) => (
+                NO_DIFF,
+                Some(format!(
+                    "nothing was run: `--changed` could not read the diff. {why}"
+                )),
+            ),
+            None => (1, Some(message.clone())),
+        },
     }
 }
 
@@ -610,7 +627,8 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     let mut reasons = BTreeMap::new();
     if let Some(reference) = &request.changed {
         let known = list::load_all(&root)?;
-        let selection = changed::since(&root, reference, &known, &chosen)?;
+        let selection = changed::since(&root, reference, &known, &chosen)
+            .map_err(|why| format!("{NO_DIFF_MARK}{why}"))?;
         println!("{}", selection.summary(reference));
         reasons = selection.reasons();
         chosen = selection.breaks();

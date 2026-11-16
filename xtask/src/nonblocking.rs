@@ -88,6 +88,108 @@ struct MainSize {
     run: u64,
     /// The commit it was built from, when the record names one.
     commit: Option<String>,
+    /// Its bytes by crate, when the run made a breakdown (Linux).
+    crates: Option<Vec<(String, u64)>>,
+}
+
+/// How much a pull request's binary may grow against `main`'s before
+/// `size --against-main` names the crates that grew most (Linux, where it
+/// can read them): 100 KB.
+const GROWTH_TO_EXPLAIN: i128 = 100 * 1024;
+
+/// How many of the crates that grew it names.
+const GREW_NAMED: usize = 3;
+
+/// The file a breakdown's bytes by crate are kept in, beside the record.
+fn crates_record_name(target: &str) -> String {
+    format!("{target}.crates.json")
+}
+
+/// The bytes by crate a breakdown kept, as JSON: `{"crate": bytes, ...}`.
+fn crates_record(sizes: &[(String, u64)]) -> String {
+    let map: serde_json::Map<String, serde_json::Value> = sizes
+        .iter()
+        .map(|(name, bytes)| (name.clone(), serde_json::Value::from(*bytes)))
+        .collect();
+    format!("{:#}\n", serde_json::Value::Object(map))
+}
+
+fn parse_crates_record(text: &str) -> Result<Vec<(String, u64)>> {
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| format!("a record by crate: {error}"))?;
+    let object = value
+        .as_object()
+        .ok_or("a record by crate that is no object")?;
+    object
+        .iter()
+        .map(|(name, bytes)| {
+            bytes
+                .as_u64()
+                .map(|bytes| (name.clone(), bytes))
+                .ok_or_else(|| format!("a record by crate whose `{name}` is no number"))
+        })
+        .collect()
+}
+
+/// The crates that grew most from `main` to `now`, largest first, with how
+/// much: a crate new since `main` counts whole. Only those that grew.
+fn grew_most(now: &[(String, u64)], main: &[(String, u64)], count: usize) -> Vec<(String, i128)> {
+    let before: BTreeMap<&str, u64> = main
+        .iter()
+        .map(|(name, bytes)| (name.as_str(), *bytes))
+        .collect();
+    let mut grew: Vec<(String, i128)> = now
+        .iter()
+        .map(|(name, bytes)| {
+            (
+                name.clone(),
+                i128::from(*bytes) - i128::from(before.get(name.as_str()).copied().unwrap_or(0)),
+            )
+        })
+        .filter(|(_, growth)| *growth > 0)
+        .collect();
+    grew.sort_by(|one, other| other.1.cmp(&one.1).then_with(|| one.0.cmp(&other.0)));
+    grew.truncate(count);
+    grew
+}
+
+/// What `size --against-main` says of a binary that grew by more than
+/// [`GROWTH_TO_EXPLAIN`]: the crates that grew most, or why it cannot say.
+fn growth_text(
+    growth: i128,
+    now: Option<&[(String, u64)]>,
+    main: Option<&[(String, u64)]>,
+) -> Option<String> {
+    if growth <= GROWTH_TO_EXPLAIN {
+        return None;
+    }
+    let said = match (now, main) {
+        (Some(now), Some(main)) => {
+            let grew = grew_most(now, main, GREW_NAMED);
+            if grew.is_empty() {
+                "no crate's symbols grew: what grew is in no symbol (headers, unwind tables, \
+                 padding)"
+                    .to_owned()
+            } else {
+                let named: Vec<String> = grew
+                    .iter()
+                    .map(|(name, bytes)| format!("`{name}` {:+.1} KB", kibibytes(*bytes)))
+                    .collect();
+                format!("the crates that grew most: {}", named.join(", "))
+            }
+        }
+        (None, _) => "the crates that grew are named by the Linux job, whose symbols can be \
+                      read (`--breakdown`)"
+            .to_owned(),
+        (Some(_), None) => "`main`'s record has no bytes by crate (its size job made no \
+                            breakdown), so the crates that grew cannot be named"
+            .to_owned(),
+    };
+    Some(format!(
+        "It grew by {:.1} KB, more than {} KB: {said}.",
+        kibibytes(growth),
+        GROWTH_TO_EXPLAIN / 1024
+    ))
 }
 
 /// The artifact the `main` workflow keeps a target's record in.
@@ -122,7 +224,24 @@ fn main_size(target: &str) -> Result<MainSize> {
     let text = fs::read_to_string(&file)
         .map_err(|error| format!("could not read {}: {error}", file.display()))?;
     let (bytes, commit) = parse_record(&text)?;
-    Ok(MainSize { bytes, run, commit })
+    // A record by crate is there when the run made a breakdown; a broken
+    // one is said and taken for none.
+    let crates = match fs::read_to_string(directory.join(crates_record_name(target))) {
+        Ok(text) => match parse_crates_record(&text) {
+            Ok(crates) => Some(crates),
+            Err(error) => {
+                println!("  main's record by crate is not read: {error}");
+                None
+            }
+        },
+        Err(_) => None,
+    };
+    Ok(MainSize {
+        bytes,
+        run,
+        commit,
+        crates,
+    })
 }
 
 /// Bytes as mebibytes, for a person.
@@ -251,6 +370,10 @@ pub(crate) struct SizeRequest {
     target: Option<String>,
     profile: String,
     breakdown: bool,
+    /// `--record-crates`: make the breakdown for the record by crate (and
+    /// the explanation of growth) without printing its table, and say a
+    /// failure of it rather than fail: the `main` workflow's Linux size job.
+    record_crates: bool,
     top: usize,
     at: Option<String>,
     /// The commit the difference from `main` should be from: a pull
@@ -296,6 +419,7 @@ impl SizeRequest {
             target: None,
             profile: PROFILE.to_owned(),
             breakdown: false,
+            record_crates: false,
             top: 25,
             at: None,
             base: None,
@@ -311,6 +435,7 @@ impl SizeRequest {
                 "--check" => request.check = true,
                 "--against-main" => request.against_main = true,
                 "--breakdown" => request.breakdown = true,
+                "--record-crates" => request.record_crates = true,
                 "--target" => request.target = Some(value("a target triple")?.clone()),
                 "--profile" => {
                     let profile = value("release or dist")?;
@@ -628,12 +753,45 @@ pub(crate) fn size(arguments: &[String]) -> Result<()> {
             .map_err(|error| format!("could not write {}: {error}", file.display()))?;
     }
 
-    // Last: it builds again, and its failure must not hide the verdict.
-    let breakdown = request
-        .breakdown
+    // Last: it builds again, and its failure must not hide the verdict. It
+    // runs when it is asked for, and on Linux when the binary grew past
+    // what is explained by name against `main`'s record.
+    let growth = match &main {
+        Some(Ok(main)) => Some(i128::from(bytes) - i128::from(main.bytes)),
+        _ => None,
+    };
+    let readable = target.contains("linux");
+    let explain = growth.is_some_and(|growth| growth > GROWTH_TO_EXPLAIN);
+    let sizes = (request.breakdown || ((request.record_crates || explain) && readable))
         .then(|| breakdown(&tree, &target_directory, &target, &request, bytes));
+    if let (Some(Ok(sizes)), true) = (&sizes, archive.is_none()) {
+        let file = target_directory
+            .join("size")
+            .join(crates_record_name(&target));
+        fs::write(&file, crates_record(sizes))
+            .map_err(|error| format!("could not write {}: {error}", file.display()))?;
+    }
+    if let (Some(growth), Some(Ok(main))) = (growth, &main) {
+        let now = match &sizes {
+            Some(Ok(sizes)) => Some(sizes.as_slice()),
+            _ => None,
+        };
+        if let Some(text) = growth_text(growth, now, main.crates.as_deref()) {
+            println!("  {text}");
+            steps::append_job_summary(&format!("{text}\n\n"));
+        }
+    }
     verdict(paths, report.over, request.check)?;
-    breakdown.unwrap_or(Ok(()))
+    match sizes {
+        // Asked for by name, its failure is the command's.
+        Some(Err(error)) if request.breakdown => Err(error),
+        // Made for the record or to explain growth, it fails nothing.
+        Some(Err(error)) => {
+            println!("  the bytes by crate were not read: {error}");
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Where cargo puts the binary of `profile` for `target`.
@@ -670,7 +828,7 @@ fn breakdown(
     target: &str,
     request: &SizeRequest,
     bytes: u64,
-) -> Result<()> {
+) -> Result<Vec<(String, u64)>> {
     let own = target_directory.join("size-breakdown");
     let variable = strip_variable(&request.profile);
     shipped::build_with(&shipped::Options {
@@ -698,16 +856,15 @@ fn breakdown(
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    let table = breakdown_table(
-        &crate_sizes(&parse_nm(&String::from_utf8_lossy(&output.stdout))),
-        bytes,
-        request.top,
-    );
-    println!("\n{table}");
-    steps::append_job_summary(&format!(
-        "### Binary size by crate\n\n```text\n{table}```\n"
-    ));
-    Ok(())
+    let sizes = crate_sizes(&parse_nm(&String::from_utf8_lossy(&output.stdout)));
+    if request.breakdown {
+        let table = breakdown_table(&sizes, bytes, request.top);
+        println!("\n{table}");
+        steps::append_job_summary(&format!(
+            "### Binary size by crate\n\n```text\n{table}```\n"
+        ));
+    }
+    Ok(sizes)
 }
 
 /// The environment variable that sets a profile's `strip`.
@@ -924,6 +1081,78 @@ mod base_tests {
 mod tests {
     use super::*;
 
+    fn sizes(list: &[(&str, u64)]) -> Vec<(String, u64)> {
+        list.iter()
+            .map(|(name, bytes)| ((*name).to_owned(), *bytes))
+            .collect()
+    }
+
+    #[test]
+    fn the_crates_that_grew_most_are_named_largest_first_and_a_new_one_whole() {
+        let main = sizes(&[
+            ("cortex_core", 500_000),
+            ("serde", 100_000),
+            ("regex", 80_000),
+        ]);
+        let now = sizes(&[
+            ("cortex_core", 650_000),
+            ("serde", 90_000),
+            ("regex", 81_000),
+            ("syntect", 120_000),
+        ]);
+        assert_eq!(
+            grew_most(&now, &main, 3),
+            [
+                ("cortex_core".to_owned(), 150_000),
+                ("syntect".to_owned(), 120_000),
+                ("regex".to_owned(), 1_000),
+            ]
+        );
+        assert_eq!(grew_most(&now, &main, 1).len(), 1);
+        // A crate that shrank is not one that grew.
+        assert!(
+            grew_most(&main, &now, 3)
+                .iter()
+                .all(|(name, _)| name == "serde")
+        );
+    }
+
+    #[test]
+    fn growth_past_100_kb_is_explained_by_crate_and_less_is_not() {
+        let main = sizes(&[("cortex_core", 500_000)]);
+        let now = sizes(&[("cortex_core", 650_000)]);
+        assert_eq!(growth_text(100 * 1024, Some(&now), Some(&main)), None);
+        let said = growth_text(150_000, Some(&now), Some(&main)).unwrap();
+        assert!(said.contains("more than 100 KB"), "{said}");
+        assert!(said.contains("`cortex_core` +146.5 KB"), "{said}");
+        // Windows reads no symbols, and an older record of main's has none.
+        let windows = growth_text(150_000, None, Some(&main)).unwrap();
+        assert!(windows.contains("named by the Linux job"), "{windows}");
+        let older = growth_text(150_000, Some(&now), None).unwrap();
+        assert!(older.contains("has no bytes by crate"), "{older}");
+        // Growth no symbol holds.
+        let same = growth_text(150_000, Some(&main), Some(&main)).unwrap();
+        assert!(same.contains("in no symbol"), "{same}");
+    }
+
+    #[test]
+    fn the_record_by_crate_is_asked_for_apart_from_the_breakdown() {
+        let record = SizeRequest::parse(&strings(&["--record-crates"])).unwrap();
+        assert!(record.record_crates && !record.breakdown);
+        let both = SizeRequest::parse(&strings(&["--breakdown", "--record-crates"])).unwrap();
+        assert!(both.record_crates && both.breakdown);
+    }
+
+    #[test]
+    fn a_record_by_crate_is_read_back_as_it_was_written() {
+        let written = sizes(&[("a", 1), ("b", 2)]);
+        let mut read = parse_crates_record(&crates_record(&written)).unwrap();
+        read.sort();
+        assert_eq!(read, written);
+        assert!(parse_crates_record("[1]").is_err());
+        assert!(parse_crates_record("{\"a\": \"x\"}").is_err());
+    }
+
     #[test]
     fn each_crate_in_the_tree_is_counted_once() {
         let tree = "\
@@ -986,6 +1215,7 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
             bytes: 12_100_000,
             run: 43_811_142_390,
             commit: Some("c225d64".to_owned()),
+            crates: None,
         });
         let smaller = report(LINUX, PROFILE, 12_000_000, 180, Some(&main)).summary;
         assert!(
@@ -1069,6 +1299,7 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
                 target: Some(LINUX.to_owned()),
                 profile: "dist".to_owned(),
                 breakdown: true,
+                record_crates: false,
                 top: 5,
                 at: Some("origin/main~2".to_owned()),
                 base: None,

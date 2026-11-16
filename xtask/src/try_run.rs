@@ -17,7 +17,11 @@ const USAGE: &str = "\
 usage: cargo xtask try --command 'COMMAND [ARGUMENTS]' [--profile ci|release|dist]
                        [--count N] [--load N] [--cores K] [--filter 'EXPR; EXPR']
                        [--against REF] [--commit SHA] [--dry-run]
-                       [--os OS] [--testkit none|profile]
+                       [--os OS] [--testkit none|profile|starts] [--capture yes|no]
+       cargo xtask try --dispatch BRANCH --command '...' [the same inputs]
+                       checks the inputs as a dry run does, dispatches the
+                       workflow on BRANCH with them (`gh workflow run try`),
+                       and prints the run's id
 
 COMMAND is one of:
   test [-p CRATE]... [FILTER]...   the tests, as the blocking job builds and runs
@@ -128,6 +132,9 @@ struct Inputs {
     commit: Option<String>,
     /// Print the command the job would run, and run nothing.
     dry_run: bool,
+    /// Dispatch the workflow on this branch with the inputs, and print the
+    /// run's id: at a desk, in place of `gh workflow run try`.
+    dispatch: Option<String>,
     /// The workflow's own inputs, which a dry run checks and a run is not
     /// given.
     os: Option<String>,
@@ -141,7 +148,7 @@ struct Inputs {
 const OSES: [&str; 4] = ["both", "linux", "windows", "linux-22.04"];
 
 /// The `testkit` inputs of the workflow.
-const TESTKITS: [&str; 2] = ["none", "profile"];
+const TESTKITS: [&str; 3] = ["none", "profile", "starts"];
 
 /// Whether `text` is a full commit hash: 40 hexadecimal digits, in lower
 /// case. A short one, or a name, is not: the workflow checks the commit out
@@ -273,10 +280,19 @@ impl Inputs {
                     let testkit = value.trim();
                     if !testkit.is_empty() {
                         if !TESTKITS.contains(&testkit) {
-                            return Err(format!("`--testkit {testkit}`: none or profile"));
+                            return Err(format!("`--testkit {testkit}`: none, profile or starts"));
                         }
                         inputs.testkit = Some(testkit.to_owned());
                     }
+                }
+                "--dispatch" => {
+                    let branch = value.trim();
+                    if !plain(branch) {
+                        return Err(format!("`--dispatch {branch}` is not a branch's name"));
+                    }
+                    inputs.dispatch = Some(branch.to_owned());
+                    // What is dispatched is checked as a dry run checks it.
+                    inputs.dry_run = true;
                 }
                 "--capture" => match value.trim() {
                     "" | "yes" => inputs.show_output = false,
@@ -1013,11 +1029,12 @@ fn plan(arguments: &[String], packages: impl FnOnce() -> Result<Vec<Package>>) -
         ));
     }
     if inputs.dry_run {
-        if inputs.testkit.as_deref() == Some("profile") && inputs.against.is_some() {
-            notes.push(
-                "testkit=profile is not set for an `against` run: the workflow leaves it out"
-                    .to_owned(),
-            );
+        if let Some(testkit @ ("profile" | "starts")) = inputs.testkit.as_deref()
+            && inputs.against.is_some()
+        {
+            notes.push(format!(
+                "testkit={testkit} is not set for an `against` run: the workflow leaves it out"
+            ));
         }
         if inputs
             .words
@@ -1070,6 +1087,132 @@ fn head_commit() -> Result<String> {
 }
 
 /// `cargo xtask try …`
+/// The arguments of `gh` that dispatch the `try` workflow on `branch` with
+/// `inputs`: each input that is set, as `-f name=value`, and nothing for
+/// one left at its default.
+fn dispatch_arguments(branch: &str, inputs: &Inputs) -> Vec<String> {
+    let mut arguments: Vec<String> = ["workflow", "run", "try", "--ref", branch]
+        .map(str::to_owned)
+        .to_vec();
+    let mut field = |name: &str, value: String| {
+        arguments.push("-f".to_owned());
+        arguments.push(format!("{name}={value}"));
+    };
+    field("command", inputs.words.join(" "));
+    if let Some(os) = &inputs.os {
+        field("os", os.clone());
+    }
+    if inputs.profile != "ci" {
+        field("profile", inputs.profile.clone());
+    }
+    for (name, value) in [
+        ("count", inputs.count.map(|value| value.to_string())),
+        ("load", inputs.load.map(|value| value.to_string())),
+        ("cores", inputs.cores.map(|value| value.to_string())),
+    ] {
+        if let Some(value) = value {
+            field(name, value);
+        }
+    }
+    if !inputs.filters.is_empty() {
+        field("filter", inputs.filters.join("; "));
+    }
+    if let Some(against) = &inputs.against {
+        field("against", against.clone());
+    }
+    if let Some(commit) = &inputs.commit {
+        field("commit", commit.clone());
+    }
+    if inputs.show_output {
+        field("capture", "no".to_owned());
+    }
+    if let Some(testkit) = inputs
+        .testkit
+        .as_deref()
+        .filter(|testkit| *testkit != "none")
+    {
+        field("testkit", testkit.to_owned());
+    }
+    arguments
+}
+
+/// The runs of `after` that are not in `before`: the ones a dispatch made.
+fn new_runs(before: &[u64], after: &[u64]) -> Vec<u64> {
+    after
+        .iter()
+        .filter(|run| !before.contains(run))
+        .copied()
+        .collect()
+}
+
+/// The ids of the `try` workflow's latest dispatched runs on `branch`.
+fn dispatched_runs(branch: &str) -> Result<Vec<u64>> {
+    let listed = crate::runs::gh(&[
+        "run",
+        "list",
+        "--workflow",
+        "try",
+        "--branch",
+        branch,
+        "--event",
+        "workflow_dispatch",
+        "--limit",
+        "20",
+        "--json",
+        "databaseId",
+    ])?;
+    let value: serde_json::Value =
+        serde_json::from_str(&listed).map_err(|error| format!("gh run list: {error}"))?;
+    Ok(value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|run| run.get("databaseId")?.as_u64())
+        .collect())
+}
+
+/// Dispatches the workflow on `branch` with `inputs`, and prints the run it
+/// made: the runs dispatched on the branch are listed before and after, and
+/// the new one is the one this made. GitHub lists a run a few seconds
+/// after it is dispatched, so the list is asked again, every two seconds,
+/// for at most a minute. Two runs dispatched on the branch at once are both
+/// named.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a command at a desk that waits for GitHub to list a run it dispatched, not a test"
+)]
+fn dispatch(branch: &str, inputs: &Inputs) -> Result<()> {
+    let before = dispatched_runs(branch)?;
+    let arguments = dispatch_arguments(branch, inputs);
+    let shown: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    println!("$ gh {}", shown.join(" "));
+    crate::runs::gh(&shown)?;
+    for _ in 0..30 {
+        let made = new_runs(&before, &dispatched_runs(branch)?);
+        if !made.is_empty() {
+            for run in &made {
+                println!(
+                    "dispatched: run {run}. Wait for it with `ci-wait --runs {run}`, and read \
+                     it with `cargo xtask try-result {run}`."
+                );
+            }
+            if made.len() > 1 {
+                println!(
+                    "{} runs appeared on {branch} since the dispatch: another was dispatched \
+                     at the same moment. Tell them apart by their inputs (`gh run view RUN`).",
+                    made.len()
+                );
+            }
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    Err(format!(
+        "the workflow was dispatched on {branch}, and no new run of it was listed within a \
+         minute: `gh run list --workflow try --branch {branch}` shows it when GitHub does"
+    ))
+}
+
 pub(crate) fn main(arguments: &[String]) -> ExitCode {
     match run(arguments) {
         Ok(code) => code,
@@ -1088,6 +1231,9 @@ fn run(arguments: &[String]) -> Result<ExitCode> {
         println!("{note}");
     }
     println!("$ cargo xtask {}", plan.command.join(" "));
+    if let Some(branch) = &plan.inputs.dispatch {
+        return dispatch(branch, &plan.inputs).map(|()| ExitCode::SUCCESS);
+    }
     if plan.inputs.dry_run {
         println!("(a dry run: nothing was built or run)");
         return Ok(ExitCode::SUCCESS);
@@ -1130,8 +1276,83 @@ fn reads_the_corpus(command: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Inputs, check_checkout, plan};
+    use super::{Inputs, check_checkout, dispatch_arguments, new_runs, plan};
     use crate::workspace::{DepKind, Dependency, Package};
+
+    #[test]
+    fn a_dispatch_passes_each_input_that_is_set_and_no_other() {
+        let parse = |words: &[&str]| {
+            Inputs::parse(
+                &words
+                    .iter()
+                    .map(|word| (*word).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let inputs = parse(&[
+            "--command",
+            "test -p cortex-core",
+            "--os",
+            "windows",
+            "--against",
+            "main",
+            "--count",
+            "5",
+            "--filter",
+            "test(/a/); test(=b)",
+            "--testkit",
+            "none",
+            "--dispatch",
+            "my-branch",
+        ])
+        .unwrap();
+        assert!(inputs.dry_run, "a dispatch is checked as a dry run is");
+        assert_eq!(
+            dispatch_arguments("my-branch", &inputs),
+            [
+                "workflow",
+                "run",
+                "try",
+                "--ref",
+                "my-branch",
+                "-f",
+                "command=test -p cortex-core",
+                "-f",
+                "os=windows",
+                "-f",
+                "count=5",
+                "-f",
+                "filter=test(/a/); test(=b)",
+                "-f",
+                "against=main",
+            ]
+        );
+        let other = parse(&[
+            "--command",
+            "startup",
+            "--profile",
+            "dist",
+            "--capture",
+            "no",
+            "--testkit",
+            "starts",
+            "--dispatch",
+            "b",
+        ])
+        .unwrap();
+        let said = dispatch_arguments("b", &other).join(" ");
+        assert!(said.contains("-f profile=dist"), "{said}");
+        assert!(said.contains("-f capture=no"), "{said}");
+        assert!(said.contains("-f testkit=starts"), "{said}");
+        assert!(parse(&["--command", "test", "--dispatch", "a b"]).is_err());
+    }
+
+    #[test]
+    fn the_run_a_dispatch_made_is_the_one_not_listed_before_it() {
+        assert_eq!(new_runs(&[3, 2, 1], &[4, 3, 2, 1]), [4]);
+        assert_eq!(new_runs(&[3, 2, 1], &[3, 2, 1]), Vec::<u64>::new());
+        assert_eq!(new_runs(&[], &[5, 6]), [5, 6]);
+    }
 
     #[test]
     fn capture_no_shows_a_passing_tests_output_and_goes_only_where_it_means_that() {
@@ -2070,7 +2291,7 @@ mod tests {
             ),
             (
                 &["--command", "test", "--testkit", "all"],
-                "none or profile",
+                "none, profile or starts",
             ),
         ] {
             let error = parse(words).unwrap_err();
@@ -2094,6 +2315,15 @@ mod tests {
                 .notes
                 .iter()
                 .any(|note| note.contains("testkit=profile is not set"))
+        );
+        let mut starts = arguments.clone();
+        *starts.last_mut().unwrap() = "starts".to_owned();
+        let planned = plan(&starts, || Ok(Vec::new())).unwrap();
+        assert!(
+            planned
+                .notes
+                .iter()
+                .any(|note| note.contains("testkit=starts is not set"))
         );
         let arguments: Vec<String> = [
             "--command",

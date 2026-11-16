@@ -190,6 +190,65 @@ pub(crate) fn latest_main_run_of(workflow: &str, status: &str, needs: &[&str]) -
     ))
 }
 
+/// The `ci` run of the main branch at the commit a pull request's run is
+/// based on (where its head's history meets `main`'s), when one kept every
+/// report of `needs`: what `ci-times --pr N` compares the pull request
+/// with, so that a run of `main` made after it, with other steps' tests in
+/// it, does not move its figures. `None`, said, when that commit has no such
+/// run (a documentation change keeps no report): the caller takes `main`'s
+/// latest then.
+pub(crate) fn base_main_run(head_sha: &str, needs: &[&str]) -> Result<Option<u64>> {
+    let base = gh(&[
+        "api",
+        &format!("repos/{{owner}}/{{repo}}/compare/main...{head_sha}"),
+        "--jq",
+        ".merge_base_commit.sha",
+    ])?;
+    let base = base.trim();
+    if base.len() != 40 || !base.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!(
+            "GitHub gave no commit where {head_sha} meets main: {base:?}"
+        ));
+    }
+    let listed = gh(&[
+        "run",
+        "list",
+        "--workflow",
+        "ci",
+        "--branch",
+        "main",
+        "--commit",
+        base,
+        "--status",
+        "success",
+        "--json",
+        "databaseId",
+    ])?;
+    let value: Value =
+        serde_json::from_str(&listed).map_err(|error| format!("gh run list: {error}"))?;
+    let mut runs = Vec::new();
+    for run in value.as_array().into_iter().flatten() {
+        if let Some(id) = run.get("databaseId").and_then(Value::as_u64) {
+            runs.push((id, artifacts(id)?));
+        }
+    }
+    let chosen = first_that_kept(&runs, needs);
+    let short: String = base.chars().take(7).collect();
+    match chosen {
+        Some(run) => println!(
+            "main: run {run} (at {short}), the main branch's `ci` run at the commit the pull \
+             request is based on"
+        ),
+        None => println!(
+            "main: the commit the pull request is based on ({short}) has no successful `ci` run \
+             that kept {}; main's latest is taken instead, and its figures may hold other \
+             changes",
+            needs.join(" and ")
+        ),
+    }
+    Ok(chosen)
+}
+
 /// The run a source names, if it names one. `needs` is what a run of `main`
 /// must have kept.
 pub(crate) fn run_of(source: &Source, needs: &[&str]) -> Result<Option<u64>> {
@@ -490,6 +549,12 @@ pub(crate) fn parse_run(json: &str) -> Result<RunInfo> {
             .and_then(Value::as_str)
             .unwrap_or("?")
             .to_owned();
+        // A matrix job that was skipped before its matrix was made keeps
+        // its name unexpanded (`pr-size-${{ matrix.name }}`): it never ran,
+        // and no table has a row for it.
+        if name.contains("${{") {
+            continue;
+        }
         let at = |key: &str| job.get(key).and_then(Value::as_str).and_then(seconds_of);
         let took = match (at("startedAt"), at("completedAt")) {
             (Some(start), Some(end)) if end >= start => Some(end - start),
@@ -666,7 +731,17 @@ pub(crate) fn ci_times(arguments: &[String]) -> Result<()> {
         Source::Run(id) => id,
         _ => return Err(format!("`{run}` is not a run's id\n{USAGE}")),
     };
+    let needs = [artifact_name(Os::Linux), artifact_name(Os::Windows)];
     let against = match against.map(|text| Source::parse(text)) {
+        // A pull request's own run is compared with `main` where the pull
+        // request is based, not with `main`'s latest.
+        None | Some(Source::Main) if pr.is_some() => {
+            let head = run_info(run)?.sha;
+            match base_main_run(&head, &needs)? {
+                Some(base) => Some(base),
+                None => Some(latest_main_run(&needs)?),
+            }
+        }
         None => None,
         Some(Source::File(path)) => {
             return Err(format!(
@@ -881,7 +956,8 @@ mod tests {
         {"name":"lint-linux","startedAt":"2026-11-13T10:00:00Z","completedAt":"2026-11-13T10:00:48Z","conclusion":"success"},
         {"name":"test-linux","startedAt":"2026-11-13T10:00:00Z","completedAt":"2026-11-13T10:00:56Z","conclusion":"success"},
         {"name":"test-windows","startedAt":"2026-11-13T10:00:05Z","completedAt":"2026-11-13T10:02:23Z","conclusion":"success"},
-        {"name":"lint-windows","startedAt":"0001-01-01T00:00:00Z","completedAt":"0001-01-01T00:00:00Z","conclusion":"cancelled"}]}"#;
+        {"name":"lint-windows","startedAt":"0001-01-01T00:00:00Z","completedAt":"0001-01-01T00:00:00Z","conclusion":"cancelled"},
+        {"name":"pr-size-${{ matrix.name }}","startedAt":"2026-11-13T10:02:24Z","completedAt":"2026-11-13T10:02:23Z","conclusion":"skipped"}]}"#;
 
     #[test]
     fn a_run_is_read_from_what_gh_prints() {

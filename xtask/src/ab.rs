@@ -420,78 +420,112 @@ pub(crate) struct Compared {
     pub(crate) head: Vec<Vec<TestCase>>,
 }
 
-/// A test that failed on both sides of a round, and so is left out of the
-/// comparison altogether.
+/// A test that failed in a round whose runs failed by tests alone, and so
+/// is left out of the comparison altogether.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Skipped {
     pub(crate) id: String,
-    /// The rounds it failed on both sides in, counted from 1.
+    /// The rounds it failed in, counted from 1.
     pub(crate) rounds: Vec<usize>,
-    /// What each side's failure said, in the first of those rounds.
+    /// What each side's failure said, in the first round it failed on that
+    /// side: empty for a side it never failed on.
     pub(crate) base: String,
     pub(crate) head: String,
+    /// Where it failed: on both sides of every round it failed in, or on
+    /// one side in some round, which is a failure of the run all the same.
+    pub(crate) on: FailedOn,
 }
 
-/// The tests that failed on both sides of `round`, if that is all that went
-/// wrong in it: both sides' runs failed, each only by tests failing, and the
-/// two sides name the same failed tests. A test that failed on one side only
-/// (the other passed it, did not run it, or does not have it) is a failure
-/// of the round, and so is a run that broke in any other way or wrote no
-/// report: nothing may let a comparison pass when a side failed or a test
-/// went missing.
-fn failed_on_both(round: &Round) -> Option<Vec<(&FailedTest, &FailedTest)>> {
-    let (Attempt::Failed(base), Attempt::Failed(head)) = (&round.base, &round.head) else {
-        return None;
-    };
-    if !base.by_tests || !head.by_tests || base.cases.is_empty() || head.cases.is_empty() {
-        return None;
+/// Where a left-out test failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FailedOn {
+    /// On both sides, in each round it failed in: a test both trees fail.
+    Both,
+    /// On one side at least once: the other passed it, or does not have it.
+    OneSide,
+}
+
+/// The tests each side of `round` failed, if failing tests are all that
+/// went wrong in it: each side finished, or its runs failed only by tests
+/// failing (nextest's exit code for it, and a failed test in its report),
+/// and at least one side failed. A run that broke in any other way, wrote
+/// no report or failed with no failed test in it makes the round
+/// incomparable: nothing may be compared that a side could not measure.
+fn failed_by_tests(round: &Round) -> Option<(&[FailedTest], &[FailedTest])> {
+    fn tests_only(attempt: &Attempt) -> Option<&[FailedTest]> {
+        match attempt {
+            Attempt::Finished(_) => Some(&[]),
+            Attempt::Failed(failure)
+                if failure.by_tests && !failure.cases.is_empty() && !failure.tests.is_empty() =>
+            {
+                Some(&failure.tests)
+            }
+            Attempt::Failed(_) => None,
+        }
     }
-    fn ids(failure: &Failure) -> BTreeSet<&str> {
-        failure.tests.iter().map(|test| test.id.as_str()).collect()
+    let (base, head) = (tests_only(&round.base)?, tests_only(&round.head)?);
+    (!base.is_empty() || !head.is_empty()).then_some((base, head))
+}
+
+/// The reports of a round's two sides, finished or failed by tests alone.
+fn cases_of(attempt: &Attempt) -> &Vec<TestCase> {
+    match attempt {
+        Attempt::Finished(cases) => cases,
+        Attempt::Failed(failure) => &failure.cases,
     }
-    if base.tests.is_empty() || ids(base) != ids(head) {
-        return None;
-    }
-    base.tests
-        .iter()
-        .map(|one| {
-            head.tests
-                .iter()
-                .find(|other| other.id == one.id)
-                .map(|other| (one, other))
-        })
-        .collect()
 }
 
 /// The rounds that are compared, and the tests left out of them. A round in
-/// which both sides finished is compared. So is one in which both sides ran
-/// and failed only the same tests, without those tests. Such a test is left
-/// out of every round of both sides, not only the one it failed in: what it
-/// took in a round it passed is no more a measurement than what it took in
-/// one it failed.
+/// which both sides finished is compared. So is one in which a side's runs
+/// failed only by tests failing (since the ninth tooling step: before it,
+/// only the same tests on both sides), without those tests. Such a test is
+/// left out of every round of both sides, not only the one it failed in:
+/// what it took in a round it passed is no more a measurement than what it
+/// took in one it failed. A test that failed on one side only is named as a
+/// failure of the run ([`conclusion`]), and the rest are compared: a
+/// Windows-only test's bug no longer loses a whole comparison.
 pub(crate) fn comparable(rounds: &[Round]) -> (Compared, Vec<Skipped>) {
     let mut skipped: BTreeMap<String, Skipped> = BTreeMap::new();
     for (index, round) in rounds.iter().enumerate() {
-        for (base, head) in failed_on_both(round).unwrap_or_default() {
-            skipped
-                .entry(base.id.clone())
-                .or_insert_with(|| Skipped {
-                    id: base.id.clone(),
-                    rounds: Vec::new(),
-                    base: base.message.clone(),
-                    head: head.message.clone(),
-                })
-                .rounds
-                .push(index + 1);
+        let Some((base, head)) = failed_by_tests(round) else {
+            continue;
+        };
+        let ids: BTreeSet<&str> = base
+            .iter()
+            .chain(head)
+            .map(|test| test.id.as_str())
+            .collect();
+        for id in ids {
+            let on_base = base.iter().find(|test| test.id == id);
+            let on_head = head.iter().find(|test| test.id == id);
+            let entry = skipped.entry(id.to_owned()).or_insert_with(|| Skipped {
+                id: id.to_owned(),
+                rounds: Vec::new(),
+                base: String::new(),
+                head: String::new(),
+                on: FailedOn::Both,
+            });
+            entry.rounds.push(index + 1);
+            if entry.base.is_empty()
+                && let Some(test) = on_base
+            {
+                entry.base.clone_from(&test.message);
+            }
+            if entry.head.is_empty()
+                && let Some(test) = on_head
+            {
+                entry.head.clone_from(&test.message);
+            }
+            if on_base.is_none() || on_head.is_none() {
+                entry.on = FailedOn::OneSide;
+            }
         }
     }
     let mut compared = Compared::default();
     for (index, round) in rounds.iter().enumerate() {
         let (base, head) = match (&round.base, &round.head) {
             (Attempt::Finished(base), Attempt::Finished(head)) => (base, head),
-            (Attempt::Failed(base), Attempt::Failed(head)) if failed_on_both(round).is_some() => {
-                (&base.cases, &head.cases)
-            }
+            _ if failed_by_tests(round).is_some() => (cases_of(&round.base), cases_of(&round.head)),
             _ => continue,
         };
         let without = |cases: &Vec<TestCase>| {
@@ -508,35 +542,47 @@ pub(crate) fn comparable(rounds: &[Round]) -> (Compared, Vec<Skipped>) {
     (compared, skipped.into_values().collect())
 }
 
-/// What to say of the tests left out: each, the rounds it failed on both
-/// sides in, and the first line of what each side's failure said. Empty when
-/// none was.
+/// What to say of the tests left out: those that failed on both sides,
+/// and then those that failed on one side, each with the rounds it failed
+/// in and the first line of what each side's failure said. Empty when none
+/// was.
 pub(crate) fn skipped_text(skipped: &[Skipped]) -> String {
-    if skipped.is_empty() {
-        return String::new();
-    }
-    let mut text = format!(
-        "{} TEST(S) FAILED ON BOTH SIDES, and are left out of both sides' medians and of the \
-         comparison (a test that failed on one side only is a failure of its round, below):\n",
-        skipped.len()
-    );
     fn message(said: &str) -> &str {
         if said.is_empty() {
-            "(no message)"
+            "(passed, or not run)"
         } else {
             said
         }
     }
-    for one in skipped {
-        let rounds: Vec<String> = one.rounds.iter().map(ToString::to_string).collect();
-        let _ = writeln!(
-            text,
-            "  {} (round {})\n      base: {}\n      head: {}",
-            one.id,
-            rounds.join(", "),
-            message(&one.base),
-            message(&one.head)
-        );
+    let mut text = String::new();
+    for (on, heading) in [
+        (
+            FailedOn::Both,
+            "TEST(S) FAILED ON BOTH SIDES, and are left out of both sides' medians and of the \
+             comparison",
+        ),
+        (
+            FailedOn::OneSide,
+            "TEST(S) FAILED ON ONE SIDE ONLY, and are left out of both sides' medians and of the \
+             comparison, which is of the other tests; the run is a failure all the same",
+        ),
+    ] {
+        let these: Vec<&Skipped> = skipped.iter().filter(|one| one.on == on).collect();
+        if these.is_empty() {
+            continue;
+        }
+        let _ = writeln!(text, "{} {heading}:", these.len());
+        for one in these {
+            let rounds: Vec<String> = one.rounds.iter().map(ToString::to_string).collect();
+            let _ = writeln!(
+                text,
+                "  {} (round {})\n      base: {}\n      head: {}",
+                one.id,
+                rounds.join(", "),
+                message(&one.base),
+                message(&one.head)
+            );
+        }
     }
     text
 }
@@ -548,7 +594,7 @@ pub(crate) fn skipped_text(skipped: &[Skipped]) -> String {
 pub(crate) fn failed_rounds(rounds: &[Round], label: &str) -> String {
     let mut text = String::new();
     for (index, round) in rounds.iter().enumerate() {
-        if failed_on_both(round).is_some() {
+        if failed_by_tests(round).is_some() {
             continue;
         }
         let sides = [
@@ -851,21 +897,38 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         "### Two trees on one runner\n\n```text\n{left_out}{}\n{table}\n{failed}```\n",
         rounds_table(&compared)
     ));
-    conclusion(rounds.len(), compared.numbers.len())
+    conclusion(rounds.len(), compared.numbers.len(), &skipped)
 }
 
 /// What the run ends as, after its comparison is printed: the measurement is
 /// kept, and a failing test is still a failure. `compared` counts the rounds
-/// compared, those in which the same tests failed on both sides included:
-/// those tests are left out and named, and are not a failure of the run.
-pub(crate) fn conclusion(rounds: usize, compared: usize) -> Result<()> {
+/// compared, those in which tests failed included. A test that failed on
+/// both sides is left out and named, and is not a failure of the run; one
+/// that failed on one side only is.
+pub(crate) fn conclusion(rounds: usize, compared: usize, skipped: &[Skipped]) -> Result<()> {
+    let one_sided: Vec<&str> = skipped
+        .iter()
+        .filter(|one| one.on == FailedOn::OneSide)
+        .map(|one| one.id.as_str())
+        .collect();
+    let mut said = Vec::new();
     if compared < rounds {
-        Err(format!(
+        said.push(format!(
             "{} of {rounds} rounds had a failing run, and are left out of the comparison above",
             rounds - compared
-        ))
-    } else {
+        ));
+    }
+    if !one_sided.is_empty() {
+        said.push(format!(
+            "{} test(s) failed on one side only, and the comparison above is of the others: {}",
+            one_sided.len(),
+            one_sided.join(", ")
+        ));
+    }
+    if said.is_empty() {
         Ok(())
+    } else {
+        Err(said.join("; "))
     }
 }
 
@@ -894,8 +957,8 @@ fn name(which: Which, label: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Attempt, Compared, FailedTest, Failure, JobEnd, Report, Request, Round, RunEnd, Skipped,
-        TEST_RUN_FAILED, Which, attempt_of, comparable, conclusion, drive_job, end_of,
+        Attempt, Compared, FailedOn, FailedTest, Failure, JobEnd, Report, Request, Round, RunEnd,
+        Skipped, TEST_RUN_FAILED, Which, attempt_of, comparable, conclusion, drive_job, end_of,
         failed_rounds, failure_of, medians, order, rounds_table, skipped_text,
     };
     use crate::junit::TestCase;
@@ -1206,10 +1269,10 @@ mod tests {
 
     #[test]
     fn a_run_with_a_round_left_out_ends_as_a_failure_and_one_without_does_not() {
-        assert_eq!(conclusion(5, 5), Ok(()));
-        let error = conclusion(5, 3).unwrap_err();
+        assert_eq!(conclusion(5, 5, &[]), Ok(()));
+        let error = conclusion(5, 3, &[]).unwrap_err();
         assert!(error.contains("2 of 5 rounds"), "{error}");
-        assert!(conclusion(2, 0).is_err());
+        assert!(conclusion(2, 0, &[]).is_err());
     }
 
     #[test]
@@ -1258,11 +1321,15 @@ mod tests {
                 rounds: vec![2, 4],
                 base: "left 1 right 2".to_owned(),
                 head: "left 3 right 4".to_owned(),
+                on: FailedOn::Both,
             }]
         );
         // Not a failure of the run, and not in the list of failed rounds.
         assert_eq!(failed_rounds(&rounds, "main"), "");
-        assert_eq!(conclusion(rounds.len(), compared.numbers.len()), Ok(()));
+        assert_eq!(
+            conclusion(rounds.len(), compared.numbers.len(), &skipped),
+            Ok(())
+        );
         let text = skipped_text(&skipped);
         assert!(text.contains("1 TEST(S) FAILED ON BOTH SIDES"), "{text}");
         assert!(text.contains("b flaky (round 2, 4)"), "{text}");
@@ -1272,7 +1339,7 @@ mod tests {
     }
 
     #[test]
-    fn a_test_that_failed_on_one_side_only_is_still_a_failed_round() {
+    fn a_test_that_failed_on_one_side_only_is_left_out_named_and_a_failure_of_the_run() {
         let rounds = vec![
             // The head passed what the base failed.
             Round {
@@ -1282,10 +1349,10 @@ mod tests {
             // The base passed what the head failed.
             Round {
                 base: passed_report(&["a", "t"]),
-                head: tried(&[("a", None), ("t", Some("x"))], true),
+                head: tried(&[("a", None), ("t", Some("y"))], true),
             },
             // The head does not have the test the base failed: missing is
-            // not failed.
+            // not failed, and the test is left out all the same.
             Round {
                 base: tried(&[("a", None), ("t", Some("x"))], true),
                 head: passed_report(&["a"]),
@@ -1297,30 +1364,69 @@ mod tests {
             },
             // Two failed on the base, one of them on the head.
             Round {
-                base: tried(&[("t", Some("x")), ("u", Some("y"))], true),
-                head: tried(&[("t", Some("x")), ("u", None)], true),
-            },
-            // Two failed on the head, one of them on the base.
-            Round {
-                base: tried(&[("t", Some("x")), ("u", None)], true),
-                head: tried(&[("t", Some("x")), ("u", Some("y"))], true),
+                base: tried(&[("a", None), ("t", Some("x")), ("u", Some("z"))], true),
+                head: tried(&[("a", None), ("t", Some("x")), ("u", None)], true),
             },
         ];
+        // Each round alone is compared, without the tests that failed in
+        // it, and is not a failed round.
         for (index, round) in rounds.iter().enumerate() {
             let (compared, skipped) = comparable(std::slice::from_ref(round));
-            assert_eq!(compared, Compared::default(), "round {}", index + 1);
-            assert!(skipped.is_empty(), "round {}", index + 1);
+            assert_eq!(compared.numbers, [1], "round {}", index + 1);
+            for cases in compared.base.iter().chain(&compared.head) {
+                let names: Vec<&str> = cases.iter().map(|case| case.name.as_str()).collect();
+                assert_eq!(names, ["a"], "round {}", index + 1);
+            }
             assert!(
-                !failed_rounds(std::slice::from_ref(round), "main").is_empty(),
-                "round {}",
+                skipped.iter().any(|one| one.on == FailedOn::OneSide),
+                "round {}: {skipped:?}",
                 index + 1
             );
+            assert_eq!(failed_rounds(std::slice::from_ref(round), "main"), "");
         }
+        // Together: every round compared, both tests left out of all of
+        // them, each named with where it failed, and the run a failure.
         let (compared, skipped) = comparable(&rounds);
-        assert_eq!(compared, Compared::default());
-        assert!(skipped.is_empty());
-        let error = conclusion(rounds.len(), compared.numbers.len()).unwrap_err();
-        assert!(error.contains("6 of 6 rounds"), "{error}");
+        assert_eq!(compared.numbers, [1, 2, 3, 4, 5]);
+        assert_eq!(skipped.len(), 2, "{skipped:?}");
+        let t = &skipped[0];
+        assert_eq!((t.id.as_str(), t.on), ("b t", FailedOn::OneSide));
+        assert_eq!(t.rounds, [1, 2, 3, 4, 5]);
+        assert_eq!((t.base.as_str(), t.head.as_str()), ("x", "y"));
+        let u = &skipped[1];
+        assert_eq!(
+            (u.id.as_str(), u.on, u.rounds.as_slice()),
+            ("b u", FailedOn::OneSide, &[5][..])
+        );
+        assert_eq!(u.head, "", "the head passed it");
+        let text = skipped_text(&skipped);
+        assert!(text.contains("2 TEST(S) FAILED ON ONE SIDE ONLY"), "{text}");
+        assert!(text.contains("head: (passed, or not run)"), "{text}");
+        assert!(!text.contains("FAILED ON BOTH SIDES"), "{text}");
+        let error = conclusion(rounds.len(), compared.numbers.len(), &skipped).unwrap_err();
+        assert!(
+            error.contains("2 test(s) failed on one side only") && error.contains("b t, b u"),
+            "{error}"
+        );
+        assert!(!error.contains("rounds had a failing run"), "{error}");
+    }
+
+    #[test]
+    fn a_test_that_failed_on_both_sides_once_and_on_one_side_once_is_one_sided() {
+        let rounds = vec![
+            Round {
+                base: tried(&[("a", None), ("t", Some("x"))], true),
+                head: tried(&[("a", None), ("t", Some("x"))], true),
+            },
+            Round {
+                base: passed_report(&["a", "t"]),
+                head: tried(&[("a", None), ("t", Some("x"))], true),
+            },
+        ];
+        let (compared, skipped) = comparable(&rounds);
+        assert_eq!(compared.numbers, [1, 2]);
+        assert_eq!(skipped[0].on, FailedOn::OneSide);
+        assert!(conclusion(2, 2, &skipped).is_err());
     }
 
     #[test]
