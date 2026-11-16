@@ -123,3 +123,21 @@ The PR's run is 43871451116, at `c64ddb3`.
 
 Two things these tables show that are not this step's: `main`'s own Linux run at `3c5ee17` was on a slow runner (tier 2 at 46 s of 40), and Windows' tier 3 is at 82 s of 90 on `main` itself on a 9 ms runner. The second pull request adds 5.5 s to it in the A/B above.
 
+## Where the second pull request's bytes went
+
+`try`'s `size --breakdown` on `main` after the second pull request (`fa8b464`, run 43874231293) and on the commit before it (`3c5ee17`, run 43874265576), the Linux binary (`x86_64-unknown-linux-musl`, the `dist` profile), by the crate that owns each symbol:
+
+| Crate | Before | After | Change |
+|---|---:|---:|---:|
+| The whole binary | 11,892,072 | 12,309,928 | +417,856 |
+| `cortex_knowledge` | 0 | 112,661 | +112,661 |
+| `toml` (`cortex-knowledge` turns on its `display` feature, which writes TOML) | 200,118 | 289,128 | +89,010 |
+| In no symbol: headers, unwind tables, padding | 3,232,521 | 3,303,994 | +71,473 |
+| `cortex_core` (the wiring) | 411,859 | 473,484 | +61,625 |
+| `std` (generic code made for the new types) | 2,007,965 | 2,060,641 | +52,676 |
+| `tokio` | 355,355 | 371,029 | +15,674 |
+| `cortex_agent` | 239,605 | 243,323 | +3,718 |
+| `cortex_protocol` | 112,586 | 116,115 | +3,529 |
+
+For step 33: a quarter of it is the crate and a fifth is `toml`'s writer, which a store that wrote its own file would not need, if the size is wanted back.
+

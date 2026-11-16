@@ -43,6 +43,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [reading-a-key-at-a-terminal](reading-a-key-at-a-terminal.md): `cortex auth login` refuses a terminal because reading a key without echo needs the terminal layer. Owner: step 25.
 - [shell-completions](shell-completions.md): Completions should come from an `xtask` command over the `FLAGS` table; the table exists, the command does not. Owner: step 34.
 - [the-binary-near-its-size-budget](the-binary-near-its-size-budget.md): After step 33's size fix the binary has about 5 MB left on each system (Windows 13.19 of 18 MiB, Linux 11.33 of 16), with extensions and MCP to come; each pull request shows its size. Open until a step-34 build passes on both. Owner: step 34.
+- [json-outputs-that-escape-what-json-does-not](json-outputs-that-escape-what-json-does-not.md): `usage`, `stats` and `sessions` with `--json` print an escape that is not JSON's for a character that acts unseen. Owner: a fix session for `cortex-cli`.
 
 ### cortex-config
 
@@ -75,6 +76,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 - [a-promote-while-a-confined-command-runs](a-promote-while-a-confined-command-runs.md): A promote made while a confined command of the same project runs is taken for a change from outside, and stops that command's turn. Owner: step 24, or a fix session that changes the continuity check.
 - [a-same-size-rewrite-within-a-clock-tick-on-windows](a-same-size-rewrite-within-a-clock-tick-on-windows.md): On Windows a file's stamp is its time and size, so a same-size rewrite within the clock's tick is not seen by the look for a changed profile. Owner: a step that changes `cortex-base`'s `watch`, or step 32.
+- [the-load-of-a-full-profile-on-a-hosted-runner](the-load-of-a-full-profile-on-a-hosted-runner.md): The budget for loading a project's knowledge at its caps is 5 ms by the design note and 5.1 ms on a hosted runner; the row is written as recommended, pending. Owner: the owner.
 - [the-item-an-entry-was-learned-from](the-item-an-entry-was-learned-from.md): An entry's source has the session and the date and not the item: the tools' contract gives a tool no call id. Owner: a step that changes the tools' contract, or step 24.
 
 ### cortex-llm

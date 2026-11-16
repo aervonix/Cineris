@@ -1025,22 +1025,22 @@ caught-by:
 # ---------------------------------------------------- the command line
 
 [break] an-id-that-begins-others-is-not-itself
-rule: An id is named whole, or by a start that only one entry has: the whole id wins over the ids it begins.
+rule: An id given whole names its entry, before any start is looked for.
 file: crates/cortex-cli/src/project_view.rs
 in: resolve
 find: if let Some(entry) = entries.iter().find(|entry| entry.id.as_str() == given) { return Ok(entry.id.clone()); }
 replace:
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::an_id_is_named_whole_or_by_a_start_that_only_one_has
+    cortex-cli::bin/cortex project_view::tests::an_id_of_the_users_store_is_whole_and_a_shared_one_may_be_cut_short
 
 [break] a-start-several-ids-share-names-the-first
-rule: A start that several ids share names none of them.
+rule: A start that several of the repository's ids share names none of them.
 file: crates/cortex-cli/src/project_view.rs
 in: resolve
 find: [entry] => Ok(entry.id.clone())
 replace: [entry, ..] => Ok(entry.id.clone())
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::an_id_is_named_whole_or_by_a_start_that_only_one_has
+    cortex-cli::bin/cortex project_view::tests::an_id_of_the_users_store_is_whole_and_a_shared_one_may_be_cut_short
 
 [break] a-command-that-only-became-active-is-listed-as-accepted
 rule: The listing says of a command whether it asks: one that became active by itself is not accepted.
@@ -1095,4 +1095,58 @@ find: let mut current = self.project.is_current(&snapshot);
 replace: let mut current = true;
 caught-by:
     cortex-core::it knowledge::sys_a_snapshot_another_change_overtook_does_not_put_a_rule_back
+
+[break] a-start-names-an-entry-of-the-users-own-store
+rule: An id of the user's own store is given whole: its start would name a later entry once its own is gone.
+file: crates/cortex-cli/src/project_view.rs
+in: resolve
+find: if !given.starts_with("s_") || given.len() < 4 { return Err(none()); }
+replace:
+caught-by:
+    cortex-cli::bin/cortex project_view::tests::an_id_of_the_users_store_is_whole_and_a_shared_one_may_be_cut_short
+
+[break] a-line-break-in-a-text-begins-a-line-of-the-listing
+rule: An entry is two lines of the listing, whatever its text holds: a line break in it is shown, and begins no line.
+file: crates/cortex-cli/src/project_view.rs
+in: said
+find: let _ = write!(said, " {}", visible(&entry.text));
+replace: let _ = write!(said, " {}", entry.text);
+caught-by:
+    cortex-cli::bin/cortex project_view::tests::a_text_cannot_begin_a_line_of_the_listing
+
+[break] the-json-line-passes-what-acts-unseen
+rule: `--json` prints one line of JSON with nothing in it that acts unseen at a terminal.
+file: crates/cortex-cli/src/project_view.rs
+in: json_line
+find: if cortex_base::acts_unseen(character) {
+replace: if false {
+caught-by:
+    cortex-cli::bin/cortex project_view::tests::the_json_line_is_json_and_shows_what_acts_unseen
+
+[break] an-accepted-command-in-a-project-not-trusted-says-nothing
+rule: The listing says that an accepted command still asks while the project is not trusted.
+file: crates/cortex-cli/src/project_view.rs
+in: listing
+find: if !trusted && shown.iter().any(|entry| runs_once_trusted(entry, now)) {
+replace: if false {
+caught-by:
+    cortex-cli::bin/cortex project_view::tests::an_accepted_command_that_still_asks_is_said_to
+
+[break] an-entry-past-its-expiry-is-listed-as-accepted
+rule: An entry past its expiry is out of use whether or not it was marked, and the listing says so.
+file: crates/cortex-cli/src/project_view.rs
+in: standing
+find: EntryStatus::Active if expired(entry, now) => "expired".to_owned(),
+replace:
+caught-by:
+    cortex-cli::bin/cortex project_view::tests::an_accepted_command_that_still_asks_is_said_to
+
+[break] the-same-id-twice-is-two-changes
+rule: An id given twice is one change.
+file: crates/cortex-cli/src/project_view.rs
+in: each_once
+find: if !once.contains(&id) {
+replace: if true {
+caught-by:
+    cortex-cli::bin/cortex project_view::tests::ids_given_twice_are_one_change
 
