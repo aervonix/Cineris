@@ -862,12 +862,12 @@ caught-by:
 rule: The workspace's paths are matched on a thread of their own, so that a key's frame never waits for the match.
 file: crates/cortex-tui/src/app/state.rs
 in: App::done
-find: match super::files::FileSearch::start(files.paths.clone(), self.waker.clone()) {
-replace: match None::<super::files::FileSearch> {
+find: match super::files::FileSearch::start(candidates, self.waker.clone()) {
+replace: match Err::<super::files::FileSearch, _>(candidates) {
 packages: cortex-tui
 caught-by:
-    app::tests::at_completes_from_the_workspace_files_the_core_lists
-    app::tests::at_the_cap_a_keys_frame_never_waits_for_the_file_match
+    app::tests::files::the_workspace_files_are_listed_on_the_first_at_and_not_when_the_session_opens
+    app::tests::files::at_the_cap_a_keys_frame_never_waits_for_the_file_match
 
 [break] a-dialog-shown-under-the-viewer
 rule: A dialog is shown by the inline screen's frame alone: under the viewer its grace has not begun. Since the review of step 23 the viewer's closing also starts the dialog's grace again, a second guard that leaves nothing this break can show.

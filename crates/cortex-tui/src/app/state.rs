@@ -188,6 +188,10 @@ pub struct App {
     waker: Option<cortex_term::Waker>,
     /// The generation of the last `@` query handed to the worker.
     files_asked: u64,
+    /// The workspace's files have been asked of the core: once, on the
+    /// first `@` typed (since the fixes of the review of step 23), so that
+    /// a session that never completes a path holds no list of them.
+    files_listing: bool,
     /// The person asked for the external editor (`Ctrl+G`).
     editor_wanted: bool,
     /// The settings `/new` opens a session with, and whether it is kept in
@@ -310,6 +314,7 @@ impl App {
             file_search: None,
             waker: None,
             files_asked: 0,
+            files_listing: false,
             editor_wanted: false,
             reading: false,
             history_items: HashMap::new(),
@@ -480,8 +485,22 @@ impl App {
         self.waker = Some(waker);
     }
 
-    /// Hands the `@` query the text asks to the worker.
+    /// Hands the `@` query the text asks to the worker. On the first `@`,
+    /// asks the core for the workspace's files, which the menu waits for.
     fn ask_files(&mut self) {
+        if !self.files_listing
+            && self.input.wants_files()
+            && let Some(session) = self.session.as_ref().map(|s| s.session_id.clone())
+        {
+            self.files_listing = true;
+            let ticket = self.link.send(Op::WorkspaceFiles(
+                cortex_protocol::methods::WorkspaceFilesParams {
+                    session_id: session,
+                    limit: None,
+                },
+            ));
+            self.pending.insert(ticket, Pending::Files);
+        }
         if let Some(search) = &self.file_search
             && let Some(query) = self.input.take_file_query()
         {
@@ -1112,14 +1131,16 @@ impl App {
             (Pending::Files, Ok(OpResult::WorkspaceFiles(files))) => {
                 // Matched on a thread of their own: at the core's cap a
                 // match takes longer than a key's budget. With no thread,
-                // on the key's path.
-                match super::files::FileSearch::start(files.paths.clone(), self.waker.clone()) {
-                    Some(search) => {
+                // on the key's path. The paths are moved into the one
+                // compact list, never copied.
+                let candidates = crate::complete::Candidates::new(files.paths);
+                match super::files::FileSearch::start(candidates, self.waker.clone()) {
+                    Ok(search) => {
                         self.file_search = Some(search);
                         self.input.filter_files_elsewhere();
                         self.ask_files();
                     }
-                    None => self.input.set_files(files.paths),
+                    Err(candidates) => self.input.set_file_candidates(candidates),
                 }
             }
             (Pending::History(_), Err(error)) => {
@@ -1243,15 +1264,8 @@ impl App {
         // "Resume"); its events wait for it.
         let session_id = state.session_id.clone();
         self.session = Some(state);
-        // The workspace's files for `@`, listed by the core beside
-        // everything else.
-        let ticket = self.link.send(Op::WorkspaceFiles(
-            cortex_protocol::methods::WorkspaceFilesParams {
-                session_id: session_id.clone(),
-                limit: None,
-            },
-        ));
-        self.pending.insert(ticket, Pending::Files);
+        // The workspace's files for `@` are listed on the first `@` typed
+        // (`ask_files`), not here.
         if stored {
             self.reading = true;
             self.read_history(session_id, None);

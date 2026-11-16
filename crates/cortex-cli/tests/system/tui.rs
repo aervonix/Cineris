@@ -57,6 +57,18 @@ const FIRST_FRAME: Duration = if cfg!(windows) {
 /// wait for the header pass before there is one.
 const HEADER: &str = concat!("Cortex-Harness ", env!("CARGO_PKG_VERSION"));
 
+/// The coarse check on a key's echo in the real binary, from the key's
+/// write to the frame that shows it: far over the budget of 2 ms at the
+/// 99th percentile (`docs/performance-budgets.md`), for a binary built
+/// without optimisation on a loaded runner, and under ConPTY's own 16 ms or
+/// so on Windows; an interface thread that waits on the disk or the core
+/// passes it by seconds.
+const KEY_ECHO: Duration = if cfg!(windows) {
+    Duration::from_millis(500)
+} else {
+    Duration::from_millis(250)
+};
+
 /// What the shell says just before it starts the binary.
 const STARTING: &str = "starting cortex";
 
@@ -181,6 +193,26 @@ fn type_text(session: &mut Session, text: &str) {
     session.send(text.as_bytes());
 }
 
+/// Types `word` into the empty prompt a key at a time, each when the last
+/// has shown, and checks that each showed within [`KEY_ECHO`]. No space in
+/// it: a row is padded with spaces, so a space typed would seem shown
+/// before it was.
+fn type_timed(session: &mut Session, word: &str) {
+    assert!(!word.contains(' '), "{word:?}");
+    let mut worst = Duration::ZERO;
+    let mut shown_so_far = String::new();
+    for c in word.chars() {
+        shown_so_far.push(c);
+        let sent = session.send(c.to_string().as_bytes());
+        let shown = session.wait_for(LIMIT, "the key's echo", |t| typed(t, &shown_so_far));
+        worst = worst.max(shown.saturating_duration_since(sent));
+    }
+    assert!(
+        worst < KEY_ECHO,
+        "a key took {worst:?} to show, more than {KEY_ECHO:?}"
+    );
+}
+
 /// Everything the screen and its scrollback show.
 fn everything(session: &Session) -> String {
     session.screen().history().join("\n")
@@ -221,8 +253,10 @@ fn sys_a_turn_with_tools_runs_in_the_interface_and_the_terminal_is_put_back() {
     let mut session = machine.tui(&[]);
     first_frame(&mut session, &phases);
 
+    phases.mark("the keys");
+    type_timed(&mut session, "why");
     phases.mark("the turn");
-    type_text(&mut session, "why does the build fail?\r");
+    type_text(&mut session, " does the build fail?\r");
     wait_shows(&mut session, "The build needs the json feature turned on.");
     let shown = everything(&session);
     assert!(shown.contains("why does the build fail?"), "{shown}");
@@ -852,14 +886,6 @@ fn child_status(session: &Session) -> Option<String> {
         })
 }
 
-/// The resident memory of the binary, in KiB. Linux only.
-#[cfg(target_os = "linux")]
-fn resident_kib(session: &Session) -> Option<u64> {
-    status_field(&child_status(session)?, "VmRSS:")?
-        .parse()
-        .ok()
-}
-
 /// Whether a turn's record is in the statistics on disk: the last thing
 /// the core's end writes, after the session's own end. Linux only, as the
 /// signal test that asks.
@@ -1093,16 +1119,8 @@ fn perf_idle_memory_and_a_keys_time_to_its_frame() {
         READY.iter().any(|ready| t.shows(ready))
     });
     session.wait_for(LIMIT, "the session's header", |t| t.shows(HEADER));
-    #[cfg(target_os = "linux")]
-    match resident_kib(&session) {
-        Some(kib) => println!(
-            "idle with a new session: {:.1} MB resident",
-            kib as f64 / 1024.0
-        ),
-        None => println!("idle with a new session: the resident memory could not be read"),
-    }
-    #[cfg(not(target_os = "linux"))]
-    println!("idle with a new session: resident memory is read on Linux only");
+    settle(&mut session);
+    report(&format!("idle with a new session: {}", memory(&session)));
     let mut times = Vec::with_capacity(keys);
     for n in 0..keys {
         let started = Instant::now();
@@ -1122,17 +1140,26 @@ fn perf_idle_memory_and_a_keys_time_to_its_frame() {
     session.wait_exit(LIMIT);
 }
 
-/// A streamed answer's piece to the frame that shows it: the scripted
-/// server holds each piece until the test lets it go, and the time is from
-/// letting it go to the screen showing it (the budget: 20 ms at the 95th
-/// percentile; the frame cap of 60 a second is most of it). Keys typed
-/// while the turn runs are timed to their frames too. A measurement, in a
-/// release build: see [`perf_start_to_first_frame_under_both_names`].
+/// A streamed answer's piece to the frame that shows it, apart from the cap
+/// of 60 frames a second: the scripted server holds each piece until the
+/// test lets it go, and the test lets it go only once the screen has been
+/// still for longer than a frame's interval, so that the frame for it is
+/// due at once (`cortex-term`'s scheduler). The time is from letting it go
+/// to the screen showing it, and, beside it, the time beyond the frame that
+/// was due: the delta path's own (the budget: 20 ms at the 95th percentile
+/// for the whole). Before the fixes of the review of step 23 (finding 12b)
+/// each piece was let go about a millisecond after the last frame, so the
+/// figure was the cap's 16.7 ms and hid up to that much of a regression. A
+/// measurement, in a release build: see
+/// [`perf_start_to_first_frame_under_both_names`].
 #[test]
 #[ignore = "a measurement, run in a release build: see its documentation"]
-fn perf_a_streamed_piece_and_a_key_while_streaming() {
+fn perf_a_streamed_piece_to_its_frame() {
     const PIECES: usize = 40;
-    let machine = Machine::new("perf_stream");
+    // Longer than a frame's interval (16.7 ms): the stream's next frame is
+    // due at once.
+    const STILL: Duration = Duration::from_millis(20);
+    let machine = Machine::new("perf_stream_piece");
     let gates: Vec<Gate> = (0..PIECES).map(|_| Gate::new()).collect();
     let mut reply = ServerReply::sse().send(super::sse(&[
         super::message_start(),
@@ -1155,26 +1182,404 @@ fn perf_a_streamed_piece_and_a_key_while_streaming() {
     session.wait_for(LIMIT, "the first frame", |t| {
         READY.iter().any(|ready| t.shows(ready))
     });
-    let mut pieces = Vec::with_capacity(PIECES);
-    let mut keys = Vec::with_capacity(PIECES);
+    let mut whole = Vec::with_capacity(PIECES);
+    let mut beyond = Vec::with_capacity(PIECES);
     for (n, gate) in gates.iter().enumerate() {
-        let started = Instant::now();
+        // The screen still for `STILL`: no frame in it, the spinner's
+        // included.
+        while session.step(STILL).is_some() {}
+        let last = session.recording().last().map(|chunk| chunk.at);
+        let opened = Instant::now();
         gate.open();
         let text = format!("piece{n:03}");
-        session.wait_for(LIMIT, "the piece", |t| {
+        let shown = session.wait_for(LIMIT, "the piece", |t| {
             t.history().iter().any(|row| row.contains(&text))
         });
-        pieces.push(started.elapsed().as_secs_f64() * 1000.0);
-        // A key while the answer streams: typed, then taken back.
-        let started = Instant::now();
-        session.send(b"q");
-        session.wait_for(LIMIT, "the key's echo", |t| typed(t, "q"));
-        keys.push(started.elapsed().as_secs_f64() * 1000.0);
-        session.send(b"\x7f");
-        session.wait_for(LIMIT, "the key taken back", |t| !typed(t, "q"));
+        // The frame before the piece's own, which may be one the spinner
+        // drew after the piece was let go: the piece's frame was due one
+        // interval after it, or at once.
+        let before = session
+            .recording()
+            .iter()
+            .rev()
+            .map(|chunk| chunk.at)
+            .find(|at| *at + Duration::from_micros(500) < shown)
+            .or(last);
+        let due = before.map_or(opened, |before| opened.max(before + FRAME));
+        whole.push(millis(shown.saturating_duration_since(opened)));
+        beyond.push(millis(shown.saturating_duration_since(due)));
     }
-    percentiles("a streamed piece to its frame", pieces);
-    percentiles("a key to its frame, streaming", keys);
+    percentiles("a streamed piece to its frame", whole);
+    percentiles("  beyond the frame that was due", beyond);
+    session.wait_for(LIMIT, "the turn's end", |t| t.shows(READY[0]));
     session.send(b"\x04");
     session.wait_exit(LIMIT);
+}
+
+/// A key's time to its frame while an answer streams at 2,000 tokens a
+/// second: the scripted server sends a word every half a millisecond, let
+/// go on a timer by a thread of the test's, while the test types
+/// `CORTEX_PERF_RUNS` keys (200 unless given), one every 23 ms (no multiple
+/// of a frame's interval, so that they land all through it), a character
+/// typed and taken back by turns, each timed from its write to the frame
+/// that shows it (the budget: 4 ms at the 99th percentile). Each key is typed while the
+/// stream runs: the test fails if the stream ended first. Before the fixes
+/// of the review of step 23 (finding 12a) each key was typed between two
+/// pieces, while the server was idle. A measurement, in a release build:
+/// see [`perf_start_to_first_frame_under_both_names`].
+#[test]
+#[ignore = "a measurement, run in a release build: see its documentation"]
+fn perf_a_key_while_an_answer_streams() {
+    // 2,000 tokens a second, a word each.
+    const EVERY: Duration = Duration::from_micros(500);
+    const WORDS: usize = 40_000;
+    const KEY_EVERY: Duration = Duration::from_millis(23);
+    let keys: usize = std::env::var("CORTEX_PERF_RUNS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(200);
+    let machine = Machine::new("perf_stream_keys");
+    let gates: Vec<Gate> = (0..WORDS).map(|_| Gate::new()).collect();
+    let mut reply = ServerReply::sse().send(super::sse(&[
+        super::message_start(),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+    ]));
+    for (n, gate) in gates.iter().enumerate() {
+        // A paragraph of forty words, as an answer has.
+        let word = if n % 40 == 39 {
+            format!("w{n:05}\n\n")
+        } else {
+            format!("w{n:05} ")
+        };
+        reply = reply.wait(gate).send(super::sse(&[json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": word}
+        })]));
+    }
+    reply = reply.send(super::sse(&[
+        json!({"type": "content_block_stop", "index": 0}),
+        super::message_delta("end_turn"),
+        json!({"type": "message_stop"}),
+    ]));
+    machine.server.push(reply);
+    let mut session = machine.tui(&["go"]);
+    session.wait_for(LIMIT, "the first frame", |t| {
+        READY.iter().any(|ready| t.shows(ready))
+    });
+    let pacer = Pacer::start(gates, EVERY);
+    session.wait_for(LIMIT, "the stream", |t| {
+        t.history().iter().any(|row| row.contains("w00000"))
+    });
+    let mut times = Vec::with_capacity(keys);
+    let began = Instant::now();
+    for n in 0..keys {
+        // The output read until the key's time comes.
+        let at = began + KEY_EVERY * u32::try_from(n).unwrap_or(u32::MAX);
+        loop {
+            let left = at.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            let _ = session.step(left);
+        }
+        let (bytes, what): (&[u8], &str) = if n % 2 == 0 {
+            (b"q", "the key's echo")
+        } else {
+            (b"\x7f", "the key taken back")
+        };
+        let sent = session.send(bytes);
+        let shown = session.wait_for(LIMIT, what, |t| typed(t, "q") == (n % 2 == 0));
+        times.push(millis(shown.saturating_duration_since(sent)));
+    }
+    let typing = began.elapsed();
+    let (released, ended) = pacer.stop();
+    assert!(
+        !ended,
+        "the stream ended before the last key: give it more than {WORDS} words"
+    );
+    report(&format!(
+        "streamed while the keys were typed: {released} words in {:.1} s, {:.0} a second",
+        typing.as_secs_f64(),
+        released as f64 / typing.as_secs_f64()
+    ));
+    percentiles("a key to its frame, streaming", times);
+    session.wait_for(LIMIT, "the turn's end", |t| t.shows(READY[0]));
+    session.send(b"\x04");
+    session.wait_exit(LIMIT);
+}
+
+/// The shortest time between two frames the application draws for what
+/// streams in: 60 a second (`cortex_term::schedule::STREAM_INTERVAL`).
+const FRAME: Duration = Duration::from_micros(16_667);
+
+#[expect(clippy::print_stdout, reason = "a measurement prints what it measured")]
+fn report(line: &str) {
+    println!("{line}");
+}
+
+/// Milliseconds, as a measurement prints them.
+fn millis(time: Duration) -> f64 {
+    time.as_secs_f64() * 1000.0
+}
+
+/// A thread that opens gates one after another on a timer: a stream let go
+/// at a rate, for a measurement. It waits by the clock, parked: the only
+/// real waiting in these tests, where the time is what is measured.
+struct Pacer {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: std::thread::JoinHandle<(usize, bool)>,
+}
+
+impl Pacer {
+    /// Opens `gates` in order, the `n`th `every * n` after the start; those
+    /// whose time has come are opened together when the system's timer
+    /// wakes the thread late (Windows).
+    fn start(gates: Vec<Gate>, every: Duration) -> Self {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = std::sync::Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            let began = Instant::now();
+            let mut next = 0;
+            while next < gates.len() {
+                if stopped.load(std::sync::atomic::Ordering::Relaxed) {
+                    // The rest at once, so that the answer ends.
+                    for gate in &gates[next..] {
+                        gate.open();
+                    }
+                    return (next, false);
+                }
+                let now = Instant::now();
+                let due = began + every * u32::try_from(next).unwrap_or(u32::MAX);
+                if now < due {
+                    std::thread::park_timeout(due - now);
+                    continue;
+                }
+                while next < gates.len()
+                    && began + every * u32::try_from(next).unwrap_or(u32::MAX) <= now
+                {
+                    gates[next].open();
+                    next += 1;
+                }
+            }
+            (next, true)
+        });
+        Self { stop, thread }
+    }
+
+    /// Stops it, opening the gates left at once: how many it had opened on
+    /// its timer, and whether that was all of them.
+    fn stop(self) -> (usize, bool) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.thread.thread().unpark();
+        self.thread.join().expect("the pacer")
+    }
+}
+
+/// What the binary uses: its resident memory and its peak, in MB, and the
+/// CPU time it has used, in the system's units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Usage {
+    resident: f64,
+    peak: f64,
+    cpu: u64,
+}
+
+/// What the binary the role shell started for `session` uses: `VmRSS`,
+/// `VmHWM` and the CPU ticks from `/proc`.
+#[cfg(target_os = "linux")]
+fn usage(session: &Session) -> Option<Usage> {
+    let status = child_status(session)?;
+    let pid = status_field(&status, "Pid:")?;
+    let mb = |name: &str| {
+        status_field(&status, name)
+            .and_then(|kib| kib.parse::<f64>().ok())
+            .map(|kib| kib / 1024.0)
+    };
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // After the name, which is in brackets and may hold spaces: the state
+    // is the first field, user time the twelfth and system time the
+    // thirteenth.
+    let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+    let cpu = fields.get(11)?.parse::<u64>().ok()? + fields.get(12)?.parse::<u64>().ok()?;
+    Some(Usage {
+        resident: mb("VmRSS:")?,
+        peak: mb("VmHWM:")?,
+        cpu,
+    })
+}
+
+/// What the binary the role shell started for `session` uses: its working
+/// set and peak working set, and its CPU time in milliseconds, asked of
+/// PowerShell (about a third of a second a question).
+#[cfg(windows)]
+fn usage(session: &Session) -> Option<Usage> {
+    let script = format!(
+        "$c = Get-CimInstance Win32_Process -Filter 'ParentProcessId={}' | \
+         Where-Object {{ $_.Name -like 'c*.exe' }} | Select-Object -First 1; \
+         $p = Get-Process -Id $c.ProcessId; \
+         \"$($p.WorkingSet64) $($p.PeakWorkingSet64) $([long]$p.TotalProcessorTime.TotalMilliseconds)\"",
+        session.pid()
+    );
+    let output = Command::new("pwsh")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut fields = text.split_whitespace();
+    let mut mb = || {
+        fields
+            .next()?
+            .parse::<f64>()
+            .ok()
+            .map(|bytes| bytes / 1024.0 / 1024.0)
+    };
+    let (resident, peak) = (mb()?, mb()?);
+    let cpu = text.split_whitespace().nth(2)?.parse().ok()?;
+    Some(Usage {
+        resident,
+        peak,
+        cpu,
+    })
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn usage(_: &Session) -> Option<Usage> {
+    None
+}
+
+/// Waits until the binary has used no CPU for a second: its session's
+/// first index pass made, and whatever else the open started. Its output
+/// is read meanwhile. Where its use cannot be read, it does not wait.
+fn settle(session: &mut Session) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let Some(mut cpu) = usage(session).map(|usage| usage.cpu) else {
+        return;
+    };
+    let mut since = Instant::now();
+    while since.elapsed() < Duration::from_secs(1) {
+        assert!(Instant::now() < deadline, "the binary never settled");
+        // Output, or a quarter of a second without any.
+        let _ = session.step(Duration::from_millis(250));
+        let now = usage(session).map_or(cpu, |usage| usage.cpu);
+        if now != cpu {
+            cpu = now;
+            since = Instant::now();
+        }
+    }
+}
+
+/// The binary's resident memory and its peak, as a measurement prints them.
+fn memory(session: &Session) -> String {
+    usage(session).map_or_else(
+        || "resident memory not read on this system".to_owned(),
+        |usage| {
+            format!(
+                "{:.1} MB resident, {:.1} MB at the peak",
+                usage.resident, usage.peak
+            )
+        },
+    )
+}
+
+/// Fills `workspace` with `count` files of real Rust code, the corpus's
+/// `.rs` files in name order (taken again in turn when it has fewer), a
+/// hundred to a directory: hard links where the two are on one volume,
+/// copies otherwise. Returns how many were links.
+fn real_code(workspace: &std::path::Path, count: usize) -> usize {
+    fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, want: usize) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            if out.len() >= want {
+                return;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                rust_files(&entry.path(), out, want);
+            } else if kind.is_file() && entry.path().extension().is_some_and(|e| e == "rs") {
+                out.push(entry.path());
+            }
+        }
+    }
+    let corpus = cortex_testkit::corpus::real_code();
+    let mut found = Vec::new();
+    rust_files(&corpus, &mut found, count);
+    assert!(!found.is_empty(), "no .rs file in {}", corpus.display());
+    let mut linked = 0;
+    for n in 0..count {
+        let dir = n / 100;
+        let to = workspace.join(format!("d{:03}/s{dir:04}/f{n}.rs", dir / 10));
+        std::fs::create_dir_all(to.parent().expect("a parent")).expect("a directory");
+        let from = &found[n % found.len()];
+        if std::fs::hard_link(from, &to).is_ok() {
+            linked += 1;
+        } else {
+            std::fs::copy(from, &to).expect("a copy");
+        }
+    }
+    linked
+}
+
+/// The application idle with a new session in a workspace of real code,
+/// for each count of files `CORTEX_PERF_FILES` lists (`20000,100000`
+/// unless given, of the pinned corpus's files: `cargo xtask corpus fetch`):
+/// its resident memory and its peak once it has used no CPU for a second,
+/// the session's first index pass made (`index.map` is on); then the same
+/// after the first `@`, which lists the workspace's files for completion.
+/// The budget (`docs/performance-budgets.md`, "Memory"): 25 MB resident at
+/// idle, in an empty workspace and in one of 20,000 files.
+/// `CORTEX_PERF_CONFIG` adds lines to the user's configuration, to see what
+/// holds the memory (`index.map = false`). On Linux the memory is `/proc`'s
+/// `VmRSS` and `VmHWM`; on Windows the working set and its peak, asked of
+/// PowerShell. A measurement, in a release build: see
+/// [`perf_start_to_first_frame_under_both_names`].
+#[test]
+#[ignore = "a measurement, run in a release build: see its documentation"]
+fn perf_idle_memory_in_a_workspace_of_real_code() {
+    let counts: Vec<usize> = std::env::var("CORTEX_PERF_FILES")
+        .unwrap_or_else(|_| "20000,100000".to_owned())
+        .split(',')
+        .filter_map(|count| count.trim().parse().ok())
+        .collect();
+    // Settings of the user's beside the machine's, to see what holds the
+    // memory (`index.map = false`, say).
+    let extra = std::env::var("CORTEX_PERF_CONFIG").unwrap_or_default();
+    if !extra.is_empty() {
+        report(&format!("with {extra:?}"));
+    }
+    for count in counts {
+        let machine = Machine::with_config(&format!("perf_idle_{count}"), &extra);
+        let made = Instant::now();
+        let linked = real_code(&machine.workspace, count);
+        report(&format!(
+            "a workspace of {count} files of real code ({linked} hard links), made in {:.1} s",
+            made.elapsed().as_secs_f64()
+        ));
+        let mut session = machine.tui(&[]);
+        session.wait_for(LIMIT, "the first frame", |t| {
+            READY.iter().any(|ready| t.shows(ready))
+        });
+        session.wait_for(LIMIT, "the session's header", |t| t.shows(HEADER));
+        settle(&mut session);
+        report(&format!("idle, {count} files: {}", memory(&session)));
+        session.send(b"@");
+        session.wait_for(LIMIT, "the workspace's files in the menu", |t| {
+            t.shows(".rs") && typed(t, "@")
+        });
+        settle(&mut session);
+        report(&format!(
+            "after the first `@`, {count} files: {}",
+            memory(&session)
+        ));
+        session.send(b"\x7f");
+        session.wait_for(LIMIT, "the `@` taken back", |t| t.shows(READY[0]));
+        session.send(b"\x04");
+        session.wait_exit(LIMIT);
+    }
 }

@@ -41,17 +41,30 @@ impl std::fmt::Debug for FileSearch {
 }
 
 impl FileSearch {
-    /// Starts the worker over `paths`, which wakes the loop through `wake`
-    /// when it has rows. `None` when its thread could not be started.
-    pub(crate) fn start(paths: Vec<String>, wake: Option<Waker>) -> Option<Self> {
+    /// Starts the worker over `candidates`, which wakes the loop through
+    /// `wake` when it has rows. The candidates are moved to it, not copied;
+    /// they come back when its thread could not be started.
+    pub(crate) fn start(candidates: Candidates, wake: Option<Waker>) -> Result<Self, Candidates> {
         let asked: Arc<(Mutex<Asked>, Condvar)> = Arc::default();
         let (send, answers) = mpsc::channel();
         let shared = Arc::clone(&asked);
-        std::thread::Builder::new()
+        // Handed over once the thread runs, so that a thread that could not
+        // be started leaves them here.
+        let (give, take) = mpsc::channel::<Candidates>();
+        let started = std::thread::Builder::new()
             .name("cortex-files".to_owned())
-            .spawn(move || work(&Candidates::new(paths), &shared, &send, wake.as_ref()))
-            .ok()?;
-        Some(Self { asked, answers })
+            .spawn(move || {
+                if let Ok(candidates) = take.recv() {
+                    work(&candidates, &shared, &send, wake.as_ref());
+                }
+            });
+        if started.is_err() {
+            return Err(candidates);
+        }
+        if let Err(mpsc::SendError(candidates)) = give.send(candidates) {
+            return Err(candidates);
+        }
+        Ok(Self { asked, answers })
     }
 
     /// Gives the worker `query`, in place of any it has not begun.

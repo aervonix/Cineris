@@ -26,9 +26,9 @@ Numbers the product and the tooling must meet, how each is measured, and where e
 - Nothing on the start-up path reads the network, the session index, the statistics, the repository index or the model catalog's optional overlays.
 - The HTTP client, the script engine, MCP servers and the repository index start in the background after the first frame. Since step 18 a session's index is made touching no file, and its first pass starts once the session's loop runs; `cortex-core`'s `index::the_index_is_not_touched_until_the_session_is_open` holds a gated index closed while the session opens (`cortex_testkit::Untouched`), and fails if the path that opens it used the index, or started a pass it did not wait for: the core says when the session's loop runs and when a pass starts, on the thread that starts it (since the fixes of the independent review of step 18, which started a pass while the session was put together and found the check passing). A general trace of what start-up opens is [outstanding](outstanding/what-start-up-opens-traced.md).
 - Terminal capability queries never block the first frame.
-- A test fails if a start-up trace shows a file opened outside an allow-list before the first frame.
+- No file outside an allow-list is opened before the first frame. No test traces it yet: the check is [outstanding](outstanding/what-start-up-opens-traced.md), and only the index's part is held (above).
 
-**Checked.** Main (both OSes). A coarse PR check: the system tier fails if first frame exceeds five times the runner budget.
+**Checked.** A coarse PR check: the system tier fails if the real binary's first frame takes more than five times the runner's budget (250 ms on Linux, 600 ms on Windows, in an unoptimised build: `crates/cortex-cli/tests/system/tui.rs`, every test that starts the application). Main (both OSes) times `--version` and the headless run with `cargo xtask startup`; it does not time the interface's first frame, which is measured by hand or through `try` (below). The review of step 23 found this line claiming more (finding 12e).
 
 **Measured in step 13b** with `cargo xtask startup BINARY --budget COLUMN`, which times `--version` under both names and a trivial headless run (`cortex -p hi`) from the start of the process to its request reaching a listener on the loopback interface, 30 runs each. The `main` workflow runs it on the `dist` binary of each OS after every merge and puts the table in the job's summary. Desktop, release build: `--version` 0.56 ms (`cx` 0.54 ms), the headless run 12.8 ms under either name, of 15 ms. The runners' numbers are in [steps/13b/ci.md](steps/13b/ci.md). The first measurement on a hosted Windows runner missed the headless budget, 212 ms against 100 ms, and showed why: about 180 ms was the session asking PowerShell 7 its version before its first request. The version is now kept in the state directory and asked off the start-up path ([architecture/05-tools.md](architecture/05-tools.md), "`shell`"); the numbers after are in the same record. `cargo xtask startup` keeps three rows that show where a headless run's time goes: without a session log, with a shell that starts fast, and with both. **A release build on hosted runners,** measured by the `try` workflow on the main branch at `c8753f4` (`-f command=startup -f profile=dist`, run 43512041506, 2026-11-13), median / 95th percentile of 30 runs: on Windows `--version` 7.02 / 7.63 ms of 50 (`cx` 7.05 / 7.58) and the headless run 17.32 / 20.33 ms of 100 (`cx` 16.68 / 17.69), 12.95 ms of it without a session log; on Linux `--version` 1.09 / 1.14 ms of 15 and the headless run 7.31 / 7.52 ms of 40. The overhead of starting a command in a release build on Windows is still not measured ([outstanding](outstanding/windows-start-overhead-in-release.md)).
 
@@ -38,7 +38,7 @@ Numbers the product and the tooling must meet, how each is measured, and where e
 
 | Budget | Limit | Measured basis |
 |---|---|---|
-| Idle, TUI open with a new session | ≤ 25 MB resident | Prototype TUI: 2.0 to 2.7 MB. A process holding the async runtime and an HTTP client: 6.4 MB. TypeScript prototypes: 51 and 85 MB. |
+| Idle, TUI open with a new session, in an empty workspace and in one of 20,000 files (since the fixes of the review of step 23) | ≤ 25 MB resident | Prototype TUI: 2.0 to 2.7 MB. A process holding the async runtime and an HTTP client: 6.4 MB. TypeScript prototypes: 51 and 85 MB. |
 | After a 200-turn session, inline presenter | ≤ 40 MB resident | Prototype over a 60-second session at 2,000 tokens per second: +1 to +2 MB (it keeps nothing it has committed). TypeScript prototypes: about +95 MB at peak. |
 | After a 200-turn session, full-screen presenter | ≤ 80 MB resident | Prototype: +2.2 MB over the same 60-second session. |
 | A command that prints 1 GB | ≤ 8 MB above idle | By design: bounded buffers, output spilled to a file. |
@@ -51,7 +51,19 @@ Numbers the product and the tooling must meet, how each is measured, and where e
 
 **Measured in step 23:** idle with a new session, 16.0 MB resident on the desktop and 15.7 MB on a Linux runner (`perf_idle_memory_and_a_keys_time_to_its_frame` in `crates/cortex-cli/tests/system/tui.rs`, a release build, the binary's own `VmRSS`; Windows is not read). The 200-turn sessions are step 25's.
 
-**Checked.** Main. The long-session test is in the nightly tier.
+**In a workspace of real code, since the fixes of the review of step 23** (finding 12c), which found 29.2 MB at 20,000 files: the budget holds for a workspace of 20,000 files as well as an empty one, the owner's call. `perf_idle_memory_in_a_workspace_of_real_code` (same file) fills the workspace with the pinned corpus's files (`cargo xtask corpus fetch`), 20,000 and 100,000 of them, and reads the binary's memory once it has used no CPU for a second, its session's first index pass made: `VmRSS` and its peak `VmHWM` on Linux, the working set and its peak on Windows. The `@` list, which the application asked for when a session opened and copied on its way to its worker, is now asked for on the first `@` typed and kept in one buffer. Idle, in MB, with the peak in brackets:
+
+| Build | Where | Empty | 20,000 files | 100,000 files | After the first `@`, 20,000 / 100,000 |
+|---|---|---|---|---|---|
+| `dist`, musl (what ships for Linux) | Desktop | 9.1 | **12.3** (31.8) | 14.5 (42.2) | 12.9 / 17.1 |
+| release, glibc | Desktop, before the fix | 14.3 | 34.7 (43.0) | 63.0 (70.6) | 34.7 / 63.0 |
+| release, glibc | Desktop | 13.9 | **30.5** (39.6) | 46.3 (55.3) | 33.1 / 61.9 |
+| release, glibc | Linux runner | 14.2 | **41.1** (46.6) | 57.2 (57.2) | 42.7 / 67.6 |
+| release | Windows runner | 11.5 | **16.4** (34.8) | 16.5 (45.7) | 18.3 / 19.9 |
+
+What ships is within the budget on both systems. A glibc build is over it at 20,000 files: what holds the memory is the index's first pass, whose freed memory glibc keeps in its per-thread arenas. With `index.map = false` the same build stays at 15.6 MB at 20,000 and at 100,000 files; with `MALLOC_ARENA_MAX=1` it is 23.2 MB at 20,000, and 19.0 MB with `MALLOC_TRIM_THRESHOLD_=0` beside it. That is [outstanding](outstanding/memory-a-pass-leaves-resident.md) for step 33; no trim was added (the owner, 2026-11-16). The 100,000-file figures are for the record: the index reads at most 20,000 files (`index.max_files`), and its listing of the rest is what grows. The desktop's figures are of runs with nothing else on the machine (`rx --exclusive`), 2026-11-16; the runners' of `try` runs 43847403200 (Linux) and 43847407403 (Windows).
+
+**Checked.** By hand and through `try` (`perf -p cortex-cli`; the musl build by hand, `cargo test --profile dist --target x86_64-unknown-linux-musl -p cortex-cli --test system perf_idle_memory -- --ignored --nocapture`): no workflow measures memory yet, and main's tier-4 checks so far are the binary's size and start-up (`main.yml`). The long-session test is to be in the nightly tier.
 
 ## Latency the harness adds
 
@@ -74,9 +86,21 @@ The model's own latency is not ours. What the harness adds to it is.
 
 **How.** Span timings from the tracing layer for the first two. The pseudo-terminal harness for key latency: it writes a key and records when the screen shows it.
 
-**Measured in step 23** with the real application under the pseudo-terminal, a release build (`perf_idle_memory_and_a_keys_time_to_its_frame` and `perf_a_streamed_piece_and_a_key_while_streaming` in `crates/cortex-cli/tests/system/tui.rs`), median and 99th percentile: a key to its frame while idle, 0.08 / 0.24 ms on the desktop and 0.08 / 0.11 ms on a Linux runner; while an answer streams, 0.12 / 0.40 ms and 0.26 / 0.81 ms. A streamed piece, which the scripted server holds until the test lets it go, to the frame that shows it: 17.3 ms at the median and 17.7 ms at the 95th percentile on the desktop, 17.5 and 17.8 ms on a Linux runner, against the 20 ms of the first response byte's budget; most of it is the cap of 60 frames a second. On a Windows runner all three are ConPTY's cost again ([outstanding/key-latency-over-conpty.md](outstanding/key-latency-over-conpty.md)).
+**Measured in step 23** with the real application under the pseudo-terminal, a release build (`perf_idle_memory_and_a_keys_time_to_its_frame` and what was then `perf_a_streamed_piece_and_a_key_while_streaming` in `crates/cortex-cli/tests/system/tui.rs`), median and 99th percentile: a key to its frame while idle, 0.08 / 0.24 ms on the desktop and 0.08 / 0.11 ms on a Linux runner; while an answer streams, 0.12 / 0.40 ms and 0.26 / 0.81 ms. A streamed piece, which the scripted server holds until the test lets it go, to the frame that shows it: 17.3 ms at the median and 17.7 ms at the 95th percentile on the desktop, 17.5 and 17.8 ms on a Linux runner, against the 20 ms of the first response byte's budget; most of it is the cap of 60 frames a second. On a Windows runner all three are ConPTY's cost again ([outstanding/key-latency-over-conpty.md](outstanding/key-latency-over-conpty.md)).
 
-**Checked.** Main. Key latency also has a coarse PR check in the system tier.
+**Measured again since the fixes of the review of step 23** (finding 12a and b), which found two of those figures taken on the wrong path: the keys "while streaming" were typed between two pieces, with the server idle, and each piece was let go about a millisecond after a frame, so its figure was the 16.7 ms the cap of 60 frames a second makes it wait, and a regression of up to that much on the delta path would not have shown. Now `perf_a_key_while_an_answer_streams` lets the answer go at 2,000 words a second on a timer while 200 keys are typed, one every 23 ms; and `perf_a_streamed_piece_to_its_frame` lets each piece go only once the screen has been still for 20 ms, so that its frame is due at once, and reports the time beyond the frame that was due. Release build, median / 95th / 99th percentile, in ms:
+
+| | Desktop | Linux runner | Windows runner (ConPTY) |
+|---|---|---|---|
+| A key while an answer streams (budget 4 at the 99th) | 0.13 / 0.16 / 0.27 | 0.19 / 0.24 / 0.27 | 0.51 / 15.81 / 16.03 |
+| A streamed piece to its frame (budget 20 at the 95th) | 0.19 / 0.40 / 0.67 | 0.33 / 0.50 / 0.50 | 0.40 / 25.52 / 31.71 |
+| The same, beyond the frame that was due | 0.19 / 0.40 / 0.67 | 0.33 / 0.50 / 0.50 | 0.28 / 9.80 / 9.84 |
+| A key while idle (budget 2 at the 99th) | 0.09 / 0.13 / 0.18 | 0.13 / 0.16 / 0.19 | 15.45 / 23.06 / 23.46 |
+| The harness's own share of an idle key, through the loop | 0.018 / – / 0.036 | 0.035 / – / 0.046 | 0.023 / – / 0.036 |
+
+The last row is `cortex-tui`'s `perf_a_keys_frame_through_the_loop` (in `src/app/tests/files.rs`): the real loop (`app::run`) with a device that hands it a key and times it to the end of the write of the frame that shows it, with no terminal behind it, so on Windows it is the harness's share apart from ConPTY's, the system's read and write left out. The desktop's figures are of a run with nothing else on the machine, 2026-11-16; the runners' of `try` runs 43847403200 and 43847407403. On Windows everything through the pseudo-terminal is ConPTY's pace again ([outstanding/key-latency-over-conpty.md](outstanding/key-latency-over-conpty.md)).
+
+**Checked.** Coarse PR checks in the system tier: the terminal layer's demo holds each key's echo under 250 ms (`crates/cortex-term/tests/it/system.rs`), and, since the fixes of the review of step 23 (finding 12d), the real binary holds each key of a word typed into the prompt under 250 ms on Linux and 500 ms on Windows (`KEY_ECHO` in `crates/cortex-cli/tests/system/tui.rs`, `sys_a_turn_with_tools_runs_in_the_interface_and_the_terminal_is_put_back`), which an interface thread waiting on the disk or the core fails. The timings themselves are measured by hand and through `try`; no workflow runs them yet.
 
 ## Rendering under fast streaming
 
@@ -96,7 +120,7 @@ At 2,000 tokens per second, which is faster than any current hosted model.
 
 **Key latency over ConPTY (step 20).** On a hosted Windows runner a key takes 16 ms at the median and 23 ms at the 99th percentile to show when the demo is idle, against a budget of 2 ms, and 16 ms at the 99th percentile while it streams, against 4 ms. The demo's own share, from reading the key to having written the frame, is 0.06 to 0.22 ms in both. The rest is the pseudo-console's. The numbers fit ConPTY passing output on at its own pace of about one frame in 16 ms (not measured inside it): an echo waits for the next one when the demo is idle, and while the demo streams one is often due already. The owner's desktop, in Windows Terminal 1.24, measured the prototype's idle echo at 0.19 ms, so the delay is that of the runner's older ConPTY and not of every Windows terminal. The terminal layer cannot change it. The budget is not loosened ([build plan](build-plan.md), rule 11); the recommendation, which the step's report raised, is to hold the harness to its own share on Windows (key read to frame written, which `xtask perf` reports) and to record the terminal's part beside it, measured again on the owner's desktop.
 
-**Checked.** The flicker properties: PR (tier 2, on every frame of every presenter test). The timings: Main.
+**Checked.** The flicker properties: PR (tier 2, on every frame of every presenter test). The timings: by hand and through `try` (`cargo xtask perf`); no workflow runs them yet.
 
 ## Binary size
 
@@ -173,7 +197,7 @@ The size budget is where the vision's features meet the footprint goal most dire
 | Blocking checks under 5 minutes | Job timeout | Yes |
 | Flicker properties on every presenter frame | 2 | Yes |
 | First frame and key latency, coarse limits | 3 | Yes |
-| No unexpected file access before the first frame | 2 | Yes |
-| Start-up, memory, latency, rendering, data-path timings against baselines | 4 | No. Opens an issue. |
+| No unexpected file access before the first frame ([not built](outstanding/what-start-up-opens-traced.md); the index's part is held) | 2 | Yes, once built |
+| Start-up, memory, latency, rendering, data-path timings against baselines (built so far: start-up, `cargo xtask startup`; the rest by hand and through `try`) | 4 | No. Opens an issue. |
 | Binary size and crate count | 4 | No. Opens an issue. |
 | Long-session memory growth | 6 | No. Opens an issue. |

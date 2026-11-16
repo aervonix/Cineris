@@ -24,70 +24,103 @@
 //! paths in `docs/performance-budgets.md`.
 
 /// A list of candidates, prepared once for matching many queries.
+///
+/// Kept compactly (since the fixes of the review of step 23): every
+/// candidate's text in one buffer, with two numbers a candidate beside it,
+/// where it ends and where its file's name starts. A workspace's 100,000
+/// paths take their bytes and 8 bytes each, not a string of their own each.
 #[derive(Debug, Clone, Default)]
 pub struct Candidates {
-    items: Vec<Item>,
+    /// Every candidate's text, one after another.
+    text: String,
+    /// Where each candidate's text ends in `text`: it starts where the one
+    /// before it ends.
+    ends: Vec<u32>,
+    /// Where each candidate's last part (the file's name) starts in its own
+    /// text: in bytes for ASCII, in characters otherwise, with
+    /// [`NOT_ASCII`] set for a candidate that is not ASCII.
+    names: Vec<u32>,
 }
 
-#[derive(Debug, Clone)]
-struct Item {
-    text: String,
-    /// The characters, for a candidate that is not ASCII.
-    chars: Option<Box<[char]>>,
-    /// Where its last part (the file's name) starts: in bytes for ASCII,
-    /// in characters otherwise.
-    name: usize,
-}
+/// The mark in [`Candidates::names`] of a candidate that is not ASCII.
+const NOT_ASCII: u32 = 1 << 31;
 
 impl Candidates {
     /// Prepares `texts`, in the order to show them when nothing has been
-    /// typed.
+    /// typed. Each text is taken into the list's one buffer and dropped.
+    /// Should they come to 2 GiB together, those past that are left out: a
+    /// workspace's listing is capped far below it.
     #[must_use]
     pub fn new(texts: impl IntoIterator<Item = String>) -> Self {
-        let items = texts
-            .into_iter()
-            .map(|text| {
-                if text.is_ascii() {
-                    let name = text.trim_end_matches('/').rfind('/').map_or(0, |at| at + 1);
-                    Item {
-                        text,
-                        chars: None,
-                        name,
-                    }
-                } else {
-                    let chars: Box<[char]> = text.chars().collect();
-                    let trimmed = chars.iter().rposition(|c| *c != '/').map_or(0, |at| at + 1);
-                    let name = chars[..trimmed]
-                        .iter()
-                        .rposition(|c| *c == '/')
-                        .map_or(0, |at| at + 1);
-                    Item {
-                        text,
-                        chars: Some(chars),
-                        name,
-                    }
-                }
-            })
-            .collect();
-        Self { items }
+        let texts = texts.into_iter();
+        let (count, _) = texts.size_hint();
+        let mut candidates = Self {
+            text: String::new(),
+            ends: Vec::with_capacity(count),
+            names: Vec::with_capacity(count),
+        };
+        for text in texts {
+            let is_ascii = text.is_ascii();
+            let name = if is_ascii {
+                text.trim_end_matches('/').rfind('/').map_or(0, |at| at + 1)
+            } else {
+                let chars: Vec<char> = text.chars().collect();
+                let trimmed = chars.iter().rposition(|c| *c != '/').map_or(0, |at| at + 1);
+                chars[..trimmed]
+                    .iter()
+                    .rposition(|c| *c == '/')
+                    .map_or(0, |at| at + 1)
+            };
+            let end = candidates.text.len() + text.len();
+            let (Ok(end), Ok(name)) = (u32::try_from(end), u32::try_from(name)) else {
+                break;
+            };
+            if end >= NOT_ASCII || name >= NOT_ASCII {
+                break;
+            }
+            candidates.text.push_str(&text);
+            candidates.ends.push(end);
+            candidates
+                .names
+                .push(if is_ascii { name } else { name | NOT_ASCII });
+        }
+        candidates.text.shrink_to_fit();
+        candidates.ends.shrink_to_fit();
+        candidates.names.shrink_to_fit();
+        candidates
     }
 
     /// How many there are.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.items.len()
+        self.ends.len()
     }
 
     /// Whether there are none.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.ends.is_empty()
     }
 
     /// The candidate at `index`.
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&str> {
-        self.items.get(index).map(|item| item.text.as_str())
+        let end = *self.ends.get(index)? as usize;
+        let start = index
+            .checked_sub(1)
+            .map_or(0, |before| self.ends[before] as usize);
+        self.text.get(start..end)
+    }
+
+    /// The candidate at `index`, which is there: its text, whether it is
+    /// ASCII, and where its file's name starts.
+    fn item(&self, index: usize) -> (&str, bool, usize) {
+        let name = self.names[index];
+        (
+            self.get(index).unwrap_or_default(),
+            name & NOT_ASCII == 0,
+            (name & !NOT_ASCII) as usize,
+        )
     }
 }
 
@@ -140,12 +173,19 @@ impl Filter {
             .then(|| needle.iter().map(|c| *c as u8).collect());
         let mut hits = Vec::new();
         let mut pool = Vec::new();
+        // A candidate that is not ASCII is matched by character, its
+        // characters gathered here: few paths are, and none is kept so.
+        let mut chars: Vec<char> = Vec::new();
         let mut consider = |index: usize| {
-            let item = &candidates.items[index];
-            let score = match (&item.chars, &ascii) {
-                (None, Some(needle)) => score(item.text.as_bytes(), needle, item.name),
-                (None, None) => None,
-                (Some(chars), _) => score(chars, &needle, item.name),
+            let (text, is_ascii, name) = candidates.item(index);
+            let score = match (is_ascii, &ascii) {
+                (true, Some(needle)) => score(text.as_bytes(), needle, name),
+                (true, None) => None,
+                (false, _) => {
+                    chars.clear();
+                    chars.extend(text.chars());
+                    score(&chars, &needle, name)
+                }
             };
             if let Some(score) = score {
                 pool.push(u32::try_from(index).unwrap_or(u32::MAX));
@@ -170,10 +210,8 @@ fn best(hits: &mut Vec<Hit>, candidates: &Candidates, limit: usize) {
         b.score
             .cmp(&a.score)
             .then_with(|| {
-                candidates.items[a.index]
-                    .text
-                    .len()
-                    .cmp(&candidates.items[b.index].text.len())
+                let length = |hit: &Hit| candidates.get(hit.index).map_or(0, str::len);
+                length(a).cmp(&length(b))
             })
             .then_with(|| a.index.cmp(&b.index))
     };
@@ -405,6 +443,29 @@ mod tests {
         assert_eq!(run(&paths, "über"), ["docs/Übersicht.md"]);
         assert_eq!(run(&paths, "名"), ["src/中文/名字.rs"]);
         assert_eq!(positions("docs/Übersicht.md", "üb"), [5..7, 7..8]);
+    }
+
+    /// The candidates are kept in one buffer of their bytes, in order,
+    /// each with whether it is ASCII and where its file's name starts.
+    #[test]
+    fn the_candidates_are_kept_in_one_buffer_in_order() {
+        let paths = ["src/a.rs", "docs/Übersicht.md", "b/", "名字.rs", ""];
+        let candidates = Candidates::new(paths.map(String::from));
+        assert_eq!(candidates.len(), paths.len());
+        for (n, path) in paths.iter().enumerate() {
+            assert_eq!(candidates.get(n), Some(*path));
+        }
+        assert_eq!(candidates.get(paths.len()), None);
+        assert_eq!(
+            candidates.text.len(),
+            paths.iter().map(|path| path.len()).sum::<usize>()
+        );
+        assert_eq!(candidates.item(0), ("src/a.rs", true, 4));
+        assert_eq!(candidates.item(1), ("docs/Übersicht.md", false, 5));
+        assert_eq!(candidates.item(2), ("b/", true, 0));
+        assert_eq!(candidates.item(3), ("名字.rs", false, 0));
+        // After a candidate that is not ASCII, one that is matches by byte.
+        assert_eq!(run(&paths, "a.rs"), ["src/a.rs"]);
     }
 
     #[test]
