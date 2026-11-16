@@ -489,12 +489,23 @@ fn the_ends_bound_begins_before_the_lane_is_waited_for() {
     assert_eq!(wire.ended.recv().unwrap(), Ended::Closed);
 }
 
-/// The end's bound begins before a `shutdown` ends the core, which waits
-/// for each session's close: here a change of level, held as it puts its
-/// engine in force, which the core's end waits for.
+/// The point where a session's loop has started a tool call and is about to
+/// run it: `cortex_agent::BEFORE_A_CALL_RUNS`, which this crate's tests
+/// cannot name by its constant.
+const BEFORE_A_CALL_RUNS: &str = "round: a call has started, and its tool is about to run";
+
+/// The end's bound begins before a `shutdown` ends the core, whose end
+/// waits for each session's loop: here a loop held as it is about to run a
+/// tool call. The end has begun while the loop is still held; begun only
+/// after the core's end, it would wait for the hold's own time limit to let
+/// the loop go.
 #[test]
 fn the_ends_bound_begins_before_a_shutdown_ends_the_core() {
     let world = World::new("ending-before-the-core");
+    world.put("notes.txt", "notes\n");
+    world
+        .server
+        .push(anthropic::tool("c1", "read", &json!({"path": "notes.txt"})));
     let core = world.core();
     let mut wire = Wire::connect(&core, world.serve_options());
     let opened = wire
@@ -504,17 +515,22 @@ fn the_ends_bound_begins_before_a_shutdown_ends_the_core() {
     let cortex_protocol::methods::OpResult::SessionNew(opened) = opened else {
         panic!("not a session");
     };
-    let hold = cortex_testkit::Hold::new(cortex_core::BEFORE_THE_NEW_LEVEL_IS_IN_FORCE);
+    let hold = cortex_testkit::Hold::new(BEFORE_A_CALL_RUNS);
     wire.lines.write_raw(&request(
         7,
-        "session/set",
-        json!({"session_id": opened.session.session_id, "settings": {"level": "read-only"}}),
+        "turn/start",
+        json!({"session_id": opened.session.session_id, "input": [{"kind": "text", "text": "read it"}]}),
     ));
     hold.reach();
     wire.lines.write_raw(&request(8, "shutdown", json!({})));
     cortex_testkit::block_on(wire.ending.cancelled());
     hold.release();
     assert_eq!(wire.ended.recv().unwrap(), Ended::Shutdown);
+    assert_eq!(
+        hold.timed_out(),
+        0,
+        "the loop was let go by the hold's own limit"
+    );
 }
 
 /// An observer's `shutdown` is refused, and does not begin the end: the
@@ -554,98 +570,6 @@ fn a_client_that_repeats_a_refused_initialize_and_reads_nothing_is_closed() {
     }
     wire.lines.write_raw(&burst);
     assert_eq!(wire.ended.recv().unwrap(), Ended::Flooded);
-}
-
-/// Over the wire, a `session/read`'s result comes after every event at or
-/// below its `seq` that the client was sent, however far behind the
-/// client is: here it reads nothing while a turn's events wait for it,
-/// then asks for the history, then reads everything.
-#[test]
-fn a_reads_result_comes_after_the_events_at_or_below_its_seq() {
-    let world = World::new("read-after-events");
-    let pieces: Vec<String> = (0..12).map(|piece| format!("piece {piece} ")).collect();
-    let pieces: Vec<&str> = pieces.iter().map(String::as_str).collect();
-    world.server.push(anthropic::text(&pieces));
-    let core = world.core();
-    let Wire { mut lines, .. } = Wire::serve(&core, world.serve_options(), 1);
-    lines
-        .initialize(conformance::initialize())
-        .expect("initialize");
-    let opened = lines.call(new_session(&world)).expect("a session opens");
-    let cortex_protocol::methods::OpResult::SessionNew(opened) = opened else {
-        panic!("not a session");
-    };
-    let session: SessionId = opened.session.session_id;
-    let watcher = core.core.connect(ClientInfo::observer());
-    let watching = {
-        let core = core.core.clone();
-        let session = session.clone();
-        async move {
-            core.handle(
-                watcher.id,
-                Op::SessionOpen(SessionRef {
-                    session_id: session,
-                }),
-            )
-            .await
-        }
-    };
-    core.on(watching)
-        .expect("the observer opens the running session");
-    lines.write_raw(&request(
-        50,
-        "turn/start",
-        json!({"session_id": session, "input": [{"kind": "text", "text": "go"}]}),
-    ));
-    loop {
-        match cortex_testkit::block_on(watcher.queue.next()) {
-            Some(Outgoing::Event(event)) if matches!(event.event, Event::SessionIdle(_)) => break,
-            Some(_) => {}
-            None => panic!("the watcher's queue closed"),
-        }
-    }
-    // The client's writer waits on it, with the turn's events queued.
-    lines.write_raw(&request(51, "session/read", json!({"session_id": session})));
-    let mut seqs = Vec::new();
-    let mut read_at = None;
-    while read_at.is_none() {
-        match lines.read() {
-            Some(Message::Notification(notification)) => {
-                if let Some(seq) = notification
-                    .params
-                    .as_ref()
-                    .and_then(|params| params["seq"].as_u64())
-                {
-                    seqs.push(seq);
-                }
-            }
-            Some(Message::Response(Response {
-                id: Some(RequestId::Number(51)),
-                result,
-            })) => {
-                read_at = result.unwrap()["seq"].as_u64();
-            }
-            Some(_) => {}
-            None => panic!("the connection ended before the read was answered"),
-        }
-    }
-    let read_at = read_at.unwrap();
-    assert!(!seqs.is_empty(), "no event came before the read");
-    // Nothing at or below the read's `seq` comes after its result.
-    lines.end_input();
-    while let Some(message) = lines.read() {
-        if let Message::Notification(notification) = message
-            && let Some(seq) = notification
-                .params
-                .as_ref()
-                .and_then(|params| params["seq"].as_u64())
-        {
-            assert!(
-                seq > read_at,
-                "event {seq} came after the read at {read_at}"
-            );
-        }
-    }
 }
 
 /// The requests read with a `shutdown`, after it, are answered

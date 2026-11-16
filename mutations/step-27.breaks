@@ -231,11 +231,11 @@ caught-by:
 [break] the-writer-gives-results-first
 rule: Over the wire, a result is written after the events queued when it was ready, so a read's result comes after every event at or below its `seq`.
 file: crates/cortex-rpc/src/connection.rs
-in: write
-find: Some(queue) => order.next(queue, &shared.results),
-replace: Some(queue) => lock(&shared.results).pop_front().map(Next::Result).or_else(|| queue.try_next().map(Next::Core)),
+in: next_to_write
+find: Some(queue) => order.next(queue, results),
+replace: Some(queue) => lock(results).pop_front().map(Next::Result).or_else(|| queue.try_next().map(Next::Core)),
 caught-by:
-    cortex-rpc::it wire::a_reads_result_comes_after_the_events_at_or_below_its_seq
+    cortex-rpc connection::tests::the_writer_sends_a_result_after_the_events_queued_before_it
 
 [break] a-result-counts-only-its-request
 rule: A result counts against the budget by its own size once it is larger than its request's line.

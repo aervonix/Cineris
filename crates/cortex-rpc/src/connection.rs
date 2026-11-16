@@ -837,14 +837,25 @@ async fn within<F: Future>(timer: &SharedTimer, limit: Duration, future: F) -> O
 }
 
 /// The writer: the next thing for the client, in order, one line at a time.
+/// What the writer sends next: before `initialize` only results; after it
+/// the client's queue and the results in [`Order`], a result after the
+/// events queued when it was ready.
+fn next_to_write(
+    order: &mut Order,
+    queue: Option<&EventQueue>,
+    results: &Mutex<VecDeque<Ready>>,
+) -> Option<Next<Ready>> {
+    match queue {
+        Some(queue) => order.next(queue, results),
+        None => lock(results).pop_front().map(Next::Result),
+    }
+}
+
 async fn write(shared: Arc<Shared>, output: mpsc::Sender<Vec<u8>>) -> Ended {
     let mut order = Order::default();
     loop {
         let queue = shared.queue();
-        let next = match &queue {
-            Some(queue) => order.next(queue, &shared.results),
-            None => lock(&shared.results).pop_front().map(Next::Result),
-        };
+        let next = next_to_write(&mut order, queue.as_deref(), &shared.results);
         let mut line = Vec::new();
         let mut frees = None;
         match next {
@@ -959,6 +970,53 @@ mod tests {
         assert!(budget.take_request(100, 4, 1000));
         assert!(budget.take_request(100, 4, 1000));
         assert!(!budget.take_request(0, 4, 1000), "past the count");
+    }
+
+    fn event(seq: u64) -> cortex_protocol::SessionEvent {
+        cortex_protocol::SessionEvent {
+            session_id: cortex_protocol::SessionId::new("s_1"),
+            seq,
+            turn_id: None,
+            event: Event::TurnStarted(cortex_protocol::event::TurnStarted {}),
+        }
+    }
+
+    /// The writer sends a result after the events queued when it was ready,
+    /// and only those: a read's result never overtakes an event at or below
+    /// its `seq`, and events that keep coming do not hold it back.
+    #[test]
+    fn the_writer_sends_a_result_after_the_events_queued_before_it() {
+        let queue = EventQueue::new(64, true);
+        let results = Mutex::new(VecDeque::new());
+        let mut order = Order::default();
+        for seq in 1..=3 {
+            queue.push(event(seq));
+        }
+        lock(&results).push_back(Ready {
+            line: b"read".to_vec(),
+            frees: Frees::Refusal,
+        });
+        let mut sent = Vec::new();
+        while let Some(next) = next_to_write(&mut order, Some(&queue), &results) {
+            sent.push(match next {
+                Next::Core(Outgoing::Event(event)) => format!("event {}", event.seq),
+                Next::Core(Outgoing::Request { .. }) => "request".to_owned(),
+                Next::Result(ready) => String::from_utf8(ready.line).unwrap_or_default(),
+            });
+            if sent.len() == 2 {
+                queue.push(event(4));
+            }
+        }
+        assert_eq!(sent, ["event 1", "event 2", "event 3", "read", "event 4"]);
+        // Before `initialize` there is no queue: results alone.
+        lock(&results).push_back(Ready {
+            line: b"early".to_vec(),
+            frees: Frees::Refusal,
+        });
+        assert!(matches!(
+            next_to_write(&mut order, None, &results),
+            Some(Next::Result(ready)) if ready.line == b"early"
+        ));
     }
 
     /// Answers given outside the lane are counted up to the bound, at least
