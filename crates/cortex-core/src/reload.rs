@@ -250,6 +250,10 @@ impl CoreConfig {
     }
 }
 
+/// The keys the core's own configuration acts on: the log, the statistics'
+/// pruning, and the usage reports and refresh.
+const CORE_KEYS: &[&str] = &["log.level", "stats.retention", "usage"];
+
 /// What a reload asks for.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Asked {
@@ -438,10 +442,14 @@ async fn reload_core(core: &Core, asked: &Asked) -> ConfigChanged {
         recorder.set_retention(mix.settings.stats.retention);
     }
     config.in_force = mix;
-    // The core's own configuration tells nobody of what waits: each
-    // session's says it for the session.
+    // The core's own configuration says only what it acts on itself; each
+    // session's says the rest, and what waits, for the session.
     ConfigChanged {
-        applied: now.iter().map(ToString::to_string).collect(),
+        applied: now
+            .iter()
+            .filter(|key| touches(std::slice::from_ref(*key), CORE_KEYS))
+            .map(ToString::to_string)
+            .collect(),
         ..ConfigChanged::default()
     }
 }

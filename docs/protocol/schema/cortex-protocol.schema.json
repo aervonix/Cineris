@@ -1083,7 +1083,7 @@
               "type": "null"
             }
           ],
-          "description": "Only this session. Absent: every open session, and the core's own\nconfiguration."
+          "description": "Only this session. Absent: every session this client has open, and\nthe core's own configuration."
         }
       },
       "type": "object"

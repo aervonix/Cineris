@@ -683,3 +683,28 @@ fn taking_some_keys_keeps_the_rest_as_they_were() {
     assert_eq!(whole.settings, newer.settings);
     assert!(whole.changes_since(&newer).is_empty());
 }
+
+/// A key taken from a configuration that no longer sets it takes the table
+/// it leaves empty with it: a role whose only setting went is no role, not
+/// a role of defaults (the review of step 24's first part, finding 13).
+#[test]
+fn taking_a_key_that_went_leaves_no_empty_table() {
+    let machine = Machine::new("reload_taking_empty");
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"first\"\n\n[model.roles.fast]\nspeed = \"fast\"\n",
+        60,
+    );
+    let (mut live, _clock) = start(&machine);
+    let before = live.current();
+    write_at(&machine, LayerKind::User, "[model]\nmain = \"first\"\n", 30);
+    let Some(Reload::Applied { changes, .. }) = live.check() else {
+        panic!("expected the change to be applied");
+    };
+    let newer = live.current();
+    let keys: Vec<KeyPath> = changes.iter().map(|change| change.key.clone()).collect();
+    let mix = before.taking(&newer, &keys).unwrap();
+    assert_eq!(mix.settings, newer.settings);
+    assert!(mix.changes_since(&newer).is_empty());
+}

@@ -9,8 +9,10 @@
 //!   turn's budget, the compaction's thresholds and the verification's
 //!   rounds. A second change before the request is merged into the first.
 //! - [`EpochChange`]: what waits for the next context epoch, taken when a
-//!   compaction begins, before it chooses what to keep: the roles' models,
-//!   and the context's settings a compaction builds the prompt with. A
+//!   compaction begins and put in force as its new epoch builds its prompt:
+//!   the roles' models, and the context's settings the prompt is built
+//!   with (and the compactions after it). A compaction that begins no new
+//!   epoch leaves it waiting. A
 //!   second one before then replaces the first. The core is told when it is
 //!   taken ([`EpochChange::taken`]), so that it can say the keys are in
 //!   force.

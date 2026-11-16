@@ -347,9 +347,6 @@ impl Context {
         }
     }
 
-    /// Replaces what the context holds with the session as the store has
-    /// it: the epoch in force on the branch, and the history from its last
-    /// summary on.
     /// Fixes an epoch read without variants (a log written before step
     /// 16, or with a choice this build does not know) to `variants`, the
     /// main model's in force as it is read, so that its requests and an
@@ -364,6 +361,9 @@ impl Context {
         }
     }
 
+    /// Replaces what the context holds with the session as the store has
+    /// it: the epoch in force on the branch, and the history from its last
+    /// summary on.
     pub(crate) fn load(&mut self, opened: &Opened) {
         self.unchecked = true;
         // The count was of the history as it was; the ratio of bytes to
