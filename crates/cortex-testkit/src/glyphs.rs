@@ -97,6 +97,14 @@ impl<'a, G> GlyphSets<'a, G> {
             .iter()
             .find_map(|set| row.strip_prefix(spell(set).as_str()))
     }
+
+    /// `row` without the suffix `spell` gives for the first set whose
+    /// suffix it ends with.
+    pub fn strip_suffix<'r>(&self, row: &'r str, spell: impl Fn(&G) -> String) -> Option<&'r str> {
+        self.sets
+            .iter()
+            .find_map(|set| row.strip_suffix(spell(set).as_str()))
+    }
 }
 
 #[cfg(test)]
@@ -164,5 +172,9 @@ mod tests {
         assert_eq!(SETS.strip_prefix("│ ◆ typed", spell), Some("typed"));
         assert_eq!(SETS.strip_prefix("| > typed", spell), Some("typed"));
         assert_eq!(SETS.strip_prefix("│ > typed", spell), None);
+        let side = |g: &Set| g.side.to_owned();
+        assert_eq!(SETS.strip_suffix("typed │", side), Some("typed "));
+        assert_eq!(SETS.strip_suffix("typed |", side), Some("typed "));
+        assert_eq!(SETS.strip_suffix("typed", side), None);
     }
 }

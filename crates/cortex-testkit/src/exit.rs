@@ -47,8 +47,10 @@ impl Exit {
         }
         #[cfg(windows)]
         {
-            use std::os::windows::process::ExitStatusExt as _;
-            Self::from_windows(status.raw())
+            // Windows always has a code, whose bits are the exit code.
+            status.code().map_or(Self::Code(-1), |code| {
+                Self::from_windows(code.cast_unsigned())
+            })
         }
     }
 

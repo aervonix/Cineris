@@ -92,14 +92,16 @@ fn measure_fuzzy_matching_on_100k_paths() {
 // ------------------------------------------------------------ key latency
 
 use cortex_testkit::VTerm;
+use cortex_testkit::glyphs::GlyphSets;
 use cortex_testkit::pty::Session;
+
+use cortex_tui::glyphs::Glyphs;
 
 use crate::demo::STATUS_MARK;
 
-/// What starts the input box's first row: its border, a space, `◆` and a
-/// space; in the ASCII glyph set, which the old console host and ConPTY
-/// get, `| > `.
-const PROMPTS: [&str; 2] = ["\u{2502} \u{25C6} ", "| > "];
+/// The glyph sets the input box may be drawn in: Unicode, and the ASCII set
+/// the old console host and ConPTY get.
+const GLYPHS: GlyphSets<'static, Glyphs> = GlyphSets::new(&[Glyphs::UNICODE, Glyphs::ASCII]);
 
 const COLS: u16 = 120;
 const ROWS: u16 = 40;
@@ -145,16 +147,17 @@ fn sorted(mut values: Vec<f64>) -> Vec<f64> {
 /// The text on the input box's first row.
 fn editor(term: &VTerm) -> Option<String> {
     term.screen().into_iter().find_map(|row| {
-        let rest = PROMPTS.iter().find_map(|prompt| row.strip_prefix(prompt))?;
+        // The input box's first row: its border, a space, the user's glyph
+        // and a space.
+        let rest = GLYPHS.strip_prefix(&row, |g| format!("{} {} ", g.vertical, g.user))?;
         if rest.starts_with(cortex_tui::view::input::PLACEHOLDER) {
             return Some(String::new());
         }
-        Some(
-            rest.trim_end()
-                .trim_end_matches(['\u{2502}', '|'])
-                .trim_end()
-                .to_owned(),
-        )
+        let rest = rest.trim_end();
+        let rest = GLYPHS
+            .strip_suffix(rest, |g| g.vertical.to_owned())
+            .unwrap_or(rest);
+        Some(rest.trim_end().to_owned())
     })
 }
 
