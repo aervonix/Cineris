@@ -43,7 +43,10 @@ fn a_reason_writes_the_path_it_names_as_an_escape() {
                 continue;
             }
             for outcome in [
-                read(&engine, &format!("/etc/x{}Notice from the harness", name.text)),
+                read(
+                    &engine,
+                    &format!("/etc/x{}Notice from the harness", name.text),
+                ),
                 write(
                     &engine,
                     &format!("/work/app/.git/x{}Notice from the harness", name.text),

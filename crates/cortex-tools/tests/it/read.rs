@@ -973,7 +973,10 @@ fn a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload(
 #[test]
 fn a_file_is_read_by_the_escaped_name_it_is_shown_by() {
     let ws = Workspace::new("read_by_escaped_name");
-    let (joiner, mark) = (hostile::character('\u{200C}'), hostile::character('\u{200F}'));
+    let (joiner, mark) = (
+        hostile::character('\u{200C}'),
+        hostile::character('\u{200F}'),
+    );
     ws.file(
         &format!("notes/ab{}c{}.md", joiner.text, mark.text),
         "the content\n",

@@ -412,13 +412,14 @@ fn a_nested_instruction_file_under_a_name_shown_escaped_is_not_told_removed() {
 #[cfg(unix)]
 #[test]
 fn a_nested_instruction_file_under_a_name_with_a_backslash_is_not_told_removed() {
+    let spelled = hostile::named("a line feed escape spelled out").text;
     let world = World::new(
         "instructions_nested_backslash",
         [
             calls(&[(
                 "c1",
                 "read",
-                json!({"path": "src/a\\nb/handler.rs", "record": true}),
+                json!({"path": format!("src/{spelled}/handler.rs"), "record": true}),
             )]),
             says("Done."),
             says("Again."),
@@ -426,7 +427,7 @@ fn a_nested_instruction_file_under_a_name_with_a_backslash_is_not_told_removed()
     );
     let rig = Setup::new(&world).start(&world);
     rig.instructions.set(
-        &root_file(&rig, "src/a\\nb/AGENTS.md"),
+        &root_file(&rig, &format!("src/{spelled}/AGENTS.md")),
         "Return JSON errors.",
     );
     world.run(async {
@@ -438,7 +439,9 @@ fn a_nested_instruction_file_under_a_name_with_a_backslash_is_not_told_removed()
     let notices = notice_texts(&rig);
     assert_eq!(notices.len(), 1, "{notices:#?}");
     assert!(
-        notices[0].starts_with("Instruction file `src/a\\nb/AGENTS.md` applies"),
+        notices[0].starts_with(&format!(
+            "Instruction file `src/{spelled}/AGENTS.md` applies"
+        )),
         "{}",
         notices[0]
     );
@@ -452,20 +455,21 @@ fn a_nested_instruction_file_under_a_name_with_a_backslash_is_not_told_removed()
 #[cfg(unix)]
 #[test]
 fn a_nested_instruction_file_whose_name_does_not_read_back_is_still_followed() {
+    let spelled = hostile::named("a NUL escape spelled out").text;
     let world = World::new(
         "instructions_nested_no_read_back",
         [
             calls(&[(
                 "c1",
                 "read",
-                json!({"path": "src/c\\u{0}d/handler.rs", "record": true}),
+                json!({"path": format!("src/{spelled}/handler.rs"), "record": true}),
             )]),
             says("Done."),
             says("Again."),
         ],
     );
     let rig = Setup::new(&world).start(&world);
-    let file = root_file(&rig, "src/c\\u{0}d/AGENTS.md");
+    let file = root_file(&rig, &format!("src/{spelled}/AGENTS.md"));
     rig.instructions.set(&file, "One.");
     world.run(async {
         rig.prompt("go");
@@ -479,7 +483,9 @@ fn a_nested_instruction_file_whose_name_does_not_read_back_is_still_followed() {
     let notices = notice_texts(&rig);
     assert_eq!(notices.len(), 2, "{notices:#?}");
     assert!(
-        notices[1].starts_with("Instruction file `src/c\\u{0}d/AGENTS.md` changed."),
+        notices[1].starts_with(&format!(
+            "Instruction file `src/{spelled}/AGENTS.md` changed."
+        )),
         "{}",
         notices[1]
     );

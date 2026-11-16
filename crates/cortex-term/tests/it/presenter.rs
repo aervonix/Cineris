@@ -10,8 +10,8 @@ use cortex_term::{
     Capabilities, Color, Cursor, Drawn, Frame, Inline, Line, Overrides, Platform, Sink, Span, Style,
 };
 use cortex_testkit::VTerm;
-use cortex_testkit::hostile::{self, Kind};
 use cortex_testkit::cases::{self, Outcome};
+use cortex_testkit::hostile::{self, Kind};
 
 /// What a shell left on screen before the program started.
 const SHELL: &[u8] = b"$ earlier output\r\nline two\r\n$ cortex\r\n";

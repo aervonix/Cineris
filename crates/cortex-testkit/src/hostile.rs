@@ -192,6 +192,19 @@ pub fn character(character: char) -> Name {
         .unwrap_or_else(|| panic!("no hostile name is U+{:04X} alone", u32::from(character)))
 }
 
+/// The entry with this label.
+///
+/// # Panics
+///
+/// When no entry has it.
+#[must_use]
+pub fn named(label: &str) -> Name {
+    all()
+        .into_iter()
+        .find(|name| name.label == label)
+        .unwrap_or_else(|| panic!("no hostile name is called `{label}`"))
+}
+
 /// The characters that break a line, as a text may hold them: for a test
 /// that asks whether a name started a line of its own.
 pub const LINE_BREAK_CHARACTERS: [char; 5] = ['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}'];
@@ -222,12 +235,7 @@ fn control() -> Vec<Name> {
         };
         names.push(one(Kind::Control, format!("{set} U+{code:04X}"), character));
     }
-    names.push(mixed(
-        Kind::Control,
-        "tab between letters",
-        "a\tb",
-        &['\t'],
-    ));
+    names.push(mixed(Kind::Control, "tab between letters", "a\tb", &['\t']));
     names.push(mixed(
         Kind::Control,
         "NUL inside a name",
@@ -353,7 +361,10 @@ fn format_characters() -> Vec<Name> {
         Kind::Format,
         "a file name with a hidden word and a language tag",
         &name,
-        &name.chars().filter(|c| *c >= '\u{E0000}').collect::<Vec<_>>(),
+        &name
+            .chars()
+            .filter(|c| *c >= '\u{E0000}')
+            .collect::<Vec<_>>(),
     ));
     names
 }
@@ -384,8 +395,12 @@ fn invisible() -> Vec<Name> {
     // A variation selector is kept after a character, and is an escape
     // when it follows nothing, or follows another.
     names.push(
-        Name::new(Kind::Invisible, "a variation selector with no base", "\u{FE0F}x")
-            .shown("\\u{fe0f}x"),
+        Name::new(
+            Kind::Invisible,
+            "a variation selector with no base",
+            "\u{FE0F}x",
+        )
+        .shown("\\u{fe0f}x"),
     );
     names.push(
         Name::new(
@@ -438,7 +453,10 @@ fn escapes() -> Vec<Name> {
         all_unseen("\u{9b}31m", "the C1 form of CSI"),
         all_unseen("\u{9d}0;title\u{9c}", "the C1 forms of OSC and ST"),
         one(Kind::Escape, "BEL", '\u{7}'),
-        all_unseen("\u{8}\u{8}\u{8}", "backspaces that overwrite what is before"),
+        all_unseen(
+            "\u{8}\u{8}\u{8}",
+            "backspaces that overwrite what is before",
+        ),
     ]
 }
 
@@ -453,7 +471,11 @@ fn long() -> Vec<Name> {
     // checks against the text.
     let mut names = vec![
         repeated("254 bytes of ASCII", "a", 254),
-        repeated("255 bytes of ASCII, the most a name holds on Linux", "a", 255),
+        repeated(
+            "255 bytes of ASCII, the most a name holds on Linux",
+            "a",
+            255,
+        ),
         repeated("256 bytes of ASCII, one over", "a", 256),
         repeated("260 characters of ASCII", "a", 260),
         repeated("1000 characters of ASCII", "a", 1000),
@@ -483,7 +505,14 @@ fn long() -> Vec<Name> {
     edge.push_str("bcd");
     let mut shown = "a".repeat(250);
     shown.push_str("\\u{200b}bcd");
-    names.push(Name::new(Kind::Long, "254 characters with a zero-width space at 250", edge).shown(shown));
+    names.push(
+        Name::new(
+            Kind::Long,
+            "254 characters with a zero-width space at 250",
+            edge,
+        )
+        .shown(shown),
+    );
     names
 }
 
@@ -514,8 +543,14 @@ fn reserved() -> Vec<Name> {
     add("CON, a trailing dot".into(), "CON.".into());
     add("NUL, a trailing dot and space".into(), "NUL. ".into());
     add("AUX, trailing spaces".into(), "AUX  ".into());
-    add("aux with an extension and a trailing dot".into(), "aux.c.".into());
-    add("aux, a space before the extension".into(), "aux .txt".into());
+    add(
+        "aux with an extension and a trailing dot".into(),
+        "aux.c.".into(),
+    );
+    add(
+        "aux, a space before the extension".into(),
+        "aux .txt".into(),
+    );
     add("CONIN$".into(), "CONIN$".into());
     add("CONOUT$".into(), "CONOUT$".into());
     // Windows treats the superscript digits as a device's number too.
@@ -557,9 +592,21 @@ fn wide() -> Vec<Name> {
             "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}",
         )
         .shown("\u{1F468}\\u{200d}\u{1F469}\\u{200d}\u{1F467}"),
-        Name::new(Kind::Wide, "a flag, two regional indicators", "\u{1F1EF}\u{1F1F5}"),
-        Name::new(Kind::Wide, "an emoji with a skin tone", "\u{1F44D}\u{1F3FD}"),
-        Name::new(Kind::Wide, "a heart with an emoji selector", "\u{2764}\u{FE0F}"),
+        Name::new(
+            Kind::Wide,
+            "a flag, two regional indicators",
+            "\u{1F1EF}\u{1F1F5}",
+        ),
+        Name::new(
+            Kind::Wide,
+            "an emoji with a skin tone",
+            "\u{1F44D}\u{1F3FD}",
+        ),
+        Name::new(
+            Kind::Wide,
+            "a heart with an emoji selector",
+            "\u{2764}\u{FE0F}",
+        ),
         Name::new(Kind::Wide, "a keycap", "1\u{FE0F}\u{20E3}"),
     ]
 }
@@ -567,7 +614,11 @@ fn wide() -> Vec<Name> {
 fn right_to_left() -> Vec<Name> {
     vec![
         Name::new(Kind::RightToLeft, "hebrew", "\u{5E9}\u{5DC}\u{5D5}\u{5DD}"),
-        Name::new(Kind::RightToLeft, "arabic", "\u{645}\u{631}\u{62D}\u{628}\u{627}"),
+        Name::new(
+            Kind::RightToLeft,
+            "arabic",
+            "\u{645}\u{631}\u{62D}\u{628}\u{627}",
+        ),
         Name::new(
             Kind::RightToLeft,
             "hebrew among latin letters and digits",
@@ -578,7 +629,11 @@ fn right_to_left() -> Vec<Name> {
             "arabic with latin digits and a dot",
             "\u{645}\u{644}\u{641}.2026.txt",
         ),
-        Name::new(Kind::RightToLeft, "an extension after hebrew", "\u{5E9}\u{5DC}\u{5D5}\u{5DD}.rs"),
+        Name::new(
+            Kind::RightToLeft,
+            "an extension after hebrew",
+            "\u{5E9}\u{5DC}\u{5D5}\u{5DD}.rs",
+        ),
     ]
 }
 
@@ -598,6 +653,11 @@ fn punctuation() -> Vec<Name> {
         ("a single dash", "-"),
         ("a backslash", "a\\b"),
         ("a trailing backslash", "dir\\"),
+        // An escape written out as text: a name that reads, once the
+        // escapes are read back, as another name (or as none).
+        ("a line feed escape spelled out", "a\\nb"),
+        ("a NUL escape spelled out", "c\\u{0}d"),
+        ("a zero-width non-joiner escape spelled out", "a\\u{200c}b"),
         ("a colon", "a:b"),
         ("a drive prefix", "C:x"),
         ("an alternate data stream", "a::$DATA"),
@@ -661,12 +721,7 @@ pub fn takes_file_name(dir: &Path, name: &str) -> bool {
     }
     let made = std::fs::File::create_new(probe.join(name)).is_ok();
     let held: Vec<_> = std::fs::read_dir(&probe)
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|entry| entry.file_name())
-                .collect()
-        })
+        .map(|entries| entries.flatten().map(|entry| entry.file_name()).collect())
         .unwrap_or_default();
     let exact = made && held.len() == 1 && held[0].as_os_str() == std::ffi::OsStr::new(name);
     let _ = std::fs::remove_dir_all(&probe);
@@ -732,9 +787,8 @@ mod tests {
             assert!(!name.text.is_empty(), "{}", name.label);
             assert!(!name.label.is_empty());
             assert!(
-                labels.insert((name.kind, name.label.clone())),
-                "two entries of {:?} are called `{}`",
-                name.kind,
+                labels.insert(name.label.clone()),
+                "two entries are called `{}`",
                 name.label
             );
         }
@@ -837,18 +891,20 @@ mod tests {
                 name.text
             );
         }
-        for wanted in ['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\u{2060}', '\u{AD}'] {
+        for wanted in [
+            '\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\u{2060}', '\u{AD}',
+        ] {
             assert!(
                 names.iter().any(|name| name.text == wanted.to_string()),
                 "no entry of U+{:04X}",
                 u32::from(wanted)
             );
         }
-        assert!(
-            names
-                .iter()
-                .any(|name| name.text.chars().any(|c| ('\u{E0020}'..='\u{E007F}').contains(&c)))
-        );
+        assert!(names.iter().any(|name| {
+            name.text
+                .chars()
+                .any(|c| ('\u{E0020}'..='\u{E007F}').contains(&c))
+        }));
         assert_eq!(tags("IGNORE").chars().count(), 6);
         assert!(tags("IGNORE").chars().all(is_format));
     }
@@ -898,7 +954,9 @@ mod tests {
             );
         }
         let all: String = of(Kind::Escape).into_iter().map(|n| n.text).collect();
-        for part in ["\u{1b}[", "\u{1b}]", "\u{7}", "\u{1b}\\", "\u{9b}", "\u{9d}"] {
+        for part in [
+            "\u{1b}[", "\u{1b}]", "\u{7}", "\u{1b}\\", "\u{9b}", "\u{9d}",
+        ] {
             assert!(all.contains(part), "no sequence with {part:?}");
         }
     }
@@ -912,7 +970,10 @@ mod tests {
         for name in &names {
             let mut words = name.label.split_whitespace();
             let count: usize = words.next().unwrap().parse().unwrap_or_else(|_| {
-                panic!("a label of a long name starts with its length: `{}`", name.label)
+                panic!(
+                    "a label of a long name starts with its length: `{}`",
+                    name.label
+                )
             });
             let unit = words.next().unwrap().trim_end_matches(',');
             let measured = match unit {
@@ -925,14 +986,27 @@ mod tests {
             lengths.insert((unit, count));
         }
         // At and around 255 bytes, 260 characters, and a few thousand.
-        for wanted in [("bytes", 254), ("bytes", 255), ("bytes", 256), ("characters", 260)] {
+        for wanted in [
+            ("bytes", 254),
+            ("bytes", 255),
+            ("bytes", 256),
+            ("characters", 260),
+        ] {
             assert!(lengths.contains(&wanted), "no name of {wanted:?}");
         }
         assert!(lengths.iter().any(|&(_, count)| count >= 4000));
         // One of 255 UTF-16 units either side, and one longer in bytes than
         // a Linux file name holds.
-        assert!(names.iter().any(|name| name.text.encode_utf16().count() == 254));
-        assert!(names.iter().any(|name| name.text.encode_utf16().count() == 256));
+        assert!(
+            names
+                .iter()
+                .any(|name| name.text.encode_utf16().count() == 254)
+        );
+        assert!(
+            names
+                .iter()
+                .any(|name| name.text.encode_utf16().count() == 256)
+        );
     }
 
     #[test]
@@ -948,7 +1022,8 @@ mod tests {
                 let numbered = (stem.starts_with("COM") || stem.starts_with("LPT"))
                     && stem.chars().count() == 4
                     && stem.chars().nth(3).is_some_and(|c| {
-                        (c.is_ascii_digit() && c != '0') || matches!(c, '\u{b9}' | '\u{b2}' | '\u{b3}')
+                        (c.is_ascii_digit() && c != '0')
+                            || matches!(c, '\u{b9}' | '\u{b2}' | '\u{b3}')
                     });
                 assert!(
                     numbered || DEVICES.contains(&stem.as_str()),
@@ -964,16 +1039,27 @@ mod tests {
         }
         for family in ["COM", "LPT"] {
             for number in 1..=9 {
-                assert!(stems.contains(&format!("{family}{number}")), "{family}{number}");
+                assert!(
+                    stems.contains(&format!("{family}{number}")),
+                    "{family}{number}"
+                );
             }
         }
         // The other cases, the extensions and the trailing dots and spaces.
         assert!(names.iter().any(|n| n.text == "nul" || n.text == "con"));
-        assert!(names.iter().any(|n| n.text.contains('.') && !n.text.ends_with('.')));
+        assert!(
+            names
+                .iter()
+                .any(|n| n.text.contains('.') && !n.text.ends_with('.'))
+        );
         assert!(names.iter().any(|n| n.text.ends_with('.')));
         assert!(names.iter().any(|n| n.text.ends_with(' ')));
         assert!(names.iter().any(|n| n.text.contains(char::is_lowercase)));
-        assert!(names.iter().any(|n| n.text.chars().any(|c| c.is_ascii_uppercase())));
+        assert!(
+            names
+                .iter()
+                .any(|n| n.text.chars().any(|c| c.is_ascii_uppercase()))
+        );
     }
 
     #[test]
@@ -994,8 +1080,15 @@ mod tests {
             );
         }
         let names = of(Kind::Combining);
-        assert!(names.iter().any(|n| n.text.starts_with(is_mark)), "no mark without a base");
-        assert!(names.iter().any(|n| n.text.chars().filter(|c| is_mark(*c)).count() >= 30));
+        assert!(
+            names.iter().any(|n| n.text.starts_with(is_mark)),
+            "no mark without a base"
+        );
+        assert!(
+            names
+                .iter()
+                .any(|n| n.text.chars().filter(|c| is_mark(*c)).count() >= 30)
+        );
     }
 
     #[test]
@@ -1013,8 +1106,14 @@ mod tests {
                 name.text
             );
         }
-        assert!(of(Kind::Wide).iter().any(|n| n.text.contains('\u{200D}')), "a joined sequence");
-        assert!(of(Kind::Wide).iter().any(|n| n.text.contains('\u{FE0F}')), "an emoji selector");
+        assert!(
+            of(Kind::Wide).iter().any(|n| n.text.contains('\u{200D}')),
+            "a joined sequence"
+        );
+        assert!(
+            of(Kind::Wide).iter().any(|n| n.text.contains('\u{FE0F}')),
+            "an emoji selector"
+        );
     }
 
     #[test]
@@ -1034,15 +1133,22 @@ mod tests {
     #[test]
     fn a_punctuation_entry_has_a_character_a_system_gives_a_meaning() {
         let names = of(Kind::Punctuation);
-        for wanted in [".", "..", "-rf", "a\\b", "a:b", "a::$DATA", "name.", "say\"hi\""] {
+        for wanted in [
+            ".",
+            "..",
+            "-rf",
+            "a\\b",
+            "a:b",
+            "a::$DATA",
+            "name.",
+            "say\"hi\"",
+        ] {
             assert!(names.iter().any(|n| n.text == wanted), "no `{wanted}`");
         }
         assert!(names.iter().any(|n| n.text.starts_with('-')));
         for name in names {
             assert!(
-                name.text
-                    .chars()
-                    .any(|c| !c.is_alphanumeric()),
+                name.text.chars().any(|c| !c.is_alphanumeric()),
                 "{}",
                 name.label
             );
@@ -1121,6 +1227,9 @@ mod tests {
         let every = of(Kind::LineBreak);
         let taken = accepted(dir, Kind::LineBreak);
         assert!(taken.iter().all(|name| every.contains(name)));
-        assert!(!taken.is_empty(), "some line break is a file name on every system");
+        assert!(
+            !taken.is_empty(),
+            "some line break is a file name on every system"
+        );
     }
 }
