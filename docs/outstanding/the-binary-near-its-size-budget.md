@@ -1,0 +1,3 @@
+| Item | Who | When |
+|---|---|---|
+| **The release binary is near its size budget.** After step 23 the Linux x86-64 `dist` binary is 16,093,960 bytes, 15.35 MB of the 16 MB budget ([performance-budgets.md](../performance-budgets.md), "Binary size"), with 174 crates. Step 22 recorded 13.2 MB, before step 23's first pull request wired the core and the interface into the binary. The steps still to come add the RPC server, extensions with their script engine (about 1.1 MB measured), and the MCP client. **To do:** a study of what the binary holds, crate by crate and by our own code, and what each later step is likely to add, with a recommendation on the budget or on what to cut. | The owner's size study | Before step 27 |
