@@ -240,6 +240,9 @@ pub struct SessionInfo {
     /// The directories the session's commands may write to, for a front
     /// end that keeps the programs it runs for the person out of them.
     pub write_roots: Vec<String>,
+    /// What the user has said of the project's trust, for a front end's
+    /// status.
+    pub trust: Option<cortex_protocol::session::TrustStanding>,
 }
 
 impl SessionInfo {
@@ -257,6 +260,7 @@ impl SessionInfo {
             lease_id: None,
             sandbox: SandboxStatus::Off,
             write_roots: Vec::new(),
+            trust: None,
         }
     }
 }

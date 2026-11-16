@@ -133,6 +133,28 @@ pub struct SessionState {
     /// put one there (since step 23).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub write_roots: Vec<String>,
+    /// What the user has said of the project's trust, for a front end's
+    /// status (since step 23). It informs only: what trust turns on is the
+    /// core's to decide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust: Option<TrustStanding>,
+}
+
+open_enum! {
+    /// What the user has said of a project's trust (since step 23).
+    pub enum TrustStanding {
+        /// Nothing: the project is not trusted.
+        Untrusted => "untrusted",
+        /// Trusted, its rules the ones the user saw.
+        Trusted => "trusted",
+        /// Trusted, its rules changed since: what they could loosen is set
+        /// aside until the change is approved.
+        RulesChanged => "rules_changed",
+        /// The user said never to trust it: it is not asked about.
+        Never => "never",
+        /// Trusted for this run by the command line (`--trust-project`).
+        ForTheRun => "for_the_run",
+    }
 }
 
 /// A stored session, in a list.
