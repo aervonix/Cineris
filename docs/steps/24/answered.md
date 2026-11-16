@@ -174,7 +174,7 @@ PR 2 touches nothing PR 1 does, so the two are built and reviewed side by side; 
 | `/plan` | Focuses the plan panel; with no plan, says the model makes one with its plan tool. |
 | `/project` | Opens the project panel, focused. |
 | `/profile [name]` | With a name, `config/reload` with that profile for the session (point 1). Without one, lists the profiles the session's layers define and the one in force. |
-| `/verify` | Sends `verify/run` and shows the core's answer, whatever it is: today `not_available` with its sentence; after the owner's yes to the turn that only verifies, its events, which the review panel shows. |
+| `/verify` | Sends `verify/run` and shows the core's answer: a turn that only verifies, whose events the review panel shows, or `no_checks` with its reason (the owner's yes to that turn, 2026-11-16). |
 | `/reload` | A full `config/reload`, and its notice. |
 | `/context` | The last request's context by category, from **`SessionUsage.context`** (new, optional): system prompt, tool definitions, summary, your messages, answers, tool results and notices, each in tokens and as a share, against the request's limit and the model's window, marked as estimates. Printed into the transcript, as `/config` is; before any request it says there is none yet. |
 | `/config` | As step 23's, each value followed by its layer and file, from **`ConfigGetResult.origins`** (new: the layer, the file as a person reads it, and the line). |
@@ -188,12 +188,12 @@ Each moves from `NOT_YET` into `COMMANDS` with its test.
 | `config-reload-through-the-core` (closed in step 24) | **Closes** (PR 1) | Point 1, with `next session` for the keys a session is made with once, and the `NextEpoch` keys at the next compaction. |
 | [config-provenance-in-the-application](../../outstanding/config-provenance-in-the-application.md) | **Closes** (PRs 1, 3) | `config/get`'s origins; `/config` shows them. |
 | [statistics-a-build-cannot-use-are-said-only-in-the-log](../../outstanding/statistics-a-build-cannot-use-are-said-only-in-the-log.md) | **Closes** (PRs 1, 3) | `UsageReport.notes`; the panel and `/usage` say what `cortex stats` says. No notice at the start. |
-| [verify-run-a-turn-that-only-verifies](../../outstanding/verify-run-a-turn-that-only-verifies.md) | **Left** for the owner | `/verify` shows the core's answer, whatever it is, and needs no change when the branch merges. |
+| `verify-run-a-turn-that-only-verifies` | **Settled by the owner** on `main` (2026-11-16, tooling 10's #86): `verify/run` starts a turn that only verifies, or answers `no_checks` with its reason | `/verify` (the third pull request) shows the turn, or the reason. |
 | [a-promote-while-a-confined-command-runs](../../outstanding/a-promote-while-a-confined-command-runs.md) | **Most of it** (PR 1) | The core refuses a promote while a session of the project runs a turn. Left: another process's promote during a command, with the item's recommendation. |
 | [the-item-an-entry-was-learned-from](../../outstanding/the-item-an-entry-was-learned-from.md) | **Left** | The panel shows the session and the date, and offers no way to open the item. |
 | `an-epoch-read-without-its-variants` (closed in step 24) | **Closes** (PR 1) | When a session is resumed, an epoch with no variants is fixed to the variants in force then and recorded in the session's state, so the next request and the next `epoch` entry carry them; a reload changes variants only at the compaction that takes them (point 1). |
 | [the-workspace-root-is-the-working-directory](../../outstanding/the-workspace-root-is-the-working-directory.md) | **Left** for the owner | A reload uses the root the session was opened with. |
-| [a-managed-ask-and-the-users-own-check](../../outstanding/a-managed-ask-and-the-users-own-check.md) | **Not built**, waiting for the owner | It was due before `/verify` because `/verify` runs the user's checks; `/verify` ships here only as the core's `not_available`, so nothing new runs a check. The checks at a turn's end (step 19) are as they were. |
+| `a-managed-ask-and-the-users-own-check` | **Settled by the owner** on `main` (tooling 10's #86): a managed `ask` holds back the user's own check | Nothing of this step's: `/verify` sends `verify/run`, whose turn the core checks. |
 
 **Left by this step, added to `docs/outstanding/`:** `user-theme-files` (point 5), `reload-now-begins-an-epoch` (08's `/reload --now`: the `NextEpoch` keys wait for the next compaction meanwhile), and `the-files-a-command-changed` (point 9, departure 4).
 

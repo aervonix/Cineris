@@ -651,7 +651,7 @@ caught-by:
 rule: A project's file that lowered `verify.mode` is told when the user asks for the checks too, once a session.
 file: crates/cortex-core/src/verify.rs
 in: CoreVerifier::round
-find: if self.parts.lowered_by_project && settings.mode != VerifyMode::Auto {
-replace: if !cx.asked && self.parts.lowered_by_project && settings.mode != VerifyMode::Auto {
+find: if live.lowered_by_project && settings.mode != VerifyMode::Auto {
+replace: if !cx.asked && live.lowered_by_project && settings.mode != VerifyMode::Auto {
 caught-by:
     cortex-core::it verify::sys_verify_run_runs_the_checks_in_a_turn_of_their_own_and_sends_the_model_nothing
