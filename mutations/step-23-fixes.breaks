@@ -367,12 +367,14 @@ caught-by:
     app::tests::a_key_before_the_answers_are_drawn_never_answers
 
 [break] answers-stay-shown-over-typing
-rule: Input that reaches the editor after the answers were drawn hides them again. The frame's cache is keyed on whether the dialog is ready, which such input changes, a second guard that leaves nothing this break can show.
-expect: survives
+rule: Input that reaches the editor after the answers were drawn hides them again: the dialog takes no key until a frame has drawn them again.
 file: crates/cortex-tui/src/app/dialog.rs
 in: Dialog::typed
 find: self.hide_answers();
 replace: let _ = ();
+caught-by:
+    app::tests::a_choice_not_on_offer_is_not_taken
+    app::tests::a_question_is_answered_by_the_digit_of_its_choice_or_left_unanswered
 
 [break] fg-keeps-the-grace
 rule: Continued after a stop, the dialog shown starts its grace again.
