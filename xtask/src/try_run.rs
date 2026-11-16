@@ -2235,15 +2235,26 @@ mod tests {
             try_command(&["--command", "size", "--profile", "release"]),
             Ok(format!("size --profile release{musl}"))
         );
-        assert_eq!(
-            try_command(&[
-                "--command",
-                "size --breakdown --top 10",
-                "--profile",
-                "dist"
-            ]),
-            Ok(format!("size --breakdown --top 10 --profile dist{musl}"))
-        );
+        // The breakdown reads an ELF binary's symbols: a Linux runner's.
+        let breakdown = try_command(&[
+            "--command",
+            "size --breakdown --top 10",
+            "--profile",
+            "dist",
+        ]);
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                breakdown,
+                Ok(format!("size --breakdown --top 10 --profile dist{musl}"))
+            );
+        } else {
+            assert!(
+                breakdown
+                    .as_ref()
+                    .is_err_and(|error| error.contains("--breakdown")),
+                "{breakdown:?}"
+            );
+        }
         // A target that is named is the one built.
         let own = if cfg!(target_os = "linux") {
             "x86_64-unknown-linux-musl"
