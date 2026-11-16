@@ -1357,6 +1357,7 @@ impl Core {
                 // whole in the last page, so nothing moves between pages
                 // (settled in step 27).
                 let page = crate::paging::page(
+                    &params.session_id,
                     logged,
                     progress,
                     params.item_id.as_ref(),
