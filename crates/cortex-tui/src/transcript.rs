@@ -233,6 +233,14 @@ impl Transcript {
         self.queue.is_empty()
     }
 
+    /// Whether the last line committed is blank, or none was (since step
+    /// 24): what is drawn under the scrollback with no live row above it
+    /// (the panels) is set apart by a blank row only when this is false.
+    #[must_use]
+    pub fn ends_blank(&self) -> bool {
+        self.last_blank || self.last.is_none()
+    }
+
     /// The lines that became final since the last call, drawn at `width`.
     pub fn commit(&mut self, width: usize, look: &Look) -> Vec<Line> {
         self.commit_parts(width, look)

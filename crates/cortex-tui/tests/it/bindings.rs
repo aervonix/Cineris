@@ -361,6 +361,39 @@ fn check(action: Action, key: &str) {
             };
             assert_eq!(press(&mut input, key), expected, "{context}");
         }
+        // A panel's own keys (step 24): a focused panel is given each, for
+        // the application to take or pass on (its tests check what each
+        // does to the plan and the review: `app::tests::panels`); a focused
+        // box has no use for them, and one that types goes to the editor,
+        // the focus with it.
+        action if action.is_panel_key() => {
+            let mut panel = input();
+            panel.focus_mut().update(&[], &[3]);
+            panel.act(Action::FocusNext);
+            assert_eq!(
+                press(&mut panel, key),
+                Outcome::Panel(Target::Panel(3), action),
+                "{context}"
+            );
+            assert_eq!(text(&panel), "", "{context}: nothing typed");
+            let mut boxed = input();
+            boxed.focus_mut().update(&[7], &[]);
+            boxed.act(Action::FocusNext);
+            match cortex_tui::keys::typed(parse(key).unwrap()) {
+                Some(c) => {
+                    assert_eq!(
+                        press(&mut boxed, key),
+                        Outcome::Focused(Target::Input),
+                        "{context}"
+                    );
+                    assert_eq!(text(&boxed), c.to_string(), "{context}: typed");
+                }
+                None => {
+                    assert_eq!(press(&mut boxed, key), Outcome::Nothing, "{context}");
+                    assert_eq!(boxed.focus().focused(), Target::ToolBox(7), "{context}");
+                }
+            }
+        }
         // A dialog's keys are looked up in its own context, and the
         // application's tests check what each answers (`app::dialog`).
         Action::AllowOnce

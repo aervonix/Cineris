@@ -36,6 +36,7 @@ use crate::testkit::{
 mod dialogs;
 mod files;
 mod output;
+mod panels;
 mod sessions;
 mod trust_standing;
 

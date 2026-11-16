@@ -31,7 +31,7 @@
 [0;90m╰──────────────────────────────────────────────────────────────────────────────── ctrl+t expands ─╯[0m
 [0m
 [0m◇[0m [0;1mPlan[0;90m  1 of 4 done[0m
-[0m  [0;32m☑ [0;90mallow _ between digits[0m
+[0m  [0;1;32m☑ [0;90mallow _ between digits[0m
 [0m  [0;38;2;122;60;251m◧ [0;1;38;2;122;60;251mreject a trailing _[0m
 [0m  [0;90m☐ [0madd a test for 1_000[0m
 [0m  [0;90m☐ [0mrun clippy[0m

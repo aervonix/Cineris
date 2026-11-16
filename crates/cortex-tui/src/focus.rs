@@ -83,6 +83,14 @@ impl Ring {
     pub fn to_input(&mut self) {
         self.focused = None;
     }
+
+    /// `target` takes the focus (since step 24: `/plan` focuses the plan
+    /// panel, which may not be drawn yet). The next [`update`](Self::update)
+    /// keeps it only if `target` is among what it is given; until then the
+    /// focus is `target`'s.
+    pub fn focus(&mut self, target: Target) {
+        self.focused = (target != Target::Input).then_some(target);
+    }
 }
 
 #[cfg(test)]
@@ -107,5 +115,18 @@ mod tests {
         ring.advance();
         ring.update(&[], &[]);
         assert!(ring.on_input());
+    }
+
+    #[test]
+    fn a_target_given_the_focus_keeps_it_only_while_it_is_there() {
+        let mut ring = Ring::new();
+        ring.focus(Target::Panel(2));
+        assert_eq!(ring.focused(), Target::Panel(2), "until the next update");
+        ring.update(&[], &[2]);
+        assert_eq!(ring.focused(), Target::Panel(2));
+        assert_eq!(ring.advance(), Target::Input);
+        ring.focus(Target::Panel(5));
+        ring.update(&[], &[2]);
+        assert!(ring.on_input(), "a panel not drawn cannot hold the focus");
     }
 }

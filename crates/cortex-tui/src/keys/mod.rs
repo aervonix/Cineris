@@ -193,6 +193,34 @@ pub enum Action {
     FocusUp,
     /// Move down in the focused panel.
     FocusDown,
+    /// A panel's own keys (step 24), each reaching the application as
+    /// `Outcome::Panel` while a panel has the focus; a box has no use for
+    /// them. Skip the focused plan item (`space`).
+    FocusSkip,
+    /// Reword the focused item, or edit the focused entry (`e`).
+    FocusEdit,
+    /// Add a plan item after the focused one (`a`).
+    FocusAdd,
+    /// Delete the focused item or entry (`d`).
+    FocusDelete,
+    /// Move the focused plan item up (`alt+up`).
+    FocusMoveUp,
+    /// Move the focused plan item down (`alt+down`).
+    FocusMoveDown,
+    /// Accept the focused entry; yes to a delete it asks about (`y`).
+    FocusAccept,
+    /// Disable the focused entry (`n`).
+    FocusDisable,
+    /// Promote the focused entry to the repository's file (`p`).
+    FocusPromote,
+    /// Ask again for what the panel shows (`r`).
+    FocusRefresh,
+    /// The next range of time the panel shows (`tab`).
+    FocusRange,
+    /// The next grouping the panel shows (`g`).
+    FocusGroup,
+    /// Close the focused panel (`x`).
+    FocusClose,
 
     // ------------------------------------------------------------ dialog
     /// Allow this call only; trust the project; the first choice
@@ -425,6 +453,24 @@ pub const ACTIONS: &[Entry] = &[
     entry(Action::FocusReturn, Context::Focus, "return", &["esc"]),
     entry(Action::FocusUp, Context::Focus, "up", &["up"]),
     entry(Action::FocusDown, Context::Focus, "down", &["down"]),
+    entry(Action::FocusSkip, Context::Focus, "skip", &["space"]),
+    entry(Action::FocusEdit, Context::Focus, "edit", &["e"]),
+    entry(Action::FocusAdd, Context::Focus, "add", &["a"]),
+    entry(Action::FocusDelete, Context::Focus, "delete", &["d"]),
+    entry(Action::FocusMoveUp, Context::Focus, "move_up", &["alt+up"]),
+    entry(
+        Action::FocusMoveDown,
+        Context::Focus,
+        "move_down",
+        &["alt+down"],
+    ),
+    entry(Action::FocusAccept, Context::Focus, "accept", &["y"]),
+    entry(Action::FocusDisable, Context::Focus, "disable", &["n"]),
+    entry(Action::FocusPromote, Context::Focus, "promote", &["p"]),
+    entry(Action::FocusRefresh, Context::Focus, "refresh", &["r"]),
+    entry(Action::FocusRange, Context::Focus, "range", &["tab"]),
+    entry(Action::FocusGroup, Context::Focus, "group", &["g"]),
+    entry(Action::FocusClose, Context::Focus, "close", &["x"]),
     entry(Action::AllowOnce, Context::Dialog, "allow_once", &["y"]),
     entry(
         Action::AllowSession,
@@ -486,7 +532,32 @@ impl Action {
             .find(|entry| entry.context.name() == context && entry.name == own)
             .map(|entry| entry.action)
     }
+
+    /// Whether it is one of a panel's own keys (step 24): a focused panel
+    /// is given it, and a focused box has no use for it.
+    #[must_use]
+    pub fn is_panel_key(self) -> bool {
+        PANEL_KEYS.contains(&self)
+    }
 }
+
+/// A panel's own keys (step 24), in the order help lists them: each comes
+/// to the application as `Outcome::Panel` while a panel has the focus.
+pub const PANEL_KEYS: [Action; 13] = [
+    Action::FocusSkip,
+    Action::FocusEdit,
+    Action::FocusAdd,
+    Action::FocusDelete,
+    Action::FocusMoveUp,
+    Action::FocusMoveDown,
+    Action::FocusAccept,
+    Action::FocusDisable,
+    Action::FocusPromote,
+    Action::FocusRefresh,
+    Action::FocusRange,
+    Action::FocusGroup,
+    Action::FocusClose,
+];
 
 impl fmt::Display for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

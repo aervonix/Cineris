@@ -23,6 +23,7 @@ use cortex_protocol::{ErrorData, SessionEvent, SessionId, Speed};
 use cortex_term::{Capabilities, Cursor, Event as TermEvent, Key, Line};
 
 mod commands;
+mod panel;
 mod viewer;
 
 use commands::{Picker, Shown};
@@ -30,6 +31,7 @@ use commands::{Picker, Shown};
 use super::dialog::{Dialog, Keyed, QUIET, REPEAT};
 use super::items::Mapper;
 use super::link::{Inbound, Link, Ticket};
+use super::panels::{ItemEditFor, Panels, Seen};
 use super::{Exit, Open, Settings, Start};
 use crate::complete::Command;
 use crate::editor::Fragment;
@@ -92,6 +94,10 @@ enum Pending {
     History(SessionId),
     /// The workspace's files of this session, for `@` completion.
     Files(SessionId),
+    /// What a panel sent or asked for in this session (since step 24): its
+    /// result is the panel's while the session is the one open, and its
+    /// error is said.
+    Panel { session: SessionId, panel: u64 },
 }
 
 /// The last key read, for the dialogs' rules (`super::dialog`).
@@ -120,6 +126,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("model", "Choose the model"),
     ("new", "Start a new session"),
     ("permissions", "The approvals stored here, to remove"),
+    ("plan", "The plan: skip, reword, add or move its items"),
     ("quit", "Quit"),
     ("sessions", "Switch to another session of this workspace"),
     ("status", "The session's model, mode, sandbox and limits"),
@@ -135,7 +142,6 @@ const NOT_YET: &[&str] = &[
     "lease",
     "context",
     "usage",
-    "plan",
     "project",
     "profile",
     "verify",
@@ -235,6 +241,22 @@ pub struct App {
     /// When a dialog last took a key: the next dialog is ready no sooner
     /// than the repeat window after it.
     taken: Option<Instant>,
+    /// The panels (step 24), the plan's and the review's.
+    panels: Panels,
+    /// The panel drawn with the focus in the last frame.
+    panel_drawn: Option<u64>,
+    /// When the last input no panel took was read: a key or a paste that
+    /// went to the editor, keys read together. A panel that takes the
+    /// focus is ready only a quiet second after it, so that typing that
+    /// runs on past `/plan`'s `Enter` never acts on it. Moving the focus
+    /// (`Ctrl+P`) is not such input.
+    panel_untaken: Option<Instant>,
+    /// The last key a panel took, and when it or a repeat of it was last
+    /// read: the same key again within [`REPEAT`] is that key held down, and
+    /// goes where its press went (nowhere).
+    panel_held: Option<(Key, Instant)>,
+    /// The panel an item edit in the editor is for, and what it is for.
+    item_edit: Option<(u64, ItemEditFor)>,
     /// The last turn's cost and the session's, shown until the next prompt.
     last_cost: Option<(String, String)>,
     /// Whether this session has had a turn, here or before.
@@ -340,6 +362,11 @@ impl App {
             note_cut: None,
             untaken: None,
             taken: None,
+            panels: panel::registered(),
+            panel_drawn: None,
+            panel_untaken: None,
+            panel_held: None,
+            item_edit: None,
             last_cost: None,
             had_turn: false,
             effects: Vec::new(),
@@ -389,8 +416,9 @@ impl App {
         if self.viewing() {
             return;
         }
+        self.panel_drawn_at(at);
         if let Some(dialog) = self.dialogs.front_mut() {
-            let first = dialog.shown.is_none();
+            let first = dialog.shown().is_none();
             dialog.drawn(at);
             // Its first frame: what was typed just before it, and the key
             // that answered the dialog before it, hold it as they would had
@@ -465,6 +493,7 @@ impl App {
         if let Some(dialog) = self.dialogs.front_mut() {
             dialog.hide();
         }
+        self.panels.restart();
         match result {
             Ok(crate::external::Edited::Changed(fragment)) => {
                 self.input.external_result(Some(fragment));
@@ -632,6 +661,11 @@ impl App {
                     }
                     self.last_key = Some(LastKey { typing: true });
                     let taken = self.viewer_key(*key, at);
+                    // Back from the viewer, a panel's readiness starts
+                    // again.
+                    if self.viewer.is_none() {
+                        self.panels.restart();
+                    }
                     // Back from the viewer, the dialog starts its grace
                     // again, as if just shown.
                     if dialog_up
@@ -660,8 +694,19 @@ impl App {
                 // The key before this one was one a dialog took.
                 let after_taken = before.is_some_and(|before| !before.typing);
                 let Some(dialog) = self.dialogs.front_mut() else {
+                    // A panel that has the focus takes its keys (step 24).
+                    if let Target::Panel(id) = self.input.focus().focused() {
+                        return self.panel_key(id, *key, at, repeat);
+                    }
                     self.last_key = Some(LastKey { typing: true });
                     self.untaken = Some(at);
+                    // Moving the focus to a panel is not typing at it.
+                    if self.input.keymap().lookup(&self.input.contexts(), *key)
+                        != Some(crate::keys::Action::FocusNext)
+                    {
+                        self.panel_untaken = Some(at);
+                    }
+                    self.panel_held = None;
                     return self.edit_with(*key, at);
                 };
                 let ready = dialog.takes_keys(at);
@@ -682,6 +727,7 @@ impl App {
                 self.last_key = Some(LastKey { typing });
                 if holds {
                     self.untaken = Some(at);
+                    self.panel_untaken = Some(at);
                     dialog.typed(at);
                 }
                 if took {
@@ -743,6 +789,7 @@ impl App {
                 if let Some(dialog) = self.dialogs.front_mut() {
                     dialog.hide();
                 }
+                self.panels.restart();
                 false
             }
             TermEvent::Resize { .. } | TermEvent::Reply(_) => false,
@@ -764,6 +811,8 @@ impl App {
     /// waits a quiet second after it, and hides answers it showed.
     fn not_taken(&mut self, at: Instant) {
         self.untaken = Some(at);
+        self.panel_untaken = Some(at);
+        self.panels.typed(at);
         if let Some(dialog) = self.dialogs.front_mut() {
             dialog.typed(at);
         }
@@ -827,6 +876,11 @@ impl App {
             Outcome::PickerClosed(_) => self.picker = None,
             Outcome::OpenViewer => self.open_viewer(None),
             Outcome::ExternalEditor => self.editor_wanted = true,
+            outcome @ (Outcome::Focused(_)
+            | Outcome::Move(..)
+            | Outcome::Activate(Target::Panel(_))
+            | Outcome::ItemEdited(_)
+            | Outcome::ItemEditCancelled) => self.panel_outcome(outcome),
             _ => {}
         }
     }
@@ -851,6 +905,8 @@ impl App {
         let started = delivery == Delivery::Prompt;
         if started {
             self.start_running(at);
+            // The next prompt: the last turn's review goes.
+            self.panels_see(&Seen::Prompt);
         }
         let delivery = match delivery {
             Delivery::Prompt => None,
@@ -1034,6 +1090,12 @@ impl App {
             ServerRequest::Question(question) => Dialog::question(id, question),
         };
         self.dialogs.push_back(dialog);
+        // No panel is drawn while a dialog is up, and none keeps the focus;
+        // after it, a panel's readiness starts again.
+        if matches!(self.input.focus().focused(), Target::Panel(_)) {
+            self.input.focus_mut().to_input();
+        }
+        self.panels.restart();
     }
 
     fn done(&mut self, ticket: Ticket, result: Result<OpResult, ErrorData>, now: Instant) {
@@ -1118,6 +1180,9 @@ impl App {
             // The next session's first `@` asks for its own.
             (Pending::Files(id), _) if !self.is_open(&id) => self.files_listing = false,
             (Pending::History(id), _) if !(self.reading && self.is_open(&id)) => {}
+            // A panel's, for a session left meanwhile, is dropped.
+            (Pending::Panel { session, .. }, _) if !self.is_open(&session) => {}
+            (Pending::Panel { panel, .. }, Ok(result)) => self.panel_result(panel, &result),
             (Pending::Undo(_), Ok(OpResult::SessionUndo(result))) => {
                 self.session = Some(result.session);
                 self.say(
@@ -1223,6 +1288,7 @@ impl App {
             }));
             self.pending.insert(ticket, Pending::Said);
         }
+        self.left_session();
         self.had_turn = false;
         self.last_cost = None;
         self.usage = None;
@@ -1242,6 +1308,9 @@ impl App {
         if text.is_empty() {
             return;
         }
+        // Into the draft, not into an item being edited.
+        self.input.cancel_item_edit();
+        self.item_edit = None;
         // What is there keeps its chips.
         let mut now = self.input.editor().fragment();
         if !now.is_empty() {
@@ -1276,7 +1345,10 @@ impl App {
         // anything that happens next (`docs/architecture/09-tui.md`,
         // "Resume"); its events wait for it.
         let session_id = state.session_id.clone();
+        self.left_session();
         self.session = Some(state);
+        // What the panels show of a session it already holds (its plan).
+        self.panels_ask(&session_id, stored);
         // The workspace's files for `@` are listed on the first `@` typed
         // (`ask_files`), not here.
         if stored {
@@ -1521,7 +1593,11 @@ impl App {
                     self.transcript.push(Block::Summary {
                         took,
                         tokens: Some(tokens(&completed.usage)),
-                        cost: cost(&completed.usage),
+                        cost: panel::with_verdict(
+                            cost(&completed.usage),
+                            completed.verification.as_ref(),
+                            &self.look,
+                        ),
                     });
                 }
                 let session = self.usage.as_ref().and_then(|usage| cost(&usage.totals));
@@ -1561,9 +1637,10 @@ impl App {
             }
             _ => self.mapper.event(&mut self.transcript, &event.event, now),
         }
+        self.panels_event(&event.event);
     }
 
-    fn say(&mut self, text: &str) {
+    pub(super) fn say(&mut self, text: &str) {
         self.transcript.push(Block::Notice(text.to_owned()));
     }
 
@@ -1588,7 +1665,6 @@ impl App {
         self.transcript
             .set_now(now.saturating_duration_since(self.began));
         let boxes = self.mapper.live_rounds(&mut self.transcript);
-        self.input.focus_mut().update(&boxes, &[]);
         let parts = self.transcript.commit_parts(width, &self.look);
         let commit: Vec<Line> = parts
             .iter()
@@ -1603,7 +1679,12 @@ impl App {
         let cursor_row;
         let mut cursor_col = 0;
         let half = (self.rows / 2).max(1);
+        // The panels' block (step 24), between the live rows and the bottom.
+        let mut block = Vec::new();
+        self.panel_drawn = None;
         if !self.dialogs.is_empty() {
+            // No panel is drawn while a dialog is up.
+            self.input.focus_mut().update(&boxes, &[]);
             // The dialog fits the window whole, with a blank row and the hint
             // row under it while there is room for them: its detail is what
             // gives way, and says so.
@@ -1635,12 +1716,23 @@ impl App {
             }
             cursor_row = None;
         } else {
-            let drawn = view::input::input(&self.input, &self.look, width);
+            let on_input = self.input.focus().on_input();
+            let mut drawn = view::input::input(&self.input, &self.look, width);
+            let menu = view::menu::menu(&self.input, &self.look, width);
+            // The bottom's height does not hang on the focus: the panels
+            // are laid out in what it leaves, and the focus ring is given
+            // the panels that can be drawn focused.
+            let height = drawn.lines.len() + menu.as_ref().map_or(1, Vec::len);
+            let room = half.max(height) - height;
+            block = self.panel_block(room, live.len(), menu.is_some(), width, &boxes);
+            if self.input.focus().on_input() != on_input {
+                drawn = view::input::input(&self.input, &self.look, width);
+            }
             let top = bottom.len();
             bottom.extend(drawn.lines);
             cursor_row = Some(top + drawn.cursor.row);
             cursor_col = drawn.cursor.col;
-            match view::menu::menu(&self.input, &self.look, width) {
+            match menu {
                 Some(menu) => bottom.extend(menu),
                 None => {
                     let left = self.hint_left(now);
@@ -1651,7 +1743,9 @@ impl App {
 
         // The live region is at most half the window, and at least the
         // bottom: what streams is cut from its top, with a mark.
-        let room = half.max(bottom.len()).saturating_sub(bottom.len());
+        let room = half
+            .max(bottom.len())
+            .saturating_sub(bottom.len() + block.len());
         if live.len() > room {
             let cut = live.len() - room + 1;
             live.drain(..cut.min(live.len()));
@@ -1665,7 +1759,8 @@ impl App {
                 );
             }
         }
-        let offset = live.len();
+        let offset = live.len() + block.len();
+        live.extend(block);
         live.extend(bottom);
         let cursor = match cursor_row {
             Some(row) => Cursor {
@@ -1684,6 +1779,9 @@ impl App {
     fn hint_left(&self, now: Instant) -> Hint {
         if self.input.quit_armed() {
             return Hint::QuitArmed;
+        }
+        if let Some(keys) = self.panel_hint() {
+            return Hint::Keys(keys);
         }
         if let Some(began) = self.running {
             return Hint::Running {

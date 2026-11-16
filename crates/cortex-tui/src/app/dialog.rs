@@ -46,7 +46,8 @@
 //! the external editor gives the terminal back, the dialog starts its grace
 //! again ([`Dialog::hide`]). All of these are comparisons of times; the one
 //! wake they need is the moment the dialog is ready, to draw the answers
-//! ([`Dialog::deadline`]).
+//! ([`Dialog::deadline`]). The times are kept by a
+//! [`Readiness`](super::ready::Readiness), which the panels share (step 24).
 //!
 //! **Only what was seen can be pressed, and allowed for longer.** Only an
 //! answer drawn whole answers (and `Esc`, which the hint row shows: deny,
@@ -68,7 +69,7 @@
 //! to a question with no choices), keys and a paste go to the note, and its
 //! row shows the note's end.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use cortex_protocol::jsonrpc::RequestId;
 use cortex_protocol::methods::{
@@ -77,32 +78,14 @@ use cortex_protocol::methods::{
 };
 use cortex_term::{Key, Line};
 
+use super::ready::Readiness;
+/// The dialog's times, which the panels share (step 24): kept here by name
+/// for what reads them as the dialog's.
+pub(crate) use super::ready::{GRACE, QUIET, REPEAT};
 use super::tools;
 use crate::keys::{Action, Context, KeyMap, name, typed};
 use crate::view::dialog::{self, Answer, ApprovalView, QuestionView, TrustView};
 use crate::view::{DiffLine, Look};
-
-/// How long after a dialog is first drawn, and after the key before, a key
-/// still goes to the editor.
-pub(crate) const GRACE: Duration = Duration::from_millis(300);
-
-/// How long with no input a dialog that typing reached waits before it
-/// takes keys (the owner's "about 1 s", after the review of step 23). Even
-/// a slow typist's gaps inside a sentence are shorter: 40 words a minute is
-/// a key every 300 ms, 15 a minute one every 800 ms. And a second is short
-/// beside the time it takes to read a dialog, so a person who stopped
-/// typing to read it does not wait for it.
-pub(crate) const QUIET: Duration = Duration::from_millis(1000);
-
-/// How long after a key the same key again is taken for that key held
-/// down, where the terminal does not say: terminals repeat a held key
-/// after 250 ms to 1 s (X11's default is 660 ms, Windows' and macOS's
-/// about 500 ms), then every 25 to 50 ms.
-pub(crate) const REPEAT: Duration = Duration::from_millis(1000);
-
-// The quiet covers a key held down where the terminal does not mark its
-// repeats: each repeat holds the dialog for longer than the gap to the next.
-const _: () = assert!(QUIET.as_millis() >= REPEAT.as_millis());
 
 /// The fewest rows a dialog's detail is given.
 const LEAST_DETAIL: usize = 2;
@@ -155,17 +138,13 @@ struct Shape {
 pub(crate) struct Dialog {
     pub(crate) id: RequestId,
     pub(crate) asks: Asks,
-    /// When its first frame was written.
-    pub(crate) shown: Option<Instant>,
-    /// When input no dialog took was last read, while the dialog was up or
-    /// just before it came: it is ready [`QUIET`] after.
-    typed: Option<Instant>,
-    /// The earliest it can be ready: [`REPEAT`] after a key that answered
-    /// the dialog before it, so that the key held a little long, or pressed
-    /// twice, never answers this one, which was not seen yet.
-    not_before: Option<Instant>,
-    /// A frame with its answers has been drawn, and nothing hid them since.
-    answers_drawn: bool,
+    /// When it is ready: its first frame, the input no dialog took while it
+    /// was up or just before it came ([`QUIET`] after), the earliest it can
+    /// be ready ([`REPEAT`] after a key that answered the dialog before it,
+    /// so that the key held a little long, or pressed twice, never answers
+    /// this one, which was not seen yet), and whether a frame with its
+    /// answers has been drawn since nothing hid them.
+    ready: Readiness,
     /// It asks to leave the sandbox of a session whose commands are
     /// confined.
     leaving: bool,
@@ -204,10 +183,7 @@ impl Dialog {
         Self {
             id,
             asks,
-            shown: None,
-            typed: None,
-            not_before: None,
-            answers_drawn: false,
+            ready: Readiness::default(),
             leaving,
             offered: Vec::new(),
             unreadable: false,
@@ -244,11 +220,14 @@ impl Dialog {
         }
     }
 
+    /// When its first frame was written, if it has been.
+    pub(crate) fn shown(&self) -> Option<Instant> {
+        self.ready.shown()
+    }
+
     /// Its first frame was written at `at`.
     pub(crate) fn drawn(&mut self, at: Instant) {
-        if self.shown.is_none() {
-            self.shown = Some(at);
-        }
+        self.ready.drawn(at);
     }
 
     /// The look changed: the rows are drawn again.
@@ -260,14 +239,15 @@ impl Dialog {
     /// just before it came: it is ready only [`QUIET`] after, and answers it
     /// showed are hidden.
     pub(crate) fn typed(&mut self, at: Instant) {
-        self.typed = Some(self.typed.map_or(at, |typed| typed.max(at)));
-        self.hide_answers();
+        if self.ready.typed(at) {
+            self.cache = None;
+        }
     }
 
     /// It is ready no earlier than `at`: a key answered the dialog before it
     /// at `at - REPEAT`.
     pub(crate) fn not_before(&mut self, at: Instant) {
-        self.not_before = Some(self.not_before.map_or(at, |before| before.max(at)));
+        self.ready.not_before(at);
     }
 
     /// The dialog starts again as if just shown: its grace begins with its
@@ -275,40 +255,25 @@ impl Dialog {
     /// was continued (`fg`), or the external editor gave the terminal back:
     /// a key typed ahead meanwhile was not typed at this dialog.
     pub(crate) fn hide(&mut self) {
-        self.shown = None;
-        self.typed = None;
-        self.hide_answers();
-    }
-
-    fn hide_answers(&mut self) {
-        if self.answers_drawn {
-            self.answers_drawn = false;
+        if self.ready.hide() {
             self.cache = None;
         }
-    }
-
-    /// When the dialog is ready to take keys and show its answers: the end
-    /// of its grace, and [`QUIET`] after typing reached the editor while it
-    /// was up. `None` until its first frame.
-    fn ready_at(&self) -> Option<Instant> {
-        let ready = (self.shown? + GRACE).max(self.not_before.unwrap_or(self.shown?));
-        Some(self.typed.map_or(ready, |typed| ready.max(typed + QUIET)))
     }
 
     /// When a frame is due for the dialog's answers: the moment it is
     /// ready, until a frame with them has been drawn. The time may have
     /// passed: a frame is then due at once.
     pub(crate) fn deadline(&self) -> Option<Instant> {
-        if self.answers_drawn || self.unreadable {
+        if self.ready.answers_drawn() || self.unreadable {
             return None;
         }
-        self.ready_at()
+        self.ready.ready_at()
     }
 
     /// Whether the dialog takes keys at `at`: it is ready, and a frame has
     /// drawn its answers.
     pub(crate) fn takes_keys(&self, at: Instant) -> bool {
-        self.answers_drawn && self.ready_at().is_some_and(|ready| at >= ready)
+        self.ready.takes_keys(at)
     }
 
     /// What `Esc` (and the other keys of `deny`) gives: deny, not now, or no
@@ -401,7 +366,7 @@ impl Dialog {
             // dialog's once its first frame is up.
             if action == Some(Action::ShowWhole)
                 && typed(key).is_none()
-                && self.shown.is_some()
+                && self.ready.shown().is_some()
                 && matches!(self.asks, Asks::Approval { .. } | Asks::Trust { .. })
             {
                 return Keyed::ShowWhole;
@@ -545,7 +510,7 @@ impl Dialog {
         look: &Look,
         now: Instant,
     ) -> Vec<Line> {
-        let ready = self.ready_at().is_some_and(|ready| now >= ready);
+        let ready = self.ready.ready(now);
         let drawn_for = Drawn {
             rows,
             width,
@@ -558,7 +523,7 @@ impl Dialog {
             return lines.clone();
         }
         let (lines, readable, offered) = self.draw(keymap, rows, width, look, ready);
-        self.answers_drawn = ready && readable;
+        self.ready.set_answers_drawn(ready && readable);
         // Too small is known only once the answers are due: before, the
         // loop is still woken for them.
         self.unreadable = ready && !readable;

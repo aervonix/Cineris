@@ -123,6 +123,8 @@ fn win32(key: Key) -> Option<Vec<u8>> {
         KeyCode::Right => (0x27, 0),
         KeyCode::Down => (0x28, 0),
         KeyCode::Delete => (0x2e, 0),
+        // A panel's `space` (step 24).
+        KeyCode::Char(' ') if !ctrl => (0x20, 0x20),
         KeyCode::Char(c @ 'a'..='z') => {
             let vk = u32::from(c.to_ascii_uppercase());
             let unit = if ctrl {

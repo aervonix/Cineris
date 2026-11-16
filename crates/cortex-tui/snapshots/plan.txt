@@ -1,0 +1,132 @@
+== 60 columns, unicode, true colour, dark — collapsed
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=#7A3CFB}◧ {}allow _ between digits in every literal the lexer read…|
+
+== 60 columns, unicode, true colour, dark — focused on the fourth
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a10}☑ {fg=a8}read the scanner|
+  {fg=a8}⊘ skip the old fixtures|
+  {fg=#7A3CFB}◧ {}allow _ between digits in every literal the lexer read…|
+  {fg=a8}☐ {fg=#8D57FC b}名前を確認する|
+  {fg=a8}☐ {}a status from a newer core|
+
+== 60 columns, ascii, true colour, dark — collapsed
+o {b}Plan{fg=a8}  1 of 5 done|
+  {fg=#7A3CFB}[>] {}allow _ between digits in every literal the lexer ...|
+
+== 60 columns, ascii, true colour, dark — focused on the fourth
+o {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a10}[x] {fg=a8}read the scanner|
+  {fg=a8}[-] skip the old fixtures|
+  {fg=#7A3CFB}[>] {}allow _ between digits in every literal the lexer ...|
+  {fg=a8}[ ] {fg=#8D57FC b}名前を確認する|
+  {fg=a8}[ ] {}a status from a newer core|
+
+== 80 columns, unicode, true colour, dark — collapsed
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=#7A3CFB}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+
+== 80 columns, unicode, true colour, dark — focused on the fourth
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a10}☑ {fg=a8}read the scanner|
+  {fg=a8}⊘ skip the old fixtures|
+  {fg=#7A3CFB}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+  {fg=a8}☐ {fg=#8D57FC b}名前を確認する|
+  {fg=a8}☐ {}a status from a newer core|
+
+== 80 columns, ascii, true colour, dark — collapsed
+o {b}Plan{fg=a8}  1 of 5 done|
+  {fg=#7A3CFB}[>] {}allow _ between digits in every literal the lexer reads, decimal, hexa...|
+
+== 80 columns, ascii, true colour, dark — focused on the fourth
+o {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a10}[x] {fg=a8}read the scanner|
+  {fg=a8}[-] skip the old fixtures|
+  {fg=#7A3CFB}[>] {}allow _ between digits in every literal the lexer reads, decimal, hexa...|
+  {fg=a8}[ ] {fg=#8D57FC b}名前を確認する|
+  {fg=a8}[ ] {}a status from a newer core|
+
+== 120 columns, unicode, true colour, dark — collapsed
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=#7A3CFB}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadecimal, octal and binary alike|
+
+== 120 columns, unicode, true colour, dark — focused on the fourth
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a10}☑ {fg=a8}read the scanner|
+  {fg=a8}⊘ skip the old fixtures|
+  {fg=#7A3CFB}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadecimal, octal and binary alike|
+  {fg=a8}☐ {fg=#8D57FC b}名前を確認する|
+  {fg=a8}☐ {}a status from a newer core|
+
+== 120 columns, ascii, true colour, dark — collapsed
+o {b}Plan{fg=a8}  1 of 5 done|
+  {fg=#7A3CFB}[>] {}allow _ between digits in every literal the lexer reads, decimal, hexadecimal, octal and binary alike|
+
+== 120 columns, ascii, true colour, dark — focused on the fourth
+o {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a10}[x] {fg=a8}read the scanner|
+  {fg=a8}[-] skip the old fixtures|
+  {fg=#7A3CFB}[>] {}allow _ between digits in every literal the lexer reads, decimal, hexadecimal, octal and binary alike|
+  {fg=a8}[ ] {fg=#8D57FC b}名前を確認する|
+  {fg=a8}[ ] {}a status from a newer core|
+
+== 80 columns, unicode, true colour, light — collapsed
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=#7A3CFB}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+
+== 80 columns, unicode, true colour, light — focused on the fourth
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a2 b}☑ {fg=a8}read the scanner|
+  {fg=a8}⊘ skip the old fixtures|
+  {fg=#7A3CFB}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+  {fg=a8}☐ {fg=#7A3CFB b}名前を確認する|
+  {fg=a8}☐ {}a status from a newer core|
+
+== 80 columns, unicode, 16 colours, dark — collapsed
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a13}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+
+== 80 columns, unicode, 16 colours, dark — focused on the fourth
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a10}☑ {fg=a8}read the scanner|
+  {fg=a8}⊘ skip the old fixtures|
+  {fg=a13}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+  {fg=a8}☐ {b}名前を確認する|
+  {fg=a8}☐ {}a status from a newer core|
+
+== 80 columns, unicode, 16 colours, light — collapsed
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a5}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+
+== 80 columns, unicode, 16 colours, light — focused on the fourth
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a2 b}☑ {fg=a8}read the scanner|
+  {fg=a8}⊘ skip the old fixtures|
+  {fg=a5}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+  {fg=a8}☐ {fg=a5 b}名前を確認する|
+  {fg=a8}☐ {}a status from a newer core|
+
+== 80 columns, unicode, 256 colours, dark — collapsed
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=i99}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+
+== 80 columns, unicode, 256 colours, dark — focused on the fourth
+◇ {b}Plan{fg=a8}  1 of 5 done|
+  {fg=a10}☑ {fg=a8}read the scanner|
+  {fg=a8}⊘ skip the old fixtures|
+  {fg=i99}◧ {}allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+  {fg=a8}☐ {fg=i99 b}名前を確認する|
+  {fg=a8}☐ {}a status from a newer core|
+
+== 80 columns, unicode, no colour, dark — collapsed
+◇ {b}Plan{d}  1 of 5 done|
+  ◧ allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+
+== 80 columns, unicode, no colour, dark — focused on the fourth
+◇ {b}Plan{d}  1 of 5 done|
+  ☑ {d}read the scanner|
+  {d}⊘ skip the old fixtures|
+  ◧ allow _ between digits in every literal the lexer reads, decimal, hexadeci…|
+  {d}☐ {b}名前を確認する|
+  {d}☐ {}a status from a newer core|
+
