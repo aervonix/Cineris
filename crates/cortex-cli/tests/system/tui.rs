@@ -108,13 +108,18 @@ pub fn child() {
     }
     for (name, _) in std::env::vars_os() {
         let name = name.to_string_lossy();
-        if name.starts_with("CORTEX_") || LEFT_OUT.contains(&name.as_ref()) {
+        // The test kit's record of process starts goes on to the binary,
+        // whose own starts are the test's.
+        if (name.starts_with("CORTEX_") && name != cortex_base::hook::STARTS)
+            || LEFT_OUT.contains(&name.as_ref())
+        {
             command.env_remove(name.as_ref());
         }
     }
     for (name, value) in spec["env"].as_object().expect("variables") {
         command.env(name, value.as_str().expect("a value"));
     }
+    cortex_base::hook::started(command.get_program());
     // It lives through a hang-up on Unix, to say how the binary ended after
     // the console was closed under it.
     ModeShell::new()

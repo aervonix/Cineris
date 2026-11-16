@@ -161,6 +161,7 @@ impl Tree {
         guard: Option<&Guard>,
         limits: Limits,
     ) -> io::Result<Self> {
+        cortex_base::hook::started(command.get_program());
         let inner = imp::Inner::spawn(command, guard, limits)?;
         Ok(Self {
             inner: Arc::new(inner),

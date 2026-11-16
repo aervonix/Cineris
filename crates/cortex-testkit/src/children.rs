@@ -310,6 +310,7 @@ pub fn run_if_child() {
             // With no console there is nothing to inherit the standard
             // streams for, except what was redirected: keep those.
         }
+        cortex_base::hook::started(command.get_program());
         command.spawn().expect("start the child's own child")
     });
 

@@ -89,6 +89,15 @@ pub(crate) fn forget_report(report: &Path) -> Result<()> {
     }
 }
 
+/// Removes a directory and what is in it; one that is not there is fine.
+pub(crate) fn forget_dir(directory: &Path) -> Result<()> {
+    match fs::remove_dir_all(directory) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("could not remove {}: {error}", directory.display())),
+    }
+}
+
 /// The cargo that is running this command, so every nested call uses the
 /// same toolchain.
 pub(crate) fn cargo() -> OsString {

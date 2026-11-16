@@ -229,6 +229,9 @@ impl Machine {
     }
 
     pub fn command_as(&self, program: &Path, arguments: &[&str]) -> Command {
+        // Marked here, where the binary is made ready to start: every test
+        // starts what this returns.
+        cortex_base::hook::started(program.as_os_str());
         let mut command = Command::new(program);
         command
             .args(arguments)
@@ -238,7 +241,11 @@ impl Machine {
             .stderr(Stdio::piped());
         for (name, _) in std::env::vars_os() {
             let name = name.to_string_lossy();
-            if name.starts_with("CORTEX_") || LEFT_OUT.contains(&name.as_ref()) {
+            // The test kit's record of process starts goes on to the binary,
+            // whose own starts are the test's.
+            if (name.starts_with("CORTEX_") && name != cortex_base::hook::STARTS)
+                || LEFT_OUT.contains(&name.as_ref())
+            {
                 command.env_remove(name.as_ref());
             }
         }

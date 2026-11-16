@@ -297,7 +297,17 @@ pub(crate) fn filtersets(arguments: &[String]) -> (Option<String>, Vec<String>) 
 /// it a failed run only says that it looks like a stall: `ci --tiers` is a
 /// measurement, and a run of it that stalled is run again by a person.
 fn run_steps(runs: Vec<Vec<String>>, rerun: bool) -> Vec<Step> {
-    if runs.len() == 1 && !rerun {
+    run_steps_with(runs, rerun, Vec::new())
+}
+
+/// [`run_steps`], with `variables` set for each run that is not run again
+/// after a stall: `ci --tiers --like-runner`'s record of process starts.
+fn run_steps_with(
+    runs: Vec<Vec<String>>,
+    rerun: bool,
+    variables: Vec<(&'static str, String)>,
+) -> Vec<Step> {
+    if runs.len() == 1 && !rerun && variables.is_empty() {
         return runs
             .into_iter()
             .map(|run| Step::cargo_owned("run tests", run))
@@ -314,8 +324,13 @@ fn run_steps(runs: Vec<Vec<String>>, rerun: bool) -> Vec<Step> {
             } else {
                 names[index.min(1)]
             };
+            let variables = variables.clone();
             Step::closure(name, move || {
                 let root = workspace::root();
+                let variables: Vec<(&str, &str)> = variables
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_str()))
+                    .collect();
                 let tiers = if single {
                     crate::stall::EVERY_TIER
                 } else if index == 0 {
@@ -327,7 +342,7 @@ fn run_steps(runs: Vec<Vec<String>>, rerun: bool) -> Vec<Step> {
                     run_with_rerun(&run, &root, tiers)
                 } else {
                     let watch = crate::stall::Watch::start();
-                    let ran = steps::cargo(&run);
+                    let ran = steps::cargo_with(&run, &variables);
                     if ran.is_err() {
                         say_if_stalled(&watch, &workspace::nextest_report(&root, "ci"));
                     }
@@ -494,6 +509,9 @@ pub(crate) fn check_ci_arguments(arguments: &[String]) -> Result<()> {
 
 const CI_USAGE: &str = "usage: cargo xtask ci [lint|test]
        cargo xtask ci --tiers [-p CRATE]... [--top N] [-- NEXTEST ARGUMENT...]
+       cargo xtask ci --tiers --like-runner [--base DIR] [-p CRATE]... [--top N]
+                              DIR: another checkout of the workspace (`main`'s), run and
+                              estimated too, and compared with this one
        cargo xtask ci --tiers --from JUNIT.XML [--os linux|windows] [--top N]
        cargo xtask ci --tiers --compare NEW [--against OLD] [--os linux|windows|both] [--top N]
                               NEW and OLD: a JUnit report, a run's id (of the `ci` workflow, or a
@@ -529,6 +547,11 @@ struct TiersRequest {
     /// A `try` A/B run to measure the factors of `like_runner` from, with
     /// the desk's report `from`.
     factors_from: Option<Source>,
+    /// The starts the desk's run of `from` wrote down: a directory.
+    starts_from: Option<PathBuf>,
+    /// With `like_runner`: a tree to run as well, at this desk, and to
+    /// compare this one's estimate with.
+    base: Option<PathBuf>,
 }
 
 impl TiersRequest {
@@ -553,6 +576,8 @@ impl TiersRequest {
             rest: Vec::new(),
             like_runner: false,
             factors_from: None,
+            starts_from: None,
+            base: None,
         };
         let mut os_given = false;
         let mut rest = arguments.iter();
@@ -575,6 +600,10 @@ impl TiersRequest {
                 }
                 "--from" => request.from = Some(PathBuf::from(value("a JUnit report")?)),
                 "--like-runner" => request.like_runner = true,
+                "--starts-from" => {
+                    request.starts_from = Some(PathBuf::from(value("a directory of starts")?));
+                }
+                "--base" => request.base = Some(PathBuf::from(value("a directory")?)),
                 "--factors-from" => {
                     request.factors_from = Some(Source::parse(value("a try run's id")?));
                 }
@@ -638,6 +667,26 @@ impl TiersRequest {
                     );
                 }
             }
+        }
+        if request.base.is_some() && (!request.like_runner || reads) {
+            return Err(
+                "`--base` is a tree to run beside this one and compare with: it goes with \
+                 `--like-runner`, and not with `--from` or `--compare`"
+                    .to_owned(),
+            );
+        }
+        if request.starts_from.is_some() && !request.like_runner && request.factors_from.is_none() {
+            return Err(
+                "`--starts-from` is read by `--like-runner` or `--factors-from`: alone it \
+                 would change nothing"
+                    .to_owned(),
+            );
+        }
+        if request.starts_from.is_some() && request.from.is_none() {
+            return Err(
+                "`--starts-from` names the starts a report given with `--from` wrote down"
+                    .to_owned(),
+            );
         }
         if os_given && !reads {
             return Err(
@@ -740,6 +789,17 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
             return Err("`--factors-from` takes a try run's id".to_owned());
         };
         let desk = crate::junit::read(desk)?;
+        if let Some(directory) = &request.starts_from {
+            // The work factors, starts taken out: a runner's plain run with
+            // its starts written down, of the tree the desk ran.
+            let desk_starts = crate::starts::Starts::read(directory)?;
+            let windows = crate::like_runner::runner_report(*run)?;
+            print!(
+                "{}",
+                crate::like_runner::measure_work(&desk, &desk_starts, &windows)
+            );
+            return Ok(());
+        }
         let side = |os| -> Result<Vec<crate::junit::TestCase>> {
             let sides = crate::records::ab_reports(*run, os)?
                 .ok_or_else(|| format!("run {run} kept no report for {os:?}"))?;
@@ -760,10 +820,12 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
     if let Some(report) = request.from {
         let checked = tiers::check_report(&report, os, top);
         if request.like_runner {
-            print!(
-                "{}",
-                crate::like_runner::estimate(&crate::junit::read(&report)?)
-            );
+            let cases = crate::junit::read(&report)?;
+            print!("{}", crate::like_runner::estimate(&cases));
+            if let Some(directory) = &request.starts_from {
+                let starts = crate::starts::Starts::read(directory)?;
+                print!("{}", crate::like_runner::starts_text(&cases, &starts));
+            }
         }
         return checked;
     }
@@ -786,6 +848,24 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
     }
     let runs = ci_runs(&request.packages, &rest, true);
     let like_runner = request.like_runner;
+    // With `--like-runner` each test's process starts are written down, in
+    // a directory emptied first.
+    let starts = workspace::root()
+        .join("target")
+        .join("like-runner")
+        .join("starts");
+    let variables = if like_runner {
+        vec![(
+            crate::starts::VARIABLE,
+            starts.to_string_lossy().into_owned(),
+        )]
+    } else {
+        Vec::new()
+    };
+    let base = match &request.base {
+        Some(base) => Some(crate::like_runner::base_tree(base)?),
+        None => None,
+    };
     let mut build = ci_run(&request.packages);
     build.push("--no-run".to_owned());
     let title = if request.packages.is_empty() && request.rest.is_empty() {
@@ -798,16 +878,36 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
             chosen.join(" ")
         )
     };
+    let starts_to_clear = starts.clone();
     let mut all = vec![Step::closure("build tests", move || {
         forget_reports(&workspace::root())?;
+        if like_runner {
+            workspace::forget_dir(&starts_to_clear)?;
+        }
         steps::cargo(&build)
     })];
-    all.extend(run_steps(runs, false));
+    all.extend(run_steps_with(runs, false, variables));
+    if let Some(base) = &base {
+        let (base, packages, rest) = (base.clone(), request.packages.clone(), rest.clone());
+        all.push(Step::closure("the base's tests", move || {
+            crate::like_runner::run_base(&base, &packages, &rest)
+        }));
+    }
     all.push(Step::closure("tier budgets", move || {
         let checked = tiers::check_report(&tiers::ci_report_path(), os, top);
         if like_runner {
             let cases = crate::junit::read(&tiers::ci_report_path())?;
+            let here = crate::starts::Starts::read(&starts)?;
             print!("{}", crate::like_runner::estimate(&cases));
+            print!("{}", crate::like_runner::starts_text(&cases, &here));
+            if let Some(base) = &base {
+                let (text, warned) =
+                    crate::like_runner::compare_with_base(&cases, &here, base, top)?;
+                print!("{text}");
+                if warned && std::env::var_os("GITHUB_ACTIONS").is_some() {
+                    println!("::warning::the estimate of a Windows tier grew past its warning");
+                }
+            }
         }
         checked
     }));
@@ -1098,6 +1198,8 @@ mod tests {
                 rest: vec![],
                 like_runner: false,
                 factors_from: None,
+                starts_from: None,
+                base: None,
             }
         );
         assert_eq!(
@@ -1123,6 +1225,8 @@ mod tests {
                 rest: strings(&["replay::", "--top"]),
                 like_runner: false,
                 factors_from: None,
+                starts_from: None,
+                base: None,
             }
         );
         assert_eq!(
@@ -1138,10 +1242,27 @@ mod tests {
                 rest: vec![],
                 like_runner: false,
                 factors_from: None,
+                starts_from: None,
+                base: None,
             }
         );
         let like = TiersRequest::parse(&strings(&["--like-runner", "-p", "cortex-llm"])).unwrap();
         assert!(like.like_runner);
+        // A base goes with the estimate, and the starts with what reads them.
+        let based = TiersRequest::parse(&strings(&["--like-runner", "--base", "../b"])).unwrap();
+        assert_eq!(based.base, Some(PathBuf::from("../b")));
+        for (words, said) in [
+            (&["--base", "../b"][..], "goes with `--like-runner`"),
+            (
+                &["--like-runner", "--base", "../b", "--from", "d.xml"],
+                "not with `--from`",
+            ),
+            (&["--from", "d.xml", "--starts-from", "s"], "alone it"),
+            (&["--like-runner", "--starts-from", "s"], "with `--from`"),
+        ] {
+            let error = TiersRequest::parse(&strings(words)).unwrap_err();
+            assert!(error.contains(said), "{words:?}: {error}");
+        }
         assert_eq!(like.packages, strings(&["cortex-llm"]));
         let measure = TiersRequest::parse(&strings(&[
             "--from",

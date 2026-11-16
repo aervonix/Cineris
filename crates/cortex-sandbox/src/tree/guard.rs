@@ -148,6 +148,7 @@ mod imp {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
             unix::in_own_session(&mut command);
+            cortex_base::hook::started(command.get_program());
             let mut child = command.spawn()?;
             let Some(pipe) = child.stdin.take() else {
                 let _ = child.kill();

@@ -411,6 +411,7 @@ impl Shell {
             ShellKind::Bash | ShellKind::Pwsh => &["--version"],
             ShellKind::Posix | ShellKind::WindowsPowerShell | ShellKind::Cmd => return,
         };
+        cortex_base::hook::probed(self.program.as_os_str());
         let Ok(said) = crate::process::brief::run(&self.program, arguments, None, &[], limit)
         else {
             return;
