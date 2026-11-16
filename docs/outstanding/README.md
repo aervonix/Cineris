@@ -27,7 +27,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [diff-emphasis-on-a-line-with-a-tab](diff-emphasis-on-a-line-with-a-tab.md): A diff's line with a tab or an escaped character loses the bold of its changed words. Owner: step 32.
 - [statistics-a-build-cannot-use-are-said-only-in-the-log](statistics-a-build-cannot-use-are-said-only-in-the-log.md): A newer build's or an unreadable statistics file is said in the log and by `cortex usage` and `cortex stats`, not by the application. Owner: step 24.
 - [stopping-at-a-task-lease-edge](stopping-at-a-task-lease-edge.md): At a task lease's edge the loop should stop and report, then fall back to the standing lease. Owner: step 37.
-- [the-binary-near-its-size-budget](the-binary-near-its-size-budget.md): The Linux release binary is 15.35 MB of its 16 MB budget after step 23, with the RPC server, extensions and MCP to come. Owner: the owner's size study.
 - [the-export-command-has-no-step](the-export-command-has-no-step.md): `/export`, in 09-tui's commands, is built by no step. Owner: the owner.
 - [the-maps-share-of-the-context-record](the-maps-share-of-the-context-record.md): The repository map is counted among the notices in the context record, so the profiler cannot say what it costs. Owner: step 44, or step 16.
 - [the-token-counting-endpoint-near-the-limit](the-token-counting-endpoint-near-the-limit.md): The provider's token-counting endpoint is never asked near the limit; needs a `Protocol` method and loop call. Owner: a later step that touches the budget, or step 33.
@@ -41,6 +40,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [headless-details-left-open](headless-details-left-open.md): Six small gaps in headless mode: dropped early notices, error records, `files_changed` matching, Windows close, untested signals. Owner: step 27 or step 32.
 - [reading-a-key-at-a-terminal](reading-a-key-at-a-terminal.md): `cortex auth login` refuses a terminal because reading a key without echo needs the terminal layer. Owner: step 25.
 - [shell-completions](shell-completions.md): Completions should come from an `xtask` command over the `FLAGS` table; the table exists, the command does not. Owner: step 34.
+- [the-binary-near-its-size-budget](the-binary-near-its-size-budget.md): After step 33's size fix the binary has about 5 MB left on each system (Windows 13.19 of 18 MiB, Linux 11.33 of 16), with extensions and MCP to come; each pull request shows its size. Open until a step-34 build passes on both. Owner: step 34.
 
 ### cortex-config
 
