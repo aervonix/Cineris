@@ -170,6 +170,17 @@ fn the_end_of_the_input_ends_the_clients_sessions_and_the_server() {
         core.core.open_sessions().is_empty(),
         "the session outlived its client"
     );
+    // The core itself has ended: it starts nothing more (the client's
+    // disconnect alone would end its sessions, and leave the core running).
+    let late = core.core.connect(ClientInfo::user());
+    let refused = core
+        .on({
+            let core = core.core.clone();
+            let op = new_session(&world);
+            async move { core.handle(late.id, op).await }
+        })
+        .unwrap_err();
+    assert_eq!(refused.code, "shutting_down");
 }
 
 /// `shutdown` stops the core, and is answered `{}` once it has.
@@ -400,4 +411,48 @@ fn a_shutdown_waits_for_the_requests_under_way_before_it_answers() {
     );
     assert_eq!(wire.ended.recv().unwrap(), Ended::Shutdown);
     assert!(core.core.open_sessions().is_empty());
+}
+
+/// The point where the project's store is written and its good copy is
+/// not: `cortex_knowledge::store::AFTER_THE_STORE`, which this crate's tests
+/// cannot name by its constant.
+const AFTER_THE_STORE: &str = "cortex-knowledge: the store is written, before its good copy";
+
+/// `shutdown` while an operation of the client's is still running past the
+/// lane's bound (a change to the project's store, held as it is written,
+/// which the core's own end does not wait for): the server still waits for
+/// it, bounded, before it answers, so the operation's answer comes first.
+/// Both bounds are on the fake clock: the lane's is let run out, and the
+/// server's never is, so it ends only because the operation does.
+#[test]
+fn a_shutdown_waits_for_an_operation_still_running_past_the_lanes_bound() {
+    let world = World::with_config("shutdown-mid-update", "[stats]\nenabled = false\n");
+    let core = world.core();
+    // Bounds of their own, told apart from the other waits on the timer.
+    let mut options = world.serve_options();
+    options.lane_end = Duration::from_secs(3);
+    options.requests_end = Duration::from_secs(77);
+    let mut wire = Wire::connect(&core, options);
+    let hold = cortex_testkit::Hold::new(AFTER_THE_STORE);
+    wire.lines.write_raw(&request(
+        7,
+        "project/update",
+        json!({"workspace": world.workspace, "add": [{"kind": "fact", "text": "It builds with make."}]}),
+    ));
+    hold.reach();
+    wire.lines.write_raw(&request(8, "shutdown", json!({})));
+    // The connection's end waits for its lane, and gives up at its bound.
+    cortex_testkit::block_on(world.timer.sleeping_for(Duration::from_secs(3)));
+    world.timer.advance(Duration::from_secs(3));
+    // The server's end then waits for the requests still running.
+    cortex_testkit::block_on(world.timer.sleeping_for(Duration::from_secs(77)));
+    hold.release();
+    let mut answered = Vec::new();
+    while let Some(message) = wire.lines.read() {
+        if let Message::Response(Response { id: Some(id), .. }) = message {
+            answered.push(id);
+        }
+    }
+    assert_eq!(answered, [RequestId::Number(7), RequestId::Number(8)]);
+    assert_eq!(wire.ended.recv().unwrap(), Ended::Shutdown);
 }
