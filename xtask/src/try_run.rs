@@ -1397,8 +1397,8 @@ mod tests {
     #[test]
     fn mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have() {
         assert_eq!(
-            try_command(&["--command", "mutate tooling-7-try-ab"]),
-            Ok("mutate --minutes 0 tooling-7-try-ab".to_owned())
+            try_command(&["--command", "mutate tooling-7"]),
+            Ok("mutate --minutes 0 tooling-7".to_owned())
         );
         assert_eq!(
             try_command(&[
