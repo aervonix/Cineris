@@ -992,7 +992,6 @@ impl App {
         // A stored session's history is drawn under its header before
         // anything that happens next (`docs/architecture/09-tui.md`,
         // "Resume"); its events wait for it.
-        let stored = stored && state.seq > 0;
         let session_id = state.session_id.clone();
         self.session = Some(state);
         // The workspace's files for `@`, listed by the core beside

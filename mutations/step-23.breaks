@@ -95,7 +95,7 @@ caught-by:
 [break] the-loop-sleeps-through-the-grace
 rule: The loop wakes at the end of a dialog's grace to draw its answers, though nothing else happens.
 file: crates/cortex-tui/src/app.rs
-in: run
+in: run_with
 find: timeout = Some(timeout.map_or(wait, |timeout| timeout.min(wait)));
 replace: let _ = wait;
 caught-by:
@@ -104,7 +104,7 @@ caught-by:
 [break] the-loop-reads-past-the-end
 rule: Once the application has ended the loop reads nothing more from the terminal: what is typed after the last key it takes is the shell's.
 file: crates/cortex-tui/src/app.rs
-in: run
+in: run_with
 find:
     if app.exit().is_some() {
         break;
@@ -678,9 +678,9 @@ caught-by:
 [break] a-new-session-read-as-stored
 rule: Only a session opened from the store has a history to draw: a new one's open is not read back, so that what it said is shown.
 file: crates/cortex-tui/src/app/state.rs
-in: App::opened
-find: let stored = stored && state.seq > 0;
-replace: let stored = state.seq > 0;
+in: App::done
+find: self.opened(result.session, false, now);
+replace: self.opened(result.session, true, now);
 packages: cortex-tui, cortex-cli
 caught-by:
     app::tests::a_new_session_reads_no_history
