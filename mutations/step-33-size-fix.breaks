@@ -163,7 +163,7 @@ in: own_folders
 find: ("the build's home folder", home_folder())
 replace: ("the build's home folder", None)
 caught-by:
-    shipped::tests::a_name_outside_ascii_and_the_builds_own_home_are_found
+    shipped::tests::the_builds_own_folders_are_its_cargo_home_and_its_home_folder
 
 [break] a-longer-folder-is-taken-for-the-home
 rule: The build's own folder is matched as a whole folder, not as the start of a longer name.

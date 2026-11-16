@@ -458,6 +458,17 @@ mod tests {
     }
 
     #[test]
+    fn the_builds_own_folders_are_its_cargo_home_and_its_home_folder() {
+        // What `check_file` looks for by name, from this process's
+        // environment: both are set wherever the tests run.
+        let own = own_folders();
+        let named = |name: &str| own.iter().find(|(own, _)| *own == name).map(|(_, f)| f);
+        assert_eq!(named("the build's home folder"), home_folder().as_ref());
+        assert_eq!(named("the build's CARGO_HOME"), cargo_home().as_ref());
+        assert!(home_folder().is_some(), "no home folder in the environment");
+    }
+
+    #[test]
     fn a_binary_with_the_folders_remapped_passes() {
         let bytes =
             b"\0cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/de.rs\0\
