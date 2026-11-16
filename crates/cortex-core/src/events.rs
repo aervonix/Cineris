@@ -9,7 +9,11 @@
 //! 1. **Deltas of one item are merged** when the reader is behind: a delta
 //!    that follows a delta of the same kind for the same item, with nothing
 //!    queued between them, is added to it. The reader sees fewer, larger
-//!    deltas.
+//!    deltas. **Never across a read:** once the client has read a session
+//!    at a `seq` (`session/read`), a delta is not added to a queued one at
+//!    or below it, so the events after the read hold only what came after
+//!    it (the review of step 23's fixes: a merged delta that spanned the
+//!    read was drawn twice in part).
 //! 2. **When the queue is full, deltas of that item are dropped**, and one
 //!    `item.resync` is queued in place of the first. From then until the
 //!    item completes, the reader gets none of its deltas: it reads what the
@@ -33,7 +37,7 @@
 //! ([`InProgress`]), built from the same deltas, which is what
 //! `session/read` returns for an item that has not completed.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use cortex_agent::EventSink;
@@ -83,6 +87,9 @@ struct QueueState {
     items: VecDeque<Outgoing>,
     /// The items whose deltas are being dropped, each told so once.
     dropping: BTreeSet<ItemId>,
+    /// For each session the client has read, the `seq` it read at: no
+    /// delta is merged into a queued one at or below it.
+    fences: BTreeMap<SessionId, u64>,
     closed: bool,
 }
 
@@ -166,7 +173,11 @@ impl EventQueue {
                 if !self.deltas || state.dropping.contains(&delta.item_id) {
                     return;
                 }
-                if let Some(Outgoing::Event(last)) = state.items.back_mut()
+                let QueueState { items, fences, .. } = &mut *state;
+                if let Some(Outgoing::Event(last)) = items.back_mut()
+                    && fences
+                        .get(&last.session_id)
+                        .is_none_or(|fence| last.seq > *fence)
                     && merge(last, &event)
                 {
                     return;
@@ -219,6 +230,14 @@ impl EventQueue {
         state.items.push_back(Outgoing::Request { id, request });
         drop(state);
         self.queued(was_empty);
+    }
+
+    /// The client read `session` at `seq`: from now on no delta is merged
+    /// into one queued at or below it.
+    pub(crate) fn fence(&self, session: &SessionId, seq: u64) {
+        let mut state = lock(&self.state);
+        let fence = state.fences.entry(session.clone()).or_insert(seq);
+        *fence = (*fence).max(seq);
     }
 
     /// The next thing for the client, if there is one. Never waits.
@@ -504,9 +523,15 @@ impl SessionSink {
     /// together: the items hold exactly the events up to that `seq`, so a
     /// reader that takes the events after it draws nothing twice (found
     /// beside the review of step 23).
-    pub(crate) fn snapshot(&self) -> (u64, Vec<Item>) {
+    /// `reader`, when given, is the queue of the client that reads, fenced
+    /// at that `seq` under the same lock, so that no delta after it is
+    /// merged into one before it.
+    pub(crate) fn snapshot(&self, reader: Option<(&EventQueue, &SessionId)>) -> (u64, Vec<Item>) {
         let progress = lock(&self.progress);
         let seq = lock(&self.last).0;
+        if let Some((queue, session)) = reader {
+            queue.fence(session, seq);
+        }
         (seq, progress.items())
     }
 }
@@ -871,6 +896,57 @@ mod tests {
         assert_eq!(cortex_testkit::block_on(queue.next()), None);
     }
 
+    /// A client behind its queue reads the session while an answer
+    /// streams: what the read gives and what the queue holds after its
+    /// `seq` together carry each part of the answer exactly once (the
+    /// review of step 23's fixes: a delta merged across the read's `seq`
+    /// was drawn twice in part).
+    #[test]
+    fn a_read_and_the_events_after_it_hold_each_part_once() {
+        let sink = SessionSink::default();
+        let queue = Arc::new(EventQueue::new(16, true));
+        sink.subscribe(1, Arc::clone(&queue));
+        sink.emit(event(
+            1,
+            Event::ItemStarted(ItemStarted {
+                item_id: ItemId::new("i_1"),
+                kind: ItemKind::AssistantMessage,
+                tool: None,
+                call_id: None,
+            }),
+        ));
+        sink.emit(text(2, "i_1", "A"));
+        sink.emit(text(3, "i_1", "B"));
+        let session = SessionId::new("s_1");
+        let (seq, items) = sink.snapshot(Some((&queue, &session)));
+        assert_eq!(seq, 3);
+        sink.emit(text(4, "i_1", "C"));
+        sink.emit(text(5, "i_1", "D"));
+        let Item::AssistantMessage(read) = &items[0] else {
+            panic!("not an assistant message");
+        };
+        let mut drawn: String = read
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                Part::Text(text) => Some(text.text.clone()),
+                _ => None,
+            })
+            .collect();
+        while let Some(outgoing) = queue.try_next() {
+            if let Outgoing::Event(event) = outgoing
+                && event.seq > seq
+                && let Event::ItemDelta(ItemDelta {
+                    delta: Delta::Text(text),
+                    ..
+                }) = event.event
+            {
+                drawn.push_str(&text.text);
+            }
+        }
+        assert_eq!(drawn, "ABCD");
+    }
+
     #[test]
     fn the_sink_gives_every_subscriber_each_event_and_tracks_what_is_in_progress() {
         let sink = SessionSink::default();
@@ -928,9 +1004,9 @@ mod tests {
                 text: "compiling\n".to_owned(),
             }),
         ));
-        assert_eq!(sink.snapshot().0, 8);
+        assert_eq!(sink.snapshot(None).0, 8);
 
-        let items = sink.snapshot().1;
+        let items = sink.snapshot(None).1;
         assert_eq!(items.len(), 2);
         let Item::AssistantMessage(message) = &items[0] else {
             panic!("not an assistant message");
@@ -957,12 +1033,12 @@ mod tests {
                 item_id: ItemId::new("i_1"),
             }),
         ));
-        let Item::AssistantMessage(message) = &sink.snapshot().1[0] else {
+        let Item::AssistantMessage(message) = &sink.snapshot(None).1[0] else {
             panic!("not an assistant message");
         };
         assert!(message.parts.is_empty());
         sink.emit(completed(10, "i_2"));
-        assert_eq!(sink.snapshot().1.len(), 1);
+        assert_eq!(sink.snapshot(None).1.len(), 1);
 
         // The client that wanted deltas got them; the other got the whole
         // events only.
@@ -975,6 +1051,6 @@ mod tests {
         sink.emit(completed(11, "i_1"));
         assert!(two.is_empty());
         assert_eq!(one.len(), 1);
-        assert!(sink.snapshot().1.is_empty());
+        assert!(sink.snapshot(None).1.is_empty());
     }
 }

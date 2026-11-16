@@ -263,7 +263,13 @@ impl App {
                          them"
                             .to_owned()
                     }
-                    TrustStanding::ForTheRun => "trusted for this run (--trust-project)".to_owned(),
+                    // `--trust-project`, or a yes the trust store could not
+                    // keep (the review of step 23's fixes): nothing is kept.
+                    TrustStanding::ForTheRun => {
+                        "trusted for now only, nothing kept: by --trust-project, or a yes the \
+                         trust store could not keep"
+                            .to_owned()
+                    }
                     other => other.as_str().replace('_', " "),
                 };
                 line("trust", said);

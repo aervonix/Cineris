@@ -769,6 +769,13 @@ impl Core {
         let (id, answer) = self.inner.clients.ask_once(&session, &[client.0], |_| {
             ServerRequest::Trust(request.clone())
         });
+        // A shutdown that began since the look (its withdrawal came before
+        // this question was put) takes the question back at once: it sets
+        // its mark before it withdraws, so one or the other sees this
+        // question (the review of step 23's fixes).
+        if self.inner.shutting_down.load(Ordering::SeqCst) {
+            self.inner.clients.close(&id);
+        }
         let answered = self.inner.options.cancel.race(answer).await;
         self.inner.clients.close(&id);
         let answer = match answered {
@@ -1160,7 +1167,10 @@ impl Core {
                 // The `seq` and what is in progress, taken together: an
                 // event after it is not in the answer, and the client gets
                 // it live.
-                let (seq, progress) = live.sink.snapshot();
+                let reader = self.inner.clients.queue(client);
+                let (seq, progress) = live
+                    .sink
+                    .snapshot(reader.as_deref().map(|queue| (queue, &params.session_id)));
                 let log = Arc::clone(&live.log);
                 let mut items = Self::blocking(move || {
                     lock(&log)
@@ -1706,6 +1716,16 @@ impl Core {
         let (id, answer) = self.inner.clients.ask_once(&session, &asked, |_| {
             ServerRequest::Question(question.clone())
         });
+        // A session that ended since its plan was made (its end withdrew
+        // what was open then) takes the question back at once: its end
+        // takes it out of the table before it withdraws, so one or the
+        // other sees this question (the review of step 23's fixes).
+        let still_open = lock(&self.inner.sessions)
+            .get(&session)
+            .is_some_and(|now| Arc::ptr_eq(now, live));
+        if !still_open {
+            self.inner.clients.close(&id);
+        }
         let answered = self.inner.options.cancel.race(answer).await;
         // Answered only when an answer came: a request withdrawn because its
         // askers left is closed already, and was not answered (the
@@ -2070,8 +2090,9 @@ fn session_error(failure: &cortex_session::SessionError) -> OpError {
 /// `user` when they set anything but a preference, a choice that raises
 /// what is spent (a model, a speed: what `session/set` lets such a client
 /// choose), or the variables commands are not given (a project's wait for
-/// trust because they could stop every command; a client's are its own). Such overrides rank as the user's own command line, so the
-/// rest is the user's to give:
+/// trust because they could stop every command; a client's are its own).
+/// Such overrides rank as the user's own command line, so the rest is the
+/// user's to give:
 ///
 /// - anything under `[permissions]`, `[sandbox]` or `[limits]`, in a
 ///   profile too, whatever its value;

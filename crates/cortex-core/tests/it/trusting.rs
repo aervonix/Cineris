@@ -37,6 +37,9 @@ enum Answer {
     Leave,
     /// Ends the core, answering nothing.
     ShutDown,
+    /// Takes the project's trust away, as another process would, then
+    /// trusts it.
+    UntrustThenTrust,
 }
 
 fn trust_it() -> Answer {
@@ -131,6 +134,19 @@ async fn answering(
                     }
                     Answer::Leave => core.disconnect(client.id).await,
                     Answer::ShutDown => core.shutdown().await,
+                    Answer::UntrustThenTrust => {
+                        let (store, key) = store(world);
+                        assert!(store.revoke(&key).unwrap());
+                        core.respond(
+                            client.id,
+                            &id,
+                            ServerResponse::Trust(TrustResponse {
+                                trusted: true,
+                                never: false,
+                            }),
+                        )
+                        .expect("the question is open");
+                    }
                 }
             }
             Some(_) => {}
@@ -319,6 +335,40 @@ fn a_project_whose_rules_changed_is_asked_about_them() {
     assert_eq!(model(&state.expect("the session opens")), OTHER_MODEL);
 }
 
+/// A yes to a project whose rules changed, whose trust another process took
+/// away while the question was open, trusts it afresh: the store keeps it,
+/// and the session is trusted, not trusted for itself alone (the review of
+/// step 23's fixes: the refusal read as an answer that could not be kept).
+#[test]
+fn a_yes_after_another_process_untrusted_the_project_trusts_it_afresh() {
+    let world = world("trusting_changed_untrusted");
+    let (store, key) = store(&world);
+    let seen = Rule {
+        effect: Effect::Write,
+        pattern: "docs/**".to_owned(),
+        action: RuleAction::Allow,
+    };
+    store
+        .trust(&key, "~/work/app", &[Definition::of_rules(&[seen])])
+        .unwrap();
+    let core = world.core();
+    let (state, asked) = world.run(open(
+        &world,
+        &core,
+        ClientInfo::user(),
+        Answer::UntrustThenTrust,
+    ));
+    assert_eq!(asked.len(), 1);
+    assert!(asked[0].resources.iter().any(|resource| resource.changed));
+    let state = state.expect("the session opens");
+    assert_eq!(model(&state), OTHER_MODEL);
+    assert_eq!(
+        state.trust,
+        Some(cortex_protocol::session::TrustStanding::Trusted)
+    );
+    assert!(store.project(&key).unwrap().is_trusted());
+}
+
 /// Never, said of a trusted project whose rules changed, is in force in the
 /// session it was said in: the project's trust is gone there, not only at
 /// the next start.
@@ -406,7 +456,8 @@ fn a_profile_the_managed_file_locks_out_is_not_listed() {
     world.project_config(
         "[[profiles.review.permissions.rules]]\neffect = \"write\"\nmatch = \"docs/**\"\naction = \
          \"allow\"\n\n[[profiles.ci.permissions.rules]]\neffect = \"exec\"\nmatch = \"make \
-         deploy\"\naction = \"allow\"\n",
+         deploy\"\naction = \"allow\"\n\n[profiles.review.retry]\nattempts = 3\n\n\
+         [profiles.ci.retry]\nattempts = 2\n",
     );
     let core = world.core();
     let (state, asked) = world.run(open(&world, &core, ClientInfo::user(), not_now()));
@@ -425,6 +476,47 @@ fn a_profile_the_managed_file_locks_out_is_not_listed() {
             "allow write docs/**".to_owned()
         )]
     );
+    // Nor are its settings, and the locked profile's are not listed under
+    // its name.
+    let settings: Vec<String> = asked[0]
+        .resources
+        .iter()
+        .filter(|resource| resource.kind == TrustResourceKind::Settings)
+        .map(|resource| resource.name.clone())
+        .collect();
+    assert!(
+        settings.contains(&"profiles.review.retry.attempts".to_owned()),
+        "{settings:?}"
+    );
+    assert!(
+        !settings.iter().any(|name| name.starts_with("profiles.ci.")),
+        "{settings:?}"
+    );
+}
+
+/// A yes the trust store cannot keep, given after the project's rules
+/// changed while the question was open, trusts the session as a yes the
+/// store kept would: what the new rules could loosen is set aside (the
+/// review of step 23's fixes).
+#[test]
+fn a_yes_the_store_cannot_keep_after_the_rules_changed_sets_them_aside() {
+    let world = world("trusting_store_fails_changed");
+    let state = world.dirs().state.unwrap();
+    std::fs::create_dir_all(state.join("trust.toml.lock")).unwrap();
+    let core = world.core();
+    let (state, asked) = world.run(open(
+        &world,
+        &core,
+        ClientInfo::user(),
+        Answer::ChangeThenTrust,
+    ));
+    assert_eq!(asked.len(), 1);
+    let state = state.expect("the session opens");
+    assert_eq!(model(&state), MODEL, "the project's settings were used");
+    assert_eq!(
+        state.trust,
+        Some(cortex_protocol::session::TrustStanding::RulesChanged)
+    );
 }
 
 /// The core's end withdraws an open trust question (the review of step
@@ -440,6 +532,88 @@ fn the_core_ending_ends_a_trust_question() {
         state.map(|_| ()).map_err(|error| error.code),
         Err("shutting_down".to_owned())
     );
+}
+
+/// The core begins to end after an open has looked at the project's trust
+/// and before its question is put: the question, put after the end
+/// withdrew what was open, is taken back at once, so the open ends refused
+/// and an answer is refused (the review of step 23's fixes).
+#[test]
+fn a_trust_question_put_as_the_core_ends_is_taken_back() {
+    let mut world = world("trusting_looked_shutdown");
+    // Each piece of blocking work waits one turn: polled once, the open
+    // waits for its look, and the core ends before the look is made.
+    world.one_turn_each();
+    let core = world.core();
+    let client = core.connect(ClientInfo::user());
+    let (answered, state) = world.run(async {
+        let mut opening = std::pin::pin!(core.handle(
+            client.id,
+            Op::SessionNew(SessionNewParams {
+                workspace: world.workspace.to_str().unwrap().to_owned(),
+                settings: SessionSettings::default(),
+                title: None,
+                config: serde_json::Map::new(),
+                ephemeral: false,
+            }),
+        ));
+        std::future::poll_fn(|context| {
+            let _ = opening.as_mut().poll(context);
+            std::task::Poll::Ready(())
+        })
+        .await;
+        core.shutdown().await;
+        let answering = async {
+            loop {
+                if let Some(Outgoing::Request {
+                    id,
+                    request: ServerRequest::Trust(_),
+                }) = client.queue.next().await
+                {
+                    return core.respond(
+                        client.id,
+                        &id,
+                        ServerResponse::Trust(TrustResponse::default()),
+                    );
+                }
+            }
+        };
+        let mut answering = std::pin::pin!(answering);
+        let mut answered = None;
+        let state = std::future::poll_fn(|context| {
+            if answered.is_none()
+                && let std::task::Poll::Ready(result) = answering.as_mut().poll(context)
+            {
+                answered = Some(result.map_err(|error| error.code));
+            }
+            opening.as_mut().poll(context)
+        })
+        .await;
+        // The open may end in the poll that puts the question, before the
+        // answering half has looked: the question is in the queue all the
+        // same, and is answered now.
+        if answered.is_none() {
+            while let Some(outgoing) = client.queue.try_next() {
+                if let Outgoing::Request {
+                    id,
+                    request: ServerRequest::Trust(_),
+                } = outgoing
+                {
+                    answered = Some(
+                        core.respond(
+                            client.id,
+                            &id,
+                            ServerResponse::Trust(TrustResponse::default()),
+                        )
+                        .map_err(|error| error.code),
+                    );
+                }
+            }
+        }
+        (answered, state.map(|_| ()).map_err(|error| error.code))
+    });
+    assert_eq!(answered, Some(Err("request_not_open".to_owned())));
+    assert_eq!(state, Err("shutting_down".to_owned()));
 }
 
 fn git(dir: &Path, arguments: &[&str]) -> bool {
