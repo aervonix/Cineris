@@ -591,6 +591,18 @@ fn place(inner: &Inner, wanted: &Wanted) -> Result<Place, Box<ErrorData>> {
     })
 }
 
+/// The level a session put together for `wanted` would start at, read
+/// from the configuration as [`assemble`] reads it: for a check made before
+/// anything of the session is written (a fork's log). Blocks.
+pub(crate) fn starting_level(
+    inner: &Inner,
+    wanted: &Wanted,
+) -> Result<cortex_protocol::lease::Level, Box<ErrorData>> {
+    let place = place(inner, wanted)?;
+    let trust = trust(inner, place.state.as_ref(), &place.root, &place.load)?;
+    Ok(trust.loaded.settings.permissions.mode.clone())
+}
+
 /// The project's trust as a session would be put together with it, and
 /// the question to ask a person who can answer it, if there is one: a
 /// project not trusted, or trusted with its rules changed since, that the
@@ -1979,11 +1991,7 @@ pub(crate) fn assemble(
     // refuses a session that would start there, on what the configuration
     // comes to, however the request spelled it; before anything of the
     // session is written.
-    if !options.allow_unrestricted
-        && loaded.settings.permissions.mode == cortex_protocol::lease::Level::Unrestricted
-    {
-        return Err(crate::core::unrestricted_not_allowed());
-    }
+    inner.may_hold(&loaded.settings.permissions.mode)?;
     told.extend(problem);
     told.extend(git_note);
     for diagnostic in &loaded.diagnostics {

@@ -149,7 +149,7 @@ replace:
                 });
 caught-by:
     cortex-core clients::tests::a_supervisors_allow_is_taken_only_within_its_grant_and_as_once
-    cortex-core::it supervising::a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
+    cortex-core::it supervising::sys_a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
 
 [break] a-supervisors-answer-is-recorded
 rule: A supervisor's answer never reaches `Engine::record`.
@@ -158,7 +158,7 @@ in: ask
 find: if by_supervisor {
 replace: if by_supervisor && response.note.as_deref() == Some("never") {
 caught-by:
-    cortex-core::it supervising::a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
+    cortex-core::it supervising::sys_a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
 
 [break] a-second-supervisor-joins
 rule: A session has at most one supervisor: a second one's `session/open` is refused `supervisor_present`.
@@ -200,11 +200,11 @@ caught-by:
 rule: The grant's allow rules decide what it covers.
 file: crates/cortex-core/src/policy.rs
 in: within_grant
-find: if rule.action == RuleAction::Allow && !of_a_path(rule) && !lease.grant.rules.contains(rule)
-replace: if rule.action == RuleAction::Allow && !of_a_path(rule) && lease.grant.rules.contains(rule)
+find: if rule.action == RuleAction::Allow && !unused(rule) && !lease.grant.rules.contains(rule) {
+replace: if rule.action == RuleAction::Allow && !unused(rule) && lease.grant.rules.contains(rule) {
 caught-by:
     cortex-core policy::tests::a_grant_covers_what_its_rules_and_level_allow
-    cortex-core::it supervising::a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
+    cortex-core::it supervising::sys_a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
 
 [break] the-grant-is-not-narrowed-by-the-session
 rule: A grant never widens what the session holds: its scope is `standing.narrow(grant)`, with the session's `ask` and `deny` rules.
@@ -325,22 +325,23 @@ caught-by:
 # ------------------------------------------------- the review of the second pull request
 
 [break] a-raise-to-unrestricted-is-taken
-rule: Where the core may not give `unrestricted`, `session/set` raising a session to it is refused.
+rule: Where the core may not give `unrestricted`, no engine at it is put in force on an open session: a raise by `session/set`, a `config/reload` with a profile, after the user's file changed, or at a turn's start.
 file: crates/cortex-core/src/core.rs
-in: set
-find: if level == Level::Unrestricted && !inner.options.allow_unrestricted {
-replace: if level == Level::Unrestricted && inner.options.allow_unrestricted {
+in: Core::put_engine
+find: self.inner.may_hold(&parts.level)?;
+replace: let _ = self.inner.may_hold(&parts.level);
 packages: cortex-core, cortex-rpc
 caught-by:
     cortex-core::it settings::unrestricted_is_refused_where_the_core_may_not_give_it
+    cortex-core::it settings::a_reload_reaches_unrestricted_only_where_the_core_may_give_it
     cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
 
 [break] a-grants-path-allow-lifts-a-path-question
 rule: A grant never lifts a question about a path: its `read` and `write` allow rules are not used.
 file: crates/cortex-core/src/policy.rs
 in: within_grant
-find: if rule.action == RuleAction::Allow && !of_a_path(rule) && !lease.grant.rules.contains(rule)
-replace: if rule.action == RuleAction::Allow && !lease.grant.rules.contains(rule)
+find: && (matches!(rule.effect, EffectKind::Read | EffectKind::Write)
+replace: && (false
 caught-by:
     cortex-core policy::tests::a_grant_lifts_no_question_about_a_path
 
@@ -348,10 +349,10 @@ caught-by:
 rule: A command's leave to run rests on the sandbox only where the narrowed scope is the session's own and its commands are confined.
 file: crates/cortex-core/src/policy.rs
 in: within_grant
-find: if !confined || !same_scope(&lease.grant.sandbox, &standing.grant.sandbox) {
-replace: if !confined && !same_scope(&lease.grant.sandbox, &standing.grant.sandbox) {
+find: let confined_here = confined && same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
+replace: let confined_here = confined || same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
 caught-by:
-    cortex-core policy::tests::a_command_rests_on_the_sandbox_only_where_it_runs_in_it
+    cortex-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
 
 [break] a-narrower-network-is-the-same-scope
 rule: A narrower network is a narrower scope.
@@ -360,7 +361,7 @@ in: same_scope
 find: && first.network == second.network
 replace: && first.network == first.network
 caught-by:
-    cortex-core policy::tests::a_command_rests_on_the_sandbox_only_where_it_runs_in_it
+    cortex-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
 
 [break] the-judge-reads-the-session-as-it-was
 rule: A supervisor's allow is judged by the session as it is when the answer comes: its template, standing lease and confinement, not as they were when the question was put.
@@ -424,3 +425,50 @@ find: (at == last).then_some(count)
 replace: (!at.is_empty() || !last.is_empty()).then_some(count)
 caught-by:
     cortex-core paging::tests::a_cursor_is_refused_on_another_session_or_another_branch
+
+# ------------------------------------------------- the second review of the fixes
+
+[break] a-fork-is-written-before-its-level-is-judged
+rule: A fork the core would refuse for its level is refused before it is written: a refused fork leaves no stored session.
+file: crates/cortex-core/src/core.rs
+in: handle
+find: self.inner.may_hold(&level)?;
+replace: let _ = self.inner.may_hold(&level);
+caught-by:
+    cortex-core::it settings::a_refused_fork_leaves_no_stored_session
+
+[break] trust-taken-away-waits-for-a-refused-level
+rule: Trust taken away is taken away when the same reload brings a level the core may not give: the level is left out.
+file: crates/cortex-core/src/reload.rs
+in: apply
+find: !touches(key, MAY_FAIL) && !(refused_level && touches(key, &["permissions.mode"]))
+replace: !touches(key, MAY_FAIL) && !(refused_level && touches(key, &["permissions.nothing"]))
+caught-by:
+    cortex-core::it reload::trust_taken_away_holds_when_the_reload_brings_a_level_the_core_may_not_give
+
+[break] a-grants-command-rule-applies-unconfined
+rule: A grant's `exec` allow rules apply only where the session's own scope confines the command.
+file: crates/cortex-core/src/policy.rs
+in: within_grant
+find: || (rule.effect == EffectKind::Exec && !confined_here))
+replace: || (rule.effect == EffectKind::Exec && !confined))
+caught-by:
+    cortex-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
+
+[break] the-supervisor-is-not-told-its-grants-limits
+rule: A supervisor is told, when it opens a session, what of its grant does not apply there and why.
+file: crates/cortex-core/src/core.rs
+in: tell_grant_limits
+find: live.hooks.tell(message);
+replace: let _ = message;
+caught-by:
+    cortex-core::it supervising::a_supervisor_is_told_what_of_its_grant_does_not_apply_in_the_session
+
+[break] a-grants-unconfined-commands-are-not-said
+rule: The notice of a grant's limits names its allow rules of commands where a command would not run confined in the session's own scope, and why.
+file: crates/cortex-core/src/policy.rs
+in: limits_in
+find: let confined_here = confined && same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
+replace: let confined_here = true || same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
+caught-by:
+    cortex-core::it supervising::a_supervisor_is_told_what_of_its_grant_does_not_apply_in_the_session

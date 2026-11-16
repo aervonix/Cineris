@@ -391,6 +391,25 @@ pub(crate) struct Live {
 }
 
 impl Inner {
+    /// The one gate of `unrestricted`: whether a session may hold `level`
+    /// in this core ([`CoreOptions::allow_unrestricted`]). Every way a
+    /// session's level is set passes it, on the configuration as it comes
+    /// to: a session put together (`session/new`, a stored session's
+    /// `session/open`, `session/fork`, in `assemble`, and a fork before it
+    /// is written), and every engine put in force on an open session
+    /// (`session/set`, `config/reload` with or without a profile, the look
+    /// at a turn's start: [`Core::put_engine`]).
+    ///
+    /// # Errors
+    ///
+    /// `unrestricted_not_allowed`, of kind `permission`.
+    pub(crate) fn may_hold(&self, level: &Level) -> Result<(), OpError> {
+        if *level == Level::Unrestricted && !self.options.allow_unrestricted {
+            return Err(unrestricted_not_allowed());
+        }
+        Ok(())
+    }
+
     /// The configuration with no project's layers, as it is in force.
     pub(crate) fn user(&self) -> Arc<Loaded> {
         lock(&self.user_config).in_force()
@@ -868,7 +887,20 @@ impl Core {
         // The client may have left, or a shutdown begun, while the session
         // was put together off this thread.
         self.still_wanted(client, &live, true).await?;
+        self.tell_grant_limits(client, &live);
         Ok(live)
+    }
+
+    /// Tells the session what of a supervisor's grant does not apply in it,
+    /// and why, when the supervisor opens it: a notice of the session's,
+    /// which every client of it is sent. Nothing for another client, or a
+    /// grant all of which applies.
+    fn tell_grant_limits(&self, client: ClientId, live: &Arc<Live>) {
+        if let Some(grant) = self.inner.clients.grant_of(client)
+            && let Some(message) = live.policy.grant_limits(&grant)
+        {
+            live.hooks.tell(message);
+        }
     }
 
     /// The trust a session is put together with, after asking the client
@@ -1284,6 +1316,7 @@ impl Core {
                     // A question that is waiting is put to a client that
                     // may answer it.
                     self.inner.clients.join(&params.session_id, client);
+                    self.tell_grant_limits(client, &live);
                     return Ok(OpResult::SessionOpen(SessionResult {
                         session: live.handle.state(),
                     }));
@@ -1375,6 +1408,22 @@ impl Core {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
                 let id = self.inner.ids.session_id();
+                // A fork the core would refuse to open for its level is
+                // refused before it is written, so that no stored session is
+                // left of it (the review of step 27's second pull request).
+                if self.inner.may_hold(&Level::Unrestricted).is_err() {
+                    let inner = Arc::clone(&self.inner);
+                    let wanted = Wanted {
+                        which: Which::Resume { id: id.clone() },
+                        workspace: PathBuf::from(live.handle.state().workspace),
+                        settings: SessionSettings::default(),
+                        overrides: Vec::new(),
+                        no_raise: false,
+                    };
+                    let level =
+                        Self::blocking(move || assemble::starting_level(&inner, &wanted)).await?;
+                    self.inner.may_hold(&level)?;
+                }
                 let fork = id.clone();
                 let log = Arc::clone(&live.log);
                 let options = cortex_session::SessionOptions::new(
@@ -1990,9 +2039,6 @@ impl Core {
                         "Only a `user` client may raise a session's level.",
                     ));
                 }
-                if level == Level::Unrestricted && !inner.options.allow_unrestricted {
-                    return Err(unrestricted_not_allowed());
-                }
                 new_level = Some(level);
             }
         }
@@ -2170,6 +2216,9 @@ impl Core {
         live: &Arc<Live>,
         mut parts: cortex_policy::Parts,
     ) -> Result<(), OpError> {
+        // A raise by `session/set`, a reload with or without a profile:
+        // nothing is changed when the core may not give the level.
+        self.inner.may_hold(&parts.level)?;
         let level = parts.level.clone();
         let old = live.policy.engine();
         let number = live.lease_count.fetch_add(1, Ordering::Relaxed) + 1;

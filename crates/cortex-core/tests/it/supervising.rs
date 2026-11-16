@@ -86,6 +86,17 @@ async fn supervise(front: &Front, grant: Option<Lease>) -> Result<Front, OpError
     })
 }
 
+/// A core on `world` whose sessions' commands are confined: the launcher,
+/// and a kernel said to have Landlock. Only there does a grant cover a
+/// command, so the tests of a command within a grant run on Linux.
+#[cfg(target_os = "linux")]
+fn confining(world: &World) -> cortex_core::Core {
+    world.core_with(|options| {
+        options.launcher = Some(crate::sandbox::launcher());
+        options.sandbox = Some(cortex_sandbox::support::Support::Landlock(8));
+    })
+}
+
 fn shell(id: &str, command: &str) -> cortex_testkit::Response {
     calls(&[(id, "shell", json!({ "command": command }))])
 }
@@ -105,8 +116,9 @@ fn resolutions(front: &Front) -> Vec<Resolution> {
 /// and the supervisor's allow settles it. "For the project" is taken as
 /// once: the call runs, nothing is recorded or stored, and the same call
 /// later is asked again.
+#[cfg(target_os = "linux")]
 #[test]
-fn a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded() {
+fn sys_a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded() {
     let world = World::new(
         "supervisor_within",
         [
@@ -116,7 +128,7 @@ fn a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded() {
             says("Not again."),
         ],
     );
-    let core = world.core();
+    let core = confining(&world);
     // Every answer recorded in the engine passes this point, under the lock
     // a change of level holds: counted, a supervisor's answer is not.
     let recorded = cortex_testkit::Hold::new("core.policy.changing-approvals");
@@ -306,10 +318,7 @@ fn a_supervisors_allow_is_judged_by_the_session_as_it_is_when_it_answers() {
         "supervisor_judged_late",
         [shell("c1", "ninja"), says("Refused.")],
     );
-    let core = world.core_with(|options| {
-        options.launcher = Some(crate::sandbox::launcher());
-        options.sandbox = Some(cortex_sandbox::support::Support::Landlock(8));
-    });
+    let core = confining(&world);
     world.run(async {
         let front = Front::start(&world, &core).await;
         assert_eq!(
@@ -374,10 +383,11 @@ fn an_expired_grant_takes_no_allow() {
 /// (step 24's `config/reload`): the user's configuration now asks about the
 /// command, and the supervisor's allow, within the grant when the question
 /// was put, is beyond it when the answer comes.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_reload_that_tightens_the_rules_reaches_an_open_requests_judge() {
     let world = World::new("supervisor_reload", [shell("c1", "make"), says("Refused.")]);
-    let core = world.core();
+    let core = confining(&world);
     world.run(async {
         let front = Front::start(&world, &core).await;
         let layer = supervise(&front, Some(grant())).await.unwrap();
@@ -406,5 +416,51 @@ fn a_reload_that_tightens_the_rules_reaches_an_open_requests_judge() {
         assert_eq!(front.results()[0].1, "denied");
         front.close().await;
         layer.close().await;
+    });
+}
+
+/// A supervisor is told, when it opens a session, what of its grant does
+/// not apply there, and why: here the session's commands are not confined
+/// (no launcher), so its allow rule of a command does not apply, and its
+/// allow rule of a path never does. Every client of the session is told.
+#[test]
+fn a_supervisor_is_told_what_of_its_grant_does_not_apply_in_the_session() {
+    let world = World::new("supervisor_told", [says("Hi.")]);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let mut limited = grant();
+        limited.grant.rules.push(Rule {
+            effect: Effect::Write,
+            pattern: "src/**".to_owned(),
+            action: RuleAction::Allow,
+        });
+        let layer = supervise(&front, Some(limited)).await.unwrap();
+        let told = layer.told("is limited in this session").await;
+        for part in [
+            "`l_test`",
+            "`exec make`",
+            "not confined by an enforcing sandbox",
+            "`write src/**`",
+            "never apply",
+        ] {
+            assert!(told.contains(part), "{part} in {told}");
+        }
+        assert_eq!(front.told("is limited in this session").await, told);
+        // A supervisor with no grant is told nothing.
+        layer.close().await;
+        let other = supervise(&front, None).await.unwrap();
+        crate::settle().await;
+        other.drain();
+        assert!(
+            !other
+                .notices()
+                .iter()
+                .any(|notice| notice.contains("is limited")),
+            "{:?}",
+            other.notices()
+        );
+        other.close().await;
+        front.close().await;
     });
 }

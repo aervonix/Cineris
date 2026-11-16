@@ -1290,3 +1290,36 @@ fn a_prompt_queued_behind_a_turn_not_yet_begun_does_not_look() {
         front.close().await;
     });
 }
+
+/// Trust taken away is taken away when the same reload would bring a level
+/// the core may not give: the level is left out of what is applied, and
+/// stays as it was (the review of step 27's second pull request).
+#[test]
+fn trust_taken_away_holds_when_the_reload_brings_a_level_the_core_may_not_give() {
+    let world = World::new("reload_untrust_unrestricted", [says("Done.")]);
+    let (store, key) = trust_store(&world);
+    store.trust(&key, "~/work/app", &[]).unwrap();
+    let core = world.core_with(|options| options.allow_unrestricted = false);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        assert_eq!(state_of(&front).await.trust, Some(TrustStanding::Trusted));
+        world.user_config("[permissions]\nmode = \"unrestricted\"\n");
+        assert!(store.forget(&key).unwrap());
+        let result = reload(&front, ConfigReloadParams::default()).await;
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("unrestricted")),
+            "{result:?}"
+        );
+        let state = state_of(&front).await;
+        assert_eq!(
+            state.trust,
+            Some(TrustStanding::Untrusted),
+            "trust stayed because the level could not be given: {result:?}"
+        );
+        assert_eq!(state.level, cortex_protocol::lease::Level::Supervised);
+        front.close().await;
+    });
+}

@@ -266,10 +266,10 @@ caught-by:
 
 [break] unrestricted-reaches-the-core-from-any-client
 rule: A client may have a session at `unrestricted` only when the server's own command line or configuration allows it: the core refuses one that would start there.
-file: crates/cortex-core/src/assemble.rs
-in: assemble
-find: if !options.allow_unrestricted
-replace: if options.allow_unrestricted
+file: crates/cortex-core/src/core.rs
+in: Inner::may_hold
+find: if *level == Level::Unrestricted && !self.options.allow_unrestricted {
+replace: if *level == Level::Unrestricted && self.options.allow_unrestricted {
 packages: cortex-core, cortex-rpc
 caught-by:
     cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
@@ -278,8 +278,8 @@ caught-by:
 rule: A configuration override of `permissions.mode` to `unrestricted`, however it is spelled, is refused as the level is: the core judges what the configuration comes to.
 file: crates/cortex-core/src/assemble.rs
 in: assemble
-find: && loaded.settings.permissions.mode == cortex_protocol::lease::Level::Unrestricted
-replace: && wanted.settings.level == Some(cortex_protocol::lease::Level::Unrestricted)
+find: inner.may_hold(&loaded.settings.permissions.mode)?;
+replace: inner.may_hold(wanted.settings.level.as_ref().unwrap_or(&cortex_protocol::lease::Level::Supervised))?;
 packages: cortex-core, cortex-rpc
 caught-by:
     cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow

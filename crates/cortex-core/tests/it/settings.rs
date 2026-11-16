@@ -833,3 +833,207 @@ fn unrestricted_is_refused_where_the_core_may_not_give_it() {
         front.close().await;
     });
 }
+
+/// The session's level, as an empty `session/set` gives it.
+async fn level_of(front: &Front) -> Level {
+    set(front, SessionSettings::default())
+        .await
+        .expect("an empty session/set")
+        .level
+}
+
+async fn reload(
+    front: &Front,
+    params: cortex_protocol::methods::ConfigReloadParams,
+) -> cortex_protocol::methods::ConfigReloadResult {
+    let OpResult::ConfigReload(result) = front
+        .op(Op::ConfigReload(params))
+        .await
+        .expect("the reload answers")
+    else {
+        panic!("not the result of config/reload");
+    };
+    result
+}
+
+/// A `config/reload` reaches no level the core may not give, by any way
+/// it comes: a profile of the user's at `unrestricted` chosen for the
+/// session; the user's file changed to `unrestricted` while the server
+/// runs, taken by the look at a turn's start, by a reload of the session,
+/// and by a reload of every session of the client. Each is refused in the
+/// reload's errors and the session keeps its level. Where the core may give
+/// it, a profile and the look at a turn's start put the session there (the
+/// review of step 27's second pull request: both reached `unrestricted`).
+#[test]
+fn a_reload_reaches_unrestricted_only_where_the_core_may_give_it() {
+    use cortex_protocol::methods::{ConfigReloadParams, ConfigReloadResult};
+    let refused = |result: &ConfigReloadResult| {
+        result
+            .errors
+            .iter()
+            .any(|error| error.contains("unrestricted"))
+    };
+    const PROFILE: &str = "[profiles.loose.permissions]\nmode = \"unrestricted\"\n";
+    const FILE: &str = "[permissions]\nmode = \"unrestricted\"\n";
+
+    // Where the core may not give it, one session tries every way.
+    let world = World::new("reload_no_unrestricted", [says("Hi.")]);
+    world.user_config(PROFILE);
+    let core = world.core_with(|options| options.allow_unrestricted = false);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let session = || Some(front.session.clone());
+        let by_profile = reload(
+            &front,
+            ConfigReloadParams {
+                session_id: session(),
+                profile: Some("loose".to_owned()),
+                ..ConfigReloadParams::default()
+            },
+        )
+        .await;
+        assert!(refused(&by_profile), "{by_profile:?}");
+        assert_eq!(level_of(&front).await, Level::Supervised, "a profile");
+
+        world.user_config(FILE);
+        front.turn("hello").await;
+        assert_eq!(level_of(&front).await, Level::Supervised, "a turn's look");
+        let of_the_session = reload(
+            &front,
+            ConfigReloadParams {
+                session_id: session(),
+                ..ConfigReloadParams::default()
+            },
+        )
+        .await;
+        assert!(refused(&of_the_session), "{of_the_session:?}");
+        assert_eq!(level_of(&front).await, Level::Supervised, "the session's");
+        let of_every_session = reload(&front, ConfigReloadParams::default()).await;
+        assert!(refused(&of_every_session), "{of_every_session:?}");
+        assert_eq!(level_of(&front).await, Level::Supervised, "every session's");
+        front.close().await;
+    });
+
+    // Where it may, as before.
+    for by_profile in [true, false] {
+        let world = World::new("reload_unrestricted", [says("Hi.")]);
+        world.user_config(PROFILE);
+        let core = world.core();
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            if by_profile {
+                let result = reload(
+                    &front,
+                    ConfigReloadParams {
+                        session_id: Some(front.session.clone()),
+                        profile: Some("loose".to_owned()),
+                        ..ConfigReloadParams::default()
+                    },
+                )
+                .await;
+                assert!(result.errors.is_empty(), "{result:?}");
+            } else {
+                world.user_config(FILE);
+                front.turn("hello").await;
+            }
+            assert_eq!(level_of(&front).await, Level::Unrestricted, "{by_profile}");
+            front.close().await;
+        });
+    }
+}
+
+/// A stored session opened again (`session/open` of a session not
+/// running) starts at the level the configuration comes to: refused where
+/// the core may not give it, and nothing runs; opened there where it may.
+#[test]
+fn a_stored_session_opened_again_reaches_unrestricted_only_where_the_core_may_give_it() {
+    let world = World::new("resume_unrestricted", [says("Hi.")]);
+    let core = world.core();
+    let session = world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("hello").await;
+        front.close().await;
+        front.session.clone()
+    });
+    world.user_config("[permissions]\nmode = \"unrestricted\"\n");
+    for allowed in [false, true] {
+        let core = world.core_with(|options| options.allow_unrestricted = allowed);
+        world.run(async {
+            let client = core.connect(ClientInfo::user());
+            let (opened, _) = crate::not_now(
+                &core,
+                &client,
+                core.handle(
+                    client.id,
+                    Op::SessionOpen(cortex_protocol::methods::SessionRef {
+                        session_id: session.clone(),
+                    }),
+                ),
+            )
+            .await;
+            if allowed {
+                let Ok(OpResult::SessionOpen(opened)) = opened else {
+                    panic!("not a session: {opened:?}");
+                };
+                assert_eq!(opened.session.level, Level::Unrestricted);
+                core.disconnect(client.id).await;
+            } else {
+                assert_eq!(
+                    opened.map(|_| ()).unwrap_err().code,
+                    "unrestricted_not_allowed"
+                );
+                assert_eq!(core.open_sessions(), Vec::new());
+            }
+        });
+    }
+}
+
+/// A `session/fork` refused for a level the core may not give writes no
+/// fork: the list of the workspace's sessions is as it was (the review of
+/// step 27's second pull request found the fork's log left behind).
+#[test]
+fn a_refused_fork_leaves_no_stored_session() {
+    let world = World::new("fork_refused", [says("Hi.")]);
+    let core = world.core_with(|options| options.allow_unrestricted = false);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("hello").await;
+        let list = || async {
+            let OpResult::SessionList(listed) = front
+                .op(Op::SessionList(
+                    cortex_protocol::methods::SessionListParams {
+                        workspace: Some(world.workspace.to_str().unwrap().to_owned()),
+                        limit: None,
+                        cursor: None,
+                    },
+                ))
+                .await
+                .unwrap()
+            else {
+                panic!("not a list");
+            };
+            listed
+                .sessions
+                .into_iter()
+                .map(|summary| summary.session_id)
+                .collect::<Vec<_>>()
+        };
+        let before = list().await;
+        // The user's file now says `unrestricted`, which this core may not
+        // give: a fork would open there.
+        world.user_config("[permissions]\nmode = \"unrestricted\"\n");
+        let refused = front
+            .op(Op::SessionFork(
+                cortex_protocol::methods::SessionForkParams {
+                    session_id: front.session.clone(),
+                    at: None,
+                },
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "unrestricted_not_allowed");
+        assert_eq!(list().await, before, "a refused fork left its session");
+        assert_eq!(world.logs().len(), 1, "a refused fork left its log");
+        front.close().await;
+    });
+}
