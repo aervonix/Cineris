@@ -634,7 +634,7 @@ keys ─► key map ─► actions ─► state changes and Ops to core
 | `app::run` | The interface's loop on the thread that entered the terminal: every terminal event already read, a key's frame drawn at once, then at most 1 ms of what arrived (in batches of 64, looking for keys between), then a frame when the scheduler says, or when the application asks for one at a time of its own (`App::deadline`: an open dialog's answers, at the end of its grace). Idle, nothing is scheduled. Its times are the terminal's (`Terminal::now`), so that its tests play a terminal back on a clock of their own. Once the application has ended it reads nothing more: what is typed after the last key it takes is the shell's. |
 | `app::interactive` | Enters the terminal with the `[terminal]` overrides, makes the link and the `Start` with the terminal's waker, runs the loop, and puts the terminal back whatever happened. |
 | `app::Start`, `Settings`, `Open` | What the application is started with: the `[tui]` settings, the key map from `[keys]` with each entry it could not use as a notice, the session to open (new, `--resume`, `--continue`, `--fork`), a prompt from the command line, the history and the highlighter. |
-| `view::dialog` | The approval dialog and the leave-the-sandbox form, from screens 2a and 2b; the trust question and a question's dialog. |
+| `view::dialog` | The approval dialog and the leave-the-sandbox form, from screens 2a and 2b; the trust question (screen 2c) and a question's dialog (screen 2d, the undo's). |
 | `view::viewer` | The viewer's title row and its row of keys, each with its rule (screens 8a and 8b). |
 | `transcript::Committed` | What `Transcript::commit_parts` gives: lines, or a finished round with its lines, which the viewer draws again as a box. |
 

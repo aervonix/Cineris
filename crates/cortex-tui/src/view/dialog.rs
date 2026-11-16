@@ -350,9 +350,9 @@ pub struct TrustView {
     pub detail_rows: usize,
 }
 
-/// The trust question, `width` columns wide at most (screen 2c of the
-/// reference: the question, the folder, then each thing trust turns on in
-/// full).
+/// The trust question, `width` columns wide at most (reference screen 2c,
+/// `docs/architecture/tui-look/2c.txt`: the question, the folder, then
+/// each thing trust turns on in full).
 ///
 /// ```text
 /// ? Trust this project?
@@ -483,8 +483,9 @@ pub struct QuestionView<'a> {
     pub note: Option<&'a str>,
 }
 
-/// A question of the core's (an undo's, about files edited since), `width`
-/// columns wide at most: the question, then its choices by their digits.
+/// A question of the core's (an undo's, about files edited since: reference
+/// screen 2d), `width` columns wide at most: the question, then its choices
+/// by their digits.
 #[must_use]
 pub fn question(
     request: &QuestionRequest,
