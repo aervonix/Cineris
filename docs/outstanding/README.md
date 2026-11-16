@@ -106,6 +106,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-sandbox
 
+- [a-launcher-refusal-read-from-the-commands-output](a-launcher-refusal-read-from-the-commands-output.md): The launcher's refusal is read from the command's own output, so a check can pass for blocked and not be fed back. Owner: step 32.
 - [a-refused-socket-the-result-does-not-name](a-refused-socket-the-result-does-not-name.md): A Unix socket refused by the filter, network on, gives a bare `EPERM` and no sandbox explanation. Owner: step 32.
 - [a-session-of-its-own-in-the-sandbox](a-session-of-its-own-in-the-sandbox.md): `setsid` is faked in the sandbox, breaking terminal-making programs; a subreaper and cgroup kill would allow it. Owner: step 32.
 - [confined-git-and-lfs-filters](confined-git-and-lfs-filters.md): The confined read-only git cannot run a git-lfs filter that must write, leaving change detection and undo incomplete. Owner: step 32.

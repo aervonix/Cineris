@@ -20,11 +20,13 @@
 //!   the harness's run): the same runner, sandbox, environment, looks at
 //!   protected paths and checkpoint as the model's commands.
 //! - **Time:** each runs with what is left of the round's limit, the
-//!   turn's, and the turn's and session's own time limits. One that
-//!   usually takes longer than the round's limit, or longer than what is
-//!   left, is skipped. One stopped at its limit is a failure for the model
-//!   only when it usually takes less than half of what it had.
-//! - **A known flaky test** that fails runs once more.
+//!   turn's, and the turn's and session's own time limits, and no longer
+//!   than `shell.max_timeout`. One that usually takes longer than the
+//!   round's limit or `shell.max_timeout`, or longer than what is left, is
+//!   skipped. One stopped at its limit is a failure for the model only when
+//!   it usually takes less than half of what it had.
+//! - **A known flaky test** that fails runs once more, unless it was
+//!   stopped at its time limit.
 //! - **What the model is told** of a failure is bounded, and every line of
 //!   a check's output is escaped and marked as the command's.
 
@@ -64,8 +66,13 @@ pub(crate) const MOST_CHECKS: usize = 8;
 /// between the checks that failed.
 const REPORT_BYTES: usize = 16 * 1024;
 
-/// The least a failed check's share of [`REPORT_BYTES`] is.
-const LEAST_SHARE: usize = 2 * 1024;
+/// The most failed checks whose output a report holds: [`REPORT_BYTES`]
+/// in more shares would leave each too little to show what failed. Any
+/// more are named, with where all of what they printed is.
+const MOST_SHOWN: usize = 3;
+
+/// The most lines of one check's output a report holds.
+const MOST_LINES: usize = 400;
 
 /// The least time a check is started with when how long it usually takes is
 /// not known.
@@ -271,6 +278,9 @@ pub(crate) struct Ran {
     /// Whether it was stopped at its time limit: such a check is not run
     /// again as a flaky test.
     pub(crate) stopped_at_limit: bool,
+    /// The turn was stopped after it ran: the look at protected paths after
+    /// it, or before it, found a change. Its own result stands beside this.
+    pub(crate) stop: Option<String>,
 }
 
 impl Ran {
@@ -284,6 +294,7 @@ impl Ran {
             output: None,
             artifact: None,
             stopped_at_limit: false,
+            stop: None,
         }
     }
 
@@ -315,6 +326,7 @@ pub(crate) fn classify(result: &ToolResult, limit: Duration, usual: Option<Durat
         output: None,
         artifact: result.artifacts().first().cloned(),
         stopped_at_limit: flag("timed_out"),
+        stop: None,
     };
     let mut notes: Vec<String> = Vec::new();
     match result.outcome() {
@@ -371,7 +383,14 @@ pub(crate) fn classify(result: &ToolResult, limit: Duration, usual: Option<Durat
     if let Some(line) = sandbox
         && ran.ended != Ended::Passed
     {
-        notes.push(format!("{} {SANDBOX_REMEDY}", visible(line)));
+        // The launcher's refusal says why itself; a guess from the output
+        // is said with what a check that needs more than the sandbox gives
+        // can do.
+        notes.push(if refused {
+            visible(line).into_owned()
+        } else {
+            format!("{} {SANDBOX_REMEDY}", visible(line))
+        });
     }
     if flag("background_stopped") {
         notes.push("It left processes running, and they were stopped.".to_owned());
@@ -413,14 +432,24 @@ pub(crate) fn time_left(
 }
 
 /// Why a check is not started for its time, when it is not: it usually
-/// takes longer than a round's limit (15-efficiency's rule), or longer than
-/// what is `left` (at least [`LEAST_TIME`] when its usual time is not
-/// known).
+/// takes longer than a command may run (`shell.max_timeout`), or than a
+/// round's limit (15-efficiency's rule), or than what is `left` (at least
+/// [`LEAST_TIME`] when its usual time is not known).
 pub(crate) fn too_long(
     usual: Option<Duration>,
     round_time: Duration,
+    max_timeout: Duration,
     left: Duration,
 ) -> Option<String> {
+    if let Some(usual) = usual
+        && usual > max_timeout
+    {
+        return Some(format!(
+            "It usually takes {}, longer than a command may run (`shell.max_timeout`, {}).",
+            shown_time(usual),
+            shown_time(max_timeout)
+        ));
+    }
     if let Some(usual) = usual
         && usual > round_time
     {
@@ -480,8 +509,8 @@ pub(crate) fn report(
         .iter()
         .filter(|(_, ran)| ran.ended == Ended::Failed)
         .collect();
-    let share = (REPORT_BYTES / failed.len().max(1)).max(LEAST_SHARE);
-    for (check, ran) in &failed {
+    let share = REPORT_BYTES / failed.len().clamp(1, MOST_SHOWN);
+    for (shown, (check, ran)) in failed.iter().enumerate() {
         let how = match (&ran.exit_code, &ran.signal) {
             (Some(code), _) => format!("exit code {code}"),
             (None, Some(signal)) => format!("signal {}", visible(signal)),
@@ -495,34 +524,12 @@ pub(crate) fn report(
         if let Some(note) = &ran.note {
             let _ = write!(text, " {note}");
         }
-        text.push_str(" What it printed, each line marked `| `:\n");
-        let printed = ran.output.as_deref().unwrap_or("");
-        let shaped = output::shape(
-            printed,
-            &OutputLimits::new(share, 400, 2_000),
-            Keep::Important,
-            Compression::Structural,
-        );
-        // The share binds what is sent, after escaping: a line of unseen
-        // characters is longer escaped than it was printed.
-        let mut block = String::new();
-        let lines: Vec<&str> = shaped.text.split('\n').collect();
-        for (at, line) in lines.iter().enumerate() {
-            let marked = format!("{MARK}{}", visible_keeping(line, &['\t']));
-            if block.len() + marked.len() + 1 > share && !block.is_empty() {
-                let _ = write!(
-                    block,
-                    "\n{MARK}… ({} more lines are not shown)",
-                    lines.len() - at
-                );
-                break;
-            }
-            if !block.is_empty() {
-                block.push('\n');
-            }
-            block.push_str(&marked);
+        if shown < MOST_SHOWN {
+            text.push_str(" What it printed, each line marked `| `:\n");
+            text.push_str(&printed_block(ran.output.as_deref().unwrap_or(""), share));
+        } else {
+            text.push_str(" What it printed is not shown here, for room.");
         }
-        text.push_str(&block);
         if let Some(artifact) = &ran.artifact {
             let _ = write!(
                 text,
@@ -566,6 +573,58 @@ pub(crate) fn report(
     text
 }
 
+/// What a failed check printed, as the model is sent it: shaped by the
+/// lines that matter, every line escaped and marked [`MARK`], in at most
+/// `share` bytes **as sent**. A line of unseen characters is longer escaped
+/// than printed, so the output is shaped again, with fewer lines, until the
+/// marked text fits: the lines that report a problem and the end stay,
+/// which cutting the marked text would lose.
+pub(crate) fn printed_block(printed: &str, share: usize) -> String {
+    let mark = |text: &str| -> String {
+        text.split('\n')
+            .map(|line| format!("{MARK}{}", visible_keeping(line, &['\t'])))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let mut bytes = share.saturating_sub(MARK.len() * MOST_LINES);
+    let mut lines = MOST_LINES;
+    let mut block = String::new();
+    for _ in 0..8 {
+        let shaped = output::shape(
+            printed,
+            &OutputLimits::new(bytes, lines, 2_000),
+            Keep::Important,
+            Compression::Structural,
+        );
+        block = mark(&shaped.text);
+        if block.len() <= share {
+            return block;
+        }
+        // Shaped again with as many fewer lines as the marked text is over.
+        let shown = shaped.text.split('\n').count();
+        lines = (shown * share / block.len() * 9 / 10).max(8);
+        bytes = (bytes * share / block.len()).max(1);
+    }
+    // Output whose every line is long escaped: whole lines from the end,
+    // where a run says how it went, and a line that says more was cut.
+    let all: Vec<&str> = block.split('\n').collect();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut used = 64;
+    for line in all.iter().rev() {
+        if used + line.len() + 1 > share {
+            break;
+        }
+        used += line.len() + 1;
+        kept.push(line);
+    }
+    kept.reverse();
+    format!(
+        "{MARK}… ({} lines before these are not shown)\n{}",
+        all.len() - kept.len(),
+        kept.join("\n")
+    )
+}
+
 /// The protocol's account of a check.
 fn check_report(check: &Check, ran: Option<&Ran>) -> CheckReport {
     CheckReport {
@@ -586,8 +645,17 @@ fn check_report(check: &Check, ran: Option<&Ran>) -> CheckReport {
         duration_ms: ran
             .and_then(|ran| ran.duration)
             .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
-        note: ran.and_then(|ran| match &ran.ended {
-            Ended::Stopped(reason) => Some(visible(reason).into_owned()),
+        note: ran.and_then(|ran| match (&ran.ended, &ran.stop) {
+            (Ended::Stopped(reason), _) => Some(visible(reason).into_owned()),
+            (_, Some(reason)) => Some(
+                format!(
+                    "{} The turn stopped after it: {}",
+                    ran.note.clone().unwrap_or_default(),
+                    visible(reason)
+                )
+                .trim_start()
+                .to_owned(),
+            ),
             _ => ran.note.clone(),
         }),
         artifact: ran.and_then(|ran| ran.artifact.clone()),
@@ -653,9 +721,11 @@ impl Memory {
             && results
                 .iter()
                 .all(|(_, ran)| matches!(ran.ended, Ended::Passed | Ended::Flaky));
+        // A stop is the round's verdict; the result of the check that made
+        // it, recorded above, still counts for what fails.
         let stopped = results.iter().find_map(|(_, ran)| match &ran.ended {
             Ended::Stopped(reason) => Some(reason.clone()),
-            _ => None,
+            _ => ran.stop.clone(),
         });
         let verdict = if let Some(reason) = stopped {
             Verdict::Stopped(reason)
@@ -691,7 +761,13 @@ pub(crate) fn retries(first: &Ran, flaky: bool) -> bool {
 /// second run passed, a failure when it failed; and when the second run
 /// did not run to a result, the first failure, with a note.
 pub(crate) fn after_retry(first: Ran, second: Ran) -> Ran {
-    match second.ended {
+    // A stop the second run met, before it or after it, goes with the
+    // result, whichever run's that is.
+    let stop = second.stop.clone().or_else(|| match &second.ended {
+        Ended::Stopped(reason) => Some(reason.clone()),
+        _ => None,
+    });
+    let mut ran = match second.ended {
         Ended::Passed => Ran {
             ended: Ended::Flaky,
             note: Some(format!(
@@ -720,6 +796,41 @@ pub(crate) fn after_retry(first: Ran, second: Ran) -> Ran {
                 ..first
             }
         }
+    };
+    if stop.is_some() {
+        ran.stop = stop;
+    }
+    ran
+}
+
+/// What the loop is told of a round's verdict, and what front ends are:
+/// a stop says whether a check of the turn still fails.
+pub(crate) fn outcome_of(
+    verdict: Verdict,
+    failing: &[Check],
+    report: impl FnOnce() -> String,
+) -> (VerifyOutcome, Verification) {
+    let failed = !failing.is_empty();
+    match verdict {
+        Verdict::Stopped(reason) => (
+            VerifyOutcome::Stopped {
+                reason,
+                failing: failed,
+            },
+            if failed {
+                Verification::Failed
+            } else {
+                Verification::Incomplete
+            },
+        ),
+        Verdict::Failed => (
+            VerifyOutcome::Failed { report: report() },
+            Verification::Failed,
+        ),
+        Verdict::StillFailing => (VerifyOutcome::StillFailing, Verification::Failed),
+        Verdict::Passed => (VerifyOutcome::Passed, Verification::Passed),
+        Verdict::Skipped => (VerifyOutcome::Skipped, Verification::Skipped),
+        Verdict::Incomplete => (VerifyOutcome::Incomplete, Verification::Incomplete),
     }
 }
 
@@ -917,7 +1028,8 @@ impl CoreVerifier {
                 return VerifyOutcome::Skipped;
             }
             let ran = self.check(&mut round, check, &chosen.flaky).await;
-            let end = matches!(ran.ended, Ended::Stopped(_) | Ended::Interrupted);
+            let end =
+                matches!(ran.ended, Ended::Stopped(_) | Ended::Interrupted) || ran.stop.is_some();
             results.push((check.clone(), ran));
             if end {
                 break;
@@ -933,11 +1045,14 @@ impl CoreVerifier {
     /// One check, and its retry when it is a known flaky test.
     async fn check(&self, round: &mut Round<'_, '_>, check: &Check, flaky: &BTreeSet<Key>) -> Ran {
         let first = self.run_once(round, check).await;
-        if !retries(&first, flaky.contains(&check.key())) || round.cx.cancel.is_cancelled() {
+        if first.stop.is_some()
+            || !retries(&first, flaky.contains(&check.key()))
+            || round.cx.cancel.is_cancelled()
+        {
             return first;
         }
         let second = self.run_once(round, check).await;
-        if matches!(second.ended, Ended::Stopped(_) | Ended::Interrupted) {
+        if second.ended == Ended::Interrupted {
             return second;
         }
         after_retry(first, second)
@@ -948,18 +1063,16 @@ impl CoreVerifier {
     async fn run_once(&self, round: &mut Round<'_, '_>, check: &Check) -> Ran {
         let cx = round.cx;
         let settings = &self.parts.settings;
-        // The level may have been lowered since the round began.
-        if *self.parts.policy.engine().level() == Level::ReadOnly {
-            return Ran::not(
-                Ended::NotRun,
-                "The session is at the read-only level now, where no check runs.",
-            );
-        }
         // The time it may have: what the round, the turn and the limits
         // leave, and no more than the shell gives a command.
         let in_round = self.parts.clock.monotonic().saturating_sub(round.started);
         let limit = time_left(settings, cx.used, cx.deadline, in_round);
-        if let Some(why) = too_long(check.usual, settings.round_time, limit) {
+        if let Some(why) = too_long(
+            check.usual,
+            settings.round_time,
+            settings.max_timeout,
+            limit,
+        ) {
             return Ran::not(Ended::Skipped, why);
         }
         // An entry of the profile must still be one that runs unasked: it
@@ -1009,10 +1122,13 @@ impl CoreVerifier {
                 plan: &plan,
                 preview: None,
             });
-            Ok::<_, cortex_tools::ToolError>((plan, decision))
+            // The level is read after the decision, so that one lowered
+            // since the round began, or while this check was planned, holds.
+            let read_only = *policy.engine().level() == Level::ReadOnly;
+            Ok::<_, cortex_tools::ToolError>((plan, decision, read_only))
         })
         .await;
-        let (mut plan, decision) = match planned {
+        let (mut plan, decision, read_only) = match planned {
             Ok(Ok(planned)) => planned,
             Ok(Err(error)) => {
                 return Ran::not(
@@ -1061,6 +1177,12 @@ impl CoreVerifier {
         if let Some(refused) = refused {
             return refused;
         }
+        if read_only {
+            return Ran::not(
+                Ended::NotRun,
+                "The session is at the read-only level now, where no check runs.",
+            );
+        }
         if let Some(reason) = self.parts.policy.stopped_turn(cx.number) {
             return Ran::not(Ended::Stopped(reason.clone()), reason);
         }
@@ -1079,10 +1201,9 @@ impl CoreVerifier {
                 .await;
         let mut ran = classify(&result, limit, check.usual);
         // The look after it, or the look before it, may have stopped the
-        // turn: nothing more of it runs, and the turn ends.
-        if let Some(reason) = self.parts.policy.stopped_turn(cx.number) {
-            ran.ended = Ended::Stopped(reason);
-        }
+        // turn: nothing more of it runs, and the turn ends. Its own result
+        // stands beside the stop.
+        ran.stop = self.parts.policy.stopped_turn(cx.number);
         ran
     }
 
@@ -1095,42 +1216,24 @@ impl CoreVerifier {
         results: Vec<(Check, Ran)>,
     ) -> VerifyOutcome {
         let (verdict, failing) = lock(&self.memory).judge(cx.turn, chosen.len(), &results);
-        let failed = !failing.is_empty();
-        let (outcome, said) = match verdict {
-            Verdict::Stopped(reason) => (
-                VerifyOutcome::Stopped {
-                    reason,
-                    failing: failed,
-                },
-                if failed {
-                    Verification::Failed
-                } else {
-                    Verification::Incomplete
-                },
-            ),
-            Verdict::Failed => {
-                let earlier: Vec<&Check> = failing
-                    .iter()
-                    .filter(|held| {
-                        !results.iter().any(|(check, ran)| {
-                            check.key() == held.key() && ran.ended == Ended::Failed
-                        })
-                    })
-                    .collect();
-                (
-                    VerifyOutcome::Failed {
-                        report: report(cx.round, cx.rounds, &results, &earlier),
-                    },
-                    Verification::Failed,
-                )
-            }
-            Verdict::StillFailing => (VerifyOutcome::StillFailing, Verification::Failed),
-            Verdict::Passed => (VerifyOutcome::Passed, Verification::Passed),
-            Verdict::Skipped => (VerifyOutcome::Skipped, Verification::Skipped),
-            Verdict::Incomplete => (VerifyOutcome::Incomplete, Verification::Incomplete),
-        };
+        let still = verdict == Verdict::StillFailing;
+        let (outcome, said) = outcome_of(verdict, &failing, || {
+            let earlier: Vec<&Check> = failing
+                .iter()
+                .filter(|held| {
+                    !results
+                        .iter()
+                        .any(|(check, ran)| check.key() == held.key() && ran.ended == Ended::Failed)
+                })
+                .collect();
+            report(cx.round, cx.rounds, &results, &earlier)
+        });
         let message = match &said {
             Verification::Passed => "The project's checks passed.".to_owned(),
+            Verification::Failed if still => format!(
+                "The project's checks still fail: {}, which did not run to a result in this round.",
+                names(&failing)
+            ),
             Verification::Failed => format!("The project's checks failed: {}.", names(&failing)),
             Verification::Skipped => "None of the project's checks ran.".to_owned(),
             _ => "The project's checks did not all run to a result.".to_owned(),
