@@ -226,6 +226,15 @@ pub(crate) fn provider_info(
     }
     if let Some(base_url) = &entry.base_url {
         info.base_url = base_url.trim_end_matches('/').to_owned();
+        if let Some(host) = cortex_llm::http::host_outside_ascii(&info.base_url) {
+            return Err(config_error(
+                "invalid_provider",
+                format!(
+                    "`providers.{name}.base_url`: {}.",
+                    cortex_llm::http::host_outside_ascii_hint(host)
+                ),
+            ));
+        }
     }
     for (header, value) in &entry.headers.0 {
         if let Some(value) = value.resolve(env) {
@@ -1114,6 +1123,42 @@ idle_timeout = "7m"
         assert_eq!(
             retry_policy(&defaults, "anthropic").speed.min_cooldown,
             std::time::Duration::from_secs(60)
+        );
+    }
+
+    #[test]
+    fn a_base_url_whose_host_is_outside_ascii_is_refused_with_its_xn_form_named() {
+        let (settings, env) = settings(
+            r#"
+[providers.books]
+protocol = "openai-chat"
+base_url = "https://bücher.example/v1"
+
+[providers.ascii]
+protocol = "openai-chat"
+base_url = "https://xn--bcher-kva.example/v1/"
+
+[providers.anthropic]
+base_url = "https://bücher.example"
+"#,
+        );
+        // Its own entry, and an entry that moves a built-in provider.
+        for name in ["books", "anthropic"] {
+            let error = provider_info(&settings, &env, name).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Config, "{name}");
+            assert_eq!(error.code, "invalid_provider", "{name}");
+            assert!(
+                error.message.contains(&format!("providers.{name}.base_url"))
+                    && error.message.contains("`bücher.example`")
+                    && error.message.contains("`xn--"),
+                "{name}: {}",
+                error.message
+            );
+        }
+        // The ASCII form is the provider's URL, as written.
+        assert_eq!(
+            provider_info(&settings, &env, "ascii").unwrap().base_url,
+            "https://xn--bcher-kva.example/v1"
         );
     }
 

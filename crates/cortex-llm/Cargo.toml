@@ -15,7 +15,7 @@ default = ["http"]
 # The real HTTP transport and the timer that goes with it. Off for crates
 # that only need the types and traits: nothing else in this crate links an
 # async runtime or a network stack.
-http = ["dep:reqwest", "dep:rustls", "dep:tokio"]
+http = ["dep:idna_adapter", "dep:reqwest", "dep:rustls", "dep:tokio"]
 
 [dependencies]
 cortex-protocol.workspace = true
@@ -27,6 +27,9 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 thiserror.workspace = true
 reqwest = { workspace = true, optional = true }
+# Not used by name: it holds the version `url`, under `reqwest`, gets
+# (root Cargo.toml).
+idna_adapter = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["time"] }
 
@@ -38,6 +41,10 @@ toml.workspace = true
 [dev-dependencies]
 cortex-testkit.workspace = true
 tokio = { workspace = true, features = ["rt"] }
+
+# `idna_adapter` is named only to hold its version (root Cargo.toml).
+[package.metadata.cargo-machete]
+ignored = ["idna_adapter"]
 
 [lints]
 workspace = true

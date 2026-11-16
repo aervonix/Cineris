@@ -315,6 +315,45 @@ fn a_connection_that_breaks_is_a_transport_error_of_the_right_kind() {
     assert!(!bad_header.message.contains("secret"), "{bad_header}");
 }
 
+/// A host with letters outside ASCII is refused before anything is sent,
+/// with the form that works named; that form goes through as it is.
+#[test]
+fn a_host_outside_ascii_is_refused_with_its_ascii_form_named() {
+    let transport = HttpTransport::default();
+    let error = run(transport.send(
+        post("https://bücher.example/v1/messages".to_owned(), "{}"),
+        CancelToken::new(),
+    ))
+    .unwrap_err();
+    assert_eq!(error.kind, TransportErrorKind::InvalidRequest, "{error}");
+    assert!(
+        error.message.contains("`bücher.example`") && error.message.contains("`xn--"),
+        "{error}"
+    );
+    // Refused before the client was made: nothing was looked up or sent.
+    assert!(!transport.is_created());
+}
+
+/// The URL library under the HTTP client is built with `idna_adapter` 1.0,
+/// which refuses a host outside ASCII and so leaves ICU's tables out of the
+/// binary (decision 0036). The root `Cargo.toml` holds it there. If this
+/// fails, the lockfile has moved it: `cargo update -p idna_adapter
+/// --precise 1.0.0`, and look at what moved it.
+#[test]
+fn the_url_library_is_built_without_icu_and_takes_the_xn_form() {
+    let refused = reqwest::Url::parse("https://bücher.example/v1").unwrap_err();
+    assert_eq!(
+        format!("{refused:?}"),
+        "IdnaError",
+        "a host outside ASCII was converted: is `idna_adapter` still 1.0?"
+    );
+    let taken = reqwest::Url::parse("https://xn--bcher-kva.example/v1").unwrap();
+    assert_eq!(taken.host_str(), Some("xn--bcher-kva.example"));
+    // An ASCII name is lowered to its canonical case, as before.
+    let upper = reqwest::Url::parse("https://API.Example/v1").unwrap();
+    assert_eq!(upper.host_str(), Some("api.example"));
+}
+
 #[test]
 fn a_whole_request_through_the_client_and_the_real_transport() {
     let server = SseServer::start();
