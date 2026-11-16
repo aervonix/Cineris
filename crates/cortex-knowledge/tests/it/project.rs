@@ -924,7 +924,7 @@ fn a_promote_that_would_pass_the_shared_files_size_is_refused() {
     let error = project
         .update(&[change(id.as_str(), EntryAction::Promote)], &[], None)
         .unwrap_err();
-    assert_eq!(error_code(&error), "shared_profile_invalid", "{error}");
+    assert_eq!(error_code(&error), "shared_profile_full", "{error}");
     assert!(error.to_string().contains("may be up to 262144"), "{error}");
     assert_eq!(world.shared_text(), team);
     assert_eq!(world.store_text(), stored);
@@ -970,4 +970,34 @@ fn a_rooted_directory_is_refused_not_reread_as_a_relative_one() {
     let snapshot = world.load();
     assert!(snapshot.entries().is_empty());
     assert!(snapshot.problems()[0].contains("`cwd` is a directory inside the workspace"));
+}
+
+/// The second review's finding: a promote is all or nothing. When the
+/// store could not take the change (it would pass its size), the promote
+/// is refused before the repository's file is written, not after.
+#[test]
+fn a_promote_the_store_cannot_take_writes_nothing_to_the_shared_file() {
+    let world = World::new(scratch!("project_promote_store_full"));
+    // Moving the short `k_1` out takes its few bytes off and adds the
+    // user's decision and the harness's own lines: past the cap.
+    let store = crate::store_of(256 * 1024 - 100);
+    world.write_store(&store);
+    let error = world
+        .project()
+        .update(&[change("k_1", EntryAction::Promote)], &[], None)
+        .unwrap_err();
+    assert_eq!(error_code(&error), "project_store_full", "{error}");
+    assert!(
+        !world.scratch.join("work/.cortex").exists(),
+        "nothing was written for a change that was refused"
+    );
+    assert_eq!(world.store_text(), store);
+    // With a shared file there already, it is as it was.
+    world.write_shared(TEAM);
+    let error = world
+        .project()
+        .update(&[change("k_1", EntryAction::Promote)], &[], None)
+        .unwrap_err();
+    assert_eq!(error_code(&error), "project_store_full");
+    assert_eq!(world.shared_text(), TEAM);
 }

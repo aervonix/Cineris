@@ -70,6 +70,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-knowledge
 
+- [a-same-size-rewrite-within-a-clock-tick-on-windows](a-same-size-rewrite-within-a-clock-tick-on-windows.md): On Windows a file's stamp is its time and size, so a same-size rewrite within the clock's tick is not seen by the look for a changed profile. Owner: a step that changes `cortex-base`'s `watch`, or step 32.
 - [the-item-an-entry-was-learned-from](the-item-an-entry-was-learned-from.md): An entry's source has the session and the date and not the item: the tools' contract gives a tool no call id. Owner: a step that changes the tools' contract, or step 24.
 
 ### cortex-llm

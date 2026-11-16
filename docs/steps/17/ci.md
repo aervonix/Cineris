@@ -4,12 +4,14 @@ Step 17 added `cortex-knowledge` (entries, the private store and the repository'
 
 ## The first pull request: the store
 
-On the desktop, built as CI builds (`cargo xtask ci`, 2026-11-16, with a side run going, so the tiers are rough):
+On the desktop, built as CI builds (`cargo xtask ci`, 2026-11-16, nothing else running):
 
 | Tier | Tests | Above the tests' start | Budget | Used |
 |---|---:|---:|---:|---:|
-| 1, unit | 2,131 | 16.1 s | 20 s | 81% |
-| 2, integration | 1,312 | 24.7 s | 40 s | 62% |
-| 3, system | 206 | 9.5 s | 60 s | 16% |
+| 1, unit | 2,136 | 9.0 s | 20 s | 45% |
+| 2, integration | 1,323 | 14.3 s | 40 s | 36% |
+| 3, system | 206 | 9.2 s | 60 s | 15% |
 
-`cortex-knowledge`'s own 56 tests take 0.06 s of it.
+`cortex-knowledge`'s own 80 tests take 0.06 s of it; `cortex-policy`'s new property test, at 40 cases, 0.08 s.
+
+**The breaks:** `mutations/step-17.breaks`, 59 breaks, every one caught by the tests its list names (`cargo xtask mutate step-17 --jobs 2`, on the desktop). **Stress:** `cortex-knowledge`, `cortex-policy` and `cortex-protocol`, 298 tests, 100 times each under seeds 0 to 99, every test passing every time; before the review's fixes, the six crates whose tests changed, 943 tests, 50 times each.

@@ -49,9 +49,10 @@ use crate::entry::{
     Basis, Check, Entry, Kind, Learned, MAX_TEXT, Scope, Status, command_from_wire, one_spaced,
 };
 use crate::file::{
-    MAX_PRIVATE_ENTRIES, PrivateState, Problem, SharedFile, append_shared, parse_shared, shared_id,
+    AppendError, MAX_FILE_BYTES, MAX_PRIVATE_ENTRIES, PrivateState, Problem, SharedFile,
+    append_shared, parse_shared, shared_id, write_private,
 };
-use crate::store::{Source, Store, StoreError, read_bounded};
+use crate::store::{Source, Store, StoreError, Unwritable, read_bounded};
 
 /// The shared file as a person names it: relative to the workspace root.
 pub const SHARED_NAME: &str = ".cortex/profile.toml";
@@ -93,6 +94,9 @@ pub enum ChangeError {
     /// The shared file cannot be read as it is, or could not be written.
     #[error("{0}")]
     Shared(String),
+    /// The shared file holds as much as it may.
+    #[error("{0}")]
+    SharedFull(String),
 }
 
 impl ChangeError {
@@ -107,6 +111,7 @@ impl ChangeError {
             Self::NotPromotable { .. } => "not_promotable",
             Self::Full(_) => "project_store_full",
             Self::Shared(_) => "shared_profile_invalid",
+            Self::SharedFull(_) => "shared_profile_full",
         }
     }
 }
@@ -469,6 +474,19 @@ impl Project {
             if work.appended
                 && let Some(text) = &work.shared_text
             {
+                // And only once the store is known to take the change: a
+                // store that would refuse it must refuse before the
+                // repository's file is written.
+                match crate::store::writable(work.state) {
+                    Ok(_) => {}
+                    Err(Unwritable::Full(message)) => return Err(ChangeError::Full(message)),
+                    Err(Unwritable::Unreadable(problem)) => {
+                        return Err(ChangeError::Invalid(format!(
+                            "the change would leave a store that could not be read again \
+                             ({problem}), so it was not made"
+                        )));
+                    }
+                }
                 cortex_base::hook::point(BEFORE_THE_SHARED_WRITE);
                 self.write_shared(text)?;
             }
@@ -646,11 +664,27 @@ fn display_name(path: &Path) -> String {
     )
 }
 
+/// How much of the store's size is kept for the changes that only narrow
+/// or decide: turning an entry off, marking one lapsed, a decision about a
+/// shared entry. A new entry is refused once the store is within this of
+/// its cap, so that a full store can still be told to use less.
+pub const RESERVED_BYTES: u64 = 32 * 1024;
+
+/// Whether the store has room for one more entry: under its cap on
+/// entries, and with [`RESERVED_BYTES`] of its size left.
 pub(crate) fn room(state: &PrivateState) -> Result<(), ChangeError> {
     if state.entries.len() >= MAX_PRIVATE_ENTRIES {
         return Err(ChangeError::Full(format!(
             "this project's store holds {MAX_PRIVATE_ENTRIES} entries, the most it may: delete \
              some with `cortex project delete`"
+        )));
+    }
+    let bytes = write_private(state).len() as u64;
+    if bytes + RESERVED_BYTES > MAX_FILE_BYTES {
+        return Err(ChangeError::Full(format!(
+            "this project's store is {bytes} bytes, and takes no new entry within \
+             {RESERVED_BYTES} bytes of the {MAX_FILE_BYTES} it may be: delete some entries with \
+             `cortex project delete`"
         )));
     }
     Ok(())
@@ -862,8 +896,12 @@ impl Work<'_> {
             .as_ref()
             .is_ok_and(|entries| entries.iter().any(|held| held.content_hash() == hash));
         if !there {
-            let text = append_shared(self.shared_text.as_deref(), &entry, SHARED_NAME)
-                .map_err(|problem| ChangeError::Shared(problem.to_string()))?;
+            let text = append_shared(self.shared_text.as_deref(), &entry, SHARED_NAME).map_err(
+                |error| match error {
+                    AppendError::Full(problem) => ChangeError::SharedFull(problem.to_string()),
+                    AppendError::Invalid(problem) => ChangeError::Shared(problem.to_string()),
+                },
+            )?;
             self.shared_text = Some(text);
             self.appended = true;
         }

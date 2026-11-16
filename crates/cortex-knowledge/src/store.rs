@@ -301,6 +301,10 @@ impl Store {
     /// The store's lock, when it can be had at once. `None` when another
     /// holds it, or it cannot be opened.
     fn try_lock(&self) -> Option<Option<std::fs::File>> {
+        self.try_lock_once(false)
+    }
+
+    fn try_lock_once(&self, retried: bool) -> Option<Option<std::fs::File>> {
         let path = private::lock_path(&self.file);
         match cortex_base::open_regular(&path) {
             Ok((lock, _)) => match lock.try_lock() {
@@ -315,9 +319,20 @@ impl Store {
                 }
                 Err(std::fs::TryLockError::Error(_)) => None,
             },
-            // No change was ever made here, so nobody holds a lock that
-            // does not exist yet: making it waits for no one.
-            Err(OpenError::NotFound) => private::hold_lock(&self.file).ok(),
+            // No change was ever made here. The lock file is made as a
+            // change makes it, and then tried like any other: another
+            // process may have made and taken it in this instant.
+            Err(OpenError::NotFound) if !retried => {
+                if let Some(directory) = self.file.parent() {
+                    private::create_dir_all(directory).ok()?;
+                }
+                match private::create_new(&path) {
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(_) => return None,
+                }
+                self.try_lock_once(true)
+            }
             Err(_) => None,
         }
     }
@@ -333,8 +348,10 @@ impl Store {
     ///
     /// [`StoreError::Invalid`] when the file cannot be read as it is: it
     /// is not written over. [`StoreError::Refused`] when `change` refuses.
-    /// Otherwise what went wrong with the lock or the write. Nothing is
-    /// written in any of them.
+    /// [`StoreError::Full`] when the result would pass the file's size
+    /// cap, and [`StoreError::Unreadable`] when this build would not read
+    /// it back. Otherwise what went wrong with the lock or the write. The
+    /// store is not written in any of them.
     pub fn change<T, E>(
         &self,
         change: impl FnOnce(&mut PrivateState, UtcTime) -> Result<(T, bool), E>,
@@ -344,25 +361,30 @@ impl Store {
             source,
         };
         let _lock = private::hold_lock(&self.file).map_err(io_error)?;
+        // The stamp is taken before the read, and again the moment the
+        // store is written: a person's edit takes no lock, and one that
+        // lands after either must show as a change at the next look, not
+        // be taken for the state returned here.
+        let read_at = self.stamp();
         let mut state = self.read_strict().map_err(StoreError::Invalid)?;
         let (answer, changed) =
             change(&mut state, self.clock.now()).map_err(StoreError::Refused)?;
+        let mut stamp = read_at;
         if changed {
-            let text = write_private(&state);
-            if text.len() as u64 > MAX_FILE_BYTES {
-                return Err(StoreError::Full(format!(
-                    "the change would make this project's store {} bytes, and it may be up to \
-                     {MAX_FILE_BYTES}: delete some entries with `cortex project delete`",
-                    text.len()
-                )));
-            }
-            parse_private(&text, STORE_NAME).map_err(StoreError::Unreadable)?;
+            let text = match writable(&state) {
+                Ok(text) => text,
+                Err(Unwritable::Full(message)) => return Err(StoreError::Full(message)),
+                Err(Unwritable::Unreadable(problem)) => {
+                    return Err(StoreError::Unreadable(problem));
+                }
+            };
             let options = AtomicWriteOptions {
                 owner_only: true,
                 follow_links: false,
                 ..AtomicWriteOptions::default()
             };
             write_atomic(&self.file, text.as_bytes(), &options, &*self.clock)?;
+            stamp = self.stamp();
             cortex_base::hook::point(AFTER_THE_STORE);
             // The good copy is what a later load falls back to. It can be
             // made again from the store, so it is not flushed; and a
@@ -378,9 +400,33 @@ impl Store {
                 tracing::warn!(error = %error, "the good copy of the project's store was not written");
             }
         }
-        // Under the lock still: the stamp is of exactly the state returned.
-        Ok((answer, state, self.stamp()))
+        Ok((answer, state, stamp))
     }
+}
+
+/// Why a state is not written.
+pub(crate) enum Unwritable {
+    /// Its text would pass the file's size cap.
+    Full(String),
+    /// This build would not read its text back.
+    Unreadable(Problem),
+}
+
+/// The store's text for `state`, when it is one that may be written:
+/// within the size cap, and read back by this build as it is. A promote
+/// asks before it writes the shared file, so that a store that cannot
+/// take the change stops it before anything is written.
+pub(crate) fn writable(state: &PrivateState) -> Result<String, Unwritable> {
+    let text = write_private(state);
+    if text.len() as u64 > MAX_FILE_BYTES {
+        return Err(Unwritable::Full(format!(
+            "the change would make this project's store {} bytes, and it may be up to \
+             {MAX_FILE_BYTES}: delete some entries, with `cortex project delete` or in the file",
+            text.len()
+        )));
+    }
+    parse_private(&text, STORE_NAME).map_err(Unwritable::Unreadable)?;
+    Ok(text)
 }
 
 /// The point of [`Store::change`] where the store has its new content and

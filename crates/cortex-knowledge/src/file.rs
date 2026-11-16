@@ -586,6 +586,14 @@ pub fn parse_private(text: &str, file: &str) -> Result<PrivateState, Problem> {
             ),
         ));
     }
+    // The counter after every id is given: past the bound, no change
+    // could be written back.
+    if next > MAX_NUMBER {
+        return Err(Problem::new(
+            file,
+            format!("the number of an id, or `next`, is past {MAX_NUMBER}"),
+        ));
+    }
     state.next = next;
     Ok(state)
 }
@@ -640,6 +648,17 @@ pub fn write_private(state: &PrivateState) -> String {
     // cannot write.
     .unwrap_or_default();
     format!("{PRIVATE_HEADER}\n{body}")
+}
+
+/// Why an entry was not added to the shared file. The file is as it was.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AppendError {
+    /// The file holds as much as it may: entries, or bytes.
+    #[error("{0}")]
+    Full(Problem),
+    /// The file cannot be read as it is, or already holds the entry.
+    #[error("{0}")]
+    Invalid(Problem),
 }
 
 /// The id of a shared entry: `s_` and the first 32 hexadecimal digits of
@@ -733,17 +752,21 @@ pub fn parse_shared(text: &str, file: &str) -> Result<SharedFile, Problem> {
 ///
 /// When the file as it is cannot be read (it is then left alone), is full,
 /// or already holds the entry.
-pub fn append_shared(existing: Option<&str>, entry: &Entry, file: &str) -> Result<String, Problem> {
+pub fn append_shared(
+    existing: Option<&str>,
+    entry: &Entry,
+    file: &str,
+) -> Result<String, AppendError> {
     let held = match existing {
-        Some(text) => parse_shared(text, file)?,
+        Some(text) => parse_shared(text, file).map_err(AppendError::Invalid)?,
         None => SharedFile::default(),
     };
     let held = held.entries.len() + held.left_out.len();
     if held >= MAX_SHARED_ENTRIES {
-        return Err(Problem::new(
+        return Err(AppendError::Full(Problem::new(
             file,
             format!("it holds {MAX_SHARED_ENTRIES} entries already, the most it may"),
-        ));
+        )));
     }
     let mut command = entry.command.as_ref().map(raw_command);
     if let Some(command) = &mut command {
@@ -771,18 +794,21 @@ pub fn append_shared(existing: Option<&str>, entry: &Entry, file: &str) -> Resul
     // What is written must be a file every reader takes: one past the cap
     // would be refused whole by everyone who has the repository.
     if text.len() as u64 > MAX_FILE_BYTES {
-        return Err(Problem::new(
+        return Err(AppendError::Full(Problem::new(
             file,
             format!(
                 "with this entry it would be {} bytes, and it may be up to {MAX_FILE_BYTES}",
                 text.len()
             ),
-        ));
+        )));
     }
     // And it must read back with exactly the one entry more.
-    let after = parse_shared(&text, file)?;
+    let after = parse_shared(&text, file).map_err(AppendError::Invalid)?;
     if after.entries.len() + after.left_out.len() != held + 1 {
-        return Err(Problem::new(file, "it already holds this entry"));
+        return Err(AppendError::Invalid(Problem::new(
+            file,
+            "it already holds this entry",
+        )));
     }
     Ok(text)
 }
@@ -1120,7 +1146,8 @@ text = "Errors are returned, never panicked on."
         assert_eq!(parse_shared(&fresh, SHARED).unwrap().entries.len(), 1);
         // The same entry is not added twice.
         let twice = append_shared(Some(&fresh), &entry, SHARED).unwrap_err();
-        assert!(twice.message.contains("already holds"), "{twice}");
+        assert!(twice.to_string().contains("already holds"), "{twice}");
+        assert!(matches!(twice, AppendError::Invalid(_)));
         // A file that cannot be read is left alone.
         assert!(append_shared(Some("version = 1\n[[entry]\n"), &entry, SHARED).is_err());
         // A file with no line break at its end.
@@ -1238,9 +1265,16 @@ text = "Errors are returned, never panicked on."
                 "{problem}"
             );
         }
-        // The largest that is taken, and the id after it.
-        let mut state = parse_private("version = 1\nnext = 9007199254740992\n", NAME).unwrap();
-        assert_eq!(state.take_id().as_str(), "k_9007199254740992");
+        // An id at the bound leaves a counter past it: no change to such a
+        // store could be written back, so it is refused when it is read.
+        let at_bound = "version = 1\n[[entry]]\nid = \"k_9007199254740992\"\nkind = \"fact\"\ntext = \"x\"\nstatus = \"active\"\n";
+        assert!(parse_private(at_bound, NAME).is_err());
+        let by_hand = "version = 1\nnext = 9007199254740992\n[[entry]]\nkind = \"fact\"\ntext = \"x\"\nstatus = \"active\"\n";
+        assert!(parse_private(by_hand, NAME).is_err());
+        // The largest counter that is read: every store that is read can be
+        // written back as it is.
+        let state = parse_private("version = 1\nnext = 9007199254740992\n", NAME).unwrap();
+        assert_eq!(parse_private(&write_private(&state), NAME).unwrap(), state);
         // An id whose number is no number is a name like any other.
         let named = "version = 1\n[[entry]]\nid = \"k_99999999999999999999999\"\nkind = \"fact\"\ntext = \"x\"\nstatus = \"active\"\n";
         assert_eq!(
@@ -1270,7 +1304,11 @@ text = "Errors are returned, never panicked on."
             "x".repeat(300),
         );
         let problem = append_shared(Some(&text), &entry, SHARED).unwrap_err();
-        assert!(problem.message.contains("may be up to 262144"), "{problem}");
+        assert!(
+            problem.to_string().contains("may be up to 262144"),
+            "{problem}"
+        );
+        assert!(matches!(problem, AppendError::Full(_)));
         // One that fits is added.
         let small = Entry::written(EntryId::new("k_1"), Scope::Private, Kind::Fact, "x");
         assert!(append_shared(Some(&text), &small, SHARED).is_ok());

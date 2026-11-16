@@ -376,69 +376,133 @@ fn a_link_at_the_store_is_not_followed() {
 #[test]
 fn a_change_that_would_pass_the_size_cap_is_refused_and_the_store_stays_readable() {
     let world = World::new(scratch!("store_size_cap"));
-    let mut store = String::from("version = 1\n");
-    let mut count = 0;
-    while store.len() < 256 * 1024 - 1_400 {
-        count += 1;
-        store.push_str(&format!(
-            "[[entry]]\nid = \"k_{count}\"\nkind = \"fact\"\ntext = \"{}\"\nstatus = \"active\"\nevidence = \"{}\"\n",
-            "t".repeat(600),
-            "e".repeat(400)
-        ));
-    }
+    // A store a person wrote to within 100 bytes of the cap. Written back
+    // it is larger, by the first lines and the counter the harness adds.
+    let store = crate::store_of(256 * 1024 - 100);
     world.write_store(&store);
     let before = world.load();
-    assert_eq!(before.entries().len(), count);
-    assert!(count < 500, "the size binds before the count does");
-
-    let long = cortex_protocol::project::NewEntry {
-        kind: cortex_protocol::project::EntryKind::Fact,
-        text: "u".repeat(600),
-        command: None,
-        check: None,
-    };
+    assert!(before.problems().is_empty(), "{:?}", before.problems());
+    assert!(
+        before.entries().len() < 500,
+        "the size binds before the count"
+    );
     let project = world.project();
-    let mut refused = None;
-    // A few more of the longest entry: the first that does not fit is
-    // refused, and everything before it is kept.
-    for index in 0..4 {
-        let mut one = long.clone();
-        // Each another entry: the same one twice is refused for that.
-        one.text = format!("{index}{}", "u".repeat(599));
-        match project.update(&[], &[one], None) {
-            Ok(_) => count += 1,
-            Err(error) => {
-                refused = Some(error);
-                break;
-            }
-        }
-    }
-    let refused = refused.expect("the store has a size it does not pass");
+    // Even a change that only turns an entry off does not fit.
+    let refused = project
+        .update(&[change("k_1", EntryAction::Disable)], &[], None)
+        .unwrap_err();
     assert!(matches!(refused, StoreError::Full(_)), "{refused}");
     assert_eq!(cortex_knowledge::error_code(&refused), "project_store_full");
-    assert!(world.store_text().len() <= 256 * 1024);
-    // Every process still reads it, and its good copy.
+    assert_eq!(world.store_text(), store, "the store is as it was");
+    // Every process still reads it.
     let after = world.load();
     assert!(after.problems().is_empty(), "{:?}", after.problems());
-    assert_eq!(after.entries().len(), count);
-    assert_eq!(
-        std::fs::read(world.good_copy()).unwrap(),
-        std::fs::read(world.store_file()).unwrap()
-    );
-    // And a proposal is refused the same way.
-    let error = project
-        .propose(
-            Proposed {
-                kind: Kind::Fact,
-                text: "v".repeat(600),
-                evidence: "w".repeat(400),
+    assert_eq!(after.entries(), before.entries());
+}
+
+/// A store keeps room for the changes that only narrow or decide: a new
+/// entry is refused within the reserve, and turning one off, accepting one
+/// and deleting one still go through.
+#[test]
+fn a_store_near_its_cap_takes_no_new_entry_and_can_still_be_told_to_use_less() {
+    let world = World::new(scratch!("store_reserve"));
+    let reserve = usize::try_from(cortex_knowledge::project::RESERVED_BYTES).unwrap();
+    world.write_store(&crate::store_of(256 * 1024 - reserve + 2_000));
+    let project = world.project();
+    let count = project.load(None).entries().len();
+    // Nothing new: not a user's entry, not a model's proposal.
+    let added = project
+        .update(
+            &[],
+            &[cortex_protocol::project::NewEntry {
+                kind: cortex_protocol::project::EntryKind::Fact,
+                text: "One more.".to_owned(),
+                command: None,
                 check: None,
-                session: None,
-            },
+            }],
             None,
         )
         .unwrap_err();
-    assert!(matches!(error, StoreError::Full(_)), "{error}");
+    assert_eq!(cortex_knowledge::error_code(&added), "project_store_full");
+    assert!(added.to_string().contains("takes no new entry"), "{added}");
+    let proposed = project.propose(fact("One more."), None).unwrap_err();
+    assert_eq!(
+        cortex_knowledge::error_code(&proposed),
+        "project_store_full"
+    );
+    // What only narrows or decides goes through.
+    project
+        .update(&[change("k_1", EntryAction::Disable)], &[], None)
+        .unwrap();
+    project
+        .update(&[change("k_1", EntryAction::Accept)], &[], None)
+        .unwrap();
+    let updated = project
+        .update(&[change("k_2", EntryAction::Delete)], &[], None)
+        .unwrap();
+    assert_eq!(updated.snapshot.entries().len(), count - 1);
+    assert!(world.load().problems().is_empty());
+}
+
+/// A store whose counter is at its bound takes no new entry: the id would
+/// leave a counter this build does not read back, and what is not read
+/// back is not written. Everything else about the store still works.
+#[test]
+fn a_change_that_could_not_be_read_back_is_not_written() {
+    let world = World::new(scratch!("store_read_back"));
+    let store = "version = 1\nnext = 9007199254740992\n[[entry]]\nid = \"k_1\"\nkind = \"fact\"\ntext = \"x\"\nstatus = \"active\"\n";
+    world.write_store(store);
+    let project = world.project();
+    let refused = project.propose(fact("One more."), None).unwrap_err();
+    assert!(matches!(refused, StoreError::Unreadable(_)), "{refused}");
+    assert_eq!(
+        cortex_knowledge::error_code(&refused),
+        "project_store_unwritable"
+    );
+    assert_eq!(world.store_text(), store);
+    assert!(world.load().problems().is_empty());
+    project
+        .update(&[change("k_1", EntryAction::Disable)], &[], None)
+        .unwrap();
+    assert!(world.load().problems().is_empty());
+}
+
+/// A person's edit takes no lock. One saved while a change is being
+/// written (after the store has its new content) is not taken for the
+/// state the change gives back: it shows at the next look.
+#[test]
+fn an_edit_saved_while_a_change_is_written_is_seen() {
+    let world = World::new(scratch!("store_stamp_hand_edit"));
+    world.write_store(MIXED);
+    let hold = cortex_testkit::Hold::new(cortex_knowledge::store::AFTER_THE_STORE);
+    let project = world.project();
+    let ours = {
+        let project = project.clone();
+        std::thread::spawn(move || {
+            project
+                .update(&[change("k_3", EntryAction::Accept)], &[], None)
+                .unwrap()
+        })
+    };
+    hold.reach();
+    // The store has our change. A person saves the file now, with the
+    // accepted command turned off.
+    let edited = world
+        .store_text()
+        .replacen("status = \"active\"", "status = \"disabled\"", 1);
+    std::fs::write(world.store_file(), &edited).unwrap();
+    hold.release();
+    let updated = ours.join().unwrap();
+    assert!(
+        !project.is_current(&updated.snapshot),
+        "the edit must show at the next look"
+    );
+    let reloaded = project.load(Some(&updated.snapshot));
+    assert_eq!(
+        reloaded.find(&crate::id("k_1")).unwrap().status,
+        Status::Disabled
+    );
+    assert_eq!(unasked(&world, &reloaded), Vec::<String>::new());
 }
 
 /// The review's second blocker: the snapshot a change gives back holds the
