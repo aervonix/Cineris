@@ -41,6 +41,7 @@ One record per significant choice. Each says what the options were, what was cho
 | [0033](0033-tui-look.md) | The TUI's look is "Roomy 2": glyph-led blocks, answers apart, tool rounds in boxes that expand, mouse only in the viewer and full screen | Chosen by the owner on 2026-11-14 |
 | [0034](0034-notices-in-the-users-role.md) | A notice is a message in the user's role that says it is the harness's: no system role in the neutral model | Accepted by the owner in step 15, on 2026-11-14 |
 | [0035](0035-where-the-context-limit-comes-from.md) | A request's context limit comes from a local server's probe, or from the catalog, which every model has | Accepted in step 15, on 2026-11-14 |
+| [0036](0036-the-shipped-binary-is-optimised-for-size.md) | The shipped binary (and `release`) is optimised for size (`opt-level = "s"`), without ICU (`idna_adapter` 1.0), and holds no path of the machine it was built on; each pull request shows its size. Replaces 0012's `opt-level = 3` for `dist` | Accepted by the owner in step 33's size fix, on 2026-11-16 |
 
 The owner's answers are dated 2026-11-12 unless a row says otherwise, and are recorded in the [build plan](../build-plan.md) and, from step 4 on, in each step's [records](../steps/README.md).
 

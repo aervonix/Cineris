@@ -97,8 +97,8 @@ Features exist to keep build cost optional, not to create product variants.
 | `dev` | Local work | `debug = "line-tables-only"`, dependencies built with `opt-level = 1` and `debug = false` |
 | `test` | Local tests | as `dev` |
 | `ci` | The blocking CI test jobs, and `cargo xtask ci` | inherits `dev`, with dependencies at `opt-level = 0`. Added in step 2, when a clean build of the planned dependency set on a hosted Windows runner measured 259 s with optimised dependencies and 60 to 82 s without ([../testing-and-ci.md](../testing-and-ci.md)) |
-| `release` | Local optimised builds, perf runs | `opt-level = 3`, `lto = "thin"`, `codegen-units = 16`, `debug = 0` |
-| `dist` | Published binaries | inherits `release`, `lto = "fat"`, `codegen-units = 1`, `strip = true` |
+| `release` | Local optimised builds, perf runs | `opt-level = "s"` (since step 33's size fix, so that a measurement runs code optimised as the shipped binary's is: [decision 0036](../decisions/0036-the-shipped-binary-is-optimised-for-size.md)), `lto = "thin"`, `codegen-units = 16`, `debug = 0` |
+| `dist` | Published binaries | inherits `release` and its `opt-level = "s"`, `lto = "fat"`, `codegen-units = 1`, `strip = true`. Built through `cargo xtask size` (and step 34's `dist`), which takes the build machine's folders out of the paths it holds |
 
 `panic = "unwind"` in every profile. A panic in a tool task or an extension call is caught at the task boundary and becomes an error result, and the terminal is always restored. The size cost and the reasons are in [decision 0012](../decisions/0012-release-profile.md).
 
