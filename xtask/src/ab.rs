@@ -14,7 +14,7 @@
 //! printed too: their spread on one side is the noise a difference has to
 //! stand out of.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -39,9 +39,19 @@ runner with the input `against`.
 
 A test that fails ends the run, after both builds, unless --keep-going is
 given: then the round is recorded as failed for that side, the run goes on to
-the next round, and the comparison is of the rounds both sides finished. The
-rounds that failed, and the tests that failed in them, are listed after it,
-and the command still fails.";
+the next round (and, within a side's job, on to its system tests after a
+failure in tiers 1 and 2), and the comparison is of the rounds both sides
+finished. The rounds that failed, and the tests that failed in them, are
+listed after it, and the command still fails.
+
+With --keep-going, a test that failed on both sides in a round, and nothing
+else going wrong in it, is not a failure of the round: it is left out of both
+sides' medians and of the comparison (in every round, not only the one it
+failed in), the other tests are compared as usual, and each such test is
+named, with its rounds and the first line of each side's failure. A test that
+failed on one side only, or a run that broke some other way, is a failure as
+above. When only tests that failed on both sides went wrong, the command
+succeeds.";
 
 /// Rounds when not told: enough for a median, few enough for a Windows job.
 const ROUNDS: usize = 5;
@@ -167,6 +177,7 @@ pub(crate) fn medians(runs: &[Vec<TestCase>]) -> Vec<TestCase> {
         .collect()
 }
 
+
 /// One side's run of one round: it finished, with its report, or a test
 /// failed in it (or the run could not be made).
 #[derive(Debug, Clone, PartialEq)]
@@ -175,24 +186,195 @@ pub(crate) enum Attempt {
     Failed(Failure),
 }
 
-/// What a failed run left: the tests that failed, as `binary name`, from
-/// whatever report it wrote, and what the run said.
+/// A test that failed, and the first line of what its failure said.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Failure {
-    pub(crate) tests: Vec<String>,
-    pub(crate) error: String,
+pub(crate) struct FailedTest {
+    /// `binary name`, as [`TestCase::id`] writes it.
+    pub(crate) id: String,
+    pub(crate) message: String,
 }
 
-/// A failed run's failure, from its report when it wrote one.
-pub(crate) fn failure_of(report: Option<&[TestCase]>, error: String) -> Failure {
-    Failure {
-        tests: report
-            .unwrap_or_default()
+/// What a failed run left: the tests that failed, from whatever report it
+/// wrote, with the whole report, and what the run said.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Failure {
+    pub(crate) tests: Vec<FailedTest>,
+    pub(crate) error: String,
+    /// Every test the report lists, the failed ones included. Empty when the
+    /// run wrote no report.
+    pub(crate) cases: Vec<TestCase>,
+    /// Every run of the job that failed did so because tests failed in it
+    /// (nextest's exit code for that, and a failed test in its report), and
+    /// for no other reason: not a build that broke, not a run that listed
+    /// nothing. Only then do the failed tests say all that went wrong.
+    pub(crate) by_tests: bool,
+}
+
+/// What a run of the job left of its report: every test, and the failed
+/// ones with their messages.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Report {
+    pub(crate) cases: Vec<TestCase>,
+    pub(crate) failed: Vec<FailedTest>,
+}
+
+impl Report {
+    /// Reads the report at `path`. A report with no test in it is an error,
+    /// as for [`junit::read`]: a run that listed nothing checked nothing.
+    fn read(path: &Path) -> Result<Self> {
+        let xml = std::fs::read_to_string(path)
+            .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+        let report = Self::of(&xml);
+        if report.cases.is_empty() {
+            return Err(format!("{} lists no tests", path.display()));
+        }
+        Ok(report)
+    }
+
+    /// The report written as `xml`.
+    pub(crate) fn of(xml: &str) -> Self {
+        let cases = junit::parse(xml);
+        let said = junit::failures(xml);
+        let failed = cases
             .iter()
             .filter(|case| case.failed)
-            .map(TestCase::id)
-            .collect(),
+            .map(|case| {
+                let message = said
+                    .iter()
+                    .find(|one| {
+                        one.binary == case.binary
+                            && one.name == case.name
+                            && one.repeat == case.repeat
+                    })
+                    .map(|one| {
+                        let line = first_line(&one.text);
+                        if line.is_empty() {
+                            one.kind.clone()
+                        } else {
+                            line
+                        }
+                    })
+                    .unwrap_or_default();
+                FailedTest {
+                    id: case.id(),
+                    message,
+                }
+            })
+            .collect();
+        Self { cases, failed }
+    }
+}
+
+/// The first line of `text` that says something, trimmed.
+fn first_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// A failed run's failure, from its report when it wrote one. `by_tests`:
+/// see [`Failure::by_tests`].
+pub(crate) fn failure_of(report: Option<Report>, error: String, by_tests: bool) -> Failure {
+    let Some(report) = report else {
+        return Failure {
+            tests: Vec::new(),
+            error,
+            cases: Vec::new(),
+            by_tests: false,
+        };
+    };
+    // A report that names no failed test explains nothing.
+    let explained = by_tests && !report.failed.is_empty();
+    Failure {
+        tests: report.failed,
         error,
+        cases: report.cases,
+        by_tests: explained,
+    }
+}
+
+/// nextest's exit code for a run in which a test failed (`cargo nextest run`
+/// exits 100 then, and another code when the build broke, no test was run or
+/// the run could not be made).
+pub(crate) const TEST_RUN_FAILED: i32 = 100;
+
+/// How one run of the job ended.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum RunEnd {
+    Passed,
+    /// Tests failed in it, and nothing else went wrong: the exit code says
+    /// so, and its report names a failed test.
+    TestsFailed(String),
+    /// It failed otherwise, or in a way nothing says was the tests': a build
+    /// that broke, a run that could not be made, a failure no report names.
+    Broke(String),
+}
+
+/// How a run ended: whether it succeeded, its exit code if it had one,
+/// whether the report it left names a failed test, and what to say of it.
+pub(crate) fn end_of(
+    success: bool,
+    code: Option<i32>,
+    a_test_failed: bool,
+    said: String,
+) -> RunEnd {
+    if success {
+        RunEnd::Passed
+    } else if code == Some(TEST_RUN_FAILED) && a_test_failed {
+        RunEnd::TestsFailed(said)
+    } else {
+        RunEnd::Broke(said)
+    }
+}
+
+/// How a side's job ended, the runs of it together.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct JobEnd {
+    /// What went wrong, if anything did.
+    pub(crate) error: Option<String>,
+    /// Every failed run failed by its tests ([`Failure::by_tests`]).
+    pub(crate) by_tests: bool,
+}
+
+/// Runs the job's `runs` in turn. Without `keep_going` the first run that
+/// fails ends the job, as it always did. With it every run is made, so that
+/// a failing test of tiers 1 and 2 does not leave the system tests
+/// unmeasured: the round's two runs are each a run the comparison needs.
+/// `after(index, last)` is called after each run, `last` when it is the job's
+/// last (the reports are then brought together, otherwise set aside).
+pub(crate) fn drive_job(
+    runs: usize,
+    keep_going: bool,
+    mut run: impl FnMut(usize) -> RunEnd,
+    mut after: impl FnMut(usize, bool) -> Result<()>,
+) -> JobEnd {
+    let mut errors = Vec::new();
+    let mut by_tests = true;
+    for index in 0..runs {
+        let end = run(index);
+        let failed = end != RunEnd::Passed;
+        let stop = failed && !keep_going;
+        if let Err(error) = after(index, index + 1 == runs || stop) {
+            errors.push(error);
+            by_tests = false;
+        }
+        match end {
+            RunEnd::Passed => {}
+            RunEnd::TestsFailed(said) => errors.push(said),
+            RunEnd::Broke(said) => {
+                errors.push(said);
+                by_tests = false;
+            }
+        }
+        if stop {
+            break;
+        }
+    }
+    JobEnd {
+        error: (!errors.is_empty()).then(|| errors.join("; ")),
+        by_tests,
     }
 }
 
@@ -203,9 +385,10 @@ pub(crate) struct Round {
     pub(crate) head: Attempt,
 }
 
-/// The rounds both sides finished, which are all that is compared: their
-/// numbers (counted from 1), and each side's reports. A round in which either
-/// side failed is in none of them.
+/// The rounds that are compared: their numbers (counted from 1), and each
+/// side's reports. A round in which a side failed is in none of them, unless
+/// the tests that failed are the same on both sides and nothing else went
+/// wrong ([`failed_on_both`]): it is compared without them.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Compared {
     pub(crate) numbers: Vec<usize>,
@@ -213,24 +396,137 @@ pub(crate) struct Compared {
     pub(crate) head: Vec<Vec<TestCase>>,
 }
 
-/// The rounds in which both sides finished.
-pub(crate) fn finished_by_both(rounds: &[Round]) -> Compared {
-    let mut compared = Compared::default();
-    for (index, round) in rounds.iter().enumerate() {
-        if let (Attempt::Finished(base), Attempt::Finished(head)) = (&round.base, &round.head) {
-            compared.numbers.push(index + 1);
-            compared.base.push(base.clone());
-            compared.head.push(head.clone());
-        }
-    }
-    compared
+/// A test that failed on both sides of a round, and so is left out of the
+/// comparison altogether.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Skipped {
+    pub(crate) id: String,
+    /// The rounds it failed on both sides in, counted from 1.
+    pub(crate) rounds: Vec<usize>,
+    /// What each side's failure said, in the first of those rounds.
+    pub(crate) base: String,
+    pub(crate) head: String,
 }
 
-/// The rounds in which a side failed, and the tests that failed: empty when
-/// none did.
+/// The tests that failed on both sides of `round`, if that is all that went
+/// wrong in it: both sides' runs failed, each only by tests failing, and the
+/// two sides name the same failed tests. A test that failed on one side only
+/// (the other passed it, did not run it, or does not have it) is a failure
+/// of the round, and so is a run that broke in any other way or wrote no
+/// report: nothing may let a comparison pass when a side failed or a test
+/// went missing.
+fn failed_on_both(round: &Round) -> Option<Vec<(&FailedTest, &FailedTest)>> {
+    let (Attempt::Failed(base), Attempt::Failed(head)) = (&round.base, &round.head) else {
+        return None;
+    };
+    if !base.by_tests || !head.by_tests || base.cases.is_empty() || head.cases.is_empty() {
+        return None;
+    }
+    fn ids(failure: &Failure) -> BTreeSet<&str> {
+        failure.tests.iter().map(|test| test.id.as_str()).collect()
+    }
+    if base.tests.is_empty() || ids(base) != ids(head) {
+        return None;
+    }
+    base.tests
+        .iter()
+        .map(|one| {
+            head.tests
+                .iter()
+                .find(|other| other.id == one.id)
+                .map(|other| (one, other))
+        })
+        .collect()
+}
+
+/// The rounds that are compared, and the tests left out of them. A round in
+/// which both sides finished is compared. So is one in which both sides ran
+/// and failed only the same tests, without those tests. Such a test is left
+/// out of every round of both sides, not only the one it failed in: what it
+/// took in a round it passed is no more a measurement than what it took in
+/// one it failed.
+pub(crate) fn comparable(rounds: &[Round]) -> (Compared, Vec<Skipped>) {
+    let mut skipped: BTreeMap<String, Skipped> = BTreeMap::new();
+    for (index, round) in rounds.iter().enumerate() {
+        for (base, head) in failed_on_both(round).unwrap_or_default() {
+            skipped
+                .entry(base.id.clone())
+                .or_insert_with(|| Skipped {
+                    id: base.id.clone(),
+                    rounds: Vec::new(),
+                    base: base.message.clone(),
+                    head: head.message.clone(),
+                })
+                .rounds
+                .push(index + 1);
+        }
+    }
+    let mut compared = Compared::default();
+    for (index, round) in rounds.iter().enumerate() {
+        let (base, head) = match (&round.base, &round.head) {
+            (Attempt::Finished(base), Attempt::Finished(head)) => (base, head),
+            (Attempt::Failed(base), Attempt::Failed(head)) if failed_on_both(round).is_some() => {
+                (&base.cases, &head.cases)
+            }
+            _ => continue,
+        };
+        let without = |cases: &Vec<TestCase>| {
+            cases
+                .iter()
+                .filter(|case| !skipped.contains_key(&case.id()))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        compared.numbers.push(index + 1);
+        compared.base.push(without(base));
+        compared.head.push(without(head));
+    }
+    (compared, skipped.into_values().collect())
+}
+
+/// What to say of the tests left out: each, the rounds it failed on both
+/// sides in, and the first line of what each side's failure said. Empty when
+/// none was.
+pub(crate) fn skipped_text(skipped: &[Skipped]) -> String {
+    if skipped.is_empty() {
+        return String::new();
+    }
+    let mut text = format!(
+        "{} TEST(S) FAILED ON BOTH SIDES, and are left out of both sides' medians and of the \
+         comparison (a test that failed on one side only is a failure of its round, below):\n",
+        skipped.len()
+    );
+    fn message(said: &str) -> &str {
+        if said.is_empty() {
+            "(no message)"
+        } else {
+            said
+        }
+    }
+    for one in skipped {
+        let rounds: Vec<String> = one.rounds.iter().map(ToString::to_string).collect();
+        let _ = writeln!(
+            text,
+            "  {} (round {})\n      base: {}\n      head: {}",
+            one.id,
+            rounds.join(", "),
+            message(&one.base),
+            message(&one.head)
+        );
+    }
+    text
+}
+
+/// The rounds in which a side failed and that are not compared, and the
+/// tests that failed: empty when none did. A round whose failures were the
+/// same tests on both sides is not here: it is compared, and its tests are
+/// in [`skipped_text`].
 pub(crate) fn failed_rounds(rounds: &[Round], label: &str) -> String {
     let mut text = String::new();
     for (index, round) in rounds.iter().enumerate() {
+        if failed_on_both(round).is_some() {
+            continue;
+        }
         let sides = [
             (format!("base ({label})"), &round.base),
             ("head".to_owned(), &round.head),
@@ -240,10 +536,18 @@ pub(crate) fn failed_rounds(rounds: &[Round], label: &str) -> String {
                 continue;
             };
             let _ = write!(text, "  round {}, {side}: ", index + 1);
-            if failure.tests.is_empty() {
+            let tests: Vec<&str> = failure.tests.iter().map(|test| test.id.as_str()).collect();
+            if tests.is_empty() {
                 let _ = writeln!(text, "no failing test in a report: {}", failure.error);
+            } else if failure.by_tests {
+                let _ = writeln!(text, "{} failed", tests.join(", "));
             } else {
-                let _ = writeln!(text, "{} failed", failure.tests.join(", "));
+                let _ = writeln!(
+                    text,
+                    "{} failed, and the run failed otherwise too: {}",
+                    tests.join(", "),
+                    failure.error
+                );
             }
         }
     }
@@ -338,34 +642,63 @@ fn nextest(tree: &Path, arguments: &[String]) -> Command {
 /// The blocking test job's runs in `tree`, as that tree's own job runs
 /// them: a base from before the job ran in two is run in one
 /// (`checks::splits`), so that an A/B of the change compares the two jobs.
-/// One report of them all is left where one run leaves its own.
-fn run_job(tree: &Path, request: &Request) -> Result<()> {
+/// One report of them all is left where one run leaves its own. With
+/// `--keep-going` every run is made even when an earlier one failed (a test
+/// of tiers 1 and 2 that fails must not leave the system tests unmeasured).
+fn run_job(tree: &Path, request: &Request) -> JobEnd {
     let split = crate::checks::splits(tree);
     let runs = crate::checks::ci_runs(&request.packages, &request.rest, split);
-    crate::checks::forget_reports(tree)?;
-    let last = runs.len() - 1;
-    for (index, run) in runs.iter().enumerate() {
-        let ran = run_in(tree, nextest(tree, run), "the tests");
+    if let Err(error) = crate::checks::forget_reports(tree) {
+        return JobEnd {
+            error: Some(error),
+            by_tests: false,
+        };
+    }
+    let report = workspace::nextest_report(tree, "ci");
+    drive_job(
+        runs.len(),
+        request.keep_going,
+        |index| run_in(tree, nextest(tree, &runs[index]), "the tests", &report),
         // A run that failed ends the job's, and what the earlier runs
         // reported is brought together with its own for whoever reads it.
-        if index == last || ran.is_err() {
-            crate::checks::bring_together(tree)?;
-        } else {
-            crate::checks::set_aside(tree)?;
-        }
-        ran?;
-    }
-    Ok(())
+        |_, last| {
+            if last {
+                crate::checks::bring_together(tree)
+            } else {
+                crate::checks::set_aside(tree)
+            }
+        },
+    )
 }
 
-fn run_in(tree: &Path, mut command: Command, what: &str) -> Result<()> {
-    let status = command
-        .status()
-        .map_err(|error| format!("could not run cargo in {}: {error}", tree.display()))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{what} failed in {} ({status})", tree.display()))
+/// One run of `command` in `tree`, and how it ended. `report` is where the
+/// run leaves its report: a run that failed is the tests' failing only when
+/// nextest says so (its exit code) and the report names a failed test.
+fn run_in(tree: &Path, mut command: Command, what: &str, report: &Path) -> RunEnd {
+    let status = match command.status() {
+        Ok(status) => status,
+        Err(error) => {
+            return RunEnd::Broke(format!(
+                "could not run cargo in {}: {error}",
+                tree.display()
+            ));
+        }
+    };
+    let a_test_failed = !status.success()
+        && std::fs::read_to_string(report).is_ok_and(|xml| !Report::of(&xml).failed.is_empty());
+    end_of(
+        status.success(),
+        status.code(),
+        a_test_failed,
+        format!("{what} failed in {} ({status})", tree.display()),
+    )
+}
+
+/// A build, which has no report: it passes or it breaks.
+fn build_in(tree: &Path, command: Command) -> Result<()> {
+    match run_in(tree, command, "the build", Path::new("")) {
+        RunEnd::Passed => Ok(()),
+        RunEnd::TestsFailed(said) | RunEnd::Broke(said) => Err(said),
     }
 }
 
@@ -399,7 +732,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     build.push("--no-run".to_owned());
     for which in [Which::Base, Which::Head] {
         println!("== building the {} ==", name(which, &label));
-        run_in(tree(which), nextest(tree(which), &build), "the build")?;
+        build_in(tree(which), nextest(tree(which), &build))?;
     }
     let mut rounds: Vec<Round> = Vec::new();
     for round in 0..request.rounds {
@@ -413,8 +746,8 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             );
             let at = tree(which);
             let report = workspace::nextest_report(at, "ci");
-            let ran = run_job(at, &request);
-            if let Err(error) = &ran {
+            let job = run_job(at, &request);
+            if let Some(error) = &job.error {
                 if !request.keep_going {
                     return Err(error.clone());
                 }
@@ -424,7 +757,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
                 );
             }
             // What the run reported, if it got as far as a report.
-            let cases = junit::read(&report);
+            let read = Report::read(&report);
             // Each round's report, kept where the head's run keeps its own
             // (the `try` workflow uploads the folder).
             let kept = head.join("target").join("ab").join(format!(
@@ -437,21 +770,27 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
                     .and_then(|()| std::fs::copy(&report, &kept))
                     .map_err(|error| format!("could not keep {}: {error}", kept.display()))?;
             }
-            attempts[which as usize] = Some(attempt_of(ran, cases)?);
+            attempts[which as usize] = Some(attempt_of(job, read)?);
         }
         let [Some(base), Some(head)] = attempts else {
             return Err("a round ran only one side".to_owned());
         };
         rounds.push(Round { base, head });
     }
-    let compared = finished_by_both(&rounds);
+    let (compared, skipped) = comparable(&rounds);
     let failed = failed_rounds(&rounds, &label);
+    let left_out = skipped_text(&skipped);
     if !failed.is_empty() {
         println!("\n{failed}");
     }
+    if !left_out.is_empty() {
+        println!("\n{left_out}");
+    }
     let (base_runs, head_runs) = (&compared.base, &compared.head);
     if base_runs.is_empty() {
-        crate::steps::append_job_summary(&format!("### Two trees on one runner\n\n{failed}\n"));
+        crate::steps::append_job_summary(&format!(
+            "### Two trees on one runner\n\n```text\n{left_out}{failed}```\n"
+        ));
         return Err(format!(
             "no round finished on both sides: all {} had a failing run",
             rounds.len()
@@ -474,15 +813,22 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         compare::Start::Shared,
     );
     println!("{table}");
+    if !skipped.is_empty() {
+        // Again at the end, where the log is read from: the comparison is
+        // of the other tests, and a reader must not take it for all of them.
+        println!("{left_out}");
+    }
     crate::steps::append_job_summary(&format!(
-        "### Two trees on one runner\n\n```text\n{}\n{table}\n{failed}```\n",
+        "### Two trees on one runner\n\n```text\n{left_out}{}\n{table}\n{failed}```\n",
         rounds_table(&compared)
     ));
     conclusion(rounds.len(), compared.numbers.len())
 }
 
 /// What the run ends as, after its comparison is printed: the measurement is
-/// kept, and a failing test is still a failure.
+/// kept, and a failing test is still a failure. `compared` counts the rounds
+/// compared, those in which the same tests failed on both sides included:
+/// those tests are left out and named, and are not a failure of the run.
 pub(crate) fn conclusion(rounds: usize, compared: usize) -> Result<()> {
     if compared < rounds {
         Err(format!(
@@ -494,16 +840,21 @@ pub(crate) fn conclusion(rounds: usize, compared: usize) -> Result<()> {
     }
 }
 
-/// One side's run of a round: `ran` is how the tests ended, and `report`
+/// One side's run of a round: `job` is how the tests ended, and `report`
 /// the report it left, if it left one. A run that failed is a failed
 /// attempt, whatever its report says; one that passed and left no report
 /// is an error.
-pub(crate) fn attempt_of(ran: Result<()>, report: Result<Vec<TestCase>>) -> Result<Attempt> {
-    match ran {
-        Ok(()) => report.map(Attempt::Finished),
-        Err(error) => Ok(Attempt::Failed(failure_of(report.ok().as_deref(), error))),
+pub(crate) fn attempt_of(job: JobEnd, report: Result<Report>) -> Result<Attempt> {
+    match job.error {
+        None => report.map(|report| Attempt::Finished(report.cases)),
+        Some(error) => Ok(Attempt::Failed(failure_of(
+            report.ok(),
+            error,
+            job.by_tests,
+        ))),
     }
 }
+
 
 fn name(which: Which, label: &str) -> String {
     match which {
@@ -515,8 +866,9 @@ fn name(which: Which, label: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Attempt, Compared, Failure, Request, Round, Which, attempt_of, conclusion, failed_rounds,
-        failure_of, finished_by_both, medians, order, rounds_table,
+        Attempt, Compared, FailedTest, Failure, JobEnd, Report, Request, Round, RunEnd, Skipped,
+        TEST_RUN_FAILED, Which, attempt_of, comparable, conclusion, drive_job, end_of,
+        failed_rounds, failure_of, medians, order, rounds_table, skipped_text,
     };
     use crate::junit::TestCase;
 
@@ -638,10 +990,20 @@ mod tests {
         Attempt::Finished(vec![case("cortex-base", "t", seconds)])
     }
 
+    /// A failed attempt of the old kind: a test failed in a run whose report
+    /// listed that one test.
     fn failed(tests: &[&str]) -> Attempt {
         Attempt::Failed(Failure {
-            tests: strings(tests),
+            tests: tests
+                .iter()
+                .map(|id| FailedTest {
+                    id: (*id).to_owned(),
+                    message: "boom".to_owned(),
+                })
+                .collect(),
             error: "the tests failed".to_owned(),
+            cases: Vec::new(),
+            by_tests: false,
         })
     }
 
@@ -669,14 +1031,15 @@ mod tests {
 
     #[test]
     fn only_the_rounds_both_sides_finished_are_compared() {
-        let compared = finished_by_both(&rounds());
+        let (compared, skipped) = comparable(&rounds());
         assert_eq!(compared.numbers, [1, 4]);
+        assert!(skipped.is_empty());
         // The round the base finished and the head failed is not in the
         // base's medians either.
         assert_eq!(compared.base.len(), 2);
         assert!((compared.base[1][0].seconds - 0.7).abs() < 1e-9);
         assert!((compared.head[0][0].seconds - 0.6).abs() < 1e-9);
-        let none = finished_by_both(&rounds()[1..3]);
+        let (none, _) = comparable(&rounds()[1..3]);
         assert_eq!(none, Compared::default());
     }
 
@@ -698,40 +1061,112 @@ mod tests {
         assert_eq!(failed_rounds(&rounds()[..1], "main"), "");
     }
 
+    /// A report as nextest writes it, for the tests `(name, failed)` of one
+    /// binary: a failed test has a failure whose text is `message` and a
+    /// line more.
+    fn xml(tests: &[(&str, Option<&str>)]) -> String {
+        let mut text = String::from("<testsuites name=\"nextest-run\">\n<testsuite name=\"b\">\n");
+        for (name, failure) in tests {
+            match failure {
+                None => text.push_str(&format!(
+                    "<testcase name=\"{name}\" classname=\"b\" time=\"0.1\"/>\n"
+                )),
+                Some(message) => text.push_str(&format!(
+                    "<testcase name=\"{name}\" classname=\"b\" time=\"0.1\">\n\
+                     <failure type=\"test failure with exit code 101\">{message}\nsecond line</failure>\n\
+                     </testcase>\n"
+                )),
+            }
+        }
+        text.push_str("</testsuite>\n</testsuites>\n");
+        text
+    }
+
+    /// A side's failed attempt from a report of its tests: failed in a run
+    /// that ended by its tests failing, or in one that broke otherwise.
+    fn tried(tests: &[(&str, Option<&str>)], by_tests: bool) -> Attempt {
+        Attempt::Failed(failure_of(
+            Some(Report::of(&xml(tests))),
+            "the tests failed".to_owned(),
+            by_tests,
+        ))
+    }
+
+    fn passed_report(names: &[&str]) -> Attempt {
+        let tests: Vec<(&str, Option<&str>)> = names.iter().map(|name| (*name, None)).collect();
+        Attempt::Finished(Report::of(&xml(&tests)).cases)
+    }
+
+    #[test]
+    fn a_report_names_each_failed_test_with_the_first_line_of_its_message() {
+        let report = Report::of(crate::junit::tests::REPORT);
+        let failed: Vec<(&str, &str)> = report
+            .failed
+            .iter()
+            .map(|test| (test.id.as_str(), test.message.as_str()))
+            .collect();
+        assert_eq!(
+            failed,
+            [
+                (
+                    "cortex-agent::it loop_::stops_at_the_refused_call",
+                    "assertion `left == right` failed"
+                ),
+                // A timeout has no text: its kind is what is left.
+                ("cortex-agent::it loop_::never_ends", "test timeout"),
+            ]
+        );
+        // A test that passed on its retry did not fail.
+        assert_eq!(report.cases.len(), 7);
+    }
+
     #[test]
     fn a_failed_run_names_the_tests_its_report_says_failed() {
-        let mut bad = case("cortex-agent::it", "turn::stops", 1.0);
-        bad.failed = true;
-        let report = vec![case("cortex-base", "t", 0.1), bad];
+        let report = Report::of(&xml(&[("ok", None), ("bad", Some("it broke"))]));
+        let failure = failure_of(Some(report), "the tests failed".to_owned(), true);
         assert_eq!(
-            failure_of(Some(&report), "the tests failed".to_owned()),
-            Failure {
-                tests: strings(&["cortex-agent::it turn::stops"]),
-                error: "the tests failed".to_owned(),
-            }
+            failure.tests,
+            [FailedTest {
+                id: "b bad".to_owned(),
+                message: "it broke".to_owned()
+            }]
         );
-        // No report: nothing to name, and the error is what is left.
-        assert!(failure_of(None, "x".to_owned()).tests.is_empty());
+        assert_eq!(failure.cases.len(), 2);
+        assert!(failure.by_tests);
+        // No report: nothing to name, and nothing says the tests were all.
+        let none = failure_of(None, "x".to_owned(), true);
+        assert!(none.tests.is_empty() && none.cases.is_empty() && !none.by_tests);
+        // A report that names no failed test explains nothing either.
+        let clean = failure_of(Some(Report::of(&xml(&[("ok", None)]))), "x".to_owned(), true);
+        assert!(!clean.by_tests);
+    }
+
+    fn job(error: Option<&str>, by_tests: bool) -> JobEnd {
+        JobEnd {
+            error: error.map(str::to_owned),
+            by_tests,
+        }
     }
 
     #[test]
     fn a_run_that_failed_is_a_failed_attempt_whatever_its_report_says() {
-        let mut bad = case("cortex-base", "t", 1.0);
-        bad.failed = true;
-        let report = || Ok(vec![bad.clone()]);
-        let attempt = attempt_of(Err("the tests failed".to_owned()), report()).unwrap();
-        assert_eq!(attempt, failed(&["cortex-base t"]));
+        let report = || Ok(Report::of(&xml(&[("bad", Some("it broke"))])));
+        let attempt = attempt_of(job(Some("the tests failed"), true), report()).unwrap();
+        assert!(matches!(&attempt, Attempt::Failed(failure) if failure.by_tests));
         // No report at all.
-        let attempt = attempt_of(Err("the tests failed".to_owned()), Err("none".to_owned()));
+        let attempt = attempt_of(
+            job(Some("the tests failed"), true),
+            Err("none".to_owned()),
+        );
         assert_eq!(attempt, Ok(failed(&[])));
         // A run that passed is finished, and one that left no report is an
         // error, not a failed attempt: nothing says it failed.
         assert!(matches!(
-            attempt_of(Ok(()), report()),
+            attempt_of(job(None, true), report()),
             Ok(Attempt::Finished(_))
         ));
         assert_eq!(
-            attempt_of(Ok(()), Err("none".to_owned())),
+            attempt_of(job(None, true), Err("none".to_owned())),
             Err("none".to_owned())
         );
     }
@@ -753,5 +1188,241 @@ mod tests {
                 .unwrap()
                 .keep_going
         );
+    }
+
+    // What a test that failed on both sides does to a round.
+
+    #[test]
+    fn a_test_that_failed_on_both_sides_is_left_out_and_the_others_are_compared() {
+        let both = || Round {
+            base: tried(&[("slow", None), ("flaky", Some("left 1 right 2"))], true),
+            head: tried(&[("slow", None), ("flaky", Some("left 3 right 4"))], true),
+        };
+        let rounds = vec![
+            Round {
+                base: passed_report(&["slow", "flaky"]),
+                head: passed_report(&["slow", "flaky"]),
+            },
+            both(),
+            Round {
+                base: passed_report(&["slow", "flaky"]),
+                head: passed_report(&["slow", "flaky"]),
+            },
+            both(),
+        ];
+        let (compared, skipped) = comparable(&rounds);
+        // Every round is compared, the test in none of them: not in the
+        // rounds it failed in, and not in those it passed in.
+        assert_eq!(compared.numbers, [1, 2, 3, 4]);
+        for cases in compared.base.iter().chain(&compared.head) {
+            let names: Vec<&str> = cases.iter().map(|case| case.name.as_str()).collect();
+            assert_eq!(names, ["slow"]);
+        }
+        assert_eq!(
+            skipped,
+            [Skipped {
+                id: "b flaky".to_owned(),
+                rounds: vec![2, 4],
+                base: "left 1 right 2".to_owned(),
+                head: "left 3 right 4".to_owned(),
+            }]
+        );
+        // Not a failure of the run, and not in the list of failed rounds.
+        assert_eq!(failed_rounds(&rounds, "main"), "");
+        assert_eq!(conclusion(rounds.len(), compared.numbers.len()), Ok(()));
+        let text = skipped_text(&skipped);
+        assert!(text.contains("1 TEST(S) FAILED ON BOTH SIDES"), "{text}");
+        assert!(text.contains("b flaky (round 2, 4)"), "{text}");
+        assert!(text.contains("base: left 1 right 2"), "{text}");
+        assert!(text.contains("head: left 3 right 4"), "{text}");
+        assert_eq!(skipped_text(&[]), "");
+    }
+
+    #[test]
+    fn a_test_that_failed_on_one_side_only_is_still_a_failed_round() {
+        let rounds = vec![
+            // The head passed what the base failed.
+            Round {
+                base: tried(&[("a", None), ("t", Some("x"))], true),
+                head: passed_report(&["a", "t"]),
+            },
+            // The base passed what the head failed.
+            Round {
+                base: passed_report(&["a", "t"]),
+                head: tried(&[("a", None), ("t", Some("x"))], true),
+            },
+            // The head does not have the test the base failed: missing is
+            // not failed.
+            Round {
+                base: tried(&[("a", None), ("t", Some("x"))], true),
+                head: passed_report(&["a"]),
+            },
+            // The head failed a test the base did not have.
+            Round {
+                base: passed_report(&["a"]),
+                head: tried(&[("a", None), ("t", Some("x"))], true),
+            },
+            // Two failed on the base, one of them on the head.
+            Round {
+                base: tried(&[("t", Some("x")), ("u", Some("y"))], true),
+                head: tried(&[("t", Some("x")), ("u", None)], true),
+            },
+        ];
+        for (index, round) in rounds.iter().enumerate() {
+            let (compared, skipped) = comparable(std::slice::from_ref(round));
+            assert_eq!(compared, Compared::default(), "round {}", index + 1);
+            assert!(skipped.is_empty(), "round {}", index + 1);
+            assert!(
+                !failed_rounds(std::slice::from_ref(round), "main").is_empty(),
+                "round {}",
+                index + 1
+            );
+        }
+        let (compared, skipped) = comparable(&rounds);
+        assert_eq!(compared, Compared::default());
+        assert!(skipped.is_empty());
+        let error = conclusion(rounds.len(), compared.numbers.len()).unwrap_err();
+        assert!(error.contains("5 of 5 rounds"), "{error}");
+    }
+
+    #[test]
+    fn a_failure_that_the_tests_do_not_explain_is_not_a_test_failing_on_both_sides() {
+        let same = |by_tests_head: bool| Round {
+            base: tried(&[("a", None), ("t", Some("x"))], true),
+            head: tried(&[("a", None), ("t", Some("x"))], by_tests_head),
+        };
+        // The control: both sides' runs ended by the test failing.
+        let (compared, skipped) = comparable(&[same(true)]);
+        assert_eq!((compared.numbers.len(), skipped.len()), (1, 1));
+        // The head's other run broke too (the system tests' build, say).
+        let (compared, skipped) = comparable(&[same(false)]);
+        assert_eq!(compared, Compared::default());
+        assert!(skipped.is_empty());
+        let text = failed_rounds(&[same(false)], "main");
+        assert!(
+            text.contains("round 1, head: b t failed, and the run failed otherwise too"),
+            "{text}"
+        );
+        // A side that wrote no report, and one whose report lists nothing it
+        // failed.
+        let silent = Round {
+            base: tried(&[("t", Some("x"))], true),
+            head: Attempt::Failed(failure_of(None, "no report".to_owned(), true)),
+        };
+        assert_eq!(comparable(&[silent]).0, Compared::default());
+        let clean = Round {
+            base: tried(&[("t", Some("x"))], true),
+            head: tried(&[("t", None)], true),
+        };
+        assert_eq!(comparable(&[clean]).0, Compared::default());
+    }
+
+    // The two runs of a side's job.
+
+    #[test]
+    fn a_failure_in_the_first_run_does_not_stop_the_second_with_keep_going() {
+        let mut ran = Vec::new();
+        let mut after = Vec::new();
+        let end = drive_job(
+            2,
+            true,
+            |index| {
+                ran.push(index);
+                if index == 0 {
+                    RunEnd::TestsFailed("tiers 1 and 2 failed".to_owned())
+                } else {
+                    RunEnd::Passed
+                }
+            },
+            |index, last| {
+                after.push((index, last));
+                Ok(())
+            },
+        );
+        assert_eq!(ran, [0, 1]);
+        // The first run's report is set aside, the second's brought together.
+        assert_eq!(after, [(0, false), (1, true)]);
+        assert_eq!(end, job(Some("tiers 1 and 2 failed"), true));
+        // Failing in both runs says both.
+        let end = drive_job(
+            2,
+            true,
+            |index| RunEnd::TestsFailed(format!("run {index} failed")),
+            |_, _| Ok(()),
+        );
+        assert_eq!(end, job(Some("run 0 failed; run 1 failed"), true));
+    }
+
+    #[test]
+    fn without_keep_going_the_first_failing_run_ends_the_job() {
+        let mut ran = Vec::new();
+        let mut after = Vec::new();
+        let end = drive_job(
+            2,
+            false,
+            |index| {
+                ran.push(index);
+                RunEnd::TestsFailed("failed".to_owned())
+            },
+            |index, last| {
+                after.push((index, last));
+                Ok(())
+            },
+        );
+        assert_eq!(ran, [0]);
+        // Its report is brought together with the earlier ones' all the same.
+        assert_eq!(after, [(0, true)]);
+        assert_eq!(end.error.as_deref(), Some("failed"));
+    }
+
+    #[test]
+    fn a_run_that_broke_or_a_report_that_could_not_be_put_together_is_not_the_tests() {
+        let end = drive_job(
+            2,
+            true,
+            |index| {
+                if index == 0 {
+                    RunEnd::TestsFailed("tests".to_owned())
+                } else {
+                    RunEnd::Broke("the build broke".to_owned())
+                }
+            },
+            |_, _| Ok(()),
+        );
+        assert_eq!(end, job(Some("tests; the build broke"), false));
+        let end = drive_job(
+            1,
+            true,
+            |_| RunEnd::TestsFailed("tests".to_owned()),
+            |_, _| Err("could not move".to_owned()),
+        );
+        assert_eq!(end, job(Some("could not move; tests"), false));
+        // Passing says nothing was wrong.
+        let end = drive_job(2, true, |_| RunEnd::Passed, |_, _| Ok(()));
+        assert_eq!(end.error, None);
+    }
+
+    #[test]
+    fn a_run_is_the_tests_failing_only_by_nextests_code_and_a_failed_test_in_its_report() {
+        let said = || "failed".to_owned();
+        assert_eq!(end_of(true, Some(0), false, said()), RunEnd::Passed);
+        assert_eq!(
+            end_of(false, Some(TEST_RUN_FAILED), true, said()),
+            RunEnd::TestsFailed(said())
+        );
+        // The code says tests failed but the report names none (it is of
+        // another run, or none): nothing shows which.
+        assert_eq!(
+            end_of(false, Some(TEST_RUN_FAILED), false, said()),
+            RunEnd::Broke(said())
+        );
+        // A failed test in the report and another code: the build broke
+        // after an earlier run's report, or nextest itself failed.
+        assert_eq!(
+            end_of(false, Some(101), true, said()),
+            RunEnd::Broke(said())
+        );
+        // Killed by a signal: no code.
+        assert_eq!(end_of(false, None, true, said()), RunEnd::Broke(said()));
     }
 }
