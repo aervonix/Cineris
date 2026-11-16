@@ -195,6 +195,8 @@ pub struct Ctx {
     pub session: Option<SessionId>,
     /// The items that completed, in order.
     pub items: Vec<ItemId>,
+    /// Every session the scenario opened, closed at its end.
+    pub opened: Vec<SessionId>,
 }
 
 impl Ctx {
@@ -663,6 +665,11 @@ pub trait Carrier {
 
     /// Answers a request.
     fn respond(&mut self, id: RequestId, response: ServerResponse);
+
+    /// Drops every event and request that has arrived and no step took,
+    /// without waiting: what a scenario left behind, so that the next one
+    /// on the same carrier starts clean.
+    fn forget(&mut self);
 }
 
 /// The client's side of the handshake every carrier sends first: a `user`
@@ -756,6 +763,7 @@ pub fn run(
         ) = &result
         {
             ctx.session = Some(opened.session.session_id.clone());
+            ctx.opened.push(opened.session.session_id.clone());
         }
         kept.push(match result {
             Ok(result) => json!({"method": method, "result": result.result().unwrap_or(Value::Null)}),
@@ -803,6 +811,16 @@ pub fn run(
             },
         }
     }
+    // Every session the scenario opened is closed, which ends its events:
+    // those queued before a close's result come before it, and none after.
+    // What no step took is dropped, so the next scenario on this carrier
+    // starts clean.
+    for session in std::mem::take(&mut ctx.opened) {
+        let _ = carrier.call(Op::SessionClose(SessionRef {
+            session_id: session,
+        }));
+    }
+    carrier.forget();
     Transcript(normalise(&kept, known))
 }
 
@@ -1176,6 +1194,10 @@ impl Carrier for Lines {
                 None => {}
             }
         }
+    }
+
+    fn forget(&mut self) {
+        self.kept.clear();
     }
 
     fn respond(&mut self, id: RequestId, response: ServerResponse) {

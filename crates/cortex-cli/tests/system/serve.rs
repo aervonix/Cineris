@@ -21,7 +21,7 @@ use cortex_protocol::jsonrpc::RequestId;
 use cortex_protocol::methods::{Op, OpResult, ServerResponse};
 use cortex_rpc::lane::{Dispatcher, Run};
 use cortex_sandbox::tree::{Exit, Tree};
-use cortex_testkit::conformance::{self, Carrier, Inbound, Lines, Scenario, Transcript};
+use cortex_testkit::conformance::{self, Carrier, Inbound, Lines, Transcript};
 
 use crate::Machine;
 
@@ -231,34 +231,50 @@ impl Carrier for InProcess {
     fn respond(&mut self, id: RequestId, response: ServerResponse) {
         self.core.respond(self.client, &id, response).unwrap();
     }
+
+    fn forget(&mut self) {
+        while self.queue.try_next().is_some() {}
+    }
 }
 
-fn transcript(
-    scenario: &Scenario,
+/// Runs every scenario on one machine, through the carrier `carry` makes,
+/// each scenario in a workspace of its own (`work/sNN`): one core, or one
+/// binary, a carrier.
+fn transcripts(
     test: &str,
-    carry: impl FnOnce(&Machine, &mut dyn FnMut(&mut dyn Carrier) -> Transcript) -> Transcript,
-) -> Transcript {
+    carry: impl FnOnce(
+        &Machine,
+        &mut dyn FnMut(&mut dyn Carrier) -> Vec<(&'static str, Transcript)>,
+    ) -> Vec<(&'static str, Transcript)>,
+) -> Vec<(&'static str, Transcript)> {
     // The repository map is background work whose notice comes when it
     // likes: off on both sides, as the scenarios ask.
-    let machine = Machine::with_config(
-        test,
-        "index.map = false
-",
-    );
-    for (path, text) in &scenario.files {
-        let path = machine.workspace.join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    }
-    for reply in scenario.model.clone() {
-        machine.server.push(reply);
-    }
-    let workspace = machine.workspace.to_str().unwrap().to_owned();
+    let machine = Machine::with_config(test, "index.map = false\n");
     let root = machine.home.parent().unwrap().to_str().unwrap().to_owned();
     let server = machine.server.base_url();
+    let work = machine.home.parent().unwrap().join("work");
     let mut run = |carrier: &mut dyn Carrier| {
         let known = [(root.as_str(), "<root>"), (server.as_str(), "<server>")];
-        conformance::run(scenario, carrier, &workspace, &known)
+        // A fresh list: a gate a scenario opens is opened for good.
+        let mut out = Vec::new();
+        for (number, scenario) in conformance::scenarios().into_iter().enumerate() {
+            let workspace = work.join(format!("s{number:02}"));
+            std::fs::create_dir_all(&workspace).unwrap();
+            for (path, text) in &scenario.files {
+                let path = workspace.join(path);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, text).unwrap();
+            }
+            for reply in scenario.model.clone() {
+                machine.server.push(reply);
+            }
+            let workspace = workspace.to_str().unwrap().to_owned();
+            out.push((
+                scenario.name,
+                conformance::run(&scenario, carrier, &workspace, &known),
+            ));
+        }
+        out
     };
     carry(&machine, &mut run)
 }
@@ -268,39 +284,30 @@ fn transcript(
 /// binary writes nothing on standard output but messages.
 #[test]
 fn sys_serve_stdio_conforms_to_the_core_in_process() {
-    // A list for each carrier: a gate a scenario opens is opened for good.
-    let count = conformance::scenarios().len();
-    for number in 0..count {
-        let first = conformance::scenarios().swap_remove(number);
-        let in_process = transcript(&first, &format!("serve-a-{number}"), |machine, run| {
-            let mut carrier = InProcess::start(machine);
-            run(&mut carrier)
-        });
-        let scenario = conformance::scenarios().swap_remove(number);
-        let scenario = &scenario;
-        let over_stdio = transcript(scenario, &format!("serve-b-{number}"), |machine, run| {
-            let mut served = serve(machine);
-            served
-                .lines
-                .initialize(conformance::initialize())
-                .expect("initialize");
-            let transcript = run(&mut served.lines);
-            assert_eq!(
-                served.end(),
-                Some(0),
-                "{}: the server's exit",
-                scenario.name
-            );
-            transcript
-        });
-        for (at, (one, other)) in in_process.0.iter().zip(&over_stdio.0).enumerate() {
-            assert_eq!(one, other, "{}: entry {at} differs", scenario.name);
+    // Folders of one length: a path's length shows in a token estimate.
+    let in_process = transcripts("serve-a", |machine, run| {
+        let mut carrier = InProcess::start(machine);
+        run(&mut carrier)
+    });
+    let over_stdio = transcripts("serve-b", |machine, run| {
+        let mut served = serve(machine);
+        served
+            .lines
+            .initialize(conformance::initialize())
+            .expect("initialize");
+        let transcripts = run(&mut served.lines);
+        assert_eq!(served.end(), Some(0), "the server's exit");
+        transcripts
+    });
+    assert_eq!(in_process.len(), conformance::scenarios().len());
+    for ((name, first), (_, second)) in in_process.iter().zip(&over_stdio) {
+        for (at, (one, other)) in first.0.iter().zip(&second.0).enumerate() {
+            assert_eq!(one, other, "{name}: entry {at} differs");
         }
         assert_eq!(
-            in_process.0.len(),
-            over_stdio.0.len(),
-            "{}: one carrier has more entries",
-            scenario.name
+            first.0.len(),
+            second.0.len(),
+            "{name}: one carrier has more entries"
         );
     }
 }
