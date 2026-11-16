@@ -95,6 +95,31 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Where a value of the configuration came from, as the protocol says it:
+/// `None` for a built-in default.
+fn config_origin(
+    origin: &cortex_config::Origin,
+    env: &Env,
+) -> Option<cortex_protocol::methods::ConfigOrigin> {
+    use cortex_config::LayerKind;
+    use cortex_protocol::methods::ConfigLayer;
+    let layer = match origin.layer {
+        LayerKind::Default => return None,
+        LayerKind::Managed => ConfigLayer::Managed,
+        LayerKind::User => ConfigLayer::User,
+        LayerKind::Project => ConfigLayer::Project,
+        LayerKind::ProjectLocal => ConfigLayer::ProjectLocal,
+        LayerKind::Profile => ConfigLayer::Profile,
+        LayerKind::Environment => ConfigLayer::Environment,
+        LayerKind::CommandLine => ConfigLayer::CommandLine,
+    };
+    Some(cortex_protocol::methods::ConfigOrigin {
+        layer,
+        file: origin.file.as_deref().map(|file| env.display_path(file)),
+        line: origin.line,
+    })
+}
+
 pub(crate) fn error(kind: ErrorKind, code: &str, message: impl Into<String>) -> Box<ErrorData> {
     Box::new(ErrorData::new(kind, code, message))
 }
@@ -1498,8 +1523,9 @@ impl Core {
                     None => self.inner.user(),
                 };
                 let mut config = serde_json::Map::new();
-                for (key, value) in loaded.effective() {
-                    let key = key.to_string();
+                let mut origins = std::collections::BTreeMap::new();
+                for (path, value) in loaded.effective() {
+                    let key = path.to_string();
                     if !params.keys.is_empty()
                         && !params
                             .keys
@@ -1509,13 +1535,17 @@ impl Core {
                         continue;
                     }
                     if let Ok(value) = serde_json::to_value(&value) {
+                        // Where it came from, for `/config` (since step 24):
+                        // a built-in default has no entry.
+                        if let Some(origin) =
+                            config_origin(&loaded.origin(&path), &self.inner.options.env)
+                        {
+                            origins.insert(key.clone(), origin);
+                        }
                         config.insert(key, value);
                     }
                 }
-                Ok(OpResult::ConfigGet(ConfigGetResult {
-                    config,
-                    origins: std::collections::BTreeMap::new(),
-                }))
+                Ok(OpResult::ConfigGet(ConfigGetResult { config, origins }))
             }
             Op::ConfigReload(params) => Ok(OpResult::ConfigReload(
                 crate::reload::reload(self, client, params).await?,
@@ -1993,6 +2023,16 @@ impl Core {
         let mut parts = lock(&live.template).parts.clone();
         parts.level = level;
         self.put_engine(live, parts).await
+    }
+
+    /// Whether a session of the project `key` runs a turn now.
+    pub(crate) fn a_turn_runs_in(&self, key: &cortex_protocol::ids::ProjectKey) -> bool {
+        lock(&self.inner.sessions).values().any(|live| {
+            live.knowledge
+                .as_ref()
+                .is_some_and(|knowledge| knowledge.key == *key)
+                && live.handle.turn_state() != cortex_agent::TurnState::Idle
+        })
     }
 
     /// The sessions `client` has open.

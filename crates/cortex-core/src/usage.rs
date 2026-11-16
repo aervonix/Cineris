@@ -94,6 +94,7 @@ pub(crate) async fn report(
     let zone = inner.options.zone.clone();
     let clock = Arc::clone(&inner.options.clock);
     let retention = settings.stats.retention;
+    let home = user.dirs.home.clone();
     // The open sessions' limits are as fresh as any on disk, and may not
     // have reached it yet.
     let live: Vec<ProviderLimits> = core
@@ -105,6 +106,7 @@ pub(crate) async fn report(
     Core::blocking(move || {
         let zone = zone.unwrap_or_else(Zone::system);
         let now = clock.now();
+        let mut notes = Vec::new();
         let (part, mut limits) = match &dir {
             Some(dir) => {
                 // With statistics on, what is read is saved: a file that
@@ -133,19 +135,33 @@ pub(crate) async fn report(
                     // nothing is written.
                     let _ = aggregates.save(dir, clock.as_ref());
                 }
-                (aggregates.total(), LimitsFile::load(dir))
+                // What `cortex stats` says of the files, the report says
+                // too (step 24: the usage panel shows it).
+                for path in dir.set_aside().unwrap_or_default() {
+                    notes.push(format!(
+                        "A statistics file that could not be read was set aside, at {}: the \
+                         months it held are not counted here.",
+                        shortened(&path, home.as_deref())
+                    ));
+                }
+                let total = aggregates.total();
+                if total.unreadable > 0 {
+                    notes.push(format!(
+                        "{} line{} of the statistics could not be read and {} not counted.",
+                        total.unreadable,
+                        if total.unreadable == 1 { "" } else { "s" },
+                        if total.unreadable == 1 { "is" } else { "are" }
+                    ));
+                }
+                (total, LimitsFile::load(dir))
             }
             None => (cortex_stats::Part::default(), LimitsFile::default()),
         };
         limits.merge(live);
-        Ok(cortex_stats::report(
-            &part,
-            &query,
-            &zone,
-            now,
-            &limits.providers,
-            recording,
-        ))
+        let mut report =
+            cortex_stats::report(&part, &query, &zone, now, &limits.providers, recording);
+        report.notes = notes;
+        Ok(report)
     })
     .await
 }
