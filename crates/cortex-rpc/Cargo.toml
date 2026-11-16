@@ -29,14 +29,16 @@ tracing.workspace = true
 # descriptor (`Win32_System_Pipes`, with the flags of `Win32_Storage_FileSystem`
 # and the descriptor's text read by `Win32_Security_Authorization`), and each
 # connection's token checked (`Win32_Security`, and `Win32_System_Threading`
-# for the thread's token). Used by one module, `socket::windows`, the only
-# place in this crate where `unsafe` is allowed.
+# for the thread's token), and the server's own commands told by the job they
+# are in (`Win32_System_JobObjects`). Used by one module, `socket::windows`,
+# the only place in this crate where `unsafe` is allowed.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }

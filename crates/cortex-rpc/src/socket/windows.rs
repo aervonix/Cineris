@@ -48,6 +48,22 @@
 //!   them, the one that has waited longest is closed. Nothing is written to
 //!   a client before it is admitted, and what was read from a refused one is
 //!   dropped with it.
+//! - **The server's own commands are refused** (`docs/steps/27/answered.md`,
+//!   "The harness's own commands"). A command the agent runs is a process of
+//!   the user's, which could otherwise connect and answer its own session's
+//!   approvals. When the first listener of a process is bound, the process
+//!   joins an empty job of its own: no limits, no breakaway allowed. Every
+//!   process it starts from then on (a command's tree, a hook, an MCP
+//!   server) is in that job and cannot leave it; the sandbox's job for each
+//!   command nests inside it. A client whose process is in the job is
+//!   refused, and so is one whose process cannot be looked at. The server's
+//!   own process may connect: it is in the job too, and it is the server.
+//!   If the job cannot be made or joined, the listener is not bound. This is
+//!   defence in depth: a command can still reach outside the job through a
+//!   service that starts processes for it (WMI's `Win32_Process.Create`,
+//!   the task scheduler). But Windows has no sandbox in the first release,
+//!   so it is the main thing that keeps a command the user approved from
+//!   answering its session's approvals over the pipe.
 //!
 //! The instances are made here (`CreateNamedPipeW`) rather than by tokio's
 //! `ServerOptions`, which needs a runtime to make one: binding needs none,
@@ -70,6 +86,7 @@ use std::os::windows::io::{
 };
 use std::path::Path;
 use std::ptr;
+use std::sync::OnceLock;
 use std::task::Poll;
 
 use tokio::io::AsyncReadExt;
@@ -77,8 +94,8 @@ use tokio::net::windows::named_pipe::NamedPipeServer;
 use tokio::sync::oneshot;
 use tokio::task::{AbortHandle, JoinError, JoinSet};
 use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
-    SetLastError, TRUE,
+    ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_SUCCESS, FALSE, HANDLE, INVALID_HANDLE_VALUE,
+    LocalFree, SetLastError, TRUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -92,12 +109,16 @@ use windows_sys::Win32::Security::{
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
 };
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
+};
 use windows_sys::Win32::System::Pipes::{
     CreateNamedPipeW, GetNamedPipeClientProcessId, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken,
+    GetCurrentProcess, GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken,
+    PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 use super::{Accepted, ListenOptions, Place};
@@ -436,16 +457,76 @@ fn is_app_container(token: BorrowedHandle<'_>) -> io::Result<bool> {
     Ok(found != 0)
 }
 
-/// The client's process, for the log only: an id can be reused.
-fn client_process(pipe: BorrowedHandle<'_>) -> String {
+/// The client's process id, `None` when Windows does not say it.
+fn client_process(pipe: BorrowedHandle<'_>) -> Option<u32> {
     let mut pid = 0_u32;
     // SAFETY: `pipe` is the server end of a connected instance, alive for the
     // call, and `pid` is a live `u32`.
-    if unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle(), &raw mut pid) } == 0 {
-        "pid unknown".to_owned()
-    } else {
-        format!("pid {pid}")
+    let told = unsafe { GetNamedPipeClientProcessId(pipe.as_raw_handle(), &raw mut pid) };
+    (told != 0).then_some(pid)
+}
+
+/// The job of the server's own commands (the module's point on them): made
+/// empty, with no limits, and joined by this process, the first time a
+/// listener is bound. A process stays in a job for good, so one job serves
+/// every listener of the process: a second, nested inside the first, would
+/// tell nothing more.
+static OWN_COMMANDS: OnceLock<OwnedHandle> = OnceLock::new();
+
+/// The job of the server's own commands, made and joined if it is not yet.
+fn own_commands() -> io::Result<BorrowedHandle<'static>> {
+    if let Some(job) = OWN_COMMANDS.get() {
+        return Ok(job.as_handle());
     }
+    // SAFETY: both arguments may be null: default security, which makes the
+    // handle not inheritable, and no name.
+    let handle = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
+    if handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `handle` is a job that was just made and that nothing else
+    // owns. `OwnedHandle` takes sole ownership and closes it.
+    let job = unsafe { OwnedHandle::from_raw_handle(handle) };
+    // SAFETY: `job` is open with every right its maker gets, and
+    // `GetCurrentProcess` returns a pseudo-handle that is always valid. A
+    // process already in a job (a test runner's, a terminal's) takes the
+    // empty one as a job nested in that one.
+    let joined = unsafe { AssignProcessToJobObject(job.as_raw_handle(), GetCurrentProcess()) };
+    if joined == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // Two threads binding at once may each make a job and join it: the
+    // second is then nested in the first, so the one kept holds every
+    // process started after either.
+    Ok(OWN_COMMANDS.get_or_init(|| job).as_handle())
+}
+
+/// Whether the process `pid` is in `job`: one the server started, or one
+/// started by those.
+fn in_job(pid: u32, job: BorrowedHandle<'_>) -> io::Result<bool> {
+    // SAFETY: the call takes plain values; its result is checked before use.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
+    if process.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `process` was just opened and nothing else owns it.
+    // `OwnedHandle` takes sole ownership and closes it.
+    let process = unsafe { OwnedHandle::from_raw_handle(process) };
+    let mut inside = FALSE;
+    // SAFETY: `process` is open with the right this asks, `job` is open with
+    // every right, both are alive for the call, and `inside` is a live
+    // `BOOL`.
+    let asked = unsafe {
+        IsProcessInJob(
+            process.as_raw_handle(),
+            job.as_raw_handle(),
+            &raw mut inside,
+        )
+    };
+    if asked == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(inside != 0)
 }
 
 /// Stops this thread impersonating. A thread that cannot would go on as the
@@ -496,9 +577,14 @@ fn client_token(pipe: BorrowedHandle<'_>) -> io::Result<OwnedHandle> {
 
 /// The check of a connected client: `Ok` with how to name it in the log, or
 /// `Err` with why it is refused. It impersonates, so it runs on a thread of
-/// its own.
-fn check(pipe: BorrowedHandle<'_>, server: Server) -> Result<String, String> {
-    let peer = client_process(pipe);
+/// its own. `job` is the job of the server's own commands.
+fn check(
+    pipe: BorrowedHandle<'_>,
+    server: Server,
+    job: BorrowedHandle<'_>,
+) -> Result<String, String> {
+    let pid = client_process(pipe);
+    let peer = pid.map_or_else(|| "pid unknown".to_owned(), |pid| format!("pid {pid}"));
     let unread =
         |error: io::Error| format!("the client's token could not be read ({peer}): {error}");
     let token = client_token(pipe).map_err(unread)?;
@@ -520,6 +606,18 @@ fn check(pipe: BorrowedHandle<'_>, server: Server) -> Result<String, String> {
     if is_app_container(token).map_err(unread)? {
         return Err(format!("a client in an AppContainer ({peer})"));
     }
+    let Some(pid) = pid else {
+        return Err("a client whose process is not known".to_owned());
+    };
+    // The server's own process is in the job too, and may connect to itself.
+    if pid != std::process::id() {
+        let own = in_job(pid, job).map_err(|error| {
+            format!("a client whose process cannot be looked at ({peer}): {error}")
+        })?;
+        if own {
+            return Err(format!("one of the server's own commands ({peer})"));
+        }
+    }
     Ok(peer)
 }
 
@@ -539,7 +637,11 @@ fn held(name: &str, error: io::Error) -> io::Error {
 
 /// A connected client, read until its first data and then checked: its
 /// bytes, that data first, when it is admitted; why not otherwise.
-async fn admit(mut pipe: NamedPipeServer, server: Server) -> Accepted {
+async fn admit(
+    mut pipe: NamedPipeServer,
+    server: Server,
+    job: BorrowedHandle<'static>,
+) -> Accepted {
     let mut first = vec![0; FIRST];
     let count = match pipe.read(&mut first).await {
         Ok(0) => return Accepted::Refused("a client that left before it sent anything".to_owned()),
@@ -553,7 +655,7 @@ async fn admit(mut pipe: NamedPipeServer, server: Server) -> Accepted {
     let checking = std::thread::Builder::new()
         .name("cortex-pipe-check".to_owned())
         .spawn(move || {
-            let verdict = check(pipe.as_handle(), server);
+            let verdict = check(pipe.as_handle(), server, job);
             let _ = told.send((pipe, verdict));
         });
     if let Err(error) = checking {
@@ -596,6 +698,8 @@ pub(super) struct Listener {
     /// The security descriptor's text, zero-terminated UTF-16.
     description: Vec<u16>,
     server: Server,
+    /// The job of the server's own commands.
+    job: BorrowedHandle<'static>,
     /// The first instance, until the first `accept` takes it into the
     /// runtime it runs in: binding needs no runtime.
     bound: Option<OwnedHandle>,
@@ -625,6 +729,15 @@ impl Listener {
             user: cortex_base::private::current_user_sid()?,
             level: own_integrity()?,
         };
+        let job = own_commands().map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!(
+                    "the server's own commands could not be told from other clients: a job \
+                     for them could not be made or joined ({error})"
+                ),
+            )
+        })?;
         let name = wide(whole);
         let description = wide(&description(server, widened(options)));
         let first = instance(&name, &description, true).map_err(|error| held(whole, error))?;
@@ -633,6 +746,7 @@ impl Listener {
             name,
             description,
             server,
+            job,
             bound: Some(first),
             waiting: None,
             checking: JoinSet::new(),
@@ -696,7 +810,7 @@ impl Listener {
         {
             oldest.abort();
         }
-        let started = self.checking.spawn(admit(connected, self.server));
+        let started = self.checking.spawn(admit(connected, self.server, self.job));
         self.order.push_back(started);
         Ok(())
     }

@@ -154,3 +154,25 @@ find: if is_app_container(token).map_err(unread)? {
 replace: if is_app_container(token).map_err(unread)? && false {
 os: windows
 expect: survives
+
+# -------------------------------------------------- the server's own commands
+
+[break] pipe-own-command-admitted
+rule: A client whose process is in the job of the server's own commands is refused: a command the agent runs cannot answer its session's approvals over the pipe.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: check
+find: if own {
+replace: if own && false {
+os: windows
+caught-by:
+    cortex-rpc::it pipe::sys_one_of_the_servers_own_commands_is_refused
+
+[break] pipe-own-commands-job-not-joined
+rule: The server's process joins the job of its own commands when it binds, so that every process it starts from then on is in it.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: own_commands
+find: let joined = unsafe { AssignProcessToJobObject(job.as_raw_handle(), GetCurrentProcess()) };
+replace: let joined = { let _ = AssignProcessToJobObject; 1 };
+os: windows
+caught-by:
+    cortex-rpc::it pipe::sys_one_of_the_servers_own_commands_is_refused

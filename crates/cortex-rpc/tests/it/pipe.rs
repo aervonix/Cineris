@@ -28,6 +28,7 @@ use std::sync::Arc;
 use cortex_base::CancelToken;
 use cortex_rpc::{Accepted, ListenOptions, Listener, Place, ServeOptions};
 use cortex_testkit::conformance::{self, Lines};
+use cortex_testkit::rerun::{self, Rerun};
 use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
@@ -763,6 +764,49 @@ fn other_user() -> Result<(OtherUser, OwnedHandle), String> {
         "the second user was not logged on: {}",
         failures.join("; ")
     ))
+}
+
+/// A client the server started (here a child of the test process, which is
+/// the server's) is one of the server's own commands: though it is the
+/// user's, at the server's integrity, its connection is closed unanswered.
+/// The child is this test run again: it opens the pipe, asks `initialize`,
+/// and says what it read. The server's own thread is served after it.
+#[test]
+fn sys_one_of_the_servers_own_commands_is_refused() {
+    if rerun::is_child() {
+        let name = std::env::var("CX_PIPE").unwrap();
+        let mut pipe = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&name)
+            .unwrap();
+        pipe.write_all(&initialize_line()).unwrap();
+        let mut buffer = [0; 256];
+        let read = match pipe.read(&mut buffer) {
+            Ok(0) | Err(_) => "closed".to_owned(),
+            Ok(count) => String::from_utf8_lossy(&buffer[..count]).into_owned(),
+        };
+        rerun::say("read", &read);
+        return;
+    }
+    let world = World::new("pipe-own-command");
+    let core = world.core();
+    let place = pipe_of("own-command");
+    let listener = bind(&place).unwrap();
+    let (stop, done) = serve(&core, listener, world.serve_options());
+    let ran = Rerun::this_test().env("CX_PIPE", name(&place)).run();
+    assert_eq!(
+        ran.said("read").as_deref(),
+        Some("closed"),
+        "the server's own command was answered"
+    );
+    let mut lines = client(open(&place).expect("the server's own thread opens the pipe"));
+    lines
+        .initialize(conformance::initialize())
+        .expect("the server's own thread is served");
+    drop(lines);
+    stop.cancel();
+    done.recv().unwrap();
 }
 
 /// Another user cannot open the pipe, while the test's own user is served:
