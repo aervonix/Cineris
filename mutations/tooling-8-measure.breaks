@@ -124,10 +124,10 @@ caught-by:
     try_run::tests::against_makes_a_crates_perf_run_a_comparison_of_the_two_trees
 
 [break] one-round-is-a-comparison
-rule: A comparison has at least two rounds, one in each order.
+rule: A comparison has at least three rounds: with two, two runs of one tree read apart a third of the time (the step's review).
 file: xtask/src/try_run.rs
 in: Inputs::perf_ab
-find: count.max(2).to_string()
+find: count.max(3).to_string()
 replace: count.to_string()
 caught-by:
     try_run::tests::against_makes_a_crates_perf_run_a_comparison_of_the_two_trees
