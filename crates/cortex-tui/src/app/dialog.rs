@@ -12,21 +12,27 @@
 //! (the owner's rule, after the review of step 23):
 //!
 //! - **The grace:** [`GRACE`] after its first frame was written.
-//! - **The quiet:** if anything reached the editor while the dialog was up
-//!   (a key it passed on, a paste), [`QUIET`] with no input after the last
-//!   of it. Typing that goes on through the dialog keeps it from being
-//!   ready, however slow; it is ready a second after the typing stops.
-//!   Answers shown before such input are hidden again.
+//! - **The quiet:** [`QUIET`] with no input a dialog did not take: a key or
+//!   a paste that reached the editor or the viewer, while the dialog was up
+//!   or just before it came. Typing that goes on through the dialog keeps it
+//!   from being ready, however slow, and so does typing that stopped less
+//!   than a second before it came; it is ready a second after the typing
+//!   stops. Answers shown before such input are hidden again.
+//! - **After an answer:** the dialog after one a key answered is ready no
+//!   sooner than [`REPEAT`] after that key, so that the key held a little
+//!   long, or pressed twice, never answers a dialog not seen yet.
 //! - **The pause:** a key read less than [`GRACE`] after the key before it
 //!   carries on the typing, whatever the dialog shows; it goes on to the
 //!   editor, and so hides the answers again.
 //! - **No repeat:** a key held down never answers. A repeat the terminal
 //!   marks ([`Event::Repeat`](cortex_term::Event::Repeat), from the
-//!   enhanced keyboard protocol's event types or win32 input) is dropped,
-//!   and so is the same key as the one before it within [`REPEAT`] when
-//!   that one was typing, not a key a dialog took: where the terminal does
-//!   not mark repeats, a key held from before the dialog came looks like
-//!   that ([`super::App`] tells).
+//!   enhanced keyboard protocol's event types, for the keys with no text,
+//!   and win32 input, for all) is dropped, and so is the same key as the
+//!   one before it within [`REPEAT`] when that one was typing, not a key a
+//!   dialog took: where the terminal does not mark repeats (the keys that
+//!   type text, under the enhanced protocol too), a key held from before
+//!   the dialog came looks like that ([`super::App`] tells). The quiet and
+//!   the wait after an answer keep such a key from ever being taken.
 //! - **Keys read together** were typed together, and none of them answers
 //!   ([`super::App::burst`]).
 //!
@@ -35,7 +41,9 @@
 //! answers. While it does not take keys, what types a character goes on to
 //! the editor, where it was going, and the dialog's own other keys (`Esc`)
 //! do nothing, so that a key meant to deny never interrupts the turn
-//! instead. Once it takes keys, a key it has no use for does nothing. A
+//! instead. Once it takes keys, a key it has no use for that types a
+//! character goes on to the editor, as input (typing that resumed after a
+//! pause is kept, and hides the answers again); any other does nothing. A
 //! paste never answers a dialog. After the program is continued (`fg`) or
 //! the external editor gives the terminal back, the dialog starts its grace
 //! again ([`Dialog::hide`]). All of these are comparisons of times; the one
@@ -150,6 +158,10 @@ pub(crate) struct Dialog {
     /// When input last reached the editor while the dialog was up: it is
     /// ready [`QUIET`] after.
     typed: Option<Instant>,
+    /// The earliest it can be ready: [`REPEAT`] after a key that answered
+    /// the dialog before it, so that the key held a little long, or pressed
+    /// twice, never answers this one, which was not seen yet.
+    not_before: Option<Instant>,
     /// A frame with its answers has been drawn, and nothing hid them since.
     answers_drawn: bool,
     /// It asks to leave the sandbox of a session whose commands are
@@ -192,6 +204,7 @@ impl Dialog {
             asks,
             shown: None,
             typed: None,
+            not_before: None,
             answers_drawn: false,
             leaving,
             offered: Vec::new(),
@@ -248,6 +261,12 @@ impl Dialog {
         self.hide_answers();
     }
 
+    /// It is ready no earlier than `at`: a key answered the dialog before it
+    /// at `at - REPEAT`.
+    pub(crate) fn not_before(&mut self, at: Instant) {
+        self.not_before = Some(self.not_before.map_or(at, |before| before.max(at)));
+    }
+
     /// The dialog starts again as if just shown: its grace begins with its
     /// next frame, and its answers are hidden until then. After the program
     /// was continued (`fg`), or the external editor gave the terminal back:
@@ -269,7 +288,7 @@ impl Dialog {
     /// of its grace, and [`QUIET`] after typing reached the editor while it
     /// was up. `None` until its first frame.
     fn ready_at(&self) -> Option<Instant> {
-        let ready = self.shown? + GRACE;
+        let ready = (self.shown? + GRACE).max(self.not_before.unwrap_or(self.shown?));
         Some(self.typed.map_or(ready, |typed| ready.max(typed + QUIET)))
     }
 
@@ -379,6 +398,15 @@ impl Dialog {
             return Keyed::Nothing;
         }
         if !self.takes_keys_at(at, previous) {
+            // Showing the request whole answers nothing: it is the
+            // dialog's once its first frame is up.
+            if action == Some(Action::ShowWhole)
+                && typed(key).is_none()
+                && self.shown.is_some()
+                && matches!(self.asks, Asks::Approval { .. } | Asks::Trust { .. })
+            {
+                return Keyed::ShowWhole;
+            }
             // Typing goes on where it was going; the dialog's own keys that
             // type nothing (`Esc`) do nothing yet.
             return if typed(key).is_none() && action.is_some_and(dialogs) {
@@ -400,7 +428,7 @@ impl Dialog {
             }));
         }
         let Some(action) = action else {
-            return Keyed::Nothing;
+            return unused(key);
         };
         match (&self.asks, action) {
             // `Esc`, and the other keys of `deny`, are always on offer: no
@@ -416,7 +444,7 @@ impl Dialog {
                     self.cache = None;
                     Keyed::Changed
                 }
-                _ => Keyed::Nothing,
+                _ => unused(key),
             },
             (Asks::Trust { .. }, action) if drawn(Pick::Act(action)) => match action {
                 Action::AllowOnce => Keyed::Answer(ServerResponse::Trust(TrustResponse {
@@ -427,14 +455,14 @@ impl Dialog {
                     trusted: false,
                     never: true,
                 })),
-                _ => Keyed::Nothing,
+                _ => unused(key),
             },
             (Asks::Question { .. }, Action::AllowOnce) if drawn(Pick::Act(Action::AllowOnce)) => {
                 self.note = Some(String::new());
                 self.cache = None;
                 Keyed::Changed
             }
-            _ => Keyed::Nothing,
+            _ => unused(key),
         }
     }
 
@@ -752,6 +780,18 @@ impl Dialog {
                 })
                 .collect(),
         }
+    }
+}
+
+/// A key a dialog that takes keys has no use for: one that types a
+/// character goes on to the editor, as typing that resumed after a pause
+/// (and so is input, which hides the answers again for a second); any
+/// other does nothing (since the review of step 23).
+fn unused(key: Key) -> Keyed {
+    if typed(key).is_some() {
+        Keyed::Pass
+    } else {
+        Keyed::Nothing
     }
 }
 

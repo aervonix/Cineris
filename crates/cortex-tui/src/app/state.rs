@@ -217,6 +217,14 @@ pub struct App {
     /// `Enter` before a pause of [`QUIET`] does not send it (the review of
     /// step 23).
     note_cut: Option<Instant>,
+    /// When the last input no dialog took was read: a key or a paste that
+    /// went to the editor or the viewer. A dialog is ready only a quiet
+    /// second after it, so typing that stopped just before a dialog came
+    /// counts as typing at it (the review of these fixes).
+    untaken: Option<Instant>,
+    /// When a dialog last took a key: the next dialog is ready no sooner
+    /// than the repeat window after it.
+    taken: Option<Instant>,
     /// The last turn's cost and the session's, shown until the next prompt.
     last_cost: Option<(String, String)>,
     /// Whether this session has had a turn, here or before.
@@ -316,6 +324,8 @@ impl App {
             last_interrupt: None,
             last_key: None,
             note_cut: None,
+            untaken: None,
+            taken: None,
             last_cost: None,
             had_turn: false,
             effects: Vec::new(),
@@ -366,7 +376,19 @@ impl App {
             return;
         }
         if let Some(dialog) = self.dialogs.front_mut() {
+            let first = dialog.shown.is_none();
             dialog.drawn(at);
+            // Its first frame: what was typed just before it, and the key
+            // that answered the dialog before it, hold it as they would had
+            // they come while it was up.
+            if first {
+                if let Some(untaken) = self.untaken {
+                    dialog.typed(untaken);
+                }
+                if let Some(taken) = self.taken {
+                    dialog.not_before(taken + REPEAT);
+                }
+            }
         }
     }
 
@@ -583,11 +605,15 @@ impl App {
                         key: Some(*key),
                         typing: true,
                     });
+                    self.not_taken(at);
                     return self.viewer_key(*key, at);
                 }
                 // The viewer's, not the hidden editor's (the review of step
                 // 23): its search, while one is being typed.
-                TermEvent::Paste(text) => return self.viewer_paste(text),
+                TermEvent::Paste(text) => {
+                    self.not_taken(at);
+                    return self.viewer_paste(text);
+                }
                 _ => {}
             }
         }
@@ -624,10 +650,29 @@ impl App {
                         key: Some(*key),
                         typing,
                     });
+                    // Typing (a key it passed on, or did nothing with while
+                    // not ready) holds the dialog a quiet second; a key it
+                    // took holds the next one; a global key is neither.
+                    match &keyed {
+                        Keyed::Global(_) => {}
+                        _ if typing => {
+                            self.untaken = Some(at);
+                            dialog.typed(at);
+                        }
+                        _ => self.taken = Some(at),
+                    }
+                    // A key the dialog took is not a second `Ctrl+C`'s
+                    // first: the quit it armed is disarmed.
+                    if matches!(keyed, Keyed::Answer(_) | Keyed::Changed | Keyed::ShowWhole) {
+                        self.input.disarm_quit();
+                    }
+                    let Some(dialog) = self.dialogs.front_mut() else {
+                        return true;
+                    };
                     match keyed {
                         // It goes on to the editor, where it was going: the
-                        // dialog waits for a pause in the typing.
-                        Keyed::Pass => dialog.typed(at),
+                        // dialog waits for a pause in the typing (above).
+                        Keyed::Pass => {}
                         Keyed::Global(action) => {
                             // `Ctrl+C` with no turn running (the trust
                             // question, the undo's) leaves the text the
@@ -656,6 +701,7 @@ impl App {
                         key: Some(*key),
                         typing,
                     });
+                    self.untaken = Some(at);
                 }
                 if self.holds_submit(*key, at) {
                     return true;
@@ -675,9 +721,7 @@ impl App {
                 true
             }
             TermEvent::Paste(_) => {
-                if let Some(dialog) = self.dialogs.front_mut() {
-                    dialog.typed(at);
-                }
+                self.not_taken(at);
                 self.last_key = Some(LastKey {
                     at,
                     key: None,
@@ -700,6 +744,15 @@ impl App {
             }
             TermEvent::Resize { .. } | TermEvent::Reply(_) => false,
             TermEvent::Focus(_) => false,
+        }
+    }
+
+    /// Input no dialog took was read at `at`: the dialog shown, if any,
+    /// waits a quiet second after it, and hides answers it showed.
+    fn not_taken(&mut self, at: Instant) {
+        self.untaken = Some(at);
+        if let Some(dialog) = self.dialogs.front_mut() {
+            dialog.typed(at);
         }
     }
 

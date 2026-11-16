@@ -681,6 +681,12 @@ impl Input {
 
     // ---------------------------------------------------------- internals
 
+    /// A key that went elsewhere (a dialog took it) was pressed after the
+    /// interrupt key: a later one does not quit at once.
+    pub fn disarm_quit(&mut self) {
+        self.quit_armed = false;
+    }
+
     /// The interrupt key while the editor is hidden (a dialog, the viewer
     /// has its place): a running turn is interrupted; otherwise the text,
     /// the search and the menus, which cannot be seen, are left as they are,
