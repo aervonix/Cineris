@@ -39,6 +39,7 @@ mod outside;
 mod owner_guard;
 mod pattern;
 mod perf;
+mod perf_ab;
 mod records;
 mod regen;
 mod replace;
@@ -159,6 +160,15 @@ On the runners, without a pull request (the `try` workflow runs this)
                     by each test's median: a change's cost apart from the
                     runner's speed. --keep-going records a round with a
                     failing test and carries on.
+
+  perf-ab --base DIR [--label NAME] [--count N] [--cargo-profile release|dist]
+          -p CRATE... [NAME]...
+                    The crates' ignored perf_ tests of this tree and of the tree
+                    at DIR, each built once, run in turn N rounds on this
+                    machine, and the measurements they print (`perf: NAME VALUE
+                    UNIT`) compared: each side's median and range, and the
+                    difference. `try` runs it for `perf -p CRATE` with
+                    --against.
 
 Reviews
   scratch-test CRATE FILE [--cargo-profile P] [--ignored|--include-ignored]
@@ -374,6 +384,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "live" => outside::live(rest),
         "record" => outside::record(rest),
         "perf" => perf::run(rest),
+        "perf-ab" => perf_ab::run(rest),
         "tui-screens" => screens::run(rest),
         "dist" => not_built("dist", 34),
         other => Err(format!("unknown command `{other}`\n\n{USAGE}")),

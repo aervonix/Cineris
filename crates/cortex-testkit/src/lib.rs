@@ -26,6 +26,7 @@
 //! | [`protocol`] | [`TestProtocol`]: a wire dialect made for tests. |
 //! | [`server`] | [`SseServer`]: a provider's HTTP endpoint on the loopback interface. For tests of the real HTTP client, and of the real binary. |
 //! | [`fixtures`] | Made-up models with every shape of speed tier, and requests to them. |
+//! | [`numbers`] | [`numbers::report`]: a measurement's name, value and unit as one line, `perf: NAME VALUE UNIT`, which `cargo xtask perf-ab` reads to compare two trees' `perf_` tests. |
 //! | [`phases`] | [`Phases`]: where a `perf_` test's time went, by named phase, printed as a breakdown with each phase's time and share. Always on. |
 //! | [`profile`] | Where a test's time went, by phase and wait, with `CORTEX_TESTKIT_PROFILE=1`. Nothing when it is off. |
 //! | [`watch`] | What a test was doing when it ran out of time: its waits and its process tree, written to its standard error before nextest stops it. And `CORTEX_TESTKIT_PAUSE_MS`, which widens the scripted server's races on purpose. |
@@ -58,6 +59,7 @@ pub mod fixtures;
 pub mod gate;
 pub mod hold;
 pub mod hostile;
+pub mod numbers;
 pub mod phases;
 pub mod profile;
 pub mod protocol;

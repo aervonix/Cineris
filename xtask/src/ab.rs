@@ -653,7 +653,7 @@ fn target_of(tree: &Path) -> PathBuf {
 
 /// `cargo nextest run` in `tree` with `arguments`: the build of the
 /// blocking test job's tests, or one of its runs.
-fn nextest(tree: &Path, arguments: &[String]) -> Command {
+pub(crate) fn nextest(tree: &Path, arguments: &[String]) -> Command {
     let mut command = Command::new(workspace::cargo());
     command
         .current_dir(tree)

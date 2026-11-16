@@ -343,6 +343,8 @@ struct Kept {
     ci: Option<PathBuf>,
     stress: Option<PathBuf>,
     perf: Option<PathBuf>,
+    /// A performance A/B's results (`perf-ab/results.json`).
+    perf_ab: Option<PathBuf>,
     ab: Vec<PathBuf>,
 }
 
@@ -364,6 +366,10 @@ fn sort_files(files: &[PathBuf]) -> Kept {
         ci: report("ci"),
         stress: report("stress"),
         perf: report("perf"),
+        perf_ab: files
+            .iter()
+            .find(|file| runs::ends_with_names(file, &crate::perf_ab::RECORD_PATH_NAMES))
+            .cloned(),
         ab: files
             .iter()
             .filter(|file| {
@@ -501,25 +507,37 @@ pub(crate) fn job_result(
                 .push(format!("`{name}`: {failing} test(s) failed on some repeat"));
         }
     }
+    if let Some(path) = &kept.perf_ab {
+        reported = true;
+        let results = crate::perf_ab::from_json(&read_text(path)?)?;
+        let _ = writeln!(result.text, "{}", crate::perf_ab::render(&results));
+        let _ = writeln!(
+            result.text,
+            "Each test's own tables are in the log: `cargo xtask ci-log {run} --grep 'perf_'`.\n"
+        );
+    }
     if let Some(path) = &kept.perf {
         reported = true;
         let xml = read_text(path)?;
-        let mut cases = junit::parse(&xml);
-        cases.sort_by_key(TestCase::id);
-        let _ = writeln!(result.text, "Performance tests ({} ran):", cases.len());
-        for case in &cases {
+        // A performance A/B's report is of the last run only, the head's.
+        if kept.perf_ab.is_none() {
+            let mut cases = junit::parse(&xml);
+            cases.sort_by_key(TestCase::id);
+            let _ = writeln!(result.text, "Performance tests ({} ran):", cases.len());
+            for case in &cases {
+                let _ = writeln!(
+                    result.text,
+                    "  {:>8.3} s  {}{}",
+                    case.seconds,
+                    case.id(),
+                    if case.failed { "  FAILED" } else { "" }
+                );
+            }
             let _ = writeln!(
                 result.text,
-                "  {:>8.3} s  {}{}",
-                case.seconds,
-                case.id(),
-                if case.failed { "  FAILED" } else { "" }
+                "Their own tables are in the log: `cargo xtask ci-log {run} --grep 'perf_'`.\n"
             );
         }
-        let _ = writeln!(
-            result.text,
-            "Their own tables are in the log: `cargo xtask ci-log {run} --grep 'perf_'`.\n"
-        );
         failures_in(&xml, "the performance tests", &mut failed);
     }
     if !reported && directory.is_some() {
@@ -1086,6 +1104,53 @@ mod tests {
             "{}",
             result.text
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A performance A/B run's artifact: the comparison of its measurements
+    /// is printed, and the report of the last run alone is not listed as if
+    /// it were the run's.
+    #[test]
+    fn a_performance_ab_run_prints_both_sides_numbers_and_the_difference() {
+        let dir = scratch("perf-ab");
+        keep(
+            &dir,
+            "work/repo/target/perf-ab/results.json",
+            r#"{"label":"main","profile":"release","packages":["cortex-index"],"rounds":3,
+                "measurements":[{"name":"index.warm","unit":"ms",
+                "base":[28.0,29.0,28.5],"head":[31.0,32.5,31.5]}]}"#,
+        );
+        keep(
+            &dir,
+            "work/repo/target/nextest/perf/junit.xml",
+            "<testsuites><testsuite name=\"cortex-index::it\">\
+             <testcase name=\"perf::perf_warm\" classname=\"cortex-index::it\" time=\"4.5\"/>\
+             </testsuite></testsuites>",
+        );
+        let result = job_result(
+            5,
+            &job("try-linux", "success"),
+            Os::Linux,
+            Some(&dir),
+            &|| Err("not asked".to_owned()),
+            &request(),
+        )
+        .unwrap();
+        let row = result
+            .text
+            .lines()
+            .find(|line| line.starts_with("index.warm"))
+            .unwrap_or_else(|| panic!("{}", result.text));
+        assert!(row.contains("28.50 (28.00 to 29.00)"), "{row}");
+        assert!(row.contains("31.50 (31.00 to 32.50)"), "{row}");
+        assert!(row.contains("+3.000 (+10.5%)"), "{row}");
+        assert!(result.text.contains("against main"), "{}", result.text);
+        assert!(
+            !result.text.contains("Performance tests ("),
+            "the last run's times are not the A/B's: {}",
+            result.text
+        );
+        assert!(result.problems.is_empty(), "{:?}", result.problems);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
