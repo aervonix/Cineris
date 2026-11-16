@@ -256,7 +256,11 @@ fn real_rust(bytes: usize) -> String {
 /// non-ASCII text and long runs of white space, each of which JSON escapes
 /// and the decoder reads back twice (once for the event's JSON, once for the
 /// argument inside it). 1 MB of arguments in 200-byte pieces, and 2,000
-/// text deltas; the median of 30 decodes. A measurement:
+/// text deltas; the median of 30 decodes. A measurement, **held to the
+/// budget** of `docs/performance-budgets.md` (the owner's decision of
+/// 2026-11-16): at least [`DECODE_BUDGET_MB_S`] of the stream the decoder
+/// reads, a hosted runner's figure, since the test cannot tell a desk (100
+/// MB/s) from a runner:
 ///
 /// ```text
 /// gh workflow run try --ref <branch> -f os=windows -f command="perf -p cortex-llm real_code"
@@ -285,4 +289,16 @@ fn perf_decoding_a_large_tool_call_of_real_code() {
         stream.len() as f64 / millis / 1e3
     );
     cortex_testkit::numbers::report("llm.decode_large_call_real_code", millis, "ms");
+    let rate = stream.len() as f64 / millis / 1e3;
+    cortex_testkit::numbers::report("llm.decode_large_call_real_code_rate", rate, "MB/s");
+    assert!(
+        rate >= DECODE_BUDGET_MB_S,
+        "decoding {rate:.0} MB/s of the stream, under the budget of {DECODE_BUDGET_MB_S} MB/s"
+    );
 }
+
+/// Decoding a large tool call of real code, in megabytes a second of the
+/// stream the decoder reads: the hosted runner's budget of
+/// `docs/performance-budgets.md` (they measured 139 MB/s on Linux and 121
+/// on Windows).
+const DECODE_BUDGET_MB_S: f64 = 80.0;

@@ -356,6 +356,13 @@ fn median_of(mut values: Vec<f64>) -> f64 {
 /// beside it). The numbers are printed as `perf:` lines for `cargo xtask
 /// perf-ab`.
 ///
+/// **Held to the budget** of `docs/performance-budgets.md` (the owner's
+/// decision of 2026-11-16): the rare literal's, the regular expression's and
+/// the miss's medians at most [`SEARCH_REAL_CODE_BUDGET_MS`], a hosted
+/// runner's figure, since the test cannot tell a desk from a runner; the
+/// desk's own figure, 100 ms, is read from the printed lines. The common
+/// literal is reported and not held.
+///
 /// ```text
 /// gh workflow run try --ref <branch> -f os=windows -f command="perf -p cortex-tools search_real"
 /// ```
@@ -364,6 +371,7 @@ fn median_of(mut values: Vec<f64>) -> f64 {
 fn perf_search_real_code() {
     let ws = over_real_code("perf_search_real_code");
     let tool = SearchTool::new();
+    let mut over = Vec::new();
     for (name, arguments) in [
         (
             "search.literal_rare_real_code",
@@ -396,8 +404,30 @@ fn perf_search_real_code() {
             runs.iter().copied().fold(f64::INFINITY, f64::min)
         );
         cortex_testkit::numbers::report(name, median, "ms");
+        // The literal on a line in nearly every file counts 135,000 lines
+        // and takes about a third longer than the other three, which the
+        // budget's figures were measured from: it is reported, not held,
+        // so that it does not fail a Windows runner near the line.
+        if name != "search.literal_common_real_code" && median > SEARCH_REAL_CODE_BUDGET_MS {
+            over.push(format!("{name} {median:.0} ms"));
+        }
     }
+    assert!(
+        over.is_empty(),
+        "over the budget of {SEARCH_REAL_CODE_BUDGET_MS} ms at the median: {}",
+        over.join(", ")
+    );
 }
+
+/// A search of the corpus of real code, at the median: the hosted runner's
+/// budget of `docs/performance-budgets.md` (400 ms on Linux, 500 ms on
+/// Windows, which measured 316 to 382 ms).
+const SEARCH_REAL_CODE_BUDGET_MS: f64 = if cfg!(windows) { 500.0 } else { 400.0 };
+
+/// A re-read's diff, at the median and the 95th percentile: the hosted
+/// runner's budget of `docs/performance-budgets.md`, in microseconds (the
+/// desk's is 2 ms at the median and 5 ms at the 95th).
+const DIFF_REREAD_BUDGET_US: f64 = 10_000.0;
 
 /// **A diff on a re-read of real code**: the tool that tells the model what
 /// changed in a file it has already seen, which is where the product
@@ -406,6 +436,11 @@ fn perf_search_real_code() {
 /// changed, a few lines added) and read again: the second read is the file's
 /// change, its hash and its diff. The same read of the unchanged files is
 /// the part that is not the diff. Per file, in microseconds.
+///
+/// **Held to the budget** of `docs/performance-budgets.md` (the owner's
+/// decision of 2026-11-16): the changed re-read, which holds the diff, at
+/// most [`DIFF_REREAD_BUDGET_US`] at the median and the 95th percentile, a
+/// hosted runner's figure.
 #[test]
 #[ignore = "a measurement, run by hand in a release build: see the module documentation"]
 fn perf_diffing_a_reread_of_real_code() {
@@ -488,6 +523,11 @@ fn perf_diffing_a_reread_of_real_code() {
         "us",
     );
     cortex_testkit::numbers::report("diff.reread_changed_95th_real_code", ninety_fifth, "us");
+    assert!(
+        changed_median <= DIFF_REREAD_BUDGET_US && ninety_fifth <= DIFF_REREAD_BUDGET_US,
+        "a re-read of a changed file over the budget of {DIFF_REREAD_BUDGET_US} us: median \
+         {changed_median:.0} us, 95th percentile {ninety_fifth:.0} us"
+    );
 }
 
 /// The `.rs` files under `dir` whose size is between `least` and `most`

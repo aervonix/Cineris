@@ -53,7 +53,7 @@ The PR's run is 43853462567, at `e450d36`.
 | Render section 5, at the caps | 1 ms | 0.30 ms | 0.40 ms | 0.37 ms |
 | One change (lock, read, flushed write, good copy) | none | 15 to 20 ms | 1.1 ms, 11 ms at the caps | 1.6 ms, 11 ms at the caps |
 
-The load at the caps is over 5 ms on the hosted runners. The recommendation, which the coordinator has put to the owner: the row takes columns as the start-up rows have, 5 ms on the desktop and 15 ms on a runner, and the caps stay. `pr-size`: Linux 11,879,784 bytes (11.33 MB of 16), Windows 13,830,656 bytes (13.19 MB of 18, 2,560 more than `main`).
+The load at the caps is over 5 ms on the hosted runners. The recommendation, which the coordinator put to the owner: the row takes columns as the start-up rows have, 5 ms on the desktop and 15 ms on a runner, and the caps stay. Decided by the owner on 2026-11-16, as built. `pr-size`: Linux 11,879,784 bytes (11.33 MB of 16), Windows 13,830,656 bytes (13.19 MB of 18, 2,560 more than `main`).
 
 ## The second pull request: the wiring
 
