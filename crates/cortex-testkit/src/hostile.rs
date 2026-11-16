@@ -26,6 +26,12 @@
 //! checked against something other than itself), and its [`Kind`]. The text
 //! may be used whole as a name, or inside one: `format!("x{}y", name.text)`.
 
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "test support that makes a real file to ask a file system what it takes, from a test's own thread"
+)]
+
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -834,13 +840,7 @@ mod tests {
                 name.label,
                 name.text
             );
-            assert!(
-                !name
-                    .text
-                    .contains(|c| matches!(c, '\n' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}')),
-                "{}",
-                name.label
-            );
+            assert!(!name.text.contains(LINE_BREAK_CHARACTERS), "{}", name.label);
         }
         // All of C0 but the two line breaks, DEL and all of C1 but NEL, each
         // alone, then the three of a name.
