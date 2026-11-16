@@ -530,3 +530,15 @@ find: dialog.restyled();
 replace: let _ = dialog;
 caught-by:
     app::tests::a_dialog_is_drawn_again_when_the_look_changes
+
+[break] a-first-limit-applied-untrusted
+rule: A project's first limit where there was none waits for trust (the owner's decision of 2026-11-16); a value at or below a limit in effect applies always.
+file: crates/cortex-config/src/schema/mod.rs
+in: Trust::class
+find: (Some(_), None) => TrustClass::FirstLimit
+replace: (Some(_), None) => TrustClass::Preference
+packages: cortex-config, cortex-core
+caught-by:
+    cortex-config::it trust::a_project_may_tighten_the_mode_and_the_limits_and_not_loosen_them
+    cortex-config::it waits::a_length_of_time_is_tightened_against_the_one_in_effect_in_any_units
+    cortex-core::it trust::a_projects_first_limit_waits_for_trust

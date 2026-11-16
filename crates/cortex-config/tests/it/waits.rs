@@ -99,11 +99,12 @@ fn a_length_of_time_is_tightened_against_the_one_in_effect_in_any_units() {
     assert_eq!(class("90001ms", Some("1m30s")), TrustClass::UserOnly);
     assert_eq!(class("1h", Some("1d")), TrustClass::Preference);
     assert_eq!(class("1d", Some("1h")), TrustClass::UserOnly);
-    // The first limit where there was none.
-    assert_eq!(class("1d", None), TrustClass::Preference);
+    // The first limit where there was none waits for trust (2026-11-16).
+    assert_eq!(class("1d", None), TrustClass::FirstLimit);
+    assert!(TrustClass::FirstLimit.needs_trust());
 
     // The user's own value is the one a project is held to.
-    let machine = Machine::new("waits_against_the_user");
+    let mut machine = Machine::new("waits_against_the_user");
     machine.layer(LayerKind::User, "[retry]\nidle_timeout = \"40s\"\n");
     machine.layer(LayerKind::Project, "[retry]\nidle_timeout = \"1m\"\n");
     let loaded = machine.load();
@@ -120,8 +121,14 @@ fn a_length_of_time_is_tightened_against_the_one_in_effect_in_any_units() {
     assert_eq!(layer_of(&loaded, "retry.idle_timeout"), "project");
     assert!(loaded.diagnostics.is_empty(), "{:?}", machine.said(&loaded));
 
-    // And a time limit where there was none applies.
+    // A time limit where there was none waits for trust (2026-11-16): a
+    // limit of nothing would stop every turn.
     machine.layer(LayerKind::Project, "[limits.turn]\ntime = \"10m\"\n");
+    let loaded = machine.load();
+    assert_eq!(value(&loaded, "limits.turn.time"), "(not set)");
+    assert_eq!(loaded.withheld.len(), 1);
+    assert_eq!(loaded.withheld[0].class, TrustClass::FirstLimit);
+    machine.options.trust = cortex_config::ProjectTrust::Trusted;
     let loaded = machine.load();
     assert_eq!(value(&loaded, "limits.turn.time"), "\"10m\"");
     assert_eq!(layer_of(&loaded, "limits.turn.time"), "project");

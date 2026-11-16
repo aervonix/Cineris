@@ -102,8 +102,10 @@ pub enum Trust {
     /// untrusted repository must not be able to raise what its user spends.
     BySpeed,
     /// A limit: a value at or below the one already in effect is a
-    /// preference, and so is the first limit where there was none. A higher
-    /// one is the user's alone.
+    /// preference. The first limit where there was none applies only once
+    /// the user trusts the project, since a limit of nothing (`time =
+    /// "0s"`, `requests = 1`) would stop every turn (the owner's decision of
+    /// 2026-11-16). A higher one is the user's alone.
     TightenOnly,
 }
 
@@ -112,6 +114,9 @@ pub enum Trust {
 pub enum TrustClass {
     /// Applied always.
     Preference,
+    /// Applied after trust: a first limit where there was none, which can
+    /// stop every turn (since step 23).
+    FirstLimit,
     /// Applied after trust: it can run code.
     RunsCode,
     /// Applied after trust: it can widen access.
@@ -128,6 +133,7 @@ impl TrustClass {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Preference => "preference",
+            Self::FirstLimit => "first limit",
             Self::RunsCode => "runs code",
             Self::WidensAccess => "widens access",
             Self::RaisesCost => "raises cost",
@@ -139,7 +145,10 @@ impl TrustClass {
     /// the project.
     #[must_use]
     pub fn needs_trust(self) -> bool {
-        matches!(self, Self::RunsCode | Self::WidensAccess | Self::RaisesCost)
+        matches!(
+            self,
+            Self::FirstLimit | Self::RunsCode | Self::WidensAccess | Self::RaisesCost
+        )
     }
 }
 
@@ -191,7 +200,7 @@ impl Trust {
             },
             Self::TightenOnly => {
                 match (types::magnitude(value), current.and_then(types::magnitude)) {
-                    (Some(_), None) => TrustClass::Preference,
+                    (Some(_), None) => TrustClass::FirstLimit,
                     (Some(wanted), Some(now)) if wanted <= now => TrustClass::Preference,
                     _ => TrustClass::UserOnly,
                 }
@@ -218,7 +227,8 @@ impl Trust {
             Self::ByNetwork => "by value: `off` is a preference, `full` widens access",
             Self::BySpeed => "by value: `standard` is a preference, any other tier raises cost",
             Self::TightenOnly => {
-                "tighten only: a lower limit is a preference, a higher one user only"
+                "tighten only: a lower limit is a preference, a first limit where there was \
+                 none waits for trust, a higher one is user only"
             }
         }
     }

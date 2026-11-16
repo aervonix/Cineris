@@ -35,8 +35,9 @@ pub fn reference_page() -> String {
          access* and *raises cost*: applied only after the user has trusted the project, and \
          listed for the user until then; until then the user's own value applies. *user only*: \
          ignored, with a warning. *tighten only*: a value at or below the one in effect \
-         applies, and a higher one is ignored, with a warning, trusted or not. A few keys depend \
-         on the value, and say how.\n\
+         applies, a first limit where there was none applies only after the user has trusted the \
+         project (a limit of nothing would stop every turn), and a higher one is ignored, with a \
+         warning, trusted or not. A few keys depend on the value, and say how.\n\
          - **Takes effect.** When a change to the key reaches a running harness: *at once*, at \
          the *next epoch* (it shapes the prompt, the tool list or the model), or after a \
          *restart*.\n\

@@ -426,27 +426,40 @@ fn a_project_may_tighten_the_mode_and_the_limits_and_not_loosen_them() {
          [limits.day]\ncost = 1.0\n",
     );
     let loaded = machine.load();
-    // Raising the mode, even to the default, widens access: held back.
+    // Raising the mode, even to the default, widens access: held back. So
+    // is a limit where there was none, which waits for trust (2026-11-16).
     assert_eq!(value(&loaded, "permissions.mode"), "\"read-only\"");
-    assert_eq!(loaded.withheld.len(), 1);
-    assert_eq!(loaded.withheld[0].key.to_string(), "permissions.mode");
-    // A higher limit is ignored. A lower one, and a limit where there was
-    // none, apply.
+    let withheld: Vec<(String, TrustClass)> = loaded
+        .withheld
+        .iter()
+        .map(|withheld| (withheld.key.to_string(), withheld.class))
+        .collect();
+    assert_eq!(
+        withheld,
+        [
+            ("limits.day.cost".to_owned(), TrustClass::FirstLimit),
+            ("limits.session.tokens".to_owned(), TrustClass::FirstLimit),
+            ("permissions.mode".to_owned(), TrustClass::WidensAccess),
+        ]
+    );
+    // A higher limit is ignored. A lower one applies, untrusted.
     assert_eq!(value(&loaded, "limits.session.cost"), "5.0");
     assert_eq!(value(&loaded, "limits.session.time"), "\"1h\"");
     assert_eq!(value(&loaded, "limits.session.requests"), "50");
     assert_eq!(layer_of(&loaded, "limits.session.requests"), "project");
-    assert_eq!(value(&loaded, "limits.session.tokens"), "1000");
-    assert_eq!(value(&loaded, "limits.day.cost"), "1.0");
+    assert_eq!(value(&loaded, "limits.session.tokens"), "(not set)");
+    assert_eq!(value(&loaded, "limits.day.cost"), "(not set)");
     let warned = machine.said(&loaded);
     assert_eq!(warned.len(), 2, "{warned:?}");
     assert!(warned[0].contains("limits.session.cost") && warned[1].contains("limits.session.time"));
 
-    // Trust lets the project raise the mode as far as `supervised`. It
-    // never raises a limit.
+    // Trust lets the project raise the mode as far as `supervised`, and
+    // set its first limits. It never raises a limit.
     let loaded = machine.trusted().load();
     assert_eq!(value(&loaded, "permissions.mode"), "\"supervised\"");
     assert_eq!(value(&loaded, "limits.session.cost"), "5.0");
+    assert_eq!(value(&loaded, "limits.session.tokens"), "1000");
+    assert_eq!(value(&loaded, "limits.day.cost"), "1.0");
 
     // A project lowering the mode needs nothing.
     let mut machine = Machine::new("trust_tighten_mode");

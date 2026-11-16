@@ -12,7 +12,7 @@ model.reasoning                    preference
 model.max_output                   raises cost
 model.speed                        by value: `standard` is a preference, any other tier raises cost
 model.speed_fallback               preference
-model.speed_wait                   tighten only: a lower limit is a preference, a higher one user only
+model.speed_wait                   tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
 model.speed_cooldown               preference
 model.speed_cooldown_min           preference
 model.roles.*.provider             raises cost
@@ -29,30 +29,30 @@ providers.*.capabilities.*         user only
 models.*                           user only
 http.*                             user only
 retry.attempts                     raises cost
-retry.backoff_base                 tighten only: a lower limit is a preference, a higher one user only
-retry.backoff_factor               tighten only: a lower limit is a preference, a higher one user only
-retry.backoff_cap                  tighten only: a lower limit is a preference, a higher one user only
-retry.max_wait                     tighten only: a lower limit is a preference, a higher one user only
-retry.idle_timeout                 tighten only: a lower limit is a preference, a higher one user only
-retry.first_event_timeout          tighten only: a lower limit is a preference, a higher one user only
+retry.backoff_base                 tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
+retry.backoff_factor               tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
+retry.backoff_cap                  tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
+retry.max_wait                     tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
+retry.idle_timeout                 tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
+retry.first_event_timeout          tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
 permissions.mode                   by level: not above the mode in effect is a preference, up to `supervised` widens access, above it user only  [enforced]
 permissions.rules                  by action: `deny` and `ask` are preferences, `allow` widens access  [enforced]
 sandbox.enabled                    user only  [enforced]
 sandbox.write                      widens access  [enforced]
 sandbox.protect                    preference  [enforced]
 sandbox.network                    by value: `off` is a preference, `full` widens access  [enforced]
-limits.turn.requests               tighten only: a lower limit is a preference, a higher one user only  [enforced]
-limits.turn.tokens                 tighten only: a lower limit is a preference, a higher one user only  [enforced]
-limits.turn.cost                   tighten only: a lower limit is a preference, a higher one user only  [enforced]
-limits.turn.time                   tighten only: a lower limit is a preference, a higher one user only  [enforced]
-limits.session.requests            tighten only: a lower limit is a preference, a higher one user only  [enforced]
-limits.session.tokens              tighten only: a lower limit is a preference, a higher one user only  [enforced]
-limits.session.cost                tighten only: a lower limit is a preference, a higher one user only  [enforced]
-limits.session.time                tighten only: a lower limit is a preference, a higher one user only  [enforced]
-limits.day.requests                tighten only: a lower limit is a preference, a higher one user only  [enforced]
-limits.day.tokens                  tighten only: a lower limit is a preference, a higher one user only  [enforced]
-limits.day.cost                    tighten only: a lower limit is a preference, a higher one user only  [enforced]
-limits.day.time                    tighten only: a lower limit is a preference, a higher one user only  [enforced]
+limits.turn.requests               tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
+limits.turn.tokens                 tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
+limits.turn.cost                   tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
+limits.turn.time                   tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
+limits.session.requests            tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
+limits.session.tokens              tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
+limits.session.cost                tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
+limits.session.time                tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
+limits.day.requests                tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
+limits.day.tokens                  tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
+limits.day.cost                    tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
+limits.day.time                    tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only  [enforced]
 credentials.store                  user only
 session.data_dir                   user only
 session.durability                 user only
@@ -63,8 +63,8 @@ log.level                          user only
 tools.*                            user only
 shell.program                      user only
 shell.args                         user only
-shell.timeout                      tighten only: a lower limit is a preference, a higher one user only
-shell.max_timeout                  tighten only: a lower limit is a preference, a higher one user only
+shell.timeout                      tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
+shell.max_timeout                  tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
 shell.env_remove                   preference
 context.auto_compact               preference
 context.background                 user only
@@ -81,11 +81,11 @@ adapt.variants.*.effort            user only
 stats.enabled                      user only
 stats.retention                    user only
 index.map                          preference
-index.map_tokens                   tighten only: a lower limit is a preference, a higher one user only
+index.map_tokens                   tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
 index.map_wait                     user only
-index.max_files                    tighten only: a lower limit is a preference, a higher one user only
-index.max_file_bytes               tighten only: a lower limit is a preference, a higher one user only
-index.pass_time                    tighten only: a lower limit is a preference, a higher one user only
+index.max_files                    tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
+index.max_file_bytes               tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
+index.pass_time                    tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
 runs.*                             user only
 usage.week_start                   user only
 usage.ranges                       user only
