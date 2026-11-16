@@ -24,7 +24,10 @@ use cortex_term::{Capabilities, Cursor, Event as TermEvent, Key, Line};
 
 mod commands;
 mod panel;
+mod restyle;
 mod viewer;
+
+pub use restyle::{Restyle, Restyled};
 
 use commands::{Picker, Shown};
 
@@ -106,6 +109,14 @@ enum Pending {
     Reload { profile: Option<String> },
     /// `/profile` with no name: the profiles this session's files define.
     Profiles(SessionId),
+    /// A look at the configuration's files, after a key or a focus-in:
+    /// what it found is said by `config.changed`, and nothing of its own
+    /// answer is.
+    Look,
+    /// The `tui` and `keys` sections, read again after a reload applied a
+    /// key of either: `keys` when a binding changed, `theme` when the
+    /// file's theme did.
+    Restyle { keys: bool, theme: bool },
 }
 
 /// The last key read, for the dialogs' rules (`super::dialog`).
@@ -265,6 +276,16 @@ pub struct App {
     /// The profile this session was loaded with by `/profile`, while it is
     /// the one open.
     profile: Option<String>,
+    /// What reads the look and the key map from the configuration
+    /// ([`App::set_restyle`]).
+    restyle: Option<Restyle>,
+    /// A look at the configuration's files is due after this frame.
+    look_due: bool,
+    /// When the last look was asked for.
+    last_look: Option<Instant>,
+    /// The theme chosen with `/theme` for this run, which a reload keeps
+    /// unless the file's own theme changed.
+    theme_picked: Option<crate::app::ThemeChoice>,
     dialogs: VecDeque<Dialog>,
     /// When the running turn began, from this app's point of view.
     running: Option<Instant>,
@@ -413,6 +434,10 @@ impl App {
             usage: None,
             profile: None,
             dialogs: VecDeque::new(),
+            restyle: start.restyle,
+            look_due: false,
+            last_look: None,
+            theme_picked: None,
             running: None,
             last_interrupt: None,
             last_key: None,
@@ -469,6 +494,7 @@ impl App {
         if let Some(open) = self.open.take() {
             self.send_open(open);
         }
+        self.look_now(at);
         // A dialog is shown by the inline screen's frame alone: under the
         // viewer it waits, its grace not begun (the review of the second
         // pull request).
@@ -707,6 +733,14 @@ impl App {
     /// paste), whose frame is drawn at once.
     pub fn terminal(&mut self, event: &TermEvent, at: Instant) -> bool {
         self.drop_stale_viewer();
+        // A key, a paste, or the focus regained: the configuration's files
+        // are looked at after this frame (step 24's hot reload).
+        if matches!(
+            event,
+            TermEvent::Key(_) | TermEvent::Paste(_) | TermEvent::Focus(true)
+        ) {
+            self.look_wanted(at);
+        }
         if let Some(viewer) = &self.viewer {
             match event {
                 TermEvent::Key(key) | TermEvent::Repeat(key) => {
@@ -1275,6 +1309,14 @@ impl App {
             (Pending::Reload { profile }, Ok(OpResult::ConfigReload(result))) => {
                 self.reloaded(&result, profile);
             }
+            (Pending::Look, Ok(OpResult::ConfigReload(result))) => {
+                self.restyle_if(&result.applied);
+            }
+            // A look's failure is the core's to say, when there is one.
+            (Pending::Look, _) => {}
+            (Pending::Restyle { keys, theme }, Ok(OpResult::ConfigGet(result))) => {
+                self.restyled(&result.config, keys, theme);
+            }
             (Pending::Set(_), Ok(OpResult::SessionSet(result))) => {
                 self.session = Some(result.session);
             }
@@ -1710,6 +1752,7 @@ impl App {
                     for line in reload_lines(&changed.applied, &changed.errors, &changed.notes) {
                         self.say(&line);
                     }
+                    self.restyle_if(&changed.applied);
                 }
             }
             Event::Notice(notice) => {
@@ -1778,6 +1821,7 @@ impl App {
         for line in reload_lines(&result.applied, &result.errors, &result.notes) {
             self.say(&line);
         }
+        self.restyle_if(&result.applied);
     }
 
     fn error(&mut self, error: &ErrorData) {

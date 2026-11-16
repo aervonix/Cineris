@@ -424,6 +424,51 @@ pub trait Setting: Sized {
     fn write(&self) -> Option<Value>;
 }
 
+/// Reads the section `name` of a configuration as `config/get` answers it:
+/// each key dotted, each value as JSON. A key it does not hold has its
+/// default. For a front end that reads part of the configuration again
+/// while it runs (step 24: the interface's look and key map, after a
+/// reload applied a key of them).
+///
+/// # Errors
+///
+/// When a value does not read as its setting: the key and what was
+/// expected.
+pub fn read_section<T: Setting>(
+    entries: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> Result<T, String> {
+    let prefix = format!("{name}.");
+    let mut table = toml::Table::new();
+    for (key, value) in entries {
+        let Some(rest) = key.strip_prefix(&prefix) else {
+            continue;
+        };
+        // JSON's null has no TOML value: a key not set.
+        if value.is_null() {
+            continue;
+        }
+        let value: Value =
+            serde_json::from_value(value.clone()).map_err(|error| format!("{key}: {error}"))?;
+        let parts: Vec<&str> = rest.split('.').collect();
+        let Some((last, path)) = parts.split_last() else {
+            continue;
+        };
+        let mut at = &mut table;
+        for part in path {
+            let next = at
+                .entry((*part).to_owned())
+                .or_insert_with(|| Value::Table(toml::Table::new()));
+            let Value::Table(next) = next else {
+                return Err(format!("{key}: a table and a value at once"));
+            };
+            at = next;
+        }
+        at.insert((*last).to_owned(), value);
+    }
+    T::read(&Value::Table(table)).map_err(|error| format!("{name}.{error}"))
+}
+
 /// The schema of a whole configuration file.
 #[must_use]
 pub fn root() -> &'static Node {

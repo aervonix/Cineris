@@ -708,3 +708,35 @@ fn taking_a_key_that_went_leaves_no_empty_table() {
     assert_eq!(mix.settings, newer.settings);
     assert!(mix.changes_since(&newer).is_empty());
 }
+
+/// A section read again from `config/get`'s answer (dotted keys, JSON
+/// values) for a front end that rebuilds part of itself: what it holds is
+/// read, what it does not has its default, another section's keys are not
+/// taken, and a value that does not read says its key (step 24's hot
+/// reload of the look and the keys).
+#[test]
+fn a_section_is_read_from_dotted_keys_and_json_values() {
+    use cortex_config::schema::{KeySettings, TuiSettings, read_section};
+
+    let mut answer = serde_json::Map::new();
+    answer.insert("tui.theme".to_owned(), "light".into());
+    answer.insert("tui.prose_width".to_owned(), 100.into());
+    answer.insert(
+        "keys.editor".to_owned(),
+        serde_json::json!({"submit": ["ctrl+j"]}),
+    );
+    answer.insert("retry.attempts".to_owned(), 3.into());
+
+    let tui: TuiSettings = read_section(&answer, "tui").unwrap();
+    assert_eq!(tui.theme, "light");
+    assert_eq!(tui.prose_width, 100);
+    assert_eq!(tui.tool_detail, TuiSettings::default().tool_detail);
+
+    let keys: KeySettings = read_section(&answer, "keys").unwrap();
+    assert_eq!(keys.editor.0["submit"], ["ctrl+j"]);
+    assert!(keys.menu.0.is_empty());
+
+    answer.insert("tui.prose_width".to_owned(), "wide".into());
+    let error = read_section::<TuiSettings>(&answer, "tui").unwrap_err();
+    assert!(error.contains("prose_width"), "{error}");
+}

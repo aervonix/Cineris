@@ -186,6 +186,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
                 notices,
                 history,
                 highlighter: Highlighter::new(move || wake.wake()),
+                restyle: Some(Box::new(restyle)),
             };
             (Box::new(link) as Box<dyn Link>, start)
         })
@@ -424,6 +425,32 @@ fn tui_settings(tui: &TuiSettings, notices: &mut Vec<String>) -> app::Settings {
         },
         theme,
     }
+}
+
+/// The look and the key map read again from `config/get`'s answer for the
+/// `tui` and `keys` sections, after a reload applied a key of them (step
+/// 24): built as at the start, what cannot be used said again. A section
+/// that does not read leaves both as they were, and says why.
+fn restyle(config: &serde_json::Map<String, serde_json::Value>) -> Result<app::Restyled, String> {
+    let unread = |error: String| {
+        format!(
+            "The look and the keys stay as they were: the configuration could not be read again \
+             ({}).",
+            cortex_base::visible(&error)
+        )
+    };
+    let tui = cortex_config::schema::read_section::<TuiSettings>(config, "tui").map_err(unread)?;
+    let keys =
+        cortex_config::schema::read_section::<KeySettings>(config, "keys").map_err(unread)?;
+    let mut notices = Vec::new();
+    let settings = tui_settings(&tui, &mut notices);
+    let (keymap, errors) = keymap(&keys);
+    notices.extend(errors);
+    Ok(app::Restyled {
+        settings,
+        keymap,
+        notices,
+    })
 }
 
 /// The key map from `[keys]`, and each entry it could not use, as a notice.
@@ -1112,5 +1139,45 @@ mod tests {
         let settings = tui_settings(&tui, &mut notices);
         assert_eq!(settings.theme, app::ThemeChoice::Auto);
         assert_eq!(notices.len(), 1);
+    }
+
+    /// The look and the key map are built again from `config/get`'s answer
+    /// as at the start, a theme not known said; a section that does not
+    /// read is an error, which leaves the application's as they were (step
+    /// 24's hot reload).
+    #[test]
+    fn the_look_and_the_keys_are_read_again_from_the_cores_answer() {
+        let mut answer = serde_json::Map::new();
+        answer.insert("tui.theme".to_owned(), "light".into());
+        answer.insert("tui.density".to_owned(), "compact".into());
+        answer.insert(
+            "keys.editor".to_owned(),
+            serde_json::json!({"submit": ["ctrl+j"], "nothing": ["f1"]}),
+        );
+        let restyled = restyle(&answer).unwrap();
+        assert_eq!(restyled.settings.theme, app::ThemeChoice::Light);
+        assert_eq!(restyled.settings.density, Density::Compact);
+        let submit = restyled.keymap.keys_of(cortex_tui::keys::Action::Submit);
+        assert!(
+            submit.contains(&cortex_tui::keys::parse("ctrl+j").unwrap()),
+            "{submit:?}"
+        );
+        assert_eq!(restyled.notices.len(), 1, "{:?}", restyled.notices);
+
+        answer.insert("tui.theme".to_owned(), "dusk".into());
+        let restyled = restyle(&answer).unwrap();
+        assert_eq!(restyled.settings.theme, app::ThemeChoice::Auto);
+        assert!(
+            restyled
+                .notices
+                .iter()
+                .any(|notice| notice.contains("dusk")),
+            "{:?}",
+            restyled.notices
+        );
+
+        answer.insert("tui.prose_width".to_owned(), "wide".into());
+        let error = restyle(&answer).unwrap_err();
+        assert!(error.contains("stay as they were"), "{error}");
     }
 }
