@@ -252,7 +252,7 @@ Headless's report, `verify/run`, the measurements on the hosted runners and the 
 
   Each can be patched, but together the patches rebuild a turn outside the state machine, without its tests. As asked, B is not sound (points 1 and 2).
 
-**Until the owner allows `Preparing → Verifying`,** `verify/run` answers `not_available`, saying that the checks run by themselves at the end of a turn that changed files (`verify::running_the_checks_on_request_is_not_available_and_says_why`). The choice is [an item](../../outstanding/verify-run-a-turn-that-only-verifies.md) for step 24. The turn that only verifies is built as the last commit of the pull request, on its own, to be dropped if the owner has not allowed it by the time the rest is ready.
+**Until the owner allows `Preparing → Verifying`,** `verify/run` answers `not_available`, saying that the checks run by themselves at the end of a turn that changed files (`verify::running_the_checks_on_request_is_not_available_and_says_why`). The choice is [an item](../../outstanding/verify-run-a-turn-that-only-verifies.md) for step 24. The turn that only verifies was built as the last commit of the pull request, on its own, to be dropped if the owner had not allowed it by the time the rest was ready. The owner had not answered, so it is kept on a branch of its own, **`worktree-step-19-verify-turn`**, on top of this pull request: built, tested (both systems), stressed, broken on purpose and reviewed twice. That branch's `answered.md` records how it was built and the reviews' findings on it, all fixed there; the reviews found nothing against the bar.
 
 ## Measured
 
