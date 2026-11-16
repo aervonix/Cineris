@@ -305,6 +305,7 @@ pub fn app_opening(now: Instant, prompt: Option<&str>, open: Open) -> (App, Scri
         notices: Vec::new(),
         history: Box::new(MemoryHistory::new()),
         highlighter: Highlighter::off(),
+        restyle: None,
     };
     let app = App::new(Box::new(link.clone()), start, &caps(), 99, 40, now);
     (app, link)

@@ -1102,6 +1102,7 @@ fn the_turn_summary_says_the_checks_verdict() {
         notices: Vec::new(),
         history: Box::new(crate::history::MemoryHistory::new()),
         highlighter: crate::highlight::Highlighter::off(),
+        restyle: None,
     };
     let mut app = App::new(Box::new(link.clone()), start, &caps(), 99, 40, now);
     opened(&mut app, &link, now);

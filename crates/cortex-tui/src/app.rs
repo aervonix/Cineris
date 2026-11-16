@@ -55,7 +55,7 @@ pub use cortex_term::{Capabilities, ColorDepth, Overrides, Waker, signal_ended, 
 use cortex_term::{Device, Event, Frame, Inline, Scheduler, Terminal, Wake};
 
 pub use link::{Inbound, Link, Ticket};
-pub use state::{App, Drained, Effect, SECOND_INTERRUPT};
+pub use state::{App, Drained, Effect, Restyle, Restyled, SECOND_INTERRUPT};
 
 use crate::glyphs::Glyphs;
 use crate::highlight::Highlighter;
@@ -195,6 +195,10 @@ pub struct Start {
     pub history: Box<dyn HistoryStore + Send>,
     /// The highlighter for the process: one, whose waker wakes the loop.
     pub highlighter: Highlighter,
+    /// What reads the look and the key map from the configuration again
+    /// while the application runs (step 24's hot reload). `None`: a reload
+    /// of them is not taken.
+    pub restyle: Option<Restyle>,
 }
 
 impl std::fmt::Debug for Start {

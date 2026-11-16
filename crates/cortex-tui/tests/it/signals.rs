@@ -175,6 +175,7 @@ pub(crate) fn enter() {
             notices: vec![NOTICE.to_owned()],
             history,
             highlighter: Highlighter::off(),
+            restyle: None,
         };
         (Box::new(Quiet { sent: 0 }) as Box<dyn Link>, start)
     });
