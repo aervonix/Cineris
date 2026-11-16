@@ -2133,6 +2133,35 @@ fn a_trust_question_that_does_not_fit_cannot_be_trusted_from_there() {
     );
 }
 
+/// A question's choices come from outside (an extension's hook, from step
+/// 28): one that holds a character that acts unseen is drawn with it as an
+/// escape, so that it cannot turn the answers' row around.
+#[test]
+fn a_questions_choices_are_drawn_with_what_acts_unseen_escaped() {
+    use cortex_protocol::methods::QuestionRequest;
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let request = ServerRequest::Question(QuestionRequest {
+        session_id: SessionId::from(SESSION),
+        turn_id: None,
+        question: "Which?".to_owned(),
+        choices: vec!["keep\u{202e}ti".to_owned(), "drop".to_owned()],
+        extension: None,
+    });
+    ask(&mut app, &link, 33, request, now);
+    let rows = text(&app.frame(now + dialog::GRACE).1);
+    assert!(
+        !rows.iter().any(|row| row.contains('\u{202e}')),
+        "the override reached the screen: {rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("1 keep") && row.contains("2 drop")),
+        "{rows:#?}"
+    );
+}
+
 /// A question of the core's, an undo's about files edited since: its
 /// choices by their digits, `Esc` no answer.
 #[test]

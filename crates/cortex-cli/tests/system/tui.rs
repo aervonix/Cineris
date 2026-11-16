@@ -870,6 +870,27 @@ fn sys_a_signal_ends_the_application_gracefully_with_its_code() {
         );
         assert!(closed.wait(LIMIT), "SIG{signal}: the turn was not stopped");
     }
+    // SIGABRT is not handed over: the terminal is put back, and the abort
+    // ends the process as it asks, by its default action.
+    let machine = Machine::new("tui_signal_ABRT");
+    let mut session = machine.tui(&[]);
+    first_frame(&mut session, &Phases::new("abort"));
+    let pid = child_status(&session)
+        .and_then(|status| status_field(&status, "Pid:"))
+        .expect("the binary's process");
+    let sent = Command::new("kill")
+        .args(["-ABRT".to_owned(), pid])
+        .status()
+        .expect("kill");
+    assert!(sent.success(), "SIGABRT was not sent");
+    session.wait_for(LIMIT, "the shell's verdict", |t| {
+        (t.shows(RESTORED) || t.shows(NOT_RESTORED)) && t.shows(")")
+    });
+    let shown = everything(&session);
+    assert!(
+        shown.contains(RESTORED) && shown.contains("signal: 6"),
+        "SIGABRT: {shown}"
+    );
 }
 
 #[expect(clippy::print_stdout, reason = "a measurement prints what it measured")]

@@ -651,7 +651,8 @@ impl Dialog {
                         Pick::Choice(place),
                         Answer {
                             key: (place + 1).to_string(),
-                            label: choice.clone(),
+                            // From outside, as every text a view draws.
+                            label: cortex_term::sanitize(choice).replace(['\n', '\t'], " "),
                         },
                     )
                 })

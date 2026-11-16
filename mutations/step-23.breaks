@@ -806,8 +806,8 @@ caught-by:
 rule: A signal that ends the program is handed to it, which ends gracefully with the signal's code.
 file: crates/cortex-term/src/sys/unix.rs
 in: on_ending
-find: if super::hand_over(128 + u8::try_from(signal).unwrap_or(0)) {
-replace: if super::hand_over(0) {
+find: super::hand_over(128 + u8::try_from(signal).unwrap_or(0))
+replace: super::hand_over(0)
 packages: cortex-term, cortex-cli
 caught-by:
     cortex-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
@@ -910,3 +910,23 @@ packages: cortex-core
 caught-by:
     trusting::never_is_kept_across_starts_until_the_project_is_trusted
     trusting::never_of_a_trusted_project_is_in_force_at_once
+
+[break] a-questions-choices-drawn-as-they-are
+rule: A question's choices are drawn with every character that acts unseen escaped, as all outside text is.
+file: crates/cortex-tui/src/app/dialog.rs
+in: Dialog::answers
+find: cortex_term::sanitize(choice)
+replace: std::borrow::Cow::<str>::Borrowed(choice.as_str())
+packages: cortex-tui
+caught-by:
+    app::tests::a_questions_choices_are_drawn_with_what_acts_unseen_escaped
+
+[break] an-abort-handed-over
+rule: SIGABRT is not handed to the program: an abort ends the process at once, by its default action.
+file: crates/cortex-term/src/sys/unix.rs
+in: on_ending
+find: signal != libc::SIGABRT &&
+replace: signal != 0 &&
+packages: cortex-term, cortex-cli
+caught-by:
+    cortex-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
