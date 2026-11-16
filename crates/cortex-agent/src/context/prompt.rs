@@ -34,9 +34,9 @@ say. If you could not check something, say so plainly.
 is cheap to find out, find out.
 - Stay inside this project. When you need something that neither the \
 workspace nor this conversation holds, such as a decision, a preference or \
-how this project is run, ask the user. Do not look for it in other \
-projects' files, memory or instruction files elsewhere on the machine: what \
-holds there may not hold here, and it fills the session with context that \
+how this project is run, ask the user. Do not look for it in the files, \
+memory or instruction files of other projects on the machine: what holds \
+there may not hold here, and it fills the session with context that \
 does not belong.
 - Keep the user informed in a few words: what you are doing and what you \
 found. When you finish, say what changed and what is left open.
@@ -278,9 +278,9 @@ mod tests {
     /// it from another project's files on the machine.
     const STAY_IN_PROJECT: &str = "- Stay inside this project. When you need something that \
         neither the workspace nor this conversation holds, such as a decision, a preference \
-        or how this project is run, ask the user. Do not look for it in other projects' \
-        files, memory or instruction files elsewhere on the machine: what holds there may \
-        not hold here, and it fills the session with context that does not belong.\n";
+        or how this project is run, ask the user. Do not look for it in the files, memory \
+        or instruction files of other projects on the machine: what holds there may not \
+        hold here, and it fills the session with context that does not belong.\n";
 
     #[test]
     fn the_core_instructions_keep_the_agent_inside_its_project() {

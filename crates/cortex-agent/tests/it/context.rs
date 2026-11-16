@@ -1918,9 +1918,8 @@ fn after_an_overflow_the_summary_request_is_cut_to_fit_what_the_provider_showed(
     // the request is too long. At the ratio the estimate used, the whole
     // history would fit the summary request's room; at the ratio the
     // refusal shows, only the last turn does. The window leaves the system
-    // prompt room to grow: at 5,000 tokens a 380-byte line added to the
-    // core instructions put the estimate past the trigger, and the test
-    // passes from about 5,050 to past 10,000.
+    // prompt room to grow: the test holds from about 5,050 tokens to past
+    // 10,000 with the prompt as it is.
     rig.window(6_000);
     world.run(async {
         for (turn, prompt) in ["first", "second", "third", "fourth"].iter().enumerate() {
