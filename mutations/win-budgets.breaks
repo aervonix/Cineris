@@ -5,9 +5,9 @@
 [break] budget-held-to-the-raw-total
 rule: A tier is held to its budget by its total above the start of its tests' processes, not by its raw total.
 file: xtask/src/tiers.rs
-in: summarise
-find: let verdict = verdict(above_start, budget);
-replace: let verdict = verdict(seconds, budget);
+in: summarise_marked
+find: let verdict = verdict(above_start, budget)
+replace: let verdict = verdict(seconds, budget)
 caught-by:
     tiers::tests::a_slow_runner_alone_does_not_put_a_tier_over_its_budget
 

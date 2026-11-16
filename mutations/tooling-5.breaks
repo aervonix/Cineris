@@ -40,7 +40,7 @@ caught-by:
 [break] a-failures-text-is-not-read
 rule: The report's failure text is read from the first failure element of a case.
 file: xtask/src/junit.rs
-in: failures
+in: failures_among
 find: let (kind, text) = child_text(&children[at..], child);
 replace: let (kind, text) = (child_text(&children[at..], child).0, String::new());
 caught-by:
