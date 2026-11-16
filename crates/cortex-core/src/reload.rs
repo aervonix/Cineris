@@ -1186,9 +1186,18 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> Result<ConfigCh
         // Trust taken away is taken away even when something else of the
         // reload cannot be built: what can fail for reasons of its own
         // waits, and the rest, trust's part included, is applied.
+        // A level the core may not give is left out too, so that trust taken
+        // away is taken away all the same.
+        let refused_level = core
+            .inner
+            .may_hold(&latest.settings.permissions.mode)
+            .is_err();
         let safe: Vec<KeyPath> = now
             .iter()
-            .filter(|key| !touches(std::slice::from_ref(*key), MAY_FAIL))
+            .filter(|key| {
+                let key = std::slice::from_ref(*key);
+                !touches(key, MAY_FAIL) && !(refused_level && touches(key, &["permissions.mode"]))
+            })
             .cloned()
             .collect();
         for key in now.iter().filter(|key| !safe.contains(key)) {

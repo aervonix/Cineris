@@ -357,6 +357,14 @@ impl Clients {
             .collect()
     }
 
+    /// A `supervisor`'s grant, if it has one.
+    pub(crate) fn grant_of(&self, client: ClientId) -> Option<Lease> {
+        lock(&self.clients)
+            .get(&client.0)
+            .filter(|entry| entry.info.role == ClientRole::Supervisor)
+            .and_then(|entry| entry.grant.clone())
+    }
+
     /// Whether the client is a `supervisor`.
     pub(crate) fn is_supervisor(&self, client: u64) -> bool {
         lock(&self.clients)
