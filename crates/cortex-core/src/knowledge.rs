@@ -51,7 +51,10 @@
 //! else holds them, so a command the user turned off cannot come back
 //! with a new engine. They are changed, and handed to an engine, only
 //! under their own lock: two changes at once leave the engine with the
-//! later one's rules, and this module knowing which those are.
+//! later one's rules, and this module knowing which those are. And they
+//! are made only from a reading of the files that is still the files'
+//! while that lock is held: a reading that another change has overtaken
+//! is read again there, so it cannot put back what the change took away.
 //!
 //! Before each command is decided the session asks whether the two files
 //! are still as **its own rules' snapshot** read them, and whether the
@@ -225,6 +228,15 @@ pub(crate) struct Knowledge {
 /// The most things a session says once: past it, nothing new is said.
 const MAX_TOLD: usize = 256;
 
+/// How often the files are read again for one hand-over of rules, when
+/// they change under it. Past it, no learned rule is in force until the
+/// next hand-over.
+const MAX_RELOADS: usize = 3;
+
+/// The engine has the learned rules that follow from a reading of the
+/// files (a point a test can stop at: [`cortex_base::hook`]).
+pub const AFTER_THE_RULES: &str = "knowledge: the engine has its learned rules";
+
 /// Lets the next mark of expired entries be made, when it is dropped.
 struct Marked(std::sync::Weak<Knowledge>);
 
@@ -348,7 +360,7 @@ impl Knowledge {
             Some(held) if self.project.is_current(&held) => held,
             held => Arc::new(self.project.load(held.as_deref())),
         };
-        self.took(&snapshot);
+        let snapshot = self.took(&snapshot);
         if snapshot.has_lapsed(self.project.now()) {
             if wait {
                 self.mark_lapsed();
@@ -396,57 +408,84 @@ impl Knowledge {
 
     /// Takes `snapshot` as the project's knowledge now: every session of
     /// the project in this process sees it, and this session's engine is
-    /// given the rules that follow from it.
-    pub(crate) fn took(&self, snapshot: &Arc<Snapshot>) {
-        *lock(&self.shared.snapshot) = Some(Arc::clone(snapshot));
+    /// given the rules that follow from it. Answers with the snapshot the
+    /// rules were made from, which is a later reading of the files when
+    /// `snapshot` was no longer theirs ([`Knowledge::give_rules`]).
+    pub(crate) fn took(&self, snapshot: &Arc<Snapshot>) -> Arc<Snapshot> {
+        let snapshot = self.give_rules(snapshot);
         for problem in snapshot.problems() {
             self.tell_once(problem.clone());
         }
-        self.give_rules(snapshot);
+        snapshot
     }
 
-    /// Gives the engine one exact allow rule for each command of
-    /// `snapshot` that the user accepted, in place of the ones it had.
-    fn give_rules(&self, snapshot: &Arc<Snapshot>) {
+    /// Gives the engine one exact allow rule for each command the user
+    /// accepted, in place of the ones it had.
+    ///
+    /// **The rules are made from the files as they are while the rules
+    /// are held.** A snapshot reaches here from several threads (a turn's
+    /// start, what the observer stored beside a turn, a change the user
+    /// made), and one that was read before another's change can arrive
+    /// after it: handed to the engine as it is, it would put back the rule
+    /// of a command the user has just turned off, between a command's look
+    /// at the files and its decision (found by the full review of the
+    /// second pull request). So a snapshot that is not the files' any more
+    /// is not used: the files are read again, here, under the rules' own
+    /// lock, and the rules made from that reading. Files that go on
+    /// changing under it leave no learned rule in force.
+    fn give_rules(&self, snapshot: &Arc<Snapshot>) -> Arc<Snapshot> {
+        let mut given = lock(&self.learned);
+        let mut snapshot = Arc::clone(snapshot);
+        let mut current = self.project.is_current(&snapshot);
+        let mut reloads = 0;
+        while !current && reloads < MAX_RELOADS {
+            snapshot = Arc::new(self.project.load(Some(&snapshot)));
+            current = self.project.is_current(&snapshot);
+            reloads += 1;
+        }
         let now = self.project.now();
         let mut rules = Vec::new();
         let mut until = None;
-        for entry in snapshot.runs_unasked(now) {
-            let Some(command) = &entry.command else {
-                continue;
-            };
-            let Some(rule) = exact_command_rule(&command.run, self.syntax) else {
-                continue;
-            };
-            rules.push(rule);
-            until = [until, entry.expires].into_iter().flatten().min();
+        if current {
+            for entry in snapshot.runs_unasked(now) {
+                let Some(command) = &entry.command else {
+                    continue;
+                };
+                let Some(rule) = exact_command_rule(&command.run, self.syntax) else {
+                    continue;
+                };
+                rules.push(rule);
+                until = [until, entry.expires].into_iter().flatten().min();
+            }
         }
-        let mut given = lock(&self.learned);
-        // Whatever the rules, they are this snapshot's from now on.
-        given.from = Some(Arc::clone(snapshot));
+        // The project's sessions share the reading the rules stand on.
+        *lock(&self.shared.snapshot) = Some(Arc::clone(&snapshot));
+        given.from = Some(Arc::clone(&snapshot));
         given.until = until;
-        if given.rules == rules {
-            return;
-        }
-        match self.policy.set_learned(rules.clone()) {
-            Ok(()) => given.rules = rules,
-            Err(errors) => {
-                // No learned rule is in force then.
-                given.rules.clear();
-                self.tell_once(format!(
-                    "The project's accepted commands could not be given to the permission \
-                     engine, so each asks before it runs: {}",
-                    visible(
-                        &errors
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    )
-                ));
+        if given.rules != rules {
+            match self.policy.set_learned(rules.clone()) {
+                Ok(()) => given.rules = rules,
+                Err(errors) => {
+                    // No learned rule is in force then.
+                    given.rules.clear();
+                    self.tell_once(format!(
+                        "The project's accepted commands could not be given to the permission \
+                         engine, so each asks before it runs: {}",
+                        visible(
+                            &errors
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        )
+                    ));
+                }
             }
         }
         drop(given);
+        // After the hand-over, and outside this module's lock and the
+        // policy's.
+        cortex_base::hook::point(AFTER_THE_RULES);
         let waiting = self
             .policy
             .engine()
@@ -460,6 +499,7 @@ impl Knowledge {
                  trust before they run without asking: `cortex permissions trust`."
             ));
         }
+        snapshot
     }
 
     /// Puts `engine` in force for a change of level, with the learned

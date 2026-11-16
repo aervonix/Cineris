@@ -271,6 +271,10 @@ pub(crate) struct PolicyParts {
     pub(crate) sandboxed: bool,
 }
 
+/// The project's files were looked at for a command, which is not
+/// decided yet (a point a test can stop at: [`cortex_base::hook`]).
+pub const AFTER_THE_LOOK: &str = "policy: the look before a command is over, and it is not decided";
+
 impl EnginePolicy {
     pub(crate) fn new(parts: PolicyParts) -> Self {
         Self {
@@ -454,6 +458,7 @@ impl EnginePolicy {
             && let Some(hook) = self.before_command.get()
         {
             hook();
+            cortex_base::hook::point(AFTER_THE_LOOK);
         }
         self.engine().decide(&Request {
             tool: &call.spec.name,

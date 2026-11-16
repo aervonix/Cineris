@@ -1087,3 +1087,12 @@ replace: let _ = lapsed;
 caught-by:
     cortex-core::it knowledge::the_command_line_lists_and_changes_a_projects_entries
 
+[break] a-snapshot-another-change-overtook-gives-its-rules
+rule: The learned rules are made only from a reading of the files that is still the files' while the rules are held: one that another change overtook is read again.
+file: crates/cortex-core/src/knowledge.rs
+in: Knowledge::give_rules
+find: let mut current = self.project.is_current(&snapshot);
+replace: let mut current = true;
+caught-by:
+    cortex-core::it knowledge::sys_a_snapshot_another_change_overtook_does_not_put_a_rule_back
+
