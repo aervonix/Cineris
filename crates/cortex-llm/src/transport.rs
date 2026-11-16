@@ -167,6 +167,17 @@ mod real {
             cancel: CancelToken,
         ) -> BoxFuture<'_, Result<HttpResponse, TransportError>> {
             Box::pin(async move {
+                // The URL library would refuse it too, with a message that
+                // does not say what to do.
+                if let Some(host) = crate::http::host_outside_ascii(&request.url) {
+                    return Err(TransportError::new(
+                        TransportErrorKind::InvalidRequest,
+                        format!(
+                            "The request could not be built: {}.",
+                            crate::http::host_outside_ascii_hint(host)
+                        ),
+                    ));
+                }
                 let client = self.client()?;
                 let method = match request.method {
                     Method::Get => reqwest::Method::GET,

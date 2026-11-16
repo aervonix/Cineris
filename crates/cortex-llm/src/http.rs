@@ -344,9 +344,68 @@ fn parse_http_date(value: &str) -> Option<UtcTime> {
     UtcTime::parse(&format!("{year}-{month:02}-{day}T{time}Z")).ok()
 }
 
+/// The host of `url` when it has a character outside ASCII, which this
+/// build does not convert: the URL library under the HTTP client is built
+/// with the IDNA back end that refuses such a host (decision 0036, which
+/// saves ICU's tables). `None` for every other URL, whether or not it is
+/// otherwise valid. The host's ASCII form, which starts `xn--`, is sent as
+/// it is.
+#[must_use]
+pub fn host_outside_ascii(url: &str) -> Option<&str> {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = after_scheme
+        .split(['/', '\\', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let host_and_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = host_and_port
+        .rsplit_once(':')
+        .filter(|(_, port)| port.bytes().all(|byte| byte.is_ascii_digit()))
+        .map_or(host_and_port, |(host, _)| host);
+    (!host.is_ascii()).then_some(host)
+}
+
+/// What a person is told about a host [`host_outside_ascii`] found: the
+/// form that works, and how to get it.
+#[must_use]
+pub fn host_outside_ascii_hint(host: &str) -> String {
+    format!(
+        "the host `{host}` has letters outside ASCII, which this build does not convert. Write \
+         it in its ASCII form, which begins `xn--` (for example `bücher.example` is \
+         `xn--bcher-kva.example`), as a browser's address bar or `idn2` gives it"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_host_outside_ascii_is_found_and_nothing_else_is() {
+        for (url, host) in [
+            ("https://bücher.example/v1", "bücher.example"),
+            ("http://bücher.example:8080", "bücher.example"),
+            ("https://user:pässword@bücher.example/v1", "bücher.example"),
+            ("https://例え.テスト?q=1", "例え.テスト"),
+            ("bücher.example/v1", "bücher.example"),
+        ] {
+            assert_eq!(host_outside_ascii(url), Some(host), "{url}");
+        }
+        for url in [
+            "https://xn--bcher-kva.example/v1",
+            "https://api.anthropic.com",
+            "http://localhost:8080/v1",
+            "http://[::1]:8080/v1",
+            // Outside the host: a path, a query, a fragment, a user.
+            "https://api.example/bücher?q=ä#ü",
+            "https://pässword@api.example/v1",
+            "",
+        ] {
+            assert_eq!(host_outside_ascii(url), None, "{url}");
+        }
+    }
 
     fn now() -> UtcTime {
         UtcTime::parse("2026-11-12T10:00:00Z").unwrap()

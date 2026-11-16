@@ -43,6 +43,13 @@ grep-matcher = { version = "0.1.9", default-features = false }
 grep-regex = { version = "0.1.14", default-features = false }
 grep-searcher = { version = "0.1.17", default-features = false }
 ignore = { version = "0.4.34", default-features = false }
+# Held at 1.0, the adapter that refuses a host name with letters outside
+# ASCII instead of mapping it through ICU's tables (decision 0036): about
+# 135 KB less binary and 21 fewer crates. `url` asks for `idna_adapter =
+# "1"`, so without this requirement `cargo update` would move it to the
+# newest 1.x and bring ICU back. `cortex-llm` names it for this alone, and
+# a test of its transport fails if it moves.
+idna_adapter = { version = "~1.0.0", default-features = false }
 keyring-core = { version = "1.0.1", default-features = false }
 # The Linux sandbox's file-system rules (step 26). It has no features.
 landlock = { version = "0.4.7", default-features = false }
@@ -211,13 +218,21 @@ opt-level = 2
 [profile.ci.package.bincode]
 opt-level = 2
 
+# Optimised for size, as the shipped binary is (decision 0036): `dist`
+# inherits the level, so every measurement made in `release` (`cargo xtask
+# perf`, the `perf_` tests, `try -f profile=release`) runs code optimised as
+# the shipped binary's is. What differs from `dist` is only the linking:
+# thin LTO over 16 units, which builds in a fraction of the time.
 [profile.release]
-opt-level = 3
+opt-level = "s"
 lto = "thin"
 codegen-units = 16
 debug = false
 
-# Published binaries: `cargo build --profile dist`.
+# Published binaries. Build them with `cargo xtask size` (or, from step 34,
+# `cargo xtask dist`), which also takes the build machine's folders out of
+# the paths the binary holds (decision 0036); a plain `cargo build --profile
+# dist` does not.
 [profile.dist]
 inherits = "release"
 lto = "fat"
