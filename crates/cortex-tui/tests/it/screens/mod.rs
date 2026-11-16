@@ -29,26 +29,27 @@ use cortex_testkit::vterm::{Cell, VTerm};
 use self::scenario::{BACKGROUNDS, Row, SPECS, Spec, compose};
 
 /// The rows each screen compares, by screen: what the views built so far
-/// draw (step 22's, and step 21's input box and menus).
-/// When a later step builds the rows it owns, its counts go up here.
+/// draw (step 22's, step 21's input box and menus, and step 23's dialogs,
+/// placeholder and viewer frame). When a later step builds the rows it
+/// owns, its counts go up here.
 const COMPARED: [(&str, usize); 17] = [
     ("0", 11),
     ("1", 40),
-    ("1b", 10),
-    ("1c", 28),
-    ("1d", 20),
-    ("2a", 7),
-    ("2b", 9),
+    ("1b", 11),
+    ("1c", 29),
+    ("1d", 21),
+    ("2a", 18),
+    ("2b", 19),
     ("3a", 11),
     ("3b", 11),
-    ("4", 35),
+    ("4", 36),
     ("5", 17),
     ("6", 42),
     ("7a", 40),
     ("7b", 40),
     ("7c", 40),
-    ("8a", 35),
-    ("8b", 47),
+    ("8a", 39),
+    ("8b", 51),
 ];
 
 fn reference_dir() -> PathBuf {
@@ -548,11 +549,8 @@ fn a_skipped_row_is_never_counted_as_compared() {
     let spec = SPECS.iter().find(|spec| spec.id == "4").copied().unwrap();
     let outcome = compare(spec, BACKGROUNDS[0]);
     let not_built: usize = outcome.not_built.iter().map(|(_, count)| count).sum();
-    assert_eq!(
-        not_built, 8,
-        "screen 4's panels, and its input box's placeholder"
-    );
-    assert_eq!(outcome.compared, outcome.rows - 8);
+    assert_eq!(not_built, 7, "screen 4's panels");
+    assert_eq!(outcome.compared, outcome.rows - 7);
     // Every depth is drawn as the reference is.
     assert!(SPECS.iter().any(|spec| spec.depth == ColorDepth::Mono));
 }

@@ -2539,27 +2539,182 @@ fn theme_picks_a_theme_for_the_run() {
     let _ = link;
 }
 
-/// `/view` opens the viewer over everything committed so far; it scrolls
-/// and `q` closes it.
+/// A turn `t_{turn}` with a finished round for each of `commands`: a call
+/// of the shell, then its result, `output` its text.
+fn rounds(app: &mut App, link: &Scripted, turn: u64, commands: &[(&str, &str)], now: Instant) {
+    let with_turn = |inbound: Inbound| match inbound {
+        Inbound::Event(mut event) => {
+            event.turn_id = Some(TurnId::from(format!("t_{turn}").as_str()));
+            Inbound::Event(event)
+        }
+        other => other,
+    };
+    link.give(with_turn(event(Event::TurnStarted(TurnStarted {}))));
+    for (n, (command, output)) in commands.iter().enumerate() {
+        let id = format!("{turn}_{n}");
+        link.give(with_turn(event(Event::ItemCompleted(ItemCompleted {
+            item: Item::AssistantMessage(AssistantMessageItem {
+                id: ItemId::from(format!("m{id}").as_str()),
+                parts: vec![Part::ToolCall(cortex_protocol::message::ToolCallPart {
+                    id: CallId::from(format!("c{id}").as_str()),
+                    name: "shell".to_owned(),
+                    arguments: serde_json::json!({"command": command}),
+                    raw: None,
+                })],
+                stop_reason: Some(StopReason::ToolCalls),
+                raw_stop: None,
+                stop_detail: None,
+                truncated: false,
+                origin: None,
+                usage: None,
+                error: None,
+                created_at: None,
+            }),
+        }))));
+        link.give(with_turn(event(Event::ItemCompleted(ItemCompleted {
+            item: Item::ToolResult(cortex_protocol::item::ToolResultItem {
+                id: ItemId::from(format!("r{id}").as_str()),
+                call_id: CallId::from(format!("c{id}").as_str()),
+                tool: "shell".to_owned(),
+                outcome: cortex_protocol::item::ToolOutcome::Success,
+                content: vec![Part::text(*output)],
+                payload: Some(serde_json::json!({"exit_code": 0, "output": output})),
+                artifacts: Vec::new(),
+                duration_ms: Some(100),
+                created_at: None,
+            }),
+        }))));
+    }
+    drain(app, now);
+    let _ = app.frame(now);
+    app.drawn(now);
+}
+
+/// `/view`, or `Ctrl+O`, opens the session full screen: a title row, the
+/// transcript with its boxes closed and the latest selected, and the keys;
+/// `Up` and `Down` move between boxes, `Enter` opens one with all its
+/// output, and `Esc` returns.
 #[test]
-fn view_shows_the_session_full_screen_and_q_closes_it() {
+fn the_viewer_moves_between_boxes_and_opens_the_selected_one() {
     let now = Instant::now();
     let (mut app, link) = with_models(now);
-    let _ = app.frame(now);
+    let long: String = (1..=30).map(|n| format!("line {n}\n")).collect();
+    rounds(
+        &mut app,
+        &link,
+        2,
+        &[("cargo build", "built"), ("cargo test", &long)],
+        now,
+    );
+    rounds(&mut app, &link, 3, &[("cargo fmt", "formatted")], now);
     run_command(&mut app, "/view", now);
     assert!(app.viewing());
-    let rows = text(&app.viewer_frame(10, 80, now));
-    assert_eq!(rows.len(), 10);
+    let rows = text(&app.viewer_frame(60, 100, now));
+    assert_eq!(rows.len(), 60);
+    assert!(rows[0].starts_with(" Viewer   ~/src/app"), "{rows:#?}");
+    assert!(rows[0].contains("turns 2 and 3"), "{rows:#?}");
+    assert!(rows[0].ends_with("esc returns to the session"), "{rows:#?}");
+    let keys = &rows[59];
+    assert!(keys.contains("up/down moves between boxes"), "{keys}");
+    assert!(keys.ends_with("box 3 of 3"), "{keys}");
+    assert!(keys.contains("enter expands"), "{keys}");
+    // The selected box says so on its own border; the others do not.
+    let labelled: Vec<&String> = rows
+        .iter()
+        .filter(|row| row.starts_with('╰') && row.contains("enter expands"))
+        .collect();
+    assert_eq!(labelled.len(), 1, "{rows:#?}");
+
+    // Up to the second box, the long output's, and open it: all of it.
+    key(&mut app, "up", now);
+    let rows = text(&app.viewer_frame(60, 100, now));
+    assert!(rows[59].ends_with("box 2 of 3"), "{rows:#?}");
     assert!(
-        rows.iter().any(|row| row.contains("Cortex-Harness")),
+        !rows.iter().any(|row| row.contains("line 1 ")),
+        "closed, it shows no output"
+    );
+    key(&mut app, "enter", now);
+    let rows = text(&app.viewer_frame(60, 100, now));
+    assert!(rows[59].contains("enter collapses"), "{rows:#?}");
+    for n in [1, 15, 30] {
+        assert!(
+            rows.iter().any(|row| row.contains(&format!("line {n}"))),
+            "line {n} of the output is not in the open box: {rows:#?}"
+        );
+    }
+    key(&mut app, "enter", now);
+    let rows = text(&app.viewer_frame(60, 100, now));
+    assert!(!rows.iter().any(|row| row.contains("line 15")));
+
+    key(&mut app, "esc", now);
+    assert!(!app.viewing());
+    let _ = link;
+}
+
+/// `/view n` opens the box `n` open; in a window too short for it the box's
+/// top is shown, and the page keys scroll.
+#[test]
+fn view_n_opens_that_box_and_the_page_keys_scroll() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    let long: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+    rounds(
+        &mut app,
+        &link,
+        1,
+        &[("cargo test", &long), ("cargo fmt", "formatted")],
+        now,
+    );
+    run_command(&mut app, "/view 1", now);
+    let rows = text(&app.viewer_frame(20, 100, now));
+    assert_eq!(rows.len(), 20);
+    assert!(rows[19].ends_with("box 1 of 2"), "{rows:#?}");
+    assert!(rows[19].contains("enter collapses"), "{rows:#?}");
+    assert!(
+        rows.iter().any(|row| row.contains("cargo test")),
+        "the box's top: {rows:#?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains("line 40")));
+    key(&mut app, "pagedown", now);
+    key(&mut app, "pagedown", now);
+    let rows = text(&app.viewer_frame(20, 100, now));
+    assert!(rows.iter().any(|row| row.contains("line 40")), "{rows:#?}");
+    key(&mut app, "home", now);
+    let rows = text(&app.viewer_frame(20, 100, now));
+    assert!(
+        rows[2].contains("Cortex-Harness") || rows.iter().any(|row| row.contains("Cortex-Harness")),
         "{rows:#?}"
     );
-    assert!(
-        rows.last()
-            .is_some_and(|row| row.contains("q or esc closes"))
-    );
+    let _ = link;
+}
+
+/// `/` searches: what is typed shows in the key row, `Enter` scrolls to the
+/// next row that holds it, and a search that finds nothing says so.
+#[test]
+fn the_viewer_searches_and_says_when_nothing_is_found() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    let long: String = (1..=40).map(|n| format!("row {n}\n")).collect();
+    rounds(&mut app, &link, 1, &[("cargo test", &long)], now);
+    run_command(&mut app, "/view 1", now);
     key(&mut app, "home", now);
-    key(&mut app, "q", now);
+    let _ = app.viewer_frame(12, 100, now);
+    key(&mut app, "/", now);
+    type_text(&mut app, "row 33", now);
+    let rows = text(&app.viewer_frame(12, 100, now));
+    assert!(rows[11].starts_with(" / row 33"), "{rows:#?}");
+    key(&mut app, "enter", now);
+    let rows = text(&app.viewer_frame(12, 100, now));
+    assert!(
+        rows[2].contains("row 33"),
+        "the match at the top: {rows:#?}"
+    );
+    key(&mut app, "/", now);
+    type_text(&mut app, "nowhere", now);
+    key(&mut app, "enter", now);
+    let rows = text(&app.viewer_frame(12, 100, now));
+    assert!(rows[11].contains("no match"), "{rows:#?}");
+    key(&mut app, "esc", now);
     assert!(!app.viewing());
     let _ = link;
 }

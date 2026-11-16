@@ -102,6 +102,9 @@ pub fn approval(
 ) -> Drawn {
     let theme = &look.theme;
     let muted = theme.style(Token::Muted);
+    // Sentences wrap at the prose width, as the transcript's do; what would
+    // run, a path and a diff take the whole width.
+    let prose = look.prose_width.min(width);
     let mut lines = Vec::new();
     let question = if view.leaving {
         "Run outside the sandbox?".to_owned()
@@ -130,7 +133,7 @@ pub fn approval(
     let question_rows = lines.len();
     if !view.leaving {
         for reason in &request.reasons {
-            lines.extend(indented(&sanitize(reason), muted, 2, width));
+            lines.extend(indented(&sanitize(reason), muted, 2, prose));
         }
     }
     lines.push(Line::new());
@@ -159,7 +162,7 @@ pub fn approval(
                      the network. This is asked every time.",
                     theme.style(Token::Warning),
                     2,
-                    width,
+                    prose,
                 ));
             }
         }
@@ -175,7 +178,7 @@ pub fn approval(
                     .omitted
                     .as_deref()
                     .unwrap_or("The change has no lines to show.");
-                detail.extend(indented(&sanitize(why), muted, 4, width));
+                detail.extend(indented(&sanitize(why), muted, 4, prose));
             } else {
                 let (rows, cut_any) = diff_rows_cut(view.diff, width.saturating_sub(1), look);
                 sideways = cut_any;
@@ -230,7 +233,7 @@ pub fn approval(
             ),
             muted,
             4,
-            width,
+            prose,
         ));
     }
     let detail_rows = detail.len();
@@ -249,7 +252,7 @@ pub fn approval(
             &format!("Allowing it for longer allows: {}", rules.join(", ")),
             muted,
             2,
-            width,
+            prose,
         ));
     }
 
@@ -366,6 +369,7 @@ pub struct TrustView {
 pub fn trust(request: &TrustRequest, view: &TrustView, width: usize, look: &Look) -> Drawn {
     let theme = &look.theme;
     let muted = theme.style(Token::Muted);
+    let prose = look.prose_width.min(width);
     let mut lines = title("Trust this project?", width, look);
     let question = lines.len();
     lines.extend(indented(
@@ -378,7 +382,7 @@ pub fn trust(request: &TrustRequest, view: &TrustView, width: usize, look: &Look
         "Trusting it turns on what its files ask for:",
         muted,
         2,
-        width,
+        prose,
     ));
     const LABEL: usize = 9;
     let mut detail: Vec<Line> = Vec::new();
@@ -439,7 +443,7 @@ pub fn trust(request: &TrustRequest, view: &TrustView, width: usize, look: &Look
             ),
             muted,
             4,
-            width,
+            prose,
         ));
     }
     let detail_rows = detail.len();
@@ -449,7 +453,7 @@ pub fn trust(request: &TrustRequest, view: &TrustView, width: usize, look: &Look
             "Its rules have changed since you trusted it.",
             theme.style(Token::Warning),
             2,
-            width,
+            prose,
         ));
     }
     lines.push(Line::new());

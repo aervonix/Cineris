@@ -729,3 +729,102 @@ caught-by:
     cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
     cortex-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
     cortex-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
+
+[break] the-viewer-opens-at-the-first-box
+rule: The viewer opens with the latest tool box selected.
+file: crates/cortex-tui/src/app/state/viewer.rs
+in: App::open_viewer
+find: _ => boxes.checked_sub(1)
+replace: _ => boxes.checked_sub(boxes)
+packages: cortex-tui
+caught-by:
+    app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
+
+[break] the-viewer-enter-does-not-open
+rule: Enter opens the selected box with all its detail, and closes it again.
+file: crates/cortex-tui/src/app/state/viewer.rs
+in: App::viewer_key
+find: if !state.open.remove(&selected) {
+replace: if state.open.remove(&selected) {
+packages: cortex-tui
+caught-by:
+    app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
+
+[break] the-viewer-draws-no-box-selected
+rule: The selected box is drawn as selected: its border in the accent, with what Enter does.
+file: crates/cortex-tui/src/app/state/viewer.rs
+in: App::viewer_rows
+find: selected: state.selected == Some(place)
+replace: selected: false
+packages: cortex-tui
+caught-by:
+    app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
+
+[break] the-viewer-search-does-not-move
+rule: A search scrolls to the next row that holds what was typed.
+file: crates/cortex-tui/src/app/state/viewer.rs
+in: App::viewer_frame
+find: state.top = row;
+replace: state.top = from;
+packages: cortex-tui
+caught-by:
+    app::tests::the_viewer_searches_and_says_when_nothing_is_found
+
+[break] the-viewer-title-counts-two-turns-as-a-range
+rule: The viewer's title names two turns with "and".
+file: crates/cortex-tui/src/view/viewer.rs
+in: title
+find: said.push(format!("turns {first} and {last}"))
+replace: said.push(format!("turns {first} to {last}"))
+packages: cortex-tui
+caught-by:
+    app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
+    screens::the_views_draw_the_reference_screens
+
+[break] the-rounds-not-kept-as-rounds
+rule: A finished round is committed apart, with the round, so that the viewer can draw it again as a box.
+file: crates/cortex-tui/src/transcript.rs
+in: Transcript::commit_parts
+find: Some(round) => out.push(Committed::Round(round, lines)),
+replace: Some(_) => push_lines(&mut out, lines),
+packages: cortex-tui
+caught-by:
+    app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
+    app::tests::view_n_opens_that_box_and_the_page_keys_scroll
+    app::tests::the_viewer_searches_and_says_when_nothing_is_found
+
+[break] a-dialogs-sentences-at-the-whole-width
+rule: A dialog's sentences wrap at the prose width, as the transcript's do.
+file: crates/cortex-tui/src/view/dialog.rs
+in: approval
+find: let prose = look.prose_width.min(width);
+replace: let prose = width;
+packages: cortex-tui
+caught-by:
+    screens::the_views_draw_the_reference_screens
+
+[break] a-signal-not-handed-over
+rule: A signal that ends the program is handed to it, which ends gracefully with the signal's code.
+file: crates/cortex-term/src/sys/unix.rs
+in: on_ending
+find: if super::hand_over(128 + u8::try_from(signal).unwrap_or(0)) {
+replace: if super::hand_over(0) {
+packages: cortex-term, cortex-cli
+caught-by:
+    cortex-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
+
+[break] a-signals-code-lost
+rule: The binary ends a signal's graceful end with the code the signal's own end would have given.
+file: crates/cortex-cli/src/interactive.rs
+in: ending
+find: Ok(Exit::Signal(code)) => (code, None)
+replace: Ok(Exit::Signal(_)) => (exit::COMPLETED, None)
+packages: cortex-cli
+caught-by:
+    cortex-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
+    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits

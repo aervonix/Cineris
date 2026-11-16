@@ -72,6 +72,47 @@ pub enum Block {
     },
 }
 
+/// A piece of what [`Transcript::commit_parts`] gives (since step 23):
+/// lines, or a finished round's lines with the round, which the viewer
+/// draws again as a box it can select and open.
+#[derive(Debug, Clone)]
+pub enum Committed {
+    /// Lines that are only lines, the blank rows between blocks among them.
+    Lines(Vec<Line>),
+    /// A finished round, and its lines as they were committed.
+    Round(Round, Vec<Line>),
+}
+
+impl Committed {
+    /// Its lines as they were committed.
+    #[must_use]
+    pub fn lines(&self) -> &[Line] {
+        match self {
+            Self::Lines(lines) | Self::Round(_, lines) => lines,
+        }
+    }
+
+    /// Its lines, taken.
+    #[must_use]
+    pub fn into_lines(self) -> Vec<Line> {
+        match self {
+            Self::Lines(lines) | Self::Round(_, lines) => lines,
+        }
+    }
+}
+
+/// Lines after `parts`, joined to the lines before them.
+fn push_lines(parts: &mut Vec<Committed>, lines: Vec<Line>) {
+    if lines.is_empty() {
+        return;
+    }
+    if let Some(Committed::Lines(last)) = parts.last_mut() {
+        last.extend(lines);
+    } else {
+        parts.push(Committed::Lines(lines));
+    }
+}
+
 /// Reasoning, as it streams and when it has finished.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Reasoning {
@@ -194,6 +235,15 @@ impl Transcript {
 
     /// The lines that became final since the last call, drawn at `width`.
     pub fn commit(&mut self, width: usize, look: &Look) -> Vec<Line> {
+        self.commit_parts(width, look)
+            .into_iter()
+            .flat_map(Committed::into_lines)
+            .collect()
+    }
+
+    /// The same lines as [`commit`](Self::commit), with each finished round
+    /// apart, and the round with it (since step 23).
+    pub fn commit_parts(&mut self, width: usize, look: &Look) -> Vec<Committed> {
         let mut out = Vec::new();
         while let Some(entry) = self.queue.front_mut() {
             let kind = entry.block.kind();
@@ -202,18 +252,22 @@ impl Transcript {
                 // begun: what comes after it is certain.
                 let gap = gap(self.last, kind, self.last_blank, look);
                 if gap {
-                    out.push(Line::new());
+                    push_lines(&mut out, vec![Line::new()]);
                     self.last_blank = true;
                 }
                 entry.started = true;
             }
-            let lines = match &mut entry.block {
+            let (lines, round) = match &mut entry.block {
                 Block::Answer(answer) => {
                     answer.set_now(self.now);
-                    answer.commit(width, look)
+                    (answer.commit(width, look), None)
                 }
-                block if block.is_open() => Vec::new(),
-                block => draw(block, Placement::Committed, 0, width, look),
+                block if block.is_open() => (Vec::new(), None),
+                Block::Round(round) => (
+                    view::round(round, Placement::Committed, 0, width, look),
+                    Some(round.clone()),
+                ),
+                block => (draw(block, Placement::Committed, 0, width, look), None),
             };
             // Asked after the commit: an answer that has ended may still have
             // lines waiting for their colours.
@@ -221,14 +275,17 @@ impl Transcript {
             if !lines.is_empty() {
                 self.last = Some(kind);
                 self.last_blank = lines.last().is_some_and(|line| line.width() == 0);
-                out.extend(lines);
+                match round {
+                    Some(round) => out.push(Committed::Round(round, lines)),
+                    None => push_lines(&mut out, lines),
+                }
             }
             if open {
                 break;
             }
             if kind == Kind::Header {
                 // The header card is set apart from whatever follows at once.
-                out.push(Line::new());
+                push_lines(&mut out, vec![Line::new()]);
                 self.last_blank = true;
             }
             self.queue.pop_front();
