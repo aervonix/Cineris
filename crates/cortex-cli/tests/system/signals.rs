@@ -116,7 +116,7 @@ fn sys_ctrl_break_interrupts_the_turn_and_exits_143() {
 /// The command a shell runs to start `spec`: the test binary, quoted for
 /// the shell the harness finds (bash or sh on Linux, PowerShell on
 /// Windows).
-fn shell_line(spec: &ChildSpec) -> String {
+pub(crate) fn shell_line(spec: &ChildSpec) -> String {
     let (program, arguments) = spec.arguments(CHILD_ENTRY);
     let quoted = format!("'{}'", program.replace('\'', "''"));
     let call = if cfg!(windows) {
