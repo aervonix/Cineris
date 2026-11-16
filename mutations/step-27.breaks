@@ -200,8 +200,8 @@ caught-by:
 rule: A `shutdown` begins the end's bound before it ends the core, which waits for each session's close.
 file: crates/cortex-rpc/src/connection.rs
 in: Connection::shutdown
-find: ending.cancel();
-replace: let _ = ending;
+find: self.server_ending.as_ref().unwrap_or(ending).cancel();
+replace: let _ = (&self.server_ending, ending);
 caught-by:
     cortex-rpc::it wire::the_ends_bound_begins_before_a_shutdown_ends_the_core
 
@@ -268,8 +268,8 @@ caught-by:
 rule: A client may ask for a session at `unrestricted` only when the server's own command line or configuration allows it.
 file: crates/cortex-rpc/src/connection.rs
 in: Connection::request
-find: op if !self.shared.options.allow_unrestricted && asks_for_unrestricted(&op) => {
-replace: op if false && asks_for_unrestricted(&op) => {
+find: op if !self.shared.options.allow_unrestricted && asks_for_unrestricted(&op) =>
+replace: op if false && asks_for_unrestricted(&op) =>
 caught-by:
     cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
 
@@ -297,6 +297,7 @@ file: crates/cortex-rpc/src/socket/unix.rs
 in: Listener::accept
 find: if peer.uid() != self.uid {
 replace: if peer.uid() == u32::MAX {
+packages: cortex-cli
 caught-by:
     cortex-cli::system serve::sys_another_user_is_refused_at_the_socket
 
@@ -361,10 +362,11 @@ rule: A client's `shutdown` ends the server: every other connection with it.
 file: crates/cortex-rpc/src/server.rs
 in: serve_socket
 find:
+                        shut.store(true, Ordering::SeqCst);
                         // Every other connection ends with this one.
                         stop.cancel();
 replace:
-                        // Every other connection ends with this one.
+                        shut.store(true, Ordering::SeqCst);
 caught-by:
     cortex-rpc::it socket::a_clients_shutdown_ends_the_server
 
