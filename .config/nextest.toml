@@ -34,18 +34,18 @@ nextest-version = "0.9.100"
 # less, for the same wall time (docs/testing-and-ci.md, "Each tier is measured
 # under its own load").
 #
-# `tiers-windows` holds the same job's first run, tiers 1 and 2, to three at
-# a time on Windows (the owner's decision of 2026-11-16, in the seventh
-# tooling step): four processes at once on a 4-core runner slowed each other,
-# and three at a time took a fifth off the integration tier for about 1.5 s
-# more of the run's wall time (docs/testing-and-ci.md, "Each tier is measured
-# under its own load").
+# `tiers-windows` holds the same job's first run, tiers 1 and 2, to two at a
+# time on Windows (three from the seventh tooling step; two by the owner's
+# decision, measured in the ninth): on one runner two at a time took 21% off
+# the integration tier and 31% off the unit tier, for about 6 s more of the
+# run's wall time (docs/testing-and-ci.md, "Each tier is measured under its
+# own load").
 [test-groups]
 process = { max-threads = 2 }
 system = { max-threads = 3 }
 system-windows = { max-threads = 1 }
 system-windows-shells = { max-threads = 1 }
-tiers-windows = { max-threads = 3 }
+tiers-windows = { max-threads = 2 }
 
 # The limits on one test come from the tier budgets in docs/testing-and-ci.md
 # and hold in every profile. After a CI run, `cargo xtask ci test` also checks
@@ -116,7 +116,7 @@ test-group = 'system-windows'
 filter = 'test(/(^|::)sys_/)'
 test-group = 'system'
 
-# Tiers 1 and 2 on Windows, three at a time; elsewhere as many as there are
+# Tiers 1 and 2 on Windows, two at a time; elsewhere as many as there are
 # cores.
 [[profile.ci.overrides]]
 platform = 'cfg(windows)'
