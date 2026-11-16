@@ -273,6 +273,16 @@ pub struct CoreOptions {
     /// mode, the terminal UI and `serve --stdio` end a session with its
     /// client.
     pub keep_sessions: bool,
+    /// Whether a session may be at `unrestricted`: started there (by its
+    /// settings, or by a configuration override however it is spelled, as
+    /// the configuration reads it) or raised there by `session/set`. On by
+    /// default, so every front end behaves as it did: a person at the
+    /// terminal or a headless run chooses its own level. A server turns it
+    /// off unless its own command line or configuration is at
+    /// `unrestricted`, so that a client is never more than the user at the
+    /// terminal (`docs/security.md`, section 5): a session that would be
+    /// there is refused `unrestricted_not_allowed`.
+    pub allow_unrestricted: bool,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -285,6 +295,7 @@ impl std::fmt::Debug for CoreOptions {
             .field("fail_on_denial", &self.fail_on_denial)
             .field("approval_timeout", &self.approval_timeout)
             .field("keep_sessions", &self.keep_sessions)
+            .field("allow_unrestricted", &self.allow_unrestricted)
             .finish_non_exhaustive()
     }
 }
@@ -333,6 +344,7 @@ impl CoreOptions {
             log: None,
             answers_may_stop: false,
             keep_sessions: false,
+            allow_unrestricted: true,
         }
     }
 }
@@ -1977,6 +1989,9 @@ impl Core {
                         "Only a `user` client may raise a session's level.",
                     ));
                 }
+                if level == Level::Unrestricted && !inner.options.allow_unrestricted {
+                    return Err(unrestricted_not_allowed());
+                }
                 new_level = Some(level);
             }
         }
@@ -2364,6 +2379,17 @@ impl ListCursor {
             session: SessionId::new(session),
         })
     }
+}
+
+/// The refusal of a session at `unrestricted` where the core may not give
+/// one ([`CoreOptions::allow_unrestricted`]).
+pub(crate) fn unrestricted_not_allowed() -> OpError {
+    error(
+        ErrorKind::Permission,
+        code::UNRESTRICTED_NOT_ALLOWED,
+        "A session at `unrestricted` is the server's own to allow: start the server at it \
+         (--permission-mode unrestricted, or `permissions.mode` in the user's configuration).",
+    )
 }
 
 fn session_error(failure: &cortex_session::SessionError) -> OpError {

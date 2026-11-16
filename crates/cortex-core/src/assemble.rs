@@ -1975,6 +1975,15 @@ pub(crate) fn assemble(
             ));
         }
     }
+    // A core that may not give `unrestricted` (a server not started at it)
+    // refuses a session that would start there, on what the configuration
+    // comes to, however the request spelled it; before anything of the
+    // session is written.
+    if !options.allow_unrestricted
+        && loaded.settings.permissions.mode == cortex_protocol::lease::Level::Unrestricted
+    {
+        return Err(crate::core::unrestricted_not_allowed());
+    }
     told.extend(problem);
     told.extend(git_note);
     for diagnostic in &loaded.diagnostics {

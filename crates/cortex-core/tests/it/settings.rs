@@ -747,3 +747,89 @@ fn a_level_the_new_model_does_not_have_is_left_behind_and_said() {
         front.close().await;
     });
 }
+
+/// Without `allow_unrestricted` (a server not started at `unrestricted`),
+/// a session there is refused however it would come to be: its settings,
+/// an override however spelled, a raise by `session/set`. With it (a
+/// server whose own configuration is at `unrestricted`), its clients have
+/// it, a fork included.
+#[test]
+fn unrestricted_is_refused_where_the_core_may_not_give_it() {
+    let world = World::new("no_unrestricted", [says("Hi.")]);
+    let core = world.core_with(|options| options.allow_unrestricted = false);
+    world.run(async {
+        let at_unrestricted = SessionSettings {
+            level: Some(Level::Unrestricted),
+            ..SessionSettings::default()
+        };
+        let refused = Front::start_as(&world, &core, ClientInfo::user(), at_unrestricted.clone())
+            .await
+            .err()
+            .expect("a session at unrestricted");
+        assert_eq!(refused.code, "unrestricted_not_allowed");
+        assert_eq!(refused.kind, cortex_protocol::ErrorKind::Permission);
+        let client = core.connect(ClientInfo::user());
+        for (key, value) in [
+            ("permissions . mode", json!("unrestricted")),
+            ("\"permissions\".mode", json!("unrestricted")),
+            ("permissions", json!({" mode": "unrestricted"})),
+        ] {
+            let mut config = serde_json::Map::new();
+            config.insert(key.to_owned(), value);
+            let refused = core
+                .handle(
+                    client.id,
+                    Op::SessionNew(cortex_protocol::methods::SessionNewParams {
+                        workspace: world.workspace.to_str().unwrap().to_owned(),
+                        settings: SessionSettings::default(),
+                        title: None,
+                        config,
+                        ephemeral: true,
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(refused.code, "unrestricted_not_allowed", "{key}");
+        }
+        assert_eq!(core.open_sessions(), Vec::new(), "a refused session runs");
+
+        let front = Front::start(&world, &core).await;
+        let raised = set(&front, at_unrestricted).await.unwrap_err();
+        assert_eq!(raised.code, "unrestricted_not_allowed");
+        // Lowering is the user's as ever.
+        let lowered = set(
+            &front,
+            SessionSettings {
+                level: Some(Level::ReadOnly),
+                ..SessionSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(lowered.level, Level::ReadOnly);
+        front.close().await;
+    });
+
+    // A server whose own configuration is at `unrestricted`.
+    world.user_config("[permissions]\nmode = \"unrestricted\"\n");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        assert_eq!(front.state.level, Level::Unrestricted);
+        front.turn("hello").await;
+        let forked = front
+            .op(Op::SessionFork(
+                cortex_protocol::methods::SessionForkParams {
+                    session_id: front.session.clone(),
+                    at: None,
+                },
+            ))
+            .await
+            .expect("the fork opens");
+        let OpResult::SessionFork(forked) = forked else {
+            panic!("not a session");
+        };
+        assert_eq!(forked.session.level, Level::Unrestricted);
+        front.close().await;
+    });
+}
