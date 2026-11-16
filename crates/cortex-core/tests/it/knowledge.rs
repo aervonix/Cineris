@@ -171,6 +171,68 @@ fn other_process(world: &World) -> Project {
     )
 }
 
+/// A second program in the workspace, which nothing allows: it asks, and
+/// a test acts while it waits.
+fn deploy(world: &World) -> &'static str {
+    if cfg!(windows) {
+        world.put("deploy.cmd", "@echo off\r\nexit /b 0\r\n");
+        "./deploy.cmd"
+    } else {
+        world.put("deploy", "#!/bin/sh\nexit 0\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                world.workspace.join("deploy"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+        "./deploy"
+    }
+}
+
+/// A test command the observer saw succeed twice in this project: active,
+/// with an expiry, and not accepted.
+fn learned(world: &World, line: &str) -> (Project, cortex_protocol::ids::EntryId) {
+    let project = other_process(world);
+    let learnt = cortex_knowledge::Learnt {
+        kind: cortex_knowledge::Kind::Command,
+        purpose: cortex_knowledge::Purpose::Test,
+        line: line.to_owned(),
+        cwd: None,
+        duration_ms: 10,
+        read_only: false,
+        session: None,
+    };
+    project.learn(&learnt, None).unwrap();
+    let (_, updated) = project.learn(&learnt, None).unwrap();
+    let id = updated.changed[0].id.clone();
+    (project, id)
+}
+
+fn change_of(id: &cortex_protocol::ids::EntryId, action: EntryAction) -> EntryChange {
+    EntryChange {
+        id: id.clone(),
+        action,
+        text: None,
+    }
+}
+
+/// Waits for the turn's next question, and fails at once if the turn ends
+/// without one: the command ran unasked.
+async fn asks_again(
+    front: &Front,
+    questions: usize,
+    why: &str,
+) -> cortex_protocol::jsonrpc::RequestId {
+    front
+        .until(|seen| crate::requests_in(seen).len() >= questions || !front.ends().is_empty())
+        .await;
+    assert!(front.ends().is_empty(), "{why}");
+    front.approval().await.0
+}
+
 /// The done criteria, end to end: a command observed succeeding twice
 /// becomes an active entry with a notice; it reaches the model, and still
 /// asks; accepted, it no longer asks; turned off, it asks again.
@@ -747,7 +809,7 @@ fn sys_a_session_cannot_read_another_projects_store() {
         let results = front.results();
         assert_eq!(results.len(), 3);
         for (tool, outcome, text) in &results {
-            assert_ne!(outcome, "ok", "{tool}: {text}");
+            assert_ne!(outcome, "success", "{tool}: {text}");
             assert!(!text.contains("deploys with"), "{tool}: {text}");
         }
         // Nor does this project's own list hold it.
@@ -827,7 +889,7 @@ fn an_invalid_store_is_told_to_the_user_and_taken_up_once_it_is_put_right() {
         );
         // The proposal was refused, with the reason for the model.
         let results = front.results();
-        assert_ne!(results[0].1, "ok");
+        assert_eq!(results[0].1, "error");
         assert!(results[0].2.contains("until its file is put right"), "{}", results[0].2);
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
@@ -870,6 +932,18 @@ fn sys_a_credential_is_not_learned_and_not_remembered() {
             "remember",
             json!({"kind": "fact", "text": format!("The token is {key}."), "evidence": "the user"}),
         )]),
+        // In the check, which is kept with the entry and would go into
+        // the repository's file with it.
+        calls(&[(
+            "c4",
+            "remember",
+            json!({
+                "kind": "fact",
+                "text": "The service answers.",
+                "evidence": "the user",
+                "check": {"kind": "command", "command": format!("curl -H token:{key} https://example.test")},
+            }),
+        )]),
         says("Done."),
     ]);
     let core = world.core();
@@ -877,12 +951,10 @@ fn sys_a_credential_is_not_learned_and_not_remembered() {
         let front = Front::start(&world, &core).await;
         front.turn_allowing("run it twice and remember").await;
         let results = front.results();
-        assert_ne!(results[2].1, "ok");
-        assert!(
-            results[2].2.contains("looks like a credential"),
-            "{}",
-            results[2].2
-        );
+        for result in &results[2..4] {
+            assert_eq!(result.1, "error");
+            assert!(result.2.contains("looks like a credential"), "{}", result.2);
+        }
         assert_eq!(list(&front).await, Vec::<ProjectEntry>::new());
         let file = store_file(&world, &world.workspace);
         assert!(!file.exists() || !std::fs::read_to_string(&file).unwrap().contains(&key));
@@ -944,6 +1016,171 @@ fn sys_learning_can_be_turned_off_and_the_sections_budget_set() {
             "{:?}",
             front.notices()
         );
+        front.close().await;
+    });
+}
+
+/// A `project/update` reaches a session in the middle of its turn: the
+/// command the user accepts while another waits for its answer runs
+/// unasked when its turn comes.
+#[test]
+fn sys_a_command_accepted_while_a_turn_runs_stops_asking_at_once() {
+    let mut world = World::new("knowledge_accept_mid_turn", []);
+    let line = passing(&world);
+    let other = deploy(&world);
+    world.provider =
+        cortex_testkit::ScriptedProvider::new([run("c1", other), run("c2", &line), says("Done.")]);
+    let (_project, id) = learned(&world, &line);
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("two commands").await;
+        let (asked, _) = front.approval().await;
+        change(&front, id.as_str(), EntryAction::Accept).await;
+        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        // An unanswered question fails the test at once.
+        front.turns(1).await;
+        assert_eq!(front.approvals().len(), 1, "the accepted command asked");
+        front.close().await;
+    });
+}
+
+/// Two sessions of one project in one process share what was last read of
+/// its files, and each has an engine of its own. When another process
+/// turns a command off and the *other* session reads the files first, this
+/// session's engine still holds the rule: it must ask all the same, by
+/// comparing the files with what its own rules were made from (found by
+/// the independent read of the trust path).
+#[test]
+fn sys_a_command_turned_off_elsewhere_asks_though_another_session_read_the_files_first() {
+    let mut world = World::new("knowledge_two_sessions", []);
+    let line = passing(&world);
+    let other = deploy(&world);
+    world.provider = cortex_testkit::ScriptedProvider::new([
+        run("c1", &line),
+        run("c2", other),
+        run("c3", &line),
+        says("Done."),
+    ]);
+    let (project, id) = learned(&world, &line);
+    project
+        .update(&[change_of(&id, EntryAction::Accept)], &[], None)
+        .unwrap();
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let second = Front::start(&world, &core).await;
+        front.prompt("three commands").await;
+        // The first ran unasked; the second asks.
+        let (asked, _) = front.approval().await;
+        assert_eq!(front.results().len(), 1);
+        project
+            .update(&[change_of(&id, EntryAction::Disable)], &[], None)
+            .unwrap();
+        // The other session reads the files: the snapshot the two share
+        // is the new one now, and only the other session's engine was
+        // given its rules.
+        assert_eq!(list(&second).await[0].status, EntryStatus::Disabled);
+        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        let asked = asks_again(
+            &front,
+            2,
+            "the command another process turned off ran without asking",
+        )
+        .await;
+        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        front.turns(1).await;
+        second.close().await;
+        front.close().await;
+    });
+}
+
+/// An accepted command whose entry expires while a turn runs asks at its
+/// next run: the look before a command knows when the first of the
+/// entries behind the rules expires.
+#[test]
+fn sys_an_accepted_command_that_expires_while_a_turn_runs_asks() {
+    let mut world = World::new("knowledge_expires_mid_turn", []);
+    let line = passing(&world);
+    let other = deploy(&world);
+    world.provider = cortex_testkit::ScriptedProvider::new([
+        run("c1", &line),
+        run("c2", other),
+        run("c3", &line),
+        says("Done."),
+    ]);
+    let (project, id) = learned(&world, &line);
+    project
+        .update(&[change_of(&id, EntryAction::Accept)], &[], None)
+        .unwrap();
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("three commands").await;
+        let (asked, _) = front.approval().await;
+        assert_eq!(front.results().len(), 1, "the accepted command ran unasked");
+        // A learned command's acceptance lasts 90 days.
+        world
+            .clock
+            .advance(std::time::Duration::from_secs(91 * 24 * 60 * 60));
+        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        let asked = asks_again(&front, 2, "the expired command ran without asking").await;
+        front.answer(&asked, ApprovalChoice::AllowOnce).unwrap();
+        front.turns(1).await;
+        front.close().await;
+    });
+}
+
+/// Promoting an entry writes all of it into the repository's file: one
+/// whose evidence or check holds what looks like a credential is refused,
+/// and nothing is written.
+#[test]
+fn an_entry_with_a_credential_in_its_evidence_is_not_promoted() {
+    let world = World::new("knowledge_promote_secret", []);
+    let key = format!("ghp_{}", "a1B2".repeat(9));
+    let project = other_process(&world);
+    let (_, stored) = project
+        .propose(
+            cortex_knowledge::Proposed {
+                kind: cortex_knowledge::Kind::Fact,
+                text: "The service needs a token.".to_owned(),
+                evidence: format!("the user said {key}"),
+                check: None,
+                session: None,
+            },
+            None,
+        )
+        .unwrap();
+    let id = stored.changed[0].id.clone();
+    project
+        .update(&[change_of(&id, EntryAction::Accept)], &[], None)
+        .unwrap();
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let refused = front
+            .op(Op::ProjectUpdate(ProjectUpdateParams {
+                session_id: Some(front.session.clone()),
+                workspace: None,
+                changes: vec![change_of(&id, EntryAction::Promote)],
+                add: Vec::new(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "invalid_entry");
+        assert!(
+            refused.message.contains("looks like a credential"),
+            "{}",
+            refused.message
+        );
+        assert!(
+            !world
+                .workspace
+                .join(".cortex")
+                .join("profile.toml")
+                .exists()
+        );
+        assert_eq!(list(&front).await[0].scope, EntryScope::Private);
         front.close().await;
     });
 }

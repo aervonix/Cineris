@@ -383,11 +383,18 @@ impl Session {
                 let epoch = self.epoch_start(&built, &discovered, reason);
                 self.begin_epoch(turn, epoch, None).await?;
                 begun = true;
+                // The history goes on under the new prompt. A notice of an
+                // older profile in it would stand after the prompt's
+                // section as the last word, and say that it replaces what
+                // came before: the profile is said again, after it.
+                if self.context.history.tells_a_profile() {
+                    self.profile_changes(turn, true).await?;
+                }
             }
         }
         if !begun {
             self.instruction_changes(turn).await?;
-            self.profile_changes(turn).await?;
+            self.profile_changes(turn, false).await?;
         }
         Ok(())
     }
@@ -403,13 +410,14 @@ impl Session {
 
     /// Tells the model the project profile as it is now, when it is not
     /// the one it has: the epoch's prompt stays as it was sent, and the
-    /// whole section follows as a notice.
-    async fn profile_changes(&mut self, turn: &Turn) -> Result<(), StoreError> {
+    /// whole section follows as a notice. `again` tells it whether or not
+    /// it is the one the model has: an older one was said since.
+    async fn profile_changes(&mut self, turn: &Turn, again: bool) -> Result<(), StoreError> {
         let Some(section) = Self::profile_now(self.context.parts.profile.clone()).await else {
             return Ok(());
         };
         let now = crate::context::profile_hash(&section);
-        if now == self.context.given_profile {
+        if now == self.context.given_profile && !again {
             return Ok(());
         }
         self.record_notice(

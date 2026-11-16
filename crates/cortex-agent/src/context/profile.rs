@@ -21,6 +21,12 @@
 //! - **A notice of an older profile is not replayed after a summary.** The
 //!   new epoch's prompt holds the profile as it is then; an older notice
 //!   after it would put an old profile over the current one.
+//! - **A new prompt over a history that goes on says the profile again.**
+//!   A resume whose prompt the harness would now build otherwise begins an
+//!   epoch and keeps its history, notices of an older profile included.
+//!   They cannot be taken out of a history that goes on, so one notice of
+//!   the profile as it is follows them (found by the independent read of
+//!   the trust path, step 17).
 
 use cortex_base::ContentHash;
 

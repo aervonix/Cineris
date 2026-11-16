@@ -268,6 +268,36 @@ The same pull request's second and last round: a reviewer read the fixes alone. 
 
 **Left open,** as items: [a second write of the same size within a clock's tick on Windows](../../outstanding/a-same-size-rewrite-within-a-clock-tick-on-windows.md), which `FileStamp` cannot tell there. **Written down, not changed:** a spacing-only edit of an accepted shared entry's text keeps its acceptance (the hash is of the text with its blanks made one; a command line, a path and a pattern are hashed as they are).
 
+## The second pull request: the wiring
+
+What the design's sections 2 to 5 became is in [14-adaptation.md](../../architecture/14-adaptation.md), "As built in step 17" (the observer, learning, a session's seams, the safe list, the profile in an epoch, the notices, credentials, the two operations, the settings). What was settled while building, beyond the design above:
+
+- **The observer's table classes a program by its file name,** whatever directory is written before it: `./gradlew test` is a test run, and so is a file in the workspace that is called `jest`. A program in the workspace that the table does not know is not observed; the user writes its entry.
+- **A session kept in memory tells no flip.** The harness does not see what its file tools write there, so "nothing changed between the two runs" cannot be said.
+- **The look before a command is decided.** A session reads the files at a turn's start, so a rejection made in another process would have waited for the next turn. The files' stamps are looked at before each command's decision (two `stat` calls, and only while the session has a learned rule), so it takes effect at the next decision.
+
+### After the read of the trust path
+
+As soon as the path existed (a shared or learned command reaching `cortex-policy`, an entry reaching the prompt), an independent reviewer read those two things and nothing else, without the author's reasoning. Its findings, each with the fix and the test that holds it:
+
+| # | Finding | Fix | Held by |
+|---|---|---|---|
+| B1 | **A session kept a turned-off command's rule when another session of the project read the files first.** The look before a command compared the files with the snapshot the project's sessions share, which the other session had just replaced; only the other session's engine was given the new rules. | The rules are kept with the snapshot they were made from, and the look compares the files with that one. | `knowledge::sys_a_command_turned_off_elsewhere_asks_though_another_session_read_the_files_first` |
+| B2 | **A change of level could put a turned-off command back on the new engine.** The rules were copied, the lock let go, and the copy then handed to the engine: a `disable` between the two was overtaken by the older list, on an engine the module then believed had no rule. | The rules are handed to an engine only while their lock is held (`regive`). | `knowledge::tests::the_rules_are_handed_to_a_new_engine_while_they_are_held` |
+| S3 | **A resume into a new epoch replayed a notice of an older profile after the new prompt.** A resume whose tools or prompt changed begins an epoch and keeps its history; a profile notice in it then stood after the prompt's section as the last word, and no later turn corrected it, the hashes being equal. | When such a history holds a profile notice, the profile is said again, once, after it. | `cortex-agent`'s `profile::a_resume_into_a_new_epoch_says_the_profile_again_after_an_older_notice` |
+| S4 | **A call decided before its rule was taken back runs on that decision:** of two calls in one response, the second runs unasked though its command was turned off while the first waited. | **Not changed here:** it is how the loop treats every rule (a revoked approval, a lowered level), and deciding again is a change to the loop's tool round. Shown with a test, written down in 14-adaptation, and left as [an item](../../outstanding/a-call-decided-before-its-rule-was-taken-back.md) with a recommendation. | the item |
+| S5 | **A credential in an entry's check, its directory, or a promoted entry's evidence was not looked for.** A check is kept in the store, and a promote writes all of an entry into the repository's file. | Every text of an entry that a file keeps is looked at: in a proposal, an added entry, and a promote. | `knowledge::sys_a_credential_is_not_learned_and_not_remembered`, `an_entry_with_a_credential_in_its_evidence_is_not_promoted`, `knowledge::tests::every_text_of_an_entry_that_a_file_keeps_is_looked_at_for_a_credential` |
+
+**From its notes:**
+
+- **Expiry was not enforced inside a turn:** fixed. The rules are kept with the time the first of their entries expires, and the look before a command drops them then (`knowledge::sys_an_accepted_command_that_expires_while_a_turn_runs_asks`).
+- **The directory is not part of a learned rule:** written down, in 06 and 14.
+- **The message for rules the engine refused carried a pattern unescaped:** it goes through `visible` now. No test: the engine refuses no rule that `exact_command_rule` writes.
+- **The observer is a way into the prompt that no one reviews,** and the words of an observed line are the model's own: `npm test` with arguments of its choosing is a test run. The plain-words rule keeps a line from carrying a quote or a sentence with blanks; it does not keep it from spelling one with `-` or `,`. Not changed: the alternative is to keep an observed command out of the prompt until it is accepted, which the coordinator's answer to the second question decided against. [security.md](../../security.md) says what is left, and the report raises it.
+- **A log written before `base` existed** begins a new epoch at its first resume once it has a profile. It costs one epoch, once, on a log no released build wrote.
+
+**The same reading found one of the author's own tests empty:** three assertions compared a tool result's outcome with `"ok"`, which no outcome is called. They compare with `error` now.
+
 ## Measured
 
 On the desktop, a release build, `perf_` tests of `cortex-knowledge` (`crates/cortex-knowledge/tests/it/measure.rs`), medians of 200 runs or more. The hosted runners' figures are in [ci.md](ci.md).

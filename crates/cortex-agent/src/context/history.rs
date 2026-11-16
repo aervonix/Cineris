@@ -230,6 +230,12 @@ impl History {
         }
     }
 
+    /// Whether the history holds a notice of the project profile: one
+    /// that a new prompt, built over this history, would be followed by.
+    pub(crate) fn tells_a_profile(&self) -> bool {
+        self.meta.iter().any(|meta| meta.profile)
+    }
+
     /// Adds the messages of `other` from `from` on, without the reasoning
     /// or the provider's own blocks of its assistant messages: the turns a
     /// summary did not cover, replayed after it.
