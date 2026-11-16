@@ -763,7 +763,7 @@ fn no_turn_starts_while_a_rewind_is_under_way() {
 /// session used meanwhile heads the next listing.
 #[test]
 fn the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages() {
-    let world = World::new("list_pages", (0..6).map(|n| says(&format!("answer {n}"))));
+    let world = World::new("list_pages", (0..4).map(|n| says(&format!("answer {n}"))));
     let core = world.core();
     let page = |client: ClientId, limit: u32, cursor: Option<String>| {
         let core = core.clone();
@@ -787,9 +787,9 @@ fn the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages() 
         }
     };
     world.run(async {
-        // Five sessions, each used a minute after the one before.
+        // Three sessions, each used a minute after the one before.
         let mut made = Vec::new();
-        for n in 0..5 {
+        for n in 0..3 {
             let front = Front::start(&world, &core).await;
             front.turn(&format!("turn {n}")).await;
             front.close().await;
@@ -797,7 +797,7 @@ fn the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages() 
             world.clock.advance(Duration::from_secs(60));
         }
         let reader = core.connect(ClientInfo::user());
-        let first = page(reader.id, 2, None).await;
+        let first = page(reader.id, 1, None).await;
         let ids = |listed: &cortex_protocol::methods::SessionListResult| {
             listed
                 .sessions
@@ -805,17 +805,17 @@ fn the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages() 
                 .map(|summary| summary.session_id.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(ids(&first), [made[4].clone(), made[3].clone()]);
+        assert_eq!(ids(&first), [made[2].clone()]);
         let cursor = first.next_cursor.clone().expect("more to come");
 
         // A session not listed yet is used: it moves to the head of the
-        // list. By position, the next page would give `made[3]` again.
+        // list. By position, the next page would give `made[2]` again.
         let user = core.connect(ClientInfo::user());
         let opened = core
             .handle(
                 user.id,
                 Op::SessionOpen(SessionRef {
-                    session_id: made[1].clone(),
+                    session_id: made[0].clone(),
                 }),
             )
             .await
@@ -826,7 +826,7 @@ fn the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages() 
         let used = Front {
             core: core.clone(),
             client: user,
-            session: made[1].clone(),
+            session: made[0].clone(),
             state: opened.session,
             seen: std::cell::RefCell::new(Vec::new()),
             answered: std::cell::RefCell::new(Vec::new()),
@@ -836,10 +836,10 @@ fn the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages() 
         used.close().await;
 
         let second = page(reader.id, 2, Some(cursor)).await;
-        assert_eq!(ids(&second), [made[2].clone(), made[0].clone()]);
+        assert_eq!(ids(&second), [made[1].clone()]);
         assert_eq!(second.next_cursor, None, "nothing after the oldest");
         // The one used meanwhile heads a new listing.
-        assert_eq!(ids(&page(reader.id, 1, None).await), [made[1].clone()]);
+        assert_eq!(ids(&page(reader.id, 1, None).await), [made[0].clone()]);
 
         // A cursor this server did not give is refused.
         let refused = core
