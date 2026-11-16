@@ -230,6 +230,8 @@ Builds `cortex` and reports its size and the crates in the build.
                    budgets are of x86_64-unknown-linux-musl and
                    x86_64-pc-windows-msvc)
   --against-main   the difference from the size `main` last recorded (dist only)
+  --base HASH      with --against-main: the pull request's base, and a line
+                   saying so when main's record is of another commit
   --profile P      `dist` (the shipped binary, and the default) or `release`
                    (thin LTO, stripped as dist is, a fraction of the build time:
                    not the shipped size, so it has no budget and no `main` to
@@ -251,6 +253,28 @@ pub(crate) struct SizeRequest {
     breakdown: bool,
     top: usize,
     at: Option<String>,
+    /// The commit the difference from `main` should be from: a pull
+    /// request's base. `main`'s record can be of another.
+    base: Option<String>,
+}
+
+/// What to say when the record `main`'s size was read from is of a commit
+/// other than `base`, the pull request's base: the difference then holds
+/// what merged between the two, or misses it. Nothing when they are one
+/// commit, or when the record names none (it is said that it names none).
+fn base_note(record: Option<&str>, base: &str) -> Option<String> {
+    let short: String = base.chars().take(7).collect();
+    match record {
+        Some(record) if base.starts_with(record) || record.starts_with(&short) => None,
+        Some(record) => Some(format!(
+            "The record is of `{record}`, not of this pull request's base `{short}`: the \
+             difference holds what changed between the two."
+        )),
+        None => Some(format!(
+            "The record names no commit, so whether it is of this pull request's base `{short}` \
+             is not known."
+        )),
+    }
 }
 
 /// Whether `text` can be given to git as a commit's name: no option, no
@@ -274,6 +298,7 @@ impl SizeRequest {
             breakdown: false,
             top: 25,
             at: None,
+            base: None,
         };
         let mut words = arguments.iter();
         while let Some(word) = words.next() {
@@ -312,8 +337,23 @@ impl SizeRequest {
                     }
                     request.at = Some(commit.clone());
                 }
+                "--base" => {
+                    let commit = value("a commit's hash")?;
+                    if commit.len() < 7 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                        return Err(format!(
+                            "`--base {commit}` is not a commit's hash (seven or more hexadecimal \
+                             digits)"
+                        ));
+                    }
+                    request.base = Some(commit.to_ascii_lowercase());
+                }
                 _ => return Err(SIZE_USAGE.to_owned()),
             }
+        }
+        if request.base.is_some() && !request.against_main {
+            return Err(
+                "`--base` says what `--against-main`'s record should be of: give both".to_owned(),
+            );
         }
         if request.profile != PROFILE {
             for (given, flag, why) in [
@@ -551,6 +591,12 @@ pub(crate) fn size(arguments: &[String]) -> Result<()> {
     }
     let paths = shipped::check_file(&binary);
     let mut report = report(&target, &request.profile, bytes, crates, main.as_ref());
+    if let (Some(Ok(main)), Some(base)) = (&main, &request.base)
+        && let Some(note) = base_note(main.commit.as_deref(), base)
+    {
+        println!("  {note}");
+        report.summary.push_str(&format!("{note}\n\n"));
+    }
     if let Some(archive) = &archive {
         report
             .summary
@@ -856,6 +902,23 @@ pub(crate) fn advisories() -> Result<()> {
 }
 
 #[cfg(test)]
+mod base_tests {
+    use super::base_note;
+
+    #[test]
+    fn a_record_of_another_commit_than_the_base_is_said_and_of_the_base_is_not() {
+        let base = "e73ef24abcdef0123456789abcdef0123456789a";
+        assert_eq!(base_note(Some("e73ef24"), base), None);
+        let other = base_note(Some("00e5482"), base).unwrap();
+        assert!(
+            other.contains("`00e5482`, not of this pull request's base `e73ef24`"),
+            "{other}"
+        );
+        assert!(base_note(None, base).unwrap().contains("names no commit"));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1006,8 +1069,24 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
                 breakdown: true,
                 top: 5,
                 at: Some("origin/main~2".to_owned()),
+                base: None,
             }
         );
+        assert_eq!(
+            SizeRequest::parse(&strings(&["--against-main", "--base", "E73EF24AB"]))
+                .unwrap()
+                .base
+                .as_deref(),
+            Some("e73ef24ab")
+        );
+        for bad in [
+            &["--base", "e73ef24"][..],
+            &["--against-main", "--base", "e73ef2"][..],
+            &["--against-main", "--base", "main"][..],
+            &["--against-main", "--base"][..],
+        ] {
+            assert!(SizeRequest::parse(&strings(bad)).is_err(), "{bad:?}");
+        }
         assert_eq!(
             SizeRequest::parse(&strings(&["--profile", "release"]))
                 .unwrap()
