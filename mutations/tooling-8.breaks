@@ -184,3 +184,12 @@ find: Pin::parse(text)
 replace: Pin::parse(shared::PIN_TEXT)
 caught-by:
     corpus::tests::a_pin_that_is_not_one_is_an_error_that_says_how_to_mend_it
+
+[break] ci-times-ab-an-os-left-out-is-not-written
+rule: An OS the A/B run had, with no round both sides finished, is written into the page as its note, never silently left out.
+file: xtask/src/records.rs
+in: ab_sections
+find: .map(|(os, note)| (*os, ab_heading(*os), format!("{note}\n")))
+replace: .filter(|_| false).map(|(os, note)| (*os, ab_heading(*os), format!("{note}\n")))
+caught-by:
+    records::tests::an_os_left_out_of_an_ab_is_written_as_its_note

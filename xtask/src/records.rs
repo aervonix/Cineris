@@ -863,7 +863,7 @@ pub(crate) fn ab_detail_text(one: &Compared, against: &str, top: usize) -> Strin
 
 /// The A/B of each OS a `try` run has, as far as any round was finished by
 /// both sides. An OS with none is named in the returned notes, with why.
-pub(crate) fn ab_compared(run: u64) -> Result<(Vec<Compared>, Vec<String>)> {
+pub(crate) fn ab_compared(run: u64) -> Result<(Vec<Compared>, Vec<(Os, String)>)> {
     let mut compared = Vec::new();
     let mut notes = Vec::new();
     for os in [Os::Windows, Os::Linux] {
@@ -871,11 +871,14 @@ pub(crate) fn ab_compared(run: u64) -> Result<(Vec<Compared>, Vec<String>)> {
             let left_out = sides.left_out.clone();
             match complete_rounds(sides) {
                 Some(sides) => compared.push(compare(os, &sides)),
-                None => notes.push(format!(
-                    "run {run}: {} has no round that both sides finished (a test that fails \
-                     ends an A/B round), so it is left out. {}",
-                    os_name(os),
-                    left_out.join("; ")
+                None => notes.push((
+                    os,
+                    format!(
+                        "run {run}: {} has no round that both sides finished (a test that \
+                         fails ends an A/B round), so it is left out. {}",
+                        os_name(os),
+                        left_out.join("; ")
+                    ),
                 )),
             }
         }
@@ -884,29 +887,41 @@ pub(crate) fn ab_compared(run: u64) -> Result<(Vec<Compared>, Vec<String>)> {
 }
 
 /// The sections `--write` puts an A/B's tables in: one for each OS, or,
-/// when the placing names one, the OSes together as `###` parts of it.
-fn ab_sections(run: u64, against: &str, compared: &[Compared], placing: &Placing) -> Vec<Section> {
-    let each = |one: &Compared| (ab_heading(one.os), ab_section(run, against, one));
+/// when the placing names one, the OSes together as `###` parts of it. An
+/// OS the run had and left out (`notes`: no round both sides finished) is
+/// written too, as its note, so that the page says it was left out.
+fn ab_sections(
+    run: u64,
+    against: &str,
+    compared: &[Compared],
+    notes: &[(Os, String)],
+    placing: &Placing,
+) -> Vec<Section> {
+    let mut parts: Vec<(Os, String, String)> = compared
+        .iter()
+        .map(|one| (one.os, ab_heading(one.os), ab_section(run, against, one)))
+        .chain(
+            notes
+                .iter()
+                .map(|(os, note)| (*os, ab_heading(*os), format!("{note}\n"))),
+        )
+        .collect();
+    // Windows first, then Linux, as the run's OSes are read.
+    parts.sort_by_key(|(os, _, _)| *os != Os::Windows);
     let (name, heading) = placing.resolve("");
     match name {
-        None => compared
-            .iter()
-            .map(|one| {
-                let (heading, body) = each(one);
-                Section {
-                    name: None,
-                    heading,
-                    body,
-                }
+        None => parts
+            .into_iter()
+            .map(|(_, heading, body)| Section {
+                name: None,
+                heading,
+                body,
             })
             .collect(),
         Some(name) => {
-            let body = compared
+            let body = parts
                 .iter()
-                .map(|one| {
-                    let (heading, body) = each(one);
-                    format!("### {heading}\n\n{}", body.trim_end())
-                })
+                .map(|(_, heading, body)| format!("### {heading}\n\n{}", body.trim_end()))
                 .collect::<Vec<_>>()
                 .join("\n\n");
             vec![Section {
@@ -932,7 +947,7 @@ pub(crate) fn ab_times(
         return Err("`--section` and `--heading` say where `--write` puts the tables".to_owned());
     }
     let (compared, notes) = ab_compared(run)?;
-    for note in &notes {
+    for (_, note) in &notes {
         println!("{note}");
     }
     if compared.is_empty() {
@@ -940,7 +955,7 @@ pub(crate) fn ab_times(
             "run {run} has no A/B round that both sides finished, on any OS"
         ));
     }
-    let sections = ab_sections(run, against, &compared, placing);
+    let sections = ab_sections(run, against, &compared, &notes, placing);
     for one in &compared {
         println!(
             "## {}\n\n{}",
@@ -1037,10 +1052,9 @@ mod tests {
     /// added to the workflow is placed in `ci-times`' table on purpose.
     #[test]
     fn every_job_of_the_ci_workflow_is_known_as_blocking_or_not() {
-        let workflow = std::fs::read_to_string(
-            crate::workspace::root().join(".github/workflows/ci.yml"),
-        )
-        .unwrap();
+        let workflow =
+            std::fs::read_to_string(crate::workspace::root().join(".github/workflows/ci.yml"))
+                .unwrap();
         let after_jobs = workflow
             .split_once("\njobs:\n")
             .map(|(_, rest)| rest)
@@ -1459,7 +1473,7 @@ mod tests {
     fn an_abs_sections_are_one_for_each_os_or_one_named_with_a_part_for_each() {
         let compared = [compared_of(Os::Windows, 3), compared_of(Os::Linux, 3)];
         // As ever: a section a heading, between the plain marks.
-        let plain = ab_sections(43, "main", &compared, &Placing::default());
+        let plain = ab_sections(43, "main", &compared, &[], &Placing::default());
         let headings: Vec<&str> = plain.iter().map(|each| each.heading.as_str()).collect();
         assert_eq!(
             headings,
@@ -1474,7 +1488,7 @@ mod tests {
             section: Some("fixes".to_owned()),
             heading: Some("The fixes' A/B".to_owned()),
         };
-        let named = ab_sections(43, "main", &compared, &placing);
+        let named = ab_sections(43, "main", &compared, &[], &placing);
         assert_eq!(named.len(), 1);
         assert_eq!(named[0].name.as_deref(), Some("fixes"));
         assert_eq!(named[0].heading, "The fixes' A/B");
@@ -1488,6 +1502,36 @@ mod tests {
         assert!(
             body.contains("\n\n### Linux, both trees on one runner\n\n"),
             "{body}"
+        );
+    }
+
+    #[test]
+    fn an_os_left_out_of_an_ab_is_written_as_its_note() {
+        let compared = [compared_of(Os::Linux, 3)];
+        let notes = [(
+            Os::Windows,
+            "run 43: Windows has no round that both sides finished".to_owned(),
+        )];
+        let plain = ab_sections(43, "main", &compared, &notes, &Placing::default());
+        assert_eq!(plain.len(), 2);
+        assert_eq!(plain[0].heading, "Windows, both trees on one runner");
+        assert_eq!(
+            plain[0].body,
+            "run 43: Windows has no round that both sides finished\n"
+        );
+        assert_eq!(plain[1].heading, "Linux, both trees on one runner");
+        let placing = Placing {
+            section: Some("fixes".to_owned()),
+            heading: Some("The fixes' A/B".to_owned()),
+        };
+        let named = ab_sections(43, "main", &compared, &notes, &placing);
+        assert!(
+            named[0].body.starts_with(
+                "### Windows, both trees on one runner\n\nrun 43: Windows has no round that \
+                 both sides finished\n\n### Linux"
+            ),
+            "{}",
+            named[0].body
         );
     }
 
