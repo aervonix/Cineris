@@ -9,6 +9,7 @@
 //! Everything is kept as it came: the views pass it through
 //! `cortex_term::sanitize` when they draw it.
 
+use std::ops::Range;
 use std::time::Duration;
 
 use cortex_protocol::item::{ToolOutcome, ToolResultItem};
@@ -243,18 +244,18 @@ fn hunk_starts(header: &str) -> (u64, u64) {
     (start('-'), start('+'))
 }
 
-/// Marks what changed in each removed line followed at once by an added
-/// one: the middle between their common start and common end.
 /// Marks what changed between a removed line and the added line after it
 /// (09-tui, "Diff": changed words are bold; the owner, 2026-11-16). Each
-/// line is cut into tokens: a word (a run of letters, digits and `_`, so
-/// that `foo_bar` is one), a run of spaces, or any other single character.
-/// The tokens the two lines do not share, in order, are the change; of
-/// those, the words are emphasised, whole, and the punctuation and spaces
-/// around them stay plain. A line whose change holds no word (a comma
-/// added) has its changed punctuation emphasised, so that the change still
-/// shows; a change of spaces alone has nothing to emphasise, and is shown
-/// by the line's sign and tint.
+/// line is cut into tokens by its grapheme clusters, so that a combining
+/// mark, a virama or a joiner stays with what it joins: a word (a run of
+/// letters, digits and `_`, so that `foo_bar` is one), a run of spaces, or
+/// any other single cluster. The words of the two lines are compared by
+/// themselves, so that punctuation never outweighs a word: those one line
+/// has and the other does not are emphasised, whole, and the punctuation and
+/// spaces around them stay plain. When the pair changed no word, its
+/// punctuation is compared the same way and what changed of it is
+/// emphasised, so that a comma added still shows; a change of spaces alone
+/// has nothing to emphasise, and is shown by the lines' signs and tints.
 fn emphasise(lines: &mut [DiffLine]) {
     for at in 1..lines.len() {
         if lines[at - 1].change != Change::Removed || lines[at].change != Change::Added {
@@ -264,41 +265,52 @@ fn emphasise(lines: &mut [DiffLine]) {
             // Several lines changed together: no one pairing is right.
             continue;
         }
-        let removed = tokens(&lines[at - 1].text);
-        let added = tokens(&lines[at].text);
-        let (removed_kept, added_kept) =
-            shared(&lines[at - 1].text, &removed, &lines[at].text, &added);
-        lines[at - 1].emphasis = changed(&removed, &removed_kept);
-        lines[at].emphasis = changed(&added, &added_kept);
+        let (removed, added) = (tokens(&lines[at - 1].text), tokens(&lines[at].text));
+        let of = |tokens: &[(Range<usize>, Piece)], piece: Piece| -> Vec<Range<usize>> {
+            tokens
+                .iter()
+                .filter(|(_, kind)| *kind == piece)
+                .map(|(range, _)| range.clone())
+                .collect()
+        };
+        let mut picked = (Vec::new(), Vec::new());
+        for piece in [Piece::Word, Piece::Mark] {
+            let (old, new) = (of(&removed, piece), of(&added, piece));
+            picked = changed(&lines[at - 1].text, &old, &lines[at].text, &new);
+            if !picked.0.is_empty() || !picked.1.is_empty() {
+                break;
+            }
+        }
+        lines[at - 1].emphasis = picked.0;
+        lines[at].emphasis = picked.1;
     }
 }
 
 /// What a token is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Piece {
-    /// Letters, digits and `_`.
+    /// Letters, digits and `_`, with what joins them.
     Word,
     /// A run of spaces.
     Space,
-    /// Any other single character.
+    /// Any other single grapheme cluster.
     Mark,
 }
 
-/// `text`'s tokens, with their byte ranges.
-fn tokens(text: &str) -> Vec<(std::ops::Range<usize>, Piece)> {
-    let kind = |c: char| {
-        if c.is_alphanumeric() || c == '_' {
+/// `text`'s tokens, with their byte ranges, by its grapheme clusters: a
+/// cluster's kind is its first character's.
+fn tokens(text: &str) -> Vec<(Range<usize>, Piece)> {
+    let mut out: Vec<(Range<usize>, Piece)> = Vec::new();
+    for (at, cluster, _) in cortex_base::text::graphemes(text) {
+        let first = cluster.chars().next().unwrap_or(' ');
+        let piece = if first.is_alphanumeric() || first == '_' {
             Piece::Word
-        } else if c.is_whitespace() {
+        } else if first.is_whitespace() {
             Piece::Space
         } else {
             Piece::Mark
-        }
-    };
-    let mut out: Vec<(std::ops::Range<usize>, Piece)> = Vec::new();
-    for (at, c) in text.char_indices() {
-        let piece = kind(c);
-        let end = at + c.len_utf8();
+        };
+        let end = at + cluster.len();
         match out.last_mut() {
             Some((range, last)) if *last == piece && piece != Piece::Mark => range.end = end,
             _ => out.push((at..end, piece)),
@@ -307,85 +319,69 @@ fn tokens(text: &str) -> Vec<(std::ops::Range<usize>, Piece)> {
     out
 }
 
-/// The most tokens two lines are compared by, the product of their counts:
-/// past it (lines of thousands of tokens) the shared tokens are the common
-/// start and end alone.
-const COMPARED: usize = 250_000;
+/// The most pairs of tokens two lines are compared by, once their common
+/// start and end are taken off: past it (lines of thousands of words, both
+/// changed far apart) every token between the first change and the last
+/// counts as changed.
+const COMPARED: usize = 1_000_000;
 
-/// Which tokens of each line the other shares, in order (their longest
-/// common run of tokens, by text).
-fn shared(
-    a_text: &str,
-    a: &[(std::ops::Range<usize>, Piece)],
-    b_text: &str,
-    b: &[(std::ops::Range<usize>, Piece)],
-) -> (Vec<bool>, Vec<bool>) {
-    let same = |i: usize, j: usize| a_text[a[i].0.clone()] == b_text[b[j].0.clone()];
-    let mut a_kept = vec![false; a.len()];
-    let mut b_kept = vec![false; b.len()];
-    if a.len().saturating_mul(b.len()) > COMPARED {
-        let start = (0..a.len().min(b.len()))
-            .take_while(|&i| same(i, i))
-            .count();
-        let end = (0..a.len().min(b.len()) - start)
-            .take_while(|&k| same(a.len() - 1 - k, b.len() - 1 - k))
-            .count();
-        for i in (0..start).chain(a.len() - end..a.len()) {
-            a_kept[i] = true;
-        }
-        for j in (0..start).chain(b.len() - end..b.len()) {
-            b_kept[j] = true;
-        }
-        return (a_kept, b_kept);
-    }
-    // lengths[i][j]: the longest common run of a[i..] and b[j..].
-    let width = b.len() + 1;
-    let mut lengths = vec![0u32; (a.len() + 1) * width];
-    for i in (0..a.len()).rev() {
-        for j in (0..b.len()).rev() {
-            lengths[i * width + j] = if same(i, j) {
-                lengths[(i + 1) * width + j + 1] + 1
-            } else {
-                lengths[(i + 1) * width + j].max(lengths[i * width + j + 1])
-            };
-        }
-    }
-    let (mut i, mut j) = (0, 0);
-    while i < a.len() && j < b.len() {
-        if same(i, j) {
-            a_kept[i] = true;
-            b_kept[j] = true;
-            i += 1;
-            j += 1;
-        } else if lengths[(i + 1) * width + j] >= lengths[i * width + j + 1] {
-            i += 1;
-        } else {
-            j += 1;
-        }
-    }
-    (a_kept, b_kept)
-}
-
-/// The ranges to emphasise: the changed words, or, when the change holds
-/// none, its changed punctuation.
+/// Of two lines' tokens of one kind (`a` in `a_text`, `b` in `b_text`), the
+/// ranges of those the other line does not share, by their longest common
+/// run of tokens, by text.
 fn changed(
-    tokens: &[(std::ops::Range<usize>, Piece)],
-    kept: &[bool],
-) -> Vec<std::ops::Range<usize>> {
-    let of = |wanted: Piece| -> Vec<std::ops::Range<usize>> {
-        tokens
+    a_text: &str,
+    a: &[Range<usize>],
+    b_text: &str,
+    b: &[Range<usize>],
+) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+    let same = |i: usize, j: usize| a_text[a[i].clone()] == b_text[b[j].clone()];
+    // The common start and end are shared: what is left is compared.
+    let start = (0..a.len().min(b.len()))
+        .take_while(|&i| same(i, i))
+        .count();
+    let end = (0..a.len().min(b.len()) - start)
+        .take_while(|&k| same(a.len() - 1 - k, b.len() - 1 - k))
+        .count();
+    let (a_middle, b_middle) = (start..a.len() - end, start..b.len() - end);
+    let (n, m) = (a_middle.len(), b_middle.len());
+    let mut a_kept = vec![false; n];
+    let mut b_kept = vec![false; m];
+    if n.saturating_mul(m) <= COMPARED {
+        // lengths[i][j]: the longest common run of the middles' i.. and j...
+        let width = m + 1;
+        let mut lengths = vec![0u32; (n + 1) * width];
+        for i in (0..n).rev() {
+            for j in (0..m).rev() {
+                lengths[i * width + j] = if same(start + i, start + j) {
+                    lengths[(i + 1) * width + j + 1] + 1
+                } else {
+                    lengths[(i + 1) * width + j].max(lengths[i * width + j + 1])
+                };
+            }
+        }
+        let (mut i, mut j) = (0, 0);
+        while i < n && j < m {
+            if same(start + i, start + j) {
+                a_kept[i] = true;
+                b_kept[j] = true;
+                i += 1;
+                j += 1;
+            } else if lengths[(i + 1) * width + j] >= lengths[i * width + j + 1] {
+                i += 1;
+            } else {
+                j += 1;
+            }
+        }
+    }
+    let pick = |all: &[Range<usize>], middle: Range<usize>, kept: &[bool]| -> Vec<Range<usize>> {
+        all[middle]
             .iter()
             .zip(kept)
-            .filter(|((_, piece), kept)| !**kept && *piece == wanted)
-            .map(|((range, _), _)| range.clone())
+            .filter(|(_, kept)| !**kept)
+            .map(|(range, _)| range.clone())
             .collect()
     };
-    let words = of(Piece::Word);
-    if words.is_empty() {
-        of(Piece::Mark)
-    } else {
-        words
-    }
+    (pick(a, a_middle, &a_kept), pick(b, b_middle, &b_kept))
 }
 
 #[cfg(test)]
@@ -567,6 +563,71 @@ mod tests {
         );
         // A change of spaces alone has nothing to make bold.
         assert_eq!(bold("a  b", "a b"), (Vec::new(), Vec::new()));
+    }
+
+    /// Punctuation never outweighs a word: words are compared by
+    /// themselves, and punctuation only when no word changed, for the pair
+    /// (the review of the owner's rule).
+    #[test]
+    fn a_word_that_stayed_is_never_bold_whatever_the_punctuation_does() {
+        assert_eq!(bold("A,,,B", "A,B,,,"), (Vec::new(), vec![",".to_owned()]));
+        assert_eq!(
+            bold("println!(\"{}\", x);", "println!(\"{x}\");"),
+            (vec![",".to_owned()], Vec::new())
+        );
+        // A word changed in the pair: punctuation stays plain on both lines.
+        assert_eq!(
+            bold("if a < b {", "if a > b && ok {"),
+            (Vec::new(), vec!["ok".to_owned()])
+        );
+        // An empty line and one with a word.
+        assert_eq!(bold("", "x"), (Vec::new(), vec!["x".to_owned()]));
+    }
+
+    /// A word is cut by its grapheme clusters: a virama, a combining mark
+    /// or a joiner stays with what it joins, so a changed word is bold
+    /// whole in any script.
+    #[test]
+    fn a_word_of_any_script_is_bold_whole() {
+        assert_eq!(
+            bold("नमस्ते दुनिया", "नमस्कार दुनिया"),
+            (vec!["नमस्ते".to_owned()], vec!["नमस्कार".to_owned()])
+        );
+        assert_eq!(
+            bold("cafe\u{301} ok", "cafe\u{301}s ok"),
+            (
+                vec!["cafe\u{301}".to_owned()],
+                vec!["cafe\u{301}s".to_owned()]
+            )
+        );
+    }
+
+    /// A long line changed in one place is compared exactly once its common
+    /// start and end are off; one changed in two places too far apart to
+    /// compare has every word between the two changes bold.
+    #[test]
+    fn a_long_line_is_compared_by_what_is_left_between_its_common_ends() {
+        let words = |n: usize, change: &[usize]| -> String {
+            (0..n)
+                .map(|at| {
+                    if change.contains(&at) {
+                        format!("v{at}")
+                    } else {
+                        format!("w{at}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let (old, new) = bold(&words(3_000, &[]), &words(3_000, &[1_500]));
+        assert_eq!(
+            (old, new),
+            (vec!["w1500".to_owned()], vec!["v1500".to_owned()])
+        );
+        let (old, new) = bold(&words(3_000, &[]), &words(3_000, &[0, 2_999]));
+        assert_eq!(old.len(), 3_000, "every word between the two changes");
+        assert_eq!(new.first().map(String::as_str), Some("v0"));
+        assert_eq!(new.last().map(String::as_str), Some("v2999"));
     }
 
     #[test]
