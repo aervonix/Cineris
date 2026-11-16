@@ -262,3 +262,48 @@ fn the_input_box_scrolls_to_keep_the_cursor_in_view() {
     input.set_width(2);
     assert!(input.scroll() > 0);
 }
+
+/// With the `@` filtering handed out, rows for any query but the latest
+/// are dropped: an answer that comes late never replaces a newer one, and
+/// one that comes before the newer query's is never shown over it.
+#[test]
+fn rows_for_an_older_file_query_are_never_shown_over_a_newer_one() {
+    use cortex_tui::complete::Row;
+    let mut input = Input::new(KeyMap::defaults(), Box::new(MemoryHistory::new()));
+    input.set_width(80);
+    input.filter_files_elsewhere();
+    let typed = |input: &mut Input, text: &str| {
+        for c in text.chars() {
+            input.handle(&Event::Key(cortex_term::Key::plain(
+                cortex_term::KeyCode::Char(c),
+            )));
+        }
+    };
+    typed(&mut input, "@le");
+    let older = input.take_file_query().expect("a query");
+    assert_eq!(older.query, "le");
+    typed(&mut input, "x");
+    let newer = input.take_file_query().expect("a newer query");
+    assert_eq!(newer.query, "lex");
+    assert!(newer.generation > older.generation);
+    assert_eq!(input.take_file_query(), None, "handed out once");
+
+    // The older answer, before the newer one: not shown.
+    input.file_rows(older.generation, vec![Row::new("src/left.rs", "")]);
+    assert!(input.menu().expect("the menu").rows.is_empty());
+    // The newer one is.
+    input.file_rows(newer.generation, vec![Row::new("src/lex.rs", "")]);
+    let labels = |input: &Input| -> Vec<String> {
+        input
+            .menu()
+            .expect("the menu")
+            .rows
+            .iter()
+            .map(|row| row.label.clone())
+            .collect()
+    };
+    assert_eq!(labels(&input), ["src/lex.rs"]);
+    // The older one late, after it: still not shown.
+    input.file_rows(older.generation, vec![Row::new("src/left.rs", "")]);
+    assert_eq!(labels(&input), ["src/lex.rs"]);
+}

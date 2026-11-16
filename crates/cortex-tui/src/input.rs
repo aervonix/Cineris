@@ -22,7 +22,7 @@
 
 use cortex_term::{Event, Key};
 
-use crate::complete::{self, Candidates, Command, Empty, Filter, Kind, Menu, Trigger};
+use crate::complete::{self, Candidates, Command, Empty, Filter, Kind, Menu, Row, Trigger};
 use crate::editor::{Editor, Fragment};
 use crate::focus::{Ring, Target};
 use crate::history::{HistoryStore, Search, Steps};
@@ -120,6 +120,9 @@ pub struct Input {
     search: Option<Search>,
     files: Option<Candidates>,
     file_filter: Filter,
+    /// The `@` filtering is done elsewhere, off the key's path (since step
+    /// 23): what was last asked, and the query not yet handed out.
+    elsewhere: Option<Elsewhere>,
     commands: Vec<Command>,
     command_candidates: Candidates,
     command_filter: Filter,
@@ -148,6 +151,7 @@ impl Input {
             search: None,
             files: None,
             file_filter: Filter::new(),
+            elsewhere: None,
             commands: Vec::new(),
             command_candidates: Candidates::default(),
             command_filter: Filter::new(),
@@ -280,6 +284,40 @@ impl Input {
         self.files = Some(Candidates::new(paths));
         self.file_filter.reset();
         self.refresh_menu();
+    }
+
+    /// Hands the `@` filtering out (since step 23): each query the text asks
+    /// is given by [`take_file_query`](Self::take_file_query), with a
+    /// generation, and the rows for it come back by
+    /// [`file_rows`](Self::file_rows). Until they do, the menu keeps the rows
+    /// it had. The paths [`set_files`](Self::set_files) gave are not used.
+    pub fn filter_files_elsewhere(&mut self) {
+        self.elsewhere = Some(Elsewhere::default());
+        self.refresh_menu();
+    }
+
+    /// The `@` query to filter for, once: `None` when the text has asked
+    /// nothing new since the last call.
+    pub fn take_file_query(&mut self) -> Option<FileQuery> {
+        self.elsewhere.as_mut()?.pending.take()
+    }
+
+    /// The rows for the query of `generation`. Rows for any query but the
+    /// latest are dropped: an older answer never replaces a newer one.
+    pub fn file_rows(&mut self, generation: u64, rows: Vec<Row>) {
+        let Some(elsewhere) = &self.elsewhere else {
+            return;
+        };
+        if generation != elsewhere.generation {
+            return;
+        }
+        if let Some(menu) = self
+            .menu
+            .as_mut()
+            .filter(|menu| matches!(menu.kind, Kind::Files { .. }))
+        {
+            menu.refill(rows, Empty::NoMatch);
+        }
     }
 
     /// The slash commands, for `/` completion.
@@ -809,6 +847,12 @@ impl Input {
             return;
         }
         let trigger = complete::trigger(self.editor.text(), self.editor.cursor());
+        let file_menu = matches!(trigger, Some(Trigger::File { .. }));
+        if !file_menu && let Some(elsewhere) = self.elsewhere.as_mut() {
+            // No `@` menu now: one asked for again later is filtered again.
+            elsewhere.asked = None;
+            elsewhere.pending = None;
+        }
         let Some(trigger) = trigger else {
             self.menu = None;
             self.dismissed = None;
@@ -820,6 +864,27 @@ impl Input {
                 return;
             }
             self.dismissed = None;
+        }
+        if let (Trigger::File { start, query }, Some(elsewhere)) =
+            (&trigger, self.elsewhere.as_mut())
+        {
+            let kind = Kind::Files { start: *start };
+            let open = self.menu.as_ref().is_some_and(|menu| menu.kind == kind);
+            // A query asked again in an open menu (the cursor moved, nothing
+            // typed) is not filtered again; a menu that opens asks.
+            if !open || elsewhere.asked.as_ref() != Some(&(*start, query.clone())) {
+                elsewhere.asked = Some((*start, query.clone()));
+                elsewhere.generation += 1;
+                elsewhere.pending = Some(FileQuery {
+                    generation: elsewhere.generation,
+                    query: query.clone(),
+                });
+            }
+            // The rows of the last answer stay until this one's come.
+            if !open {
+                self.menu = Some(Menu::completion(kind, Vec::new(), Empty::Listing));
+            }
+            return;
         }
         let (kind, rows, empty) = match &trigger {
             Trigger::File { start, query } => match &self.files {
@@ -854,6 +919,28 @@ impl Input {
             _ => self.menu = Some(Menu::completion(kind, rows, empty)),
         }
     }
+}
+
+/// An `@` query to filter for, handed out by
+/// [`Input::take_file_query`]: rows for it are taken back only while it is
+/// the latest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileQuery {
+    /// Which query it is: each new one has the next.
+    pub generation: u64,
+    /// What follows the `@`.
+    pub query: String,
+}
+
+/// The `@` filtering done elsewhere.
+#[derive(Debug, Default)]
+struct Elsewhere {
+    /// The latest query's generation.
+    generation: u64,
+    /// The latest query, and the `@` it follows.
+    asked: Option<(usize, String)>,
+    /// The latest query, until it is handed out.
+    pending: Option<FileQuery>,
 }
 
 /// Whether two triggers are for the same `@` or the same `/`.
