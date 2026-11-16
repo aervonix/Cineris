@@ -114,6 +114,11 @@ pub(crate) fn enter() {
         std::process::exit(0);
     }
     let parent = std::os::unix::process::parent_id();
+    // The application's process, which the test describes should the report
+    // stop short: a job's is not the test's own child.
+    if let Some(report) = report() {
+        append(&report, &format!("pid {}", std::process::id()));
+    }
     // Should the end stall, the report says where each thread waits in the
     // kernel, every 5 s: a test's run out of time then says why.
     std::thread::spawn(|| {
@@ -285,6 +290,9 @@ fn close_the_terminal(case: &str, test: &str, job: bool) -> String {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let report = dir.join("report.txt");
+    // The job outlives its leader: once it ends it stays as this process's
+    // zombie, whose end `/proc` can still say.
+    cortex_term::pty::adopt_orphans().unwrap();
     let pty = cortex_term::pty::Pty::spawn(
         &this_binary(),
         &SIGNALS.arguments(case),
@@ -318,9 +326,74 @@ fn close_the_terminal(case: &str, test: &str, job: bool) -> String {
         std::thread::yield_now();
     }
     drop(pty);
-    let text = wait_result(&report, job);
+    let mut text = wait_result(&report, job);
+    if !text.contains("RESULT") {
+        // Where the application is, or how it ended: a signal's default
+        // action (SIGALRM is the watchdog), a panic, or still running.
+        let pid = text
+            .lines()
+            .find_map(|line| line.strip_prefix("pid "))
+            .and_then(|pid| pid.trim().parse::<u32>().ok());
+        text.push_str(&pid.map_or_else(|| "no pid said".to_owned(), describe));
+    }
     let _ = std::fs::remove_dir_all(&dir);
     text
+}
+
+/// What `/proc` says of process `pid`: how it ended, if it is a zombie, or
+/// else each thread's state and where it waits, and its signals.
+fn describe(pid: u32) -> String {
+    let base = format!("/proc/{pid}");
+    let Ok(stat) = std::fs::read_to_string(format!("{base}/stat")) else {
+        return format!("process {pid}: gone, waited for by another");
+    };
+    let fields: Vec<&str> = stat
+        .rsplit(')')
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+    let state = fields.first().copied().unwrap_or("?");
+    if state == "Z" {
+        // Field 52, the status `waitpid` would give.
+        let code: i32 = fields
+            .get(49)
+            .and_then(|code| code.parse().ok())
+            .unwrap_or(-1);
+        return if code & 0x7f == 0 {
+            format!("process {pid}: exited with {}", (code >> 8) & 0xff)
+        } else {
+            format!("process {pid}: killed by signal {}", code & 0x7f)
+        };
+    }
+    let mut said = format!("process {pid}: {state}");
+    for task in std::fs::read_dir(format!("{base}/task"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let wchan = std::fs::read_to_string(task.path().join("wchan")).unwrap_or_default();
+        let stat = std::fs::read_to_string(task.path().join("stat")).unwrap_or_default();
+        let state = stat
+            .rsplit(')')
+            .next()
+            .and_then(|rest| rest.split_whitespace().next())
+            .unwrap_or("?")
+            .to_owned();
+        said.push_str(&format!(
+            " [{} {state} {wchan}]",
+            task.file_name().to_string_lossy()
+        ));
+    }
+    let status = std::fs::read_to_string(format!("{base}/status")).unwrap_or_default();
+    for line in status.lines().filter(|line| {
+        ["SigPnd", "ShdPnd", "SigBlk", "SigIgn", "SigCgt"]
+            .iter()
+            .any(|name| line.starts_with(name))
+    }) {
+        said.push_str(&format!("\n{line}"));
+    }
+    said
 }
 
 /// The terminal closing (a hang-up, then SIGHUP to the job, as a shell
