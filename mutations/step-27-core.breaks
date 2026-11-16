@@ -41,3 +41,56 @@ find: let kept = self.inner.options.keep_sessions && !put_together;
 replace: let kept = self.inner.options.keep_sessions;
 caught-by:
     cortex-core::it lifecycle::with_keep_sessions_a_session_started_for_a_client_that_left_does_not_run_on
+
+# ------------------------------------------- the queue bounded by bytes
+
+[break] the-queue-is-never-full-of-bytes
+rule: A client's queue is full once the deltas it holds reach its byte bound, merged ones counted whole.
+file: crates/cortex-core/src/events.rs
+in: EventQueue::push
+find: let full_of_bytes = state.delta_bytes >= self.delta_bytes;
+replace: let full_of_bytes = false;
+caught-by:
+    cortex-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
+    cortex-core::it events::a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync
+
+[break] a-merged-delta-is-not-counted
+rule: The bytes of a delta merged into the one before it count towards the bound.
+file: crates/cortex-core/src/events.rs
+in: EventQueue::push
+find:
+                    *delta_bytes += size;
+                    return;
+replace:
+                    return;
+caught-by:
+    cortex-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
+    cortex-core::it events::a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync
+
+[break] the-bytes-taken-are-not-given-back
+rule: The bytes of a delta the reader takes are no longer held, so a reader that keeps up is never full of them.
+file: crates/cortex-core/src/events.rs
+in: EventQueue::try_next
+find: state.delta_bytes = state.delta_bytes.saturating_sub(delta_size(&delta.delta));
+replace: let _ = delta_size(&delta.delta);
+caught-by:
+    cortex-core events::tests::the_bytes_held_go_down_as_the_reader_takes_deltas
+    cortex-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
+
+[break] a-whole-event-is-dropped-past-the-bytes
+rule: Whole events are never dropped, past the byte bound as past the count.
+file: crates/cortex-core/src/events.rs
+in: EventQueue::push
+find:
+        if let Event::ItemDelta(delta) = &event.event {
+            state.delta_bytes += delta_size(&delta.delta);
+        }
+replace:
+        if let Event::ItemDelta(delta) = &event.event {
+            state.delta_bytes += delta_size(&delta.delta);
+        } else if state.delta_bytes >= self.delta_bytes {
+            return;
+        }
+caught-by:
+    cortex-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
+    cortex-core::it events::a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync
