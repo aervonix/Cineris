@@ -35,6 +35,7 @@ mod history;
 mod instructions;
 mod map;
 mod prefix;
+mod profile;
 mod prompt;
 
 use std::collections::VecDeque;
@@ -57,6 +58,7 @@ pub use instructions::{
 pub(crate) use map::Answered;
 pub use map::{MapAnswer, MapPending, MapSource, RepoMap};
 pub use prefix::{PrefixDifference, check_prefix};
+pub use profile::{PROFILE_CHANGED, PROFILE_EMPTY, ProfileSource};
 pub use prompt::{CORE_INSTRUCTIONS, Environment, GUIDED_NOTES};
 
 pub(crate) use budget::{Budget, Pressure, fraction_of, pressure, summary_room};
@@ -67,6 +69,7 @@ pub(crate) use instructions::{
     notice_text, places, read_one, shown as shown_in, told_date,
 };
 pub(crate) use prefix::{InFlight, Shape, difference, excerpt, hash_of};
+pub(crate) use profile::{hash_of as profile_hash, notice_text as profile_notice};
 pub(crate) use prompt::{Built, Sections, build};
 
 use crate::store::{EpochReason, EpochStart, Opened};
@@ -174,6 +177,9 @@ pub struct ContextParts {
     pub cache_key: Option<String>,
     /// Where the repository map comes from. `None` gives no map.
     pub map: Option<RepoMap>,
+    /// Where the project profile, section 5 of the system prompt, comes
+    /// from. `None` gives no section.
+    pub profile: Option<Arc<dyn ProfileSource>>,
 }
 
 impl ContextParts {
@@ -190,6 +196,7 @@ impl ContextParts {
             plan: None,
             cache_key: None,
             map: None,
+            profile: None,
         }
     }
 }
@@ -289,6 +296,10 @@ pub(crate) struct Context {
     pub(crate) history: History,
     /// What the model has of each instruction file.
     pub(crate) given: Given,
+    /// The project profile the model has: the hash of the section its
+    /// epoch's prompt holds, or of the last notice that replaced it.
+    /// `None` when it has none.
+    pub(crate) given_profile: Option<cortex_base::ContentHash>,
     pub(crate) budget: Budget,
     /// The date the epoch's history tells the model.
     pub(crate) date: Option<String>,
@@ -322,6 +333,7 @@ impl Context {
             unchecked: false,
             history: History::default(),
             given: Given::default(),
+            given_profile: None,
             budget: Budget::default(),
             date: None,
             last_user: None,
@@ -372,8 +384,10 @@ impl Context {
             for &index in rest {
                 // The old epoch's map is not replayed: the new epoch has its
                 // own (`History::extend_projected`).
+                // Nor is a notice of the old epoch's profile: the new
+                // epoch's prompt holds the profile as it was then.
                 if index < at
-                    && matches!(&items[index], Item::Notice(notice) if notice.source == NoticeSource::Map)
+                    && matches!(&items[index], Item::Notice(notice) if matches!(notice.source, NoticeSource::Map | NoticeSource::Profile))
                 {
                     continue;
                 }
@@ -407,12 +421,19 @@ impl Context {
             .and_then(|first| opened.epochs.get(first))
             .map_or((0, &[][..]), |(at, epoch)| (*at, &epoch.instructions[..]));
         self.given = Given::from_marks(marks);
+        // And of the project profile, the same way: what the prompt held,
+        // then the last notice that replaced it.
+        self.given_profile = first
+            .and_then(|first| opened.epochs.get(first))
+            .and_then(|(_, epoch)| epoch.profile);
         let notices_from = epoch_from.max(summary.map_or(0, |at| at + 1));
         for item in items.iter().skip(notices_from) {
-            if let Item::Notice(notice) = item
-                && notice.source == NoticeSource::Instructions
-            {
-                self.given.note(&notice.text);
+            if let Item::Notice(notice) = item {
+                if notice.source == NoticeSource::Instructions {
+                    self.given.note(&notice.text);
+                } else if notice.source == NoticeSource::Profile {
+                    self.given_profile = profile::told(&notice.text);
+                }
             }
         }
         // The date the history tells: its summary's, or its first user
@@ -560,6 +581,7 @@ impl Context {
         }
         if epoch.reason != Some(EpochReason::Model) {
             self.given = Given::from_marks(&epoch.instructions);
+            self.given_profile = epoch.profile;
         }
         self.epoch = Some(epoch);
         self.epoch_number += 1;

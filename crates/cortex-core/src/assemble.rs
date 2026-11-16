@@ -1787,6 +1787,7 @@ pub(crate) fn assemble(
                 timer: Arc::clone(&options.timer),
                 wait: settings.index.map_wait.unwrap_or(options.map_wait),
             }),
+        profile: None,
     };
     let parts = SessionParts {
         info,

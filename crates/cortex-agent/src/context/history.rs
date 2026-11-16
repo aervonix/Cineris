@@ -59,6 +59,10 @@ struct Meta {
     /// The message is the epoch's repository map: the one notice that a
     /// summary's replay leaves out, because the new epoch is given its own.
     map: bool,
+    /// The message is a notice of the project profile as it was at some
+    /// moment of the epoch. Like the map, it is not replayed after a
+    /// summary: the new epoch's prompt holds the profile as it is then.
+    profile: bool,
 }
 
 /// The messages of an epoch.
@@ -186,6 +190,7 @@ impl History {
                 fingerprint: message.1,
                 dated: false,
                 map: matches!(item, Item::Notice(notice) if notice.source == NoticeSource::Map),
+                profile: matches!(item, Item::Notice(notice) if notice.source == NoticeSource::Profile),
             });
         } else if self.messages.len() == before
             && matches!(item, Item::ToolResult(_))
@@ -233,10 +238,11 @@ impl History {
     /// of the same items after a summary: a message that held only
     /// reasoning is left out, a first user message loses the date it
     /// carried, which the summary says now, and the old epoch's repository
-    /// map is left out, because the new epoch is given its own.
+    /// map and its notices of the project profile are left out, because
+    /// the new epoch is given its own of each.
     pub(crate) fn extend_projected(&mut self, other: &Self, from: usize) {
         for (message, meta) in other.messages.iter().zip(&other.meta).skip(from) {
-            if meta.map {
+            if meta.map || meta.profile {
                 continue;
             }
             let mut message = if message.role == Role::Assistant {
@@ -259,6 +265,7 @@ impl History {
                 fingerprint,
                 dated: false,
                 map: false,
+                profile: false,
             });
         }
         self.dated = true;

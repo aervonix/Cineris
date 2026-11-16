@@ -245,13 +245,14 @@ impl Session {
         let discovered = run_blocking(&CancelToken::new(), move |_| discover(&*io, &found, cap))
             .await
             .unwrap_or_default();
+        let profile = Self::profile_now(self.context.parts.profile.clone())
+            .await
+            .unwrap_or_default();
         let parts = &self.context.parts;
         let built = build(&Sections {
             environment: Some(&parts.environment),
             instructions: &discovered.texts,
-            // The project profile's source is wired in step 17's second
-            // part.
-            profile: None,
+            profile: Some(&profile),
             append: parts.append.as_deref(),
             guided: self.model.variants.prompt_style == "guided",
         });
@@ -386,7 +387,38 @@ impl Session {
         }
         if !begun {
             self.instruction_changes(turn).await?;
+            self.profile_changes(turn).await?;
         }
+        Ok(())
+    }
+
+    /// Section 5 as the source gives it now, asked on the blocking pool.
+    /// `None` when the session has no profile, or the answer did not come.
+    async fn profile_now(source: Option<Arc<dyn crate::context::ProfileSource>>) -> Option<String> {
+        let source = source?;
+        run_blocking(&CancelToken::new(), move |_| source.section())
+            .await
+            .ok()
+    }
+
+    /// Tells the model the project profile as it is now, when it is not
+    /// the one it has: the epoch's prompt stays as it was sent, and the
+    /// whole section follows as a notice.
+    async fn profile_changes(&mut self, turn: &Turn) -> Result<(), StoreError> {
+        let Some(section) = Self::profile_now(self.context.parts.profile.clone()).await else {
+            return Ok(());
+        };
+        let now = crate::context::profile_hash(&section);
+        if now == self.context.given_profile {
+            return Ok(());
+        }
+        self.record_notice(
+            turn,
+            NoticeSource::Profile,
+            crate::context::profile_notice(&section),
+        )
+        .await?;
+        self.context.given_profile = now;
         Ok(())
     }
 

@@ -45,6 +45,7 @@ mod measure;
 mod order;
 mod plan;
 mod pressure;
+mod profile;
 mod retries;
 mod roles;
 mod rounds;
@@ -967,6 +968,8 @@ pub struct Setup {
     pub root: Option<PathBuf>,
     /// Where the repository map comes from, when the session has one.
     pub map: Option<cortex_agent::context::RepoMap>,
+    /// Where the project profile comes from, when the session has one.
+    pub profile: Option<Arc<dyn cortex_agent::ProfileSource>>,
 }
 
 /// One session, with everything it does remembered.
@@ -1006,6 +1009,7 @@ impl Setup {
             verifier: None,
             root: None,
             map: None,
+            profile: None,
         }
     }
 
@@ -1041,6 +1045,7 @@ impl Setup {
             user_dir: self.user_dir,
             plan: self.plan,
             map: self.map,
+            profile: self.profile,
             ..ContextParts::new()
         };
         let parts = SessionParts {
