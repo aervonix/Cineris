@@ -14,6 +14,7 @@
 //! | [`is_private`] | Whether only the current user has access to a file or a directory. |
 //! | [`hold_lock`] | Takes the lock that keeps two writers of a stored file apart: the operating system's lock on a private file beside it. |
 //! | [`access_list`] | Windows only: the access list, read back. |
+//! | [`current_user_sid`] | Windows only: the security identifier of the user the process runs as, in text. |
 //!
 //! [`write_atomic`](crate::write_atomic) with
 //! [`owner_only`](crate::AtomicWriteOptions::owner_only) is the third way to
@@ -76,7 +77,9 @@ use std::path::Path;
 mod windows;
 
 #[cfg(windows)]
-pub use windows::{AccessEntry, AccessKind, AccessList, FULL_CONTROL, access_list};
+pub use windows::{
+    AccessEntry, AccessKind, AccessList, FULL_CONTROL, access_list, current_user_sid,
+};
 
 #[cfg(windows)]
 pub(crate) use windows::{file_identity, reparse_tag};
