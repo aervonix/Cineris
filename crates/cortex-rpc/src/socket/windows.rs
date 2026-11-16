@@ -7,20 +7,23 @@
 //!   instance ever exists without it. It is written in Windows's own
 //!   description language, as `cortex-base`'s owner-only files are
 //!   (`docs/decisions/0029-owner-only-files-on-windows.md`):
-//!   `O:<user>D:P(A;;GA;;;<user>)S:(ML;;NW;;;S-1-16-<level>)` reads: owned by
-//!   the user; an access list protected from inheritance (`P`) whose one
+//!   `O:<user>D:P(A;;GA;;;<user>)S:(ML;;NWNR;;;S-1-16-<level>)` reads: owned
+//!   by the user; an access list protected from inheritance (`P`) whose one
 //!   entry allows (`A`) everything (`GA`) to the user; and a mandatory label
 //!   (`ML`) at the server's own integrity level, which keeps a process below
-//!   it from opening the pipe to write (`NW`, no write up). Without the label
-//!   a process of the user's at medium integrity could drive a server that
-//!   UAC elevated, and its commands would run elevated.
+//!   it from opening the pipe at all (`NW` and `NR`: no write up, no read
+//!   up). Without the label a process of the user's at medium integrity
+//!   could drive a server that UAC elevated, and its commands would run
+//!   elevated. Reading is kept out too, since a client is checked only once
+//!   it has written (below): one that could open the pipe to read and never
+//!   write could hold connections it could never be refused on.
 //! - **Every instance is made with it,** the first with
 //!   `FILE_FLAG_FIRST_PIPE_INSTANCE`, so that a name another process holds
 //!   (another server, or a squatter) refuses the start rather than joining
 //!   it, and all with `PIPE_REJECT_REMOTE_CLIENTS`.
 //! - **The next instance is made before a connected one is handed on,** so
 //!   the name never lapses between two instances for another process to
-//!   take.
+//!   take, and is always there for the next client.
 //! - **Each connection's own token is checked before anything is served:**
 //!   the connection's, not its process's, since a thread that impersonates
 //!   another user connects as that user, and a process id can be reused. A
@@ -33,16 +36,18 @@
 //!   is the server's, its integrity is at least the server's, and it is
 //!   neither restricted nor an AppContainer's. A client that allows only
 //!   anonymous impersonation has no token to read, and is refused.
-//! - **No data is needed before the check.** The old rule that a server may
-//!   impersonate a pipe's client only after reading from it
-//!   (`ERROR_CANNOT_IMPERSONATE`) does not hold for the systems the harness
-//!   runs on: a client that has written nothing is checked and admitted
-//!   (`cortex-rpc`'s `pipe::a_silent_client_is_admitted_and_the_name_never_lapses`,
-//!   on the hosted runners).
-//! - **Nothing read before the check is handed on.** Tokio's pipe reads
-//!   ahead as soon as a client connects, up to 4 KiB into a buffer of its
-//!   own; a refused connection is closed with that buffer, and none of it
-//!   reaches the server. Nothing is written to it.
+//! - **The check waits for the client's first data.** Windows lets a server
+//!   impersonate a pipe's client only once it has read something the client
+//!   wrote: before that, `ImpersonateNamedPipeClient` fails with
+//!   `ERROR_CANNOT_IMPERSONATE` (seen on the hosted Windows runners). And the
+//!   token it gives is that of the client's thread that wrote what was read,
+//!   not of the one that opened the pipe. So each connection is read, in a
+//!   task of its own, until its first data, which is held, the client is
+//!   checked, and only an admitted client is handed on, with that data first.
+//!   A client that writes nothing holds up no other; past [`CHECKING`] of
+//!   them, the one that has waited longest is closed. Nothing is written to
+//!   a client before it is admitted, and what was read from a refused one is
+//!   dropped with it.
 //!
 //! The instances are made here (`CreateNamedPipeW`) rather than by tokio's
 //! `ServerOptions`, which needs a runtime to make one: binding needs none,
@@ -56,6 +61,7 @@
               where unsafe is allowed"
 )]
 
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::io;
 use std::mem::size_of;
@@ -64,9 +70,12 @@ use std::os::windows::io::{
 };
 use std::path::Path;
 use std::ptr;
+use std::task::Poll;
 
+use tokio::io::AsyncReadExt;
 use tokio::net::windows::named_pipe::NamedPipeServer;
 use tokio::sync::oneshot;
+use tokio::task::{AbortHandle, JoinError, JoinSet};
 use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
     SetLastError, TRUE,
@@ -99,6 +108,19 @@ const PIPES: &str = r"\\.\pipe\";
 /// What each direction of an instance holds in the system: one read of the
 /// connection's.
 const BUFFER: u32 = 64 * 1024;
+
+/// The most read of a client before its token is checked: what Windows
+/// needs read before it lets the server impersonate the client. A client's
+/// first line comes in it whole or in part; the rest follows once it is
+/// admitted.
+const FIRST: usize = 4 * 1024;
+
+/// The most connections that may wait for their first data at once. One
+/// more closes the one that has waited longest, so that clients that never
+/// write cannot hold the pipe's instances. A client that writes as it
+/// connects, as every client of the protocol does, is checked within
+/// microseconds, long before so many come after it.
+const CHECKING: usize = 16;
 
 pub(super) fn default_place(_runtime: Option<&Path>) -> io::Result<Place> {
     let user = cortex_base::private::current_user_sid()?;
@@ -134,13 +156,13 @@ struct Server {
 /// The text of the pipe's security descriptor (the module's first point).
 /// `widen`, for tests only, also allows everyone to read and write, and
 /// puts the label at low, so that nothing but the check of a connection's
-/// token keeps another user out.
+/// token keeps another user, or a lower integrity, out.
 fn description(server: Server, widen: bool) -> String {
     let Server { user, level } = server;
     if widen {
-        format!("O:{user}D:P(A;;GA;;;{user})(A;;GRGW;;;WD)S:(ML;;NW;;;LW)")
+        format!("O:{user}D:P(A;;GA;;;{user})(A;;GRGW;;;WD)S:(ML;;NWNR;;;LW)")
     } else {
-        format!("O:{user}D:P(A;;GA;;;{user})S:(ML;;NW;;;S-1-16-{level})")
+        format!("O:{user}D:P(A;;GA;;;{user})S:(ML;;NWNR;;;S-1-16-{level})")
     }
 }
 
@@ -515,6 +537,57 @@ fn held(name: &str, error: io::Error) -> io::Error {
     }
 }
 
+/// A connected client, read until its first data and then checked: its
+/// bytes, that data first, when it is admitted; why not otherwise.
+async fn admit(mut pipe: NamedPipeServer, server: Server) -> Accepted {
+    let mut first = vec![0; FIRST];
+    let count = match pipe.read(&mut first).await {
+        Ok(0) => return Accepted::Refused("a client that left before it sent anything".to_owned()),
+        Ok(count) => count,
+        Err(error) => {
+            return Accepted::Refused(format!("a client that could not be read: {error}"));
+        }
+    };
+    first.truncate(count);
+    let (told, verdict) = oneshot::channel();
+    let checking = std::thread::Builder::new()
+        .name("cortex-pipe-check".to_owned())
+        .spawn(move || {
+            let verdict = check(pipe.as_handle(), server);
+            let _ = told.send((pipe, verdict));
+        });
+    if let Err(error) = checking {
+        return Accepted::Refused(format!("no thread to check the client's token on: {error}"));
+    }
+    let Ok((pipe, verdict)) = verdict.await else {
+        return Accepted::Refused("the check of the client's token did not finish".to_owned());
+    };
+    match verdict {
+        Ok(peer) => {
+            let (read, write) = tokio::io::split(pipe);
+            // What was read for the check goes first.
+            let read = std::io::Cursor::new(first).chain(read);
+            Accepted::Client {
+                transport: super::transport_of(read, write),
+                peer,
+            }
+        }
+        Err(why) => Accepted::Refused(why),
+    }
+}
+
+/// What the listener was woken by.
+enum Woken {
+    /// A connection's check ended.
+    Checked(Result<Accepted, JoinError>),
+    /// A client connected to the waiting instance.
+    Connected(io::Result<()>),
+}
+
+fn gone() -> io::Error {
+    io::Error::other("the listener's pipe is gone")
+}
+
 #[derive(Debug)]
 pub(super) struct Listener {
     place: Place,
@@ -528,6 +601,10 @@ pub(super) struct Listener {
     bound: Option<OwnedHandle>,
     /// The instance the next client connects to.
     waiting: Option<NamedPipeServer>,
+    /// The connections waiting for their first data and their check.
+    checking: JoinSet<Accepted>,
+    /// Each of those, oldest first, to close the oldest past [`CHECKING`].
+    order: VecDeque<AbortHandle>,
 }
 
 impl Listener {
@@ -558,6 +635,8 @@ impl Listener {
             server,
             bound: Some(first),
             waiting: None,
+            checking: JoinSet::new(),
+            order: VecDeque::new(),
         })
     }
 
@@ -569,42 +648,57 @@ impl Listener {
         if let Some(first) = self.bound.take() {
             self.waiting = Some(registered(first)?);
         }
-        let Some(waiting) = &mut self.waiting else {
-            return Err(io::Error::other("the listener is gone"));
-        };
-        waiting.connect().await?;
+        loop {
+            let woken = {
+                let Some(waiting) = &self.waiting else {
+                    return Err(gone());
+                };
+                let checking = &mut self.checking;
+                let mut connecting = std::pin::pin!(waiting.connect());
+                std::future::poll_fn(|context| {
+                    if let Poll::Ready(Some(checked)) = checking.poll_join_next(context) {
+                        return Poll::Ready(Woken::Checked(checked));
+                    }
+                    connecting.as_mut().poll(context).map(Woken::Connected)
+                })
+                .await
+            };
+            match woken {
+                Woken::Checked(Ok(accepted)) => return Ok(accepted),
+                Woken::Checked(Err(ended)) if ended.is_cancelled() => {
+                    return Ok(Accepted::Refused(
+                        "a client that sent nothing, closed to make room for newer ones".to_owned(),
+                    ));
+                }
+                Woken::Checked(Err(ended)) => {
+                    return Ok(Accepted::Refused(format!(
+                        "the check of a client's token failed: {ended}"
+                    )));
+                }
+                Woken::Connected(connected) => {
+                    connected?;
+                    self.hand_to_check()?;
+                }
+            }
+        }
+    }
+
+    /// Hands the instance a client just connected to to a check of its own,
+    /// and puts the next instance in its place first.
+    fn hand_to_check(&mut self) -> io::Result<()> {
         // The next instance is there before this one goes anywhere, so the
         // name never lapses.
         let next = registered(instance(&self.name, &self.description, false)?)?;
-        let connected = std::mem::replace(waiting, next);
-        let server = self.server;
-        let (told, verdict) = oneshot::channel();
-        let checking = std::thread::Builder::new()
-            .name("cortex-pipe-check".to_owned())
-            .spawn(move || {
-                let verdict = check(connected.as_handle(), server);
-                let _ = told.send((connected, verdict));
-            });
-        if let Err(error) = checking {
-            return Ok(Accepted::Refused(format!(
-                "no thread to check the client's token on: {error}"
-            )));
+        let connected = self.waiting.replace(next).ok_or_else(gone)?;
+        self.order.retain(|waiting| !waiting.is_finished());
+        if self.order.len() >= CHECKING
+            && let Some(oldest) = self.order.pop_front()
+        {
+            oldest.abort();
         }
-        let Ok((connected, verdict)) = verdict.await else {
-            return Ok(Accepted::Refused(
-                "the check of the client's token did not finish".to_owned(),
-            ));
-        };
-        match verdict {
-            Ok(peer) => {
-                let (read, write) = tokio::io::split(connected);
-                Ok(Accepted::Client {
-                    transport: super::transport_of(read, write),
-                    peer,
-                })
-            }
-            Err(why) => Ok(Accepted::Refused(why)),
-        }
+        let started = self.checking.spawn(admit(connected, self.server));
+        self.order.push_back(started);
+        Ok(())
     }
 }
 
@@ -622,7 +716,7 @@ mod tests {
         };
         assert_eq!(
             description(server, false),
-            format!("O:{USER}D:P(A;;GA;;;{USER})S:(ML;;NW;;;S-1-16-12288)")
+            format!("O:{USER}D:P(A;;GA;;;{USER})S:(ML;;NWNR;;;S-1-16-12288)")
         );
     }
 
@@ -634,7 +728,7 @@ mod tests {
         };
         assert_eq!(
             description(server, true),
-            format!("O:{USER}D:P(A;;GA;;;{USER})(A;;GRGW;;;WD)S:(ML;;NW;;;LW)")
+            format!("O:{USER}D:P(A;;GA;;;{USER})(A;;GRGW;;;WD)S:(ML;;NWNR;;;LW)")
         );
     }
 

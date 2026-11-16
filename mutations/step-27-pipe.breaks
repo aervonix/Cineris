@@ -7,12 +7,23 @@
 
 # ------------------------------------------------------- the pipe's security
 
-[break] pipe-label-keeps-out-reading-not-writing
+[break] pipe-label-lets-a-lower-process-write
 rule: The pipe is labelled at the server's integrity with no write up: a process below it cannot open the pipe to write.
 file: crates/cortex-rpc/src/socket/windows.rs
 in: description
-in-string: ML;;NW;;;S-1-16
+in-string: ML;;NWNR;;;S-1-16
 replace: ML;;NR;;;S-1-16
+os: windows
+caught-by:
+    cortex-rpc::it pipe::a_client_below_the_servers_integrity_is_kept_out
+    cortex-rpc::it pipe::the_pipe_admits_the_user_alone_at_the_servers_integrity
+
+[break] pipe-label-lets-a-lower-process-read
+rule: The pipe's label has no read up as well: a process below the server's integrity cannot open the pipe to read, where it could hold a connection it never writes on and so is never checked.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: description
+in-string: ML;;NWNR;;;S-1-16
+replace: ML;;NW;;;S-1-16
 os: windows
 caught-by:
     cortex-rpc::it pipe::a_client_below_the_servers_integrity_is_kept_out
@@ -61,30 +72,37 @@ caught-by:
     cortex-rpc::it pipe::a_name_in_use_is_refused
 
 [break] pipe-name-lapses-between-instances
-rule: The next instance is made before a connected one is handed on, so the name never lapses: a client opens it while the last connection is still being served and before the server accepts again.
+rule: The next instance is made before a connected one is handed on, so the name never lapses and an instance always waits for the next client.
 file: crates/cortex-rpc/src/socket/windows.rs
-in: Listener::accept
+in: Listener::hand_to_check
 find:
-    let Some(waiting) = &mut self.waiting else {
-        return Err(io::Error::other("the listener is gone"));
-    };
-    waiting.connect().await?;
     let next = registered(instance(&self.name, &self.description, false)?)?;
-    let connected = std::mem::replace(waiting, next);
+    let connected = self.waiting.replace(next).ok_or_else(gone)?;
 replace:
-    if self.waiting.is_none() {
-        self.waiting = Some(registered(instance(&self.name, &self.description, false)?)?);
-    }
-    let Some(waiting) = &mut self.waiting else {
-        return Err(io::Error::other("the listener is gone"));
-    };
-    waiting.connect().await?;
-    let Some(connected) = self.waiting.take() else {
-        return Err(io::Error::other("the listener is gone"));
-    };
+    let connected = self.waiting.take().ok_or_else(gone)?;
 os: windows
 caught-by:
-    cortex-rpc::it pipe::a_silent_client_is_admitted_and_the_name_never_lapses
+    cortex-rpc::it pipe::a_silent_client_holds_up_no_other_and_the_name_never_lapses
+
+[break] pipe-silent-clients-are-kept
+rule: Past the most connections that may wait for their first data, the one that has waited longest is closed, so that clients that never write cannot hold the pipe's instances.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: Listener::hand_to_check
+find: oldest.abort();
+replace: let _ = oldest;
+os: windows
+caught-by:
+    cortex-rpc::it pipe::the_longest_silent_client_is_closed_to_make_room
+
+[break] pipe-first-data-is-dropped
+rule: What was read of a client for the check of its token is handed on first, once it is admitted: nothing it sent is lost.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: admit
+find: let read = std::io::Cursor::new(first).chain(read);
+replace: let read = std::io::Cursor::new(Vec::new()).chain(read);
+os: windows
+caught-by:
+    cortex-rpc::it pipe::a_silent_client_holds_up_no_other_and_the_name_never_lapses
 
 [break] pipe-default-is-one-name-for-every-user
 rule: The default pipe is named for the user's security identifier, so that two users' servers do not meet at one name.
