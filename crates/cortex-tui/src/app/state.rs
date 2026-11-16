@@ -85,7 +85,12 @@ enum Pending {
     Config(Shown),
     /// A change of the session's settings, from a picker.
     Set,
+    /// A page of a stored session's history, to draw.
+    History,
 }
+
+/// The most items of a stored session's history read at a time.
+const HISTORY_PAGE: u32 = 500;
 
 /// The slash commands this build has, with what each does.
 const COMMANDS: &[(&str, &str)] = &[
@@ -147,6 +152,9 @@ pub struct App {
     picker: Option<(String, Picker)>,
     /// Every line committed to the scrollback so far, for the viewer.
     kept: Vec<Line>,
+    /// A stored session's history is being read: its events wait, and
+    /// those it already holds (`seq` up to the read's) are dropped.
+    reading: bool,
     /// The viewer, while it is open: how many rows up from the end it is
     /// scrolled.
     viewer: Option<usize>,
@@ -251,6 +259,7 @@ impl App {
             picker: None,
             kept: Vec::new(),
             viewer: None,
+            reading: false,
             forked_from: None,
             opening: false,
             held: Vec::new(),
@@ -671,7 +680,7 @@ impl App {
             drained.changed = true;
             match inbound {
                 Inbound::Event(event) => {
-                    if self.opening {
+                    if self.opening || self.reading {
                         self.held.push(event);
                     } else {
                         self.event(event, now);
@@ -806,6 +815,15 @@ impl App {
             (Pending::Set, Ok(OpResult::SessionSet(result))) => {
                 self.session = Some(result.session);
             }
+            (Pending::History, Ok(OpResult::SessionRead(page))) => self.history_read(page, now),
+            (Pending::History, Err(error)) => {
+                self.reading = false;
+                let held = std::mem::take(&mut self.held);
+                for event in held {
+                    self.event(event, now);
+                }
+                self.error(&error);
+            }
             (_, Err(error)) => self.error(&error),
             _ => {}
         }
@@ -910,10 +928,20 @@ impl App {
             branch: None,
             profile: None,
         }));
+        // A stored session's history is drawn under its header before
+        // anything that happens next (`docs/architecture/09-tui.md`,
+        // "Resume"); its events wait for it.
+        let stored = state.seq > 0;
+        let session_id = state.session_id.clone();
         self.session = Some(state);
-        let held = std::mem::take(&mut self.held);
-        for event in held {
-            self.event(event, now);
+        if stored {
+            self.reading = true;
+            self.read_history(session_id, None);
+        } else {
+            let held = std::mem::take(&mut self.held);
+            for event in held {
+                self.event(event, now);
+            }
         }
         let prompts: Vec<String> = self.held_prompts.drain(..).collect();
         let mut first = true;
@@ -926,6 +954,63 @@ impl App {
             first = false;
             self.submit_open(text, delivery);
         }
+    }
+
+    /// Asks for a page of the session's history.
+    fn read_history(&mut self, session_id: SessionId, cursor: Option<String>) {
+        let ticket = self.link.send(Op::SessionRead(
+            cortex_protocol::methods::SessionReadParams {
+                session_id,
+                item_id: None,
+                limit: Some(HISTORY_PAGE),
+                cursor,
+            },
+        ));
+        self.pending.insert(ticket, Pending::History);
+    }
+
+    /// A page of the history: its finished items drawn as they ended. At
+    /// its last page, the events held meanwhile that came after the read
+    /// follow; those it already held are dropped.
+    fn history_read(&mut self, page: cortex_protocol::methods::SessionReadResult, now: Instant) {
+        for item in page.items {
+            let incomplete = item
+                .id()
+                .is_some_and(|id| page.incomplete.iter().any(|open| open.as_str() == id));
+            if incomplete {
+                continue;
+            }
+            self.mapper.event(
+                &mut self.transcript,
+                &Event::ItemCompleted(cortex_protocol::event::ItemCompleted { item }),
+                now,
+            );
+        }
+        if let (Some(cursor), Some(session)) = (page.next_cursor, self.session_id_now()) {
+            self.read_history(session, Some(cursor));
+            return;
+        }
+        self.reading = false;
+        let running = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.running_turn.is_some());
+        if !running {
+            // A call the history holds with no result was cut off.
+            self.mapper.turn_done(&mut self.transcript, now);
+        }
+        let held = std::mem::take(&mut self.held);
+        for event in held {
+            if event.seq > page.seq {
+                self.event(event, now);
+            }
+        }
+    }
+
+    fn session_id_now(&self) -> Option<SessionId> {
+        self.session
+            .as_ref()
+            .map(|session| session.session_id.clone())
     }
 
     /// Sends a prompt held while the session opened.
