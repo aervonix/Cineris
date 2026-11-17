@@ -561,7 +561,7 @@ What steps 23 to 25 build on, in `cineris-tui`. Its public items are documented 
 | `/config` | Shows the effective configuration and where each value comes from. |
 | `/theme` | Picks a theme. |
 | `/mcp`, `/extensions` | Status and management. |
-| `/export` | Writes the session as Markdown or JSON, redacted. |
+| `/export` | Writes the session as Markdown or JSON, redacted (since step 25): `/export`, `/export json`, or `/export <file>` by its ending, `.md` or `.json`. See "Exporting a session". |
 | `/quit` | Exits. |
 
 Custom commands (markdown files, see [12-extensions.md](12-extensions.md)) and extension commands appear in the same menu. Extension commands are prefixed with the extension's name.
@@ -576,6 +576,15 @@ Custom commands (markdown files, see [12-extensions.md](12-extensions.md)) and e
 - **Themes and key bindings are reloaded while the application runs.** One watcher, the core's: after a key's frame, at most once a second, and on the terminal's focus regained, the application asks the core to look at the files (`config/reload` with `changed_only`). When a reload, whoever's it was, applied a `tui.*` or `keys.*` key, the application asks for the two sections (`config/get`) and builds its look again, in force from the next frame, and its key map when a binding changed (a key already read was taken with the old one; an open dialog's and the panels' readiness start again). A theme chosen with `/theme` stays unless the file's own theme changed. A section that cannot be read is said, and the old look and keys kept; a theme name not known is said and `auto` used, as at the start. "A theme file" is the configuration file that holds `tui.theme`: user theme files are [outstanding/user-theme-files.md](../outstanding/user-theme-files.md). The program gives the application the function that reads the two sections (`App::set_restyle`, from `cineris-config`'s `schema::read_section`), so the application needs nothing of the configuration's types.
 - **A file named with `@` is read ahead** when its completion is accepted (`workspace/warm`): the core reads its start into the system's cache, at most 16 a prompt; a folder is not read, and nothing of the answer is said.
 - **The review panel's `Enter` on a check** opens its whole output in the viewer (`session/artifact`), under its label, with what acts unseen as its escape and what was cut said; a check with no output kept opens nothing. **`space` on a skipped plan item** restores it (`PlanEdit::Restore`).
+
+
+### Exporting a session
+
+Built in step 25. `/export` writes the session to a file: Markdown to read, or JSON with the items as the protocol has them. Nothing of it is in-process, so `cineris attach` exports the same way.
+
+- **What is read is masked twice.** The application reads every page of the session with `session/read`'s `redacted` ([11-rpc-protocol.md](11-rpc-protocol.md)): the core masks each item with the filter its log's writer has, the harness's credentials by their values (which a client over the wire never has) and every well-known key format, by the same walk (`cineris_session::redact::for_export`, so the two can never mask different sets); drops every provider block (`raw`), which the log keeps unmasked to replay; makes an assistant message its neutral projection; leaves out what is still running, and says so; and does the same for a session kept only in memory (`--no-session`). Then the client's stricter pass (`cineris_tui::export`) runs every string of every item through `cineris_base::SecretFilter`'s formats again before anything is serialised, the title with them, so a key JSON's escapes would cut is still found. What is said after names the file and how many values are masked, the core's count and the client's together.
+- **What is written is safe to read.** In Markdown, control characters are left out and what acts unseen is escaped, as `/copy`'s text is (`export::readable`, which `/copy` shares), each block of output is fenced with more backticks than any run in it, and the title is escaped so that it stays one heading.
+- **The file is the program's to write,** on a thread of its own that wakes the loop (`Start::export`, an `export::Writer`), so the interface's thread never waits on the disk. It is created new and private to the user (`cineris_base::private`), never over a file that exists, which is named and left as it was; what a write that failed part of the way wrote is removed. The default name is `cineris-session-<date>-<the session's first eight characters>.md` (or `.json`) in the folder the person started in, with `-2`, `-3` and so on for another the same day; a path given is taken from that folder.
 
 ## Terminal layer (`cineris-term`)
 
