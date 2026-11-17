@@ -131,8 +131,12 @@ caught-by:
 rule: The key map is replaced only when a binding changed: an open dialog's and the panels' readiness are not restarted for a change of the look.
 file: crates/cortex-tui/src/app/state/restyle.rs
 in: restyled
-find: if keys {
-replace: if true {
+find:
+        if keys {
+            self.set_keymap(keymap);
+replace:
+        if true {
+            self.set_keymap(keymap);
 caught-by:
     cortex-tui app::tests::restyle::a_reload_of_the_look_reads_it_again_and_leaves_the_keys
 
@@ -184,9 +188,9 @@ caught-by:
 [break] an-artifacts-escapes-reach-the-screen
 rule: A check's output in the viewer is shown with what acts unseen as its escape.
 file: crates/cortex-tui/src/app/state/viewer.rs
-in: viewer_rows
-find: cortex_term::sanitize(line).into_owned()
-replace: line.clone()
+in: open_text
+find: let mut lines = crate::view::round::output_lines(&artifact.text);
+replace: let mut lines: Vec<String> = artifact.text.lines().map(str::to_owned).collect();
 caught-by:
     cortex-tui app::tests::panels::enter_on_a_check_opens_its_whole_output_in_the_viewer
 
