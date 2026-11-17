@@ -215,6 +215,10 @@ pub struct Markdown {
     given: Option<Vec<CodeColours>>,
     /// How many code blocks have opened: the next one's place.
     code_count: usize,
+    /// The text of each code block's lines, as the highlighter is given
+    /// them, while a kept answer is read for them
+    /// ([`code_lines`](Self::code_lines)).
+    collect: Option<Vec<Vec<String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -379,6 +383,7 @@ impl Markdown {
             keep: None,
             given: None,
             code_count: 0,
+            collect: None,
         }
     }
 
@@ -410,6 +415,25 @@ impl Markdown {
         stream.push(&source.text);
         stream.finish();
         stream.commit(width, look)
+    }
+
+    /// The text of each code block's lines in a kept answer, by the
+    /// blocks' order, as the highlighter was given them (tabs expanded):
+    /// what a block whose colours were late is handed to it again with.
+    #[must_use]
+    pub fn code_lines(source: &Source) -> Vec<Vec<String>> {
+        let mut stream = Self::new(Flavor::Answer);
+        stream.given = Some(source.code.clone());
+        stream.collect = Some(Vec::new());
+        stream.push(&source.text);
+        stream.finish();
+        // Code lines are not laid out by the width: any will do.
+        let look = Look::new(
+            crate::theme::Theme::new(cortex_term::ColorDepth::Mono, None),
+            &crate::glyphs::Glyphs::ASCII,
+        );
+        let _ = stream.commit(1_000, &look);
+        stream.collect.take().unwrap_or_default()
     }
 
     /// The whole of `text`, drawn at `width` with `look`: what a stream of it
@@ -494,6 +518,7 @@ impl Markdown {
             keep: None,
             given: self.given.clone(),
             code_count: self.code_count,
+            collect: None,
         };
         scratch.commit(width, look)
     }
@@ -1191,6 +1216,14 @@ impl Markdown {
             }
             _ => None,
         };
+        if let (Some(collect), Some((_, ordinal, index))) = (self.collect.as_mut(), place) {
+            if collect.len() <= ordinal {
+                collect.resize(ordinal + 1, Vec::new());
+            }
+            if collect[ordinal].len() == index {
+                collect[ordinal].push(text.clone());
+            }
+        }
         if let (Some(given), Some((_, ordinal, index))) = (&self.given, place) {
             // A kept answer drawn again: its colours as committed.
             let colours = given

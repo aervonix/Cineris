@@ -305,6 +305,27 @@ pub fn app_with_settings(now: Instant, settings: Settings) -> (App, Scripted) {
     )
 }
 
+/// As [`app_with_settings`], code coloured by `highlighter` (since step
+/// 25: the tests of code highlighted again).
+#[must_use]
+pub fn app_with_highlighter(
+    now: Instant,
+    settings: Settings,
+    highlighter: Highlighter,
+) -> (App, Scripted) {
+    app_built_with(
+        now,
+        None,
+        Open::New {
+            workspace: WORKSPACE.to_owned(),
+            settings: SessionSettings::default(),
+            ephemeral: false,
+        },
+        settings,
+        highlighter,
+    )
+}
+
 /// As [`app`], opening `open`, with `prompt` given on the command line.
 #[must_use]
 pub fn app_opening(now: Instant, prompt: Option<&str>, open: Open) -> (App, Scripted) {
@@ -316,6 +337,16 @@ fn app_built(
     prompt: Option<&str>,
     open: Open,
     settings: Settings,
+) -> (App, Scripted) {
+    app_built_with(now, prompt, open, settings, Highlighter::off())
+}
+
+fn app_built_with(
+    now: Instant,
+    prompt: Option<&str>,
+    open: Open,
+    settings: Settings,
+    highlighter: Highlighter,
 ) -> (App, Scripted) {
     let link = Scripted::default();
     let start = Start {
@@ -329,7 +360,7 @@ fn app_built(
         keymap: KeyMap::defaults(),
         notices: Vec::new(),
         history: Box::new(MemoryHistory::new()),
-        highlighter: Highlighter::off(),
+        highlighter,
         restyle: None,
     };
     let app = App::new(Box::new(link.clone()), start, &caps(), 99, 40, now);

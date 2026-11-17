@@ -51,6 +51,7 @@ use cortex_term::{Capabilities, Cursor, Event as TermEvent, Key, Line};
 
 mod commands;
 mod panel;
+mod recolour;
 mod restyle;
 pub(super) mod screen;
 mod viewer;
@@ -310,6 +311,12 @@ pub struct App {
     /// The full-screen presenter's view, when the application draws with
     /// it (`tui.presenter`, `--fullscreen`; since step 25).
     screen: Option<screen::ScreenView>,
+    /// The kept answers' code blocks handed to the highlighter again, their
+    /// colours having been late (since step 25).
+    recolouring: Vec<recolour::Recolouring>,
+    /// Kept blocks to be drawn again, for a view that was not at hand when
+    /// they changed (the full screen's, while its frame is made).
+    redraw_blocks: Vec<usize>,
     /// The worker that filters `@` completion off the key's path, once the
     /// workspace's paths have come.
     file_search: Option<super::files::FileSearch>,
@@ -496,6 +503,8 @@ impl App {
             picker: None,
             kept: Kept::new(),
             screen: full_screen.then(screen::ScreenView::default),
+            recolouring: Vec::new(),
+            redraw_blocks: Vec::new(),
             zone: None,
             turns: None,
             viewer: None,
@@ -565,6 +574,22 @@ impl App {
         self.look_changed();
         for dialog in &mut self.dialogs {
             dialog.restyled();
+        }
+    }
+
+    /// Kept block `block` is to be drawn again by the viewer and the full
+    /// screen: its colours came, say.
+    pub(super) fn forget_block_rows(&mut self, block: usize) {
+        if let Some(viewer) = self.viewer.as_mut() {
+            viewer.forget_block(block);
+        }
+        match self.screen.as_mut() {
+            Some(screen) => screen.forget_block(block),
+            // The full screen's view is out while its frame is made.
+            None if self.settings.presenter == super::Presenter::Fullscreen => {
+                self.redraw_blocks.push(block);
+            }
+            None => {}
         }
     }
 
@@ -2144,7 +2169,12 @@ impl App {
         let boxes = self.mapper.live_rounds(&mut self.transcript);
         let parts = self.transcript.commit_parts(width, &self.look);
         let commit: Vec<Line> = parts.into_iter().flat_map(Committed::into_lines).collect();
+        let before = self.kept.len();
         self.kept.extend(self.transcript.take_finished());
+        // Code whose colours were late is asked for again, and what came of
+        // it drawn (step 25).
+        self.ask_colours(before);
+        self.take_colours();
         (commit, boxes)
     }
 

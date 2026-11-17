@@ -73,6 +73,11 @@ impl ScreenView {
     pub(super) fn forget_rows(&mut self) {
         self.scroll.rows.clear();
     }
+
+    /// Forgets one kept block's rows: it is to be drawn again.
+    pub(super) fn forget_block(&mut self, block: usize) {
+        self.scroll.rows.forget(block);
+    }
 }
 
 /// The columns between the transcript and the panels' column.
@@ -196,6 +201,9 @@ impl App {
             view.width = width;
         }
         let (_, boxes) = self.prepare(now, width);
+        for block in std::mem::take(&mut self.redraw_blocks) {
+            view.forget_block(block);
+        }
         self.feed_search(&mut view);
         self.take_found(&mut view, width);
         let live = self.screen_live(width);

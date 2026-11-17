@@ -316,3 +316,30 @@ find: (cols >= SIDE_FROM)
 replace: (cols > SIDE_FROM)
 caught-by:
     cortex-tui app::tests::screen::panels_sit_beside_the_transcript_on_a_wide_window
+
+[break] late-code-is-never-asked-again
+rule: A kept answer's code whose colours were late is handed to the highlighter again.
+file: crates/cortex-tui/src/app/state.rs
+in: App::prepare
+find: self.ask_colours(before);
+replace: let _ = before;
+caught-by:
+    cortex-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
+
+[break] the-colours-that-come-are-dropped
+rule: The colours that come for late code are put into the kept answer.
+file: crates/cortex-tui/src/app/state/recolour.rs
+in: App::take_colours
+find: *line = Some(colours);
+replace: *line = Some(Vec::new());
+caught-by:
+    cortex-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
+
+[break] the-full-screen-keeps-the-plain-rows
+rule: A kept block whose colours came is drawn again by the full screen, whose view is out while its frame is made.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::screen_frame
+find: view.forget_block(block);
+replace: let _ = block;
+caught-by:
+    cortex-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
