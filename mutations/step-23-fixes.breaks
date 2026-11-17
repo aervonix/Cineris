@@ -979,22 +979,24 @@ caught-by:
 
 [break] copy-keeps-control-characters
 rule: A control character on the clipboard would be typed when pasted into a terminal: `/copy` drops every one but the line feed and the tab.
-file: crates/cineris-tui/src/app/state/commands.rs
-in: for_clipboard
+file: crates/cineris-tui/src/export.rs
+in: readable
 find: .filter(|&c| matches!(c, '\n' | '\t') || cineris_term::sanitize::visible(c).is_none())
 replace: .filter(|_| true)
 caught-by:
     app::tests::output::copy_drops_control_characters_and_escapes_what_acts_unseen
     app::tests::output::copy_of_an_answer_of_control_characters_copies_nothing
+    export::tests::markdown_holds_no_control_character_and_nothing_that_acts_unseen
 
 [break] copy-keeps-what-acts-unseen
 rule: `/copy` writes what acts unseen (a bidirectional override, a tag character, a zero-width space) as its escape, as the screen shows it.
-file: crates/cineris-tui/src/app/state/commands.rs
-in: for_clipboard
+file: crates/cineris-tui/src/export.rs
+in: readable
 find: cineris_term::sanitize(&typed).into_owned()
 replace: typed
 caught-by:
     app::tests::output::copy_drops_control_characters_and_escapes_what_acts_unseen
+    export::tests::markdown_holds_no_control_character_and_nothing_that_acts_unseen
 
 [break] the-editor-counts-what-acts-unseen-as-nothing
 rule: The editor lays a cluster out in the columns the input box draws it in: what acts unseen in its escape's, so that the cursor stays after the text and no row is cut.

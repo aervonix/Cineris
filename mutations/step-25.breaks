@@ -744,3 +744,71 @@ replace: masked += 0;
 caught-by:
     cineris-core::it secrets::an_export_read_of_a_logged_session_holds_no_secret_and_no_provider_block
     cineris-core::it secrets::an_export_read_of_a_session_kept_in_memory_is_masked_the_same
+
+[break] the-clients-pass-skips-the-items
+rule: Every string of every item an export reads goes through the client's stricter filter before it is serialised.
+file: crates/cineris-tui/src/export.rs
+in: Export::new
+find: added += mask(&mut value, &filter);
+replace: let _ = &filter;
+caught-by:
+    cineris-tui export::tests::the_clients_pass_masks_every_string_and_the_title_in_both_formats
+    cineris-tui app::tests::export::export_reads_the_session_masked_and_hands_the_writer_its_text
+
+[break] the-title-is-not-masked
+rule: An export's title goes through the client's filter too.
+file: crates/cineris-tui/src/export.rs
+in: Export::new
+find: let masked = filter.redact(title).into_owned();
+replace: let masked = title.to_owned();
+caught-by:
+    cineris-tui export::tests::the_clients_pass_masks_every_string_and_the_title_in_both_formats
+
+[break] a-fence-that-the-output-closes
+rule: A block of output is fenced with more backticks than any run in it.
+file: crates/cineris-tui/src/export.rs
+in: fenced
+find: let fence = "`".repeat(longest.max(2) + 1);
+replace: let fence = "`".repeat(3);
+caught-by:
+    cineris-tui export::tests::markdown_lays_the_session_out_in_order_with_fences_nothing_closes
+
+# What an export's Markdown is made safe by is `/copy`'s, shared since step
+# 25 (`export::readable`): step 23's two breaks of it, in
+# `mutations/step-23-fixes.breaks`, name the export's test too.
+
+[break] an-export-reads-unmasked
+rule: /export reads the session with session/read's redacted.
+file: crates/cineris-tui/src/app/state/export.rs
+in: App::read_for_export
+find: redacted: true
+replace: redacted: false
+caught-by:
+    cineris-tui app::tests::export::export_reads_the_session_masked_and_hands_the_writer_its_text
+
+[break] an-export-stops-at-the-first-page
+rule: /export reads every page of the session.
+file: crates/cineris-tui/src/app/state/export.rs
+in: App::export_read
+find: if let Some(cursor) = page.next_cursor {
+replace: if let Some(cursor) = page.next_cursor.filter(|_| false) {
+caught-by:
+    cineris-tui app::tests::export::export_reads_the_session_masked_and_hands_the_writer_its_text
+
+[break] an-export-writes-over-a-file
+rule: An export is created new, never over a file that exists.
+file: crates/cineris-cli/src/export.rs
+in: create
+find: let mut out = match cineris_base::private::create_new(path) {
+replace: let mut out = match std::fs::File::create(path) {
+caught-by:
+    cineris-cli::bin/cineris export::tests::an_export_is_a_new_private_file_never_one_that_exists
+
+[break] the-second-export-of-the-day-overwrites
+rule: A second export the same day takes the next name, -2 and on.
+file: crates/cineris-cli/src/export.rs
+in: write
+find: Err(ExportError::Exists(_)) => {}
+replace: Err(ExportError::Exists(name)) => return Err(ExportError::Exists(name)),
+caught-by:
+    cineris-cli::bin/cineris export::tests::an_export_is_a_new_private_file_never_one_that_exists
