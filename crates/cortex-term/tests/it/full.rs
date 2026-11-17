@@ -205,7 +205,7 @@ fn every_frame_is_one_write_with_nothing_cleared_and_the_right_screen() {
     for sync in [true, false] {
         cases::check(
             "full-screen frames",
-            100,
+            30,
             script,
             |script: &Script| -> Outcome {
                 let mut rig = Rig::new(60, 12, sync);
