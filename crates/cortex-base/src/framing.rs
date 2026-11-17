@@ -85,9 +85,16 @@ impl FrameError {
 }
 
 /// Reads one line, without its line ending, as a message.
+///
+/// A line that fails is JSON of the wrong shape (`InvalidMessage`) only
+/// when it reads as JSON at all; anything else is `InvalidJson`. serde's
+/// own class of its first error does not say which: the type's reading can
+/// fail on a line before its syntax does (`[1`, `{"jsonrpc":[`), and the
+/// other way round. Asked again only of a line that already failed (found
+/// by the fuzzing of step 27's server).
 pub fn decode<T: DeserializeOwned>(line: &[u8]) -> Result<T, FrameError> {
     serde_json::from_slice(line).map_err(|error| {
-        if error.classify() == serde_json::error::Category::Data {
+        if serde_json::from_slice::<serde::de::IgnoredAny>(line).is_ok() {
             FrameError::InvalidMessage(error)
         } else {
             FrameError::InvalidJson(error)
@@ -412,6 +419,40 @@ mod tests {
     use super::*;
     use crate::cases::{self, ensure};
     use crate::rng::Rng;
+
+    /// A line is not JSON, or JSON that is not a message, by what it is, not
+    /// by where serde's reading first failed.
+    #[test]
+    fn a_line_is_told_apart_as_not_json_or_not_a_message() {
+        for not_json in [
+            r#"[1"#,
+            r#"{"jsonrpc":["#,
+            r#"{"jsonrpc":5 x"#,
+            r#"{"jsonrpc":"1.0","id":7} x"#,
+            "not json",
+        ] {
+            assert!(
+                matches!(
+                    decode::<Message>(not_json.as_bytes()),
+                    Err(FrameError::InvalidJson(_))
+                ),
+                "{not_json}"
+            );
+        }
+        for not_a_message in [
+            r#"{"jsonrpc":"1.0","id":7}"#,
+            r#"["2.0",1,"m",null,null,null,7]"#,
+            r#"42"#,
+        ] {
+            assert!(
+                matches!(
+                    decode::<Message>(not_a_message.as_bytes()),
+                    Err(FrameError::InvalidMessage(_))
+                ),
+                "{not_a_message}"
+            );
+        }
+    }
 
     /// The protocol's golden transcript: every method and event of version 1.
     const GOLDEN: &str = include_str!("../../cortex-protocol/tests/golden/v1-session.jsonl");

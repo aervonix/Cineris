@@ -46,6 +46,22 @@ pub(crate) enum Incoming {
 
 /// Reads one line, without its line ending.
 pub(crate) fn read(line: &[u8]) -> Incoming {
+    // One object a line. An array is a batch, which the protocol does not
+    // serve, and serde would read a message out of one (`["2.0",1,
+    // "models/list",null,null,null]`; found by the fuzzing of this step).
+    if line.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'[')
+        && serde_json::from_slice::<serde::de::IgnoredAny>(line).is_ok()
+    {
+        return Incoming::Bad {
+            id: None,
+            error: ErrorObject {
+                code: jsonrpc::code::INVALID_REQUEST,
+                message: "A line holds one JSON object: a batch (an array) is not served."
+                    .to_owned(),
+                data: None,
+            },
+        };
+    }
     match framing::decode::<Message>(line) {
         Ok(Message::Request(request)) => Incoming::Request(request),
         Ok(Message::Response(response)) => Incoming::Response(response),
@@ -157,6 +173,27 @@ mod tests {
 
     fn line(text: &str) -> Incoming {
         read(text.as_bytes())
+    }
+
+    /// An array is a batch, refused as a request that cannot be read, never
+    /// served as the message serde could read out of it.
+    #[test]
+    fn an_array_is_not_served_as_a_message() {
+        for batch in [
+            r#"["2.0",1,"models/list",null,null,null]"#,
+            r#" [{"jsonrpc":"2.0","id":1,"method":"models/list"}]"#,
+        ] {
+            let Incoming::Bad { id, error } = line(batch) else {
+                panic!("{batch} was served");
+            };
+            assert_eq!(id, None);
+            assert_eq!(error.code, jsonrpc::code::INVALID_REQUEST, "{batch}");
+        }
+        // An array cut short is not JSON at all.
+        let Incoming::Bad { error, .. } = line("[1") else {
+            panic!("not refused");
+        };
+        assert_eq!(error.code, jsonrpc::code::PARSE_ERROR);
     }
 
     #[test]
