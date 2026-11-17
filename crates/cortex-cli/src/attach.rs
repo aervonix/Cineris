@@ -641,11 +641,22 @@ async fn read(
 }
 
 /// The lines of what was read, split at `\n`.
-#[derive(Default)]
 struct Lines {
     held: Vec<u8>,
     /// How much of `held` is known to hold no `\n`.
     searched: usize,
+    /// The longest a line may grow: [`LONGEST_LINE`].
+    longest: usize,
+}
+
+impl Default for Lines {
+    fn default() -> Self {
+        Self {
+            held: Vec::new(),
+            searched: 0,
+            longest: LONGEST_LINE,
+        }
+    }
 }
 
 impl Lines {
@@ -654,14 +665,14 @@ impl Lines {
     }
 
     /// The next whole line, without its `\n`; `Err` when a line has grown
-    /// past [`LONGEST_LINE`].
+    /// past the longest a line may be.
     fn next_line(&mut self) -> Result<Option<Vec<u8>>, ()> {
         let Some(found) = self.held[self.searched..]
             .iter()
             .position(|byte| *byte == b'\n')
         else {
             self.searched = self.held.len();
-            return if self.held.len() > LONGEST_LINE {
+            return if self.held.len() > self.longest {
                 Err(())
             } else {
                 Ok(None)
@@ -886,8 +897,13 @@ mod tests {
         lines.push(b":3}\n");
         assert_eq!(lines.next_line(), Ok(Some(b"{\"c\":3}".to_vec())));
         assert_eq!(lines.next_line(), Ok(None));
-        let mut long = Lines::default();
-        long.push(&vec![b'x'; LONGEST_LINE + 1]);
+        let mut long = Lines {
+            longest: 16,
+            ..Lines::default()
+        };
+        long.push(b"0123456789abcdef");
+        assert_eq!(long.next_line(), Ok(None), "a line at the longest is kept");
+        long.push(b"g");
         assert_eq!(long.next_line(), Err(()));
     }
 }
