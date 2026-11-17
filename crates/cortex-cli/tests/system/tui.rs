@@ -291,6 +291,77 @@ fn sys_a_turn_with_tools_runs_in_the_interface_and_the_terminal_is_put_back() {
     quit(&mut session, &phases);
 }
 
+/// The full-screen presenter in the real binary (step 25): `--fullscreen`
+/// draws on the alternate screen with the mouse reported, runs a turn,
+/// scrolls up with the wheel sent as the terminal sends it (which on
+/// Windows goes through the console's mouse input), re-wraps on a resize,
+/// and quitting leaves the terminal as it was: the main screen as the shell
+/// left it, the mouse and the alternate screen off, and the modes the
+/// shell had.
+#[test]
+fn sys_the_full_screen_runs_a_turn_scrolls_and_leaves_the_terminal_as_it_was() {
+    let phases =
+        Phases::new("sys_the_full_screen_runs_a_turn_scrolls_and_leaves_the_terminal_as_it_was");
+    let machine = Machine::new("tui_full_screen");
+    let answer: String = (1..=60)
+        .map(|n| format!("Line {n} of a long answer.\n\n"))
+        .collect();
+    machine.reply_text(&answer);
+    let mut session = machine.tui(&["--fullscreen"]);
+    first_frame(&mut session, &phases);
+    if cfg!(unix) {
+        // Through ConPTY the modes are the console's, not these.
+        let modes = session.screen().modes();
+        assert!(modes.alternate, "on the alternate screen");
+        assert!(modes.mouse && modes.mouse_sgr, "the mouse is reported");
+    }
+
+    phases.mark("the turn");
+    type_text(&mut session, "tell me a long story\r");
+    session.wait_for(LIMIT, "the answer's end", |t| {
+        t.shows("Line 60 of a long answer.")
+    });
+
+    phases.mark("the wheel");
+    // Three notches of the wheel up, over the transcript.
+    session.send(b"\x1b[<64;10;5M\x1b[<64;10;5M\x1b[<64;10;5M");
+    session.wait_for(LIMIT, "the view moved up", |t| t.shows("more below"));
+    assert!(!session.screen().shows("Line 60 of a long answer."));
+
+    phases.mark("the resize");
+    session.resize(60, 30);
+    session.wait_for(LIMIT, "drawn again at the new width", |t| {
+        t.screen()
+            .iter()
+            .all(|row| row.trim_end().chars().count() <= 59)
+            && t.shows("more below")
+    });
+
+    phases.mark("back to the end");
+    session.send(b"\x1b[6~\x1b[6~\x1b[6~\x1b[6~\x1b[6~\x1b[6~\x1b[6~\x1b[6~");
+    session.wait_for(LIMIT, "the end again", |t| {
+        t.shows("Line 60 of a long answer.") && !t.shows("more below")
+    });
+
+    quit(&mut session, &phases);
+    let screen = session.screen();
+    if cfg!(unix) {
+        let modes = screen.modes();
+        assert!(!modes.alternate, "the alternate screen was left");
+        assert!(!modes.mouse && !modes.mouse_sgr, "the mouse was turned off");
+    }
+    // The main screen holds nothing of the session: it is as the shell
+    // left it.
+    assert!(
+        !screen
+            .history()
+            .iter()
+            .any(|row| row.contains("long answer")),
+        "{}",
+        screen.dump()
+    );
+}
+
 #[test]
 fn sys_an_approval_is_asked_in_a_dialog_and_answered_with_a_key() {
     let phases = Phases::new("sys_an_approval_is_asked_in_a_dialog_and_answered_with_a_key");
@@ -1604,6 +1675,143 @@ fn perf_idle_memory_in_a_workspace_of_real_code() {
         ));
         session.send(b"\x7f");
         session.wait_for(LIMIT, "the `@` taken back", |t| t.shows(READY[0]));
+        session.send(b"\x04");
+        session.wait_exit(LIMIT);
+    }
+}
+
+/// The memory of a 200-turn session in each presenter (step 25's "Done
+/// when"; `docs/performance-budgets.md`, "Memory": 40 MB inline, 80 MB full
+/// screen): a workspace of 20,000 files of the real-code corpus, and 200
+/// turns each of a read, an edit with a diff and a command that prints 200
+/// lines, then an answer of about 40 lines with a code block; in the full
+/// screen, the transcript then scrolled to its top and back, resized twice
+/// and searched once. The binary's resident memory and its peak are read
+/// once it has settled. Ignored; on the shipped musl `dist` build:
+///
+/// ```text
+/// cargo test --profile dist --target x86_64-unknown-linux-musl -p cortex-cli --test system perf_two_hundred_turns -- --ignored --nocapture
+/// ```
+///
+/// `CORTEX_PERF_TURNS` sets the turns, `CORTEX_PERF_FILES` the files.
+#[test]
+#[ignore = "a measurement, in a release build"]
+fn perf_two_hundred_turns_in_each_presenter() {
+    let turns: usize = std::env::var("CORTEX_PERF_TURNS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(200);
+    let files: usize = std::env::var("CORTEX_PERF_FILES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(20_000);
+    let answer: String = {
+        let mut text = String::from("Here is what changed, and why.\n\n");
+        for n in 1..=12 {
+            text.push_str(&format!(
+                "Paragraph {n}: the scanner now treats an underscore between two digits \
+                 as a separator, and anything else as the end of the number.\n\n"
+            ));
+        }
+        text.push_str("```rust\n");
+        for n in 1..=16 {
+            text.push_str(&format!("let value_{n} = scan(\"1_{n:03}\")?;\n"));
+        }
+        text.push_str("```\n\nThe tests pass.\n");
+        text
+    };
+    let print = if cfg!(windows) {
+        "1..200 | ForEach-Object { \"line $_ of the build's output, as a compiler prints it\" }"
+    } else {
+        "for i in $(seq 1 200); do echo \"line $i of the build's output, as a compiler prints it\"; done"
+    };
+    for presenter in ["inline", "fullscreen"] {
+        let machine = Machine::new(&format!("perf_turns_{presenter}"));
+        let made = Instant::now();
+        let linked = real_code(&machine.workspace, files);
+        report(&format!(
+            "{presenter}: a workspace of {files} files of real code ({linked} hard links), made in {:.1} s",
+            made.elapsed().as_secs_f64()
+        ));
+        std::fs::write(machine.workspace.join("count.txt"), "count 0\n").unwrap();
+        for n in 1..=turns {
+            let calls = [
+                ("read", json!({"path": "count.txt"})),
+                (
+                    "edit",
+                    json!({"path": "count.txt", "old_string": format!("count {}", n - 1),
+                        "new_string": format!("count {n}")}),
+                ),
+                ("shell", json!({"command": print})),
+            ];
+            let mut events = vec![super::message_start()];
+            for (index, (tool, input)) in calls.iter().enumerate() {
+                events.push(json!({"type": "content_block_start", "index": index,
+                    "content_block": {"type": "tool_use", "id": format!("toolu_{n}_{index}"),
+                        "name": tool, "input": {}}}));
+                events.push(json!({"type": "content_block_delta", "index": index,
+                    "delta": {"type": "input_json_delta", "partial_json": input.to_string()}}));
+                events.push(json!({"type": "content_block_stop", "index": index}));
+            }
+            events.push(super::message_delta("tool_use"));
+            events.push(json!({"type": "message_stop"}));
+            machine
+                .server
+                .push(ServerReply::sse().send(super::sse(&events)));
+            machine.reply_text(&format!("{answer}Turn {n} done.\n"));
+        }
+        let mut arguments = vec!["--permission-mode", "unrestricted"];
+        if presenter == "fullscreen" {
+            arguments.push("--fullscreen");
+        }
+        let mut session = machine.tui(&arguments);
+        session.wait_for(LIMIT, "the first frame", |t| {
+            READY.iter().any(|ready| t.shows(ready))
+        });
+        session.wait_for(LIMIT, "the session's header", |t| t.shows(HEADER));
+        settle(&mut session);
+        report(&format!(
+            "{presenter}: idle before the turns, {}",
+            memory(&session)
+        ));
+        let began = Instant::now();
+        for n in 1..=turns {
+            session.send(format!("turn {n}\r").as_bytes());
+            let done = format!("Turn {n} done.");
+            session.wait_for(Duration::from_secs(60), "the turn's answer", |t| {
+                shows_ever(t, &done)
+            });
+            turn_ended(&mut session);
+        }
+        report(&format!(
+            "{presenter}: {turns} turns in {:.1} s",
+            began.elapsed().as_secs_f64()
+        ));
+        settle(&mut session);
+        report(&format!(
+            "{presenter}: after {turns} turns, {}",
+            memory(&session)
+        ));
+        if presenter == "fullscreen" {
+            // To the top and back, two resizes, and a search.
+            for _ in 0..(turns * 4) {
+                session.send(b"\x1b[5~");
+            }
+            session.wait_for(LIMIT, "the top", |t| t.shows(HEADER));
+            for _ in 0..(turns * 4) {
+                session.send(b"\x1b[6~");
+            }
+            session.resize(70, 30);
+            session.resize(100, 30);
+            session.send(b"\x06turn 1\r");
+            settle(&mut session);
+            session.send(b"\x1b");
+            settle(&mut session);
+            report(&format!(
+                "{presenter}: scrolled, resized and searched, {}",
+                memory(&session)
+            ));
+        }
         session.send(b"\x04");
         session.wait_exit(LIMIT);
     }

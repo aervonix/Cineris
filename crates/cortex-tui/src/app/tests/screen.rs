@@ -743,6 +743,104 @@ fn code_committed_plain_is_coloured_once_its_colours_come() {
     );
 }
 
+/// A frame of the full-screen presenter after 200 turns (step 25,
+/// `docs/performance-budgets.md`): the application's frame and `Full`'s
+/// bytes for it, at the end and following, scrolled into the middle, and
+/// while an answer streams (a piece taken in before each frame), in a
+/// window of 120 by 40. Ignored; run in a release build:
+///
+/// ```text
+/// cargo test --release -p cortex-tui --features test-kit --lib perf_a_frame_in_the_full_screen -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "a measurement, in a release build"]
+fn perf_a_frame_in_the_full_screen_presenter() {
+    use cortex_term::{Full, Screen};
+
+    let runs: usize = std::env::var("CORTEX_PERF_RUNS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1_000);
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Fullscreen, 119, 40, now);
+    for n in 1..=200 {
+        for step in turn(n, &format!("Turn {n}."), ANSWER, OUTPUT) {
+            for inbound in step {
+                link.give(inbound);
+            }
+            drain(&mut app, now);
+        }
+        let _ = app.screen_frame(now);
+    }
+    let caps = crate::testkit::caps();
+    let mut full = Full::new(120, 40);
+    let mut measure = |label: &str, app: &mut super::App, each: &mut dyn FnMut(&mut super::App)| {
+        let mut times = Vec::with_capacity(runs);
+        let mut bytes = Vec::with_capacity(runs);
+        for _ in 0..runs {
+            each(app);
+            let began = Instant::now();
+            let (lines, cursor) = app.screen_frame(now);
+            let mut sink = Vec::new();
+            full.draw(
+                &Screen {
+                    lines: &lines,
+                    cursor,
+                },
+                &caps,
+                &mut sink,
+            )
+            .expect("drawn");
+            times.push(began.elapsed());
+            bytes.push(sink.len());
+        }
+        times.sort();
+        bytes.sort_unstable();
+        let at = |share: f64| {
+            let index = ((times.len() as f64 * share) as usize).min(times.len() - 1);
+            times[index].as_secs_f64() * 1_000.0
+        };
+        let median = at(0.5);
+        let p99 = at(0.99);
+        println!(
+            "{label}: {median:.3} ms median, {p99:.3} ms at the 99th, {} bytes median, {} at most",
+            bytes[bytes.len() / 2],
+            bytes[bytes.len() - 1]
+        );
+        cortex_testkit::numbers::report(&format!("full_screen.{label}.median"), median, "ms");
+        cortex_testkit::numbers::report(&format!("full_screen.{label}.p99"), p99, "ms");
+    };
+    measure("idle_at_the_end", &mut app, &mut |_| {});
+    for _ in 0..40 {
+        key(&mut app, "pageup", now);
+    }
+    measure("idle_in_the_middle", &mut app, &mut |_| {});
+    key(&mut app, "pagedown", now);
+    for _ in 0..80 {
+        key(&mut app, "pagedown", now);
+    }
+    // An answer streaming: a piece each frame, the window following it.
+    let answer = cortex_protocol::ItemId::from("streaming");
+    link.give(event(Event::ItemStarted(ItemStarted {
+        item_id: answer.clone(),
+        kind: ItemKind::AssistantMessage,
+        tool: None,
+        call_id: None,
+    })));
+    drain(&mut app, now);
+    let mut n = 0;
+    measure("streaming", &mut app, &mut |app| {
+        n += 1;
+        link.give(event(Event::ItemDelta(ItemDelta {
+            item_id: answer.clone(),
+            delta: Delta::Text(TextDelta {
+                text: format!("word{n} and some more words to wrap, "),
+            }),
+        })));
+        drain(app, now);
+    });
+}
+
 /// What a played terminal reads, in turn.
 type Steps = Vec<(cortex_term::Ready, Vec<u8>)>;
 
