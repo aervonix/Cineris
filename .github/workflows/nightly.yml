@@ -188,12 +188,15 @@ jobs:
 
   # Coverage-guided fuzzing of the stream decoders (docs/testing-and-ci.md,
   # "Not blocking"): the parser of server-sent events and the decoder of
-  # each provider protocol, each for a fixed time, starting from the recorded
-  # fixtures. The fuzzer needs a nightly compiler, which only this job
-  # installs; the targets are a package of their own, `fuzz/`, outside the
-  # workspace. The nightly is pinned to a date in `fuzz/rust-toolchain.toml`,
-  # so that a new nightly cannot break this job by itself. An input that
-  # fails is kept as an artifact of the run.
+  # each provider protocol, starting from the recorded fixtures; the outline
+  # extractors, from their samples; and, since step 27, the RPC server's
+  # decoder, from lines a client sends. Each target for two minutes: five
+  # targets and their build take about twelve. The fuzzer needs a nightly
+  # compiler, which only this job installs; the targets are a package of
+  # their own, `fuzz/`, outside the workspace. The nightly is pinned to a
+  # date in `fuzz/rust-toolchain.toml`, so that a new nightly cannot break
+  # this job by itself. An input that fails is kept as an artifact of the
+  # run.
   fuzz:
     if: ${{ !inputs.force_failure }}
     runs-on: ubuntu-latest
@@ -209,7 +212,7 @@ jobs:
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-fuzz@0.13.2
-      - name: Fuzz the stream decoders
+      - name: Fuzz the decoders and the extractors
         run: cargo run --locked --quiet --package xtask -- fuzz --seconds 120
       - name: Keep the inputs that failed
         if: ${{ failure() }}

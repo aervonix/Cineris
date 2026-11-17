@@ -235,9 +235,10 @@ fn spent(text: &str, since: Option<&str>) -> String {
 }
 
 /// The fuzz targets, and the fixtures each one starts from, a directory
-/// under the repository: a protocol's recorded streams in `cortex-llm`, or
-/// the outline extractors' sample files in `cortex-index` (since the fixes
-/// of step 18's review).
+/// under the repository: a protocol's recorded streams in `cortex-llm`, the
+/// outline extractors' sample files in `cortex-index` (since the fixes of
+/// step 18's review), or the lines a client sends the RPC server in
+/// `cortex-rpc` (since step 27).
 const FUZZ_TARGETS: &[(&str, &str)] = &[
     (
         "sse_parser",
@@ -252,6 +253,7 @@ const FUZZ_TARGETS: &[(&str, &str)] = &[
         "crates/cortex-llm/fixtures/openai-chat",
     ),
     ("extractors", "crates/cortex-index/fixtures/outlines"),
+    ("rpc_decoder", "crates/cortex-rpc/fixtures/lines"),
 ];
 
 /// How long each fuzz target runs when no time is given, in seconds.
