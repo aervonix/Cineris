@@ -117,6 +117,7 @@ fn answer(
             Ok(OpResult::ConfigGet(ConfigGetResult {
                 config,
                 origins: Default::default(),
+                ..Default::default()
             })),
         ));
     }

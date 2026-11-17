@@ -982,6 +982,20 @@
           },
           "description": "Where each key of `config` came from, by the same dotted key. A key\nwith no entry has its built-in default. Added in step 24.",
           "type": "object"
+        },
+        "profile": {
+          "description": "The profile in force: the one chosen for the session, or the one the\nfiles select. Added in step 24.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "profiles": {
+          "description": "The settings profiles that may be chosen for the session (`/profile`):\nthose the user's and the managed files define, and a project's only\nonce the project is trusted. Added in step 24.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         }
       },
       "required": [

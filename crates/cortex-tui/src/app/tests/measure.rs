@@ -216,6 +216,7 @@ fn perf_the_usage_panels_first_frame_with_a_year() {
                             cortex_protocol::methods::ConfigGetResult {
                                 config: serde_json::Map::new(),
                                 origins: Default::default(),
+                                ..Default::default()
                             },
                         )),
                     )),

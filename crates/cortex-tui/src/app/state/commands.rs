@@ -162,8 +162,7 @@ impl App {
                 let ticket = self
                     .link
                     .send(Op::ConfigReload(ConfigReloadParams::default()));
-                self.pending
-                    .insert(ticket, Pending::Reload { profile: None });
+                self.pending.insert(ticket, Pending::Reload);
             }
             "profile" => self.profile(rest),
             "verify" => {
@@ -304,23 +303,12 @@ impl App {
             profile: Some(rest.to_owned()),
             changed_only: false,
         }));
-        self.pending.insert(
-            ticket,
-            Pending::Reload {
-                profile: Some(rest.to_owned()),
-            },
-        );
+        self.pending.insert(ticket, Pending::Reload);
     }
 
-    /// The profiles the session's files define, and the one in force.
-    pub(super) fn profiles_listed(&mut self, config: &serde_json::Map<String, Value>) {
-        let mut names: Vec<String> = config
-            .keys()
-            .filter_map(|key| key.strip_prefix("profiles."))
-            .filter_map(|rest| rest.split('.').next())
-            .map(ToOwned::to_owned)
-            .collect();
-        names.dedup();
+    /// The profiles the core says may be chosen for the session, and the
+    /// one in force.
+    pub(super) fn profiles_listed(&mut self, names: &[String], in_force: Option<&str>) {
         if names.is_empty() {
             self.say(
                 "No profile is defined: a `[profiles.<name>]` table in a configuration file \
@@ -328,8 +316,6 @@ impl App {
             );
             return;
         }
-        let from_file = config.get("profile").and_then(Value::as_str);
-        let in_force = self.profile.as_deref().or(from_file);
         let lines = names
             .iter()
             .map(|name| {
@@ -341,8 +327,7 @@ impl App {
             })
             .collect();
         self.transcript.push(Block::Listing {
-            title: "The profiles this session's files define (/profile <name> loads one):"
-                .to_owned(),
+            title: "The profiles this session may use (/profile <name> loads one):".to_owned(),
             lines,
         });
     }

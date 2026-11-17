@@ -12,6 +12,8 @@ The commands that need no panel, the hot reload of the look and the keys, the fi
 - **The usage report's aggregates kept** (`cortex-core`'s `usage::AggregatesCache`, the coordinator's call when the usage panel's year missed its budget): a report reads `aggregates.json` again only when it is not the file the kept aggregates were read from: told apart by its path, the file itself (`cortex_base::FileIdentity`: device and inode, or volume and file index on Windows, where a save is a new file put in place), its length and its time, taken before the read. A report that saved keeps nothing, nor one that did not read the aggregates whole from the file; what is kept is dropped after a quiet minute. A year's report goes from 17.4 / 19.4 ms to 7.2 / 8.2 ms (median / p99, release, the desktop); the measurement is `cortex-stats`' `perf_a_years_report_for_the_usage_panel`, and the budget's row says the rest.
 - **Screens 2a and 2b** composed in the application's real states, as the owner asked: asked in the middle of a turn (the spinner and the turn's time before the dialog's keys), and 2a's edit with the rule a lasting answer adds ("Allowing it for longer allows: …", two rows more). Written with `tui-screens --write`; the tui-look README says what changed.
 
+**A protocol addition, told to the coordinator first** (found by the review: `config/get` never held `profiles.*`, so `/profile` alone found none against the real core): `ConfigGetResult.profiles` and `ConfigGetResult.profile`, both optional with defaults, from `cortex-config`'s new `Loaded::profiles` (the names every layer but the project's defines) and, once the project is trusted, `project_profiles`. The coordinator's condition: a project not trusted puts no profile in force this way, so its profiles are not offered and `config/reload` refuses one only it defines (`untrusted_profile`).
+
 ## Where it departs from the design
 
 | Design | As built | Why |
@@ -27,6 +29,7 @@ The commands that need no panel, the hot reload of the look and the keys, the fi
 | A reload's notice is said once, from its result | `cortex-tui app::tests::commands::reload_says_what_the_reload_did_once` |
 | A change found elsewhere is said | `commands::a_change_found_elsewhere_is_said` |
 | `/profile` loads one, and lists them with the one in force | `commands::profile_loads_one_and_lists_them`, `profile_with_none_defined_says_how_to_make_one` |
+| A project's profile is offered and loaded only once the project is trusted | `cortex-core::it reload::a_projects_profile_is_offered_and_loaded_only_once_it_is_trusted` |
 | `/verify` asks for the checks, and says why none could run | `commands::verify_asks_for_the_checks_and_says_why_none_could_run` |
 | `/context` by part, against the limit and the window | `commands::context_shows_the_last_request_by_part` |
 | `/config` says where each value came from | `commands::config_says_where_each_value_came_from` |

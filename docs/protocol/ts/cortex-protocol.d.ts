@@ -356,6 +356,10 @@ export interface ConfigGetResult {
   config: { [key: string]: unknown };
   /** Where each key of `config` came from, by the same dotted key. A key with no entry has its built-in default. Added in step 24. */
   origins?: { [key: string]: ConfigOrigin };
+  /** The profile in force: the one chosen for the session, or the one the files select. Added in step 24. */
+  profile?: string | null;
+  /** The settings profiles that may be chosen for the session (`/profile`): those the user's and the managed files define, and a project's only once the project is trusted. Added in step 24. */
+  profiles?: Array<string>;
 }
 
 /** The layer of the configuration a value came from (`docs/architecture/08-configuration.md`, "Layers"). */

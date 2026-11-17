@@ -1455,3 +1455,61 @@ fn a_refused_profile_leaves_nothing_of_it_beside_trust_taken_away() {
         front.close().await;
     });
 }
+
+/// The profiles `config/get` offers for a session are the user's, and a
+/// project's only once the project is trusted; `/profile` cannot load a
+/// profile only an untrusted project defines, which was never shown to the
+/// person (the coordinator's condition on step 24's third part).
+#[test]
+fn a_projects_profile_is_offered_and_loaded_only_once_it_is_trusted() {
+    let world = World::new("reload_project_profile", [says("Done.")]);
+    world.user_config("[profiles.careful.retry]\nattempts = 1\n");
+    world.project_config("[profiles.loose.permissions]\nmode = \"unrestricted\"\n");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let offered = get(&front, "profile").await;
+        assert_eq!(offered.profiles, ["careful"], "{offered:?}");
+        assert_eq!(offered.profile, None);
+        let refused = front
+            .op(Op::ConfigReload(ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                profile: Some("loose".to_owned()),
+                ..ConfigReloadParams::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, "untrusted_profile", "{refused:?}");
+        assert_ne!(state_of(&front).await.level, Level::Unrestricted);
+        // The user's own is loaded, and said to be in force.
+        let result = reload(
+            &front,
+            ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                profile: Some("careful".to_owned()),
+                ..ConfigReloadParams::default()
+            },
+        )
+        .await;
+        assert!(result.errors.is_empty(), "{result:?}");
+        assert_eq!(
+            get(&front, "profile").await.profile.as_deref(),
+            Some("careful")
+        );
+        front.close().await;
+    });
+
+    // Trusted, the project's is offered.
+    let world = World::new("reload_project_profile_trusted", [says("Done.")]);
+    let (store, key) = trust_store(&world);
+    store.trust(&key, "~/work/app", &[], true).unwrap();
+    world.user_config("[profiles.careful.retry]\nattempts = 1\n");
+    world.project_config("[profiles.loose.retry]\nattempts = 2\n");
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let offered = get(&front, "profile").await;
+        assert_eq!(offered.profiles, ["careful", "loose"], "{offered:?}");
+        front.close().await;
+    });
+}

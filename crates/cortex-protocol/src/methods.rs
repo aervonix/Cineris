@@ -621,7 +621,7 @@ pub struct ConfigGetParams {
 }
 
 /// The result of `config/get`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ConfigGetResult {
     /// The effective configuration, as the configuration file would have it.
@@ -631,6 +631,15 @@ pub struct ConfigGetResult {
     /// with no entry has its built-in default. Added in step 24.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub origins: BTreeMap<String, ConfigOrigin>,
+    /// The settings profiles that may be chosen for the session (`/profile`):
+    /// those the user's and the managed files define, and a project's only
+    /// once the project is trusted. Added in step 24.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<String>,
+    /// The profile in force: the one chosen for the session, or the one the
+    /// files select. Added in step 24.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 open_enum! {
