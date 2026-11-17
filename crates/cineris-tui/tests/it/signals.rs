@@ -176,6 +176,7 @@ pub(crate) fn enter() {
             history,
             highlighter: Highlighter::off(),
             restyle: None,
+            export: None,
         };
         (Box::new(Quiet { sent: 0 }) as Box<dyn Link>, start)
     });

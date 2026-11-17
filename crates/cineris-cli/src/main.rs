@@ -35,6 +35,7 @@ mod args;
 mod attach;
 mod commands;
 mod exit;
+mod export;
 mod headless;
 mod help;
 mod history;

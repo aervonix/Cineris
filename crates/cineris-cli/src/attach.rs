@@ -120,6 +120,9 @@ pub(crate) fn run(attach: Attach, name: &'static str) -> u8 {
     let root = workspace.to_string_lossy().into_owned();
     let history = interactive::history_for(&env, &workspace);
     let prompt = attach.prompt.clone();
+    // `/export` writes in the folder the person started in, as the
+    // in-process interface's does (step 25).
+    let started_in = here.cwd.clone().unwrap_or_else(|| workspace.clone());
 
     let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         app::interactive(overrides, move |waker, _caps| {
@@ -143,6 +146,7 @@ pub(crate) fn run(attach: Attach, name: &'static str) -> u8 {
                 // The server's `config/get` reads the same user's
                 // configuration as the in-process core does.
                 restyle: Some(Box::new(interactive::restyle)),
+                export: Some(crate::export::writer(started_in)),
             };
             (Box::new(link) as Box<dyn Link>, start)
         })

@@ -751,6 +751,7 @@ fn app_dialog(
         history: Box::new(MemoryHistory::new()),
         highlighter: Highlighter::off(),
         restyle: None,
+        export: None,
     };
     let mut caps = super::capabilities(spec);
     caps.background = Some(background);
