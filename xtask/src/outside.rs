@@ -825,7 +825,9 @@ pub(crate) fn fuzz(arguments: &[String]) -> Result<()> {
             .args(["fuzz", "run", "--target", &host, target, "--"])
             .arg(format!("-max_total_time={seconds}"))
             // A stream event is a few hundred bytes. Inputs up to this size
-            // hold a whole response of several blocks.
+            // hold a whole response of several blocks. The RPC target's line
+            // limit (`RPC_LINE_LIMIT`, 4 KiB) stays below it, so that a line
+            // too long is reached.
             .arg("-max_len=8192")
             .arg("-timeout=10")
             .arg("-print_final_stats=1")
@@ -901,8 +903,9 @@ fn seed(fixtures: &Path, corpus: &Path) -> Result<usize> {
     for entry in entries {
         let entry = entry.map_err(|error| format!("{}: {error}", fixtures.display()))?;
         let name = entry.file_name();
-        // A file of its own (an extractor's sample) is an input as it is,
-        // once: its target reads the whole input as a file.
+        // A file of its own (an extractor's sample, or lines a client sends
+        // the RPC server) is an input as it is, once: its target reads the
+        // whole input as a file, or as a client's stream.
         if entry.path().is_file() {
             let bytes = fs::read(entry.path())
                 .map_err(|error| format!("{}: {error}", entry.path().display()))?;

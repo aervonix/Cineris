@@ -354,6 +354,7 @@ The server's first part: `cortex serve --stdio` (`cortex-rpc`; `docs/steps/27/an
 - **The server's decoder is fuzzed in the nightly workflow for 120 seconds a night** (the `rpc_decoder` target of `cargo xtask fuzz`; [testing-and-ci.md](../testing-and-ci.md), "Not blocking").
   - Any bytes, as a client's stream, are read as the server reads them: into lines, each line's kind, a request's operation, and an answer to each kind of request the server puts.
   - Nothing may panic, what cannot be read gets an error the server can write and a client can read, and an operation or an answer read is the same once written again and read.
+  - A float may come back a unit or two in the last place off, since serde_json, as the harness builds it, reads a float only that closely.
 
 ## Network listening
 
