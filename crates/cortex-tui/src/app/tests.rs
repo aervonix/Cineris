@@ -42,6 +42,7 @@ mod panels;
 mod project;
 mod prompts;
 mod restyle;
+mod screen;
 mod sessions;
 mod trust_standing;
 mod usage;
