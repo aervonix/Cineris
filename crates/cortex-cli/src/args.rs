@@ -178,6 +178,25 @@ pub(crate) enum Command {
     Project(ProjectCommand),
     /// `cortex serve …`: the RPC server (step 27).
     Serve(Box<Serve>),
+    /// `cortex attach …`: the interactive application on a running server
+    /// (step 27).
+    Attach(Box<Attach>),
+}
+
+/// `cortex attach [--socket PATH] [--continue | --resume ID] [PROMPT]`: the
+/// interactive application on a running `serve --socket`, with no core of
+/// its own (`docs/steps/27/answered.md`, point 5).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Attach {
+    /// Where the server listens: its default place when not given.
+    pub(crate) socket: Option<String>,
+    /// The session to open: a new one, the workspace's latest, or one by
+    /// its id.
+    pub(crate) choice: Choice,
+    /// A prompt to send once the session is open.
+    pub(crate) prompt: Option<String>,
+    /// `--log-level`: what the log file takes.
+    pub(crate) log_level: Option<String>,
 }
 
 /// `cortex serve --stdio [FLAGS]`: the RPC server, and the flags of a run
@@ -314,6 +333,7 @@ pub(crate) enum Topic {
     Stats,
     Project,
     Serve,
+    Attach,
 }
 
 /// What a headless run writes on standard output.
@@ -479,6 +499,7 @@ pub(crate) fn parse(arguments: Vec<OsString>) -> Result<Command, UsageError> {
             "stats" => Some(Topic::Stats),
             "project" => Some(Topic::Project),
             "serve" => Some(Topic::Serve),
+            "attach" => Some(Topic::Attach),
             _ => None,
         };
         if let Some(topic) = topic {
@@ -553,6 +574,39 @@ fn serve(parser: &mut Parser) -> Result<Command, UsageError> {
         _ => {}
     }
     Ok(Command::Serve(Box::new(serve)))
+}
+
+/// `cortex attach`: where the server is, the session to open, and a prompt.
+fn attach(parser: &mut Parser) -> Result<Command, UsageError> {
+    let mut attach = Attach::default();
+    let mut words: Vec<String> = Vec::new();
+    let mut choices = 0;
+    while let Some(argument) = parser.next()? {
+        match argument {
+            Arg::Short('h') | Arg::Long("help") => return Ok(Command::Help(Topic::Attach)),
+            Arg::Long("socket") => attach.socket = Some(text(parser)?),
+            Arg::Long("continue") => {
+                choices += 1;
+                attach.choice = Choice::Continue;
+            }
+            Arg::Long("resume") => {
+                choices += 1;
+                attach.choice = Choice::Resume(text(parser)?);
+            }
+            Arg::Long("log-level") => attach.log_level = Some(text(parser)?),
+            Arg::Value(value) => words.push(value.string()?),
+            other => return Err(unexpected(&other)),
+        }
+    }
+    if choices > 1 {
+        return Err(UsageError(
+            "attach takes --continue or --resume ID, not both".to_owned(),
+        ));
+    }
+    if !words.is_empty() {
+        attach.prompt = Some(words.join(" "));
+    }
+    Ok(Command::Attach(Box::new(attach)))
 }
 
 /// An argument as lexopt reads it, holding its own text, so that the parser
@@ -701,6 +755,9 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
     if topic == Topic::Serve {
         return serve(parser);
     }
+    if topic == Topic::Attach {
+        return attach(parser);
+    }
     if topic == Topic::Models {
         return match parser.next()? {
             None => Ok(Command::Models),
@@ -754,6 +811,7 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 Topic::Stats => "stats",
                 Topic::Project => "project",
                 Topic::Serve => "serve",
+                Topic::Attach => "attach",
                 Topic::Main => "",
             }
         ))
@@ -869,7 +927,8 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
         | Topic::Usage
         | Topic::Stats
         | Topic::Project
-        | Topic::Serve => Err(wrong(&action)),
+        | Topic::Serve
+        | Topic::Attach => Err(wrong(&action)),
     }
 }
 

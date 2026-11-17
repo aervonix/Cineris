@@ -61,6 +61,31 @@ them aside again until it is approved with `{name} permissions trust`. A
 project you said never to trust is not asked about; `trust` trusts it.
 "
         ),
+        Topic::Attach => format!(
+            "\
+Usage: {name} attach [--socket PATH] [--continue | --resume ID] [PROMPT]
+
+Run the interactive application on a server that `{name} serve --socket`
+started, with no core of its own: the server runs the sessions, and they go
+on when you leave, for you to attach to again.
+
+A new session for this folder, or with --continue its latest, or with
+--resume a session by its id. A session running another client's turn is
+watched as it runs; a prompt sent then steers it.
+
+The server is reached only once it is shown to be yours: on Unix a socket of
+yours in a folder others cannot write in, and a server running as you; on
+Windows a pipe you own, at an integrity level of medium or above.
+
+Options:
+  --socket PATH        Where the server listens (default: its own default
+                       place, as `{name} serve --socket` chooses it)
+  --continue           Open this folder's latest session
+  --resume ID          Open the session ID
+  --log-level LEVEL    What the log file takes
+  -h, --help           Print this help
+"
+        ),
         Topic::Serve => format!(
             "\
 Usage: {name} serve --stdio [OPTIONS]
@@ -222,6 +247,7 @@ Commands:
   stats         The local statistics: show or reset
   project       What is known about this project: review, accept, turn off
   serve         Serve the RPC protocol to another program
+  attach        Run the interactive application on a running server
 
 Options:
 "
@@ -266,6 +292,7 @@ mod tests {
             Topic::Stats,
             Topic::Project,
             Topic::Serve,
+            Topic::Attach,
         ] {
             let as_cx = help(topic, "cx");
             assert!(as_cx.contains("Usage: cx "), "{topic:?}");

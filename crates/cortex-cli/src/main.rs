@@ -32,6 +32,7 @@
 )]
 
 mod args;
+mod attach;
 mod commands;
 mod exit;
 mod headless;
@@ -114,6 +115,7 @@ fn dispatch(command: Command, name: &'static str, started: Instant) -> u8 {
         Command::Stats(command) => commands::stats(command, name),
         Command::Project(command) => commands::project(command, name),
         Command::Serve(serve) => serve::run(*serve, name),
+        Command::Attach(attach) => attach::run(*attach, name),
     }
 }
 

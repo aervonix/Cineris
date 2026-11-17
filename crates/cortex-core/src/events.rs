@@ -263,7 +263,7 @@ impl EventQueue {
     }
 
     /// Queues a request to the client. Never dropped.
-    pub(crate) fn push_request(&self, id: RequestId, request: ServerRequest) {
+    pub fn push_request(&self, id: RequestId, request: ServerRequest) {
         let mut state = lock(&self.state);
         if state.closed {
             return;
@@ -276,7 +276,7 @@ impl EventQueue {
 
     /// The client read `session` at `seq`: from now on no delta is merged
     /// into one queued at or below it.
-    pub(crate) fn fence(&self, session: &SessionId, seq: u64) {
+    pub fn fence(&self, session: &SessionId, seq: u64) {
         let mut state = lock(&self.state);
         let fence = state.fences.entry(session.clone()).or_insert(seq);
         *fence = (*fence).max(seq);
@@ -284,7 +284,7 @@ impl EventQueue {
 
     /// Forgets the fence of `session`: the client opened it again, or
     /// closed it.
-    pub(crate) fn unfence(&self, session: &SessionId) {
+    pub fn unfence(&self, session: &SessionId) {
         lock(&self.state).fences.remove(session);
     }
 
@@ -339,7 +339,7 @@ impl EventQueue {
 
     /// The client is gone: what is queued can still be read, and nothing
     /// more is taken.
-    pub(crate) fn close(&self) {
+    pub fn close(&self) {
         lock(&self.state).closed = true;
         self.wake.notify_waiters();
         self.wake.notify_one();
