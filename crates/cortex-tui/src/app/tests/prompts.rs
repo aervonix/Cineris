@@ -185,32 +185,128 @@ fn a_prompt_sent_while_held_ones_are_on_their_way_follows_them() {
     assert_eq!(app.input().editor().expanded(), "second\nthird");
 }
 
-/// Stopping while held prompts are on their way: the one sent is the
-/// interrupt's, and those not sent come back once it is answered, rather
-/// than start a turn after the stop.
+/// What was sent, in order: each prompt as its text and delivery, and an
+/// interrupt as `interrupt`, with its ticket; everything else is left out.
+fn lane(link: &Scripted) -> Vec<(Ticket, String)> {
+    link.take_sent()
+        .into_iter()
+        .filter_map(|(ticket, op)| match op {
+            Op::TurnStart(params) => {
+                let text: Vec<String> = params
+                    .input
+                    .iter()
+                    .filter_map(|part| match part {
+                        Part::Text(text) => Some(text.text.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                Some((ticket, format!("{} {:?}", text.join("\n"), params.delivery)))
+            }
+            Op::TurnInterrupt(_) => Some((ticket, "interrupt".to_owned())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The texts of [`lane`], without the tickets.
+fn texts(lane: &[(Ticket, String)]) -> Vec<&str> {
+    lane.iter().map(|(_, text)| text.as_str()).collect()
+}
+
+/// Stopping while the first held prompt is on its way: those not sent go
+/// at once, queued behind it and ahead of the interrupt, so that the core
+/// holds them in order, as it holds any queued prompt at an interrupt, and
+/// they follow the next prompt. Nothing comes back to be sent ahead of
+/// them.
 #[test]
-fn stopping_while_held_prompts_are_on_their_way_gives_back_those_not_sent() {
+fn stopping_while_held_prompts_are_on_their_way_queues_the_rest_ahead_of_the_interrupt() {
     let now = Instant::now();
     let (mut app, link) = holding(now, "first", &["second", "third"]);
     opened(&mut app, &link, now);
     let (first, _, _) = one_prompt(&link);
     key(&mut app, "esc", now);
-    assert!(
-        link.script()
-            .sent
-            .iter()
-            .any(|(_, op)| matches!(op, Op::TurnInterrupt(_))),
-        "the interrupt is sent"
+    assert_eq!(
+        texts(&lane(&link)),
+        ["second Some(Queue)", "third Some(Queue)", "interrupt"]
     );
     accepted(&link, first, Disposition::Started);
     drain(&mut app, now);
     assert!(prompts(&link).is_empty(), "nothing more is sent");
-    assert_eq!(app.input().editor().expanded(), "second\nthird");
+    assert_eq!(app.input().editor().expanded(), "");
 }
 
-/// A prompt sent after an interrupt stopped the held prompts does not wait
-/// to come back with them: it goes at once, as any prompt sent after an
-/// interrupt does.
+/// The review's first case: the first held prompt started its turn and the
+/// second is on its way, queued behind it, when the person stops. The core
+/// holds the second after the interrupt; the third goes queued ahead of the
+/// interrupt and is held behind it. Given back instead, the third, sent
+/// again, would run first and the second after it.
+#[test]
+fn stopping_while_a_queued_held_prompt_is_on_its_way_keeps_the_rest_behind_it() {
+    let now = Instant::now();
+    let (mut app, link) = holding(now, "first", &["second", "third"]);
+    opened(&mut app, &link, now);
+    let (first, _, _) = one_prompt(&link);
+    accepted(&link, first, Disposition::Started);
+    drain(&mut app, now);
+    let (second, text, _) = one_prompt(&link);
+    assert_eq!(text, "second");
+    key(&mut app, "esc", now);
+    assert_eq!(texts(&lane(&link)), ["third Some(Queue)", "interrupt"]);
+    accepted(&link, second, Disposition::Queued);
+    drain(&mut app, now);
+    assert!(prompts(&link).is_empty(), "nothing more is sent");
+    assert_eq!(
+        app.input().editor().expanded(),
+        "",
+        "nothing comes back to be sent ahead of the second"
+    );
+}
+
+/// The review's second case: attached to a running turn, the first held
+/// prompt is on its way to steer it when the person stops. The second goes
+/// queued ahead of the interrupt and the core holds it; the first comes
+/// back undelivered in the interrupt's answer, alone, and sent again it
+/// runs first and the second follows. Given back on the steer's answer,
+/// the second came into the editor before the first.
+#[test]
+fn stopping_while_a_held_steer_is_on_its_way_keeps_the_rest_behind_it() {
+    let now = Instant::now();
+    let (mut app, link) = app_opening(
+        now,
+        Some("and the docs"),
+        Open::Resume(SessionId::from("s_a")),
+    );
+    type_text(&mut app, "then the tests", now);
+    key(&mut app, "enter", now);
+    let _ = attached(
+        &mut app,
+        &link,
+        session().id("s_a").seq(5).running("t_4").build(),
+        now,
+    );
+    let (steer, text, delivery) = one_prompt(&link);
+    assert_eq!(
+        (text.as_str(), delivery),
+        ("and the docs", Some(ItemDelivery::Steer))
+    );
+    key(&mut app, "esc", now);
+    let sent = lane(&link);
+    assert_eq!(texts(&sent), ["then the tests Some(Queue)", "interrupt"]);
+    accepted(&link, steer, Disposition::Steering);
+    link.give(Inbound::Done(
+        sent[1].0,
+        Ok(OpResult::TurnInterrupt(TurnInterruptResult {
+            interrupted: true,
+            undelivered: vec![vec![Part::text("and the docs")]],
+        })),
+    ));
+    drain(&mut app, now);
+    assert!(prompts(&link).is_empty(), "nothing more is sent");
+    assert_eq!(app.input().editor().expanded(), "and the docs");
+}
+
+/// A prompt sent after an interrupt is sent at once, as any prompt after
+/// an interrupt is: the held ones went with the interrupt.
 #[test]
 fn a_prompt_sent_after_stopping_the_held_ones_goes_at_once() {
     let now = Instant::now();
@@ -218,6 +314,7 @@ fn a_prompt_sent_after_stopping_the_held_ones_goes_at_once() {
     opened(&mut app, &link, now);
     let (first, _, _) = one_prompt(&link);
     key(&mut app, "esc", now);
+    assert_eq!(texts(&lane(&link)), ["second Some(Queue)", "interrupt"]);
     type_text(&mut app, "something else", now);
     key(&mut app, "enter", now);
     let (_, text, delivery) = one_prompt(&link);
@@ -228,7 +325,7 @@ fn a_prompt_sent_after_stopping_the_held_ones_goes_at_once() {
     accepted(&link, first, Disposition::Started);
     drain(&mut app, now);
     assert!(prompts(&link).is_empty());
-    assert_eq!(app.input().editor().expanded(), "second");
+    assert_eq!(app.input().editor().expanded(), "");
 }
 
 // ---------------------------- (2) refused `turn_running`: queued, once

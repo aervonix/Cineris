@@ -18,9 +18,12 @@
 //!   sent while they are on their way follows them, and the session is not
 //!   left until the last is answered. A refused one comes back into the
 //!   editor with those behind it, in order, and the spinner they started
-//!   stops unless the core has said a turn runs. After an interrupt, those
-//!   not sent come back once the one on its way is answered, and a prompt
-//!   sent then goes at once.
+//!   stops unless the core has said a turn runs. An interrupt sends those
+//!   not sent yet at once, queued behind the one on its way and ahead of
+//!   the interrupt, so that the core holds them in order, as it holds any
+//!   queued prompt at an interrupt; the one on its way, refused or handed
+//!   back undelivered, comes into the editor, and sent again it runs
+//!   first, with them behind it. None overtakes another.
 //! - **A prompt refused `turn_running` is sent again once, queued:** sent
 //!   with no delivery in the moment between one turn's `turn.completed` and
 //!   the `turn.started` of the next the core takes from its queue, or onto a
@@ -159,9 +162,8 @@ struct Sent {
     /// It was sent as a new turn, and this app runs from then: a refusal
     /// stops that.
     started: bool,
-    /// An interrupt was sent after it: the held prompts that wait for it
-    /// come back once it is answered, rather than follow it, and a refusal
-    /// is not sent again.
+    /// An interrupt was sent after it: a refusal gives it back, and is not
+    /// sent again.
     stopped: bool,
     /// It was refused `turn_running` once and sent again queued: a refusal
     /// now gives it back.
@@ -1068,9 +1070,8 @@ impl App {
             return;
         };
         // The prompts held while the session opened are still on their way:
-        // this one follows them, never ahead of one of them. Once an
-        // interrupt stopped them it goes as any prompt after an interrupt.
-        if self.held_going() {
+        // this one follows them, never ahead of one of them.
+        if self.held_sent.is_some() {
             self.held_prompts.push_back(text);
             self.start_running(at);
             return;
@@ -1089,13 +1090,6 @@ impl App {
             again: false,
         };
         self.send_prompt(sent, wire(delivery));
-    }
-
-    /// Whether held prompts are on their way, and no interrupt stopped them.
-    fn held_going(&self) -> bool {
-        self.held_sent
-            .and_then(|ticket| self.pending.get(&ticket))
-            .is_some_and(|pending| matches!(pending, Pending::Prompt(sent) if !sent.stopped))
     }
 
     /// Sends a prompt with `delivery`, its answer awaited.
@@ -1159,8 +1153,27 @@ impl App {
             self.stop_running();
             return;
         };
-        // What was held behind a prompt on its way does not follow it: it
-        // comes back once that one is answered.
+        // The held prompts not sent yet go now, queued behind the one on
+        // its way and ahead of the interrupt: the core holds them with it,
+        // in order, as it holds any queued prompt at an interrupt, and they
+        // follow the next prompt (`docs/architecture/03-agent-loop.md`,
+        // "Only a turn that completed starts the next prompt by itself").
+        // Given back, one sent again would run ahead of one the core holds.
+        // The one on its way is answered from here on as any prompt is.
+        if self.held_sent.take().is_some() {
+            while let Some(text) = self.held_prompts.pop_front() {
+                let sent = Sent {
+                    session: session.clone(),
+                    text,
+                    started: false,
+                    stopped: false,
+                    again: false,
+                };
+                self.send_prompt(sent, Some(ItemDelivery::Queue));
+            }
+        }
+        // A prompt on its way that is refused comes back: queued behind the
+        // turn the person stopped, it would run after the stop.
         for pending in self.pending.values_mut() {
             if let Pending::Prompt(sent) = pending {
                 sent.stopped = true;
@@ -1500,8 +1513,7 @@ impl App {
     /// queued behind the turn the core started meanwhile (step 27). Any
     /// other refusal, that one's second, or one after an interrupt brings it
     /// back into the editor with why, and the held prompts that wait for it
-    /// after it, in order; an accepted held one lets the next go, unless an
-    /// interrupt came after it.
+    /// after it, in order; an accepted held one lets the next go.
     fn prompt_answered(
         &mut self,
         ticket: Ticket,
@@ -1555,7 +1567,7 @@ impl App {
         if !held {
             return;
         }
-        if refused || sent.stopped || !self.is_open(&sent.session) {
+        if refused || !self.is_open(&sent.session) {
             self.give_back_held();
         } else {
             self.send_held(false, now);
