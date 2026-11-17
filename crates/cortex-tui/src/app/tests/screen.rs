@@ -682,6 +682,67 @@ fn panels_sit_beside_the_transcript_on_a_wide_window() {
     assert_eq!(crate::app::state::screen::side_column(200), Some(56));
 }
 
+/// Code whose colours were late is drawn plain as it commits, kept as late,
+/// handed to the highlighter again, and drawn in its colours by the full
+/// screen once they come (closes `highlighted-code-drawn-again`).
+#[cfg(feature = "highlight")]
+#[test]
+fn code_committed_plain_is_coloured_once_its_colours_come() {
+    use crate::highlight::Highlighter;
+    use crate::markdown::Markdown;
+    use crate::theme::Token;
+
+    let now = Instant::now();
+    let highlighter = Highlighter::new(|| {});
+    // The grammars loaded first, then the worker held: the code's colours
+    // are late.
+    let look = crate::app::look(&Settings::default(), &crate::testkit::caps());
+    let mut warm = Markdown::answer().with_highlighter(highlighter.clone());
+    warm.push("```rust\nx\n```\n");
+    let _ = warm.commit(79, &look);
+    assert!(highlighter.settle(BOUND));
+    highlighter.hold(true);
+    let settings = Settings {
+        presenter: Presenter::Fullscreen,
+        ..Settings::default()
+    };
+    let (mut app, link) = crate::testkit::app_with_highlighter(now, settings, highlighter.clone());
+    app.resize(79, 60);
+    opened(&mut app, &link, now);
+    let later = now + std::time::Duration::from_secs(5);
+    for step in turn(1, "Fix it.", ANSWER, OUTPUT) {
+        for inbound in step {
+            link.give(inbound);
+        }
+        drain(&mut app, now);
+        let _ = app.screen_frame(now);
+    }
+    // Past the wait: committed plain.
+    let _ = app.screen_frame(later);
+    let keyword = look.theme.style(Token::SyntaxKeyword);
+    let coloured = |lines: &[Line]| {
+        lines
+            .iter()
+            .flat_map(|line| line.spans().to_vec())
+            .any(|span| span.text() == "continue" && span.style() == keyword)
+    };
+    let (lines, _) = app.screen_frame(later);
+    assert!(
+        lines.iter().any(|line| line.text().contains("continue")),
+        "{:#?}",
+        text(&lines)
+    );
+    assert!(!coloured(&lines), "plain while late");
+    highlighter.hold(false);
+    assert!(highlighter.settle(BOUND));
+    let (lines, _) = app.screen_frame(later);
+    assert!(
+        coloured(&lines),
+        "coloured once they came: {:#?}",
+        text(&lines)
+    );
+}
+
 /// What a played terminal reads, in turn.
 type Steps = Vec<(cortex_term::Ready, Vec<u8>)>;
 

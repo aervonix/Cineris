@@ -77,6 +77,11 @@ impl Viewer {
         self.scroll.rows.clear();
     }
 
+    /// Forgets one kept block's rows: it is to be drawn again.
+    pub(super) fn forget_block(&mut self, block: usize) {
+        self.scroll.rows.forget(block);
+    }
+
     /// Whether a search is being typed.
     pub(super) fn searching(&self) -> bool {
         self.typing.is_some()

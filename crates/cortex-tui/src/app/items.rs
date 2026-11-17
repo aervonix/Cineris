@@ -107,6 +107,12 @@ pub(crate) struct Mapper {
 }
 
 impl Mapper {
+    /// The highlighter for the process, which the kept answers' late code
+    /// is handed to again (step 25).
+    pub(crate) fn highlighter(&self) -> &Highlighter {
+        &self.highlighter
+    }
+
     pub(crate) fn new(highlighter: Highlighter) -> Self {
         Self {
             highlighter,
