@@ -163,6 +163,8 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     let prompt = run.prompt.clone();
     let link = core.link();
     let history = history_for(&env, &workspace);
+    // `/export` writes in the folder the person started in.
+    let started_in = here.cwd.clone().unwrap_or_else(|| workspace.clone());
 
     // A panic of the interface's own unwinds to here: the terminal has been
     // put back by then (the terminal layer's hook, and its drop), and the
@@ -187,6 +189,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
                 history,
                 highlighter: Highlighter::new(move || wake.wake()),
                 restyle: Some(Box::new(restyle)),
+                export: Some(crate::export::writer(started_in)),
             };
             (Box::new(link) as Box<dyn Link>, start)
         })

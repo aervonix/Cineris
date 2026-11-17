@@ -362,6 +362,7 @@ fn app_built_with(
         history: Box::new(MemoryHistory::new()),
         highlighter,
         restyle: None,
+        export: None,
     };
     let app = App::new(Box::new(link.clone()), start, &caps(), 99, 40, now);
     (app, link)

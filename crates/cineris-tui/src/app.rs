@@ -219,6 +219,9 @@ pub struct Start {
     /// while the application runs (step 24's hot reload). `None`: a reload
     /// of them is not taken.
     pub restyle: Option<Restyle>,
+    /// What writes `/export`'s files, on a worker (since step 25). `None`:
+    /// `/export` says it is not available.
+    pub export: Option<crate::export::Writer>,
 }
 
 impl std::fmt::Debug for Start {

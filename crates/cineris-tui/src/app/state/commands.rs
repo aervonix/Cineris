@@ -178,6 +178,7 @@ impl App {
                 self.pending.insert(ticket, Pending::Said);
             }
             "context" => self.context(),
+            "export" => self.export(rest),
             "copy" => {
                 let answer = for_clipboard(self.mapper.last_answer());
                 if answer.trim().is_empty() {
@@ -785,11 +786,7 @@ impl App {
 /// before a line feed with them; and what acts unseen is written as its
 /// escape, as the screen shows it (`cineris_term::sanitize`).
 pub(crate) fn for_clipboard(answer: &str) -> String {
-    let typed: String = answer
-        .chars()
-        .filter(|&c| matches!(c, '\n' | '\t') || cineris_term::sanitize::visible(c).is_none())
-        .collect();
-    cineris_term::sanitize(&typed).into_owned()
+    crate::export::readable(answer)
 }
 
 /// Where a value came from, as a person reads it: the layer, then the file

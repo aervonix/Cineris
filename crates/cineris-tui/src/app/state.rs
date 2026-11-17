@@ -50,6 +50,7 @@ use cineris_protocol::{ErrorData, SessionEvent, SessionId, Speed};
 use cineris_term::{Capabilities, Cursor, Event as TermEvent, Key, Line};
 
 mod commands;
+mod export;
 mod panel;
 mod recolour;
 mod restyle;
@@ -153,6 +154,8 @@ enum Pending {
     /// key of either: `keys` when a binding changed, `theme` when the
     /// file's theme did.
     Restyle { keys: bool, theme: bool },
+    /// A page of this session, read for `/export` (since step 25).
+    Export(SessionId),
 }
 
 /// A prompt on its way to the core, for its answer.
@@ -221,6 +224,10 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
     ("copy", "Copy the last answer to the clipboard"),
     ("effort", "Choose the model's effort, and fast mode"),
+    (
+        "export",
+        "Write the session to a file: Markdown, or JSON with json",
+    ),
     ("help", "The commands and the keys"),
     ("mode", "Choose how much is asked before it is done"),
     ("model", "Choose the model"),
@@ -356,6 +363,10 @@ pub struct App {
     /// What reads the look and the key map from the configuration
     /// ([`App::set_restyle`]).
     restyle: Option<Restyle>,
+    /// The program's writer of `/export`'s files (since step 25).
+    writer: Option<crate::export::Writer>,
+    /// An export under way.
+    exporting: Option<export::Exporting>,
     /// A look at the configuration's files is due after this frame.
     look_due: bool,
     /// When the last look was asked for.
@@ -530,6 +541,8 @@ impl App {
             usage: None,
             dialogs: VecDeque::new(),
             restyle: start.restyle,
+            writer: start.export,
+            exporting: None,
             look_due: false,
             last_look: None,
             theme_picked: None,
@@ -1564,6 +1577,15 @@ impl App {
             (Pending::History(id), Ok(OpResult::SessionRead(page))) => {
                 self.history_read(id, page, now);
             }
+            (Pending::Export(id), Ok(OpResult::SessionRead(page))) => {
+                self.export_read(&id, page);
+            }
+            (Pending::Export(id), result) => {
+                self.export_unread(&id);
+                if let Err(error) = result {
+                    self.error(&error);
+                }
+            }
             (Pending::Files(_), Ok(OpResult::WorkspaceFiles(files))) => {
                 // Listed and matched on a thread of their own: at the
                 // core's cap either takes longer than a key's budget. With no
@@ -2196,6 +2218,8 @@ impl App {
         // What the text asks of `@` goes to the worker before the frame:
         // the frame shows the rows it has, and the worker's come after.
         self.ask_files();
+        // An export's writer that has answered.
+        self.take_export();
         // The spinner's frame follows the clock, one every `SPIN`.
         let since = now.saturating_duration_since(self.began).as_millis();
         self.tick = usize::try_from(since / super::SPIN.as_millis()).unwrap_or(0);
