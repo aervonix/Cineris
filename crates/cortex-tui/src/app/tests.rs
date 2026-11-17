@@ -40,6 +40,7 @@ mod measure;
 mod output;
 mod panels;
 mod project;
+mod prompts;
 mod restyle;
 mod sessions;
 mod trust_standing;
@@ -171,13 +172,28 @@ fn a_prompt_before_the_session_is_open_is_held_and_sent_once_it_is() {
     opened(&mut app, &link, now);
     let sent = link.take_sent();
     let prompts = turn_start(&sent);
-    assert_eq!(prompts.len(), 2, "{sent:#?}");
+    assert_eq!(prompts.len(), 1, "one at a time: {sent:#?}");
     assert_eq!(prompts[0].input, vec![Part::text("from the command line")]);
     assert_eq!(prompts[0].delivery, None);
+    let (ticket, _) = sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::TurnStart(_)))
+        .expect("the prompt");
+    link.give(Inbound::Done(
+        *ticket,
+        Ok(OpResult::TurnStart(TurnStartResult {
+            turn_id: TurnId::from("t_1"),
+            disposition: Disposition::Started,
+        })),
+    ));
+    drain(&mut app, now);
     // The second came while the first was on its way: it waits for it.
-    assert_eq!(prompts[1].input, vec![Part::text("and this")]);
+    let sent = link.take_sent();
+    let prompts = turn_start(&sent);
+    assert_eq!(prompts.len(), 1, "{sent:#?}");
+    assert_eq!(prompts[0].input, vec![Part::text("and this")]);
     assert_eq!(
-        prompts[1].delivery,
+        prompts[0].delivery,
         Some(cortex_protocol::item::Delivery::Queue)
     );
 }

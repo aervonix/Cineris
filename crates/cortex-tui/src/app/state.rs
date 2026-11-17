@@ -4,6 +4,21 @@
 //! of its own. The loop ([`super::run`]) gives it each event with the time
 //! it was read, asks it for each frame, and writes what it gives; the
 //! tests drive it the same way with a scripted [`Link`].
+//!
+//! **Prompts at a turn's edges** (step 27). The application chooses a
+//! prompt's delivery from its own view of whether a turn runs, which lags
+//! the core's; both links drive it, so what follows is decided here, once
+//! (`docs/architecture/09-tui.md`, "Start-up" and "Running from the moment
+//! a prompt is sent"):
+//!
+//! - **The prompts held while the session opened go one at a time,** each
+//!   once the one before it was answered: the first as a new turn, or
+//!   steering the turn the open says is running (`session/open`'s
+//!   `running_turn`), as `Enter` would; the rest queued behind it. A prompt
+//!   sent while they are on their way follows them, and the session is not
+//!   left until the last is answered. A refused one comes back into the
+//!   editor with those behind it, in order; after an interrupt, those not
+//!   sent come back once the one on its way is answered.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -74,8 +89,9 @@ enum Pending {
     ForkFrom(SessionId),
     /// The list of models, for the hint row and the context's share.
     Models,
-    /// A prompt: put back in the editor if it is refused.
-    Prompt { text: String, started: bool },
+    /// A prompt: put back in the editor if it is refused, with the held
+    /// prompts that wait for it.
+    Prompt(Sent),
     /// An interrupt: its steering prompts that were never delivered come
     /// back.
     Interrupt,
@@ -122,6 +138,21 @@ enum Pending {
     /// key of either: `keys` when a binding changed, `theme` when the
     /// file's theme did.
     Restyle { keys: bool, theme: bool },
+}
+
+/// A prompt on its way to the core, for its answer.
+#[derive(Debug, Clone)]
+struct Sent {
+    /// The session it was sent to.
+    session: SessionId,
+    /// Its text: given back if it is refused.
+    text: String,
+    /// It was sent as a new turn, and this app runs from then: a refusal
+    /// stops that.
+    started: bool,
+    /// An interrupt was sent after it: the held prompts that wait for it
+    /// come back once it is answered, rather than follow it.
+    stopped: bool,
 }
 
 /// The last key read, for the dialogs' rules (`super::dialog`).
@@ -271,8 +302,13 @@ pub struct App {
     /// Whether the open is under way: its events are held until it returns.
     opening: bool,
     held: Vec<SessionEvent>,
-    /// Prompts sent before the session was open.
+    /// Prompts sent before the session was open, and those sent while they
+    /// are on their way: sent one at a time once it is, each when the one
+    /// before it was answered, so that their order holds (step 27).
     held_prompts: VecDeque<String>,
+    /// The held prompt on its way, by its ticket: the next waits for its
+    /// answer.
+    held_sent: Option<Ticket>,
     pending: HashMap<Ticket, Pending>,
     session: Option<SessionState>,
     models: Vec<ModelInfo>,
@@ -434,6 +470,7 @@ impl App {
             opening: false,
             held: Vec::new(),
             held_prompts: VecDeque::new(),
+            held_sent: None,
             pending: HashMap::new(),
             session: None,
             models: Vec::new(),
@@ -1011,24 +1048,37 @@ impl App {
             }
             return;
         };
+        // The prompts held while the session opened are still on their way:
+        // this one follows them, never ahead of one of them.
+        if self.held_sent.is_some() {
+            self.held_prompts.push_back(text);
+            self.start_running(at);
+            return;
+        }
         let started = delivery == Delivery::Prompt;
         if started {
             self.start_running(at);
             // The next prompt: the last turn's review goes.
             self.panels_see(&Seen::Prompt);
         }
-        let delivery = match delivery {
-            Delivery::Prompt => None,
-            Delivery::Steer => Some(ItemDelivery::Steer),
-            Delivery::Queue => Some(ItemDelivery::Queue),
+        let sent = Sent {
+            session,
+            text,
+            started,
+            stopped: false,
         };
+        self.send_prompt(sent, wire(delivery));
+    }
+
+    /// Sends a prompt with `delivery`, its answer awaited.
+    fn send_prompt(&mut self, sent: Sent, delivery: Option<ItemDelivery>) -> Ticket {
         let ticket = self.link.send(Op::TurnStart(TurnStartParams {
-            session_id: session,
-            input: vec![Part::text(text.clone())],
+            session_id: sent.session.clone(),
+            input: vec![Part::text(sent.text.clone())],
             delivery,
         }));
-        self.pending
-            .insert(ticket, Pending::Prompt { text, started });
+        self.pending.insert(ticket, Pending::Prompt(sent));
+        ticket
     }
 
     /// A slash command this build has is done, and one it does not have
@@ -1081,6 +1131,13 @@ impl App {
             self.stop_running();
             return;
         };
+        // What was held behind a prompt on its way does not follow it: it
+        // comes back once that one is answered.
+        for pending in self.pending.values_mut() {
+            if let Pending::Prompt(sent) = pending {
+                sent.stopped = true;
+            }
+        }
         let ticket = self.link.send(Op::TurnInterrupt(TurnInterruptParams {
             session_id: session,
             now,
@@ -1259,18 +1316,7 @@ impl App {
             (Pending::Models, Ok(OpResult::ModelsList(ModelsListResult { models }))) => {
                 self.models = models;
             }
-            (Pending::Prompt { text, started }, Err(error)) => {
-                if started && self.running.is_some() {
-                    self.stop_running();
-                }
-                self.error(&error);
-                self.give_back(&text);
-            }
-            (Pending::Prompt { .. }, Ok(OpResult::TurnStart(result))) => {
-                if result.disposition == Disposition::Started {
-                    self.had_turn = true;
-                }
-            }
+            (Pending::Prompt(sent), result) => self.prompt_answered(ticket, sent, result, now),
             (Pending::Interrupt, Ok(OpResult::TurnInterrupt(result))) => {
                 for parts in result.undelivered {
                     let text: Vec<&str> = parts
@@ -1422,10 +1468,51 @@ impl App {
         }
     }
 
+    /// A prompt's answer. A refused one comes back into the editor with
+    /// why, and the held prompts that wait for it after it, in order; an
+    /// accepted held one lets the next go, unless an interrupt came after it.
+    fn prompt_answered(
+        &mut self,
+        ticket: Ticket,
+        sent: Sent,
+        result: Result<OpResult, ErrorData>,
+        now: Instant,
+    ) {
+        let held = self.held_sent == Some(ticket);
+        if held {
+            self.held_sent = None;
+        }
+        let refused = match result {
+            Err(error) => {
+                if sent.started && self.running.is_some() {
+                    self.stop_running();
+                }
+                self.error(&error);
+                self.give_back(&sent.text);
+                true
+            }
+            Ok(OpResult::TurnStart(result)) => {
+                if result.disposition == Disposition::Started {
+                    self.had_turn = true;
+                }
+                false
+            }
+            Ok(_) => false,
+        };
+        if !held {
+            return;
+        }
+        if refused || sent.stopped || !self.is_open(&sent.session) {
+            self.give_back_held();
+        } else {
+            self.send_held(false, now);
+        }
+    }
+
     /// `/new`: the session open now is closed, and a new one opened in the
     /// workspace, with its own header.
     fn new_session(&mut self) {
-        if self.running.is_some() {
+        if self.running.is_some() || self.held_sent.is_some() {
             self.say("A turn is running: wait for it to end, or stop it with esc.");
             return;
         }
@@ -1513,25 +1600,44 @@ impl App {
                 self.event(event, now);
             }
         }
-        let prompts: Vec<String> = self.held_prompts.drain(..).collect();
-        let held = !prompts.is_empty();
-        let mut first = true;
-        for text in prompts {
-            // The command line's prompt is a command when it is one, as a
-            // typed one is: it was never through `submit`.
+        let held = !self.held_prompts.is_empty();
+        self.send_held(true, now);
+        // Every one held was a command: no turn is on its way.
+        if held && self.held_sent.is_none() {
+            self.stop_running();
+        }
+    }
+
+    /// Sends the next prompt held while the session opened, the one before
+    /// it answered (step 27): the `first` as a new turn, or steering the
+    /// turn the open says is running, as `Enter` would; each after it
+    /// queued behind it. The command line's prompt is a command when it is
+    /// one, as a typed one is: it was never through `submit`.
+    fn send_held(&mut self, first: bool, now: Instant) {
+        while let Some(text) = self.held_prompts.pop_front() {
             if self.slash_command(&text, now) {
                 continue;
             }
-            let delivery = if first {
-                Delivery::Prompt
-            } else {
-                Delivery::Queue
+            let Some(session) = self.session.as_ref() else {
+                self.held_prompts.push_front(text);
+                self.give_back_held();
+                return;
             };
-            first = false;
-            self.submit_open(text, delivery);
-        }
-        if held && first {
-            self.stop_running();
+            let (delivery, started) = if !first {
+                (Some(ItemDelivery::Queue), false)
+            } else if session.running_turn.is_some() {
+                (Some(ItemDelivery::Steer), false)
+            } else {
+                (None, true)
+            };
+            let sent = Sent {
+                session: session.session_id.clone(),
+                text,
+                started,
+                stopped: false,
+            };
+            self.held_sent = Some(self.send_prompt(sent, delivery));
+            return;
         }
     }
 
@@ -1667,29 +1773,6 @@ impl App {
         self.session
             .as_ref()
             .is_some_and(|open| open.session_id == *session)
-    }
-
-    /// Sends a prompt held while the session opened.
-    fn submit_open(&mut self, text: String, delivery: Delivery) {
-        let Some(session) = self.session.as_ref().map(|s| s.session_id.clone()) else {
-            return;
-        };
-        let ticket = self.link.send(Op::TurnStart(TurnStartParams {
-            session_id: session,
-            input: vec![Part::text(text.clone())],
-            delivery: match delivery {
-                Delivery::Prompt => None,
-                Delivery::Steer => Some(ItemDelivery::Steer),
-                Delivery::Queue => Some(ItemDelivery::Queue),
-            },
-        }));
-        self.pending.insert(
-            ticket,
-            Pending::Prompt {
-                text,
-                started: delivery == Delivery::Prompt,
-            },
-        );
     }
 
     fn event(&mut self, event: SessionEvent, now: Instant) {
@@ -2139,6 +2222,15 @@ fn item_of(event: &Event) -> Option<&str> {
         Event::ItemCompleted(completed) => completed.item.id(),
         Event::ItemResync(item) | Event::ItemReset(item) => Some(item.item_id.as_str()),
         _ => None,
+    }
+}
+
+/// A prompt's delivery as the protocol says it: none for a new turn.
+fn wire(delivery: Delivery) -> Option<ItemDelivery> {
+    match delivery {
+        Delivery::Prompt => None,
+        Delivery::Steer => Some(ItemDelivery::Steer),
+        Delivery::Queue => Some(ItemDelivery::Queue),
     }
 }
 
