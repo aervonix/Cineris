@@ -1416,6 +1416,42 @@ mod tests {
         );
     }
 
+    /// `attach` takes where the server is, the session to open, a prompt
+    /// and the log's level; one session choice at most; nothing of a run's
+    /// core, which is the server's.
+    #[test]
+    fn attach_takes_its_place_its_session_and_a_prompt() {
+        assert_eq!(
+            parse_words(&["attach"]).unwrap(),
+            Command::Attach(Box::default())
+        );
+        assert_eq!(
+            parse_words(&["attach", "--socket", "here.sock", "--continue", "say", "hi"]).unwrap(),
+            Command::Attach(Box::new(Attach {
+                socket: Some("here.sock".to_owned()),
+                choice: Choice::Continue,
+                prompt: Some("say hi".to_owned()),
+                log_level: None,
+            }))
+        );
+        assert_eq!(
+            parse_words(&["attach", "--resume", "s_1", "--log-level", "debug"]).unwrap(),
+            Command::Attach(Box::new(Attach {
+                socket: None,
+                choice: Choice::Resume("s_1".to_owned()),
+                prompt: None,
+                log_level: Some("debug".to_owned()),
+            }))
+        );
+        assert_eq!(
+            parse_words(&["attach", "--help"]).unwrap(),
+            Command::Help(Topic::Attach)
+        );
+        let both = parse_words(&["attach", "--continue", "--resume", "s_1"]).unwrap_err();
+        assert!(both.0.contains("not both"), "{}", both.0);
+        assert!(parse_words(&["attach", "--model", "m"]).is_err());
+    }
+
     fn serve_of(words: &[&str]) -> Serve {
         match parse_words(words) {
             Ok(Command::Serve(serve)) => *serve,
