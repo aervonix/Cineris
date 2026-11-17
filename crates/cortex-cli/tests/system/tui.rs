@@ -1633,22 +1633,24 @@ fn sys_a_look_and_a_binding_changed_in_the_file_reach_the_next_key() {
     phases.mark("the file changed");
     let glyphs = if unicode { "ascii" } else { "unicode" };
     machine.user_config(&format!(
-        "tui.glyphs = \"{glyphs}\"\nkeys.editor.submit = [\"f5\"]\n"
+        "tui.glyphs = \"{glyphs}\"\nkeys.editor.submit = [\"ctrl+s\"]\n"
     ));
     // The first key's frame asks for the look.
     type_text(&mut session, "hello");
     session.wait_for(LIMIT, "the look read again", |t| {
         shows_ever(t, "in force now") && t.shows(other)
     });
-    // F5 is submit now.
-    session.send(b"\x1b[15~");
+    // Ctrl+S is submit now: a key with no escape before it, which ConPTY
+    // passes on as it is (docs/conpty.md: a sequence after an escape is
+    // misread there).
+    session.send(b"\x13");
     wait_shows(&mut session, "Sent with the new key.");
     turn_ended(&mut session);
 
     phases.mark("the file broken");
     machine.user_config("tui.glyphs = [\n");
     // `/reload`, its row of the command menu taken with tab, and sent with
-    // F5 (an esc sent just before F5 would read as alt+F5).
+    // Ctrl+S.
     type_text(&mut session, "/reload");
     session.wait_for(LIMIT, "the command menu", |t| {
         t.shows("Read the configuration files again")
@@ -1657,7 +1659,7 @@ fn sys_a_look_and_a_binding_changed_in_the_file_reach_the_next_key() {
     session.wait_for(LIMIT, "the menu closed", |t| {
         !t.shows("Read the configuration files again")
     });
-    session.send(b"\x1b[15~");
+    session.send(b"\x13");
     session.wait_for(LIMIT, "the error said", |t| shows_ever(t, "config.toml"));
     assert!(
         session.screen().shows(other),
