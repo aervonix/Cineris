@@ -47,6 +47,10 @@ The third of step 27's three pull requests: `cortex attach`, the prompts at a tu
 
 Windows' tier 1 came mostly from `cortex-tui`'s new prompt tests (+0.55 s) and from one test that took a line of 64 MiB, since given a small one. Tier 3 has the pseudo-terminal tests of `attach` (about 1.6 s on Windows).
 
+## The binary's size
+
+The shipped binary in the pull request's run (`pr-size`): **Linux 14,432,584 bytes** (13.76 MB, of a budget of 16 MB), 553,056 bytes more than `main`'s; **Windows 17,442,304 bytes** (16.63 MB, of 18 MB), 763,392 more. By crate (`cargo xtask size --breakdown` on Linux, the same code unstripped, against `main` at `24305e3`; 551,960 bytes in all): `serde_json` +275,674 and `cortex_protocol` +131,535, the client's half of the protocol, since `attach` is the first to read every result, event and request of the server's and to write every operation's parameters, where the server does the other half; `attach` itself (`cortex`) +37,930; tables and padding +76,397; the rest +30,000 or so (`std`, `tokio`, `cortex_tui`). Three quarters of it is the protocol read and written the other way round, which any client in the binary costs. No budget is passed. Windows is at 92% of its budget, though, with 1.36 MB of it from step 27 (the second pull request's 593,408 bytes and this one's), raised in the step's report.
+
 ## The independent review
 
 It read the whole pull request, and then the fix of the line's class. Every finding was fixed with a test that fails without the fix and a break the test catches, or is said here.
@@ -73,3 +77,28 @@ It read the whole pull request, and then the fix of the line's class. Every find
 
 Added, nothing removed or changed: `cortex-core`'s `EventQueue::push_request`, `fence`, `unfence` and `close` (public now, for a link outside the core), and `cortex_rpc::socket::connect`.
 
+## The pull request's CI
+
+<!-- written by cargo xtask ci-times, section "The pull request's CI": it replaces this up to the end mark -->
+Pull request 93, on `main` at `24305e3`. "Main" is main's own run at `24305e3` (run 44006251793).
+The PR's run is 44020125621, at `1f34b99`.
+
+| Job | Main, `24305e3` | The PR at `1f34b99` |
+|---|---|---|
+| `lint-linux` | 59 s | 60 s |
+| `test-linux` | 139 s | 117 s |
+| `lint-windows` | 98 s | 98 s |
+| `test-windows` | 287 s | 294 s |
+| `pr-size-linux` (blocks nothing) | — | 265 s |
+| `ts-client` (blocks nothing) | — | 69 s |
+| `pr-size-windows` (blocks nothing) | — | 386 s |
+
+| Time above process start, against the budget | Linux, main (6 ms) | Linux, `1f34b99` (3 ms) | Windows, main (8 ms) | Windows, `1f34b99` (8 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 18.6 s | 16.2 s | 18.7 s | 18.5 s |
+| Tier 2, integration (40 s) | 29.3 s | 37.7 s | 44.2 s | 43.6 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 27.2 s | 24.4 s | 84.2 s | 84.8 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "The pull request's CI" -->
+
+Linux's tier 2 at 37.7 s, 8.4 s over `main`'s run, is the runner's disk, not the pull request: what moved most were `cortex-session`'s logs cut at every byte (+2.1, +2.0 and +1.5 s) and `cortex-config`'s concurrent writers and reloads (+1.8 and +0.9 s), which it does not touch, and the one-runner A/B above has tier 2 at +0.0 s. The run before it, at `0d91ad2`, failed on Windows on step 26's verify test, waiting on a fake timer nothing advances (CI run 44019306491; the item above); the push of that item cancelled its re-run.
