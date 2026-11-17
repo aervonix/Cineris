@@ -108,6 +108,7 @@ impl Rows {
     }
 
     /// How many blocks' rows are kept: what the test of the bound counts.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.made.len()
     }
@@ -165,13 +166,13 @@ impl Scroll {
         self.height = height;
         let height = height.max(1);
         let window = match self.anchor {
-            Anchor::End => self.from_end(source, height),
+            Anchor::End => self.ending(source, height),
             Anchor::At { block, row } => {
-                let window = self.from(source, block, row, height);
+                let window = self.starting(source, block, row, height);
                 if window.at_end {
                     // Moved down to the end: following it again.
                     self.anchor = Anchor::End;
-                    self.from_end(source, height)
+                    self.ending(source, height)
                 } else {
                     window
                 }
@@ -201,7 +202,7 @@ impl Scroll {
     }
 
     /// The window that ends with the last row.
-    fn from_end(&mut self, source: &mut Source<'_>, height: usize) -> Window {
+    fn ending(&mut self, source: &mut Source<'_>, height: usize) -> Window {
         let mut pieces: Vec<(usize, Arc<Vec<Line>>)> = Vec::new();
         let mut have = 0;
         let mut block = source.blocks + 1;
@@ -224,7 +225,13 @@ impl Scroll {
     }
 
     /// The window whose top is row `row` of block `block`.
-    fn from(&mut self, source: &mut Source<'_>, block: usize, row: usize, height: usize) -> Window {
+    fn starting(
+        &mut self,
+        source: &mut Source<'_>,
+        block: usize,
+        row: usize,
+        height: usize,
+    ) -> Window {
         let block = block.min(source.blocks);
         let mut pieces: Vec<(usize, Arc<Vec<Line>>)> = Vec::new();
         let first = self.block(source, block);
@@ -305,13 +312,13 @@ impl Scroll {
         self.anchor = Anchor::At { block, row };
         // Whether that reached the end is found when the window is made.
         let height = self.height.max(1);
-        if self.from(source, block, row, height).at_end {
+        if self.starting(source, block, row, height).at_end {
             self.anchor = Anchor::End;
         }
     }
 
     /// Moves the window to the first row.
-    pub(crate) fn to_start(&mut self) {
+    pub(crate) fn go_to_start(&mut self) {
         self.anchor = Anchor::At { block: 0, row: 0 };
     }
 
@@ -370,27 +377,13 @@ impl Scroll {
         self.top_now(source)
     }
 
-    /// Moves the window so that row `row` of block `block` is in it, at its
-    /// top if it was not: what a search's match and a selected box do.
-    pub(crate) fn show(&mut self, source: &mut Source<'_>, block: usize, row: usize) {
-        let height = self.height.max(1);
-        let window = self.window(source, height);
-        let shown = window
-            .places
-            .iter()
-            .any(|place| *place == Place::Kept { block, row });
-        if !shown {
-            self.anchor = Anchor::At { block, row };
-        }
-    }
-
     /// The window's top now: the anchor's, or where the end's window began.
     fn top_now(&mut self, source: &mut Source<'_>) -> Option<(usize, usize)> {
         match self.anchor {
             Anchor::At { block, row } => Some((block, row)),
             Anchor::End => {
                 let height = self.height.max(1);
-                self.from_end(source, height);
+                self.ending(source, height);
                 self.top
             }
         }
@@ -549,7 +542,7 @@ mod tests {
         // Two or three blocks are shown; those near them are made, not the
         // thousand.
         assert!(rig.made <= 4, "{} blocks made", rig.made);
-        rig.with(|scroll, _| scroll.to_start());
+        rig.with(|scroll, _| scroll.go_to_start());
         assert_eq!(rig.window(10)[0], "0.0");
         assert!(rig.scroll.rows.len() <= 30, "{}", rig.scroll.rows.len());
         // The window moved away from the end: the blocks there were let go.
@@ -557,12 +550,22 @@ mod tests {
     }
 
     #[test]
-    fn a_shown_row_does_not_move_the_window_and_one_not_shown_brings_it_to_the_top() {
+    fn a_revealed_range_moves_the_window_only_when_it_is_not_shown() {
         let mut rig = Rig::new(&[3, 3, 3, 3], 0);
         rig.window(4);
-        rig.with(|scroll, source| scroll.show(source, 3, 1));
+        // Shown at the end already: nothing moves.
+        rig.with(|scroll, source| scroll.reveal(source, 3, 0, 3));
         assert!(rig.scroll.following());
-        rig.with(|scroll, source| scroll.show(source, 1, 2));
+        // Above the window: its start at the top.
+        rig.with(|scroll, source| scroll.reveal(source, 1, 1, 3));
+        assert_eq!(rig.window(4), ["1.1", "1.2", "2.0", "2.1"]);
+        // Below it: its end at the bottom.
+        rig.with(|scroll, _| scroll.go_to_start());
+        rig.window(4);
+        rig.with(|scroll, source| scroll.reveal(source, 2, 0, 3));
         assert_eq!(rig.window(4), ["1.2", "2.0", "2.1", "2.2"]);
+        // Taller than the window: its start at the top.
+        rig.with(|scroll, source| scroll.reveal(source, 0, 0, 6));
+        assert_eq!(rig.window(2), ["0.0", "0.1"]);
     }
 }

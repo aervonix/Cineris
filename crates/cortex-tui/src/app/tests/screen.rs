@@ -488,6 +488,9 @@ fn the_viewer_scrolls_with_the_wheel_and_a_click_opens_a_box() {
     assert_eq!(text(&app.viewer_frame(30, 99, now)), rows);
 }
 
+/// What a played terminal reads, in turn.
+type Steps = Vec<(cortex_term::Ready, Vec<u8>)>;
+
 /// What the loop wrote, played into a virtual terminal: the modes it left.
 fn modes_after(written: &[u8]) -> cortex_testkit::vterm::Modes {
     let mut term = cortex_testkit::VTerm::new(100, 30);
@@ -497,7 +500,7 @@ fn modes_after(written: &[u8]) -> cortex_testkit::vterm::Modes {
 
 /// A played terminal of 100 by 30 with `steps`, and what is written to it.
 fn played(
-    steps: Vec<(cortex_term::Ready, Vec<u8>)>,
+    steps: Steps,
     base: Instant,
 ) -> (super::Played, std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
     let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -529,7 +532,7 @@ fn holds(bytes: &[u8], part: &[u8]) -> bool {
 #[test]
 fn every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_off() {
     use cortex_term::Ready;
-    let ways: [(&str, Vec<(Ready, Vec<u8>)>); 3] = [
+    let ways: [(&str, Steps); 3] = [
         (
             "quit",
             vec![(Ready::Woken, Vec::new()), (Ready::Input, b"\x04".to_vec())],

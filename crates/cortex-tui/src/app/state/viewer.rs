@@ -121,7 +121,7 @@ impl App {
         let mut scroll = Scroll::default();
         // The viewer opens at the transcript's start, with the selected box
         // brought into view.
-        scroll.to_start();
+        scroll.go_to_start();
         self.viewer = Some(Viewer {
             scroll,
             selected,
@@ -138,7 +138,7 @@ impl App {
             self.zone = Some(Zone::system());
         }
         let mut scroll = Scroll::default();
-        scroll.to_start();
+        scroll.go_to_start();
         self.viewer = Some(Viewer {
             scroll,
             whole: self.dialogs.front().map(|dialog| dialog.id.clone()),
@@ -167,7 +167,7 @@ impl App {
             ));
         }
         let mut scroll = Scroll::default();
-        scroll.to_start();
+        scroll.go_to_start();
         self.viewer = Some(Viewer {
             scroll,
             text: Some((label.to_owned(), lines)),
@@ -502,7 +502,7 @@ impl App {
             Some(Action::ViewerScrollDown) => self.with_window(state, width, |scroll, source| {
                 scroll.down(source, WHEEL_ROWS);
             }),
-            Some(Action::ViewerTop) => state.scroll.to_start(),
+            Some(Action::ViewerTop) => state.scroll.go_to_start(),
             // To the end: the window follows it, as the last page.
             Some(Action::ViewerBottom) => state.scroll.follow(),
             Some(Action::ViewerSearch) => {
