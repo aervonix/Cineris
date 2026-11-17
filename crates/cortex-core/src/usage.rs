@@ -14,8 +14,9 @@
 //! besides its figures is dropped. A refresh that fails, in any way, leaves
 //! what was kept as it was, and says why without the answer's text.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use cortex_base::Zone;
 use cortex_config::{Loaded, StateDir};
@@ -59,6 +60,63 @@ pub(crate) fn recorder(user: &Loaded, options: &CoreOptions) -> Option<Recorder>
 }
 
 /// `usage/report`.
+/// What tells one `aggregates.json` from another without reading it: its
+/// length, when it was last written, and the file itself (its inode on
+/// Unix, its creation time on Windows, where a save is a new file put in
+/// place): so that a save of the same length within the clock's
+/// granularity is not taken for the file before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileIdentity {
+    len: u64,
+    modified: Option<SystemTime>,
+    unique: u64,
+}
+
+impl FileIdentity {
+    /// The identity of the file at `path`, or `None` when there is none.
+    /// Blocks: called on the blocking pool, with the report.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a file's metadata, read on the blocking pool beside the report's own reads"
+    )]
+    fn of(path: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(path).ok()?;
+        #[cfg(unix)]
+        let unique = std::os::unix::fs::MetadataExt::ino(&meta);
+        #[cfg(windows)]
+        let unique = std::os::windows::fs::MetadataExt::creation_time(&meta);
+        #[cfg(not(any(unix, windows)))]
+        let unique = 0;
+        Some(Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            unique,
+        })
+    }
+}
+
+/// The aggregates the last report read, and the file they are of (step
+/// 24): a heavy year's `aggregates.json` is megabytes of JSON, most of a
+/// report's time, so a report reads it again only when another process
+/// saved it since (the usage panel's year within one frame,
+/// `docs/performance-budgets.md`).
+#[derive(Debug)]
+pub(crate) struct AggregatesCache {
+    path: PathBuf,
+    identity: FileIdentity,
+    aggregates: Aggregates,
+}
+
+/// The aggregates kept, when they are of the file at `path` as it is now.
+fn kept(
+    cache: Option<AggregatesCache>,
+    path: &Path,
+    now: Option<FileIdentity>,
+) -> Option<Aggregates> {
+    let cache = cache?;
+    (cache.path == path && Some(cache.identity) == now).then_some(cache.aggregates)
+}
+
 pub(crate) async fn report(
     core: &Core,
     client: ClientId,
@@ -103,21 +161,31 @@ pub(crate) async fn report(
         .filter_map(|session| core.session_usage(session))
         .flat_map(|usage| usage.limits)
         .collect();
+    let held = Arc::clone(inner);
     Core::blocking(move || {
         let zone = zone.unwrap_or_else(Zone::system);
         let now = clock.now();
         let mut notes = Vec::new();
         let (part, mut limits) = match &dir {
             Some(dir) => {
-                // With statistics on, what is read is saved: a file that
-                // cannot be read is moved aside first. With them off,
-                // nothing on the disk is changed.
-                let mut aggregates = if recording {
-                    Aggregates::load_for_saving(dir, clock.as_ref())
-                } else {
-                    Aggregates::load(dir)
-                }
-                .map_err(read_failed)?;
+                // One report at a time reads and keeps the aggregates.
+                let mut cache = held
+                    .aggregates_cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let path = dir.aggregates_file();
+                let mut aggregates = match kept(cache.take(), &path, FileIdentity::of(&path)) {
+                    Some(aggregates) => aggregates,
+                    // With statistics on, what is read is saved: a file
+                    // that cannot be read is moved aside first. With them
+                    // off, nothing on the disk is changed.
+                    None => if recording {
+                        Aggregates::load_for_saving(dir, clock.as_ref())
+                    } else {
+                        Aggregates::load(dir)
+                    }
+                    .map_err(read_failed)?,
+                };
                 refuse_unread(aggregates.found(), dir)?;
                 let changed = aggregates
                     .sync(
@@ -153,6 +221,15 @@ pub(crate) async fn report(
                         if total.unreadable == 1 { "is" } else { "are" }
                     ));
                 }
+                // Kept with the file as it is now, the save above included:
+                // what this report synced and could not save is ahead of
+                // the file, and the next report goes on from it until
+                // another process saves the file.
+                *cache = FileIdentity::of(&path).map(|identity| AggregatesCache {
+                    path,
+                    identity,
+                    aggregates,
+                });
                 (total, LimitsFile::load(dir))
             }
             None => (cortex_stats::Part::default(), LimitsFile::default()),
@@ -643,6 +720,74 @@ fn shortened(path: &std::path::Path, home: Option<&std::path::Path>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The aggregates kept are used only for the same file, unchanged in
+    /// its length, its time, and itself.
+    #[test]
+    fn the_aggregates_kept_are_used_only_for_the_same_file_unchanged() {
+        let path = PathBuf::from("stats/aggregates.json");
+        let identity = FileIdentity {
+            len: 3_500_000,
+            modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000)),
+            unique: 42,
+        };
+        let cache = |identity| {
+            Some(AggregatesCache {
+                path: path.clone(),
+                identity,
+                aggregates: Aggregates::default(),
+            })
+        };
+        assert!(kept(cache(identity), &path, Some(identity)).is_some());
+        let another = |change: fn(&mut FileIdentity)| {
+            let mut now = identity;
+            change(&mut now);
+            kept(cache(identity), &path, Some(now))
+        };
+        assert!(another(|now| now.len += 1).is_none(), "a longer file");
+        assert!(
+            another(|now| now.modified = Some(SystemTime::UNIX_EPOCH)).is_none(),
+            "a file written since"
+        );
+        assert!(
+            another(|now| now.unique += 1).is_none(),
+            "another file of the same length and time"
+        );
+        assert!(kept(cache(identity), &path, None).is_none(), "no file now");
+        assert!(
+            kept(
+                cache(identity),
+                Path::new("other/aggregates.json"),
+                Some(identity)
+            )
+            .is_none(),
+            "another folder's"
+        );
+        assert!(kept(None, &path, Some(identity)).is_none());
+    }
+
+    /// A file's identity changes when it is saved again in its place, even
+    /// at the same length.
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test that writes and replaces a file of its own directory"
+    )]
+    fn a_file_saved_again_at_the_same_length_is_another() {
+        let scratch =
+            cortex_testkit::scratch::Scratch::outside("cortex-core-unit", "file_identity");
+        let dir = scratch.path().to_path_buf();
+        let path = dir.join("aggregates.json");
+        std::fs::write(&path, b"{\"a\":1}").unwrap();
+        let first = FileIdentity::of(&path).unwrap();
+        assert_eq!(FileIdentity::of(&path), Some(first));
+        // A save writes a new file and puts it in place, as `Aggregates::save`
+        // does.
+        let next = dir.join("aggregates.json.new");
+        std::fs::write(&next, b"{\"a\":2}").unwrap();
+        std::fs::rename(&next, &path).unwrap();
+        assert_ne!(FileIdentity::of(&path), Some(first));
+    }
 
     #[test]
     fn an_amount_is_written_exactly() {

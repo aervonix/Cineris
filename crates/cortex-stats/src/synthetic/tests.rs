@@ -802,4 +802,42 @@ fn perf_a_years_report_for_the_usage_panel() {
         times[times.len() - 1]
     );
     cortex_testkit::numbers::report("usage_panel.core_report_p99", at(99), "ms");
+
+    // As the core reports since step 24's third part: the aggregates kept
+    // from the last report, read again only when another process saved the
+    // file (`cortex-core`'s `usage::AggregatesCache`; telling the file
+    // apart is one `stat`).
+    let mut kept = Aggregates::load_for_saving(&dir, &clock).unwrap();
+    let mut kept_times = Vec::new();
+    for _ in 0..20 {
+        for range in &ranges {
+            for group in groups {
+                let began = Instant::now();
+                let _ = std::fs::metadata(dir.aggregates_file());
+                kept.sync(&dir, zone.date_of(now), &crate::month_of(now), Some(400))
+                    .unwrap();
+                let total = kept.total();
+                let limits = crate::LimitsFile::load(&dir);
+                let query = crate::Query {
+                    range: range.clone(),
+                    group_by: group.to_vec(),
+                    project: None,
+                    week_start: 0,
+                    rolling: false,
+                };
+                let _ = crate::report(&total, &query, &zone, now, &limits.providers, true);
+                kept_times.push((Instant::now() - began).as_secs_f64() * 1000.0);
+            }
+        }
+    }
+    kept_times.sort_by(f64::total_cmp);
+    let kept_at =
+        |share: usize| kept_times[(kept_times.len() * share / 100).min(kept_times.len() - 1)];
+    println!(
+        "a report from the aggregates kept: median {:.3} ms   p99 {:.3} ms   most {:.3} ms",
+        kept_at(50),
+        kept_at(99),
+        kept_times[kept_times.len() - 1]
+    );
+    cortex_testkit::numbers::report("usage_panel.core_report_kept_p99", kept_at(99), "ms");
 }

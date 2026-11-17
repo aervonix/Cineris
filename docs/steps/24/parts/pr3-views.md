@@ -9,6 +9,7 @@ The commands that need no panel, the hot reload of the look and the keys, the fi
 - **`@` files read ahead:** `Outcome::FileChosen` when an `@` completion is accepted, and `workspace/warm` for it, at most 16 a prompt, a folder not; nothing of the answer said.
 - **A check's whole output in the viewer:** the review panel's `Enter` on a check sends `session/artifact` (`Act::Artifact`), and the viewer shows the text under its label (`open_text`), sanitised and wrapped, what was cut said.
 - **A skipped plan item restored** with `space` (`PlanEdit::Restore`), the hint row offering it.
+- **The usage report's aggregates kept** (`cortex-core`'s `usage::AggregatesCache`, the coordinator's call when the usage panel's year missed its budget): a report reads `aggregates.json` again only when another process saved it, told apart by its path, length, time and its inode (Unix) or creation time (Windows, where a save is a new file put in place). A year's report goes from 17.4 / 19.4 ms to 7.2 / 8.2 ms (median / p99, release, the desktop); the measurement is `cortex-stats`' `perf_a_years_report_for_the_usage_panel`, and the budget's row says the rest.
 - **Screens 2a and 2b** composed in the application's real states, as the owner asked: asked in the middle of a turn (the spinner and the turn's time before the dialog's keys), and 2a's edit with the rule a lasting answer adds ("Allowing it for longer allows: …", two rows more). Written with `tui-screens --write`; the tui-look README says what changed.
 
 ## Where it departs from the design
@@ -40,6 +41,7 @@ The commands that need no panel, the hot reload of the look and the keys, the fi
 | A file chosen with `@` is read ahead, at most 16 a prompt, a folder not, a refusal not said | `files::a_file_chosen_with_at_is_read_ahead_and_a_refusal_is_not_said` |
 | `space` on a skipped item restores it | `panels::space_on_a_skipped_item_restores_it_and_says_so` |
 | `Enter` on a check opens its whole output, escaped, the cut said | `panels::enter_on_a_check_opens_its_whole_output_in_the_viewer` |
+| The aggregates kept are used only for the same file, unchanged; a file saved again at the same length is another | `cortex-core usage::tests::the_aggregates_kept_are_used_only_for_the_same_file_unchanged`, `a_file_saved_again_at_the_same_length_is_another` |
 | Screens 2a and 2b in their real states | `cortex-tui::it screens::the_views_draw_the_reference_screens` |
 
 The breaks are `mutations/step-24-views.breaks`.
