@@ -173,6 +173,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [tests-the-fifth-tooling-step-left-unwritten](tests-the-fifth-tooling-step-left-unwritten.md): Seven behaviours of the fifth tooling step's tools that work and that no test or break holds yet. Owner: a later tooling step.
 - [tests-the-seventh-tooling-step-left-thin](tests-the-seventh-tooling-step-left-thin.md): Behaviours of the seventh tooling step's tools no blocking test holds (`ab`'s glue, `try`'s commit check, `api-diff`'s report and its Windows runs, the corpus on Windows). Owner: a later tooling step.
 - [the-binary-size-by-crate-on-windows](the-binary-size-by-crate-on-windows.md): `size --breakdown` reads symbols with `nm`, which an MSVC binary keeps in a PDB, so it does nothing on Windows. Owner: a later tooling step.
+- [the-fuzz-package-has-no-blocking-check](the-fuzz-package-has-no-blocking-check.md): Nothing blocking builds the fuzz package or checks its seeds: a change that breaks a target, or a method its seeds miss, shows only in the nightly. Owner: a tooling step.
 - [the-pr-size-jobs-rough-edges](the-pr-size-jobs-rough-edges.md): `ci-wait` counts `pr-size` with the blocking jobs. Owner: a tooling step.
 - [timeout-report-for-tests-without-the-test-kit](timeout-report-for-tests-without-the-test-kit.md): A test using none of the test kit's waits gets no timeout report, since nextest lacks pre-timeout scripts. Owner: a later tooling step.
 - [typed-values-in-composite-actions](typed-values-in-composite-actions.md): The repo rule against event values in scripts reads `.github/workflows/` only, not composite actions under `.github/actions/`. Owner: a later tooling step.
@@ -185,4 +186,5 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### Other
 
+- [json-floats-read-within-a-few-units](json-floats-read-within-a-few-units.md): A float a client sends is read to within a few units in its last place, since `serde_json` is built without its exact reading of floats. Owner: the owner.
 - [quickjs-with-the-windows-toolchain](quickjs-with-the-windows-toolchain.md): Confirm QuickJS builds in the real extension crate with the Windows MSVC toolchain, or switch to Lua. Owner: step 28, in its first hour.
