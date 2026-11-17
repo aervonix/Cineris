@@ -61,6 +61,9 @@ pub(crate) struct ScreenView {
     shown: Vec<Place>,
     /// Where the left button went down, for a click.
     pressed: Option<(u16, u16)>,
+    /// Where the panels' column begins, when it is shown: a click there
+    /// is not the transcript's.
+    column: Option<usize>,
     /// The width the open block's rows were last laid out at.
     width: usize,
 }
@@ -70,6 +73,25 @@ impl ScreenView {
     pub(super) fn forget_rows(&mut self) {
         self.scroll.rows.clear();
     }
+}
+
+/// The columns between the transcript and the panels' column.
+const GAP: usize = 2;
+
+/// The narrowest window, in columns, that has the panels beside the
+/// transcript (the coordinator's answer of 2026-11-17).
+pub(crate) const SIDE_FROM: usize = 140;
+
+/// The panels' column for a window of `cols` columns: none below
+/// [`SIDE_FROM`], 40 columns there, and one more for each two past it, up
+/// to 56.
+pub(crate) fn side_column(cols: usize) -> Option<usize> {
+    (cols >= SIDE_FROM).then(|| (40 + (cols - SIDE_FROM) / 2).min(56))
+}
+
+/// Where the full screen's panels' column begins, if it is shown.
+fn view_column(app: &App) -> Option<usize> {
+    app.screen.as_ref().and_then(|view| view.column)
 }
 
 /// A block's rows in the full-screen view: a round as it committed, or as a
@@ -100,6 +122,13 @@ impl App {
     #[must_use]
     pub fn full_screen(&self) -> bool {
         self.screen.is_some()
+    }
+
+    /// The columns the full screen's transcript may use: the window's, less
+    /// the panels' column and its gap on a wide window.
+    fn transcript_width(&self) -> usize {
+        let full = self.width.max(1);
+        side_column(full + 1).map_or(full, |column| full.saturating_sub(column + GAP).max(1))
     }
 
     /// Whether the viewer and the full-screen presenter report the mouse
@@ -150,7 +179,11 @@ impl App {
     /// top to bottom (the transcript area, the panels' block, the bottom),
     /// and where the cursor goes, if anywhere.
     pub fn screen_frame(&mut self, now: Instant) -> (Vec<Line>, Option<Cursor>) {
-        let width = self.width.max(1);
+        let full = self.width.max(1);
+        // On a wide window the panels have a column of their own, and the
+        // transcript the rest.
+        let column = side_column(full + 1);
+        let width = self.transcript_width();
         let Some(mut view) = self.screen.take() else {
             return (Vec::new(), None);
         };
@@ -162,20 +195,20 @@ impl App {
             }
             view.width = width;
         }
-        let (_, boxes) = self.prepare(now);
+        let (_, boxes) = self.prepare(now, width);
         self.feed_search(&mut view);
         self.take_found(&mut view, width);
         let live = self.screen_live(width);
         // The live rows the panels may leave the transcript, as inline: the
         // full screen's transcript area scrolls, so they count no further.
         let live_len = live.len().min(4);
-        let mut bottom = self.bottom(now, width, &boxes, live_len);
+        let mut bottom = self.bottom(now, full, &boxes, live_len, column);
         // The search's row in the hint row's place, the cursor after what
         // is typed.
         if let Some(search) = &view.search
             && let Some(last) = bottom.lines.last_mut()
         {
-            let (row, col) = self.search_row(search, width);
+            let (row, col) = self.search_row(search, full);
             *last = row;
             bottom.cursor = Some((bottom.lines.len() - 1, col));
         }
@@ -193,7 +226,18 @@ impl App {
             self.more_below(&mut window, width);
         }
         view.shown = window.places;
+        view.column = column.map(|_| width + GAP);
         let mut lines = window.rows;
+        // The panels' column beside the transcript, from its first row.
+        if column.is_some() {
+            for (line, side) in lines.iter_mut().zip(bottom.column) {
+                let pad = width.saturating_sub(line.width()) + GAP;
+                line.push(Span::plain(" ".repeat(pad)));
+                for span in side.spans() {
+                    line.push(span.clone());
+                }
+            }
+        }
         let top = lines.len() + bottom.block.len();
         lines.extend(bottom.block);
         lines.extend(bottom.lines);
@@ -295,6 +339,12 @@ impl App {
         if action == Action::ScreenToggle && !self.dialogs.is_empty() {
             return true;
         }
+        // A click in the panels' column is not on the transcript.
+        if action == Action::ScreenToggle
+            && view_column(self).is_some_and(|column| usize::from(mouse.col) >= column)
+        {
+            return true;
+        }
         self.screen_act(action, Some(usize::from(mouse.row)));
         true
     }
@@ -302,7 +352,7 @@ impl App {
     /// Does `action` in the full-screen view; `row` is the screen row a
     /// click was on.
     fn screen_act(&mut self, action: Action, row: Option<usize>) {
-        let width = self.width.max(1);
+        let width = self.transcript_width();
         let live = self.screen_live(width);
         let Some(mut view) = self.screen.take() else {
             return;
@@ -436,7 +486,7 @@ impl App {
     /// wake.
     #[cfg(test)]
     pub(crate) fn settle_search(&mut self, limit: std::time::Duration) -> bool {
-        let width = self.width.max(1);
+        let width = self.transcript_width();
         let Some(mut view) = self.screen.take() else {
             return false;
         };
@@ -464,7 +514,7 @@ impl App {
     /// The search's keys, the history search's context's: older (`Up`,
     /// `Enter`, `Ctrl+F` again), newer (`Down`), erase, and `Esc` to end.
     fn search_key(&mut self, key: Key) {
-        let width = self.width.max(1);
+        let width = self.transcript_width();
         let Some(mut view) = self.screen.take() else {
             return;
         };

@@ -52,7 +52,7 @@ use cortex_term::{Capabilities, Cursor, Event as TermEvent, Key, Line};
 mod commands;
 mod panel;
 mod restyle;
-mod screen;
+pub(super) mod screen;
 mod viewer;
 
 pub use restyle::{Restyle, Restyled};
@@ -258,6 +258,10 @@ struct Bottom {
     block: Vec<Line>,
     lines: Vec<Line>,
     cursor: Option<(usize, usize)>,
+    /// The panels in a column of their own beside the transcript, when the
+    /// full screen is wide enough ([`App::panel_column`]; `block` is then
+    /// empty).
+    column: Vec<Line>,
 }
 
 /// The application. See the [module documentation](self).
@@ -2078,13 +2082,14 @@ impl App {
     /// and where the cursor goes in it.
     pub fn frame(&mut self, now: Instant) -> (Vec<Line>, Vec<Line>, Cursor) {
         let width = self.width.max(1);
-        let (commit, boxes) = self.prepare(now);
+        let (commit, boxes) = self.prepare(now, width);
         let mut live = self.transcript.live(width, &self.look, self.tick);
         let Bottom {
             block,
             lines: bottom,
             cursor,
-        } = self.bottom(now, width, &boxes, live.len());
+            ..
+        } = self.bottom(now, width, &boxes, live.len(), None);
         let half = (self.rows / 2).max(1);
 
         // The live region is at most half the window, and at least the
@@ -2126,11 +2131,10 @@ impl App {
     /// the clock, the `@` worker's query, the live rounds, and the lines
     /// that became final, the blocks they finish kept. Gives the lines and
     /// the live boxes' ids.
-    fn prepare(&mut self, now: Instant) -> (Vec<Line>, Vec<u64>) {
+    fn prepare(&mut self, now: Instant, width: usize) -> (Vec<Line>, Vec<u64>) {
         // What the text asks of `@` goes to the worker before the frame:
         // the frame shows the rows it has, and the worker's come after.
         self.ask_files();
-        let width = self.width.max(1);
         // The spinner's frame follows the clock, one every `SPIN`.
         let since = now.saturating_duration_since(self.began).as_millis();
         self.tick = usize::try_from(since / super::SPIN.as_millis()).unwrap_or(0);
@@ -2148,8 +2152,18 @@ impl App {
     /// in both presenters (since step 25): a dialog in the input box's place,
     /// or the input box with the menu or the hint row under it, and the
     /// panels above it.
-    fn bottom(&mut self, now: Instant, width: usize, boxes: &[u64], live: usize) -> Bottom {
+    /// `column`, in the full screen on a wide window: the panels go in a
+    /// column of this many columns beside the transcript instead.
+    fn bottom(
+        &mut self,
+        now: Instant,
+        width: usize,
+        boxes: &[u64],
+        live: usize,
+        column: Option<usize>,
+    ) -> Bottom {
         let mut bottom = Vec::new();
+        let mut side = Vec::new();
         let cursor_row;
         let mut cursor_col = 0;
         let half = (self.rows / 2).max(1);
@@ -2201,8 +2215,16 @@ impl App {
             // What the panels would have with the hint row, not a menu:
             // what `/plan`, typed with its menu open, is measured against.
             let plain = drawn.lines.len() + 1;
-            self.panel_room = self.panel_rows(half.max(plain) - plain, live);
-            block = self.panel_block(room, live, menu.is_some(), width, boxes);
+            if let Some(column) = column {
+                // Beside the transcript: the column's rows are all those
+                // above the bottom.
+                let rows = self.rows.saturating_sub(height);
+                self.panel_room = rows;
+                side = self.panel_column(rows, column, menu.is_some(), boxes);
+            } else {
+                self.panel_room = self.panel_rows(half.max(plain) - plain, live);
+                block = self.panel_block(room, live, menu.is_some(), width, boxes);
+            }
             if self.input.focus().on_input() != on_input {
                 drawn = view::input::input(&self.input, &self.look, width);
             }
@@ -2222,6 +2244,7 @@ impl App {
             block,
             lines: bottom,
             cursor: cursor_row.map(|row| (row, cursor_col)),
+            column: side,
         }
     }
 

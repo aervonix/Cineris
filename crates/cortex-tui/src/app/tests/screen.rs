@@ -622,6 +622,66 @@ fn a_match_inside_a_closed_box_opens_it_while_it_is_current() {
     );
 }
 
+/// From 140 columns the panels sit in a column of their own beside the
+/// transcript, from the top: the plan there, collapsed, then whole with
+/// the focus; the transcript keeps the rest, and no row is wider than the
+/// window. Narrower, they are stacked above the input box as inline.
+#[test]
+fn panels_sit_beside_the_transcript_on_a_wide_window() {
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Fullscreen, 2, now);
+    link.give(super::panels::plan_updated(super::panels::screen_plan(1)));
+    drain(&mut app, now);
+    app.resize(149, 30);
+    let (lines, _) = app.screen_frame(now);
+    let rows = text(&lines);
+    assert!(lines.iter().all(|line| line.width() <= 149), "{rows:#?}");
+    // The plan's first row, at the column's start: 45 columns at 150 (40,
+    // and one for each two past 140), two from the transcript's 102.
+    let plan = rows
+        .iter()
+        .position(|row| row.contains("Plan  1 of 4 done"))
+        .expect("the plan");
+    assert_eq!(plan, 0, "from the top: {rows:#?}");
+    assert_eq!(
+        rows[plan].chars().position(|c| c == '◇'),
+        Some(104),
+        "{rows:#?}"
+    );
+    // The transcript beside it, at its own width.
+    assert!(
+        rows.iter()
+            .any(|row| row.starts_with('╭') && row.chars().nth(101) == Some('╮')),
+        "{rows:#?}"
+    );
+    // Focused: drawn whole, every item.
+    key(&mut app, "ctrl+p", now);
+    let rows = rows_text(&mut app, now);
+    for item in [
+        "allow _ between digits",
+        "add a test for 1_000",
+        "run clippy",
+    ] {
+        assert!(
+            rows.iter().any(|row| row.contains(item)),
+            "{item}: {rows:#?}"
+        );
+    }
+    key(&mut app, "esc", now);
+    // At 139 columns: stacked above the input box, under the transcript.
+    app.resize(138, 30);
+    let rows = rows_text(&mut app, now);
+    let plan = rows
+        .iter()
+        .position(|row| row.contains("Plan  1 of 4 done"))
+        .expect("the plan");
+    assert!(rows[plan].starts_with("◇"), "{rows:#?}");
+    assert!(plan > 10, "above the bottom: {rows:#?}");
+    assert_eq!(crate::app::state::screen::side_column(139), None);
+    assert_eq!(crate::app::state::screen::side_column(140), Some(40));
+    assert_eq!(crate::app::state::screen::side_column(200), Some(56));
+}
+
 /// What a played terminal reads, in turn.
 type Steps = Vec<(cortex_term::Ready, Vec<u8>)>;
 
