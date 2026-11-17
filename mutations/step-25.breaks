@@ -298,3 +298,21 @@ find: Some(nth) if Some(nth) == current => style.reverse().bold(),
 replace: Some(nth) if Some(nth) == current => style.reverse(),
 caught-by:
     cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
+
+[break] the-panels-never-go-beside
+rule: On a window of 140 columns or more, the full screen's panels sit in a column beside the transcript.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::screen_frame
+find: let mut bottom = self.bottom(now, full, &boxes, live_len, column);
+replace: let mut bottom = self.bottom(now, full, &boxes, live_len, None);
+caught-by:
+    cortex-tui app::tests::screen::panels_sit_beside_the_transcript_on_a_wide_window
+
+[break] the-side-column-starts-a-column-late
+rule: The panels go beside the transcript from 140 columns.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: side_column
+find: (cols >= SIDE_FROM)
+replace: (cols > SIDE_FROM)
+caught-by:
+    cortex-tui app::tests::screen::panels_sit_beside_the_transcript_on_a_wide_window

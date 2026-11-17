@@ -30,7 +30,7 @@ fn plan_item(id: &str, text: &str, status: PlanStatus) -> PlanItem {
 }
 
 /// Screen 4's plan, at `revision`.
-fn screen_plan(revision: u64) -> Plan {
+pub(super) fn screen_plan(revision: u64) -> Plan {
     Plan {
         items: vec![
             plan_item("p1", "allow _ between digits", PlanStatus::Done),
@@ -42,7 +42,7 @@ fn screen_plan(revision: u64) -> Plan {
     }
 }
 
-fn plan_updated(plan: Plan) -> Inbound {
+pub(super) fn plan_updated(plan: Plan) -> Inbound {
     event(Event::PlanUpdated(PlanUpdated {
         plan,
         by: Actor::Agent,

@@ -308,6 +308,43 @@ impl App {
         block
     }
 
+    /// The panels in a column of their own beside the full screen's
+    /// transcript (since step 25), `rows` high and `width` wide: step 24's
+    /// layout in that room, with no blank row before or after it, since
+    /// nothing above it needs setting apart. No room with a menu open, as
+    /// stacked.
+    pub(super) fn panel_column(
+        &mut self,
+        rows: usize,
+        width: usize,
+        menu: bool,
+        boxes: &[u64],
+    ) -> Vec<Line> {
+        let mut column = Vec::new();
+        let mut reachable = Vec::new();
+        if !menu && self.rows > LEAST_ROWS {
+            let whole = match self.input.focus().focused() {
+                Target::Panel(id) => Some(id),
+                Target::Input | Target::ToolBox(_) => self.item_edit.as_ref().map(|(id, _)| *id),
+            };
+            let draw = Draw {
+                width,
+                look: &self.look,
+                tick: self.tick,
+                keys: self.input.keymap(),
+            };
+            let laid = self.panels.layout(rows, whole, &draw, self.input.keymap());
+            column = laid.lines;
+            reachable = laid.reachable;
+            self.panel_drawn = laid.focused;
+        }
+        self.input.focus_mut().update(boxes, &reachable);
+        if self.panel_drawn.map(Target::Panel) != Some(self.input.focus().focused()) {
+            self.panel_drawn = None;
+        }
+        column
+    }
+
     /// A frame was written at `at`: the panel it drew focused, on its
     /// first frame since its readiness started again, is held by the input
     /// no panel took just before, as a dialog is.
