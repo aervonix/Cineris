@@ -795,7 +795,33 @@ fn unrestricted_is_refused_where_the_core_may_not_give_it() {
         assert_eq!(core.open_sessions(), Vec::new(), "a refused session runs");
 
         let front = Front::start(&world, &core).await;
-        let raised = set(&front, at_unrestricted).await.unwrap_err();
+        let raised = set(&front, at_unrestricted.clone()).await.unwrap_err();
+        assert_eq!(raised.code, "unrestricted_not_allowed");
+        assert!(
+            raised.message.contains("--permission-mode unrestricted"),
+            "{}",
+            raised.message
+        );
+        // The level is looked at before anything else of the request is
+        // made ready: a role's model that would be refused too is never
+        // looked for.
+        let raised = set(
+            &front,
+            SessionSettings {
+                roles: [(
+                    ModelRole::Main,
+                    RoleSettings {
+                        model: Some(ModelId::new("no-such-model")),
+                        ..RoleSettings::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+                ..at_unrestricted
+            },
+        )
+        .await
+        .unwrap_err();
         assert_eq!(raised.code, "unrestricted_not_allowed");
         // Lowering is the user's as ever.
         let lowered = set(

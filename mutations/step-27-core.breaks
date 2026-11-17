@@ -325,16 +325,13 @@ caught-by:
 # ------------------------------------------------- the review of the second pull request
 
 [break] a-raise-to-unrestricted-is-taken
-rule: Where the core may not give `unrestricted`, no engine at it is put in force on an open session: a raise by `session/set`, a `config/reload` with a profile, after the user's file changed, or at a turn's start.
+rule: Where the core may not give `unrestricted`, a `session/set` that raises to it is refused, before anything else of the request is made ready.
 file: crates/cortex-core/src/core.rs
-in: Core::put_engine
-find: self.inner.may_hold(&parts.level)?;
-replace: let _ = self.inner.may_hold(&parts.level);
-packages: cortex-core, cortex-rpc
+in: Core::set
+find: inner.may_hold(&level)?;
+replace: let _ = inner.may_hold(&level);
 caught-by:
     cortex-core::it settings::unrestricted_is_refused_where_the_core_may_not_give_it
-    cortex-core::it settings::a_reload_reaches_unrestricted_only_where_the_core_may_give_it
-    cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
 
 [break] a-grants-path-allow-lifts-a-path-question
 rule: A grant never lifts a question about a path: its `read` and `write` allow rules are not used.
@@ -429,11 +426,22 @@ caught-by:
 # ------------------------------------------------- the second review of the fixes
 
 [break] a-fork-is-written-before-its-level-is-judged
-rule: A fork the core would refuse for its level is refused before it is written: a refused fork leaves no stored session.
-file: crates/cortex-core/src/core.rs
-in: handle
-find: self.inner.may_hold(&level)?;
-replace: let _ = self.inner.may_hold(&level);
+rule: A fork is written only once the level it would open at has passed the gate: a refused fork leaves no stored session.
+file: crates/cortex-core/src/assemble.rs
+in: assemble
+find: inner.may_hold(&loaded.settings.permissions.mode)?;
+replace:
+    if let (Some(fork), Which::Resume { id }) = (&wanted.fork, &wanted.which) {
+        let mut kept = fork.log.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(disk) = kept.disk() {
+            let _ = disk.session.fork(
+                fork.at.as_ref(),
+                id.clone(),
+                SessionOptions::new(Arc::clone(&clock), options.harness_version.clone()),
+            );
+        }
+    }
+    inner.may_hold(&loaded.settings.permissions.mode)?;
 caught-by:
     cortex-core::it settings::a_refused_fork_leaves_no_stored_session
 
@@ -444,17 +452,9 @@ in: apply
 find: if refused_level && touches(std::slice::from_ref(&change.key), &["permissions.mode"]) {
 replace: if false && touches(std::slice::from_ref(&change.key), &["permissions.mode"]) {
 caught-by:
+    cortex-core::it reload::a_reload_applies_the_rest_beside_a_level_the_core_may_not_give
     cortex-core::it reload::trust_taken_away_holds_when_the_reload_brings_a_level_the_core_may_not_give
 
-[break] a-grants-command-rule-applies-unconfined
-rule: A grant's `exec` allow rules apply only where the session's own scope confines the command.
-file: crates/cortex-core/src/policy.rs
-in: left_out
-find: || (rule.effect == EffectKind::Exec && !confined_here))
-replace: || (rule.effect == EffectKind::Exec && false))
-    cortex-core::it reload::a_reload_applies_the_rest_beside_a_level_the_core_may_not_give
-caught-by:
-    cortex-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
 [break] a-refused-profile-is-chosen
 rule: A profile refused for its level is not chosen: not its name, and the session's own choices are not dropped for it.
 file: crates/cortex-core/src/reload.rs
@@ -473,6 +473,14 @@ replace: if refused_profile && false {
 caught-by:
     cortex-core::it reload::a_refused_profile_leaves_nothing_of_it_beside_trust_taken_away
 
+[break] a-grants-command-rule-applies-unconfined
+rule: A grant's `exec` allow rules apply only where the session's own scope confines the command.
+file: crates/cortex-core/src/policy.rs
+in: left_out
+find: || (rule.effect == EffectKind::Exec && !confined_here))
+replace: || (rule.effect == EffectKind::Exec && false))
+caught-by:
+    cortex-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
 
 [break] the-supervisor-is-not-told-its-grants-limits
 rule: A supervisor is told, when it opens a session, what of its grant does not apply there and why.

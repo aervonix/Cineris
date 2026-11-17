@@ -395,10 +395,12 @@ impl Inner {
     /// in this core ([`CoreOptions::allow_unrestricted`]). Every way a
     /// session's level is set passes it, on the configuration as it comes
     /// to: a session put together (`session/new`, a stored session's
-    /// `session/open`, `session/fork`, in `assemble`, and a fork before it
-    /// is written), and every engine put in force on an open session
-    /// (`session/set`, `config/reload` with or without a profile, the look
-    /// at a turn's start: [`Core::put_engine`]).
+    /// `session/open`, `session/fork`, whose fork is written only after it,
+    /// in `assemble`); a raise by `session/set`, before anything of it is
+    /// made ready; and a `config/reload` (with or without a profile,
+    /// explicit or the look at a turn's start), which leaves a refused
+    /// level out and applies the rest. [`Core::put_engine`] asks it again,
+    /// for a way not written yet.
     ///
     /// # Errors
     ///
@@ -1271,6 +1273,7 @@ impl Core {
                     .open(
                         client,
                         Wanted {
+                            fork: None,
                             which: Which::New {
                                 id: self.inner.ids.session_id(),
                                 title: params.title,
@@ -1329,6 +1332,7 @@ impl Core {
                     .open(
                         client,
                         Wanted {
+                            fork: None,
                             which: Which::Resume {
                                 id: params.session_id,
                             },
@@ -1408,30 +1412,14 @@ impl Core {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
                 let id = self.inner.ids.session_id();
-                // A fork the core would refuse to open for its level is
-                // refused before it is written, so that no stored session is
-                // left of it (the review of step 27's second pull request).
-                if self.inner.may_hold(&Level::Unrestricted).is_err() {
-                    let inner = Arc::clone(&self.inner);
-                    let wanted = Wanted {
-                        which: Which::Resume { id: id.clone() },
-                        workspace: PathBuf::from(live.handle.state().workspace),
-                        settings: SessionSettings::default(),
-                        overrides: Vec::new(),
-                        no_raise: false,
-                    };
-                    let level =
-                        Self::blocking(move || assemble::starting_level(&inner, &wanted)).await?;
-                    self.inner.may_hold(&level)?;
-                }
-                let fork = id.clone();
                 let log = Arc::clone(&live.log);
-                let options = cortex_session::SessionOptions::new(
-                    Arc::clone(&self.inner.options.clock),
-                    self.inner.options.harness_version.clone(),
-                );
-                let workspace = Self::blocking(move || {
-                    let mut kept = lock(&log);
+                // Where the fork goes back to, and its workspace; it is
+                // written as it is put together, once its level has passed
+                // the gate, so that a refused fork leaves no stored session
+                // (the reviews of step 27's second pull request).
+                let source = Arc::clone(&log);
+                let (workspace, at) = Self::blocking(move || {
+                    let mut kept = lock(&source);
                     let Some(disk) = kept.disk() else {
                         return Err(error(
                             ErrorKind::Usage,
@@ -1451,15 +1439,7 @@ impl Core {
                         }
                         None => None,
                     };
-                    let (forked, _) = disk
-                        .session
-                        .fork(at.as_ref(), fork, options)
-                        .map_err(|failure| session_error(&failure))?;
-                    let workspace = forked.header().workspace.clone();
-                    // The fork's lock is let go: it is opened again below,
-                    // as any stored session is.
-                    drop(forked);
-                    Ok(workspace)
+                    Ok((disk.session.header().workspace.clone(), at))
                 })
                 .await?;
                 let forked = self
@@ -1467,6 +1447,7 @@ impl Core {
                         client,
                         Wanted {
                             which: Which::Resume { id },
+                            fork: Some(assemble::ForkFrom { log, at }),
                             workspace: PathBuf::from(workspace),
                             settings: SessionSettings::default(),
                             overrides: Vec::new(),
@@ -2039,6 +2020,9 @@ impl Core {
                         "Only a `user` client may raise a session's level.",
                     ));
                 }
+                // Before anything is made ready: a level the core may not
+                // give refuses the whole request.
+                inner.may_hold(&level)?;
                 new_level = Some(level);
             }
         }
@@ -2216,8 +2200,9 @@ impl Core {
         live: &Arc<Live>,
         mut parts: cortex_policy::Parts,
     ) -> Result<(), OpError> {
-        // A raise by `session/set`, a reload with or without a profile:
-        // nothing is changed when the core may not give the level.
+        // Every way here has passed the gate already (`session/set` in its
+        // checks, a reload by leaving a refused level out); kept so that a
+        // new way cannot put a level in force round it.
         self.inner.may_hold(&parts.level)?;
         let level = parts.level.clone();
         let old = live.policy.engine();
