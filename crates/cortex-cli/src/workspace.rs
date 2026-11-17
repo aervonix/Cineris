@@ -171,4 +171,54 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&scratch);
     }
+
+    /// The same on Windows, with a real junction (`mklink /J`, which needs
+    /// no administrator's rights): a working directory below the root by
+    /// its name, reached through a junction out of the workspace, starts
+    /// at the root and says so, where it failed the session's open (the
+    /// full review of the follow-ups of step 23, finding 3). `sys_`: it
+    /// starts `cmd.exe` to make the junction.
+    #[cfg(windows)]
+    #[test]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the test starts cmd.exe once, to make a junction"
+    )]
+    fn sys_a_start_through_a_junction_out_starts_at_the_root_and_says_why() {
+        let scratch =
+            std::env::temp_dir().join(format!("cortex-cli-here-junction-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let repo = scratch.join("repo");
+        std::fs::create_dir_all(repo.join(".cortex")).unwrap();
+        let outside = scratch.join("outside");
+        std::fs::create_dir_all(outside.join("sub")).unwrap();
+        let link = repo.join("lib");
+        let made = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .expect("cmd.exe starts");
+        assert!(made.status.success(), "{made:?}");
+        let start = link.join("sub");
+        let here = Here::of(&start);
+        assert_eq!(here.root, repo);
+        assert_eq!(here.cwd, None, "a start outside the workspace");
+        assert_eq!(here.cwd_not_taken, Some(start.clone()));
+        let said = here.passed_over_said();
+        assert!(
+            said.iter()
+                .any(|line| line.contains("Commands start at the workspace's root")),
+            "{said:?}"
+        );
+        // A folder of the workspace itself, beside the junction, is taken.
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        let inside = Here::of(&repo.join("src"));
+        assert_eq!(inside.cwd, Some(repo.join("src")));
+        // The junction is removed as a directory, without what it leads to.
+        let _ = std::fs::remove_dir(&link);
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
 }

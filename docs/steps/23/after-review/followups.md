@@ -148,7 +148,7 @@ The read runs on the history's own thread, beside the start-up, and the interfac
 |---|---|---|
 | 1. An older build's long line was counted as written: at a start it could hide a project's prompts, and a compaction could drop every line before it | A line's size is that of what is kept of it | `history::tests::an_older_builds_long_line_counts_as_what_is_kept` |
 | 2. The prompts sent in a run were held without a bound | The whole a project holds is kept within 1,000 and 2 MiB, the oldest dropped first | `history::tests::the_prompts_sent_in_a_run_are_held_within_the_bounds` |
-| 3. On Windows, a working directory reached through a junction out of the workspace failed the session's open (`invalid_cwd`) | The binary starts commands at the root when the working directory leads out of it, and says so | `workspace::tests::a_start_through_a_link_out_starts_at_the_root_and_says_why` (Linux, a link) |
+| 3. On Windows, a working directory reached through a junction out of the workspace failed the session's open (`invalid_cwd`) | The binary starts commands at the root when the working directory leads out of it, and says so | `workspace::tests::a_start_through_a_link_out_starts_at_the_root_and_says_why` (Linux, a link) and `sys_a_start_through_a_junction_out_starts_at_the_root_and_says_why` (Windows, a real junction made with `mklink /J`) |
 | 4. No test ran a command with no `cwd` where the session started, nor a binary below the root, nor the passed-over notice, nor keep of rules and git together | Tests added | `shell::a_command_with_no_cwd_runs_where_the_session_started`; `commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start` (headless from `src`); the workspace test; `trusting::keep_of_new_rules_and_new_git_declines_both`; the context test checks the shell's text |
 | 5. A client from before that answers never to a trusted project's question is refused where it was taken | Kept, and said in [11-rpc-protocol.md](../../../architecture/11-rpc-protocol.md): a never there is what the owner ruled out | (documented) |
 | 6. A start whose name is not Unicode was told to the model with replacement characters | Such a start starts at the root, in the binary and in the core | (the core's `start_below`; the binary's `leads_inside`) |
@@ -191,6 +191,5 @@ What moved in tier 1 is `cortex-cli`'s new history tests (+0.92 s together: file
 
 ## Left open
 
-- **Untested on Windows:** the start through a junction out of the workspace (finding 3) is tested with a link on Linux only; the Windows test runner cannot make a junction without privileges the test kit does not ask for. The code compares the canonical forms with `cortex_base::location_within`, as the Windows facts in `AGENTS.md` require.
 - **A client from before that answers never to a trusted project's question** is refused, as above: a narrowing documented in 11, with no version of its own.
 - Nothing of the five items is left open.
