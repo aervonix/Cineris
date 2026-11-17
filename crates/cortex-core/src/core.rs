@@ -2437,8 +2437,8 @@ pub(crate) fn unrestricted_not_allowed() -> OpError {
     error(
         ErrorKind::Permission,
         code::UNRESTRICTED_NOT_ALLOWED,
-        "A session at `unrestricted` is the server's own to allow: start the server at it \
-         (--permission-mode unrestricted, or `permissions.mode` in the user's configuration).",
+        "A session at `unrestricted` is the server's own to allow, and this server was not \
+         started at it: restart it at `unrestricted` (--permission-mode unrestricted).",
     )
 }
 

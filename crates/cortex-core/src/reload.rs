@@ -1089,18 +1089,34 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> Result<ConfigCh
         mut errors,
         profile,
     } = looked;
-    let (in_force, was, chosen, generation) = {
+    let (in_force, was, kept_choices, generation) = {
         let config = lock(&live.config);
-        // A profile starts from itself: the session's own choices go.
-        let chosen = if profile.is_some() {
-            BTreeSet::new()
-        } else {
-            config.chosen_keys()
-        };
-        (config.in_force(), config.trusted, chosen, config.generation)
+        (
+            config.in_force(),
+            config.trusted,
+            config.chosen_keys(),
+            config.generation,
+        )
     };
     let loaded = latest.is_some();
     let latest = latest.unwrap_or_else(|| Arc::clone(&in_force));
+    // A level the core may not give (a server not started at `unrestricted`)
+    // is never applied: it is refused in the errors and stays pending, and
+    // the rest of the reload is applied, a tightening included. A profile at
+    // such a level is refused whole: neither its keys nor its taking the
+    // place of the session's own choices; only what trust taken away takes
+    // goes (the reviews of step 27's second pull request).
+    let refused_level = core
+        .inner
+        .may_hold(&latest.settings.permissions.mode)
+        .is_err();
+    let refused_profile = refused_level && profile.is_some();
+    // A profile starts from itself: the session's own choices go.
+    let chosen = if profile.is_some() && !refused_profile {
+        BTreeSet::new()
+    } else {
+        kept_choices
+    };
     let lowered = (was.rules && !trusted.rules) || (was.repository && !trusted.repository);
     let changes = latest.changes_since(&in_force);
     // When trust was taken away, what it gave goes at once, whatever its
@@ -1118,7 +1134,19 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> Result<ConfigCh
     let mut now: Vec<KeyPath> = Vec::new();
     let mut silent: Vec<KeyPath> = Vec::new();
     let mut waiting: BTreeMap<KeyPath, Effect> = BTreeMap::new();
+    let mut refused: Vec<KeyPath> = Vec::new();
     for change in &changes {
+        let held_back = newly_held
+            .iter()
+            .any(|held| change.key.is_at_or_under(held) || held.is_at_or_under(&change.key));
+        // Of a refused profile, only what trust taken away takes.
+        if refused_profile && !held_back {
+            continue;
+        }
+        if refused_level && touches(std::slice::from_ref(&change.key), &["permissions.mode"]) {
+            refused.push(change.key.clone());
+            continue;
+        }
         if chosen.contains(&change.key.to_string()) {
             // In force already, as `session/set` put it: taken into the
             // configuration, neither applied again nor said, whatever its
@@ -1126,14 +1154,31 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> Result<ConfigCh
             silent.push(change.key.clone());
             continue;
         }
-        let held_back = newly_held
-            .iter()
-            .any(|held| change.key.is_at_or_under(held) || held.is_at_or_under(&change.key));
         if change.effect == Effect::Now || (held_back && change.effect == Effect::NextEpoch) {
             now.push(change.key.clone());
         } else {
             waiting.insert(change.key.clone(), change.effect);
         }
+    }
+    if refused_profile {
+        errors.push(format!(
+            "The profile was not chosen for this session: it sets `permissions.mode` to \
+             `unrestricted`. {}",
+            unrestricted_reason()
+        ));
+        // Nothing of the session changes unless trust was taken away.
+        if !lowered {
+            return Ok(ConfigChanged {
+                errors,
+                ..ConfigChanged::default()
+            });
+        }
+    } else if !refused.is_empty() {
+        errors.push(format!(
+            "`permissions.mode` = `unrestricted` was not applied to this session, and waits; the \
+             rest was applied. {}",
+            unrestricted_reason()
+        ));
     }
     let mut taken: Vec<KeyPath> = now.iter().chain(&silent).cloned().collect();
     let mut mix = match in_force.taking(&latest, &taken) {
@@ -1186,18 +1231,9 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> Result<ConfigCh
         // Trust taken away is taken away even when something else of the
         // reload cannot be built: what can fail for reasons of its own
         // waits, and the rest, trust's part included, is applied.
-        // A level the core may not give is left out too, so that trust taken
-        // away is taken away all the same.
-        let refused_level = core
-            .inner
-            .may_hold(&latest.settings.permissions.mode)
-            .is_err();
         let safe: Vec<KeyPath> = now
             .iter()
-            .filter(|key| {
-                let key = std::slice::from_ref(*key);
-                !touches(key, MAY_FAIL) && !(refused_level && touches(key, &["permissions.mode"]))
-            })
+            .filter(|key| !touches(std::slice::from_ref(*key), MAY_FAIL))
             .cloned()
             .collect();
         for key in now.iter().filter(|key| !safe.contains(key)) {
@@ -1264,20 +1300,29 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> Result<ConfigCh
             }
         };
         config.set_in_force(Arc::clone(&committed));
-        if loaded {
+        // A profile refused for its level leaves nothing of it: not what
+        // was loaded with it, not its name, not the session's choices.
+        if loaded && !refused_profile {
             config.latest = Arc::clone(&latest);
         }
-        config.waiting = waiting.clone();
+        if refused_profile {
+            // What waited before waits still, but for what trust's part
+            // applied: the profile's load says nothing of it.
+            config.waiting.retain(|key, _| !applied.contains(key));
+            waiting = config.waiting.clone();
+        } else {
+            config.waiting = waiting.clone();
+        }
         config.trusted = trusted;
         if trusted != was || loaded {
             config.standing = standing.clone();
         }
         match profile {
-            Some(profile) => {
+            Some(profile) if !refused_profile => {
                 config.options.profile = Some(profile);
                 std::mem::take(&mut config.choices)
             }
-            None => Vec::new(),
+            _ => Vec::new(),
         }
     };
     if trusted != was {
@@ -1298,13 +1343,24 @@ async fn apply(core: &Core, live: &Arc<Live>, looked: Looked) -> Result<ConfigCh
         ));
     }
     install_epoch(live, epoch);
-    notes.extend(waiting_notes(&waiting, &mix, &latest));
+    if !refused_profile {
+        notes.extend(waiting_notes(&waiting, &mix, &latest));
+    }
     Ok(ConfigChanged {
         applied: applied.iter().map(ToString::to_string).collect(),
-        pending: waiting.keys().map(ToString::to_string).collect(),
+        pending: waiting
+            .keys()
+            .chain(&refused)
+            .map(ToString::to_string)
+            .collect(),
         errors,
         notes,
     })
+}
+
+/// Why a level of `unrestricted` is not given.
+fn unrestricted_reason() -> String {
+    crate::core::unrestricted_not_allowed().message
 }
 
 /// What `apply` says when the loop took what waited for an epoch while it

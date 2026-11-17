@@ -1323,3 +1323,135 @@ fn trust_taken_away_holds_when_the_reload_brings_a_level_the_core_may_not_give()
         front.close().await;
     });
 }
+
+/// While the user's file says `unrestricted` and the core may not give it,
+/// a reload applies the rest of what changed, a tightening included: the
+/// level is refused in its errors, which say the server must be started at
+/// it, and waits (the review of step 27's second pull request found every
+/// change of such a reload lost, a `deny` included). A project's rule added
+/// after it is applied too.
+#[test]
+fn a_reload_applies_the_rest_beside_a_level_the_core_may_not_give() {
+    let world = World::new("reload_rest_beside_level", [says("Hi.")]);
+    let core = world.core_with(|options| options.allow_unrestricted = false);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        world.user_config(
+            "[permissions]\nmode = \"unrestricted\"\n\n[[permissions.rules]]\neffect = \
+             \"exec\"\nmatch = \"rm *\"\naction = \"deny\"\n",
+        );
+        let result = reload(
+            &front,
+            ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                ..ConfigReloadParams::default()
+            },
+        )
+        .await;
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("--permission-mode unrestricted")),
+            "{result:?}"
+        );
+        assert!(
+            result.applied.iter().any(|key| key == "permissions.rules"),
+            "{result:?}"
+        );
+        assert!(
+            result.pending.iter().any(|key| key == "permissions.mode"),
+            "{result:?}"
+        );
+        let rules = value(&front, "permissions.rules").await.unwrap();
+        assert!(rules.to_string().contains("rm *"), "{rules}");
+        assert_eq!(state_of(&front).await.level, Level::Supervised);
+
+        // A project's rule added afterwards, the user's file as it is.
+        world.project_config(
+            "[[permissions.rules]]\neffect = \"exec\"\nmatch = \"curl *\"\naction = \"deny\"\n",
+        );
+        let result = reload(
+            &front,
+            ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                ..ConfigReloadParams::default()
+            },
+        )
+        .await;
+        let rules = value(&front, "permissions.rules").await.unwrap();
+        assert!(rules.to_string().contains("curl *"), "{rules}: {result:?}");
+        assert_eq!(state_of(&front).await.level, Level::Supervised);
+        front.close().await;
+    });
+}
+
+/// A profile at a level the core may not give, chosen in the reload that
+/// also finds trust taken away: trust's part is applied, the profile is not
+/// chosen (neither its name nor its replacing the session's choices), the
+/// level is given as the reason, and a later plain reload of the session is
+/// applied as any other, the session's choice still in force (the review of
+/// step 27's second pull request found the profile half-committed and every
+/// later reload refused).
+#[test]
+fn a_refused_profile_leaves_nothing_of_it_beside_trust_taken_away() {
+    let world = World::new("reload_untrust_profile", [says("Hi.")]);
+    let profile = "[profiles.loose.permissions]\nmode = \"unrestricted\"\n\n[profiles.loose.retry]\nattempts = 7\n";
+    world.user_config(profile);
+    let (store, key) = trust_store(&world);
+    store.trust(&key, "~/work/app", &[], false).unwrap();
+    let core = world.core_with(|options| options.allow_unrestricted = false);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        assert_eq!(state_of(&front).await.trust, Some(TrustStanding::Trusted));
+        // A choice of the session's own, which a chosen profile would replace.
+        let lowered = SessionSettings {
+            level: Some(Level::ReadOnly),
+            ..SessionSettings::default()
+        };
+        set(&front, lowered).await.unwrap();
+        assert!(store.forget(&key).unwrap());
+        let result = reload(
+            &front,
+            ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                profile: Some("loose".to_owned()),
+                ..ConfigReloadParams::default()
+            },
+        )
+        .await;
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("profile was not chosen")
+                    && error.contains("unrestricted")),
+            "{result:?}"
+        );
+        // Nothing of the profile waits: it was not chosen.
+        assert!(result.pending.is_empty(), "{result:?}");
+        let state = state_of(&front).await;
+        assert_eq!(state.trust, Some(TrustStanding::Untrusted), "{result:?}");
+        assert_eq!(state.level, Level::ReadOnly);
+        assert_ne!(value(&front, "retry.attempts").await, Some(Value::from(7)));
+
+        // A plain reload afterwards is applied as any other.
+        world.user_config(&format!("{profile}\n[context]\nauto_compact = false\n"));
+        let after = reload(
+            &front,
+            ConfigReloadParams {
+                session_id: Some(front.session.clone()),
+                ..ConfigReloadParams::default()
+            },
+        )
+        .await;
+        assert!(after.errors.is_empty(), "{after:?}");
+        assert_eq!(
+            value(&front, "context.auto_compact").await,
+            Some(Value::Bool(false)),
+            "{after:?}"
+        );
+        assert_eq!(state_of(&front).await.level, Level::ReadOnly);
+        front.close().await;
+    });
+}
