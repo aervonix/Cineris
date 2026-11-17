@@ -22,6 +22,7 @@
 //! | `tools` | The real toolbox as a strict variant declares it. |
 //! | `sandbox` | The hidden subcommand `__sandbox` as the sandbox launcher, and what it adds to starting a command (Linux). |
 //! | `tui` | The interactive application under a pseudo-terminal: a turn with tools, an approval, interruptions, a steer and a queue. |
+//! | `ts_client` | A client in TypeScript, typed only by the generated declarations, runs a turn over `serve --stdio` (Node 22.18 or later; `CORTEX_TS_CLIENT`). |
 
 #![allow(
     clippy::disallowed_methods,
@@ -45,6 +46,7 @@ mod sandbox;
 mod serve;
 mod signals;
 mod tools;
+mod ts_client;
 mod tui;
 mod usage;
 

@@ -1,0 +1,33 @@
+# Step 27: the TypeScript client of the RPC protocol. The rules of where its
+# test runs (`crates/cortex-cli/tests/system/ts_client.rs`), broken one at a
+# time: the blocking jobs never depend on Node, a job that asks for the test
+# cannot pass without running it, and a Node that cannot run the client as it
+# is is never used. What the client checks of the server is broken in
+# step-27.breaks, whose tests need no Node.
+
+[break] the-blocking-jobs-run-the-typescript-client
+rule: In CI the test runs only where `CORTEX_TS_CLIENT` asks for it, and looks for no Node otherwise, so the blocking jobs never depend on Node.
+file: crates/cortex-cli/tests/system/ts_client.rs
+in: here
+find: if ci && !asked {
+replace: if ci && !asked && false {
+caught-by:
+    cortex-cli::system ts_client::it_runs_where_it_is_asked_for_and_never_in_ci_unasked
+
+[break] a-job-that-asks-for-the-client-passes-without-node
+rule: Where `CORTEX_TS_CLIENT` is set, a missing or older Node fails the test rather than leaving it not run.
+file: crates/cortex-cli/tests/system/ts_client.rs
+in: here
+find: Err(problem) if asked => Here::Wanting(problem)
+replace: Err(problem) if asked => Here::NotRun(problem)
+caught-by:
+    cortex-cli::system ts_client::it_runs_where_it_is_asked_for_and_never_in_ci_unasked
+
+[break] a-node-older-than-22-18-is-used
+rule: A Node of the 22 line older than 22.18 is not used: it does not strip a file's types by itself, so it cannot run the client as it is.
+file: crates/cortex-cli/tests/system/ts_client.rs
+in: strips_types
+find: 22 => minor >= 18
+replace: 22 => minor >= 6
+caught-by:
+    cortex-cli::system ts_client::it_runs_where_it_is_asked_for_and_never_in_ci_unasked
