@@ -195,9 +195,57 @@ pub(crate) fn word_end(text: &str, at: usize) -> usize {
 /// A cluster as the input box draws it, made safe to show
 /// (`cineris_term::sanitize`) on its own: a control character as its
 /// symbol, and what acts unseen (a character of no width, a bidirectional
-/// control) as its escape, `\u{200b}`. A tab is the caller's to draw.
+/// control) as its escape, `\u{200b}`. A run of [`RUN`] or more of one
+/// escape is written once with its count, `\u{e0041}×12`, so that a row
+/// always holds a cluster (since step 25: a letter followed by a long run
+/// of tag characters is one cluster, and was wider than the row). Only the
+/// prompt editor's row counts: everywhere else `sanitize` shows every
+/// escape. A tab is the caller's to draw.
 pub(crate) fn drawn(cluster: &str) -> Cow<'_, str> {
-    cineris_term::sanitize(cluster)
+    match cineris_term::sanitize(cluster) {
+        Cow::Borrowed(text) => Cow::Borrowed(text),
+        Cow::Owned(shown) => Cow::Owned(counted(&shown)),
+    }
+}
+
+/// How many of one escape in a row are written once with their count.
+pub(crate) const RUN: usize = 4;
+
+/// `shown` with each run of [`RUN`] or more of one escape written once,
+/// followed by `×` and the count.
+fn counted(shown: &str) -> String {
+    let mut out = String::with_capacity(shown.len());
+    let mut rest = shown;
+    while let Some(c) = rest.chars().next() {
+        let Some(escape) = escape_at(rest) else {
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+            continue;
+        };
+        let mut count = 0;
+        while rest.starts_with(escape) {
+            count += 1;
+            rest = &rest[escape.len()..];
+        }
+        if count >= RUN {
+            out.push_str(escape);
+            out.push('×');
+            out.push_str(&count.to_string());
+        } else {
+            out.push_str(&escape.repeat(count));
+        }
+    }
+    out
+}
+
+/// The escape `sanitize` writes for a character, `\u{…}` with one to six
+/// hex digits, when `text` starts with one.
+fn escape_at(text: &str) -> Option<&str> {
+    let body = text.strip_prefix("\\u{")?;
+    let close = body.find('}')?;
+    let digits = &body[..close];
+    (!digits.is_empty() && digits.len() <= 6 && digits.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| &text[..3 + close + 1])
 }
 
 /// How many columns a cluster takes in the editor: a tab [`TAB_WIDTH`],
@@ -228,6 +276,26 @@ mod tests {
             seen.push(at);
         }
         seen
+    }
+
+    /// A letter followed by twelve tag characters is one cluster, drawn as
+    /// the letter, one escape and its count, so that a row holds it; three
+    /// are each written; a run of another escape stands apart (step 25,
+    /// `one-character-wider-than-the-prompts-row`).
+    #[test]
+    fn a_long_run_of_one_unseen_character_is_drawn_once_with_its_count() {
+        let tags: String = std::iter::repeat_n('\u{e0041}', 12).collect();
+        let cluster = format!("a{tags}");
+        assert_eq!(clusters(&cluster).count(), 1, "one cluster");
+        assert_eq!(drawn(&cluster), "a\\u{e0041}×12");
+        assert_eq!(width(&cluster), "a\\u{e0041}×12".chars().count());
+        let three = "a\u{e0041}\u{e0041}\u{e0041}";
+        assert_eq!(drawn(three), "a\\u{e0041}\\u{e0041}\\u{e0041}");
+        let mixed: String = format!("a{}{}", "\u{e0041}".repeat(5), "\u{e0042}".repeat(4));
+        assert_eq!(drawn(&mixed), "a\\u{e0041}×5\\u{e0042}×4");
+        // Plain text, and a text that only looks like an escape, as they are.
+        assert_eq!(drawn("é"), "é");
+        assert!(matches!(drawn("x"), Cow::Borrowed("x")));
     }
 
     #[test]

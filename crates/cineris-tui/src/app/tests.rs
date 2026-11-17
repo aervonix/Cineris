@@ -2710,6 +2710,25 @@ fn copy_shows_the_answer_to_copy_by_hand_where_the_clipboard_may_not_be_taken() 
     assert!(!app.viewing());
 }
 
+/// A letter and twelve tag characters typed into the prompt are one
+/// cluster: its row shows the letter, one escape and the count, whole,
+/// and nothing is cut (step 25, `one-character-wider-than-the-prompts-row`).
+#[test]
+fn a_long_run_of_unseen_characters_fits_the_prompts_row() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let typed = format!("a{}", "\u{e0041}".repeat(12));
+    type_text(&mut app, &typed, now);
+    let (_, live, _) = app.frame(now);
+    let rows: Vec<String> = live.iter().map(|line| line.text().into_owned()).collect();
+    assert!(
+        rows.iter().any(|row| row.contains("a\\u{e0041}×12")),
+        "{rows:#?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains('…')), "{rows:#?}");
+}
+
 #[test]
 fn theme_picks_a_theme_for_the_run() {
     let now = Instant::now();
