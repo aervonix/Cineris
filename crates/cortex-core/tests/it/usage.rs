@@ -681,16 +681,21 @@ fn the_report_and_cortex_stats_say_what_the_aggregates_file_was() {
 #[test]
 fn the_aggregates_are_read_again_only_when_they_are_not_the_files() {
     let world = World::new("usage_kept", [says("Done.")]);
-    let core = world.core_with(|options| options.zone = Some(cortex_base::Zone::utc()));
     let stats = cortex_stats::StatsDir::new(world.dirs().state.unwrap().join("stats"));
+    // A turn recorded, and the core that recorded it ended, so that its
+    // statistics are on the disk and nothing writes them while the
+    // reports count what they read.
+    let recording = world.core_with(|options| options.zone = Some(cortex_base::Zone::utc()));
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = Front::start(&world, &recording).await;
         front.turn("go").await;
         front.close().await;
+        recording.shutdown().await;
     });
-    // The first report brings the aggregates up to date and saves them; it
-    // keeps nothing, so the second reads them, and keeps them.
-    let _ = world.run(report(&core, UsageRange::Today));
+    let core = world.core_with(|options| options.zone = Some(cortex_base::Zone::utc()));
+    // The recording core's end saved the aggregates: the first report reads
+    // them (the aggregates, the month's events and the limits), and keeps
+    // them.
     let before = cortex_stats::reads(&stats);
     let _ = world.run(report(&core, UsageRange::Today));
     let reading = cortex_stats::reads(&stats) - before;
