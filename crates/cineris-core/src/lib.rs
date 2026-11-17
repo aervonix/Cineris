@@ -43,6 +43,7 @@ mod reads;
 mod redact;
 mod reload;
 mod repo_map;
+mod rewind;
 mod rules;
 mod sandbox;
 mod shell_cache;

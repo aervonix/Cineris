@@ -448,6 +448,7 @@ pub fn scenarios() -> Vec<Scenario> {
                         session_id: ctx.session(),
                         to: ctx.items[1].clone(),
                         restore_files: false,
+                        plan: None,
                     })
                 }),
                 read(),

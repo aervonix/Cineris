@@ -5366,6 +5366,118 @@
       ],
       "type": "object"
     },
+    "RewindFile": {
+      "description": "One file of a rewind's plan.",
+      "properties": {
+        "path": {
+          "description": "The file as the session's checkpoints name it: relative to the\nworkspace's root, or absolute outside it.",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/RewindFileStatus",
+          "description": "Whether it can be put back now."
+        },
+        "to": {
+          "$ref": "#/$defs/RewindTarget",
+          "description": "What it would go back to."
+        },
+        "why_not": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RewindWhyNot"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Why it cannot be put back, when `status` is `cannot`."
+        }
+      },
+      "required": [
+        "path",
+        "to",
+        "status"
+      ],
+      "type": "object"
+    },
+    "RewindFileStatus": {
+      "anyOf": [
+        {
+          "const": "as_left",
+          "description": "It is as the harness left it: putting it back is safe."
+        },
+        {
+          "const": "already",
+          "description": "It is already as it would be put back."
+        },
+        {
+          "const": "edited_since",
+          "description": "It was changed after the harness left it: the rewind asks before it puts it back, and keeps it unless told otherwise."
+        },
+        {
+          "const": "cannot",
+          "description": "It cannot be put back, and is left as it is: `why_not` says why."
+        },
+        {
+          "description": "A value this version of the protocol does not know. Receivers need a default branch.",
+          "type": "string",
+          "x-cineris-open": true
+        }
+      ],
+      "description": "Whether a file of a rewind's plan can be put back now."
+    },
+    "RewindTarget": {
+      "anyOf": [
+        {
+          "const": "content",
+          "description": "Its content before the turns undone."
+        },
+        {
+          "const": "removed",
+          "description": "No file: it did not exist then, and would be removed."
+        },
+        {
+          "const": "not_recorded",
+          "description": "Not known: a command changed it, and what it held before was not recorded. It is never removed or overwritten."
+        },
+        {
+          "description": "A value this version of the protocol does not know. Receivers need a default branch.",
+          "type": "string",
+          "x-cineris-open": true
+        }
+      ],
+      "description": "What a rewind would put a file back to."
+    },
+    "RewindWhyNot": {
+      "anyOf": [
+        {
+          "const": "not_recorded",
+          "description": "What it held before is not known."
+        },
+        {
+          "const": "too_large",
+          "description": "Its earlier content was too large to keep."
+        },
+        {
+          "const": "missing",
+          "description": "Its earlier content is no longer in the session's store."
+        },
+        {
+          "const": "unreadable",
+          "description": "A checkpoint of the turns undone cannot be read."
+        },
+        {
+          "const": "through_a_link",
+          "description": "A directory on its way, or the file itself, is now a link."
+        },
+        {
+          "description": "A value this version of the protocol does not know. Receivers need a default branch.",
+          "type": "string",
+          "x-cineris-open": true
+        }
+      ],
+      "description": "Why a file of a rewind's plan cannot be put back."
+    },
     "Role": {
       "anyOf": [
         {
@@ -5968,6 +6080,13 @@
     "SessionRewindParams": {
       "description": "`session/rewind`: moves the active branch back to an item, putting files\nback if asked.\n\n**It may ask a question** (since step 23). With `restore_files`, a file\nedited since the harness left it is put back only if the person says so:\nthe session's `user` clients that answer questions are put one\n`question/ask` naming those files, with the choices \"Put them back\" and\n\"Keep them as they are\". No client to ask, no answer, a client that goes\naway, the session's close and the core's end all keep the files. The\nresult comes once the question is settled; a session closed meanwhile is\nnot moved back (`session_not_open`).",
       "properties": {
+        "plan": {
+          "description": "The `mark` of the plan `session/rewind_plan` gave, which the person\nwas shown (since step 25). The plan is made again, and the rewind is\nrefused (`plan_changed`), changing nothing, when it is not that one:\nwith `restore_files`, when its turns or what it would do to any file\ndiffer; without, when its turns do. Absent: no plan is checked.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "restore_files": {
           "default": false,
           "description": "Whether to put files back as they were at that point, from the\nsnapshots of the turns that are undone.",
@@ -5985,6 +6104,56 @@
       "required": [
         "session_id",
         "to"
+      ],
+      "type": "object"
+    },
+    "SessionRewindPlanParams": {
+      "description": "`session/rewind_plan`: what `session/rewind` to the same item would do\nnow, changing nothing (since step 25). A front end shows it before it\nasks whether to put files back: the turns it would undo, and each file\nthey changed with what it would go back to. Refused as `session/rewind`\nwould be: `session_not_stored` for a session with no log, `unknown_item`,\n`turn_running` while a turn runs.",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The session."
+        },
+        "to": {
+          "$ref": "#/$defs/ItemId",
+          "description": "The last item the rewind would keep on the active branch."
+        }
+      },
+      "required": [
+        "session_id",
+        "to"
+      ],
+      "type": "object"
+    },
+    "SessionRewindPlanResult": {
+      "description": "The result of `session/rewind_plan`: the plan the core would carry out\n(`docs/architecture/07-sessions-and-context.md`, \"Snapshots and undo\").",
+      "properties": {
+        "files": {
+          "description": "The files those turns changed, in the order they were first changed.",
+          "items": {
+            "$ref": "#/$defs/RewindFile"
+          },
+          "type": "array"
+        },
+        "mark": {
+          "description": "The plan in a few characters: given back as `session/rewind`'s\n`plan`, it has that rewind refused when the plan has changed since.",
+          "type": "string"
+        },
+        "turns": {
+          "description": "The turns it would undo, wholly or in part, oldest first.",
+          "items": {
+            "$ref": "#/$defs/TurnId"
+          },
+          "type": "array"
+        },
+        "unreadable": {
+          "description": "A checkpoint of those turns cannot be read: what they changed is not\nwholly known, and no file would be put back.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "turns",
+        "mark"
       ],
       "type": "object"
     },
@@ -8333,6 +8502,15 @@
         },
         "result": {
           "$ref": "#/$defs/SessionResult"
+        }
+      },
+      "session/rewind_plan": {
+        "description": "What `session/rewind` to an item would do now, changing nothing.",
+        "params": {
+          "$ref": "#/$defs/SessionRewindPlanParams"
+        },
+        "result": {
+          "$ref": "#/$defs/SessionRewindPlanResult"
         }
       },
       "session/set": {

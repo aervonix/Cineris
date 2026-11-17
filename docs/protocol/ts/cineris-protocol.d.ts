@@ -56,6 +56,8 @@ export interface ClientMethods {
   "session/read": { params: SessionReadParams; result: SessionReadResult };
   /** Moves the active branch back to an earlier item. */
   "session/rewind": { params: SessionRewindParams; result: SessionResult };
+  /** What `session/rewind` to an item would do now, changing nothing. */
+  "session/rewind_plan": { params: SessionRewindPlanParams; result: SessionRewindPlanResult };
   /** Changes a session's settings: models, reasoning level, speed, level. */
   "session/set": { params: SessionSetParams; result: SessionResult };
   /** Steps back before the last turn, putting its files back if asked. */
@@ -1461,6 +1463,27 @@ export interface RetryNotice {
   next_attempt_at: Timestamp;
 }
 
+/** One file of a rewind's plan. */
+export interface RewindFile {
+  /** The file as the session's checkpoints name it: relative to the workspace's root, or absolute outside it. */
+  path: string;
+  /** Whether it can be put back now. */
+  status: RewindFileStatus;
+  /** What it would go back to. */
+  to: RewindTarget;
+  /** Why it cannot be put back, when `status` is `cannot`. */
+  why_not?: RewindWhyNot | null;
+}
+
+/** Whether a file of a rewind's plan can be put back now. */
+export type RewindFileStatus = "as_left" | "already" | "edited_since" | "cannot" | (string & {});
+
+/** What a rewind would put a file back to. */
+export type RewindTarget = "content" | "removed" | "not_recorded" | (string & {});
+
+/** Why a file of a rewind's plan cannot be put back. */
+export type RewindWhyNot = "not_recorded" | "too_large" | "missing" | "unreadable" | "through_a_link" | (string & {});
+
 /** Who a message is from. */
 export type Role = "user" | "assistant" | "tool" | (string & {});
 
@@ -1670,12 +1693,34 @@ export interface SessionResult {
 
 /** `session/rewind`: moves the active branch back to an item, putting files back if asked. **It may ask a question** (since step 23). With `restore_files`, a file edited since the harness left it is put back only if the person says so: the session's `user` clients that answer questions are put one `question/ask` naming those files, with the choices "Put them back" and "Keep them as they are". No client to ask, no answer, a client that goes away, the session's close and the core's end all keep the files. The result comes once the question is settled; a session closed meanwhile is not moved back (`session_not_open`). */
 export interface SessionRewindParams {
+  /** The `mark` of the plan `session/rewind_plan` gave, which the person was shown (since step 25). The plan is made again, and the rewind is refused (`plan_changed`), changing nothing, when it is not that one: with `restore_files`, when its turns or what it would do to any file differ; without, when its turns do. Absent: no plan is checked. */
+  plan?: string | null;
   /** Whether to put files back as they were at that point, from the snapshots of the turns that are undone. */
   restore_files?: boolean;
   /** The session. */
   session_id: SessionId;
   /** The last item to keep on the active branch. */
   to: ItemId;
+}
+
+/** `session/rewind_plan`: what `session/rewind` to the same item would do now, changing nothing (since step 25). A front end shows it before it asks whether to put files back: the turns it would undo, and each file they changed with what it would go back to. Refused as `session/rewind` would be: `session_not_stored` for a session with no log, `unknown_item`, `turn_running` while a turn runs. */
+export interface SessionRewindPlanParams {
+  /** The session. */
+  session_id: SessionId;
+  /** The last item the rewind would keep on the active branch. */
+  to: ItemId;
+}
+
+/** The result of `session/rewind_plan`: the plan the core would carry out (`docs/architecture/07-sessions-and-context.md`, "Snapshots and undo"). */
+export interface SessionRewindPlanResult {
+  /** The files those turns changed, in the order they were first changed. */
+  files?: Array<RewindFile>;
+  /** The plan in a few characters: given back as `session/rewind`'s `plan`, it has that rewind refused when the plan has changed since. */
+  mark: string;
+  /** The turns it would undo, wholly or in part, oldest first. */
+  turns: Array<TurnId>;
+  /** A checkpoint of those turns cannot be read: what they changed is not wholly known, and no file would be put back. */
+  unreadable?: boolean;
 }
 
 /** `session/set` */
