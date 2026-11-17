@@ -20,14 +20,19 @@
 //! - **The server's own commands are refused** (the design note's point 1,
 //!   "The harness's own commands"): a peer whose line of parents reaches the
 //!   server's process is one of the commands its sessions started, which
-//!   could otherwise answer its own session's approvals. A peer whose line
-//!   cannot be read is refused too: its process, or a parent of it, is gone
-//!   (a command can connect, hand the socket to a child and exit at once,
-//!   the independent review of step 27's second part), or it is in another
-//!   pid namespace. A command that detaches itself from that line escapes
-//!   this, and so could one whose process id was taken by another process in
-//!   between, so it is defence in depth beside the sandbox, which keeps a
-//!   confined command from any Unix socket.
+//!   could otherwise answer its own session's approvals. A peer whose own
+//!   process cannot be read is refused too: it is gone (a command can
+//!   connect, hand the socket to a child and exit at once, the independent
+//!   review of step 27's second part), or it is in another pid namespace;
+//!   so is one whose line could not be read for any other reason (the
+//!   process out of descriptors). A parent that `/proc` does not show (gone,
+//!   or hidden: `hidepid`, a unit's `ProtectProc`) ends the line elsewhere,
+//!   since another user's process (an SSH session's `sshd`) is hidden there.
+//!   So a command escapes this check by detaching itself from that line, by
+//!   a process id another process took in between, or through a parent of
+//!   its own that `/proc` hides from the server (one that ran a set-user-id
+//!   program, or made itself not dumpable): it is defence in depth beside
+//!   the sandbox, which keeps a confined command from any Unix socket.
 
 #![allow(
     clippy::disallowed_methods,
@@ -102,13 +107,38 @@ fn check_named_folder(folder: &Path, uid: u32) -> io::Result<()> {
     }
 }
 
+/// What `/proc` says of a process's parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Parent {
+    /// Its parent's process id.
+    Of(u32),
+    /// The process is not shown: it is gone, or `/proc` hides it.
+    Unseen,
+    /// It could not be read for another reason (the server out of
+    /// descriptors or memory), or what was read is not understood.
+    Failed,
+}
+
 /// The parent of `pid`, from `/proc/<pid>/stat`: the field after the
 /// command's name, which is in parentheses and may hold anything, so it is
 /// read from the last `)`.
-fn parent_of(pid: u32) -> Option<u32> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after = &stat[stat.rfind(')')? + 1..];
-    after.split_whitespace().nth(1)?.parse().ok()
+fn parent_of(pid: u32) -> Parent {
+    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            return Parent::Unseen;
+        }
+        Err(_) => return Parent::Failed,
+    };
+    stat.rfind(')')
+        .and_then(|end| stat[end + 1..].split_whitespace().nth(1))
+        .and_then(|field| field.parse().ok())
+        .map_or(Parent::Failed, Parent::Of)
 }
 
 /// Where a peer's line of parents leads.
@@ -116,9 +146,10 @@ fn parent_of(pid: u32) -> Option<u32> {
 enum Line {
     /// To the server's process: the peer is one of its commands.
     Server,
-    /// To the system's first process without passing the server's.
+    /// To the system's first process, or to a parent `/proc` does not show,
+    /// without passing the server's.
     Elsewhere,
-    /// Not known: the peer, or one of its parents, could not be read.
+    /// Not known: the peer's own process is not shown, or a read failed.
     Unknown,
 }
 
@@ -126,24 +157,27 @@ enum Line {
 /// process (not `pid` itself: the server may connect to itself), with
 /// `parent_of` reading a process's parent.
 ///
-/// Only the peer's own process must be readable: one that is gone is
-/// `Unknown`. A parent that cannot be read ends the line `Elsewhere`: it is
-/// another user's process that `/proc` hides (`hidepid`, a unit's
-/// `ProtectProc`: an SSH session's `sshd`, a `sudo`), never one of the
-/// server's commands, which are the server's user's and visible to it; or
-/// it went in the moment between two reads, as a client's launcher may
-/// (the second review of step 27's second part).
-fn line_of(pid: u32, server: u32, parent_of: impl Fn(u32) -> Option<u32>) -> Line {
+/// The peer's own process must be shown: one that is gone is `Unknown`. A
+/// parent that `/proc` does not show ends the line `Elsewhere`: mostly
+/// another user's process it hides (`hidepid`, a unit's `ProtectProc`: an
+/// SSH session's `sshd`, a `sudo`), or one that went between two reads, as
+/// a client's launcher may (the second review of step 27's second part).
+/// It can also be a process of the server's own user that ran a
+/// set-user-id program or made itself not dumpable: an escape the module's
+/// doc names. A read that fails for any other reason refuses, as before
+/// (the third review).
+fn line_of(pid: u32, server: u32, parent_of: impl Fn(u32) -> Parent) -> Line {
     let mut at = pid;
     // A line of parents is short; the bound only stops a loop the table
     // could show while it changes.
     for _ in 0..4096 {
         match parent_of(at) {
-            Some(parent) if parent == server => return Line::Server,
-            Some(parent) if parent <= 1 || parent == at => return Line::Elsewhere,
-            Some(parent) => at = parent,
-            None if at == pid => return Line::Unknown,
-            None => return Line::Elsewhere,
+            Parent::Of(parent) if parent == server => return Line::Server,
+            Parent::Of(parent) if parent <= 1 || parent == at => return Line::Elsewhere,
+            Parent::Of(parent) => at = parent,
+            Parent::Unseen if at == pid => return Line::Unknown,
+            Parent::Unseen => return Line::Elsewhere,
+            Parent::Failed => return Line::Unknown,
         }
     }
     Line::Unknown
@@ -307,8 +341,8 @@ impl Listener {
             }
             Line::Unknown => {
                 return Ok(Accepted::Refused(format!(
-                    "a peer whose line of parents could not be read (pid {pid}): its process, \
-                     or a parent of it, is gone"
+                    "a peer whose line of parents could not be read (pid {pid}): its process is \
+                     gone, or a read of it failed"
                 )));
             }
             Line::Elsewhere => {}
@@ -339,33 +373,36 @@ impl Drop for Listener {
 mod tests {
     use super::*;
 
-    /// A table of parents, as `/proc` would give it: `None` for a process
-    /// that cannot be read.
-    fn table(parents: &[(u32, Option<u32>)]) -> impl Fn(u32) -> Option<u32> + '_ {
+    /// A table of parents, as `/proc` would give it; a process not in it is
+    /// not shown.
+    fn table(parents: &[(u32, Parent)]) -> impl Fn(u32) -> Parent + '_ {
         move |pid| {
             parents
                 .iter()
                 .find(|(child, _)| *child == pid)
-                .and_then(|(_, parent)| *parent)
+                .map_or(Parent::Unseen, |(_, parent)| *parent)
         }
     }
 
     /// The server's own command, near or far, is the server's; a line that
-    /// reaches the first process is not; a peer that cannot be read is not
-    /// known; a parent that cannot be read (another user's, hidden) ends
-    /// the line elsewhere.
+    /// reaches the first process is not; a peer that is not shown is not
+    /// known; a parent that is not shown (another user's, hidden) ends the
+    /// line elsewhere; a read that fails refuses, the peer's or a parent's.
     #[test]
     fn a_line_of_parents_is_the_servers_elsewhere_or_unknown() {
         const SERVER: u32 = 100;
         let parents = [
-            (300, Some(200)),
-            (200, Some(SERVER)),
-            (SERVER, Some(50)),
-            (50, Some(1)),
-            (400, Some(350)),
-            (350, Some(1)),
-            (500, Some(450)),
-            (450, None),
+            (300, Parent::Of(200)),
+            (200, Parent::Of(SERVER)),
+            (SERVER, Parent::Of(50)),
+            (50, Parent::Of(1)),
+            (400, Parent::Of(350)),
+            (350, Parent::Of(1)),
+            (500, Parent::Of(450)),
+            (450, Parent::Unseen),
+            (600, Parent::Of(550)),
+            (550, Parent::Failed),
+            (700, Parent::Failed),
         ];
         let read = table(&parents);
         assert_eq!(line_of(300, SERVER, &read), Line::Server);
@@ -374,5 +411,17 @@ mod tests {
         assert_eq!(line_of(400, SERVER, &read), Line::Elsewhere);
         assert_eq!(line_of(500, SERVER, &read), Line::Elsewhere);
         assert_eq!(line_of(999, SERVER, &read), Line::Unknown);
+        assert_eq!(line_of(600, SERVER, &read), Line::Unknown);
+        assert_eq!(line_of(700, SERVER, &read), Line::Unknown);
+    }
+
+    /// `/proc`'s own line for the test's process names its parent.
+    #[test]
+    fn the_parent_is_read_from_proc() {
+        assert_eq!(
+            parent_of(std::process::id()),
+            Parent::Of(std::os::unix::process::parent_id())
+        );
+        assert_eq!(parent_of(u32::MAX), Parent::Unseen);
     }
 }
