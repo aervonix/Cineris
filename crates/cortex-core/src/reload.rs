@@ -218,6 +218,12 @@ impl SessionConfig {
         }
     }
 
+    /// Whether the project's rules are trusted, and the profile chosen for
+    /// the session (`/profile`), when one was.
+    pub(crate) fn profile_and_trust(&self) -> (bool, Option<String>) {
+        (self.trusted.rules, self.options.profile.clone())
+    }
+
     /// The keys the person chose in the session.
     fn chosen_keys(&self) -> BTreeSet<String> {
         self.choices
@@ -398,6 +404,23 @@ pub(crate) async fn reload(
             core.open_sessions_of(client)
         }
     };
+    if let (Some(name), Some(live)) = (&params.profile, sessions.first()) {
+        // A profile only a project not trusted defines is not one to put in
+        // force: what it holds was never shown to the person.
+        let (trusted, _) = lock(&live.config).profile_and_trust();
+        let loaded = live.loaded();
+        if !trusted && !loaded.profiles.contains(name) && loaded.project_profiles.contains(name) {
+            return Err(error(
+                ErrorKind::Permission,
+                "untrusted_profile",
+                format!(
+                    "The profile `{}` is this project's, and the project is not trusted: trust \
+                     it first (`cortex permissions trust`), or choose a profile of your own.",
+                    cortex_base::visible(name)
+                ),
+            ));
+        }
+    }
     if params.profile.is_some() {
         // A profile can raise the level, which only a person may (as
         // `session/set` holds it).

@@ -108,7 +108,7 @@ enum Pending {
     Warm,
     /// `/reload`, or `/profile` with a name: what it did is said from its
     /// result, which holds what its `config.changed` events say.
-    Reload { profile: Option<String> },
+    Reload,
     /// `/profile` with no name: the profiles this session's files define.
     Profiles(SessionId),
     /// A stored artifact of this session (a check's whole output), shown in
@@ -277,9 +277,6 @@ pub struct App {
     session: Option<SessionState>,
     models: Vec<ModelInfo>,
     usage: Option<SessionUsage>,
-    /// The profile this session was loaded with by `/profile`, while it is
-    /// the one open.
-    profile: Option<String>,
     /// What reads the look and the key map from the configuration
     /// ([`App::set_restyle`]).
     restyle: Option<Restyle>,
@@ -441,7 +438,6 @@ impl App {
             session: None,
             models: Vec::new(),
             usage: None,
-            profile: None,
             dialogs: VecDeque::new(),
             restyle: start.restyle,
             look_due: false,
@@ -1332,10 +1328,10 @@ impl App {
                 self.config_shown(shown, &result.config, &result.origins);
             }
             (Pending::Profiles(_), Ok(OpResult::ConfigGet(result))) => {
-                self.profiles_listed(&result.config);
+                self.profiles_listed(&result.profiles, result.profile.as_deref());
             }
-            (Pending::Reload { profile }, Ok(OpResult::ConfigReload(result))) => {
-                self.reloaded(&result, profile);
+            (Pending::Reload, Ok(OpResult::ConfigReload(result))) => {
+                self.reloaded(&result);
             }
             (Pending::Look, Ok(OpResult::ConfigReload(result))) => {
                 self.restyle_if(&result.applied);
@@ -1442,7 +1438,6 @@ impl App {
         self.had_turn = false;
         self.last_cost = None;
         self.usage = None;
-        self.profile = None;
         // As the command line asked for the first: its settings, and kept
         // in memory only if it was.
         let (settings, ephemeral) = self.fresh.clone();
@@ -1776,7 +1771,7 @@ impl App {
                 let asked = self
                     .pending
                     .values()
-                    .any(|pending| matches!(pending, Pending::Reload { .. }));
+                    .any(|pending| matches!(pending, Pending::Reload));
                 if !asked {
                     for line in reload_lines(&changed.applied, &changed.errors, &changed.notes) {
                         self.say(&line);
@@ -1837,16 +1832,7 @@ impl App {
 
     /// What a reload did, said: the keys in force now, the core's notes
     /// (what waits, and for what), and what was wrong.
-    fn reloaded(
-        &mut self,
-        result: &cortex_protocol::methods::ConfigReloadResult,
-        profile: Option<String>,
-    ) {
-        if let Some(profile) = profile
-            && result.errors.is_empty()
-        {
-            self.profile = Some(profile);
-        }
+    fn reloaded(&mut self, result: &cortex_protocol::methods::ConfigReloadResult) {
         for line in reload_lines(&result.applied, &result.errors, &result.notes) {
             self.say(&line);
         }

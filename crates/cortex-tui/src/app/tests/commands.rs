@@ -120,14 +120,14 @@ fn profile_loads_one_and_lists_them() {
         unreachable!()
     };
     assert_eq!(params.keys, ["profile", "profiles"]);
-    let mut config = serde_json::Map::new();
-    config.insert("profiles.careful.retry.attempts".to_owned(), 1.into());
-    config.insert("profiles.daily.limits.day.requests".to_owned(), 5.into());
+    // As the core answers: the profiles that may be chosen, and the one in
+    // force.
     link.give(Inbound::Done(
         ticket,
         Ok(OpResult::ConfigGet(ConfigGetResult {
-            config,
-            origins: Default::default(),
+            profiles: vec!["careful".to_owned(), "daily".to_owned()],
+            profile: Some("careful".to_owned()),
+            ..Default::default()
         })),
     ));
     drain(&mut app, now);
@@ -151,6 +151,7 @@ fn profile_with_none_defined_says_how_to_make_one() {
         Ok(OpResult::ConfigGet(ConfigGetResult {
             config: serde_json::Map::new(),
             origins: Default::default(),
+            ..Default::default()
         })),
     ));
     drain(&mut app, now);
@@ -254,7 +255,11 @@ fn config_says_where_each_value_came_from() {
     );
     link.give(Inbound::Done(
         ticket,
-        Ok(OpResult::ConfigGet(ConfigGetResult { config, origins })),
+        Ok(OpResult::ConfigGet(ConfigGetResult {
+            config,
+            origins,
+            ..Default::default()
+        })),
     ));
     drain(&mut app, now);
     let all = notices(&mut app, now);

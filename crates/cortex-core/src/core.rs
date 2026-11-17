@@ -1665,10 +1665,23 @@ impl Core {
                     .collect(),
             })),
             Op::ConfigGet(params) => {
-                let loaded = match &params.session_id {
-                    Some(session) => self.open_for(client, session)?.loaded(),
-                    None => self.inner.user(),
+                let (loaded, trusted, chosen) = match &params.session_id {
+                    Some(session) => {
+                        let live = self.open_for(client, session)?;
+                        let (trusted, chosen) = lock(&live.config).profile_and_trust();
+                        (live.loaded(), trusted, chosen)
+                    }
+                    None => (self.inner.user(), false, None),
                 };
+                // The profiles that may be chosen: a project's only once it
+                // is trusted (step 24).
+                let mut profiles = loaded.profiles.clone();
+                if trusted {
+                    profiles.extend(loaded.project_profiles.iter().cloned());
+                }
+                profiles.sort_unstable();
+                profiles.dedup();
+                let profile = chosen.or_else(|| loaded.profile.clone());
                 let mut config = serde_json::Map::new();
                 let mut origins = std::collections::BTreeMap::new();
                 for (path, value) in loaded.effective() {
@@ -1692,7 +1705,12 @@ impl Core {
                         config.insert(key, value);
                     }
                 }
-                Ok(OpResult::ConfigGet(ConfigGetResult { config, origins }))
+                Ok(OpResult::ConfigGet(ConfigGetResult {
+                    config,
+                    origins,
+                    profiles,
+                    profile,
+                }))
             }
             Op::ConfigReload(params) => Ok(OpResult::ConfigReload(
                 crate::reload::reload(self, client, params).await?,

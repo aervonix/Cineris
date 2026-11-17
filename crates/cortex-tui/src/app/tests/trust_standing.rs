@@ -25,6 +25,7 @@ fn status_says_a_trust_kept_for_now_only_without_naming_one_cause() {
             cortex_protocol::methods::ConfigGetResult {
                 config: serde_json::Map::new(),
                 origins: Default::default(),
+                ..Default::default()
             },
         )),
     ));

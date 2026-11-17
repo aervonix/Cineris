@@ -74,7 +74,7 @@ impl App {
             || self
                 .pending
                 .values()
-                .any(|pending| matches!(pending, Pending::Reload { .. } | Pending::Look))
+                .any(|pending| matches!(pending, Pending::Reload | Pending::Look))
         {
             return;
         }

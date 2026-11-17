@@ -250,3 +250,25 @@ in: report
 find: if cache.as_ref().is_some_and(|cache| cache.used == used) {
 replace: if false && cache.as_ref().is_some_and(|cache| cache.used == used) {
 expect: survives
+
+[break] an-untrusted-projects-profile-is-loaded
+rule: A profile only a project not trusted defines is not loaded for the session.
+file: crates/cortex-core/src/reload.rs
+in: reload
+find: if !trusted && !loaded.profiles.contains(name) && loaded.project_profiles.contains(name) {
+replace: if false && !trusted && !loaded.profiles.contains(name) && loaded.project_profiles.contains(name) {
+caught-by:
+    cortex-core::it reload::a_projects_profile_is_offered_and_loaded_only_once_it_is_trusted
+
+[break] an-untrusted-projects-profiles-are-offered
+rule: config/get offers a project's profiles only once the project is trusted.
+file: crates/cortex-core/src/core.rs
+in: handle
+find:
+                if trusted {
+                    profiles.extend(loaded.project_profiles.iter().cloned());
+replace:
+                if true {
+                    profiles.extend(loaded.project_profiles.iter().cloned());
+caught-by:
+    cortex-core::it reload::a_projects_profile_is_offered_and_loaded_only_once_it_is_trusted

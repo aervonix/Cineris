@@ -2554,6 +2554,7 @@ fn status_shows_the_session_and_the_limits_in_force() {
             cortex_protocol::methods::ConfigGetResult {
                 config: config.as_object().cloned().unwrap_or_default(),
                 origins: Default::default(),
+                ..Default::default()
             },
         )),
     ));
@@ -2593,6 +2594,7 @@ fn config_shows_the_configuration_in_effect() {
             cortex_protocol::methods::ConfigGetResult {
                 config: config.as_object().cloned().unwrap_or_default(),
                 origins: Default::default(),
+                ..Default::default()
             },
         )),
     ));
@@ -3033,6 +3035,7 @@ fn status_says_a_project_is_marked_never_and_how_to_change_it() {
             cortex_protocol::methods::ConfigGetResult {
                 config: serde_json::Map::new(),
                 origins: Default::default(),
+                ..Default::default()
             },
         )),
     ));

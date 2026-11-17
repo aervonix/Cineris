@@ -560,6 +560,7 @@ fn a_status_of_the_session_left_is_not_shown_for_the_next() {
         Ok(OpResult::ConfigGet(ConfigGetResult {
             config: serde_json::Map::new(),
             origins: Default::default(),
+            ..Default::default()
         })),
     ));
     drain(&mut app, now);
