@@ -399,8 +399,12 @@ async fn connection(
         take_in(message, &asked, &shared, &output).await;
     }
     writer.abort();
-    // The end: every operation still asked is answered, then the interface
-    // is told once, as the queue is closed and empty.
+    ended(&asked, &shared);
+}
+
+/// The connection's end: every operation still asked is answered, then the
+/// interface is told once, as the queue is closed and empty.
+fn ended(asked: &AskedMap, shared: &Shared) {
     let left: Vec<Ticket> = asked
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -606,7 +610,147 @@ impl Lines {
 
 #[cfg(test)]
 mod tests {
+    use cortex_protocol::event::{Delta, Event, ItemDelta, TextDelta};
+    use cortex_protocol::jsonrpc::Notification;
+    use cortex_protocol::{ItemId, SessionEvent};
+
     use super::*;
+
+    fn shared() -> Shared {
+        Shared {
+            queue: Arc::new(EventQueue::new(16, true)),
+            done: Done::default(),
+            slot: Slot::default(),
+        }
+    }
+
+    /// A text delta of `s_1`'s item `i_1`, as the server sends it.
+    fn delta(seq: u64, text: &str) -> Message {
+        let event = SessionEvent {
+            session_id: SessionId::from("s_1"),
+            seq,
+            turn_id: None,
+            event: Event::ItemDelta(ItemDelta {
+                item_id: ItemId::new("i_1"),
+                delta: Delta::Text(TextDelta {
+                    text: text.to_owned(),
+                }),
+            }),
+        };
+        Message::Notification(Notification {
+            method: "session/event".to_owned(),
+            params: Some(serde_json::to_value(event).unwrap()),
+        })
+    }
+
+    fn texts(queue: &EventQueue) -> Vec<String> {
+        std::iter::from_fn(|| queue.try_next())
+            .filter_map(|next| match next {
+                cortex_core::Outgoing::Event(SessionEvent {
+                    event:
+                        Event::ItemDelta(ItemDelta {
+                            delta: Delta::Text(text),
+                            ..
+                        }),
+                    ..
+                }) => Some(text.text),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn run<T>(future: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
+
+    /// A history read's result fences the link's queue at its `seq`, as the
+    /// core fences the in-process queue: a delta after it is not merged into
+    /// one before it, which the read already drew.
+    #[test]
+    fn a_reads_result_fences_the_queue_at_its_seq() {
+        let shared = shared();
+        let asked: AskedMap = Arc::default();
+        asked.lock().unwrap().insert(
+            1,
+            Asked {
+                ticket: Ticket(1),
+                method: "session/read",
+                session: Some(SessionId::from("s_1")),
+            },
+        );
+        let (output, _written) = mpsc::channel(4);
+        let read = Message::Response(Response {
+            id: Some(RequestId::Number(1)),
+            result: Ok(serde_json::json!({"items": [], "incomplete": [], "seq": 1})),
+        });
+        run(async {
+            take_in(delta(1, "a"), &asked, &shared, &output).await;
+            take_in(read, &asked, &shared, &output).await;
+            take_in(delta(2, "b"), &asked, &shared, &output).await;
+        });
+        assert_eq!(texts(&shared.queue), ["a", "b"]);
+        let done = shared.done.lock().unwrap().pop_front();
+        assert!(
+            matches!(
+                done,
+                Some(Inbound::Done(Ticket(1), Ok(OpResult::SessionRead(_))))
+            ),
+            "{done:?}"
+        );
+    }
+
+    /// At the connection's end every operation still asked is answered, and
+    /// the interface is told once that the server is gone.
+    #[test]
+    fn the_end_answers_what_was_asked_and_tells_the_interface_once() {
+        let shared = shared();
+        let asked: AskedMap = Arc::default();
+        asked.lock().unwrap().insert(
+            4,
+            Asked {
+                ticket: Ticket(9),
+                method: "turn/start",
+                session: None,
+            },
+        );
+        ended(&asked, &shared);
+        let (mut order, mut gone_said) = (Order::default(), false);
+        let mut next =
+            || interactive::take(&shared.done, &shared.queue, &mut order, &mut gone_said);
+        assert!(
+            matches!(next(), Some(Inbound::Done(Ticket(9), Err(error))) if error.code == "server_gone")
+        );
+        assert!(matches!(next(), Some(Inbound::Gone(_))));
+        assert!(next().is_none(), "the end was told twice");
+    }
+
+    /// A request this build cannot read is declined, so that it stays open
+    /// for the server's other clients, and nothing is put to the interface.
+    #[test]
+    fn a_request_that_cannot_be_read_is_declined() {
+        let shared = shared();
+        let asked: AskedMap = Arc::default();
+        let (output, mut written) = mpsc::channel(4);
+        let request = Message::Request(Request {
+            id: RequestId::Number(7),
+            method: "brand/new".to_owned(),
+            params: None,
+        });
+        run(take_in(request, &asked, &shared, &output));
+        let line = written.try_recv().expect("an answer was written");
+        let Ok(Message::Response(Response {
+            id: Some(RequestId::Number(7)),
+            result: Err(error),
+        })) = serde_json::from_slice::<Message>(&line)
+        else {
+            panic!("not a declining answer: {}", String::from_utf8_lossy(&line));
+        };
+        assert_eq!(error.code, cortex_protocol::jsonrpc::code::METHOD_NOT_FOUND);
+        assert!(shared.queue.try_next().is_none());
+    }
 
     /// Lines are split at `\n` however the chunks fall, and one past the
     /// longest is the connection's end.
