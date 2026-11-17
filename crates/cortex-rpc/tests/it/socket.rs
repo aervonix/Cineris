@@ -449,3 +449,76 @@ fn sys_a_peer_whose_process_is_gone_is_refused() {
     stop.cancel();
     done.recv().unwrap();
 }
+
+/// Connects as a client, on the core's runtime (the transport's tasks run
+/// there).
+fn connect(core: &CoreThread, path: &Path) -> std::io::Result<cortex_rpc::Transport> {
+    let place = Place::Path(path.to_path_buf());
+    let (sent, reached) = std::sync::mpsc::channel();
+    core.handle.spawn(async move {
+        let _ = sent.send(cortex_rpc::socket::connect(&place).await);
+    });
+    reached.recv().expect("the connect ran")
+}
+
+/// A client reaches a server of the user's own, and is answered; it does
+/// not reach a socket others can write to, or one in a folder others can
+/// write in, where another user could have put a socket of their own.
+#[test]
+fn a_client_reaches_only_a_server_of_the_users_own() {
+    let world = World::new("socket-connect");
+    let core = world.core();
+    let path = folder(&world, "named", 0o700).join("rpc.sock");
+    let listener = bind(&path, false).unwrap();
+    let (stop, done) = serve(&core, listener, world.serve_options(), 64);
+    let mut transport = connect(&core, &path).expect("the user's own server is reached");
+    let initialize = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": conformance::initialize()});
+    transport
+        .output
+        .blocking_send(format!("{initialize}\n").into_bytes())
+        .unwrap();
+    let mut said = Vec::new();
+    while !said.contains(&b'\n') {
+        let chunk = transport
+            .input
+            .blocking_recv()
+            .expect("the server answers")
+            .unwrap();
+        said.extend(chunk);
+    }
+    assert!(
+        String::from_utf8_lossy(&said).contains(r#""result""#),
+        "{}",
+        String::from_utf8_lossy(&said)
+    );
+    drop(transport);
+    stop.cancel();
+    done.recv().unwrap();
+
+    // A socket others can write to, in a folder of the user's.
+    let open = folder(&world, "open-socket", 0o700).join("rpc.sock");
+    let _held = std::os::unix::net::UnixListener::bind(&open).unwrap();
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o666)).unwrap();
+    let Err(refused) = connect(&core, &open) else {
+        panic!("a socket others write to is reached");
+    };
+    assert_eq!(
+        refused.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "{refused}"
+    );
+
+    // A socket of the user's in a folder others can write in.
+    let shared = folder(&world, "shared", 0o777).join("rpc.sock");
+    let _held = std::os::unix::net::UnixListener::bind(&shared).unwrap();
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let Err(refused) = connect(&core, &shared) else {
+        panic!("a socket where others write is reached");
+    };
+    assert_eq!(
+        refused.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "{refused}"
+    );
+}

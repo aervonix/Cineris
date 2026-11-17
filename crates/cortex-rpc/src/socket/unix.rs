@@ -360,6 +360,54 @@ impl Listener {
     }
 }
 
+/// Connects to the server at `place` once it is shown to be the user's: the
+/// socket and its folder as [`super::connect`] says, then the credentials
+/// of the process at the other end.
+pub(super) async fn connect(place: &Place) -> io::Result<super::Transport> {
+    let Place::Path(path) = place else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a Unix server is reached at a path",
+        ));
+    };
+    let uid = effective_uid()?;
+    let folder = path
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    check_named_folder(folder, uid).map_err(|error| {
+        refused(format!(
+            "the server is not reached: {error} (another user could have put a socket there)"
+        ))
+    })?;
+    let found = std::fs::symlink_metadata(path)?;
+    if !found.file_type().is_socket() {
+        return Err(refused(format!(
+            "{} is not a socket: no server of yours listens there",
+            path.display()
+        )));
+    }
+    if found.uid() != uid || found.mode() & 0o022 != 0 {
+        return Err(refused(format!(
+            "{} is another user's socket, or others can write to it (mode {:o}): it is not \
+             reached",
+            path.display(),
+            found.mode() & 0o7777
+        )));
+    }
+    let stream = tokio::net::UnixStream::connect(path).await?;
+    let server = stream.peer_cred()?;
+    if server.uid() != uid {
+        return Err(refused(format!(
+            "the process listening at {} is another user's (uid {}): it is not reached",
+            path.display(),
+            server.uid()
+        )));
+    }
+    let (read, write) = stream.into_split();
+    Ok(super::transport_of(read, write))
+}
+
 impl Drop for Listener {
     fn drop(&mut self) {
         // The socket goes before the lock, so that no second server finds
