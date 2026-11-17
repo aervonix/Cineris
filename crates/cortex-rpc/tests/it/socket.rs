@@ -103,6 +103,7 @@ fn new_session(workspace: &Path) -> Op {
         title: None,
         config: Map::new(),
         ephemeral: false,
+        cwd: None,
     })
 }
 
