@@ -54,6 +54,9 @@ pub struct ProjectView<'a> {
     /// Whether the person trusts the project as it is: without that, an
     /// accepted command still asks before it runs.
     pub trusted: bool,
+    /// The key that answers the question of a deletion (`focus.accept`),
+    /// as the key map names it: none when no key is bound to it.
+    pub yes: Option<&'a str>,
 }
 
 /// Whether the user accepted `entry`, or wrote it in their own store: for
@@ -218,6 +221,7 @@ pub fn project_rows(
         ));
         if focus {
             let asking = view.asking == Some(index);
+            let asking = asking.then_some(view.yes);
             for line in detail(entry, asking, view.now, view.trusted, width, look) {
                 rows.push(PanelRow::of(index, line));
             }
@@ -298,12 +302,13 @@ pub fn entry_row(
 /// never cut: what it runs, what for and where, whether it only reads,
 /// where it came from, its standing (`trusted` when the project is trusted
 /// as it is), what accepting it keeps it until, its check and its
-/// evidence; and, when its deletion is asked, the question. Everything a
+/// evidence; and, when its deletion is asked (`asking`, with the key that
+/// answers it), the question. Everything a
 /// `y` acts on is here: the entry's row, which is cut, is not needed.
 #[must_use]
 pub fn detail(
     entry: &ProjectEntry,
-    asking: bool,
+    asking: Option<Option<&str>>,
     now: UtcTime,
     trusted: bool,
     width: usize,
@@ -375,14 +380,17 @@ pub fn detail(
             Span::new(one_line(evidence), muted),
         ]);
     }
-    if asking {
-        paragraphs.push(vec![Span::new(
-            format!(
-                "delete this entry? y deletes {} any other key keeps it",
+    // The question names the key that answers it, as the key map binds it.
+    if let Some(yes) = asking {
+        let question = match yes {
+            Some(yes) => format!(
+                "delete this entry? {} deletes {} any other key keeps it",
+                one_line(yes),
                 look.glyphs.separator
             ),
-            theme.style(Token::Warning),
-        )]);
+            None => "delete this entry? no key is bound to accept it: any key keeps it".to_owned(),
+        };
+        paragraphs.push(vec![Span::new(question, theme.style(Token::Warning))]);
     }
     // Four columns in, where the window has room for them.
     let indent = if width >= 12 { 4 } else { 0 };

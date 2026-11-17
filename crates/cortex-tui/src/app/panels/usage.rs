@@ -66,6 +66,9 @@ pub(crate) struct UsagePanel {
     said: Vec<String>,
     /// Whether `/usage` opened it: it stays open with no limit near.
     summoned: bool,
+    /// Whether a limit was near at the last update: one that becomes near
+    /// opens it by itself, once, and none near closes it.
+    warned: bool,
     /// Its parts as its state makes them, kept: the mechanism asks for an
     /// item at every place when the list changes, and each would make them
     /// all again.
@@ -90,6 +93,7 @@ impl UsagePanel {
             refreshed: Vec::new(),
             said: Vec::new(),
             summoned: false,
+            warned: false,
             parts: Vec::new(),
             clock,
             zone,
@@ -243,14 +247,20 @@ impl Panel for UsagePanel {
     }
 
     fn item(&self, index: usize) -> Option<ItemKey> {
-        let part = self.parts.get(index)?;
-        // Nothing here acts on a row: what it shows changing is no reason
-        // to hold a key back.
-        let id = format!("{part:?}");
-        Some(ItemKey {
-            content: id.clone(),
-            id,
+        // Nothing here acts on a row, and its keys change its own view
+        // (`tab`, `g`): what the rows show changing is no reason to hold
+        // the next key back. One key for every row: the focus keeps its
+        // place, and the readiness goes on.
+        self.parts.get(index).map(|_| ItemKey {
+            id: "usage".to_owned(),
+            content: String::new(),
         })
+    }
+
+    fn lapsed(&self) -> bool {
+        // Opened by a limit whose reset has passed since, with nothing
+        // said: nothing to draw.
+        !self.summoned && !self.near()
     }
 
     fn hint(&self, _focused: usize, keymap: &KeyMap) -> Vec<String> {
@@ -270,15 +280,19 @@ impl UsagePanel {
         match seen {
             Seen::Event { event, .. } => match event {
                 Event::UsageUpdated(updated) => {
-                    let was = self.near();
                     self.session = Some(updated.usage.clone());
                     let near = self.near();
-                    // Opened by a limit near, closed when none is; else as
-                    // it was.
-                    match (was, near) {
-                        (false, true) => self.show(),
-                        (true, false) if !self.summoned => Show::Close,
-                        _ => Show::Same,
+                    let was = std::mem::replace(&mut self.warned, near);
+                    // A limit that became near opens it; with none near (a
+                    // reset passed, as the clock tells it, is not near), it
+                    // goes, unless `/usage` opened it. One near since before
+                    // does not open it again after `x`.
+                    if near && !was {
+                        self.show()
+                    } else if !near && !self.summoned {
+                        Show::Close
+                    } else {
+                        Show::Same
                     }
                 }
                 Event::ConfigChanged(changed)

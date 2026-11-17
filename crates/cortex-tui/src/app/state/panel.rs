@@ -288,6 +288,7 @@ impl App {
                 width,
                 look: &self.look,
                 tick: self.tick,
+                keys: self.input.keymap(),
             };
             let laid = self.panels.layout(room, whole, &draw, self.input.keymap());
             if !laid.lines.is_empty() {
@@ -349,6 +350,7 @@ impl App {
             width: self.width.max(1),
             look: &self.look,
             tick: self.tick,
+            keys: self.input.keymap(),
         };
         if self.panels.rows_to_focus(id, &draw) > self.panel_room {
             let name = self.panels.name(id).unwrap_or("panel");

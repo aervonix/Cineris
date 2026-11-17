@@ -62,6 +62,8 @@ pub(crate) struct Draw<'a> {
     pub(crate) look: &'a Look,
     /// The spinner's frame, for what runs.
     pub(crate) tick: usize,
+    /// The key map, for a row that names a key (`y deletes`).
+    pub(crate) keys: &'a KeyMap,
 }
 
 /// Something that happened, which every panel sees.
@@ -217,6 +219,13 @@ pub(crate) trait Panel: std::fmt::Debug + Send {
     /// It took the focus: what a key of its asked and was not answered
     /// (a question in a row) is forgotten.
     fn focus_taken(&mut self) {}
+
+    /// It is open and has nothing more to show, though nothing it saw said
+    /// so: the time passed it by (a limit's reset). The mechanism closes it
+    /// before the panels are laid out.
+    fn lapsed(&self) -> bool {
+        false
+    }
 
     /// The focus moved to `focused` inside it (`Up`, `Down`).
     fn moved(&mut self, focused: usize) {
@@ -631,6 +640,17 @@ impl Panels {
         keymap: &KeyMap,
     ) -> Laid {
         let mut laid = Laid::default();
+        // What the time passed by goes first: it would be open with nothing
+        // to draw, and the focus ring would still reach it.
+        let lapsed: Vec<u64> = self
+            .open
+            .iter()
+            .copied()
+            .filter(|id| self.slot(*id).is_some_and(|slot| slot.panel.lapsed()))
+            .collect();
+        for id in lapsed {
+            self.close(id);
+        }
         if room == 0 || self.open.is_empty() {
             return laid;
         }

@@ -126,6 +126,7 @@ fn the_focused_panel_scrolls_to_keep_its_row_with_a_dim_row_at_each_cut_end() {
         width: 59,
         look: &look,
         tick: 0,
+        keys: &KEYS,
     };
     let mut panels = Panels::new();
     let tall = panels.register(standin("tall", 12, 1, 2));
@@ -185,6 +186,7 @@ fn the_oldest_collapsed_panels_fold_into_one_row_and_with_no_room_nothing_is_dra
         width: 59,
         look: &look,
         tick: 0,
+        keys: &KEYS,
     };
     let mut panels = Panels::new();
     let first = panels.register(standin("first", 3, 1, 3));
@@ -231,6 +233,7 @@ fn a_panel_that_would_not_be_drawn_focused_cannot_be_reached() {
         width: 59,
         look: &look,
         tick: 0,
+        keys: &KEYS,
     };
     let mut panels = Panels::new();
     // Its focused item alone is three rows, under its first row.
@@ -265,6 +268,7 @@ fn each_panel_says_the_fewest_rows_it_draws() {
         width: 59,
         look: &look,
         tick: 0,
+        keys: &KEYS,
     };
     for id in ids {
         let panels = app.panels_mut();
@@ -444,6 +448,7 @@ fn sweep(running: bool) {
             width,
             look: &look,
             tick: 0,
+            keys: &KEYS,
         };
         // Each panel's focused rows, as its focus starts, which no height
         // changes.
@@ -574,3 +579,6 @@ fn the_block_is_set_apart_above_and_below_and_the_live_rows_keep_four() {
 
 /// The transcript's live rows that panels never take.
 const LIVE_ROWS: usize = 4;
+
+/// The default key map, which every `Draw` here names.
+static KEYS: std::sync::LazyLock<KeyMap> = std::sync::LazyLock::new(KeyMap::defaults);

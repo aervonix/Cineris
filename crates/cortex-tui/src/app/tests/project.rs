@@ -809,3 +809,63 @@ fn y_on_an_entry_in_use_and_accepted_sends_nothing() {
         "taken, not typed"
     );
 }
+
+/// A list the core refuses (no project kept here) ends the panel's
+/// `reading…`, and says why where the entries would be.
+#[test]
+fn a_refused_list_ends_the_reading_and_says_why() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let long_before = now - Duration::from_secs(10);
+    let (mut app, link) = app(long_before);
+    app.set_clock(clock());
+    app.resize(98, 60);
+    opened(&mut app, &link, long_before);
+    let refusal = || {
+        ErrorData::new(
+            ErrorKind::Usage,
+            "not_available",
+            "There is no state directory, so no project profile is kept.",
+        )
+    };
+    for (ticket, op) in link.take_sent() {
+        if let Op::ProjectList(_) = op {
+            link.give(Inbound::Done(ticket, Err(refusal())));
+        }
+    }
+    drain(&mut app, long_before);
+    type_text(&mut app, "/project", now - Duration::from_secs(5));
+    key(&mut app, "esc", now - Duration::from_secs(5));
+    key(&mut app, "enter", now);
+    for (ticket, op) in link.take_sent() {
+        if let Op::ProjectList(_) = op {
+            link.give(Inbound::Done(ticket, Err(refusal())));
+        }
+    }
+    drain(&mut app, now);
+    let live = live_text(&mut app, now);
+    assert!(!live.iter().any(|row| row.contains("reading")), "{live:#?}");
+    assert!(
+        live.iter()
+            .any(|row| row.contains("There is no state directory, so no project profile is kept.")),
+        "{live:#?}"
+    );
+}
+
+/// The question names the key the map binds to `focus.accept`.
+#[test]
+fn the_delete_question_names_the_bound_key() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_entries(now, 60, &entries());
+    let keys = ["z".to_owned()];
+    let (keymap, errors) = crate::keys::KeyMap::with_table([("focus.accept", &keys[..])]);
+    assert!(errors.is_empty(), "{errors:?}");
+    app.set_keymap(keymap);
+    let ready = project_focused(&mut app, &link, &entries(), now);
+    press(&mut app, "d", ready);
+    let live = live_text(&mut app, ready);
+    assert!(
+        live.iter()
+            .any(|row| row == "    delete this entry? z deletes · any other key keeps it"),
+        "{live:#?}"
+    );
+}

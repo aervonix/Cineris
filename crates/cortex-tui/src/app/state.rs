@@ -1300,7 +1300,12 @@ impl App {
             }
             // What a panel asked as the session opened, which the core has
             // nothing of here: nothing the person asked for.
-            (Pending::Opened { .. }, Err(error)) if error.code == "not_available" => {}
+            (Pending::Opened { panel, .. }, Err(error)) if error.code == "not_available" => {
+                // The panel hears of it, and its rows stop `reading…`.
+                if self.panels.failed(panel, &error) {
+                    self.panel_closed(panel);
+                }
+            }
             // The panel hears of it (its rows stop `reading…`), and the
             // error is said.
             (Pending::Panel { panel, .. } | Pending::Opened { panel, .. }, Err(error)) => {

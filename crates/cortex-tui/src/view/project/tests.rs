@@ -115,6 +115,7 @@ fn view(entries: &[ProjectEntry]) -> ProjectView<'_> {
         reading: false,
         problems: &[],
         trusted: false,
+        yes: Some("y"),
     }
 }
 
@@ -210,7 +211,7 @@ fn what_waits_for_review_is_a_proposal_or_an_entry_never_accepted() {
 /// The focused entry's detail, its rows trimmed and joined, its spaces
 /// made one: what it says, whatever the width wrapped.
 fn said_whole(entry: &ProjectEntry, trusted: bool, width: usize) -> String {
-    detail(entry, false, now(), trusted, width, &look())
+    detail(entry, None, now(), trusted, width, &look())
         .iter()
         .map(|line| line.text().trim().to_owned())
         .collect::<Vec<_>>()
@@ -319,10 +320,16 @@ fn each_origin_and_standing_is_said_as_cortex_project_says_it() {
         said(&stale)
     );
     assert!(said(&entries[0]).contains("evidence ran 3 times and passed"));
-    let asked = detail(&entries[0], true, now(), false, 200, &look);
+    let asked = detail(&entries[0], Some(Some("y")), now(), false, 200, &look);
     assert_eq!(
         asked.last().map(|line| line.text().into_owned()).as_deref(),
         Some("    delete this entry? y deletes · any other key keeps it")
+    );
+    // The key the map binds, whatever it is.
+    let asked = detail(&entries[0], Some(Some("ctrl+y")), now(), false, 200, &look);
+    assert_eq!(
+        asked.last().map(|line| line.text().into_owned()).as_deref(),
+        Some("    delete this entry? ctrl+y deletes · any other key keeps it")
     );
 }
 

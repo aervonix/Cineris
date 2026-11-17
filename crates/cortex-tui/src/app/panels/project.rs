@@ -35,12 +35,12 @@
 //!   core's sentence.
 
 use cortex_base::SharedClock;
-use cortex_protocol::SessionId;
 use cortex_protocol::event::Event;
 use cortex_protocol::ids::EntryId;
 use cortex_protocol::methods::{Op, OpResult, ProjectListParams, ProjectUpdateParams};
 use cortex_protocol::project::{EntryAction, EntryChange, EntryStatus, ProjectEntry};
 use cortex_protocol::session::{SessionState, TrustStanding};
+use cortex_protocol::{ErrorData, SessionId};
 use cortex_term::Line;
 
 use super::{Act, Draw, ItemEditFor, ItemKey, Panel, Seen, Show};
@@ -128,7 +128,7 @@ impl ProjectPanel {
         self.order();
     }
 
-    fn view(&self) -> ProjectView<'_> {
+    fn view<'a>(&'a self, yes: Option<&'a str>) -> ProjectView<'a> {
         let asking = self
             .asking
             .as_ref()
@@ -140,7 +140,16 @@ impl ProjectPanel {
             reading: !self.listed,
             problems: &self.problems,
             trusted: self.trusted,
+            yes,
         }
+    }
+
+    /// The key bound to `focus.accept`, as `keys` names it.
+    fn yes(keys: &KeyMap) -> Option<String> {
+        keys.keys_of(Action::FocusAccept)
+            .into_iter()
+            .next()
+            .map(name)
     }
 
     /// One change to the entry `id`, in `session`.
@@ -244,11 +253,27 @@ impl Panel for ProjectPanel {
     }
 
     fn collapsed(&self, draw: &Draw<'_>) -> Vec<Line> {
-        views::project_collapsed(&self.view(), draw.width, draw.look)
+        views::project_collapsed(&self.view(None), draw.width, draw.look)
     }
 
     fn expanded(&self, focused: usize, draw: &Draw<'_>) -> Vec<PanelRow> {
-        views::project_rows(&self.view(), Some(focused), draw.width, draw.look)
+        let yes = Self::yes(draw.keys);
+        views::project_rows(
+            &self.view(yes.as_deref()),
+            Some(focused),
+            draw.width,
+            draw.look,
+        )
+    }
+
+    fn failed(&mut self, error: &ErrorData) -> Show {
+        // A list refused (no project kept here): said where the entries
+        // would be, and no longer `reading…`.
+        if !self.listed {
+            self.listed = true;
+            self.problems = vec![error.message.clone()];
+        }
+        Show::Same
     }
 
     fn items(&self) -> usize {

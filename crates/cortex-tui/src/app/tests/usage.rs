@@ -440,3 +440,71 @@ fn a_refused_report_is_said_in_the_panel_and_reading_ends() {
     assert!(joined.contains(sentence), "{live:#?}");
     assert!(!joined.contains("reading…"), "{live:#?}");
 }
+
+/// A limit that opened the panel, whose reset has passed: with the next
+/// update it goes, and with no update at all it goes with the next frame,
+/// the focus ring not reaching it.
+#[test]
+fn a_limit_past_its_reset_closes_the_panel_it_opened() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let wall = FakeClock::starting_at("2026-11-16T12:00:00Z").expect("a time");
+    let (mut app, link) = with_usage(now, 40, SessionUsage::default());
+    app.set_clock(Arc::new(wall.clone()));
+    let usage = usage_id(&app);
+    link.give(usage_updated(session_usage()));
+    drain(&mut app, now);
+    assert!(app.panels().is_open(usage), "the fast tier is near");
+    // The fast tier resets at 15:00; at 15:01 nothing is known of it.
+    wall.advance(Duration::from_secs(3 * 3_600 + 60));
+    link.give(usage_updated(session_usage()));
+    drain(&mut app, now);
+    assert!(!app.panels().is_open(usage), "a reset passed is not near");
+    // Near again, and then the reset passes with no update: the next
+    // frame closes it, and `Ctrl+P` does not land on it.
+    let wall = FakeClock::starting_at("2026-11-16T12:00:00Z").expect("a time");
+    let (mut app, link) = with_usage(now, 40, SessionUsage::default());
+    app.set_clock(Arc::new(wall.clone()));
+    link.give(usage_updated(session_usage()));
+    drain(&mut app, now);
+    let _ = live_text(&mut app, now);
+    assert!(app.panels().is_open(usage));
+    wall.advance(Duration::from_secs(3 * 3_600 + 60));
+    let live = live_text(&mut app, now);
+    assert!(!app.panels().is_open(usage), "{live:#?}");
+    key(&mut app, "ctrl+p", now);
+    assert_ne!(app.input().focus().focused(), Target::Panel(usage));
+}
+
+/// `tab` and `g` change the panel's own view: a `g` straight after the
+/// range's answer is taken, not typed into the prompt.
+#[test]
+fn a_key_straight_after_the_views_change_is_taken() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_usage(now, 60, session_usage());
+    let (asked, ready) = usage_focused(&mut app, &link, now);
+    answer(
+        &mut app,
+        &link,
+        &asked,
+        &report(Vec::new()),
+        &["anthropic"],
+        now,
+    );
+    // The focus on a row of the history, which `tab` changes.
+    for _ in 0..6 {
+        key(&mut app, "down", ready);
+    }
+    let _ = live_text(&mut app, ready);
+    press(&mut app, "tab", ready);
+    let tab = sent(&link);
+    answer(&mut app, &link, &tab, &report(Vec::new()), &[], ready);
+    let _ = live_text(&mut app, ready);
+    let soon = ready + Duration::from_millis(50);
+    press(&mut app, "g", soon);
+    assert_eq!(
+        sent(&link).reports.len(),
+        1,
+        "the grouping asked for at once"
+    );
+    assert_eq!(app.input().focus().focused(), Target::Panel(usage_id(&app)));
+}
