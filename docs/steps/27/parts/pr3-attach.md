@@ -9,6 +9,7 @@ The third of step 27's three pull requests: `cortex attach`, the prompts at a tu
 - **The core's queue** makes public what a link outside the core needs: `EventQueue::push_request`, `fence`, `unfence` and `close`. No behaviour changes.
 - **Prompts at a turn's edges** (`cortex-tui`'s `app::state`, settling the open item): the prompts held while a session opens are sent one at a time, each once the one before was answered, a refused one giving back those behind it in order; the first is sent with `steer` when the open says a turn is running; a prompt refused `turn_running` is sent again once with `queue`.
 - **A TypeScript client** (`crates/cortex-cli/tests/system/ts_client/turn.mts`), typed only by `docs/protocol/ts/cortex-protocol.d.ts` and run by Node 22.18 or later with no build step, starts `cortex serve --stdio` and runs a turn. `tsc` checks it against the declarations first, so a protocol change it no longer fits fails. It runs in a job that blocks nothing, `ts-client`, when `cortex-protocol`, `cortex-rpc`, the declarations, the client or its workflow change, and in the nightly ([testing-and-ci.md](../../../testing-and-ci.md), "The TypeScript client").
+- **The server's decoder fuzzed** (`fuzz/`'s `rpc_decoder`, in `cargo xtask fuzz` and the nightly job, 120 s a night): any bytes as a client's stream, through the server's own `wire::read` (compiled from its file, so the fuzz build does not take in the core), into lines, a request's operation and an answer to each request the server puts. Nothing may panic, what cannot be read gets an error a client can read, and what is read is the same once written again. Its fuzzing found that a line that is not JSON could get -32600 rather than -32700, and that a JSON array was served as a message: both fixed (`cortex_base::framing::decode` classes a failed line by whether it reads as JSON text at all; `wire::read` refuses an array as a batch).
 - **The measurement** `perf_a_requests_round_trip_through_the_server` ([performance-budgets.md](../../../performance-budgets.md), "Latency the harness adds").
 
 ## Where it departs from the design
@@ -18,6 +19,8 @@ The third of step 27's three pull requests: `cortex attach`, the prompts at a tu
 | `actions/setup-node` in the blocking `test` jobs (point 7) | A job of its own that blocks nothing, and the nightly | The coordinator's answer, by rule 2 |
 | The client run with Node's type stripping alone | `tsc` from npm checks it first, in the job | Node checks no types: only a compiler shows the client no longer fits the declarations |
 | A prompt typed while held ones are on their way, not named | It follows them; `/new` and a switch wait for them | Their order holds only so |
+| Held prompts given back at an interrupt | The ones not yet sent are queued ahead of the interrupt, and the core holds them in order behind the next prompt | Giving them back let one overtake another (the review, below) |
+| The fuzz target on `cortex-rpc` | On `wire.rs` compiled from its file | The fuzz build takes 57 crates (30 s) rather than 141 (51 s) with the core |
 
 ## The "Done when" items this part covers
 
@@ -25,3 +28,31 @@ The third of step 27's three pull requests: `cortex attach`, the prompts at a tu
 |---|---|
 | A session survives its client disconnecting and can be re-attached | `cortex-cli::system tui::sys_attach_runs_a_turn_on_the_server_and_its_session_outlives_it` (on Linux over a socket and on Windows over a named pipe, under the pseudo-terminal): a turn over `attach`, then `attach --continue` draws it again |
 | A minimal TypeScript client using only the generated declarations runs a turn | `cortex-cli::system ts_client::sys_a_typescript_client_runs_a_turn`, in the `ts-client` job (CI run 44009172980) |
+| The decoder passes a fixed-length fuzz run in the non-blocking tier | `fuzz/`'s `rpc_decoder`, 120 s in the nightly workflow's `fuzz` job on this branch with no failure (run 44010331313: 70,495 runs); 21 minutes on the desktop, no failure |
+
+## The independent review
+
+It read the whole pull request, and then the fix of the line's class. Every finding was fixed with a test that fails without the fix and a break the test catches, or is said here.
+
+| Finding | Fix |
+|---|---|
+| attach fenced its queue at a read's answer only, and the server may send a delta after the read's `seq` before the answer: merged into one the read drew, its text was drawn twice | Merging of the session's deltas stops from the read's asking; the answer fences at its `seq` |
+| An interrupt while a held prompt was on its way could turn the prompts' order round | The held prompts not sent are queued ahead of the interrupt |
+| The Unix check of the server's process had no break | A break that survives, with why: setting up another user's server in a folder of the user's needs root |
+| A Windows `SAFETY` claim was not shown: a security identifier read past its bytes was not ruled out | Every identifier read is bounded by the bytes it lies in, in the label's and the token's reading alike |
+| attach said "the core" when the server went | Its own end is said: the server's connection has ended, its sessions go on there; a pseudo-terminal test ends attach by ending its server |
+| An operation that could not be written, or a reader that panicked, left the application waiting | The writer answers it; the end runs from a guard |
+| The records said the TypeScript job runs on more than its gate holds | They name its paths as the gate has them |
+| The queue's public methods could be misused on the core's own queues | Their documents say they are for a queue the caller made |
+| The class of a failed line passed over a byte that is not UTF-8 | A failed line is JSON only when it is text too |
+
+## Open items
+
+- **Settled:** [prompt delivery at a turn's edges](../answered.md) (the item's file is gone).
+- **Opened:** [json-floats-read-within-a-few-units](../../../outstanding/json-floats-read-within-a-few-units.md) (the owner's: floats from a client are read to within a couple of units in their last place) and [the-fuzz-package-has-no-blocking-check](../../../outstanding/the-fuzz-package-has-no-blocking-check.md) (a tooling step's).
+- **Shared, step 27's part said in [answered.md](../answered.md):** `headless-details-left-open` (its (6) left to step 32: the test would cost Windows' tier 3 about 3 s) and `waits-on-the-statistics-without-a-limit` (the server's end bounded).
+
+## Public API
+
+Added, nothing removed or changed: `cortex-core`'s `EventQueue::push_request`, `fence`, `unfence` and `close` (public now, for a link outside the core), and `cortex_rpc::socket::connect`.
+
