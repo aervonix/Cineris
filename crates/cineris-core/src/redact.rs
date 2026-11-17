@@ -48,6 +48,65 @@ impl Redactor for LogRedactor {
     }
 }
 
+/// The items of a `session/read` with `redacted`, for an export (since
+/// step 25): those still in progress left out, and each of the rest masked
+/// by the walk the log's writer uses ([`cineris_session::redact::for_export`])
+/// with the filter it uses, its provider blocks dropped. A session kept
+/// only in memory, whose items were never written, is masked the same.
+/// An assistant message is first made its [`neutral`] projection, as the
+/// log stores one whose blocks hold a secret: its provider blocks are not
+/// parts an export can show. Returns the items and how many values are
+/// masked in them, by the log as it was written or by this pass.
+pub(crate) fn for_export(
+    items: Vec<Item>,
+    incomplete: &[cineris_protocol::ItemId],
+    filter: crate::provider::SharedFilter,
+) -> (Vec<Item>, u32) {
+    let redactor = LogRedactor(filter);
+    let masks = |value: &Value| {
+        let mut count = 0;
+        count_masks(value, &mut count);
+        count
+    };
+    let mut masked = 0usize;
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        if item
+            .id()
+            .is_some_and(|id| incomplete.iter().any(|open| open.as_str() == id))
+        {
+            continue;
+        }
+        let item = match item {
+            Item::AssistantMessage(message) => Item::AssistantMessage(neutral(&message)),
+            other => other,
+        };
+        let Ok(mut value) = serde_json::to_value(&item) else {
+            continue;
+        };
+        // The masks it holds, the log's and this pass's: a logged session
+        // reads back masked already.
+        cineris_session::redact::for_export(&mut value, &redactor);
+        masked += masks(&value);
+        // An item that does not read back after masking is left out rather
+        // than given unmasked.
+        if let Ok(item) = serde_json::from_value::<Item>(value) {
+            out.push(item);
+        }
+    }
+    (out, u32::try_from(masked).unwrap_or(u32::MAX))
+}
+
+/// Adds to `count` the masks in the strings of `value`.
+fn count_masks(value: &Value, count: &mut usize) {
+    match value {
+        Value::String(text) => *count += text.matches(cineris_base::redact::MASK).count(),
+        Value::Array(items) => items.iter().for_each(|item| count_masks(item, count)),
+        Value::Object(fields) => fields.values().for_each(|item| count_masks(item, count)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
 /// Whether the filter finds a secret in a provider's block.
 ///
 /// The block is JSON text, so what it says is written with escapes: a key
@@ -262,6 +321,35 @@ mod tests {
 
     fn filter() -> SecretFilter {
         SecretFilter::new().with_value(&Secret::new(KEY))
+    }
+
+    /// What an export reads: the items in progress left out, the rest
+    /// masked by the log's walk, and no provider block, even one with no
+    /// secret in it (step 25).
+    #[test]
+    fn an_export_leaves_out_what_runs_masks_the_rest_and_drops_every_raw_block() {
+        let shared: crate::provider::SharedFilter =
+            std::sync::Arc::new(std::sync::RwLock::new(filter()));
+        let mut done = message(r#"{"type":"thinking","signature":"sig"}"#);
+        if let Part::Text(text) = &mut done.parts[2] {
+            text.text = format!("the key is {KEY}");
+        }
+        let mut running = message(r#"{"type":"thinking","signature":"sig"}"#);
+        running.id = ItemId::new("i_3");
+        let (items, masked) = for_export(
+            vec![
+                Item::AssistantMessage(done),
+                Item::AssistantMessage(running),
+            ],
+            &[ItemId::new("i_3")],
+            shared,
+        );
+        assert_eq!(items.len(), 1, "the item in progress is left out");
+        let text = serde_json::to_string(&items).unwrap();
+        assert!(!text.contains(KEY), "{text}");
+        assert!(!text.contains("\"raw\""), "{text}");
+        assert!(text.contains("the key is [redacted]"), "{text}");
+        assert_eq!(masked, 1);
     }
 
     fn message(reasoning_raw: &str) -> AssistantMessageItem {

@@ -1848,6 +1848,7 @@ impl App {
                 item_id: None,
                 limit: Some(HISTORY_PAGE),
                 cursor,
+                redacted: false,
             },
         ));
         self.pending.insert(ticket, Pending::History(session_id));

@@ -554,6 +554,7 @@ fn on_their_way_with_no_turn(now: Instant) -> (App, Scripted, Ticket) {
                 incomplete: Vec::new(),
                 next_cursor: None,
                 seq: 5,
+                masked: 0,
             },
         )),
     ));
@@ -697,6 +698,7 @@ fn held_prompts_given_back_leave_the_spinner_of_a_turn_that_runs() {
                 incomplete: Vec::new(),
                 next_cursor: None,
                 seq: 5,
+                masked: 0,
             },
         )),
     ));

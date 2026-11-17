@@ -250,6 +250,13 @@ pub struct SessionReadParams {
     /// Where to continue: the `next_cursor` of the page before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
+    /// For an export (since step 25): every item's text masked by the
+    /// core's own secret filter, as the session log's writer masks it, the
+    /// provider's blocks (`raw`) left out, and the items still in progress
+    /// left out (named in `incomplete`). A session kept only in memory is
+    /// masked the same.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redacted: bool,
 }
 
 /// The result of `session/read`: items of the active branch, oldest first.
@@ -267,6 +274,10 @@ pub struct SessionReadResult {
     /// The `seq` of the last event sent for the session when the items were
     /// read. Events after it are not in this result.
     pub seq: u64,
+    /// With `redacted`: how many values are masked in `items`, by the log
+    /// as it was written or as they were read (since step 25).
+    #[serde(default, skip_serializing_if = "masked_none")]
+    pub masked: u32,
 }
 
 /// `session/fork`
@@ -1444,4 +1455,13 @@ impl SessionEvent {
             params: Some(serde_json::to_value(self)?),
         })
     }
+}
+
+/// Whether `session/read` masked nothing, so the field is left out.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip test takes a reference"
+)]
+fn masked_none(masked: &u32) -> bool {
+    *masked == 0
 }

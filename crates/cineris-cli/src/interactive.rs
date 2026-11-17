@@ -1067,6 +1067,7 @@ mod tests {
                     incomplete: Vec::new(),
                     next_cursor: None,
                     seq: 9,
+                    masked: 0,
                 },
             )),
         )

@@ -23,6 +23,7 @@ async fn read(
             item_id: item,
             limit,
             cursor,
+            redacted: false,
         }))
         .await
         .unwrap();

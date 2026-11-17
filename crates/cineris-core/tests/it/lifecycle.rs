@@ -175,6 +175,7 @@ async fn read_all(front: &Front) -> SessionReadResult {
             item_id: None,
             limit: None,
             cursor: None,
+            redacted: false,
         }))
         .await
         .unwrap();
