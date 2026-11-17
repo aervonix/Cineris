@@ -568,6 +568,7 @@ fn sys_serve_socket_serves_at_the_default_place_and_removes_it() {
             title: None,
             config: serde_json::Map::new(),
             ephemeral: false,
+            cwd: None,
         }))
         .expect("a session opens")
     else {

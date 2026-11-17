@@ -1298,7 +1298,7 @@ fn a_prompt_queued_behind_a_turn_not_yet_begun_does_not_look() {
 fn trust_taken_away_holds_when_the_reload_brings_a_level_the_core_may_not_give() {
     let world = World::new("reload_untrust_unrestricted", [says("Done.")]);
     let (store, key) = trust_store(&world);
-    store.trust(&key, "~/work/app", &[]).unwrap();
+    store.trust(&key, "~/work/app", &[], true).unwrap();
     let core = world.core_with(|options| options.allow_unrestricted = false);
     world.run(async {
         let front = Front::start(&world, &core).await;

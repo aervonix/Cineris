@@ -785,6 +785,7 @@ fn unrestricted_is_refused_where_the_core_may_not_give_it() {
                         title: None,
                         config,
                         ephemeral: true,
+                        cwd: None,
                     }),
                 )
                 .await
