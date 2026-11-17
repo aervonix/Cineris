@@ -650,6 +650,33 @@ fn end_then_page_down_in_the_viewer_stays_at_the_end() {
     assert_eq!(text(&app.viewer_frame(30, 99, now)), at_end);
 }
 
+/// A dialog that comes while the search is open: what is pasted then goes
+/// to the search, and its answer does not move the window, which stays at
+/// the end the request followed, at what led to the dialog (the second
+/// review of step 25).
+#[test]
+fn the_search_does_not_move_the_window_under_a_dialog() {
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Fullscreen, 3, now);
+    key(&mut app, "ctrl+f", now);
+    link.give(Inbound::Request(
+        cortex_protocol::jsonrpc::RequestId::Number(7),
+        crate::testkit::approval("c_7"),
+    ));
+    drain(&mut app, now);
+    let _ = rows_text(&mut app, now);
+    assert!(app.screen_follows(), "the request follows the end");
+    app.terminal(&TermEvent::Paste("Turn".to_owned()), now);
+    assert!(app.search_ready(BOUND));
+    let _ = app.drain(now, 64);
+    let _ = rows_text(&mut app, now);
+    assert_eq!(app.search_query().as_deref(), Some("Turn"));
+    assert!(
+        app.screen_follows(),
+        "the search moved the window under the dialog"
+    );
+}
+
 /// A search's query holds at most 256 characters, however much is typed
 /// or pasted; with the ASCII glyphs, the row that says there is more below
 /// uses theirs (the review of step 25).
@@ -1026,9 +1053,9 @@ fn holds(bytes: &[u8], part: &[u8]) -> bool {
 
 /// The full-screen presenter's loop draws on the alternate screen with the
 /// mouse reported, and leaves both off when it quits, the core goes, the
-/// terminal fails under it, or the program is suspended (`Ctrl+Z`, after
-/// which it takes the screen again); the mouse is never on with the main
-/// screen.
+/// terminal fails under it, or the program is suspended (by a key bound
+/// to it, after which it takes the screen again); the mouse is never on
+/// with the main screen.
 #[test]
 fn every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_off() {
     use cortex_term::Ready;
@@ -1041,7 +1068,8 @@ fn every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_of
             "suspended",
             vec![
                 (Ready::Woken, Vec::new()),
-                (Ready::Input, b"\x1a".to_vec()),
+                // F9, bound to `global.suspend` for this way.
+                (Ready::Input, b"\x1b[20~".to_vec()),
                 // Continued (`fg`), and a frame's time passes.
                 (Ready::Resumed, Vec::new()),
                 (Ready::Timeout, Vec::new()),
@@ -1059,6 +1087,13 @@ fn every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_of
             ..Settings::default()
         };
         let (mut app, link) = app_with_settings(base, settings);
+        if way == "suspended" {
+            let f9 = vec!["f9".to_owned()];
+            let (keymap, errors) =
+                crate::keys::KeyMap::with_table([("global.suspend", f9.as_slice())]);
+            assert!(errors.is_empty(), "{errors:?}");
+            app.set_keymap(keymap);
+        }
         link.give(Inbound::Done(
             crate::app::Ticket(1),
             Ok(cortex_protocol::methods::OpResult::SessionNew(
@@ -1090,17 +1125,20 @@ fn every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_of
             "{way}"
         );
         if way == "suspended" {
-            // Off before the stop, the mouse first; on again after it.
-            let on = b"\x1b[?1049h\x1b[?1000h\x1b[?1006h";
-            let ons = during
-                .windows(on.len())
-                .filter(|window| window == on)
-                .count();
-            assert_eq!(ons, 2, "the screen taken again after the stop");
-            assert!(
-                holds(&during, b"\x1b[?1006l\x1b[?1000l\x1b[?1049l"),
-                "{way}"
-            );
+            // On, then off with the mouse first, then the stop, then on
+            // again once continued.
+            let on: &[u8] = b"\x1b[?1049h\x1b[?1000h\x1b[?1006h";
+            let off: &[u8] = b"\x1b[?1006l\x1b[?1000l\x1b[?1049l";
+            let at = |part: &[u8], from: usize| {
+                during[from..]
+                    .windows(part.len())
+                    .position(|window| window == part)
+                    .map(|found| found + from)
+            };
+            let first_on = at(on, 0).expect("on");
+            let first_off = at(off, first_on).expect("off before the stop");
+            let stopped = at(super::SUSPENDED, first_off).expect("the stop");
+            assert!(at(on, stopped).is_some(), "on again after the stop");
         }
         // Put back as the program puts it back.
         terminal.leave().expect("left");

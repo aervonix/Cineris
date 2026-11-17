@@ -711,10 +711,24 @@ fn typing_into_the_full_screen_search_does_not_answer_a_dialog() {
         approval("c_7"),
         last + Duration::from_millis(100),
     );
-    typing(&mut app, "ype", last + Duration::from_millis(450), 450);
+    let last = typing(&mut app, "ype", last + Duration::from_millis(450), 450);
     assert!(
         answers(&link).is_empty(),
         "typing into the search answered the dialog"
+    );
+    // The keys the dialog passed went on to the search, hidden under it,
+    // and `Enter`, the search's older match, sent nothing: never the hidden
+    // editor, whose `Enter` would send (the second review of step 25).
+    press(&mut app, "enter", last + Duration::from_millis(300));
+    assert!(answers(&link).is_empty(), "Enter answered the dialog");
+    assert_eq!(app.search_query().as_deref(), Some("type"));
+    assert_eq!(app.input().editor().expanded(), "");
+    assert!(
+        !link
+            .take_sent()
+            .iter()
+            .any(|(_, op)| matches!(op, Op::TurnStart(_))),
+        "a prompt was sent"
     );
     let (lines, _) = app.screen_frame(now + Duration::from_secs(20));
     let rows = text(&lines);

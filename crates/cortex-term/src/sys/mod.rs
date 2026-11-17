@@ -78,7 +78,9 @@ pub(crate) fn restore_sequence() -> &'static [u8] {
 pub(crate) fn millis_left(deadline: Option<std::time::Instant>, now: std::time::Instant) -> u32 {
     deadline.map_or(u32::MAX, |deadline| {
         let left = deadline.saturating_duration_since(now);
-        u32::try_from(left.as_nanos().div_ceil(1_000_000)).unwrap_or(u32::MAX - 1)
+        u32::try_from(left.as_nanos().div_ceil(1_000_000))
+            .unwrap_or(u32::MAX)
+            .min(u32::MAX - 1)
     })
 }
 
@@ -311,6 +313,9 @@ mod tests {
             millis_left(Some(now + std::time::Duration::from_secs(5_000_000)), now),
             u32::MAX - 1
         );
+        // Exactly the most a wait counts is still an end.
+        let most = std::time::Duration::from_millis(u64::from(u32::MAX));
+        assert_eq!(millis_left(Some(now + most), now), u32::MAX - 1);
     }
 
     #[test]

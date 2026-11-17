@@ -1189,6 +1189,9 @@ type Waits = Arc<Mutex<Vec<(Option<Duration>, usize)>>>;
 /// A terminal for the loop's tests: it plays back steps on a clock of its
 /// own, which a wait that times out moves on by the wait's length, so that
 /// the loop's waits are tested without waiting.
+/// What the played terminal writes where the program stopped.
+const SUSPENDED: &[u8] = b"<suspended>";
+
 struct Played {
     steps: std::collections::VecDeque<(cortex_term::Ready, Vec<u8>)>,
     written: Arc<Mutex<Vec<u8>>>,
@@ -1237,7 +1240,13 @@ impl cortex_term::Device for Played {
     fn waker(&self) -> cortex_term::Waker {
         cortex_term::Waker::new(|| {})
     }
-    fn suspend(&mut self) {}
+    /// Marks where the program stopped, in what it wrote.
+    fn suspend(&mut self) {
+        self.written
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(SUSPENDED);
+    }
     fn leave(&mut self) {}
     fn now(&self) -> Instant {
         self.base + self.elapsed

@@ -1124,14 +1124,25 @@ mod tests {
         decoder.set_mouse(true);
         let mut events = Vec::new();
         decoder.feed(&out, &mut events);
-        assert_eq!(events.len(), 7, "{events:?}");
-        assert!(matches!(
-            events[4],
-            crate::Event::Mouse(crate::Mouse {
-                kind: crate::MouseKind::Wheel(crate::Wheel::Up),
-                ..
+        let kinds: Vec<crate::MouseKind> = events
+            .iter()
+            .map(|event| match event {
+                crate::Event::Mouse(mouse) => mouse.kind,
+                other => panic!("not a mouse event: {other:?}"),
             })
-        ));
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                crate::MouseKind::Press(crate::Button::Left),
+                crate::MouseKind::Drag(crate::Button::Left),
+                crate::MouseKind::Release(Some(crate::Button::Left)),
+                crate::MouseKind::Wheel(crate::Wheel::Up),
+                crate::MouseKind::Wheel(crate::Wheel::Down),
+                crate::MouseKind::Press(crate::Button::Right),
+                crate::MouseKind::Release(Some(crate::Button::Right)),
+            ]
+        );
     }
 
     #[test]
