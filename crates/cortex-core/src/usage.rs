@@ -60,61 +60,73 @@ pub(crate) fn recorder(user: &Loaded, options: &CoreOptions) -> Option<Recorder>
 }
 
 /// `usage/report`.
-/// What tells one `aggregates.json` from another without reading it: its
-/// length, when it was last written, and the file itself (its inode on
-/// Unix, its creation time on Windows, where a save is a new file put in
-/// place): so that a save of the same length within the clock's
-/// granularity is not taken for the file before it.
+/// What tells one `aggregates.json` from another without reading it: the
+/// file itself (`cortex_base::FileIdentity`: its device and inode on Unix,
+/// its volume and file index on Windows, where a save is a new file put in
+/// place and its creation time is not to be trusted), its length, and when
+/// it was last written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct FileIdentity {
+pub(crate) struct FileState {
+    file: cortex_base::FileIdentity,
     len: u64,
     modified: Option<SystemTime>,
-    unique: u64,
 }
 
-impl FileIdentity {
-    /// The identity of the file at `path`, or `None` when there is none.
-    /// Blocks: called on the blocking pool, with the report.
+impl FileState {
+    /// The state of the file at `path`, or `None` when there is none or it
+    /// cannot be told. Blocks: called on the blocking pool, with the report.
     #[expect(
         clippy::disallowed_methods,
         reason = "a file's metadata, read on the blocking pool beside the report's own reads"
     )]
     fn of(path: &Path) -> Option<Self> {
+        let file = cortex_base::FileIdentity::at(path).ok()?;
         let meta = std::fs::metadata(path).ok()?;
-        #[cfg(unix)]
-        let unique = std::os::unix::fs::MetadataExt::ino(&meta);
-        #[cfg(windows)]
-        let unique = std::os::windows::fs::MetadataExt::creation_time(&meta);
-        #[cfg(not(any(unix, windows)))]
-        let unique = 0;
         Some(Self {
+            file,
             len: meta.len(),
             modified: meta.modified().ok(),
-            unique,
         })
     }
 }
 
-/// The aggregates the last report read, and the file they are of (step
-/// 24): a heavy year's `aggregates.json` is megabytes of JSON, most of a
-/// report's time, so a report reads it again only when another process
-/// saved it since (the usage panel's year within one frame,
-/// `docs/performance-budgets.md`).
+/// How long the aggregates a report read are kept unused: the usage
+/// panel's reports, a key apart, come well within it; an application left
+/// alone gives the memory back after it.
+const KEEP_AGGREGATES: Duration = Duration::from_secs(60);
+
+/// The aggregates the last report read, and the file they were read from
+/// (step 24): a heavy year's `aggregates.json` is megabytes of JSON, most
+/// of a report's time, so a report reads it again only when it is not the
+/// file the aggregates were read from (the usage panel's year within one
+/// frame, `docs/performance-budgets.md`).
+///
+/// The file's state is the one taken before the aggregates were read, so
+/// it is never a newer file's than theirs: a file saved in between is
+/// another state, and is read. A report that saved the aggregates keeps
+/// nothing (the state of what it wrote is not known for certain), nor one
+/// that did not read them whole from the file.
 #[derive(Debug)]
 pub(crate) struct AggregatesCache {
     path: PathBuf,
-    identity: FileIdentity,
+    state: FileState,
     aggregates: Aggregates,
+    /// When it was last used, which the drop after [`KEEP_AGGREGATES`]
+    /// checks.
+    used: std::time::Instant,
 }
 
-/// The aggregates kept, when they are of the file at `path` as it is now.
-fn kept(
-    cache: Option<AggregatesCache>,
-    path: &Path,
-    now: Option<FileIdentity>,
-) -> Option<Aggregates> {
+/// The aggregates kept, when they were read from the file at `path` as it
+/// is now.
+fn kept(cache: Option<AggregatesCache>, path: &Path, now: Option<FileState>) -> Option<Aggregates> {
     let cache = cache?;
-    (cache.path == path && Some(cache.identity) == now).then_some(cache.aggregates)
+    (cache.path == path && Some(cache.state) == now).then_some(cache.aggregates)
+}
+
+/// Whether a report's aggregates are kept for the next: read whole from the
+/// file, and not saved by it.
+fn to_keep(found: &Found, saved: bool) -> bool {
+    !saved && matches!(found, Found::Read)
 }
 
 pub(crate) async fn report(
@@ -162,10 +174,11 @@ pub(crate) async fn report(
         .flat_map(|usage| usage.limits)
         .collect();
     let held = Arc::clone(inner);
-    Core::blocking(move || {
+    let made = Core::blocking(move || {
         let zone = zone.unwrap_or_else(Zone::system);
         let now = clock.now();
         let mut notes = Vec::new();
+        let mut kept_at = None;
         let (part, mut limits) = match &dir {
             Some(dir) => {
                 // One report at a time reads and keeps the aggregates.
@@ -174,7 +187,10 @@ pub(crate) async fn report(
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let path = dir.aggregates_file();
-                let mut aggregates = match kept(cache.take(), &path, FileIdentity::of(&path)) {
+                // Taken before anything is read: what is kept is never of a
+                // newer file than the state says.
+                let before = FileState::of(&path);
+                let mut aggregates = match kept(cache.take(), &path, before) {
                     Some(aggregates) => aggregates,
                     // With statistics on, what is read is saved: a file
                     // that cannot be read is moved aside first. With them
@@ -197,11 +213,12 @@ pub(crate) async fn report(
                         recording.then_some(retention),
                     )
                     .map_err(read_failed)?;
+                let mut saved = false;
                 if changed && recording {
                     // Kept for the next report; one that cannot be written
                     // is no reason to fail this one. With statistics off
                     // nothing is written.
-                    let _ = aggregates.save(dir, clock.as_ref());
+                    saved = aggregates.save(dir, clock.as_ref()).is_ok();
                 }
                 // What `cortex stats` says of the files, the report says
                 // too (step 24: the usage panel shows it).
@@ -221,15 +238,18 @@ pub(crate) async fn report(
                         if total.unreadable == 1 { "is" } else { "are" }
                     ));
                 }
-                // Kept with the file as it is now, the save above included:
-                // what this report synced and could not save is ahead of
-                // the file, and the next report goes on from it until
-                // another process saves the file.
-                *cache = FileIdentity::of(&path).map(|identity| AggregatesCache {
-                    path,
-                    identity,
-                    aggregates,
-                });
+                // Kept for the next report, with the file's state before it
+                // was read: a report that saved them keeps nothing.
+                *cache = match before {
+                    Some(state) if to_keep(aggregates.found(), saved) => Some(AggregatesCache {
+                        path,
+                        state,
+                        aggregates,
+                        used: std::time::Instant::now(),
+                    }),
+                    _ => None,
+                };
+                kept_at = cache.as_ref().map(|cache| cache.used);
                 (total, LimitsFile::load(dir))
             }
             None => (cortex_stats::Part::default(), LimitsFile::default()),
@@ -238,9 +258,31 @@ pub(crate) async fn report(
         let mut report =
             cortex_stats::report(&part, &query, &zone, now, &limits.providers, recording);
         report.notes = notes;
-        Ok(report)
+        Ok((report, kept_at))
     })
-    .await
+    .await;
+    let (report, kept_at) = made?;
+    if let Some(used) = kept_at {
+        // Dropped once no report used them for a while: an application left
+        // alone holds no year of statistics. A weak hold, so that the
+        // core's end is not kept waiting for the time to pass.
+        let weak = Arc::downgrade(&core.inner);
+        let sleep = core.inner.options.timer.sleep(KEEP_AGGREGATES);
+        tokio::spawn(async move {
+            sleep.await;
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            let mut cache = inner
+                .aggregates_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if cache.as_ref().is_some_and(|cache| cache.used == used) {
+                *cache = None;
+            }
+        });
+    }
+    Ok(report)
 }
 
 fn read_failed(failure: std::io::Error) -> OpError {
@@ -722,71 +764,75 @@ mod tests {
     use super::*;
 
     /// The aggregates kept are used only for the same file, unchanged in
-    /// its length, its time, and itself.
+    /// itself, its length and its time; and only those read whole from the
+    /// file, by a report that did not save them, are kept.
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test that writes the files it tells apart"
+    )]
     fn the_aggregates_kept_are_used_only_for_the_same_file_unchanged() {
-        let path = PathBuf::from("stats/aggregates.json");
-        let identity = FileIdentity {
-            len: 3_500_000,
-            modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000)),
-            unique: 42,
-        };
-        let cache = |identity| {
+        let scratch =
+            cortex_testkit::scratch::Scratch::outside("cortex-core-unit", "aggregates_kept");
+        let path = scratch.path().join("aggregates.json");
+        std::fs::write(&path, b"{}").unwrap();
+        let state = FileState::of(&path).unwrap();
+        let cache = |state| {
             Some(AggregatesCache {
                 path: path.clone(),
-                identity,
+                state,
                 aggregates: Aggregates::default(),
+                used: std::time::Instant::now(),
             })
         };
-        assert!(kept(cache(identity), &path, Some(identity)).is_some());
-        let another = |change: fn(&mut FileIdentity)| {
-            let mut now = identity;
+        assert!(kept(cache(state), &path, Some(state)).is_some());
+        let another = |change: fn(&mut FileState)| {
+            let mut now = state;
             change(&mut now);
-            kept(cache(identity), &path, Some(now))
+            kept(cache(state), &path, Some(now))
         };
         assert!(another(|now| now.len += 1).is_none(), "a longer file");
         assert!(
             another(|now| now.modified = Some(SystemTime::UNIX_EPOCH)).is_none(),
             "a file written since"
         );
-        assert!(
-            another(|now| now.unique += 1).is_none(),
-            "another file of the same length and time"
-        );
-        assert!(kept(cache(identity), &path, None).is_none(), "no file now");
+        assert!(kept(cache(state), &path, None).is_none(), "no file now");
         assert!(
             kept(
-                cache(identity),
+                cache(state),
                 Path::new("other/aggregates.json"),
-                Some(identity)
+                Some(state)
             )
             .is_none(),
             "another folder's"
         );
-        assert!(kept(None, &path, Some(identity)).is_none());
+        assert!(kept(None, &path, Some(state)).is_none());
+
+        assert!(to_keep(&Found::Read, false));
+        assert!(
+            !to_keep(&Found::Read, true),
+            "a report that saved keeps nothing"
+        );
+        assert!(!to_keep(&Found::Missing, false), "nothing read whole");
     }
 
-    /// A file's identity changes when it is saved again in its place, even
-    /// at the same length.
+    /// A file saved again in its place, at the same length, is another
+    /// file: a save writes a new one and puts it in place.
     #[test]
     #[expect(
         clippy::disallowed_methods,
         reason = "a test that writes and replaces a file of its own directory"
     )]
     fn a_file_saved_again_at_the_same_length_is_another() {
-        let scratch =
-            cortex_testkit::scratch::Scratch::outside("cortex-core-unit", "file_identity");
-        let dir = scratch.path().to_path_buf();
-        let path = dir.join("aggregates.json");
+        let scratch = cortex_testkit::scratch::Scratch::outside("cortex-core-unit", "file_state");
+        let path = scratch.path().join("aggregates.json");
         std::fs::write(&path, b"{\"a\":1}").unwrap();
-        let first = FileIdentity::of(&path).unwrap();
-        assert_eq!(FileIdentity::of(&path), Some(first));
-        // A save writes a new file and puts it in place, as `Aggregates::save`
-        // does.
-        let next = dir.join("aggregates.json.new");
+        let first = FileState::of(&path).unwrap();
+        assert_eq!(FileState::of(&path), Some(first));
+        let next = scratch.path().join("aggregates.json.new");
         std::fs::write(&next, b"{\"a\":2}").unwrap();
         std::fs::rename(&next, &path).unwrap();
-        assert_ne!(FileIdentity::of(&path), Some(first));
+        assert_ne!(FileState::of(&path), Some(first));
     }
 
     #[test]
