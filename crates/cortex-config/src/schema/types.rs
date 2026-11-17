@@ -602,6 +602,18 @@ choice! {
 }
 
 choice! {
+    /// Which presenter the terminal UI draws with (since step 25).
+    pub enum PresenterChoice {
+        /// The transcript in the terminal's own scrollback, and a small live
+        /// region at the bottom.
+        Inline => "inline",
+        /// The whole window, on the alternate screen: the transcript kept,
+        /// scrolled, wrapped again on a resize and searched.
+        Fullscreen => "fullscreen",
+    }
+}
+
+choice! {
     /// How many colours the terminal shows, in place of detecting it.
     pub enum ColorChoice {
         /// No colour: attributes only.

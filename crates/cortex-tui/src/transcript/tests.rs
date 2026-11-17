@@ -195,3 +195,122 @@ fn the_header_is_set_apart_at_once_and_compact_density_sets_apart_only_turns() {
         ["· One.", "✗ Two.", "", "◆ Again."]
     );
 }
+
+/// A session of every kind of block, pushed and finished in turn.
+fn session(transcript: &mut Transcript) {
+    transcript.push(Block::Header(Header {
+        version: "0.1.0".to_owned(),
+        model: "opus-5.5".to_owned(),
+        folder: "~/src/parser".to_owned(),
+        ..Header::default()
+    }));
+    transcript.push(Block::User("Fix scan_number, and add a test.".to_owned()));
+    transcript.push(Block::Reasoning(Reasoning {
+        text: String::new(),
+        elapsed: Duration::from_secs(6),
+        summary: Some("The loop breaks on any non-digit.".to_owned()),
+        finished: true,
+    }));
+    let mut answer = Markdown::answer().keeping();
+    answer.push(
+        "It stops at the first character that is not a digit, so `1_000` ends after the \
+         `1`.\n\n~~~rust\nif c == '_' { continue; }\n~~~\n\n- one\n- two\n",
+    );
+    answer.finish();
+    transcript.push(Block::Answer(answer));
+    let mut failed = running_call();
+    failed.state = CallState::Failed;
+    failed.detail = Detail::Output("line one\nline two\ntest result: FAILED".to_owned());
+    transcript.push(Block::Round(Round {
+        calls: vec![running_call(), failed],
+        open: None,
+    }));
+    if let Some(Block::Round(round)) = transcript.last_mut() {
+        round.calls[0].state = CallState::Succeeded;
+    }
+    transcript.push(Block::Notice("Context compacted.".to_owned()));
+    transcript.push(Block::Notice("A retry.".to_owned()));
+    transcript.push(Block::Listing {
+        title: "Status".to_owned(),
+        lines: vec!["model  opus-5.5".to_owned()],
+    });
+    transcript.push(Block::Error {
+        message: "It failed.".to_owned(),
+        hint: Some("Press enter.".to_owned()),
+    });
+    transcript.push(Block::Summary {
+        took: Duration::from_secs(12),
+        tokens: Some(1_200),
+        cost: Some("$0.02".to_owned()),
+    });
+}
+
+/// The kept blocks, drawn again at the width they committed at, are the
+/// lines the transcript committed, blank rows and all (step 25): the
+/// full-screen presenter and the viewer draw the session as the scrollback
+/// holds it. At another width they are what a transcript committed at that
+/// width gives.
+#[test]
+fn kept_blocks_draw_again_the_lines_that_were_committed() {
+    let look = look();
+    for width in [40, 79, 99] {
+        let mut transcript = Transcript::new();
+        transcript.keep_finished();
+        session(&mut transcript);
+        let committed = transcript.commit(width, &look);
+        assert!(transcript.is_empty());
+        let mut kept = kept::Kept::new();
+        kept.extend(transcript.take_finished());
+        assert_eq!(kept.len(), 10);
+        assert_eq!(kept.rounds(), 1);
+        assert_eq!(kept.round_block(0), Some(4));
+        let drawn: Vec<Line> = kept
+            .iter()
+            .flat_map(|block| block.rows(Placement::Committed, width, &look))
+            .collect();
+        assert_eq!(texts(&drawn), texts(&committed), "at {width} columns");
+        assert_eq!(drawn, committed, "the styles at {width} columns");
+        // Drawn again at another width: what committing there gives.
+        let mut other = Transcript::new();
+        session(&mut other);
+        let narrow: Vec<Line> = kept
+            .iter()
+            .flat_map(|block| block.rows(Placement::Committed, 30, &look))
+            .collect();
+        assert_eq!(narrow, other.commit(30, &look));
+    }
+    // A transcript that does not keep its blocks gives none.
+    let mut transcript = Transcript::new();
+    session(&mut transcript);
+    let _ = transcript.commit(79, &look);
+    assert!(transcript.take_finished().is_empty());
+}
+
+/// A kept round holds at most the end of a long command's output, from a
+/// line's start.
+#[test]
+fn a_kept_round_holds_the_end_of_a_long_output() {
+    let mut call = running_call();
+    call.state = CallState::Succeeded;
+    let long: String = (0..10_000).map(|n| format!("line {n}\n")).collect();
+    call.detail = Detail::Output(long.clone());
+    let mut kept = kept::Kept::new();
+    kept.extend([kept::Finished {
+        block: Block::Round(Round {
+            calls: vec![call],
+            open: None,
+        }),
+        gap: false,
+        after: false,
+    }]);
+    let Some(Detail::Output(output)) = kept
+        .get(0)
+        .and_then(kept::KeptBlock::round)
+        .map(|round| round.calls[0].detail.clone())
+    else {
+        panic!("no output kept");
+    };
+    assert!(output.len() <= kept::OUTPUT_KEPT, "{}", output.len());
+    assert!(output.starts_with("line ") && long.ends_with(&output));
+    assert!(kept.bytes() < kept::OUTPUT_KEPT + 1_024);
+}

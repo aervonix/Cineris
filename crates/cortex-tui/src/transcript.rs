@@ -27,6 +27,8 @@ use cortex_term::Line;
 use crate::markdown::Markdown;
 use crate::view::{self, Density, Header, Look, Placement, Round};
 
+pub mod kept;
+
 /// One block of the transcript.
 #[derive(Debug, Clone)]
 #[allow(
@@ -168,6 +170,8 @@ struct Entry {
     /// Whether any of its lines (or the blank before it) has been
     /// committed.
     started: bool,
+    /// Whether a blank row was committed before it.
+    gap: bool,
 }
 
 /// The transcript in progress. See the [module documentation](self).
@@ -184,6 +188,11 @@ pub struct Transcript {
     now: Duration,
     /// The next block's id.
     next: u64,
+    /// The blocks wholly committed since [`take_finished`] was last asked,
+    /// while they are kept (since step 25): `None` when they are not.
+    ///
+    /// [`take_finished`]: Self::take_finished
+    finished: Option<Vec<kept::Finished>>,
 }
 
 impl Transcript {
@@ -201,8 +210,24 @@ impl Transcript {
             id,
             block,
             started: false,
+            gap: false,
         });
         id
+    }
+
+    /// Keeps each block once it has wholly committed, for
+    /// [`take_finished`](Self::take_finished) (since step 25): what the
+    /// viewer and the full-screen presenter draw again. What is committed is
+    /// the same either way.
+    pub fn keep_finished(&mut self) {
+        self.finished.get_or_insert_with(Vec::new);
+    }
+
+    /// The blocks wholly committed since the last call, in order, each with
+    /// the blank rows around it, while they are kept
+    /// ([`keep_finished`](Self::keep_finished)).
+    pub fn take_finished(&mut self) -> Vec<kept::Finished> {
+        self.finished.as_mut().map(std::mem::take).unwrap_or_default()
     }
 
     /// The block `id`, to stream into or update, while any of it is still
@@ -264,6 +289,7 @@ impl Transcript {
                     self.last_blank = true;
                 }
                 entry.started = true;
+                entry.gap = gap;
             }
             let (lines, round) = match &mut entry.block {
                 Block::Answer(answer) => {
@@ -296,7 +322,15 @@ impl Transcript {
                 push_lines(&mut out, vec![Line::new()]);
                 self.last_blank = true;
             }
-            self.queue.pop_front();
+            if let Some(entry) = self.queue.pop_front()
+                && let Some(finished) = self.finished.as_mut()
+            {
+                finished.push(kept::Finished {
+                    block: entry.block,
+                    gap: entry.gap,
+                    after: kind == Kind::Header,
+                });
+            }
         }
         out
     }

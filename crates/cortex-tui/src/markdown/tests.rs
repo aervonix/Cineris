@@ -1038,3 +1038,91 @@ fn an_entity_or_an_autolink_cut_by_white_space_holds_nothing() {
     assert_eq!(stream.forced(), 0);
     assert_eq!(lines, whole(text, 12, &look));
 }
+
+/// A stream that keeps its source gives it whole once done, its code
+/// blocks with their languages and a record of every line (step 25): what
+/// the full-screen presenter draws again at another width.
+#[test]
+fn a_kept_answer_draws_again_what_its_stream_committed() {
+    let look = look();
+    for width in [40, 79, 119] {
+        let mut stream = Markdown::answer().keeping();
+        let mut lines = Vec::new();
+        for piece in ANSWER.split_inclusive(' ') {
+            stream.push(piece);
+            lines.extend(stream.commit(width, &look));
+            let _ = stream.live(width, &look);
+        }
+        stream.finish();
+        lines.extend(stream.commit(width, &look));
+        assert!(stream.is_done());
+        let source = stream.take_source().expect("a kept source");
+        assert_eq!(source.text, ANSWER);
+        assert_eq!(source.code.len(), 1);
+        assert_eq!(source.code[0].language, "rust");
+        // With no highlighter every code line is plain on purpose: nothing
+        // to ask for again.
+        assert!(
+            source.code[0]
+                .lines
+                .iter()
+                .all(|line| line == &Some(Vec::new()))
+        );
+        assert_eq!(source.late().count(), 0);
+        let again = Markdown::render_source(Flavor::Answer, &source, width, &look);
+        assert_eq!(again, lines, "at {width} columns");
+    }
+    // A stream that keeps nothing gives nothing.
+    assert_eq!(Markdown::answer().take_source(), None);
+}
+
+/// A kept answer drawn again takes the colours its code was committed with,
+/// by block and line, at any width; a line with none is plain.
+#[test]
+fn a_kept_answers_code_keeps_its_colours_at_another_width() {
+    let look = look();
+    let text = "Code:\n\n~~~rust\nlet a = 1;\nlet b = 2;\n~~~\n\n    indented\n";
+    let source = Source {
+        text: text.to_owned(),
+        code: vec![
+            CodeColours {
+                language: "rust".to_owned(),
+                lines: vec![Some(vec![(0..3, Token::SyntaxKeyword)]), None],
+            },
+            CodeColours {
+                language: String::new(),
+                lines: vec![Some(vec![(0..8, Token::SyntaxString)])],
+            },
+        ],
+    };
+    assert_eq!(source.late().collect::<Vec<_>>(), [0]);
+    for width in [20, 79] {
+        let lines = Markdown::render_source(Flavor::Answer, &source, width, &look);
+        let span = |row: &str, word: &str| {
+            lines
+                .iter()
+                .find(|line| line.text().contains(row))
+                .and_then(|line| {
+                    line.spans()
+                        .iter()
+                        .find(|span| span.text() == word)
+                        .cloned()
+                })
+                .unwrap_or_else(|| panic!("no {word:?} in {:?}", texts(&lines)))
+        };
+        assert_eq!(
+            span("let a", "let").style(),
+            look.theme.style(Token::SyntaxKeyword)
+        );
+        assert_eq!(
+            span("indented", "indented").style(),
+            look.theme.style(Token::SyntaxString)
+        );
+        // The line whose colours were late is plain.
+        let late = lines
+            .iter()
+            .find(|line| line.text().contains("let b"))
+            .unwrap();
+        assert!(late.spans().iter().all(|span| span.style() == Style::PLAIN));
+    }
+}

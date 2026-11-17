@@ -37,8 +37,9 @@ use windows_sys::Win32::System::Console::{
     ENABLE_PROCESSED_OUTPUT, ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
     ENABLE_WINDOW_INPUT, GetConsoleCP, GetConsoleMode, GetConsoleOutputCP,
     GetConsoleScreenBufferInfo, GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD,
-    KEY_EVENT, ReadConsoleInputW, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCP,
-    SetConsoleCtrlHandler, SetConsoleMode, SetConsoleOutputCP, WINDOW_BUFFER_SIZE_EVENT,
+    KEY_EVENT, MOUSE_EVENT, MOUSE_EVENT_RECORD, ReadConsoleInputW, STD_INPUT_HANDLE,
+    STD_OUTPUT_HANDLE, SetConsoleCP, SetConsoleCtrlHandler, SetConsoleMode, SetConsoleOutputCP,
+    WINDOW_BUFFER_SIZE_EVENT,
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventW, SetEvent, WaitForMultipleObjects, WaitForSingleObject,
@@ -115,6 +116,96 @@ fn our_output_mode(found: u32) -> u32 {
 fn our_input_mode(found: u32) -> u32 {
     (found | ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT)
         & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_MOUSE_INPUT)
+}
+
+/// Turns the console's mouse input on or off (since step 25): on only
+/// while the alternate screen is shown and the program wants the mouse.
+/// The mode the program found is what every restore puts back.
+pub(crate) fn set_mouse_input(on: bool) {
+    if !ACTIVE.load(Ordering::SeqCst) {
+        return;
+    }
+    let input = handle(STD_INPUT_HANDLE);
+    if let Some(mode) = console_mode(input) {
+        let wanted = if on {
+            mode | ENABLE_MOUSE_INPUT
+        } else {
+            mode & !ENABLE_MOUSE_INPUT
+        };
+        if wanted != mode {
+            set_mode(input, wanted);
+        }
+    }
+    if !on {
+        BUTTONS.store(0, Ordering::SeqCst);
+    }
+}
+
+/// The buttons the last mouse record said were down, to tell a press from
+/// a release.
+static BUTTONS: AtomicU32 = AtomicU32::new(0);
+
+/// A mouse event that came as a console record, written into `into` as the
+/// SGR report (mode 1006) a terminal would have sent, so that one decoder
+/// reads both. Moves with no button down are not reported.
+fn push_mouse(event: &MOUSE_EVENT_RECORD, into: &mut Vec<u8>) {
+    const MOVED: u32 = 0x1;
+    const WHEELED: u32 = 0x4;
+    const HWHEELED: u32 = 0x8;
+    const SHIFT: u32 = 0x10;
+    const ALT: u32 = 0x1 | 0x2;
+    const CTRL: u32 = 0x4 | 0x8;
+    let state = event.dwControlKeyState;
+    let mut mods = 0;
+    if state & SHIFT != 0 {
+        mods |= 4;
+    }
+    if state & ALT != 0 {
+        mods |= 8;
+    }
+    if state & CTRL != 0 {
+        mods |= 16;
+    }
+    let col = i32::from(event.dwMousePosition.X).max(0) + 1;
+    let row = i32::from(event.dwMousePosition.Y).max(0) + 1;
+    let mut report = |code: u32, release: bool| {
+        into.extend_from_slice(
+            format!(
+                "\x1b[<{};{col};{row}{}",
+                code | mods,
+                if release { 'm' } else { 'M' }
+            )
+            .as_bytes(),
+        );
+    };
+    let buttons = event.dwButtonState;
+    // The wheel's turn is the high word of the button state, signed.
+    let turn = (buttons >> 16) as u16 as i16;
+    if event.dwEventFlags & WHEELED != 0 {
+        report(if turn > 0 { 64 } else { 65 }, false);
+        return;
+    }
+    if event.dwEventFlags & HWHEELED != 0 {
+        report(if turn > 0 { 67 } else { 66 }, false);
+        return;
+    }
+    // Left, right and middle, as the console numbers them, and their codes.
+    let held = buttons & 0x7;
+    let before = BUTTONS.swap(held, Ordering::SeqCst);
+    let codes = [(0x1, 0), (0x4, 1), (0x2, 2)];
+    if event.dwEventFlags & MOVED != 0 {
+        if let Some((_, code)) = codes.iter().find(|(bit, _)| held & bit != 0) {
+            report(code + 32, false);
+        }
+        return;
+    }
+    for (bit, code) in codes {
+        match (before & bit != 0, held & bit != 0) {
+            (false, true) => report(code, false),
+            (true, false) => report(code, true),
+            _ => {}
+        }
+    }
 }
 
 /// Turns on virtual-terminal processing and input, UTF-8, and raw input.
@@ -520,6 +611,14 @@ pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<
                 // Kept until it is reported: a read that also brought keys
                 // reports them first, and the resize on the next wait.
                 WINDOW_BUFFER_SIZE_EVENT => RESIZED.store(true, Ordering::SeqCst),
+                // Only while the program has the console's mouse input on
+                // (the alternate screen, step 25), where the console gives
+                // the mouse as a record rather than as the terminal's text.
+                MOUSE_EVENT => {
+                    // SAFETY: the record says it holds a mouse event.
+                    let mouse = unsafe { record.Event.MouseEvent };
+                    push_mouse(&mouse, into);
+                }
                 _ => {}
             }
         }

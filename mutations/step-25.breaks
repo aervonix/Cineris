@@ -1,0 +1,134 @@
+# Step 25: full screen, the session interface and onboarding. Its rules,
+# broken one at a time, with the tests that must fail. Written with the
+# code (docs/steps/25/answered.md, "The design, before building").
+
+[break] full-redraws-every-row
+rule: The full-screen presenter writes only the rows that changed since the last frame.
+file: crates/cortex-term/src/full.rs
+in: Full::draw
+find: if !full && self.screen.get(index) == Some(row) {
+replace: if false && self.screen.get(index) == Some(row) {
+caught-by:
+    cortex-term full::tests::the_first_frame_writes_every_row_and_the_next_only_what_changed
+
+[break] full-forgets-a-failed-write
+rule: A frame the terminal did not take is drawn whole the next time.
+file: crates/cortex-term/src/full.rs
+in: Full::draw
+find:
+    self.scratch = rows;
+    self.stale = true;
+    return Err(error);
+replace:
+    self.scratch = rows;
+    return Err(error);
+caught-by:
+    cortex-term full::tests::a_failed_write_is_drawn_whole_next_time
+
+[break] full-shows-a-cursor-below-the-window
+rule: A cursor placed below the window is not shown.
+file: crates/cortex-term/src/full.rs
+in: Full::draw
+find: .filter(|cursor| cursor.row < self.rows)
+replace: .filter(|cursor| cursor.row <= self.rows)
+caught-by:
+    cortex-term full::tests::a_row_is_cut_before_the_last_column_and_the_cursor_kept_inside
+
+[break] kept-answer-loses-its-code-colours
+rule: A kept answer drawn again takes the colours its code lines were committed with.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: code_line
+find: let code = if colours.is_empty() {
+replace: let code = if true || colours.is_empty() {
+caught-by:
+    cortex-tui markdown::tests::a_kept_answers_code_keeps_its_colours_at_another_width
+    cortex-tui highlight::tests::a_kept_answer_records_its_code_colours_and_the_lines_that_were_late
+
+[break] a-late-line-is-kept-as-plain
+rule: A code line committed plain because its colours were late is recorded as late, so that a redraw asks for them again.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: flush
+find: (Vec::new(), None)
+replace: (Vec::new(), Some(Vec::new()))
+caught-by:
+    cortex-tui highlight::tests::a_kept_answer_records_its_code_colours_and_the_lines_that_were_late
+
+[break] a-kept-source-drops-text
+rule: A kept answer keeps every piece of its text as it arrived.
+file: crates/cortex-tui/src/markdown/mod.rs
+in: push
+find: keep.text.push_str(text);
+replace: keep.text = text.to_owned();
+caught-by:
+    cortex-tui markdown::tests::a_kept_answer_draws_again_what_its_stream_committed
+
+[break] the-mouse-on-the-main-screen
+rule: The mouse is reported only while the alternate screen is shown, never on the main screen.
+file: crates/cortex-term/src/terminal.rs
+in: Terminal::set_mouse
+find: if !self.alternate {
+replace: if false && !self.alternate {
+caught-by:
+    cortex-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
+
+[break] the-mouse-left-on-at-the-end
+rule: Putting the terminal back turns mouse reporting off before it leaves the alternate screen.
+file: crates/cortex-term/src/terminal.rs
+in: Terminal::end
+find: end.extend_from_slice(MOUSE_OFF);
+replace: end.extend_from_slice(b"");
+caught-by:
+    cortex-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
+
+[break] the-mouse-left-on-with-the-main-screen
+rule: Leaving the alternate screen turns mouse reporting off with it.
+file: crates/cortex-term/src/terminal.rs
+in: Terminal::alternate
+find: bytes.extend_from_slice(MOUSE_OFF);
+replace: bytes.extend_from_slice(b"");
+caught-by:
+    cortex-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
+
+[break] the-emergency-restore-leaves-the-mouse-on
+rule: Every emergency restore with the alternate screen on turns mouse reporting off.
+file: crates/cortex-term/src/sys/mod.rs
+find: b"\x1b[?2026l\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?1049l\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h"
+replace: b"\x1b[?2026l\x1b[0m\x1b[?1049l\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h"
+caught-by:
+    cortex-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
+
+[break] a-resume-forgets-the-mouse
+rule: Continued after a stop, the alternate screen comes back with the mouse, if it was asked for.
+file: crates/cortex-term/src/terminal.rs
+in: Terminal::resume
+find: again.extend_from_slice(MOUSE_ON);
+replace: again.extend_from_slice(b"");
+caught-by:
+    cortex-term terminal::tests::a_resume_turns_the_mouse_on_again_with_the_alternate_screen
+
+[break] the-older-report-read-with-the-mouse-off
+rule: With the mouse off, CSI M is dropped alone, and the keys after it are typed.
+file: crates/cortex-term/src/input.rs
+in: Decoder::decode
+find: if !self.mouse && self.buffer[start..].starts_with(b"\x1b[M") {
+replace: if false && self.buffer[start..].starts_with(b"\x1b[M") {
+caught-by:
+    cortex-term input::tests::mouse_reports_in_the_older_form_are_taken_whole
+    cortex-term terminal::tests::the_older_mouse_report_is_read_only_while_the_mouse_is_on
+
+[break] the-wheel-turned-the-wrong-way
+rule: A report with the wheel bit and button 0 is the wheel turned up.
+file: crates/cortex-term/src/input.rs
+find: 0 => Wheel::Up,
+replace: 0 => Wheel::Down,
+caught-by:
+    cortex-term input::tests::mouse_reports_in_the_sgr_form
+    cortex-term input::tests::mouse_reports_in_the_older_form_are_taken_whole
+
+[break] a-release-read-as-a-press
+rule: The SGR form's lower-case final says a button came up.
+file: crates/cortex-term/src/input.rs
+find: Some(final_byte == b'm')
+replace: Some(false)
+caught-by:
+    cortex-term input::tests::mouse_reports_in_the_sgr_form

@@ -37,7 +37,9 @@ static PROTOCOLS: AtomicU8 = AtomicU8::new(0);
 const KEYBOARD: u8 = 1;
 /// Windows Terminal's win32 input mode.
 const WIN32: u8 = 2;
-/// The alternate screen, while the viewer is open (since step 23).
+/// The alternate screen, while the viewer or the full-screen presenter is
+/// shown (since step 23). Mouse reporting is on only with it (since step
+/// 25), so its restore turns that off too.
 const ALTERNATE: u8 = 4;
 
 /// What puts the terminal's own state back after a panic, a signal or a
@@ -46,18 +48,20 @@ const ALTERNATE: u8 = 4;
 /// main screen comes back as it was), erases the live region from its first
 /// row down (the cursor is moved up the region's rows above it first, by
 /// [`restore`], so that a message printed next is not mixed into it), turns
-/// off what was turned on, and turns automatic wrap back on. The raw-mode
-/// or console-mode half is the system's. One for each set of keyboard
+/// off what was turned on, and turns automatic wrap back on. With the
+/// alternate screen on it turns mouse reporting off first (modes 1006 and
+/// 1000), which is on only with it (since step 25). The raw-mode or
+/// console-mode half is the system's. One for each set of keyboard
 /// reporting and screen that may be on, indexed by [`PROTOCOLS`].
 const RESTORE: [&[u8]; 8] = [
     b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
     b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[<u\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
     b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
     b"\x1b[?2026l\x1b[0m\r\x1b[J\x1b[<u\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-    b"\x1b[?2026l\x1b[0m\x1b[?1049l\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-    b"\x1b[?2026l\x1b[0m\x1b[?1049l\r\x1b[J\x1b[<u\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-    b"\x1b[?2026l\x1b[0m\x1b[?1049l\r\x1b[J\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
-    b"\x1b[?2026l\x1b[0m\x1b[?1049l\r\x1b[J\x1b[<u\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
+    b"\x1b[?2026l\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?1049l\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
+    b"\x1b[?2026l\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?1049l\r\x1b[J\x1b[<u\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
+    b"\x1b[?2026l\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?1049l\r\x1b[J\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
+    b"\x1b[?2026l\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?1049l\r\x1b[J\x1b[<u\x1b[?9001l\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h",
 ];
 
 /// The restore sequence for the terminal's state now, without the move up

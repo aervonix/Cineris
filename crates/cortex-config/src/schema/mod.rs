@@ -51,9 +51,9 @@ pub use sections::{
     StatsSettings, TerminalSettings, TuiSettings, UsageSettings, VariantSettings, VerifySettings,
 };
 pub use types::{
-    Bindings, ColorChoice, DensityChoice, EnvText, GlyphChoice, Headers, Profiles, ReasoningShown,
-    ReasoningVisibility, Reserved, SessionDurability, StoreChoice, ToolOutputChoice, UsageRanges,
-    VerifyMode, Weekday,
+    Bindings, ColorChoice, DensityChoice, EnvText, GlyphChoice, Headers, PresenterChoice, Profiles,
+    ReasoningShown, ReasoningVisibility, Reserved, SessionDurability, StoreChoice,
+    ToolOutputChoice, UsageRanges, VerifyMode, Weekday,
 };
 pub(crate) use types::{magnitude, milliseconds_as_text};
 

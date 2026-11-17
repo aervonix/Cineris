@@ -13,9 +13,9 @@ use cortex_protocol::lease::{NetworkAccess, Rule};
 use cortex_protocol::{Level, ModelRole, Speed};
 
 use super::types::{
-    Bindings, ColorChoice, DensityChoice, GlyphChoice, Headers, Profiles, ReasoningShown,
-    ReasoningVisibility, Reserved, SessionDurability, StoreChoice, ToolOutputChoice, UsageRanges,
-    VerifyMode, Weekday,
+    Bindings, ColorChoice, DensityChoice, GlyphChoice, Headers, PresenterChoice, Profiles,
+    ReasoningShown, ReasoningVisibility, Reserved, SessionDurability, StoreChoice,
+    ToolOutputChoice, UsageRanges, VerifyMode, Weekday,
 };
 use super::{CONFIG_VERSION, settings};
 
@@ -786,6 +786,12 @@ settings! {
         /// know is said, and `auto` is used.
         [UserOnly, Now]
         pub theme: String = "auto".to_owned(),
+        /// How the interface draws: `inline` (the transcript in the
+        /// terminal's own scrollback) or `fullscreen` (the whole window, on
+        /// the alternate screen, scrolled and searched there).
+        /// `--fullscreen` chooses the second for one run.
+        [UserOnly, Restart]
+        pub presenter: PresenterChoice = PresenterChoice::Inline,
     }
 }
 
@@ -817,6 +823,15 @@ settings! {
         /// A dialog's: the answers to an approval, a question or trust.
         [UserOnly, Now]
         pub dialog: Bindings,
+        /// The viewer's (`Ctrl+O`): moving between boxes, opening one,
+        /// scrolling, searching, and the mouse's `click`, `wheel_up` and
+        /// `wheel_down`.
+        [UserOnly, Now]
+        pub viewer: Bindings,
+        /// The full-screen presenter's: scrolling, searching, and the
+        /// mouse's `click`, `wheel_up` and `wheel_down`.
+        [UserOnly, Now]
+        pub screen: Bindings,
         /// Those looked up last, whatever has the keyboard: `interrupt`,
         /// `redraw`, `suspend`, and the rest.
         [UserOnly, Now]
@@ -845,6 +860,12 @@ settings! {
         /// Unicode, or ASCII only.
         [UserOnly, Restart]
         pub unicode: Option<bool>,
+        /// The mouse in the viewer and the full-screen presenter: a click
+        /// opens or closes a box, and the wheel scrolls; `shift` and a drag
+        /// still select text. Never in the inline screen. On unless set to
+        /// `false`.
+        [UserOnly, Restart]
+        pub mouse: Option<bool>,
     }
 }
 

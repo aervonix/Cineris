@@ -150,6 +150,62 @@ impl std::ops::BitOr for Mods {
     }
 }
 
+/// A mouse button (since step 25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Button {
+    /// The left button.
+    Left,
+    /// The middle button, or the wheel pressed.
+    Middle,
+    /// The right button.
+    Right,
+}
+
+/// Which way the wheel turned (since step 25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Wheel {
+    /// Up: away from the person.
+    Up,
+    /// Down: towards the person.
+    Down,
+    /// Left, on a wheel or a pad that has it.
+    Left,
+    /// Right.
+    Right,
+}
+
+/// What the mouse did (since step 25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MouseKind {
+    /// A button went down.
+    Press(Button),
+    /// A button came up. The older report (mode 1000 alone) does not say
+    /// which.
+    Release(Option<Button>),
+    /// The pointer moved with a button down.
+    Drag(Button),
+    /// The pointer moved with no button down (only where the terminal
+    /// reports that, which the layer does not ask for).
+    Moved,
+    /// The wheel turned, a notch.
+    Wheel(Wheel),
+}
+
+/// A report of the mouse, while the program asked for them
+/// ([`Terminal::set_mouse`](crate::Terminal::set_mouse), since step 25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Mouse {
+    /// What it did.
+    pub kind: MouseKind,
+    /// The column, counted from 0 at the left edge.
+    pub col: u16,
+    /// The row, counted from 0 at the top of the window.
+    pub row: u16,
+    /// The modifiers held. A terminal keeps `Shift` and a drag for its own
+    /// selection, so `Shift` is seldom reported.
+    pub mods: Mods,
+}
+
 /// A terminal's answer to one of the capability queries
 /// ([`Capabilities::QUERIES`](crate::Capabilities::QUERIES)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -190,6 +246,9 @@ pub enum Event {
     Paste(String),
     /// The terminal window gained (`true`) or lost focus.
     Focus(bool),
+    /// The mouse, while its reports are on (since step 25): in a terminal
+    /// that turned modes 1000 and 1006 on for the program.
+    Mouse(Mouse),
     /// An answer to a capability query.
     Reply(Reply),
     /// The window changed size. Not from the decoder: the
@@ -230,6 +289,9 @@ pub struct Decoder {
     /// down, until a record says it went up: another down of it is the
     /// key held, repeating.
     held: Option<u32>,
+    /// Whether the program asked for the mouse (since step 25): only then is
+    /// `CSI M` the start of mode 1000's own report, three bytes long.
+    mouse: bool,
 }
 
 /// A sequence too long to keep, being dropped until it ends.
@@ -288,6 +350,16 @@ impl Decoder {
     pub fn feed(&mut self, bytes: &[u8], events: &mut Vec<Event>) {
         self.buffer.extend_from_slice(bytes);
         self.decode(events, false);
+    }
+
+    /// Reads `CSI M` as mode 1000's own mouse report, its three bytes with
+    /// it, while `on` (since step 25): while the program has mouse
+    /// reporting on. Off, as at the start, `CSI M` is a sequence with no
+    /// meaning and only its three bytes are dropped, so that `Alt+[` and
+    /// `M` typed in a row never take the keys after them. The SGR form
+    /// (mode 1006) is read either way: no key sends it.
+    pub fn set_mouse(&mut self, on: bool) {
+        self.mouse = on;
     }
 
     /// Whether bytes are kept that more input would complete: the reader
@@ -367,6 +439,10 @@ impl Decoder {
             }
             if start >= self.buffer.len() {
                 break;
+            }
+            if !self.mouse && self.buffer[start..].starts_with(b"\x1b[M") {
+                start += 3;
+                continue;
             }
             match step(&self.buffer[start..], flushing) {
                 Step::Done(used, event) => {
@@ -782,6 +858,18 @@ fn ss3(bytes: &[u8]) -> Option<(usize, Option<Event>)> {
 /// A control sequence: ESC [, parameters, intermediates, a final byte.
 fn csi(bytes: &[u8]) -> Option<(usize, Option<Event>)> {
     let body = &bytes[2..];
+    // The older mouse report, `CSI M` and three bytes, each a value plus 32:
+    // from a terminal that turned mode 1000 on and does not know 1006. Its
+    // bytes are not a sequence's, so they are taken whole here, and never
+    // become typed text.
+    if body.first() == Some(&b'M') {
+        let report = body.get(1..4)?;
+        let value = |byte: u8| u32::from(byte.saturating_sub(32));
+        return Some((
+            6,
+            mouse(value(report[0]), value(report[1]), value(report[2]), None),
+        ));
+    }
     let mut end = None;
     for (index, &byte) in body.iter().enumerate() {
         match byte {
@@ -856,6 +944,14 @@ fn decode_csi(raw: &[u8], intermediates: &[u8], final_byte: u8) -> Option<Event>
         })),
         (Some(b'?'), b"", b'u') => Some(Event::Reply(Reply::Keyboard(number(0, 0).unwrap_or(0)))),
         (Some(b'?'), b"", b'c') => Some(Event::Reply(Reply::DeviceAttributes)),
+        // The mouse, in the form mode 1006 asks for: `M` a press, a drag or
+        // the wheel, `m` a release.
+        (Some(b'<'), b"", b'M' | b'm') => mouse(
+            number(0, 0)?,
+            number(1, 0)?,
+            number(2, 0)?,
+            Some(final_byte == b'm'),
+        ),
         (None, b"", b'I') if groups.is_empty() => Some(Event::Focus(true)),
         (None, b"", b'O') if groups.is_empty() => Some(Event::Focus(false)),
         (None, b"", b'u') => kitty(&groups),
@@ -881,6 +977,55 @@ fn decode_csi(raw: &[u8], intermediates: &[u8], final_byte: u8) -> Option<Event>
         }
         _ => None,
     }
+}
+
+/// A mouse report: its button code, and its column and row counted from 1.
+/// `released`: the SGR form says whether a button came up (`m`); `None` for
+/// the older form, where a button code of 3 says it.
+fn mouse(code: u32, col: u32, row: u32, released: Option<bool>) -> Option<Event> {
+    let mut mods = Mods::NONE;
+    if code & 4 != 0 {
+        mods = mods | Mods::SHIFT;
+    }
+    if code & 8 != 0 {
+        mods = mods | Mods::ALT;
+    }
+    if code & 16 != 0 {
+        mods = mods | Mods::CTRL;
+    }
+    let button = match code & 3 {
+        0 => Some(Button::Left),
+        1 => Some(Button::Middle),
+        2 => Some(Button::Right),
+        _ => None,
+    };
+    let kind = if code & 64 != 0 {
+        MouseKind::Wheel(match code & 3 {
+            0 => Wheel::Up,
+            1 => Wheel::Down,
+            2 => Wheel::Left,
+            _ => Wheel::Right,
+        })
+    } else if code & 128 != 0 {
+        // The buttons past the third: nothing the interface uses.
+        return None;
+    } else {
+        match (released, code & 32 != 0, button) {
+            (Some(true), _, button) => MouseKind::Release(button),
+            (None, false, None) => MouseKind::Release(None),
+            (_, true, Some(button)) => MouseKind::Drag(button),
+            (_, true, None) => MouseKind::Moved,
+            (_, false, Some(button)) => MouseKind::Press(button),
+            (Some(false), false, None) => return None,
+        }
+    };
+    let cell = |value: u32| u16::try_from(value.saturating_sub(1)).unwrap_or(u16::MAX);
+    Some(Event::Mouse(Mouse {
+        kind,
+        col: cell(col),
+        row: cell(row),
+        mods,
+    }))
 }
 
 /// A key with the enhanced protocol's event type, the second part of its
@@ -1488,6 +1633,110 @@ mod tests {
         events.clear();
         decoder.feed(b"\x03", &mut events);
         assert_eq!(events, keys(&[(KeyCode::Char('c'), Mods::CTRL)]));
+    }
+
+    /// What `bytes` decode to with the mouse on.
+    fn decode_mouse(bytes: &[u8]) -> Vec<Event> {
+        let mut decoder = Decoder::new();
+        decoder.set_mouse(true);
+        let mut events = Vec::new();
+        decoder.feed(bytes, &mut events);
+        decoder.flush(&mut events);
+        events
+    }
+
+    fn mouse(kind: MouseKind, col: u16, row: u16, mods: Mods) -> Event {
+        Event::Mouse(Mouse {
+            kind,
+            col,
+            row,
+            mods,
+        })
+    }
+
+    /// Mode 1006's reports (step 25): a press, a release, a drag, the wheel
+    /// four ways, the modifiers, counted from the top left as 0; the buttons
+    /// past the third are nothing.
+    #[test]
+    fn mouse_reports_in_the_sgr_form() {
+        assert_eq!(
+            decode(b"\x1b[<0;1;1M\x1b[<0;1;1m\x1b[<2;80;24M\x1b[<34;81;24M\x1b[<64;5;6M\x1b[<65;5;6M\x1b[<66;5;6M\x1b[<67;5;6M"),
+            vec![
+                mouse(MouseKind::Press(Button::Left), 0, 0, N),
+                mouse(MouseKind::Release(Some(Button::Left)), 0, 0, N),
+                mouse(MouseKind::Press(Button::Right), 79, 23, N),
+                mouse(MouseKind::Drag(Button::Right), 80, 23, N),
+                mouse(MouseKind::Wheel(Wheel::Up), 4, 5, N),
+                mouse(MouseKind::Wheel(Wheel::Down), 4, 5, N),
+                mouse(MouseKind::Wheel(Wheel::Left), 4, 5, N),
+                mouse(MouseKind::Wheel(Wheel::Right), 4, 5, N),
+            ]
+        );
+        assert_eq!(
+            decode(b"\x1b[<4;3;2M\x1b[<8;3;2M\x1b[<16;3;2M\x1b[<1;300;400M\x1b[<35;9;9M"),
+            vec![
+                mouse(MouseKind::Press(Button::Left), 2, 1, Mods::SHIFT),
+                mouse(MouseKind::Press(Button::Left), 2, 1, Mods::ALT),
+                mouse(MouseKind::Press(Button::Left), 2, 1, Mods::CTRL),
+                mouse(MouseKind::Press(Button::Middle), 299, 399, N),
+                mouse(MouseKind::Moved, 8, 8, N),
+            ]
+        );
+        // The eighth button, and a report that names no cell: nothing, and
+        // nothing of them is typed.
+        assert_eq!(decode(b"\x1b[<128;1;1M\x1b[<0M"), vec![]);
+        // A report too large for a cell's number is the last cell.
+        assert_eq!(
+            decode(b"\x1b[<0;99999;1M"),
+            vec![mouse(MouseKind::Press(Button::Left), u16::MAX, 0, N)]
+        );
+    }
+
+    /// Mode 1000's own form, from a terminal that does not know 1006: taken
+    /// whole while the mouse is on, so that none of its bytes is typed, a
+    /// release saying no button. With the mouse off `CSI M` is dropped
+    /// alone, as before, and what follows it is typed.
+    #[test]
+    fn mouse_reports_in_the_older_form_are_taken_whole() {
+        assert_eq!(
+            decode(b"\x1b[Mabc"),
+            keys(&[
+                (KeyCode::Char('a'), N),
+                (KeyCode::Char('b'), N),
+                (KeyCode::Char('c'), N)
+            ])
+        );
+        assert_eq!(
+            decode_mouse(b"\x1b[M !!\x1b[M#!!\x1b[M`+,a"),
+            vec![
+                mouse(MouseKind::Press(Button::Left), 0, 0, N),
+                mouse(MouseKind::Release(None), 0, 0, N),
+                mouse(MouseKind::Wheel(Wheel::Up), 10, 11, N),
+                Event::Key(Key::plain(KeyCode::Char('a'))),
+            ]
+        );
+        // Bytes past 127 are values too, not text.
+        assert_eq!(
+            decode_mouse(b"\x1b[M \xff\xff"),
+            vec![mouse(MouseKind::Press(Button::Left), 222, 222, N)]
+        );
+    }
+
+    /// A mouse report decodes the same however reads split it.
+    #[test]
+    fn a_mouse_report_decodes_the_same_at_every_split() {
+        let input: &[u8] = b"x\x1b[<0;12;7M\x1b[<0;12;7m\x1b[M \"#y";
+        let whole = decode_mouse(input);
+        assert_eq!(whole.len(), 5, "{whole:?}");
+        for cut in 0..=input.len() {
+            let mut decoder = Decoder::new();
+            decoder.set_mouse(true);
+            let mut events = Vec::new();
+            decoder.feed(&input[..cut], &mut events);
+            decoder.feed(&input[cut..], &mut events);
+            decoder.flush(&mut events);
+            assert_eq!(events, whole, "cut at {cut}");
+        }
     }
 
     /// Whether the nightly run asked for every case (`CORTEX_PROPERTY_SCALE`

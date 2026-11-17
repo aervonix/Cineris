@@ -39,6 +39,7 @@ mod items;
 pub mod link;
 mod panels;
 mod ready;
+mod scroll;
 mod state;
 mod tools;
 mod wording;
