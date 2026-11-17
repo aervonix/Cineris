@@ -1,0 +1,21 @@
+{
+  "//": "The type check of turn.mts against the generated declarations (docs/testing-and-ci.md, \"The TypeScript client\"). `tsc -p` this folder with `--typeRoots` naming where @types/node is; it emits nothing.",
+  "compilerOptions": {
+    "noEmit": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2023",
+    "lib": ["es2023"],
+    "types": ["node"]
+  },
+  "files": ["turn.mts"]
+}
