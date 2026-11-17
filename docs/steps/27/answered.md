@@ -1,6 +1,6 @@
 # Answered in step 27, on 2026-11-16
 
-Step 27 builds the RPC server in `cortex-rpc`: `cortex serve --stdio` and `--socket`, the handshake with roles, every first-release method and event, server-to-client requests with supervisor routing, several clients per session, backpressure, socket permissions and peer checks, and `cortex attach`. The owner's answers come through the coordinator.
+Step 27 builds the RPC server in `cortex-rpc`: `cortex serve --stdio` and `--socket`, the handshake with roles, every first-release method and event, server-to-client requests with supervisor routing, several clients per session, backpressure, socket permissions and peer checks, and `cortex attach`. The owner's answers come through the coordinator. What the first pull request built and measured is below and in [ci.md](ci.md); each later pull request has a record of its own in [parts/](parts/).
 
 | Question | The answer, 2026-11-16 | Recorded in |
 |---|---|---|
