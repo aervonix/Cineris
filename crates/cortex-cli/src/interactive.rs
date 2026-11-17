@@ -434,7 +434,9 @@ pub(crate) fn tui_settings(tui: &TuiSettings, notices: &mut Vec<String>) -> app:
 /// `tui` and `keys` sections, after a reload applied a key of them (step
 /// 24): built as at the start, what cannot be used said again. A section
 /// that does not read leaves both as they were, and says why.
-fn restyle(config: &serde_json::Map<String, serde_json::Value>) -> Result<app::Restyled, String> {
+pub(crate) fn restyle(
+    config: &serde_json::Map<String, serde_json::Value>,
+) -> Result<app::Restyled, String> {
     let unread = |error: String| {
         format!(
             "The look and the keys stay as they were: the configuration could not be read again \

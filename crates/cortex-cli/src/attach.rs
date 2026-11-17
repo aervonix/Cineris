@@ -140,6 +140,9 @@ pub(crate) fn run(attach: Attach, name: &'static str) -> u8 {
                 notices,
                 history,
                 highlighter: Highlighter::new(move || wake.wake()),
+                // The server's `config/get` reads the same user's
+                // configuration as the in-process core does.
+                restyle: Some(Box::new(interactive::restyle)),
             };
             (Box::new(link) as Box<dyn Link>, start)
         })
