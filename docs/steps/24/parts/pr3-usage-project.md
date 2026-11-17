@@ -37,6 +37,16 @@ A focused review of the accept and promote paths (4c31a16e). It found sound: `wh
 | 8. Tests | The detail compared whole with the command; the question with `Up` and `Down`; a dropped delete; a result for a session left; a change between the frame and `y`; the hostile purpose and check command; the focus kept after `n` | `a_result_for_a_session_left_is_dropped`, `an_entry_changed_between_its_frame_and_y_holds_y_back`, and those above | |
 | 9. Docs | 09-tui's "The panels as built" has the project and usage panels; `Panel::least_rows` says a kind may count its item's first row alone | | |
 
+## The pull request's full review, and what each finding of this part's changed
+
+| Finding | What changed | Test | Break |
+|---|---|---|---|
+| 1. The usage panel a near limit opened never closed once the limit's reset had passed: the panel stayed open with no rows, and `Ctrl+P` reached it | The panel remembers whether a limit was near at the last update, opens when one becomes near, and closes on any update with none near; and a new hook, `Panel::lapsed`, has the mechanism close it before the panels are laid out when the time passed it by with no update | `a_limit_past_its_reset_closes_the_panel_it_opened` | `a-reset-passed-keeps-the-panel-open`, `a-lapsed-usage-panel-is-not-lapsed`, `the-mechanism-keeps-a-lapsed-panel` |
+| 2. The project panel said `reading…` for ever after a refused list | It has `failed`: the reading ends, and the refusal is said where the entries would be; the open's own `not_available` tells it too, and is still not said | `a_refused_list_ends_the_reading_and_says_why` | `a-refused-project-list-reads-on` |
+| 3a. The question of a deletion said `y` whatever the key | It names the key the map binds to `focus.accept` (the mechanism's `Draw` carries the key map) | `the_delete_question_names_the_bound_key` | `the-question-names-y-whatever-the-key` |
+| 3b. `tab` and `g` changed the usage panel's focused row, and the readiness started again, so a quick second key was typed into the prompt | Its rows are one item to the mechanism (one key, no content): its keys change its own view, and nothing acts on a row | `a_key_straight_after_the_views_change_is_taken` | `a-view-key-holds-the-next-back` |
+| 3c. Under 60 columns a mixed cost could be cut at the row's end, its `est.` lost | In a narrow window costs put their marked parts first (`$1.92 est. + $41.87`), the output column goes before the cost would be cut, and a total that does not fit beside its word follows it, cut at its end | `a_mixed_cost_keeps_its_basis_in_a_narrow_window` | `a-narrow-total-loses-its-mark`, `a-narrow-row-keeps-its-output` |
+
 ## Tests
 
 All tier-1 unit tests of `cortex-tui`, with no real waiting:

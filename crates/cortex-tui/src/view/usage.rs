@@ -462,9 +462,22 @@ fn part_lines(
             let Some(report) = view.report else {
                 return Vec::new();
             };
-            let cost = cost_words(&report.totals.costs);
+            let cost = if width < NARROW {
+                cost_words_narrow(&report.totals.costs)
+            } else {
+                cost_words(&report.totals.costs)
+            };
             let left = Line::plain("  ").with(Span::new("total", theme.style(name_token)));
             let right = Line::styled(cost, theme.style(Token::Text));
+            // Where the cost does not fit at the row's end, it follows the
+            // word, cut at its end: its first basis stays.
+            if left.width() + 2 + right.width() > width {
+                let line = left.with(Span::plain("  ")).with(Span::new(
+                    right.text().into_owned(),
+                    theme.style(Token::Text),
+                ));
+                return vec![cut(&line, width, look.glyphs.ellipsis)];
+            }
             vec![spread(&left, &right, width, 2, look.glyphs.ellipsis)]
         }
         Part::Time => {
@@ -564,6 +577,32 @@ pub fn cost_words(costs: &[Cost]) -> String {
             let amount = dollars(cost.usd_nanos);
             match &cost.basis {
                 CostBasis::Metered if mixed => format!("{amount} metered"),
+                CostBasis::Metered => amount,
+                CostBasis::Estimate => format!("{amount} est."),
+                CostBasis::Recorded => format!("{amount} recorded"),
+                other => format!("{amount} {}", one_line(other.as_str())),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
+/// Costs with their bases in a narrow window, where a row's end may be
+/// cut: the estimates and the recorded costs first, each marked, then the
+/// metered one plain (`$1.92 est. + $41.87`), so that what is cut is never
+/// the mark.
+#[must_use]
+pub fn cost_words_narrow(costs: &[Cost]) -> String {
+    if costs.len() < 2 {
+        return cost_words(costs);
+    }
+    let marked = costs.iter().filter(|cost| cost.basis != CostBasis::Metered);
+    let metered = costs.iter().filter(|cost| cost.basis == CostBasis::Metered);
+    marked
+        .chain(metered)
+        .map(|cost| {
+            let amount = dollars(cost.usd_nanos);
+            match &cost.basis {
                 CostBasis::Metered => amount,
                 CostBasis::Estimate => format!("{amount} est."),
                 CostBasis::Recorded => format!("{amount} recorded"),
@@ -821,13 +860,14 @@ impl Column {
         }
     }
 
-    fn value(self, totals: &UsageTotals) -> String {
+    fn value(self, totals: &UsageTotals, narrow: bool) -> String {
         let tokens = &totals.tokens;
         match self {
             Self::Input => count(tokens.input),
             Self::CacheRead => count(tokens.cache_read),
             Self::CacheWrite => count(tokens.cache_write),
             Self::Output => count(tokens.output),
+            Self::Cost if narrow => cost_words_narrow(&totals.costs),
             Self::Cost => cost_words(&totals.costs),
         }
     }
@@ -839,6 +879,8 @@ impl Column {
 struct Table {
     columns: Vec<(Column, usize)>,
     width: usize,
+    /// Under [`NARROW`] columns: the costs put their marks first.
+    narrow: bool,
 }
 
 impl Table {
@@ -851,9 +893,10 @@ impl Table {
         if let Some(report) = view.report.filter(|_| !view.reading) {
             all.extend(report.rows.iter().map(|row| &row.totals));
         }
+        let narrow = width < NARROW;
         let wide = |column: Column| {
             all.iter()
-                .map(|totals| cortex_base::text::width(&column.value(totals)))
+                .map(|totals| cortex_base::text::width(&column.value(totals, narrow)))
                 .chain([column.name().len()])
                 .max()
                 .unwrap_or(0)
@@ -880,9 +923,16 @@ impl Table {
             columns.retain(|column| *column != drop);
             sized.retain(|(column, _)| *column != drop);
         }
+        // In a narrow window the output goes too when the name would have
+        // no room beside the cost, whose basis must show.
+        let used: usize = sized.iter().map(|(_, wide)| wide + 2).sum();
+        if narrow && used + 4 + 4 > width {
+            sized.retain(|(column, _)| *column != Column::Output);
+        }
         Self {
             columns: sized,
             width,
+            narrow,
         }
     }
 
@@ -927,7 +977,7 @@ impl Table {
         let room = self.name_room(indent);
         line.push(Span::new(fit(name, room, look), theme.style(token)));
         for (column, wide) in &self.columns {
-            let value = column.value(totals);
+            let value = column.value(totals, self.narrow);
             let token = if *column == Column::Cost && totals.costs.is_empty() {
                 Token::Muted
             } else {

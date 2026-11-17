@@ -515,3 +515,28 @@ fn hostile_names_labels_currencies_notes_and_errors_are_drawn_visible() {
         }
     }
 }
+
+/// Under 60 columns a cost keeps its basis however its row is cut: the
+/// estimate first, and the output dropped before the cost is.
+#[test]
+fn a_mixed_cost_keeps_its_basis_in_a_narrow_window() {
+    let zone = Zone::utc();
+    let by_model = report(vec![UsageGroup::Provider, UsageGroup::Model]);
+    let state = view(None, Some(&by_model), &[], &[], &zone);
+    for width in 20..NARROW {
+        let rows = shown(&state, width);
+        let row = |name: &str| {
+            rows.iter()
+                .find(|row| row.trim_start().starts_with(name))
+                .cloned()
+                .unwrap_or_else(|| panic!("{name} at {width}: {rows:#?}"))
+        };
+        assert!(row("total").contains("$1.92 est."), "at {width}: {rows:#?}");
+        // The name is cut first: its first letters stay.
+        assert!(row("hai").contains("est."), "at {width}: {rows:#?}");
+    }
+    assert_eq!(
+        cost_words_narrow(&[metered(4_440), estimate(210)]),
+        "$2.10 est. + $44.40"
+    );
+}

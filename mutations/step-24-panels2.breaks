@@ -233,8 +233,8 @@ caught-by:
 rule: The open's own list, where the core keeps no project (no state directory), says nothing.
 file: crates/cortex-tui/src/app/state.rs
 in: App::done
-find: (Pending::Opened { .. }, Err(error)) if error.code == "not_available" => {}
-replace: (Pending::Opened { .. }, Err(error)) if false && error.code.is_empty() => {}
+find: (Pending::Opened { panel, .. }, Err(error)) if error.code == "not_available" => {
+replace: (Pending::Opened { panel, .. }, Err(error)) if false && error.code.is_empty() => {
 caught-by:
     app::tests::project::no_project_kept_says_nothing_as_the_session_opens
 
@@ -257,15 +257,6 @@ find: if left.saturating_mul(5) >= limit {
 replace: if left.saturating_mul(5) > limit {
 caught-by:
     view::usage::tests::a_limit_with_less_than_a_fifth_left_is_the_warning_line
-
-[break] a-limit-no-longer-near-keeps-it-open
-rule: Opened by a limit near, the panel closes by itself when no limit is.
-file: crates/cortex-tui/src/app/panels/usage.rs
-in: UsagePanel::saw
-find: (true, false) if !self.summoned => Show::Close,
-replace: (true, false) if !self.summoned => Show::Same,
-caught-by:
-    app::tests::usage::a_limit_near_opens_it_by_itself_as_the_warning_line_and_its_end_closes_it
 
 [break] tab-asks-for-no-report
 rule: `tab` goes to the next range and asks for its report.
@@ -383,3 +374,79 @@ replace: .map(str::to_owned)
 occurrence: 1
 caught-by:
     view::usage::tests::hostile_names_labels_currencies_notes_and_errors_are_drawn_visible
+
+# ------------------------------------------- PR 3's full review
+
+[break] a-reset-passed-keeps-the-panel-open
+rule: The usage panel a near limit opened closes with the next update that finds none near, a limit past its reset included.
+file: crates/cortex-tui/src/app/panels/usage.rs
+in: UsagePanel::saw
+find: } else if !near && !self.summoned {
+replace: } else if false {
+caught-by:
+    app::tests::usage::a_limit_past_its_reset_closes_the_panel_it_opened
+    app::tests::usage::a_limit_near_opens_it_by_itself_as_the_warning_line_and_its_end_closes_it
+
+[break] a-lapsed-usage-panel-is-not-lapsed
+rule: The usage panel a near limit opened has nothing to show once the reset has passed, update or not.
+file: crates/cortex-tui/src/app/panels/usage.rs
+in: UsagePanel::lapsed
+find: !self.summoned && !self.near()
+replace: false
+caught-by:
+    app::tests::usage::a_limit_past_its_reset_closes_the_panel_it_opened
+
+[break] the-mechanism-keeps-a-lapsed-panel
+rule: The mechanism closes a panel that has nothing more to show before laying the panels out: the focus ring never reaches it.
+file: crates/cortex-tui/src/app/panels.rs
+in: Panels::layout
+find: .filter(|id| self.slot(*id).is_some_and(|slot| slot.panel.lapsed()))
+replace: .filter(|_| false)
+caught-by:
+    app::tests::usage::a_limit_past_its_reset_closes_the_panel_it_opened
+
+[break] a-refused-project-list-reads-on
+rule: A list the core refuses ends the project panel's `reading…` and says why.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::failed
+find: if !self.listed {
+replace: if false {
+caught-by:
+    app::tests::project::a_refused_list_ends_the_reading_and_says_why
+
+[break] the-question-names-y-whatever-the-key
+rule: The question of a deletion names the key the map binds to `focus.accept`.
+file: crates/cortex-tui/src/app/panels/project.rs
+in: ProjectPanel::expanded
+find: let yes = Self::yes(draw.keys);
+replace: let yes = Some("y".to_owned());
+caught-by:
+    app::tests::project::the_delete_question_names_the_bound_key
+
+[break] a-view-key-holds-the-next-back
+rule: `tab` and `g` change the usage panel's own view: the next key is not held back for what they changed.
+file: crates/cortex-tui/src/app/panels/usage.rs
+in: UsagePanel::item
+find: id: "usage".to_owned()
+replace: id: index.to_string()
+caught-by:
+    app::tests::usage::a_key_straight_after_the_views_change_is_taken
+
+[break] a-narrow-total-loses-its-mark
+rule: Under 60 columns the total puts its marked costs first, so that a cut keeps the basis.
+file: crates/cortex-tui/src/view/usage.rs
+in: part_lines
+find: let cost = if width < NARROW {
+replace: let cost = if false {
+caught-by:
+    view::usage::tests::a_mixed_cost_keeps_its_basis_in_a_narrow_window
+    view::usage::tests::the_usage_in_every_variant
+
+[break] a-narrow-row-keeps-its-output
+rule: Under 60 columns the output goes before a cost would be cut.
+file: crates/cortex-tui/src/view/usage.rs
+in: Table::new
+find: if narrow && used + 4 + 4 > width {
+replace: if false {
+caught-by:
+    view::usage::tests::a_mixed_cost_keeps_its_basis_in_a_narrow_window

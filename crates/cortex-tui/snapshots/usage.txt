@@ -32,7 +32,7 @@
     haiku-5.5                            201.0k  $1.92 est.|
   {b}openrouter|
     some-open-model                      310.0k{fg=a8}           —|
-  total                         $41.87 metered + $1.92 est.|
+  total                                 $1.92 est. + $41.87|
   {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for|
   {fg=a8}you 5s|
   {fg=a11}A statistics file that could not be read was set aside,|
@@ -67,7 +67,7 @@
     anthropic                            201.0k  $1.92 est.|
   {b}~/src/site|
     openrouter                           310.0k{fg=a8}           —|
-  total                         $41.87 metered + $1.92 est.|
+  total                                 $1.92 est. + $41.87|
   {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for|
   {fg=a8}you 5s|
   {fg=a11}A statistics file that could not be read was set aside,|
@@ -143,7 +143,7 @@ o {b}Usage{}  {fg=a8}this session $0.42 | today|
     haiku-5.5                            201.0k  $1.92 est.|
   {b}openrouter|
     some-open-model                      310.0k{fg=a8}           —|
-  total                         $41.87 metered + $1.92 est.|
+  total                                 $1.92 est. + $41.87|
   {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for|
   {fg=a8}you 5s|
   {fg=a11}A statistics file that could not be read was set aside,|
@@ -178,7 +178,7 @@ o {b}Usage{}  {fg=a8}this session $0.42 | today|
     anthropic                            201.0k  $1.92 est.|
   {b}~/src/site|
     openrouter                           310.0k{fg=a8}           —|
-  total                         $41.87 metered + $1.92 est.|
+  total                                 $1.92 est. + $41.87|
   {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for|
   {fg=a8}you 5s|
   {fg=a11}A statistics file that could not be read was set aside,|
