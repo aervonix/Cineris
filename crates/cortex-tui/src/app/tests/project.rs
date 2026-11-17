@@ -782,3 +782,30 @@ fn d_asks_in_the_row_y_then_deletes_once_ready_and_any_other_key_keeps_it() {
         "{live:#?}"
     );
 }
+
+/// An entry in use and accepted has nothing for `y` to do: no `y` is
+/// offered, and one pressed sends nothing.
+#[test]
+fn y_on_an_entry_in_use_and_accepted_sends_nothing() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_entries(now, 60, &entries());
+    let ready = project_focused(&mut app, &link, &entries(), now);
+    // The fact, accepted, after the three that wait.
+    for _ in 0..3 {
+        key(&mut app, "down", ready);
+    }
+    let at = ready + Duration::from_secs(2);
+    let hint = live_text(&mut app, at).last().cloned().unwrap_or_default();
+    assert!(
+        !hint.contains("accepts") && !hint.contains("taller"),
+        "{hint}"
+    );
+    // Once its detail drawn whole has had its grace.
+    press(&mut app, "y", at + GRACE);
+    assert!(answered(&mut app, &link, &[], at + GRACE).is_empty());
+    assert_eq!(
+        app.input().focus().focused(),
+        Target::Panel(project_id(&app)),
+        "taken, not typed"
+    );
+}

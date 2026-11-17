@@ -745,15 +745,20 @@ fn perf_a_years_report_for_the_usage_panel() {
         &[UsageGroup::Project, UsageGroup::Provider],
     ];
     let mut times = Vec::new();
+    // Where each report's time goes: the aggregates read, brought up to
+    // date with the files, and the report made (the limits read with it).
+    let (mut loads, mut syncs, mut makes) = (Vec::new(), Vec::new(), Vec::new());
     let mut most_rows = 0;
     for _ in 0..20 {
         for range in &ranges {
             for group in groups {
                 let began = Instant::now();
                 let mut aggregates = Aggregates::load_for_saving(&dir, &clock).unwrap();
+                let loaded = Instant::now();
                 aggregates
                     .sync(&dir, zone.date_of(now), &crate::month_of(now), Some(400))
                     .unwrap();
+                let synced = Instant::now();
                 let total = aggregates.total();
                 let limits = crate::LimitsFile::load(&dir);
                 let query = crate::Query {
@@ -764,12 +769,28 @@ fn perf_a_years_report_for_the_usage_panel() {
                     rolling: false,
                 };
                 let report = crate::report(&total, &query, &zone, now, &limits.providers, true);
-                times.push(began.elapsed().as_secs_f64() * 1000.0);
+                let ended = Instant::now();
+                let ms = |from: Instant, to: Instant| (to - from).as_secs_f64() * 1000.0;
+                times.push(ms(began, ended));
+                loads.push(ms(began, loaded));
+                syncs.push(ms(loaded, synced));
+                makes.push(ms(synced, ended));
                 most_rows = most_rows.max(report.rows.len());
             }
         }
     }
     times.sort_by(f64::total_cmp);
+    for part in [&mut loads, &mut syncs, &mut makes] {
+        part.sort_by(f64::total_cmp);
+    }
+    let median = |part: &[f64]| part[part.len() / 2];
+    println!(
+        "  the aggregates read: median {:.3} ms   brought up to date: median {:.3} ms   \
+         the report made, the limits read: median {:.3} ms",
+        median(&loads),
+        median(&syncs),
+        median(&makes)
+    );
     let at = |share: usize| times[(times.len() * share / 100).min(times.len() - 1)];
     println!(
         "a report from the year's aggregates, {} reports of up to {most_rows} rows, aggregates of {} KB: \
