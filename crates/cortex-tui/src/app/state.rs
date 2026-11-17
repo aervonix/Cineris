@@ -993,6 +993,14 @@ impl App {
                     self.input.disarm_quit();
                 }
                 match keyed {
+                    // To the full screen's search, where it was going while
+                    // the search is open, hidden under the dialog: never the
+                    // hidden editor, whose `Enter` would send (the second
+                    // review of step 25).
+                    Keyed::Pass if self.screen_searching() => {
+                        self.search_key(*key);
+                        true
+                    }
                     // It goes on to the editor, where it was going.
                     Keyed::Pass => self.edit_with(*key, at),
                     Keyed::Global(action) => {

@@ -513,6 +513,14 @@ impl App {
         self.look_changed();
     }
 
+    /// Whether the full screen's window follows the end, for tests.
+    #[cfg(test)]
+    pub(crate) fn screen_follows(&self) -> bool {
+        self.screen
+            .as_ref()
+            .is_some_and(|view| view.scroll.following())
+    }
+
     /// The search's query, for tests.
     #[cfg(test)]
     pub(crate) fn search_query(&self) -> Option<String> {
@@ -593,7 +601,7 @@ impl App {
 
     /// The search's keys, the history search's context's: older (`Up`,
     /// `Enter`, `Ctrl+F` again), newer (`Down`), erase, and `Esc` to end.
-    fn search_key(&mut self, key: Key) {
+    pub(super) fn search_key(&mut self, key: Key) {
         let width = self.transcript_width();
         let Some(mut view) = self.screen.take() else {
             return;
@@ -684,6 +692,12 @@ impl App {
     /// Brings the current match into view: its block, the row it is drawn
     /// on, opening a closed box whose detail holds it.
     fn reveal_match(&self, view: &mut ScreenView, width: usize) {
+        // Under a dialog the window stays where the request left it, at what
+        // led to the dialog: the search moves it once it can be seen again
+        // (the second review of step 25).
+        if !self.dialogs.is_empty() {
+            return;
+        }
         let Some(search) = view.search.as_ref() else {
             return;
         };
