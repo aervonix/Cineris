@@ -19,10 +19,17 @@
 //!   left until the last is answered. A refused one comes back into the
 //!   editor with those behind it, in order; after an interrupt, those not
 //!   sent come back once the one on its way is answered.
+//! - **A prompt refused `turn_running` is sent again once, queued:** sent
+//!   with no delivery in the moment between one turn's `turn.completed` and
+//!   the `turn.started` of the next the core takes from its queue, or onto a
+//!   turn another client began, it runs after the turn that took the gap.
+//!   Nothing is said. A second refusal, or one after an interrupt, gives it
+//!   back with why, as any refusal does.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use cortex_protocol::error::code;
 use cortex_protocol::event::{Event, Notice, TurnOutcome};
 use cortex_protocol::item::Delivery as ItemDelivery;
 use cortex_protocol::jsonrpc::RequestId;
@@ -151,8 +158,12 @@ struct Sent {
     /// stops that.
     started: bool,
     /// An interrupt was sent after it: the held prompts that wait for it
-    /// come back once it is answered, rather than follow it.
+    /// come back once it is answered, rather than follow it, and a refusal
+    /// is not sent again.
     stopped: bool,
+    /// It was refused `turn_running` once and sent again queued: a refusal
+    /// now gives it back.
+    again: bool,
 }
 
 /// The last key read, for the dialogs' rules (`super::dialog`).
@@ -1066,6 +1077,7 @@ impl App {
             text,
             started,
             stopped: false,
+            again: false,
         };
         self.send_prompt(sent, wire(delivery));
     }
@@ -1468,9 +1480,12 @@ impl App {
         }
     }
 
-    /// A prompt's answer. A refused one comes back into the editor with
-    /// why, and the held prompts that wait for it after it, in order; an
-    /// accepted held one lets the next go, unless an interrupt came after it.
+    /// A prompt's answer. One refused `turn_running` is sent again once,
+    /// queued behind the turn the core started meanwhile (step 27). Any
+    /// other refusal, that one's second, or one after an interrupt brings it
+    /// back into the editor with why, and the held prompts that wait for it
+    /// after it, in order; an accepted held one lets the next go, unless an
+    /// interrupt came after it.
     fn prompt_answered(
         &mut self,
         ticket: Ticket,
@@ -1483,6 +1498,26 @@ impl App {
             self.held_sent = None;
         }
         let refused = match result {
+            // Sent with no delivery as one turn ended and the next the core
+            // took from its queue began, or onto a turn another client
+            // began: it runs after that turn.
+            Err(error)
+                if error.code == code::TURN_RUNNING
+                    && !sent.again
+                    && !sent.stopped
+                    && self.is_open(&sent.session) =>
+            {
+                let again = Sent {
+                    started: false,
+                    again: true,
+                    ..sent
+                };
+                let ticket = self.send_prompt(again, Some(ItemDelivery::Queue));
+                if held {
+                    self.held_sent = Some(ticket);
+                }
+                return;
+            }
             Err(error) => {
                 if sent.started && self.running.is_some() {
                     self.stop_running();
@@ -1635,6 +1670,7 @@ impl App {
                 text,
                 started,
                 stopped: false,
+                again: false,
             };
             self.held_sent = Some(self.send_prompt(sent, delivery));
             return;
