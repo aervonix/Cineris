@@ -21,6 +21,7 @@
 )]
 
 mod conformance;
+mod perf;
 #[cfg(windows)]
 mod pipe;
 #[cfg(unix)]
