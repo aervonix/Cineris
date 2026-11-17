@@ -438,33 +438,38 @@ pub fn read_section<T: Setting>(
     entries: &serde_json::Map<String, serde_json::Value>,
     name: &str,
 ) -> Result<T, String> {
-    let prefix = format!("{name}.");
     let mut table = toml::Table::new();
     for (key, value) in entries {
-        let Some(rest) = key.strip_prefix(&prefix) else {
+        // Read as the key it is: a part a name with a dot in it is quoted.
+        let Ok(path) = KeyPath::parse(key) else {
             continue;
         };
+        let Some((first, rest)) = path.parts().split_first() else {
+            continue;
+        };
+        if first != name {
+            continue;
+        }
         // JSON's null has no TOML value: a key not set.
         if value.is_null() {
             continue;
         }
         let value: Value =
             serde_json::from_value(value.clone()).map_err(|error| format!("{key}: {error}"))?;
-        let parts: Vec<&str> = rest.split('.').collect();
-        let Some((last, path)) = parts.split_last() else {
+        let Some((last, path)) = rest.split_last() else {
             continue;
         };
         let mut at = &mut table;
         for part in path {
             let next = at
-                .entry((*part).to_owned())
+                .entry(part.clone())
                 .or_insert_with(|| Value::Table(toml::Table::new()));
             let Value::Table(next) = next else {
                 return Err(format!("{key}: a table and a value at once"));
             };
             at = next;
         }
-        at.insert((*last).to_owned(), value);
+        at.insert(last.clone(), value);
     }
     T::read(&Value::Table(table)).map_err(|error| format!("{name}.{error}"))
 }

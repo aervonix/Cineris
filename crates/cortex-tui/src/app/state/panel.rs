@@ -210,6 +210,7 @@ impl App {
     /// The session was left (or another is opened): the panels forget it,
     /// and an item edit of one of them ends, the draft back.
     pub(super) fn left_session(&mut self) {
+        self.warmed = 0;
         if self.item_edit.take().is_some() {
             self.input.cancel_item_edit();
         }

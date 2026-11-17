@@ -50,7 +50,8 @@ fn restyle(config: &serde_json::Map<String, serde_json::Value>) -> Result<Restyl
             ..Settings::default()
         },
         keymap,
-        notices: Vec::new(),
+        look_notices: vec!["a note of the look".to_owned()],
+        key_notices: vec!["a note of the keys".to_owned()],
     })
 }
 
@@ -241,4 +242,77 @@ fn a_look_that_cannot_be_read_is_said_and_the_old_one_kept() {
     answer_sections(&mut app, &link, &[("tui.theme", "broken".into())], now);
     assert_eq!(app.settings().theme, ThemeChoice::Auto);
     assert!(notices(&mut app, now).contains("could not be read again"));
+}
+
+/// Two reloads that each applied a key, the second before the first's
+/// sections came: one answer serves both, and takes what each changed (the
+/// review of step 24's third part: the second was dropped, its key map
+/// lost).
+#[test]
+fn a_second_reload_before_the_answer_is_taken_in_by_it() {
+    let now = Instant::now();
+    let (mut app, link) = restyled_app(now);
+    link.give(changed(&["tui.theme"]));
+    drain(&mut app, now);
+    link.give(changed(&["keys.editor"]));
+    drain(&mut app, now);
+    answer_sections(
+        &mut app,
+        &link,
+        &[
+            ("tui.theme", "light".into()),
+            ("keys.editor", serde_json::json!({"submit": ["ctrl+j"]})),
+        ],
+        now,
+    );
+    assert!(
+        link.take_sent()
+            .iter()
+            .all(|(_, op)| !matches!(op, Op::ConfigGet(_))),
+        "asked twice"
+    );
+    assert_eq!(app.settings().theme, ThemeChoice::Light);
+    let submit = app.input().keymap().keys_of(Action::Submit);
+    assert!(submit.contains(&parse("ctrl+j").unwrap()), "{submit:?}");
+}
+
+/// A change another client's reload found, while this one's `/reload` is
+/// out, is read too (the review of step 24's third part).
+#[test]
+fn a_change_found_while_a_reload_is_out_is_read_again() {
+    let now = Instant::now();
+    let (mut app, link) = restyled_app(now);
+    run_command(&mut app, "/reload", now);
+    let _ = link.take_sent();
+    link.give(changed(&["keys.editor"]));
+    drain(&mut app, now);
+    answer_sections(
+        &mut app,
+        &link,
+        &[("keys.editor", serde_json::json!({"submit": ["ctrl+j"]}))],
+        now,
+    );
+    let submit = app.input().keymap().keys_of(Action::Submit);
+    assert!(submit.contains(&parse("ctrl+j").unwrap()), "{submit:?}");
+}
+
+/// What could not be used is said with the change it is about: the keys'
+/// notes when the key map is replaced, the look's when the theme changed.
+#[test]
+fn a_note_is_said_only_with_its_change() {
+    let now = Instant::now();
+    let (mut app, link) = restyled_app(now);
+    link.give(changed(&["keys.editor"]));
+    drain(&mut app, now);
+    answer_sections(&mut app, &link, &[], now);
+    let all = notices(&mut app, now);
+    assert!(all.contains("a note of the keys"), "{all}");
+    assert!(!all.contains("a note of the look"), "{all}");
+    link.give(changed(&["tui.theme"]));
+    drain(&mut app, now);
+    answer_sections(&mut app, &link, &[("tui.theme", "light".into())], now);
+    let all = notices(&mut app, now);
+    // What this frame added: the look's note, and not the keys' again.
+    assert!(all.contains("a note of the look"), "{all}");
+    assert!(!all.contains("a note of the keys"), "said again: {all}");
 }

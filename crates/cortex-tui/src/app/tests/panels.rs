@@ -1623,7 +1623,7 @@ fn enter_on_a_check_opens_its_whole_output_in_the_viewer() {
         ticket,
         Ok(OpResult::SessionArtifact(
             cortex_protocol::methods::SessionArtifactResult {
-                text: "error: unused import\n\u{1b}[31mwarning\u{1b}[0m: 2 more\n".to_owned(),
+                text: "error: unused import\n\u{1b}[31mwarning\u{1b}[0m: 2 more\n\tindented\nchecking 10%\rchecking 100%\n".to_owned(),
                 bytes: 80_000,
                 cut: true,
             },
@@ -1639,6 +1639,15 @@ fn enter_on_a_check_opens_its_whole_output_in_the_viewer() {
         "an escape reached the screen: {lines}"
     );
     assert!(lines.contains("of its 80000 bytes are shown"), "{lines}");
+    // As a command's output is shown: a tab expanded, a carriage return
+    // taking the line back to its start.
+    assert!(lines.contains("        indented"), "{lines}");
+    assert!(lines.contains("checking 100%"), "{lines}");
+    assert!(!lines.contains("checking 10%"), "{lines}");
+    assert!(
+        !lines.contains('\u{2409}'),
+        "a tab drawn as a sign: {lines}"
+    );
     key(&mut app, "esc", ms(now, 70));
     assert!(!app.viewing());
 

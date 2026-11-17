@@ -263,3 +263,39 @@ replace:
                     profiles.extend(loaded.project_profiles.iter().cloned());
 caught-by:
     cortex-core::it reload::a_projects_profile_is_offered_and_loaded_only_once_it_is_trusted
+
+[break] a-second-reload-is-dropped
+rule: A reload that applied a key while the sections are already asked for is taken in by that answer.
+file: crates/cortex-tui/src/app/state/restyle.rs
+in: restyle_if
+find: *asked_keys |= keys;
+replace: let _ = keys;
+caught-by:
+    cortex-tui app::tests::restyle::a_second_reload_before_the_answer_is_taken_in_by_it
+
+[break] a-change-during-a-reload-is-not-read
+rule: A change found while this application's /reload is out is read again too.
+file: crates/cortex-tui/src/app/state.rs
+in: event
+find: self.restyle_if(&changed.applied);
+replace: if !asked { self.restyle_if(&changed.applied); }
+caught-by:
+    cortex-tui app::tests::restyle::a_change_found_while_a_reload_is_out_is_read_again
+
+[break] every-note-is-said-again
+rule: What could not be used is said only with the change it is about.
+file: crates/cortex-tui/src/app/state/restyle.rs
+in: restyled
+find: let said = if theme { look_notices } else { Vec::new() };
+replace: let said = look_notices;
+caught-by:
+    cortex-tui app::tests::restyle::a_note_is_said_only_with_its_change
+
+[break] an-artifact-is-shown-as-raw-lines
+rule: A check's output is shown as a command's is: tabs expanded, a carriage return taking the line back.
+file: crates/cortex-tui/src/app/state/viewer.rs
+in: open_text
+find: let mut lines = crate::view::round::output_lines(&artifact.text);
+replace: let mut lines: Vec<String> = artifact.text.lines().map(|line| cortex_term::sanitize(line).into_owned()).collect();
+caught-by:
+    cortex-tui app::tests::panels::enter_on_a_check_opens_its_whole_output_in_the_viewer

@@ -1776,8 +1776,10 @@ impl App {
                     for line in reload_lines(&changed.applied, &changed.errors, &changed.notes) {
                         self.say(&line);
                     }
-                    self.restyle_if(&changed.applied);
                 }
+                // Read again whoever's reload it was: one asked for already
+                // takes it in.
+                self.restyle_if(&changed.applied);
             }
             Event::Notice(notice) => {
                 if let Some(message) = notice_text(notice) {
