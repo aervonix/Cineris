@@ -104,6 +104,10 @@ A race the first round of the core work found, a client that opened the session 
 
 On a slower Windows runner (8 ms a process start; `try` run 43985112180) tier 2 read 40.9 s against `main`'s 38.8 s, past its warning: the coordinator accepted it for this pull request, and [windows-tier-2-at-its-budget](../../../outstanding/windows-tier-2-at-its-budget.md) leaves the budget to the owner. The first Linux run of the final A/B failed on `cortex-index`'s memory-peak test, a known item ([a-memory-peak-test-near-its-limit](../../../outstanding/a-memory-peak-test-near-its-limit.md)), and passed again.
 
+## The binary's size
+
+The shipped binary in the pull request's run (`pr-size`): **Linux 13,682,824 bytes** (13.05 MB, of a budget of 16 MB), 340,224 bytes more than `main`'s; **Windows 16,442,880 bytes** (15.68 MB, of 18 MB), 593,408 more. The socket and the pipe, with the security of each, and the core's changes.
+
 ## Public API
 
 Added, nothing removed or changed (`cargo xtask api-diff --against origin/main`):
@@ -113,3 +117,25 @@ Added, nothing removed or changed (`cargo xtask api-diff --against origin/main`)
 - **`cortex-rpc`** (27): the `socket` module (`Place`, `ListenOptions`, `Listener`, `Accepted`, the point `BEFORE_A_PEERS_PARENTS_ARE_READ`), `serve_socket`, `Ended::Silent`, `Connection::set_server_ending`, and `ServeOptions::initialize_within` and `supervisor_grant`; behind `test-hooks`, `ListenOptions::widen_access_for_tests` and `failing_accepts`.
 - **`cortex-base`** (Windows only, which the Linux listing cannot show): `private::current_user_sid`.
 
+## The pull request's CI
+
+<!-- written by cargo xtask ci-times, section "The pull request's CI": it replaces this up to the end mark -->
+Pull request 90, on `main` at `fac4391`. "Main" is main's own run at `fac4391` (run 43987289460).
+The PR's run is 44000660265, at `ad45c49`.
+
+| Job | Main, `fac4391` | The PR at `ad45c49` |
+|---|---|---|
+| `lint-linux` | 62 s | 55 s |
+| `test-linux` | 144 s | 109 s |
+| `lint-windows` | 76 s | 82 s |
+| `test-windows` | 289 s | 270 s |
+| `pr-size-linux` (blocks nothing) | — | 315 s |
+| `pr-size-windows` (blocks nothing) | — | 277 s |
+
+| Time above process start, against the budget | Linux, main (6 ms) | Linux, `ad45c49` (3 ms) | Windows, main (8 ms) | Windows, `ad45c49` (8 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 19.0 s | 13.1 s | 18.0 s | 15.4 s |
+| Tier 2, integration (40 s) | 29.7 s | 24.8 s | 42.2 s | 36.6 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 26.8 s | 22.0 s | 82.5 s | 77.8 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "The pull request's CI" -->
