@@ -56,10 +56,11 @@ fn is_main(info: &RunInfo) -> bool {
 
 /// The jobs of the `ci` workflow that block no merge, by the start of their
 /// names: the pull request's binary size (`pr-size-linux`,
-/// `pr-size-windows`), which starts only after the required jobs. A test
-/// reads `.github/workflows/ci.yml` and fails on a job that is in neither
-/// this list nor `BLOCKING`.
-pub(crate) const NON_BLOCKING: [&str; 1] = ["pr-size"];
+/// `pr-size-windows`) and the TypeScript client of the protocol
+/// (`ts-client`), which start only after the required jobs. A test reads
+/// `.github/workflows/ci.yml` and fails on a job that is in neither this
+/// list nor `BLOCKING`.
+pub(crate) const NON_BLOCKING: [&str; 2] = ["pr-size", "ts-client"];
 
 /// The `ci` workflow's jobs that a merge waits for, by the start of their
 /// names (`lint-linux`, `test-windows`, …): what the test of the workflow
@@ -1056,6 +1057,7 @@ mod tests {
         assert!(!blocks("pr-size-windows"));
         assert!(!blocks("pr-size"));
         assert!(blocks("pr-sizes"));
+        assert!(!blocks("ts-client"));
         assert!(blocks("lint-linux"));
         assert!(blocks("test-windows"));
         assert!(blocks("a-job-not-known-yet"));
@@ -1078,6 +1080,7 @@ mod tests {
             .filter(|id| !id.starts_with([' ', '#']))
             .collect();
         assert!(ids.contains(&"pr-size"), "{ids:?}");
+        assert!(ids.contains(&"ts-client"), "{ids:?}");
         for id in ids {
             assert!(
                 BLOCKING.contains(&id) || NON_BLOCKING.contains(&id),
