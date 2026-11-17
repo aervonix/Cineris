@@ -51,6 +51,15 @@ Numbers the product and the tooling must meet, how each is measured, and where e
 
 **Measured in step 23:** idle with a new session, 16.0 MB resident on the desktop and 15.7 MB on a Linux runner (`perf_idle_memory_and_a_keys_time_to_its_frame` in `crates/cortex-cli/tests/system/tui.rs`, a release build, the binary's own `VmRSS`; Windows is not read). The 200-turn sessions are step 25's.
 
+**Measured in step 25:** 200 turns in each presenter, on the shipped build (`--profile dist --target x86_64-unknown-linux-musl`), in a workspace of 20,000 files of the pinned corpus of real code (`perf_two_hundred_turns_in_each_presenter` in `crates/cortex-cli/tests/system/tui.rs`, the binary's `VmRSS` and its peak `VmHWM` once it has settled). Each turn is a prompt, three tool calls (a read, an edit and a command of about 40 lines of output) and an answer of about 40 lines with a code block; the full screen is then scrolled to its top and back, resized twice and searched. The desktop, 2026-11-17, in MB:
+
+| | Idle before the turns | After 200 turns | Peak |
+|---|---|---|---|
+| Inline presenter (budget 40) | 14.0 | 30.4 | 38.2 |
+| Full-screen presenter (budget 80) | 14.0 | 30.5; 33.2 after scrolling, resizing and searching | 39.0 |
+
+Both are within budget. The inline presenter's peak is near its budget, and most of it comes before any turn: 34.2 MB at the peak while idle, the index's first pass over the 20,000 files (above). The full screen keeps every finished block to draw again; what it holds of a box's output is its last 64 KiB ([outstanding/a-kept-box-holds-only-the-end-of-its-output.md](outstanding/a-kept-box-holds-only-the-end-of-its-output.md)).
+
 **In a workspace of real code, since the fixes of the review of step 23** (finding 12c), which found 29.2 MB at 20,000 files: the budget holds for a workspace of 20,000 files as well as an empty one, the owner's call. `perf_idle_memory_in_a_workspace_of_real_code` (same file) fills the workspace with the pinned corpus's files (`cargo xtask corpus fetch`), 20,000 and 100,000 of them, and reads the binary's memory once it has used no CPU for a second, its session's first index pass made: `VmRSS` and its peak `VmHWM` on Linux, the working set and its peak on Windows. The `@` list, which the application asked for when a session opened and copied on its way to its worker, is now asked for on the first `@` typed and kept in one buffer. Idle, in MB, with the peak in brackets:
 
 | Build | Where | Empty | 20,000 files | 100,000 files | After the first `@`, 20,000 / 100,000 |
