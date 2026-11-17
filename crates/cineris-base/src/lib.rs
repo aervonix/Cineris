@@ -5,6 +5,7 @@
 //! |---|---|
 //! | [`error`] | [`ErrorKind`], the closed set that drives retries, exit codes and the protocol's error kind, and [`Classified`], by which an error says which kind it is. |
 //! | [`secret`] | [`Secret`], a credential that cannot be printed or serialised. |
+//! | [`secret_buf`] | [`SecretBuf`], a key being typed: fixed capacity, written over with zeros when dropped (since step 25). |
 //! | [`time`], [`clock`] | [`UtcTime`] and its RFC 3339 form; the [`Clock`] trait, the system clock and the [`FakeClock`]. |
 //! | [`rng`] | The [`Rng`] trait, the system generator and the [`SeededRng`]. |
 //! | [`id`] | [`IdGenerator`] for unique, time-ordered ids and [`IdCounter`] for counted ones. |
@@ -64,6 +65,7 @@ pub mod program;
 pub mod redact;
 pub mod rng;
 pub mod secret;
+pub mod secret_buf;
 pub mod text;
 pub mod time;
 pub mod timer;
@@ -91,6 +93,7 @@ pub use path::{
 pub use redact::SecretFilter;
 pub use rng::{Rng, SeededRng, SystemRng};
 pub use secret::Secret;
+pub use secret_buf::SecretBuf;
 pub use time::{TimeError, UtcTime};
 pub use timer::{SharedTimer, Sleep, Timer};
 pub use visible::{acts_unseen, unescape, visible, visible_keeping, visible_keeping_after};
