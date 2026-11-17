@@ -473,3 +473,31 @@ replace: Ok::<(), io::Error>(()).map_err
 caught-by:
     cortex-rpc::it socket::a_client_reaches_only_a_server_of_the_users_own
 
+
+
+[break] attach-merges-a-delta-across-a-read
+rule: A history read's result fences attach's queue at its seq, so no delta after the read is merged into one before it.
+file: crates/cortex-cli/src/attach.rs
+in: take_in
+find: shared.queue.fence(session, read.seq);
+replace: let _ = (session, read.seq);
+caught-by:
+    cortex-cli::bin/cortex attach::tests::a_reads_result_fences_the_queue_at_its_seq
+
+[break] attach-leaves-what-was-asked-unanswered
+rule: At the connection's end every operation attach still asked is answered, so the application never waits on one.
+file: crates/cortex-cli/src/attach.rs
+in: ended
+find: interactive::push(&shared.done, Inbound::Done(ticket, Err(gone())));
+replace: let _ = ticket;
+caught-by:
+    cortex-cli::bin/cortex attach::tests::the_end_answers_what_was_asked_and_tells_the_interface_once
+
+[break] attach-leaves-an-unreadable-request-unanswered
+rule: A request attach cannot read is declined, so it stays open for the server's other clients rather than waiting on this one.
+file: crates/cortex-cli/src/attach.rs
+in: take_in
+find: let _ = write(output, &declined).await;
+replace: let _ = declined;
+caught-by:
+    cortex-cli::bin/cortex attach::tests::a_request_that_cannot_be_read_is_declined
