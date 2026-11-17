@@ -1,6 +1,6 @@
 # Coverage-guided fuzzing of the stream decoders, the outline extractors and
-# the RPC server's decoder (docs/testing-and-ci.md, "Not blocking"). Run by the nightly workflow, and
-# by hand:
+# the RPC server's decoder (docs/testing-and-ci.md, "Not blocking"). Run by
+# the nightly workflow, and by hand:
 #
 #   cargo xtask fuzz [--seconds N] [TARGET…]
 #
