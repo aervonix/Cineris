@@ -3,7 +3,8 @@
 # release target, the property tests with many more cases than a pull
 # request runs, the mutation driver's test against the real cargo, the
 # check of every break's `caught-by` against the tests that exist,
-# coverage-guided fuzzing of the stream decoders, the sandbox's tests on
+# coverage-guided fuzzing of the stream decoders, the outline extractors
+# and the RPC server's decoder, the sandbox's tests on
 # a kernel with the partial Landlock (ABI 4), and a turn run by the
 # TypeScript client of the RPC protocol. Later
 # steps add the long-session memory test and the live smoke tests (tiers 5

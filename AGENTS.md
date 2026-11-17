@@ -98,7 +98,7 @@ Each cost a session hours to find. The details are in [docs/steps/11/](docs/step
 | Rebuild every generated file that the tree can rebuild (the protocol, the configuration, every snapshot, the reference screens), for example after a rebase that met changes to them: settle the sources, take either side of each generated file, run it | `cargo xtask regen` (`regen --list` says what it covers and what it leaves to other commands, and why); at the desk `rx --back -- cargo xtask regen` |
 | Build `cortex` and its alias `cx` | `cargo xtask alias` |
 | Fetch, check or print the folder of the pinned corpus of real code that `perf_` tests measure (about 20,000 `.rs` files from crates.io, kept outside the repository), or pin a new one | `cargo xtask corpus fetch`, `corpus check`, `corpus path`, `corpus pin [--update]`; a perf test asks for it with `cortex_testkit::corpus::real_code()`, and `try`'s `perf -p CRATE` fetches it first ([docs/testing-and-ci.md](docs/testing-and-ci.md), "A tree of real code to measure") |
-| Fuzz the stream decoders (needs a nightly toolchain and cargo-fuzz) | `cargo xtask fuzz` |
+| Fuzz the stream decoders, the outline extractors and the RPC server's decoder (needs a nightly toolchain and cargo-fuzz) | `cargo xtask fuzz` |
 | Run the live smoke test, or record provider fixtures: by hand, never in CI, and it costs money | `cargo xtask live [PROVIDER]`, `cargo xtask live --headless [PROVIDER] [--test NAME] [--dry-run]` (the real binary's runs, with no time limit; one of them by name; what would run, sending nothing), `cargo xtask record [--provider PROVIDER]`, `cargo xtask record --toolbox`; `record --dry-run` sends nothing, `live --spent` totals the spend |
 
 `./x <command>` is the same as `cargo xtask <command>`.

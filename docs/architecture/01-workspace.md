@@ -33,7 +33,7 @@ All crates use the `cortex-` prefix, live under `crates/`, and set `publish = fa
 | `cortex-testkit` | Test support: scripted provider, scripted transport, scripted SSE server, a test protocol, the fake timer, the property-test helper, virtual terminal, PTY driver, temp workspaces, fake clock. Dev-dependency only. | protocol, base, llm, term | serde_json. The virtual terminal and the pseudo-terminal driver are its own (step 20), on `cortex-term`'s `pty` feature |
 | `xtask` | Developer commands: schema generation, perf runs, fixture recording, release packaging. Not shipped. Fixture recording and the live smoke test are ignored tests of `cortex-llm` that `xtask` starts, so that `xtask` does not build the HTTP stack. | as needed | none shipped |
 
-One package is in the repository and outside the workspace: `fuzz/`, the fuzz targets for the stream decoders, with a lockfile of its own. It depends on `cortex-llm` and `cortex-protocol`, needs a nightly compiler, and is built only by the nightly workflow's `fuzz` job and by `cargo xtask fuzz` ([../testing-and-ci.md](../testing-and-ci.md), "Not blocking").
+One package is in the repository and outside the workspace: `fuzz/`, the fuzz targets for the stream decoders, the outline extractors and the RPC server's decoder, with a lockfile of its own. It depends on `cortex-llm`, `cortex-index`, `cortex-protocol` and `cortex-base`, and compiles `cortex-rpc`'s `wire.rs` from its file rather than depending on `cortex-rpc` and so on the whole core, needs a nightly compiler, and is built only by the nightly workflow's `fuzz` job and by `cargo xtask fuzz` ([../testing-and-ci.md](../testing-and-ci.md), "Not blocking").
 
 ## Dependency direction
 
