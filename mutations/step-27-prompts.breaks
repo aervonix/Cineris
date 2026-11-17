@@ -1,0 +1,136 @@
+# Step 27: prompts at a turn's edges, in `cortex-tui`'s application, which
+# both links drive (docs/steps/27/answered.md, point 5). Each rule broken
+# one at a time, with the tests that must fail. Written with the code.
+
+# ------------------------------- (1) the held prompts, one at a time
+
+[break] held-prompts-all-go-at-once
+rule: The prompts held while the session opened go one at a time: the next is sent only once the one before it was answered.
+file: crates/cortex-tui/src/app/state.rs
+in: App::send_held
+find:
+            self.held_sent = Some(self.send_prompt(sent, delivery));
+            return;
+replace:
+            self.held_sent = Some(self.send_prompt(sent, delivery));
+caught-by:
+    app::tests::prompts::held_prompts_go_one_at_a_time_each_once_the_one_before_is_answered
+    app::tests::prompts::a_refused_held_prompt_gives_back_those_behind_it_in_order
+
+[break] the-held-prompts-after-the-first-are-not-queued
+rule: Each held prompt after the first is queued behind the one before it.
+file: crates/cortex-tui/src/app/state.rs
+in: App::send_held
+find: (Some(ItemDelivery::Queue), false)
+replace: (None, true)
+caught-by:
+    app::tests::prompts::held_prompts_go_one_at_a_time_each_once_the_one_before_is_answered
+    app::tests::prompts::after_a_held_steer_the_next_held_prompt_is_queued
+
+[break] a-refused-held-prompt-lets-the-next-go
+rule: A refused held prompt comes back with those behind it, in order, and none of them is sent.
+file: crates/cortex-tui/src/app/state.rs
+in: App::prompt_answered
+find: if refused || sent.stopped
+replace: if sent.stopped
+caught-by:
+    app::tests::prompts::a_refused_held_prompt_gives_back_those_behind_it_in_order
+    app::tests::prompts::a_prompt_sent_while_held_ones_are_on_their_way_follows_them
+
+[break] a-prompt-overtakes-the-held-ones-on-their-way
+rule: A prompt sent once the session is open, while the held ones are still on their way, follows them.
+file: crates/cortex-tui/src/app/state.rs
+in: App::submit
+find: if self.held_sent.is_some() {
+replace: if false {
+caught-by:
+    app::tests::prompts::a_prompt_sent_while_held_ones_are_on_their_way_follows_them
+
+[break] the-held-prompts-follow-an-interrupt
+rule: After an interrupt, the held prompts not sent come back once the one on its way is answered, rather than run after the stop.
+file: crates/cortex-tui/src/app/state.rs
+in: App::prompt_answered
+find: sent.stopped || !self.is_open(&sent.session)
+replace: !self.is_open(&sent.session)
+caught-by:
+    app::tests::prompts::stopping_while_held_prompts_are_on_their_way_gives_back_those_not_sent
+
+[break] new-leaves-the-session-while-held-prompts-are-on-their-way
+rule: `/new` does not leave the session while a held prompt is on its way: what follows it is that session's.
+file: crates/cortex-tui/src/app/state.rs
+in: App::new_session
+find: if self.running.is_some() || self.held_sent.is_some() {
+replace: if self.running.is_some() {
+caught-by:
+    app::tests::prompts::new_does_not_leave_the_session_while_held_prompts_are_on_their_way
+
+[break] a-switch-leaves-the-session-while-held-prompts-are-on-their-way
+rule: A switch in `/sessions` does not leave the session while a held prompt is on its way.
+file: crates/cortex-tui/src/app/state/commands.rs
+in: App::switch_to
+find: if self.running.is_some() || self.held_sent.is_some() {
+replace: if self.running.is_some() {
+caught-by:
+    app::tests::prompts::a_switch_does_not_leave_the_session_while_held_prompts_are_on_their_way
+
+# ------------------------------------ (3) an open onto a running turn
+
+[break] a-held-prompt-onto-a-running-turn-is-a-new-turn
+rule: When the open says a turn is running, the first held prompt steers it, as `Enter` would, rather than be refused `turn_running`.
+file: crates/cortex-tui/src/app/state.rs
+in: App::send_held
+find: } else if session.running_turn.is_some() {
+replace: } else if false {
+caught-by:
+    app::tests::prompts::the_first_held_prompt_steers_a_turn_the_open_says_is_running
+
+# --------------------------- (2) refused `turn_running`: queued, once
+
+[break] turn-running-is-not-sent-again
+rule: A prompt refused `turn_running` is sent again, queued behind the turn that took the gap.
+file: crates/cortex-tui/src/app/state.rs
+in: App::prompt_answered
+find: if error.code == code::TURN_RUNNING
+replace: if false && error.code == code::TURN_RUNNING
+caught-by:
+    app::tests::prompts::enter_between_two_turns_is_sent_again_once_queued
+    app::tests::prompts::a_held_prompt_refused_because_a_turn_runs_is_queued_and_those_behind_wait
+
+[break] turn-running-is-sent-again-unqueued
+rule: The prompt sent again after `turn_running` is queued, so that it runs after the turn that took the gap.
+file: crates/cortex-tui/src/app/state.rs
+in: App::prompt_answered
+find: let ticket = self.send_prompt(again, Some(ItemDelivery::Queue));
+replace: let ticket = self.send_prompt(again, None);
+caught-by:
+    app::tests::prompts::enter_between_two_turns_is_sent_again_once_queued
+
+[break] turn-running-is-sent-again-without-end
+rule: A prompt refused `turn_running` is sent again once: a second refusal gives it back.
+file: crates/cortex-tui/src/app/state.rs
+in: App::prompt_answered
+find: && !sent.again
+replace:
+caught-by:
+    app::tests::prompts::a_second_turn_running_refusal_gives_the_prompt_back
+
+[break] a-prompt-refused-after-an-interrupt-is-sent-again
+rule: A prompt refused after an interrupt was sent comes back, and is not queued behind the turn the person stopped.
+file: crates/cortex-tui/src/app/state.rs
+in: App::prompt_answered
+find: && !sent.stopped
+replace:
+caught-by:
+    app::tests::prompts::a_prompt_refused_after_an_interrupt_comes_back_and_is_not_sent_again
+
+[break] a-held-prompt-sent-again-lets-the-next-go-at-once
+rule: The held prompts behind one sent again after `turn_running` wait for the answer to it.
+file: crates/cortex-tui/src/app/state.rs
+in: App::prompt_answered
+find:
+                if held {
+                    self.held_sent = Some(ticket);
+                }
+replace:
+caught-by:
+    app::tests::prompts::a_held_prompt_refused_because_a_turn_runs_is_queued_and_those_behind_wait

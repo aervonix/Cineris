@@ -1272,7 +1272,7 @@ caught-by:
 [break] the-command-lines-command-is-a-prompt
 rule: A command line's prompt that is a slash command is done as one, not sent to the model.
 file: crates/cortex-tui/src/app/state.rs
-in: App::opened
+in: App::send_held
 find:
     if self.slash_command(&text, now) {
         continue;
