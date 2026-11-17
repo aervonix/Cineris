@@ -30,6 +30,23 @@ The third of step 27's three pull requests: `cortex attach`, the prompts at a tu
 | A minimal TypeScript client using only the generated declarations runs a turn | `cortex-cli::system ts_client::sys_a_typescript_client_runs_a_turn`, in the `ts-client` job (CI run 44009172980) |
 | The decoder passes a fixed-length fuzz run in the non-blocking tier | `fuzz/`'s `rpc_decoder`, 120 s in the nightly workflow's `fuzz` job on this branch with no failure (run 44010331313: 70,495 runs); 21 minutes on the desktop, no failure |
 
+## Breaks, stress and the tiers
+
+- **Breaks:** `step-27`, `step-27-prompts` and `step-27-ts` did what their lists expect (70 of 70 before the review; the breaks the review's fixes added and moved after it, 6 of 6 and the prompts' 20 of 20); `step-27-pipe` on a Windows runner, 20 of 20 (`try` run 44018042197), its AppContainer break surviving as its list expects, as does the Unix check of the server's process here.
+- **Stress:** `cortex-rpc`, `cortex-cli` and `cortex-tui`, 742 tests 30 times; `cortex-rpc` and `cortex-cli`, 175 tests 20 times with `--cores 2 --load 6`; every test passed every time.
+- **The tiers,** one runner each, the pull request against `main`, the median of 5 rounds (`try` run 44015094662):
+
+| OS (start) | Tier | The PR | `main` | Change | Budget |
+|---|---|---|---|---|---|
+| Linux (3 ms) | 1, unit | 12.3 s | 12.1 s | +0.2 s | 20 s |
+| Linux | 2, integration | 17.3 s | 17.3 s | +0.0 s | 40 s |
+| Linux | 3, system | 20.7 s | 19.1 s | +1.5 s | 60 s |
+| Windows (8 ms) | 1, unit | 13.9 s | 12.2 s | +1.8 s | 20 s |
+| Windows | 2, integration | 32.8 s | 31.4 s | +1.4 s | 40 s |
+| Windows | 3, system | 71.9 s | 70.0 s | +2.0 s | 90 s |
+
+Windows' tier 1 came mostly from `cortex-tui`'s new prompt tests (+0.55 s) and from one test that took a line of 64 MiB, since given a small one. Tier 3 has the pseudo-terminal tests of `attach` (about 1.6 s on Windows).
+
 ## The independent review
 
 It read the whole pull request, and then the fix of the line's class. Every finding was fixed with a test that fails without the fix and a break the test catches, or is said here.
