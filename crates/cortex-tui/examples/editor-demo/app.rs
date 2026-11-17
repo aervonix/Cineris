@@ -367,7 +367,7 @@ pub fn run(options: &Options) -> io::Result<()> {
                 look = Look::new(Theme::for_terminal(&caps), Glyphs::for_terminal(&caps));
                 scheduler.input();
             }
-            Event::Focus(_) => {}
+            Event::Focus(_) | Event::Mouse(_) => {}
         }
     }
     let caps = *terminal.caps();

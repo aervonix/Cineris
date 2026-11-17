@@ -956,7 +956,7 @@ impl App {
                 false
             }
             TermEvent::Resize { .. } | TermEvent::Reply(_) => false,
-            TermEvent::Focus(_) => false,
+            TermEvent::Focus(_) | TermEvent::Mouse(_) => false,
         }
     }
 

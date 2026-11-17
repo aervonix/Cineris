@@ -12,6 +12,7 @@
 //! | [`input`] | [`Decoder`]: bytes to [`Event`]s, however a read splits them. |
 //! | [`caps`] | [`Capabilities`]: what the terminal can do, detected, asked and overridden. |
 //! | [`inline`] | [`Inline`]: the inline presenter. A frame is one write, inside a synchronized update. |
+//! | [`full`] | [`Full`]: the full-screen presenter, on the alternate screen (since step 25). A frame is one write, of the rows that changed. |
 //! | [`schedule`] | [`Scheduler`]: when to draw. |
 //! | [`terminal`] | [`Terminal`]: raw mode on the way in, put back on every way out, events on the way through. |
 //! | `pty` | Pseudo-terminals, for tests. Behind the `pty` feature, which only the test kit turns on. |
@@ -26,6 +27,7 @@
 //! Only in `sys`, one module for each system, each block with its reason.
 
 pub mod caps;
+pub mod full;
 pub mod inline;
 pub mod input;
 pub mod line;
@@ -39,8 +41,9 @@ mod sys;
 pub mod terminal;
 
 pub use caps::{Capabilities, Overrides, Platform};
+pub use full::{Full, Screen};
 pub use inline::{Cursor, Drawn, Frame, Inline, Sink};
-pub use input::{Decoder, Event, Key, KeyCode, Mods, Reply};
+pub use input::{Button, Decoder, Event, Key, KeyCode, Mods, Mouse, MouseKind, Reply, Wheel};
 pub use line::{Line, Span};
 pub use sanitize::sanitize;
 pub use schedule::{Scheduler, Wake};

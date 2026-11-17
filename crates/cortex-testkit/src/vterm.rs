@@ -206,6 +206,10 @@ pub struct Modes {
     pub autowrap: bool,
     /// Windows Terminal's win32 input mode (9001).
     pub win32_input: bool,
+    /// Mouse reporting of presses and releases (1000), since step 25.
+    pub mouse: bool,
+    /// Mouse reports in the SGR form (1006), since step 25.
+    pub mouse_sgr: bool,
 }
 
 /// A virtual terminal. See the [module documentation](self).
@@ -259,6 +263,8 @@ impl VTerm {
                 alternate: false,
                 autowrap: true,
                 win32_input: false,
+                mouse: false,
+                mouse_sgr: false,
             },
             keyboard: Vec::new(),
             state: State::Ground,
@@ -893,6 +899,8 @@ impl VTerm {
             2004 => self.modes.bracketed_paste = on,
             2026 => self.modes.sync = on,
             9001 => self.modes.win32_input = on,
+            1000 => self.modes.mouse = on,
+            1006 => self.modes.mouse_sgr = on,
             47 | 1047 | 1049 => {
                 if on && !self.modes.alternate {
                     let screen =

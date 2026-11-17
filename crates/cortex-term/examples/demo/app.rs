@@ -520,7 +520,7 @@ pub fn run(options: &Options) -> io::Result<()> {
                 scheduler.input();
             }
             // Made a key above.
-            Event::Focus(_) | Event::Reply(_) | Event::Repeat(_) => {}
+            Event::Focus(_) | Event::Reply(_) | Event::Repeat(_) | Event::Mouse(_) => {}
         }
     }
     let caps = *terminal.caps();

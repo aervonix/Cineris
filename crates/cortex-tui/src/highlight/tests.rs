@@ -13,7 +13,7 @@ use cortex_term::ColorDepth;
 
 use super::*;
 use crate::glyphs::Glyphs;
-use crate::markdown::Markdown;
+use crate::markdown::{Flavor, Markdown};
 use crate::testing::DARK;
 use crate::theme::Theme;
 use crate::view::Look;
@@ -277,4 +277,56 @@ fn a_frame_drawn_once_the_colours_are_in_leaves_them_for_the_commit() {
     assert_eq!(keyword(&stream.live(79, &look)), want);
     // The commit after it still finds them.
     assert_eq!(keyword(&stream.commit(79, &look)), want);
+}
+
+/// A kept answer records the colours its code committed with, and a line
+/// committed plain because its colours were late as late (step 25): drawn
+/// again at another width, the first keeps its colours, and the second is
+/// what a redraw asks the worker for again.
+#[cfg(feature = "highlight")]
+#[test]
+fn a_kept_answer_records_its_code_colours_and_the_lines_that_were_late() {
+    let look = look();
+    let highlighter = Highlighter::new(|| {});
+    let mut warm = Markdown::answer().with_highlighter(highlighter.clone());
+    warm.push("```rust\nx\n```\n");
+    let _ = warm.commit(79, &look);
+    assert!(highlighter.settle(BOUND));
+    let mut stream = Markdown::answer()
+        .with_highlighter(highlighter.clone())
+        .keeping();
+    stream.push("Code:\n\n```rust\nlet n = 1;\n");
+    let mut lines = stream.commit(79, &look);
+    assert!(highlighter.settle(BOUND));
+    lines.extend(stream.commit(79, &look));
+    // The second line's colours are held back past its wait: it commits
+    // plain.
+    highlighter.hold(true);
+    stream.push("let m = 2;\n```\n");
+    stream.set_now(Duration::from_secs(10));
+    lines.extend(stream.commit(79, &look));
+    stream.set_now(Duration::from_secs(10) + WAIT);
+    stream.finish();
+    lines.extend(stream.commit(79, &look));
+    highlighter.hold(false);
+    assert!(highlighter.settle(BOUND));
+    assert!(stream.is_done());
+    let source = stream.take_source().unwrap();
+    let code = &source.code[0];
+    assert!(matches!(&code.lines[0], Some(colours) if !colours.is_empty()));
+    assert_eq!(code.lines[1], None);
+    assert_eq!(source.late().collect::<Vec<_>>(), [0]);
+    // Drawn again at the same width it is what was committed; at another,
+    // the first line keeps its keyword's colour.
+    assert_eq!(
+        Markdown::render_source(Flavor::Answer, &source, 79, &look),
+        lines
+    );
+    let narrow = Markdown::render_source(Flavor::Answer, &source, 30, &look);
+    let keyword = narrow
+        .iter()
+        .flat_map(|line| line.spans().to_vec())
+        .find(|span| span.text() == "let")
+        .map(|span| span.style());
+    assert_eq!(keyword, Some(look.theme.style(Token::SyntaxKeyword)));
 }

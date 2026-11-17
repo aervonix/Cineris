@@ -56,7 +56,7 @@ use cortex_base::text::expand_tabs;
 use cortex_term::sanitize::sanitize_after;
 use cortex_term::{Line, Span, Style, sanitize};
 
-use crate::highlight::{BlockId, Highlighter, Outcome, WAIT};
+use crate::highlight::{BlockId, Colours, Highlighter, Outcome, WAIT};
 use crate::layout::cut;
 use crate::theme::Token;
 use crate::view::{Density, Look};
@@ -93,6 +93,61 @@ pub enum Flavor {
     Answer,
     /// A reasoning summary: no mark, every row muted and italic.
     Reasoning,
+}
+
+/// What a finished answer keeps so that it can be drawn again at another
+/// width (since step 25): its text as it arrived, and the colours each of
+/// its code lines was committed with. The colours are byte ranges of each
+/// source line, so they do not depend on the width.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Source {
+    /// The text, as it arrived.
+    pub text: String,
+    /// Each code block, in the order they open.
+    pub code: Vec<CodeColours>,
+}
+
+/// A code block of a [`Source`]: its language and its lines' colours.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CodeColours {
+    /// What follows its opening fence (empty for an indented block).
+    pub language: String,
+    /// Each line's colours as committed: `Some`, empty for a line drawn
+    /// plain on purpose (a language not known, a line too long, no
+    /// highlighting); `None` for a line committed plain because its colours
+    /// were late, which a redraw may ask for again.
+    pub lines: Vec<Option<Colours>>,
+}
+
+impl Source {
+    /// The bytes it holds, for the tests of what the full-screen presenter
+    /// keeps.
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        self.text.len()
+            + self
+                .code
+                .iter()
+                .map(|block| {
+                    block.language.len()
+                        + block
+                            .lines
+                            .iter()
+                            .map(|line| line.as_ref().map_or(0, Vec::len) * 24 + 8)
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+    }
+
+    /// The code blocks with a line whose colours were late, by their place:
+    /// what a redraw asks the highlighter for again.
+    pub fn late(&self) -> impl Iterator<Item = usize> + '_ {
+        self.code
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| block.lines.iter().any(Option::is_none))
+            .map(|(index, _)| index)
+    }
 }
 
 /// A markdown stream. See the [module documentation](self).
@@ -151,6 +206,15 @@ pub struct Markdown {
     /// The text kept before a break is forced ([`KEPT`] and [`LIMIT`]): the
     /// tests of the bounds give smaller ones, to test them on less text.
     bounds: (usize, usize),
+    /// What is kept to draw the answer again (since step 25), while the
+    /// stream keeps it ([`keeping`](Self::keeping)).
+    keep: Option<Box<Source>>,
+    /// The colours to draw code with, when drawing a kept answer again
+    /// ([`render_source`](Self::render_source)), in place of the
+    /// highlighter's.
+    given: Option<Vec<CodeColours>>,
+    /// How many code blocks have opened: the next one's place.
+    code_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -178,9 +242,12 @@ enum Leaf {
 struct Code {
     /// The fence's character, length and indentation, for a fenced block.
     fence: Option<(u8, usize, usize)>,
-    /// The block, as the highlighter knows it, and its next line's number.
+    /// The block, as the highlighter knows it.
     block: Option<BlockId>,
+    /// Its next line's number.
     next: usize,
+    /// Its place among the stream's code blocks.
+    ordinal: usize,
 }
 
 /// A row ready to commit, or a code line waiting for its colours.
@@ -196,6 +263,8 @@ enum Pending {
         width: usize,
         block: BlockId,
         index: usize,
+        /// Its block's place among the stream's code blocks.
+        ordinal: usize,
         /// When it ended.
         since: Duration,
     },
@@ -307,7 +376,40 @@ impl Markdown {
             forced: 0,
             parsed: 0,
             bounds: (KEPT, LIMIT),
+            keep: None,
+            given: None,
+            code_count: 0,
         }
+    }
+
+    /// Keeps what drawing the finished answer again needs (since step 25):
+    /// its text and its code lines' colours, given by
+    /// [`take_source`](Self::take_source). The inline presenter's stream
+    /// does not need it; what the full-screen presenter and the viewer keep
+    /// does.
+    #[must_use]
+    pub fn keeping(mut self) -> Self {
+        self.keep = Some(Box::default());
+        self
+    }
+
+    /// What was kept, once the stream is done, taken; `None` when it was not
+    /// kept.
+    pub fn take_source(&mut self) -> Option<Source> {
+        self.keep.take().map(|kept| *kept)
+    }
+
+    /// A kept answer drawn whole at `width`: what its stream committed at
+    /// that width, its code coloured as it was committed. A line whose
+    /// colours were late is drawn plain, and so is one the source has no
+    /// colours for. Nothing waits for the highlighter.
+    #[must_use]
+    pub fn render_source(flavor: Flavor, source: &Source, width: usize, look: &Look) -> Vec<Line> {
+        let mut stream = Self::new(flavor);
+        stream.given = Some(source.code.clone());
+        stream.push(&source.text);
+        stream.finish();
+        stream.commit(width, look)
     }
 
     /// The whole of `text`, drawn at `width` with `look`: what a stream of it
@@ -324,6 +426,9 @@ impl Markdown {
     pub fn push(&mut self, text: &str) {
         if !self.finished {
             self.pending.push_str(text);
+            if let Some(keep) = self.keep.as_mut() {
+                keep.text.push_str(text);
+            }
         }
     }
 
@@ -386,6 +491,9 @@ impl Markdown {
             forced: self.forced,
             parsed: self.parsed,
             bounds: self.bounds,
+            keep: None,
+            given: self.given.clone(),
+            code_count: self.code_count,
         };
         scratch.commit(width, look)
     }
@@ -701,18 +809,21 @@ impl Markdown {
                 self.close_leaf(frame);
                 self.fresh = true;
                 let indent = block::indentation(rest);
-                let block = if self.flavor == Flavor::Answer && !self.scratch {
-                    self.highlighter.open(&info)
-                } else {
-                    None
-                };
+                let block =
+                    if self.flavor == Flavor::Answer && !self.scratch && self.given.is_none() {
+                        self.highlighter.open(&info)
+                    } else {
+                        None
+                    };
                 if let Some(block) = block {
                     self.blocks.push((block, 0, false));
                 }
+                let ordinal = self.open_code(&info);
                 self.leaf = Some(Leaf::Code(Code {
                     fence: Some((ch, len, indent)),
                     block,
                     next: 0,
+                    ordinal,
                 }));
             }
             block::Line::Heading { text, .. } => {
@@ -743,10 +854,12 @@ impl Markdown {
                     if !matches!(self.leaf, Some(Leaf::Code(Code { fence: None, .. }))) {
                         self.close_leaf(frame);
                         self.fresh = true;
+                        let ordinal = self.open_code("");
                         self.leaf = Some(Leaf::Code(Code {
                             fence: None,
                             block: None,
                             next: 0,
+                            ordinal,
                         }));
                     }
                     let code = dedent(rest, 4).unwrap_or(rest);
@@ -1042,15 +1155,35 @@ impl Markdown {
             Flavor::Reasoning => frame.look.theme.style(Token::Reasoning),
         };
         let room = frame.width.saturating_sub(self.prefix_width());
-        let block = match &mut self.leaf {
-            Some(Leaf::Code(code)) if !self.scratch => code.block.map(|block| {
+        // Every code line has its place, the scratch copy's included, so that
+        // the colours of a kept answer are found by it.
+        let place = match &mut self.leaf {
+            Some(Leaf::Code(code)) => {
                 let index = code.next;
                 code.next += 1;
-                (block, index)
-            }),
+                Some((code.block, code.ordinal, index))
+            }
             _ => None,
         };
-        let Some((block, index)) = block else {
+        if let (Some(given), Some((_, ordinal, index))) = (&self.given, place) {
+            // A kept answer drawn again: its colours as committed.
+            let colours = given
+                .get(ordinal)
+                .and_then(|block| block.lines.get(index))
+                .cloned()
+                .flatten()
+                .unwrap_or_default();
+            let code = if colours.is_empty() {
+                Line::styled(text, base)
+            } else {
+                coloured(&text, &colours, frame)
+            };
+            let line = cut(&code, room, frame.look.glyphs.ellipsis);
+            self.emit(line, frame);
+            return;
+        }
+        let Some((Some(block), ordinal, index)) = place.filter(|_| !self.scratch) else {
+            self.kept_colours(place.map(|(_, ordinal, index)| (ordinal, index)), Some(Vec::new()));
             let line = cut(&Line::styled(text, base), room, frame.look.glyphs.ellipsis);
             self.emit(line, frame);
             return;
@@ -1069,8 +1202,40 @@ impl Markdown {
             width: frame.width,
             block,
             index,
+            ordinal,
             since: self.now,
         });
+    }
+
+    /// A code block opens: its place among the stream's, and, while the
+    /// stream keeps its source, a record for its lines' colours.
+    fn open_code(&mut self, language: &str) -> usize {
+        let ordinal = self.code_count;
+        self.code_count += 1;
+        if let Some(keep) = self.keep.as_mut().filter(|_| !self.scratch) {
+            keep.code.push(CodeColours {
+                language: language.trim().to_owned(),
+                lines: Vec::new(),
+            });
+        }
+        ordinal
+    }
+
+    /// Records the colours a code line was committed with, while the stream
+    /// keeps its source.
+    fn kept_colours(&mut self, place: Option<(usize, usize)>, colours: Option<Colours>) {
+        let (Some((ordinal, index)), Some(keep)) = (place, self.keep.as_mut()) else {
+            return;
+        };
+        if self.scratch {
+            return;
+        }
+        if let Some(block) = keep.code.get_mut(ordinal) {
+            if block.lines.len() <= index {
+                block.lines.resize(index + 1, Some(Vec::new()));
+            }
+            block.lines[index] = colours;
+        }
     }
 
     /// Commits what is ready at the queue's front, in order.
@@ -1085,6 +1250,7 @@ impl Markdown {
                     width,
                     block,
                     index,
+                    ordinal,
                     since,
                 } => {
                     let outcome = if self.scratch {
@@ -1092,22 +1258,24 @@ impl Markdown {
                     } else {
                         self.highlighter.take(*block, *index)
                     };
-                    let colours = match outcome {
-                        Outcome::Coloured(colours) => colours,
-                        Outcome::Plain => Vec::new(),
+                    let (colours, kept) = match outcome {
+                        Outcome::Coloured(colours) => (colours.clone(), Some(colours)),
+                        Outcome::Plain => (Vec::new(), Some(Vec::new())),
                         Outcome::Waiting
                             if self.scratch || self.now.saturating_sub(*since) >= WAIT =>
                         {
-                            Vec::new()
+                            (Vec::new(), None)
                         }
                         Outcome::Waiting => break,
                     };
+                    let place = Some((*ordinal, *index));
                     let mut line = prefix.clone();
                     let code = coloured(text, &colours, frame);
                     for span in cut(&code, *room, frame.look.glyphs.ellipsis).spans() {
                         line.push(span.clone());
                     }
                     let (block, width) = (*block, *width);
+                    self.kept_colours(place, kept);
                     if let Some(entry) = self.blocks.iter_mut().find(|(id, _, _)| *id == block) {
                         entry.1 = entry.1.saturating_sub(1);
                     }

@@ -95,6 +95,10 @@ const WIN32_OFF: &[u8] = b"\x1b[?9001l";
 /// The alternate screen on, and off: the main screen comes back as it was.
 const ALTERNATE_ON: &[u8] = b"\x1b[?1049h";
 const ALTERNATE_OFF: &[u8] = b"\x1b[?1049l";
+/// Mouse reporting on, presses and releases with the wheel (1000), in the
+/// SGR form (1006); and off, the second first (since step 25).
+const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1006h";
+const MOUSE_OFF: &[u8] = b"\x1b[?1006l\x1b[?1000l";
 
 /// Wakes a terminal that is waiting in [`Terminal::next`], from any thread.
 #[derive(Clone)]
@@ -286,8 +290,11 @@ pub struct Terminal<D: Device = System> {
     /// When the decoder last had input while inside a paste or a sequence
     /// being dropped: it gives up on it once [`OPEN_WAIT`] has passed.
     open_since: Option<Instant>,
-    /// Whether the alternate screen is on (the viewer).
+    /// Whether the alternate screen is on (the viewer, the full-screen
+    /// presenter).
     alternate: bool,
+    /// Whether the alternate screen reports the mouse (since step 25).
+    mouse: bool,
 }
 
 impl Terminal<System> {
@@ -354,6 +361,7 @@ impl<D: Device> Terminal<D> {
             answered: false,
             open_since: None,
             alternate: false,
+            mouse: false,
         })
     }
 
@@ -403,10 +411,12 @@ impl<D: Device> Terminal<D> {
         sys::ended_by()
     }
 
-    /// Turns the alternate screen on or off: the viewer's full screen, which
-    /// leaves the main screen, its scrollback and the live region as they
-    /// were (since step 23). While it is on, an emergency restore leaves it
-    /// too, and so does putting the terminal back.
+    /// Turns the alternate screen on or off: the viewer's full screen, and
+    /// the full-screen presenter's, which leave the main screen, its
+    /// scrollback and the live region as they were (since step 23). While
+    /// it is on, an emergency restore leaves it too, and so does putting the
+    /// terminal back. With it the mouse is reported, if the program asked
+    /// for that ([`set_mouse`](Self::set_mouse)), and never without it.
     ///
     /// # Errors
     ///
@@ -418,18 +428,62 @@ impl<D: Device> Terminal<D> {
         self.alternate = on;
         // The emergency restore's record says on before the screen is, and
         // off only once it is not: a signal in between finds it on and
-        // leaves it. On the main screen that is not quite nothing (xterm
-        // and VTE move the cursor to the position saved last), but it never
-        // leaves the terminal on the alternate screen, which the other
-        // order could.
+        // leaves it, and turns the mouse off with it. On the main screen
+        // that is not quite nothing (xterm and VTE move the cursor to the
+        // position saved last), but it never leaves the terminal on the
+        // alternate screen, which the other order could.
         if on {
             sys::set_alternate(true);
-            self.device.write(ALTERNATE_ON)
+            let mut bytes = ALTERNATE_ON.to_vec();
+            if self.mouse {
+                bytes.extend_from_slice(MOUSE_ON);
+                self.decoder.set_mouse(true);
+                sys::set_mouse_input(true);
+            }
+            self.device.write(&bytes)
         } else {
-            let written = self.device.write(ALTERNATE_OFF);
+            let mut bytes = Vec::new();
+            if self.mouse {
+                bytes.extend_from_slice(MOUSE_OFF);
+                self.decoder.set_mouse(false);
+                sys::set_mouse_input(false);
+            }
+            bytes.extend_from_slice(ALTERNATE_OFF);
+            let written = self.device.write(&bytes);
             sys::set_alternate(false);
             written
         }
+    }
+
+    /// Whether the alternate screen reports the mouse (since step 25): modes
+    /// 1000 and 1006, and on Windows the console's mouse input, while the
+    /// alternate screen is on, and never on the main screen, where the
+    /// terminal's own wheel and selection must stay the person's. `Shift`
+    /// and a drag stay the terminal's selection in the terminals that
+    /// report the mouse. Off at the start. Taking effect at once when the
+    /// alternate screen is on.
+    ///
+    /// # Errors
+    ///
+    /// When the terminal cannot be written to.
+    pub fn set_mouse(&mut self, on: bool) -> io::Result<()> {
+        if on == self.mouse {
+            return Ok(());
+        }
+        self.mouse = on;
+        if !self.alternate {
+            return Ok(());
+        }
+        self.decoder.set_mouse(on);
+        sys::set_mouse_input(on);
+        self.device.write(if on { MOUSE_ON } else { MOUSE_OFF })
+    }
+
+    /// Whether the mouse is reported now: the alternate screen is on, and
+    /// the program asked for the mouse.
+    #[must_use]
+    pub fn mouse(&self) -> bool {
+        self.mouse && self.alternate
     }
 
     /// Whether the alternate screen is on.
@@ -590,9 +644,14 @@ impl<D: Device> Terminal<D> {
     fn resume(&mut self) -> io::Result<()> {
         let mut again = START.to_vec();
         // The stop's restore left the alternate screen, which the program
-        // still has on (since the review of step 23).
+        // still has on (since the review of step 23), and turned the mouse
+        // off with it.
         if self.alternate {
             again.extend_from_slice(ALTERNATE_ON);
+            if self.mouse {
+                again.extend_from_slice(MOUSE_ON);
+                sys::set_mouse_input(true);
+            }
         }
         if self.keyboard {
             again.extend_from_slice(KEYBOARD_ON);
@@ -655,6 +714,10 @@ impl<D: Device> Terminal<D> {
         let mut end = Vec::new();
         let alternate = std::mem::take(&mut self.alternate);
         if alternate {
+            if self.mouse {
+                end.extend_from_slice(MOUSE_OFF);
+                sys::set_mouse_input(false);
+            }
             end.extend_from_slice(ALTERNATE_OFF);
         }
         if self.keyboard {
@@ -915,6 +978,105 @@ mod tests {
                 .ends_with(&[ALTERNATE_OFF, END].concat())
         );
         assert!(!leaves(sys::restore_sequence()));
+    }
+
+    fn holds(bytes: &[u8], part: &[u8]) -> bool {
+        bytes.windows(part.len()).any(|w| w == part)
+    }
+
+    /// The mouse is reported only with the alternate screen, once the
+    /// program has asked for it (step 25): turned on with the screen, off
+    /// before it is left, at the end, and by every emergency restore while
+    /// the alternate screen is on; never on the main screen.
+    #[test]
+    fn the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out() {
+        let device = script(&[]);
+        let written = device.written.clone();
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        // Asked for on the main screen: nothing is turned on there.
+        written.lock().unwrap().clear();
+        terminal.set_mouse(true).unwrap();
+        assert!(written.lock().unwrap().is_empty());
+        assert!(!terminal.mouse());
+        terminal.alternate(true).unwrap();
+        assert_eq!(
+            &*written.lock().unwrap(),
+            &[ALTERNATE_ON, MOUSE_ON].concat()
+        );
+        assert!(terminal.mouse());
+        // Every restore with the alternate screen on turns the mouse off,
+        // before it leaves the screen.
+        let restore = sys::restore_sequence();
+        let off = |part: &[u8]| restore.windows(part.len()).position(|w| w == part);
+        assert!(off(b"\x1b[?1000l") < off(ALTERNATE_OFF), "{restore:?}");
+        assert!(off(b"\x1b[?1006l").is_some(), "{restore:?}");
+        // Off with the screen: the mouse first.
+        written.lock().unwrap().clear();
+        terminal.alternate(false).unwrap();
+        assert_eq!(
+            &*written.lock().unwrap(),
+            &[MOUSE_OFF, ALTERNATE_OFF].concat()
+        );
+        assert!(!terminal.mouse());
+        // Turned off while the screen is on: at once.
+        terminal.alternate(true).unwrap();
+        written.lock().unwrap().clear();
+        terminal.set_mouse(false).unwrap();
+        assert_eq!(&*written.lock().unwrap(), MOUSE_OFF);
+        terminal.set_mouse(true).unwrap();
+        // The end: the mouse off, then the screen, then the rest.
+        written.lock().unwrap().clear();
+        terminal.leave().unwrap();
+        let end = written.lock().unwrap().clone();
+        assert!(
+            end.starts_with(&[MOUSE_OFF, ALTERNATE_OFF].concat()),
+            "{end:?}"
+        );
+        assert!(end.ends_with(END), "{end:?}");
+    }
+
+    /// A stop's restore turned the mouse off with the alternate screen;
+    /// continued, both come back, the mouse only if it was asked for.
+    #[test]
+    fn a_resume_turns_the_mouse_on_again_with_the_alternate_screen() {
+        for mouse in [true, false] {
+            let device = script(&[(Ready::Resumed, b"")]);
+            let written = Arc::clone(&device.written);
+            let mut terminal = Terminal::with_device(device, caps()).unwrap();
+            terminal.set_mouse(mouse).unwrap();
+            terminal.alternate(true).unwrap();
+            written.lock().unwrap().clear();
+            assert_eq!(terminal.next(None).unwrap(), Some(Event::Resumed));
+            let again = written.lock().unwrap().clone();
+            assert!(holds(&again, ALTERNATE_ON), "{again:?}");
+            assert_eq!(holds(&again, MOUSE_ON), mouse, "{again:?}");
+            terminal.alternate(false).unwrap();
+        }
+    }
+
+    /// While the mouse is reported, mode 1000's own report is read whole;
+    /// once the alternate screen is left, `CSI M` is a sequence with no
+    /// meaning again, and what follows it is typed.
+    #[test]
+    fn the_older_mouse_report_is_read_only_while_the_mouse_is_on() {
+        let device = script(&[(Ready::Input, b"\x1b[M !!"), (Ready::Input, b"\x1b[Mab")]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        terminal.set_mouse(true).unwrap();
+        terminal.alternate(true).unwrap();
+        assert!(matches!(
+            terminal.next(None).unwrap(),
+            Some(Event::Mouse(crate::Mouse {
+                kind: crate::MouseKind::Press(crate::Button::Left),
+                col: 0,
+                row: 0,
+                ..
+            }))
+        ));
+        terminal.alternate(false).unwrap();
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(crate::Key::plain(crate::KeyCode::Char('a'))))
+        );
     }
 
     #[test]
