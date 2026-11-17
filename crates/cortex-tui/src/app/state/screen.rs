@@ -83,6 +83,10 @@ impl ScreenView {
 /// The columns between the transcript and the panels' column.
 const GAP: usize = 2;
 
+/// The most characters a search's query holds: more typed or pasted is
+/// left out (the review of step 25).
+const QUERY_MOST: usize = 256;
+
 /// The narrowest window, in columns, that has the panels beside the
 /// transcript (the coordinator's answer of 2026-11-17).
 pub(crate) const SIDE_FROM: usize = 140;
@@ -150,7 +154,7 @@ impl App {
         &self,
         view: &mut ScreenView,
         width: usize,
-        live: &[Line],
+        live: &std::sync::Arc<Vec<Line>>,
         act: impl FnOnce(&mut Scroll, &mut Source<'_>) -> T,
     ) -> T {
         let mut scroll = std::mem::take(&mut view.scroll);
@@ -174,10 +178,10 @@ impl App {
 
     /// The rows under the kept blocks: those committed of the block still
     /// open, then the live rows.
-    fn screen_live(&self, width: usize) -> Vec<Line> {
+    pub(super) fn screen_live(&self, width: usize) -> std::sync::Arc<Vec<Line>> {
         let mut rows = self.transcript.open_rows().to_vec();
         rows.extend(self.transcript.live(width, &self.look, self.tick));
-        rows
+        std::sync::Arc::new(rows)
     }
 
     /// The full-screen presenter's frame for `now`: every row of the window,
@@ -205,7 +209,7 @@ impl App {
             view.forget_block(block);
         }
         self.feed_search(&mut view);
-        self.take_found(&mut view, width);
+        let _ = self.take_found(&mut view, width);
         let live = self.screen_live(width);
         // The live rows the panels may leave the transcript, as inline: the
         // full screen's transcript area scrolls, so they count no further.
@@ -213,20 +217,26 @@ impl App {
         let mut bottom = self.bottom(now, full, &boxes, live_len, column);
         // The search's row in the hint row's place, the cursor after what
         // is typed.
-        if let Some(search) = &view.search
+        // Not over a dialog's own row: its keys are the dialog's.
+        if let Some(search) = view.search.as_ref().filter(|_| self.dialogs.is_empty())
             && let Some(last) = bottom.lines.last_mut()
         {
-            let (row, col) = self.search_row(search, full);
+            let (row, col) = self.search_row(search, full, view.worker.is_some());
             *last = row;
             bottom.cursor = Some((bottom.lines.len() - 1, col));
         }
         let rows = self.rows.max(1);
-        let height = rows
-            .saturating_sub(bottom.block.len() + bottom.lines.len())
-            .max(1);
-        let mut window = self.with_screen(&mut view, width, &live, |scroll, source| {
-            scroll.window(source, height)
-        });
+        // A dialog may fill the window: the transcript then has no row, and
+        // the dialog's own last row, its keys, is still drawn (the review of
+        // step 25).
+        let height = rows.saturating_sub(bottom.block.len() + bottom.lines.len());
+        let mut window = if height == 0 {
+            Window::default()
+        } else {
+            self.with_screen(&mut view, width, &live, |scroll, source| {
+                scroll.window(source, height)
+            })
+        };
         if let Some(search) = &view.search {
             self.mark_matches(search, &mut window);
         }
@@ -270,7 +280,10 @@ impl App {
             .first()
             .map(|key| crate::keys::name(*key))
             .unwrap_or_else(|| "pgdn".to_owned());
-        let text = format!("  more below · {keys} goes to the end");
+        let text = format!(
+            "  more below {} {keys} goes to the end",
+            self.look.glyphs.separator
+        );
         *last = crate::layout::cut(
             &Line::from(Span::new(text, self.look.theme.style(Token::Hint))),
             width,
@@ -436,9 +449,12 @@ impl App {
             return false;
         };
         let taken = if let Some(search) = view.search.as_mut() {
-            search
-                .query
-                .extend(text.chars().map(|c| if c.is_control() { ' ' } else { c }));
+            let room = QUERY_MOST.saturating_sub(search.query.chars().count());
+            search.query.extend(
+                text.chars()
+                    .take(room)
+                    .map(|c| if c.is_control() { ' ' } else { c }),
+            );
             self.ask_search(&mut view);
             true
         } else {
@@ -482,11 +498,48 @@ impl App {
     }
 
     /// Takes the worker's answer, if one came, and goes to the newest match.
-    fn take_found(&self, view: &mut ScreenView, width: usize) {
+    fn take_found(&self, view: &mut ScreenView, width: usize) -> bool {
         let Some(found) = view.worker.as_ref().and_then(TextSearch::answer) else {
-            return;
+            return false;
         };
         self.found(view, found, width);
+        true
+    }
+
+    /// The ASCII glyphs from now on, for tests.
+    #[cfg(test)]
+    pub(crate) fn use_ascii_glyphs(&mut self) {
+        self.look.glyphs = &crate::glyphs::Glyphs::ASCII;
+        self.look_changed();
+    }
+
+    /// The search's query, for tests.
+    #[cfg(test)]
+    pub(crate) fn search_query(&self) -> Option<String> {
+        self.screen
+            .as_ref()
+            .and_then(|view| view.search.as_ref())
+            .map(|search| search.query.clone())
+    }
+
+    /// Whether the full screen's search is open.
+    pub(super) fn screen_searching(&self) -> bool {
+        self.screen
+            .as_ref()
+            .is_some_and(|view| view.search.is_some())
+    }
+
+    /// Takes the search worker's answer, when it has come: the loop's drain
+    /// asks, so that an answer that comes while nothing else happens is
+    /// drawn (the review of step 25). Says whether one came.
+    pub(super) fn take_search_answer(&mut self) -> bool {
+        let width = self.transcript_width();
+        let Some(mut view) = self.screen.take() else {
+            return false;
+        };
+        let came = self.take_found(&mut view, width);
+        self.screen = Some(view);
+        came
     }
 
     /// Waits at most `limit` for the search worker's answer to the latest
@@ -498,6 +551,15 @@ impl App {
         let Some(mut view) = self.screen.take() else {
             return false;
         };
+        // A frame, or the loop's drain, took it already.
+        if view
+            .search
+            .as_ref()
+            .is_some_and(|search| search.found.is_some())
+        {
+            self.screen = Some(view);
+            return true;
+        }
         let found = view.worker.as_ref().and_then(|worker| worker.wait(limit));
         let settled = found.is_some();
         if let Some(found) = found {
@@ -505,6 +567,16 @@ impl App {
         }
         self.screen = Some(view);
         settled
+    }
+
+    /// Waits at most `limit` for the search worker's answer and leaves it
+    /// to be taken: for tests of what takes it.
+    #[cfg(test)]
+    pub(crate) fn search_ready(&self, limit: std::time::Duration) -> bool {
+        self.screen
+            .as_ref()
+            .and_then(|view| view.worker.as_ref())
+            .is_some_and(|worker| worker.wait_ready(limit))
     }
 
     /// The worker's answer to the latest query: the newest match is the
@@ -559,7 +631,11 @@ impl App {
                     && !key.mods.contains(Mods::ALT)
                 {
                     let c = crate::keys::typed(key).unwrap_or(c);
-                    if let Some(search) = view.search.as_mut() {
+                    if let Some(search) = view
+                        .search
+                        .as_mut()
+                        .filter(|search| search.query.chars().count() < QUERY_MOST)
+                    {
                         search.query.push(c);
                     }
                     self.ask_search(&mut view);
@@ -679,7 +755,7 @@ impl App {
 
     /// The search's row: its key, what is typed, and where it is; and the
     /// column the cursor goes to, after what is typed.
-    fn search_row(&self, search: &Searching, width: usize) -> (Line, usize) {
+    fn search_row(&self, search: &Searching, width: usize, working: bool) -> (Line, usize) {
         let key = self
             .input
             .keymap()
@@ -698,6 +774,8 @@ impl App {
             .map_or(0, |found| found.iter().map(|(_, count)| count).sum());
         let place = match (&search.found, search.current) {
             _ if search.query.is_empty() => String::new(),
+            // Its thread could not be started: there is no search.
+            (None, _) if !working => "the search could not start".to_owned(),
             (None, _) => "searching…".to_owned(),
             (Some(_), None) => "no match".to_owned(),
             (Some(_), Some(current)) => format!("{} of {total}", current + 1),

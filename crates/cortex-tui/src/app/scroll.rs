@@ -136,8 +136,9 @@ pub(crate) struct Source<'a> {
     pub(crate) blocks: usize,
     /// Makes a kept block's rows at the width.
     pub(crate) make: &'a mut dyn FnMut(usize) -> Vec<Line>,
-    /// The rows still live, drawn under the kept blocks.
-    pub(crate) live: &'a [Line],
+    /// The rows still live, drawn under the kept blocks: shared, so that a
+    /// frame does not copy them again (the review of step 25).
+    pub(crate) live: &'a Arc<Vec<Line>>,
     /// The columns a row may use.
     pub(crate) width: usize,
 }
@@ -156,7 +157,7 @@ impl Scroll {
     /// A block's rows, from the cache.
     fn block(&mut self, source: &mut Source<'_>, block: usize) -> Arc<Vec<Line>> {
         if block >= source.blocks {
-            return Arc::new(source.live.to_vec());
+            return Arc::clone(source.live);
         }
         self.rows.of(block, source.width, source.make)
     }
@@ -446,7 +447,7 @@ mod tests {
 
     struct Rig {
         blocks: Vec<Vec<Line>>,
-        live: Vec<Line>,
+        live: Arc<Vec<Line>>,
         made: usize,
         scroll: Scroll,
     }
@@ -455,9 +456,11 @@ mod tests {
         fn new(heights: &[usize], live: usize) -> Self {
             Self {
                 blocks: blocks(heights),
-                live: (0..live)
-                    .map(|row| Line::plain(format!("live.{row}")))
-                    .collect(),
+                live: Arc::new(
+                    (0..live)
+                        .map(|row| Line::plain(format!("live.{row}")))
+                        .collect(),
+                ),
                 made: 0,
                 scroll: Scroll::default(),
             }
@@ -488,7 +491,7 @@ mod tests {
     fn it_follows_the_end_from_the_start_and_as_rows_are_added() {
         let mut rig = Rig::new(&[3, 2, 4], 1);
         assert_eq!(rig.window(4), ["2.1", "2.2", "2.3", "live.0"]);
-        rig.live.push(Line::plain("live.1"));
+        Arc::make_mut(&mut rig.live).push(Line::plain("live.1"));
         assert_eq!(rig.window(4), ["2.2", "2.3", "live.0", "live.1"]);
         assert!(rig.scroll.following());
     }
@@ -501,7 +504,7 @@ mod tests {
         assert!(!rig.scroll.following());
         let held = rig.window(4);
         assert_eq!(held, ["1.0", "1.1", "2.0", "2.1"]);
-        rig.live.push(Line::plain("live.1"));
+        Arc::make_mut(&mut rig.live).push(Line::plain("live.1"));
         assert_eq!(rig.window(4), held);
         // Down past the end follows again.
         rig.with(|scroll, source| scroll.down(source, 100));

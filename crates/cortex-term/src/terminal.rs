@@ -49,7 +49,6 @@ use std::time::{Duration, Instant};
 use crate::caps::{Capabilities, Overrides, Platform};
 use crate::inline::Sink;
 use crate::input::{Decoder, Event, Reply};
-use crate::line::Line;
 use crate::sys::{self, Ready};
 
 /// How long a lone ESC waits for the rest of a sequence before it is taken
@@ -490,34 +489,6 @@ impl<D: Device> Terminal<D> {
     #[must_use]
     pub fn is_alternate(&self) -> bool {
         self.alternate
-    }
-
-    /// Draws `lines` as the whole screen, from its top, each cut to `width`
-    /// columns, in one write: the viewer's frame on the alternate screen.
-    /// The cursor is hidden; what is below the last line is erased.
-    ///
-    /// # Errors
-    ///
-    /// When the terminal cannot be written to.
-    pub fn draw_screen(&mut self, lines: &[Line], width: usize) -> io::Result<()> {
-        let target = crate::render::Target::of(&self.caps);
-        let mut out = Vec::new();
-        if self.caps.sync {
-            out.extend_from_slice(crate::inline::SYNC_BEGIN);
-        }
-        out.extend_from_slice(b"\x1b[?25l\x1b[H");
-        for (index, line) in lines.iter().enumerate() {
-            if index > 0 {
-                out.extend_from_slice(b"\r\n");
-            }
-            crate::render::line(&mut out, line, width, target);
-            out.extend_from_slice(b"\x1b[0m\x1b[K");
-        }
-        out.extend_from_slice(b"\x1b[J");
-        if self.caps.sync {
-            out.extend_from_slice(b"\x1b[?2026l");
-        }
-        self.device.write(&out)
     }
 
     /// Puts `text` on the clipboard of the terminal the program runs in,
@@ -1076,32 +1047,6 @@ mod tests {
         assert_eq!(
             terminal.next(None).unwrap(),
             Some(Event::Key(crate::Key::plain(crate::KeyCode::Char('a'))))
-        );
-    }
-
-    #[test]
-    fn a_screen_is_drawn_from_its_top_with_what_is_below_erased() {
-        let device = script(&[]);
-        let written = device.written.clone();
-        let mut terminal = Terminal::with_device(device, caps()).unwrap();
-        written.lock().unwrap().clear();
-        terminal
-            .draw_screen(&[Line::plain("first"), Line::plain("second")], 20)
-            .unwrap();
-        let out = String::from_utf8(written.lock().unwrap().clone()).unwrap();
-        let first = out.find("first").expect("the first line");
-        let second = out.find("second").expect("the second line");
-        assert!(
-            out.find("\x1b[H").is_some_and(|home| home < first),
-            "{out:?}"
-        );
-        assert!(
-            first < second && out[first..second].contains("\r\n"),
-            "{out:?}"
-        );
-        assert!(
-            out.ends_with("\x1b[J") || out.contains("\x1b[J\x1b[?2026l"),
-            "{out:?}"
         );
     }
 

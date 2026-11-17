@@ -71,6 +71,17 @@ pub(crate) fn restore_sequence() -> &'static [u8] {
     RESTORE[usize::from(PROTOCOLS.load(Ordering::SeqCst) & 7)]
 }
 
+/// The whole milliseconds left until `deadline` at `now`, rounded up, for a
+/// wait that takes milliseconds: `u32::MAX`, which is no end, when there is
+/// no deadline, and just under it for a deadline too far away to count
+/// (since the review of step 25: each system's wait waits to a deadline).
+pub(crate) fn millis_left(deadline: Option<std::time::Instant>, now: std::time::Instant) -> u32 {
+    deadline.map_or(u32::MAX, |deadline| {
+        let left = deadline.saturating_duration_since(now);
+        u32::try_from(left.as_nanos().div_ceil(1_000_000)).unwrap_or(u32::MAX - 1)
+    })
+}
+
 /// Where in every restore sequence the erase of the live region begins.
 const ERASE: &[u8] = b"\r\x1b[J";
 
@@ -284,6 +295,23 @@ pub(crate) fn has_ended() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wait to a deadline takes what is left of it, rounded up to the
+    /// millisecond; nothing left is no wait, and no deadline no end (the
+    /// review of step 25).
+    #[test]
+    fn a_wait_to_a_deadline_takes_what_is_left_of_it() {
+        let now = std::time::Instant::now();
+        let ms = std::time::Duration::from_micros;
+        assert_eq!(millis_left(None, now), u32::MAX);
+        assert_eq!(millis_left(Some(now + ms(10_400)), now), 11);
+        assert_eq!(millis_left(Some(now + ms(10_400)), now + ms(4_000)), 7);
+        assert_eq!(millis_left(Some(now), now + ms(1_000)), 0);
+        assert_eq!(
+            millis_left(Some(now + std::time::Duration::from_secs(5_000_000)), now),
+            u32::MAX - 1
+        );
+    }
 
     #[test]
     fn the_restore_sequence_turns_off_what_was_turned_on() {

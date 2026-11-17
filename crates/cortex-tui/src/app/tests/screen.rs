@@ -576,6 +576,104 @@ fn ctrl_f_searches_the_transcript_and_goes_between_matches() {
     assert!(rows_text(&mut app, now)[19].contains("no match"));
 }
 
+/// The search's answer that comes while nothing else happens is drawn:
+/// the loop's drain takes it and says there is a change, so the row does not
+/// stay at `searching…` until the next key (the review of step 25).
+#[test]
+fn a_search_answer_that_comes_while_idle_schedules_a_frame() {
+    let now = Instant::now();
+    let (mut app, _link) = long_session(Presenter::Fullscreen, 3, now);
+    key(&mut app, "ctrl+f", now);
+    super::type_text(&mut app, "TURN", now);
+    assert!(app.search_ready(BOUND), "the worker answered");
+    assert!(app.drain(now, 64).changed, "the answer is a change to draw");
+    let rows = rows_text(&mut app, now);
+    assert!(rows[19].contains("3 of 3"), "{rows:#?}");
+}
+
+/// The viewer opened while an answer streams shows what the answer has
+/// committed to the scrollback, then its live rows: nothing in between is
+/// missing (the review of step 25).
+#[test]
+fn the_viewer_opened_mid_stream_shows_what_the_answer_committed() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Inline, 79, 20, now);
+    let steps = turn(1, "Turn 1.", ANSWER, OUTPUT);
+    // The answer's first four pieces: its first paragraph and its code are
+    // committed, its last paragraph is live.
+    let mut committed = Vec::new();
+    for step in &steps[..5] {
+        for inbound in step {
+            link.give(inbound.clone());
+        }
+        drain(&mut app, now);
+        let (commit, _, _) = app.frame(now);
+        committed.extend(text(&commit));
+        app.drawn(now);
+    }
+    assert!(
+        committed
+            .iter()
+            .any(|row| row.contains("scan_number stops at the first")),
+        "{committed:#?}"
+    );
+    key(&mut app, "ctrl+o", now);
+    assert!(app.viewing());
+    let rows = text(&app.viewer_frame(40, 79, now));
+    for wanted in [
+        "scan_number stops at the first",
+        "self.bump();",
+        "Then the test",
+    ] {
+        assert!(
+            rows.iter().any(|row| row.contains(wanted)),
+            "{wanted:?} missing: {rows:#?}"
+        );
+    }
+}
+
+/// `End`, then `PageDown`, `j` and `Down` in the viewer: the window stays
+/// at the end, its rows those `End` showed (step 23's overflow, held since
+/// step 25 by the window itself).
+#[test]
+fn end_then_page_down_in_the_viewer_stays_at_the_end() {
+    let now = Instant::now();
+    let (mut app, _link) = long_session(Presenter::Inline, 3, now);
+    key(&mut app, "ctrl+o", now);
+    key(&mut app, "home", now);
+    key(&mut app, "end", now);
+    let at_end = text(&app.viewer_frame(30, 99, now));
+    assert!(at_end[29].ends_with("box 3 of 3"), "{at_end:#?}");
+    for binding in ["pagedown", "end", "j", "down", "pagedown"] {
+        key(&mut app, binding, now);
+    }
+    assert_eq!(text(&app.viewer_frame(30, 99, now)), at_end);
+}
+
+/// A search's query holds at most 256 characters, however much is typed
+/// or pasted; with the ASCII glyphs, the row that says there is more below
+/// uses theirs (the review of step 25).
+#[test]
+fn the_query_is_bounded_and_the_more_below_row_follows_the_glyphs() {
+    let now = Instant::now();
+    let (mut app, _link) = long_session(Presenter::Fullscreen, 3, now);
+    key(&mut app, "ctrl+f", now);
+    app.terminal(&TermEvent::Paste("x".repeat(1_000)), now);
+    super::type_text(&mut app, "yz", now);
+    assert_eq!(
+        app.search_query().map(|query| query.chars().count()),
+        Some(256)
+    );
+    key(&mut app, "esc", now);
+    app.use_ascii_glyphs();
+    key(&mut app, "pageup", now);
+    let rows = rows_text(&mut app, now);
+    assert!(
+        rows.iter().any(|row| row.contains("more below | ")),
+        "{rows:#?}"
+    );
+}
+
 /// A match inside a closed box opens the box while it is the current
 /// match, its border saying the search opened it; a new query closes it,
 /// and ending the search on it leaves it open.
@@ -757,6 +855,9 @@ fn code_committed_plain_is_coloured_once_its_colours_come() {
     assert!(!coloured(&lines), "plain while late");
     highlighter.hold(false);
     assert!(highlighter.settle(BOUND));
+    // Their coming is a change the loop draws, with nothing else happening
+    // (the review of step 25).
+    assert!(app.drain(later, 64).changed, "the colours schedule a frame");
     let (lines, _) = app.screen_frame(later);
     assert!(
         coloured(&lines),
@@ -861,6 +962,29 @@ fn perf_a_frame_in_the_full_screen_presenter() {
         })));
         drain(app, now);
     });
+    // The same answer, 2,500 paragraphs long and still open: the rows it
+    // has committed are copied for each frame (the review of step 25).
+    for k in 0..2_500 {
+        link.give(event(Event::ItemDelta(ItemDelta {
+            item_id: answer.clone(),
+            delta: Delta::Text(TextDelta {
+                text: format!("\n\nParagraph {k} of a long answer."),
+            }),
+        })));
+    }
+    drain(&mut app, now);
+    let _ = app.screen_frame(now);
+    let mut n = 0;
+    measure("streaming_a_long_answer", &mut app, &mut |app| {
+        n += 1;
+        link.give(event(Event::ItemDelta(ItemDelta {
+            item_id: answer.clone(),
+            delta: Delta::Text(TextDelta {
+                text: format!(" word{n}"),
+            }),
+        })));
+        drain(app, now);
+    });
 }
 
 /// What a played terminal reads, in turn.
@@ -901,16 +1025,28 @@ fn holds(bytes: &[u8], part: &[u8]) -> bool {
 }
 
 /// The full-screen presenter's loop draws on the alternate screen with the
-/// mouse reported, and leaves both off when it quits, the core goes, or
-/// the terminal fails under it; the mouse is never on with the main
+/// mouse reported, and leaves both off when it quits, the core goes, the
+/// terminal fails under it, or the program is suspended (`Ctrl+Z`, after
+/// which it takes the screen again); the mouse is never on with the main
 /// screen.
 #[test]
 fn every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_off() {
     use cortex_term::Ready;
-    let ways: [(&str, Steps); 3] = [
+    let ways: [(&str, Steps); 4] = [
         (
             "quit",
             vec![(Ready::Woken, Vec::new()), (Ready::Input, b"\x04".to_vec())],
+        ),
+        (
+            "suspended",
+            vec![
+                (Ready::Woken, Vec::new()),
+                (Ready::Input, b"\x1a".to_vec()),
+                // Continued (`fg`), and a frame's time passes.
+                (Ready::Resumed, Vec::new()),
+                (Ready::Timeout, Vec::new()),
+                (Ready::Input, b"\x04".to_vec()),
+            ],
         ),
         ("the core gone", vec![(Ready::Woken, Vec::new())]),
         // The script ends: the terminal fails under the loop.
@@ -953,6 +1089,19 @@ fn every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_of
             holds(&during, b"\x1b[?1049h\x1b[?1000h\x1b[?1006h"),
             "{way}"
         );
+        if way == "suspended" {
+            // Off before the stop, the mouse first; on again after it.
+            let on = b"\x1b[?1049h\x1b[?1000h\x1b[?1006h";
+            let ons = during
+                .windows(on.len())
+                .filter(|window| window == on)
+                .count();
+            assert_eq!(ons, 2, "the screen taken again after the stop");
+            assert!(
+                holds(&during, b"\x1b[?1006l\x1b[?1000l\x1b[?1049l"),
+                "{way}"
+            );
+        }
         // Put back as the program puts it back.
         terminal.leave().expect("left");
         let all = bytes(&written);

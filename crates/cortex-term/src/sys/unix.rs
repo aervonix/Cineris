@@ -550,11 +550,11 @@ pub(crate) fn suspend() {
     unsafe { libc::raise(libc::SIGTSTP) };
 }
 
-/// The window's size, columns then rows.
 /// The console's mouse input, which only Windows has: a terminal is asked
 /// for the mouse by the sequences alone.
 pub(crate) fn set_mouse_input(_on: bool) {}
 
+/// The window's size, columns then rows.
 pub(crate) fn size() -> io::Result<(u16, u16)> {
     let mut size = MaybeUninit::<libc::winsize>::zeroed();
     // SAFETY: `TIOCGWINSZ` fills a `winsize`.
@@ -610,15 +610,20 @@ fn write_all(bytes: &[u8]) -> io::Result<()> {
 /// Waits for input, a resize, a resumption or a wake, for at most
 /// `timeout` (`None`: as long as it takes). Input is added to `into`.
 pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<Ready> {
-    let millis = timeout.map_or(-1, |timeout| {
-        let rounded_up = timeout.as_nanos().div_ceil(1_000_000);
-        libc::c_int::try_from(rounded_up).unwrap_or(libc::c_int::MAX)
-    });
+    // A deadline, not a wait's length: a `poll` a signal interrupted (a
+    // child's end) or a wake with nothing to report waits only for what is
+    // left of it (since the review of step 25, which found the twin on
+    // Windows).
+    let deadline = timeout.and_then(|timeout| std::time::Instant::now().checked_add(timeout));
     let wake = WAKE_READ.load(Ordering::SeqCst);
     loop {
         if let Some(ready) = flags() {
             return Ok(ready);
         }
+        let millis = match super::millis_left(deadline, std::time::Instant::now()) {
+            u32::MAX => -1,
+            left => libc::c_int::try_from(left).unwrap_or(libc::c_int::MAX),
+        };
         let mut fds = [
             libc::pollfd {
                 fd: STDIN,

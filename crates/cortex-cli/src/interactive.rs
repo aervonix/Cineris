@@ -465,10 +465,11 @@ pub(crate) fn restyle(
     })
 }
 
-/// The key map from `[keys]`, and each entry it could not use, as a notice.
-pub(crate) fn keymap(keys: &KeySettings) -> (KeyMap, Vec<String>) {
-    let mut table: Vec<(String, Vec<String>)> = Vec::new();
-    for (context, bindings) in [
+/// Every table of `[keys]`, by its name: each must be here, or its
+/// bindings are dropped with no word (the review of step 25 found
+/// `viewer` and `screen` missing).
+fn key_tables(keys: &KeySettings) -> [(&'static str, &cortex_config::schema::Bindings); 10] {
+    [
         ("editor", &keys.editor),
         ("menu", &keys.menu),
         ("picker", &keys.picker),
@@ -476,8 +477,16 @@ pub(crate) fn keymap(keys: &KeySettings) -> (KeyMap, Vec<String>) {
         ("search", &keys.search),
         ("focus", &keys.focus),
         ("dialog", &keys.dialog),
+        ("viewer", &keys.viewer),
+        ("screen", &keys.screen),
         ("global", &keys.global),
-    ] {
+    ]
+}
+
+/// The key map from `[keys]`, and each entry it could not use, as a notice.
+pub(crate) fn keymap(keys: &KeySettings) -> (KeyMap, Vec<String>) {
+    let mut table: Vec<(String, Vec<String>)> = Vec::new();
+    for (context, bindings) in key_tables(keys) {
         for (action, keys) in &bindings.0 {
             table.push((format!("{context}.{action}"), keys.clone()));
         }
@@ -1161,6 +1170,41 @@ mod tests {
         );
         assert_eq!(notices.len(), 1, "{notices:?}");
         assert!(notices[0].contains("editor.no_such_action"), "{notices:?}");
+    }
+
+    /// Every table `[keys]` declares is read into the key map: the list of
+    /// tables holds each field of the section, and a binding in each of
+    /// the full screen's and the viewer's is taken (the review of step 25).
+    #[test]
+    fn every_table_of_keys_is_read() {
+        let mut declared: Vec<String> = cortex_config::schema::keys()
+            .into_iter()
+            .filter_map(|key| key.path.strip_prefix("keys.").map(str::to_owned))
+            .collect();
+        declared.sort();
+        let mut read: Vec<String> = key_tables(&KeySettings::default())
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect();
+        read.sort();
+        assert_eq!(read, declared);
+
+        let mut keys = KeySettings::default();
+        keys.screen
+            .0
+            .insert("search".to_owned(), vec!["ctrl+s".to_owned()]);
+        keys.viewer.0.insert("top".to_owned(), vec!["t".to_owned()]);
+        let (map, notices) = keymap(&keys);
+        assert!(notices.is_empty(), "{notices:?}");
+        let lookup = |context, key| map.lookup(&[context], cortex_tui::keys::parse(key).unwrap());
+        assert_eq!(
+            lookup(cortex_tui::keys::Context::Screen, "ctrl+s"),
+            Some(cortex_tui::keys::Action::ScreenSearch)
+        );
+        assert_eq!(
+            lookup(cortex_tui::keys::Context::Viewer, "t"),
+            Some(cortex_tui::keys::Action::ViewerTop)
+        );
     }
 
     #[test]

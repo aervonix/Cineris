@@ -1081,9 +1081,10 @@ mod tests {
             map.lookup_gesture(&[Context::Viewer], Gesture::WheelUp),
             Some(Action::ViewerUp)
         );
-        // The wheel up was the scroll's: rebinding takes it from that action
-        // only in the map's lookup order, and both stay listed.
+        // The wheel up was the scroll's: bound to `viewer.up`, it is that
+        // action's, and the scroll keeps no gesture.
         assert_eq!(map.gestures_of(Action::ViewerUp), vec![Gesture::WheelUp]);
+        assert!(map.gestures_of(Action::ViewerScrollUp).is_empty());
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].reason.contains("click"), "{errors:?}");
         assert_eq!(

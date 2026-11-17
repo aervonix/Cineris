@@ -122,6 +122,10 @@ fn our_input_mode(found: u32) -> u32 {
 /// while the alternate screen is shown and the program wants the mouse.
 /// The mode the program found is what every restore puts back.
 pub(crate) fn set_mouse_input(on: bool) {
+    // Under the writing lock, which the emergency restore takes too: the
+    // mode read here is never written back after a restore put the
+    // console's own back (the review of step 25).
+    let _writing = writing(None);
     if !ACTIVE.load(Ordering::SeqCst) {
         return;
     }
@@ -541,9 +545,10 @@ fn write_all(bytes: &[u8]) -> io::Result<()> {
 pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<Ready> {
     let input = handle(STD_INPUT_HANDLE);
     let wake = wake_event()?;
-    let millis = timeout.map_or(u32::MAX, |timeout| {
-        u32::try_from(timeout.as_nanos().div_ceil(1_000_000)).unwrap_or(u32::MAX - 1)
-    });
+    // A deadline, not a wait's length: a pass that brought nothing to report
+    // (mouse moves with no button, a key's release) waits only for what is
+    // left of it (the review of step 25).
+    let deadline = timeout.and_then(|timeout| std::time::Instant::now().checked_add(timeout));
     let handles = [input, wake];
     loop {
         if RESIZED.swap(false, Ordering::SeqCst) {
@@ -552,6 +557,7 @@ pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<
         if WOKEN.swap(false, Ordering::SeqCst) {
             return Ok(Ready::Woken);
         }
+        let millis = super::millis_left(deadline, std::time::Instant::now());
         // SAFETY: an array of two live handles, and its length.
         let result = unsafe { WaitForMultipleObjects(2, handles.as_ptr(), FALSE, millis) };
         if result == WAIT_OBJECT_0 + 1 {
@@ -1077,6 +1083,56 @@ pub(crate) mod pty {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mouse(x: i16, y: i16, buttons: u32, flags: u32, keys: u32) -> MOUSE_EVENT_RECORD {
+        MOUSE_EVENT_RECORD {
+            dwMousePosition: windows_sys::Win32::System::Console::COORD { X: x, Y: y },
+            dwButtonState: buttons,
+            dwControlKeyState: keys,
+            dwEventFlags: flags,
+        }
+    }
+
+    /// The console's mouse records become the SGR reports a terminal would
+    /// have sent (since the review of step 25): a press, a drag and a
+    /// release, a move with no button left out, the wheel each way and its
+    /// modifiers, and the right button with `Ctrl`; the decoder then reads
+    /// them as it reads a terminal's.
+    #[test]
+    fn mouse_records_become_the_reports_a_terminal_sends() {
+        BUTTONS.store(0, Ordering::SeqCst);
+        let up = 120u32 << 16;
+        let down = u32::from(0xff88u16) << 16;
+        let mut out = Vec::new();
+        for record in [
+            mouse(4, 2, 0x1, 0, 0),
+            mouse(5, 2, 0x1, 0x1, 0),
+            mouse(5, 2, 0, 0, 0),
+            mouse(5, 2, 0, 0x1, 0),
+            mouse(1, 1, up, 0x4, 0),
+            mouse(1, 1, down, 0x4, 0x10),
+            mouse(0, 0, 0x2, 0, 0x8),
+            mouse(0, 0, 0, 0, 0x8),
+        ] {
+            push_mouse(&record, &mut out);
+        }
+        assert_eq!(
+            String::from_utf8(out.clone()).unwrap(),
+            "\x1b[<0;5;3M\x1b[<32;6;3M\x1b[<0;6;3m\x1b[<64;2;2M\x1b[<69;2;2M\x1b[<18;1;1M\x1b[<18;1;1m"
+        );
+        let mut decoder = crate::Decoder::new();
+        decoder.set_mouse(true);
+        let mut events = Vec::new();
+        decoder.feed(&out, &mut events);
+        assert_eq!(events.len(), 7, "{events:?}");
+        assert!(matches!(
+            events[4],
+            crate::Event::Mouse(crate::Mouse {
+                kind: crate::MouseKind::Wheel(crate::Wheel::Up),
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn the_modes_turn_on_what_is_needed_and_off_what_gets_in_the_way() {

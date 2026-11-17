@@ -900,13 +900,19 @@ impl App {
                     self.not_taken(at);
                     return self.viewer_paste(text);
                 }
-                // The mouse (since step 25): input as a key is, for a dialog
-                // waiting under the viewer.
+                // The mouse (since step 25): not typing, as in the full
+                // screen. A gesture bound to closing the viewer closes it as
+                // its key does: a panel's readiness and a waiting dialog's
+                // grace start again.
                 TermEvent::Mouse(mouse) => {
-                    if self.dialogs.is_empty() {
-                        self.not_taken(at);
+                    let taken = self.viewer_mouse(*mouse);
+                    if self.viewer.is_none() {
+                        self.panels.restart();
+                        if let Some(dialog) = self.dialogs.front_mut() {
+                            dialog.hide();
+                        }
                     }
-                    return self.viewer_mouse(*mouse);
+                    return taken;
                 }
                 _ => {}
             }
@@ -914,10 +920,18 @@ impl App {
         // The full-screen presenter's own keys (step 25): scrolling and its
         // search, where neither the input nor a dialog has a use for them.
         // Moving the view is not typing at anything.
-        if let TermEvent::Key(key) | TermEvent::Repeat(key) = event
-            && self.screen_key(*key)
-        {
-            return true;
+        if let TermEvent::Key(key) | TermEvent::Repeat(key) = event {
+            let searching = self.screen_searching();
+            if self.screen_key(*key) {
+                // Typing into the search is typing, as into the editor: a
+                // dialog that comes next waits for it to pause (the review
+                // of step 25).
+                if searching {
+                    self.not_taken(at);
+                    self.last_key = Some(LastKey { typing: true });
+                }
+                return true;
+            }
         }
         match event {
             TermEvent::Key(key) | TermEvent::Repeat(key) => {
@@ -1013,8 +1027,13 @@ impl App {
             {
                 true
             }
-            // The full-screen search's, while it is open (step 25).
-            TermEvent::Paste(text) if self.screen_paste(text) => true,
+            // The full-screen search's, while it is open (step 25): typing,
+            // as a paste into the editor is.
+            TermEvent::Paste(text) if self.screen_paste(text) => {
+                self.not_taken(at);
+                self.last_key = Some(LastKey { typing: true });
+                true
+            }
             TermEvent::Paste(_) => {
                 self.not_taken(at);
                 self.last_key = Some(LastKey { typing: true });
@@ -1035,12 +1054,10 @@ impl App {
                 false
             }
             TermEvent::Resize { .. } | TermEvent::Reply(_) => false,
-            // The mouse in the full-screen view (step 25): input as a key
-            // is, for a dialog's and a panel's readiness.
-            TermEvent::Mouse(mouse) if self.screen.is_some() => {
-                self.not_taken(at);
-                self.screen_mouse(*mouse)
-            }
+            // The mouse in the full-screen view (step 25). It answers no
+            // dialog and types into no panel, so it is not typing: a dialog
+            // that comes after the wheel is ready as one after a pause is.
+            TermEvent::Mouse(mouse) if self.screen.is_some() => self.screen_mouse(*mouse),
             TermEvent::Focus(_) | TermEvent::Mouse(_) => false,
         }
     }
@@ -1340,6 +1357,15 @@ impl App {
     pub fn drain(&mut self, now: Instant, most: usize) -> Drained {
         let mut drained = Drained::default();
         if self.take_file_rows() {
+            drained.changed = true;
+        }
+        // The full screen's search, and code coloured late, wake the loop
+        // when their workers answer: what they bring is a change to draw
+        // (the review of step 25).
+        if self.take_search_answer() {
+            drained.changed = true;
+        }
+        if self.take_colours() {
             drained.changed = true;
         }
         let mut taken = 0;
