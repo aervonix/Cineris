@@ -343,6 +343,15 @@ The server's first part: `cortex serve --stdio` (`cortex-rpc`; `docs/steps/27/an
   - It says `initialize` as a `user` client that answers approvals, opens a session, sends a prompt, answers the approval the turn asks, and reads `session/event` until `turn.completed` and then `session.idle`.
   - `tsc` checks it against the declarations first, so a protocol change it no longer fits fails, in the `ts-client` job that blocks nothing and in the nightly ([../testing-and-ci.md](../testing-and-ci.md), "The TypeScript client").
 
+- **`cortex attach [--socket PATH] [--continue | --resume ID] [PROMPT]` runs the interactive application on a server's session,** with no core of its own (`cortex-cli`'s `attach`).
+  - It reaches the server only once it is shown to be the user's (`cortex_rpc::socket::connect`): on Unix a socket of the user's with no write for others, in a folder that is the user's or root's with the sticky bit, and a process of the user's at the other end (`SO_PEERCRED`); on Windows a pipe the user owns, labelled medium or above (no label is medium), asked of the open handle.
+  - It says `initialize` as a `user` client with every capability, and the application is the in-process one, through a second `Link`: an operation is a request matched back to its ticket by its id, and a result is taken in the same order as in process, after the events that came before it.
+  - Events and the server's requests go into an `EventQueue` of the link's own, so that deltas merge and give way to `item.resync` for an interface that is behind; a `session/read`'s result fences it at its `seq`, and an open or a close lifts the fence, as the core does in process.
+  - Its reading and writing run on a thread of its own with a current-thread runtime; when the connection ends, every operation still asked is answered with an error and the application is told once.
+  - Leaving is a disconnect: the server keeps the session, for `attach --continue` or another client.
+- **Prompts at a turn's edges** are the application's, so both front ends have them: the prompts held while a session opens go one at a time, the first with `steer` when the open says a turn is running, and a prompt refused `turn_running` is sent again once with `queue` ([09-tui.md](09-tui.md)).
+- **A request's round trip through the server** (`models/list`, a release build on the desktop, 2,000 each): 177 µs at the median and 283 µs at the 99th percentile over the transport's in-memory ends, 186 µs and 310 µs over the local socket; nearly all of it is the core's own work (`cortex-rpc`'s `perf_a_requests_round_trip_through_the_server`).
+
 ## Network listening
 
 Off by default, and not in the first release. When added:
