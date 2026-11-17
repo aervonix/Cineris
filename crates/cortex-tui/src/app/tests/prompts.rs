@@ -377,12 +377,12 @@ fn the_first_held_prompt_is_a_prompt_when_the_open_says_no_turn_runs() {
     assert_eq!((text.as_str(), delivery), ("and the docs", None));
 }
 
-/// While held prompts are on their way the session is not left: `/new`
-/// waits, though the turn the open found has ended, so that what follows
-/// is never sent to the next session or given back in the wrong order.
-#[test]
-fn the_session_is_not_left_while_held_prompts_are_on_their_way() {
-    let now = Instant::now();
+// ------------------------------- leaving the session while they go
+
+/// Attached to `s_a` with a turn running and two prompts held, the first
+/// sent; the read ends and then the turn: the application sees no turn
+/// while the held prompt is still on its way. Returns its ticket.
+fn on_their_way_with_no_turn(now: Instant) -> (App, Scripted, Ticket) {
     let (mut app, link) = app_opening(
         now,
         Some("and the docs"),
@@ -422,17 +422,33 @@ fn the_session_is_not_left_while_held_prompts_are_on_their_way() {
         }),
     }));
     drain(&mut app, now);
+    assert!(!app.running(), "the turn has ended");
+    (app, link, ticket)
+}
+
+/// Whether the session was left: closed, or another opened.
+fn left(link: &Scripted) -> bool {
+    link.script().sent.iter().any(|(_, op)| {
+        matches!(
+            op,
+            Op::SessionClose(_) | Op::SessionNew(_) | Op::SessionOpen(_)
+        )
+    })
+}
+
+/// While held prompts are on their way the session is not left: `/new`
+/// waits, though the turn the open found has ended, so that what follows
+/// is never sent to the next session, nor given back mixed with what is
+/// held for it.
+#[test]
+fn new_does_not_leave_the_session_while_held_prompts_are_on_their_way() {
+    let now = Instant::now();
+    let (mut app, link, ticket) = on_their_way_with_no_turn(now);
+    let _ = link.take_sent();
     type_text(&mut app, "/new", now);
     key(&mut app, "enter", now);
     key(&mut app, "enter", now);
-    assert!(
-        !link
-            .script()
-            .sent
-            .iter()
-            .any(|(_, op)| matches!(op, Op::SessionClose(_) | Op::SessionNew(_))),
-        "the session was left"
-    );
+    assert!(!left(&link), "the session was left");
     accepted(&link, ticket, Disposition::Started);
     drain(&mut app, now);
     let sent = link.take_sent();
@@ -444,4 +460,41 @@ fn the_session_is_not_left_while_held_prompts_are_on_their_way() {
         })
         .collect();
     assert_eq!(next, [SessionId::from("s_a")], "{sent:#?}");
+}
+
+/// The same for a switch in `/sessions`.
+#[test]
+fn a_switch_does_not_leave_the_session_while_held_prompts_are_on_their_way() {
+    let now = Instant::now();
+    let (mut app, link, _) = on_their_way_with_no_turn(now);
+    let _ = link.take_sent();
+    run_command(&mut app, "/sessions", now);
+    let (list, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::SessionList(_)))
+        .expect("the list");
+    let summary = |id: &str| SessionSummary {
+        session_id: SessionId::from(id),
+        workspace: WORKSPACE.to_owned(),
+        title: Some(id.to_owned()),
+        created_at: Timestamp::from("2026-11-15T09:00:00Z"),
+        updated_at: Timestamp::from("2026-11-15T09:30:00Z"),
+        parent: None,
+        model: None,
+        turns: 1,
+    };
+    link.give(Inbound::Done(
+        list,
+        Ok(OpResult::SessionList(
+            cortex_protocol::methods::SessionListResult {
+                sessions: vec![summary("s_a"), summary("s_b")],
+                next_cursor: None,
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    assert!(!left(&link), "the session was left");
 }
