@@ -17,8 +17,10 @@
 //!   `running_turn`), as `Enter` would; the rest queued behind it. A prompt
 //!   sent while they are on their way follows them, and the session is not
 //!   left until the last is answered. A refused one comes back into the
-//!   editor with those behind it, in order; after an interrupt, those not
-//!   sent come back once the one on its way is answered.
+//!   editor with those behind it, in order, and the spinner they started
+//!   stops unless the core has said a turn runs. After an interrupt, those
+//!   not sent come back once the one on its way is answered, and a prompt
+//!   sent then goes at once.
 //! - **A prompt refused `turn_running` is sent again once, queued:** sent
 //!   with no delivery in the moment between one turn's `turn.completed` and
 //!   the `turn.started` of the next the core takes from its queue, or onto a
@@ -337,6 +339,11 @@ pub struct App {
     dialogs: VecDeque<Dialog>,
     /// When the running turn began, from this app's point of view.
     running: Option<Instant>,
+    /// Whether a turn runs, as the core last said: the open, the history's
+    /// read and the turn's events. The spinner runs from a prompt sent,
+    /// before the core says; giving back held prompts stops it only when
+    /// no turn runs (step 27).
+    turn_runs: bool,
     last_interrupt: Option<Instant>,
     /// The last key read: a dialog that appears while the person is typing
     /// waits before it takes keys, and takes no key held down.
@@ -492,6 +499,7 @@ impl App {
             last_look: None,
             theme_picked: None,
             running: None,
+            turn_runs: false,
             last_interrupt: None,
             last_key: None,
             note_cut: None,
@@ -1060,8 +1068,9 @@ impl App {
             return;
         };
         // The prompts held while the session opened are still on their way:
-        // this one follows them, never ahead of one of them.
-        if self.held_sent.is_some() {
+        // this one follows them, never ahead of one of them. Once an
+        // interrupt stopped them it goes as any prompt after an interrupt.
+        if self.held_going() {
             self.held_prompts.push_back(text);
             self.start_running(at);
             return;
@@ -1080,6 +1089,13 @@ impl App {
             again: false,
         };
         self.send_prompt(sent, wire(delivery));
+    }
+
+    /// Whether held prompts are on their way, and no interrupt stopped them.
+    fn held_going(&self) -> bool {
+        self.held_sent
+            .and_then(|ticket| self.pending.get(&ticket))
+            .is_some_and(|pending| matches!(pending, Pending::Prompt(sent) if !sent.stopped))
     }
 
     /// Sends a prompt with `delivery`, its answer awaited.
@@ -1519,7 +1535,9 @@ impl App {
                 return;
             }
             Err(error) => {
-                if sent.started && self.running.is_some() {
+                // What began the spinner ends it: this prompt, or the held
+                // prompts given back with it when no turn runs.
+                if (sent.started || (held && !self.turn_runs)) && self.running.is_some() {
                     self.stop_running();
                 }
                 self.error(&error);
@@ -1547,8 +1565,15 @@ impl App {
     /// `/new`: the session open now is closed, and a new one opened in the
     /// workspace, with its own header.
     fn new_session(&mut self) {
-        if self.running.is_some() || self.held_sent.is_some() {
+        if self.running.is_some() {
             self.say("A turn is running: wait for it to end, or stop it with esc.");
+            return;
+        }
+        // What follows a held prompt on its way is this session's.
+        if self.held_sent.is_some() {
+            self.say(
+                "Your prompts are still being sent: /new can start another session once they are.",
+            );
             return;
         }
         if self.opening || self.reading {
@@ -1619,6 +1644,7 @@ impl App {
         // "Resume"); its events wait for it.
         let session_id = state.session_id.clone();
         self.left_session();
+        self.turn_runs = state.running_turn.is_some();
         self.session = Some(state);
         // What the panels show of a session it already holds (its plan),
         // and of its project (the entries that wait).
@@ -1784,6 +1810,7 @@ impl App {
         if drawn.values().any(Option::is_some) {
             running = true;
         }
+        self.turn_runs = running;
         if running {
             // A turn this client did not start (another's, or one begun
             // before the open) is running: `Enter` steers it.
@@ -1843,9 +1870,11 @@ impl App {
                     self.note_turn(number);
                 }
                 self.had_turn = true;
+                self.turn_runs = true;
                 self.start_running(now);
             }
             Event::TurnCompleted(completed) => {
+                self.turn_runs = false;
                 self.mapper.turn_done(&mut self.transcript, now);
                 if let Some(error) = &completed.error {
                     self.error(error);

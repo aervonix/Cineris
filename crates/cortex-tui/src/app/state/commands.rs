@@ -737,10 +737,13 @@ impl App {
     /// Leaves this session for another of the workspace's: the one open is
     /// closed, and the other opened with its history drawn.
     fn switch_to(&mut self, session: SessionId) {
-        // A held prompt on its way holds the session too: what follows it
-        // is this session's.
-        if self.running.is_some() || self.held_sent.is_some() {
+        if self.running.is_some() {
             self.say("A turn is running: wait for it to end, or stop it with esc.");
+            return;
+        }
+        // What follows a held prompt on its way is this session's.
+        if self.held_sent.is_some() {
+            self.say("Your prompts are still being sent: /sessions can switch once they are.");
             return;
         }
         // Until the one under way is open and drawn, what comes back is

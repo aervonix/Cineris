@@ -208,6 +208,29 @@ fn stopping_while_held_prompts_are_on_their_way_gives_back_those_not_sent() {
     assert_eq!(app.input().editor().expanded(), "second\nthird");
 }
 
+/// A prompt sent after an interrupt stopped the held prompts does not wait
+/// to come back with them: it goes at once, as any prompt sent after an
+/// interrupt does.
+#[test]
+fn a_prompt_sent_after_stopping_the_held_ones_goes_at_once() {
+    let now = Instant::now();
+    let (mut app, link) = holding(now, "first", &["second"]);
+    opened(&mut app, &link, now);
+    let (first, _, _) = one_prompt(&link);
+    key(&mut app, "esc", now);
+    type_text(&mut app, "something else", now);
+    key(&mut app, "enter", now);
+    let (_, text, delivery) = one_prompt(&link);
+    assert_eq!(
+        (text.as_str(), delivery),
+        ("something else", Some(ItemDelivery::Steer))
+    );
+    accepted(&link, first, Disposition::Started);
+    drain(&mut app, now);
+    assert!(prompts(&link).is_empty());
+    assert_eq!(app.input().editor().expanded(), "second");
+}
+
 // ---------------------------- (2) refused `turn_running`: queued, once
 
 /// `Enter` between one turn's end and the start of the next the core takes
@@ -280,6 +303,35 @@ fn a_prompt_refused_after_an_interrupt_comes_back_and_is_not_sent_again() {
     drain(&mut app, now);
     assert!(prompts(&link).is_empty(), "not sent again after a stop");
     assert_eq!(app.input().editor().expanded(), "keep me");
+}
+
+/// A prompt refused `turn_running` after its session was left (`/new`,
+/// once the turn that took the gap had ended) comes back: it is not sent
+/// again to a session this client closed.
+#[test]
+fn a_prompt_refused_after_its_session_was_left_comes_back() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    type_text(&mut app, "in the gap", now);
+    key(&mut app, "enter", now);
+    let (ticket, _, _) = one_prompt(&link);
+    link.give(event(Event::TurnStarted(TurnStarted {})));
+    link.give(turn_completed());
+    drain(&mut app, now);
+    type_text(&mut app, "/new", now);
+    key(&mut app, "enter", now);
+    key(&mut app, "enter", now);
+    assert!(
+        link.take_sent()
+            .iter()
+            .any(|(_, op)| matches!(op, Op::SessionClose(_))),
+        "the session is left"
+    );
+    refused(&link, ticket, code::TURN_RUNNING);
+    drain(&mut app, now);
+    assert!(prompts(&link).is_empty(), "not sent to a session left");
+    assert_eq!(app.input().editor().expanded(), "in the gap");
 }
 
 /// The first held prompt is refused `turn_running` (a turn began between
@@ -449,6 +501,7 @@ fn new_does_not_leave_the_session_while_held_prompts_are_on_their_way() {
     key(&mut app, "enter", now);
     key(&mut app, "enter", now);
     assert!(!left(&link), "the session was left");
+    assert!(shown(&mut app, now).contains("prompts are still being sent"));
     accepted(&link, ticket, Disposition::Started);
     drain(&mut app, now);
     let sent = link.take_sent();
@@ -497,4 +550,61 @@ fn a_switch_does_not_leave_the_session_while_held_prompts_are_on_their_way() {
     key(&mut app, "down", now);
     key(&mut app, "enter", now);
     assert!(!left(&link), "the session was left");
+    assert!(shown(&mut app, now).contains("prompts are still being sent"));
+}
+
+// ------------------------------------------------------- the spinner
+
+/// A prompt sent once the turn the open found had ended joins the held
+/// ones and starts the spinner; when the one on its way is refused, all
+/// come back and the spinner stops with them: no turn runs.
+#[test]
+fn held_prompts_given_back_stop_the_spinner_when_no_turn_runs() {
+    let now = Instant::now();
+    let (mut app, link, ticket) = on_their_way_with_no_turn(now);
+    type_text(&mut app, "and the lint", now);
+    key(&mut app, "enter", now);
+    assert!(app.running(), "running from the moment it is sent");
+    refused(&link, ticket, code::HISTORY_CHANGING);
+    drain(&mut app, now);
+    assert!(prompts(&link).is_empty());
+    assert_eq!(
+        app.input().editor().expanded(),
+        "and the docs\nthen the tests\nand the lint"
+    );
+    assert!(!app.running(), "the spinner runs for no turn");
+}
+
+/// While the turn the open found still runs, giving back the held prompts
+/// leaves the spinner on: it is that turn's.
+#[test]
+fn held_prompts_given_back_leave_the_spinner_of_a_turn_that_runs() {
+    let now = Instant::now();
+    let (mut app, link) = app_opening(
+        now,
+        Some("and the docs"),
+        Open::Resume(SessionId::from("s_a")),
+    );
+    let read = attached(
+        &mut app,
+        &link,
+        session().id("s_a").seq(5).running("t_4").build(),
+        now,
+    );
+    let (ticket, _, _) = one_prompt(&link);
+    link.give(Inbound::Done(
+        read,
+        Ok(OpResult::SessionRead(
+            cortex_protocol::methods::SessionReadResult {
+                items: Vec::new(),
+                incomplete: Vec::new(),
+                next_cursor: None,
+                seq: 5,
+            },
+        )),
+    ));
+    refused(&link, ticket, code::HISTORY_CHANGING);
+    drain(&mut app, now);
+    assert_eq!(app.input().editor().expanded(), "and the docs");
+    assert!(app.running(), "the turn the open found still runs");
 }
