@@ -1096,7 +1096,13 @@ pub fn answer(query: Query, term: &VTerm) -> Vec<u8> {
         Query::Mode(mode) => {
             // Synchronized updates and the win32 input mode are known and
             // off; anything else is not known.
-            let state = if mode == 2026 || mode == 9001 { 2 } else { 0 };
+            let state = match mode {
+                2026 | 9001 => 2,
+                // Bracketed paste: known, as it is set.
+                2004 if term.modes().bracketed_paste => 1,
+                2004 => 2,
+                _ => 0,
+            };
             format!("\x1b[?{mode};{state}$y").into_bytes()
         }
         Query::Keyboard => b"\x1b[?0u".to_vec(),

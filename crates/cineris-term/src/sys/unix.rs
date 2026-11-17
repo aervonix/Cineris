@@ -550,6 +550,14 @@ pub(crate) fn suspend() {
     unsafe { libc::raise(libc::SIGTSTP) };
 }
 
+/// Whether the terminal's erase character, as it was when the program
+/// entered it, is `^H` (since step 25): its Backspace then sends byte 0x08.
+pub(crate) fn erase_is_ctrl_h() -> bool {
+    ORIGINAL
+        .get()
+        .is_some_and(|original| original.c_cc[libc::VERASE] == 0x08)
+}
+
 /// The window's size, columns then rows.
 pub(crate) fn size() -> io::Result<(u16, u16)> {
     let mut size = MaybeUninit::<libc::winsize>::zeroed();

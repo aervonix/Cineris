@@ -241,6 +241,10 @@ Every key a Cineris configuration file may hold. The design is in [architecture/
 | `terminal.hyperlinks` | `true` or `false` | not set | user only | restart | Links in text. |
 | `terminal.unicode` | `true` or `false` | not set | user only | restart | Unicode, or ASCII only. |
 | `terminal.mouse` | `true` or `false` | not set | user only | restart | The mouse in the viewer and the full-screen presenter: a click opens or closes a box, and the wheel scrolls; `shift` and a drag still select text. Never in the inline screen. On unless set to `false`. |
+| `terminal.backspace` | `"auto"`, `"del"`, `"ctrl+h"` | `"auto"` | user only | restart | What byte 0x08 is: `ctrl+h` reads it as Backspace, for a terminal whose Backspace sends `^H`; `del` as `Ctrl+Backspace`, which most terminals send it for; `auto` decides from the terminal's erase character. |
+| `terminal.bracketed_paste` | `true` or `false` | not set | user only | restart | Bracketed paste: `true` trusts the terminal's brackets; `false` does not ask for them, and takes keys that come many at once with a line break inside for a paste; unset, it asks, and takes such a burst for a paste only where the terminal has not said it knows the mode. |
+| `terminal.paste_wait` | length of time, 100ms to 1m | `"2s"` | user only | restart | How long a bracketed paste may pause before what it holds is given as a paste; what follows of it, to its end, is its rest. |
+| `terminal.clipboard` | `true` or `false` | not set | user only | restart | Whether the terminal takes the clipboard sequence `/copy` sends: `false` also shows the text in the viewer, to select and copy by hand. Unset, it is guessed from the terminal: not the old console host, tmux or GNU screen. |
 
 ## `[rpc]`
 

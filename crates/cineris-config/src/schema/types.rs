@@ -602,6 +602,18 @@ choice! {
 }
 
 choice! {
+    /// What byte 0x08 from the terminal is (since step 25).
+    pub enum BackspaceChoice {
+        /// Decided from the terminal's erase character.
+        Auto => "auto",
+        /// `Ctrl+Backspace`, as most terminals send it.
+        Del => "del",
+        /// Backspace, for a terminal whose Backspace sends `^H`.
+        CtrlH => "ctrl+h",
+    }
+}
+
+choice! {
     /// Which presenter the terminal UI draws with (since step 25).
     pub enum PresenterChoice {
         /// The transcript in the terminal's own scrollback, and a small live

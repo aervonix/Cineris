@@ -69,6 +69,9 @@ pub(super) struct Viewer {
     /// Where the left button went down, for a click: a release on the same
     /// cell.
     pressed: Option<(u16, u16)>,
+    /// It shows text to select and copy by hand: the mouse is not reported,
+    /// so a plain drag is the terminal's own selection (since step 25).
+    to_copy: bool,
 }
 
 impl Viewer {
@@ -178,6 +181,27 @@ impl App {
             text: Some((label.to_owned(), lines)),
             ..Viewer::default()
         });
+    }
+
+    /// Opens the viewer on `text`, for copying by hand where the terminal
+    /// is thought not to take the clipboard sequence (since step 25): the
+    /// mouse is not reported while it is open.
+    pub(super) fn open_to_copy(&mut self, text: &str) {
+        let artifact = cineris_protocol::methods::SessionArtifactResult {
+            text: text.to_owned(),
+            bytes: text.len() as u64,
+            cut: false,
+        };
+        self.open_text("The last answer, to select and copy", &artifact);
+        if let Some(viewer) = self.viewer.as_mut() {
+            viewer.to_copy = true;
+        }
+    }
+
+    /// Whether the viewer shows text to copy by hand, with the mouse not
+    /// reported.
+    pub(super) fn viewing_to_copy(&self) -> bool {
+        self.viewer.as_ref().is_some_and(|viewer| viewer.to_copy)
     }
 
     /// Whether the viewer is open: the loop then draws [`viewer_frame`]

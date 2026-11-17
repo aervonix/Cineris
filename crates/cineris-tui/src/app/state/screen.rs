@@ -146,7 +146,7 @@ impl App {
     /// (`terminal.mouse`).
     #[must_use]
     pub fn mouse(&self) -> bool {
-        self.settings.mouse
+        self.settings.mouse && !self.viewing_to_copy()
     }
 
     /// Runs `act` on the full-screen view's window, with what it is drawn

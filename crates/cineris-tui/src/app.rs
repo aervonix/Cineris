@@ -602,6 +602,9 @@ fn draw<D: Device>(
         if !terminal.is_alternate() {
             full.redraw();
         }
+        // The mouse as the application wants it now: not while text is
+        // shown to copy by hand.
+        terminal.set_mouse(app.mouse())?;
         terminal.alternate(true)?;
         let caps = *terminal.caps();
         let (lines, cursor) = if app.viewing() {

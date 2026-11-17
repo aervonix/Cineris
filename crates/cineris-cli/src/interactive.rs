@@ -37,8 +37,8 @@ use std::time::{Duration, Instant};
 use cineris_base::log::{self, FileOptions, Filter, LogHandle, LogOptions};
 use cineris_base::{CancelToken, SecretFilter, SystemClock};
 use cineris_config::schema::{
-    ColorChoice, DensityChoice, GlyphChoice, KeySettings, PresenterChoice, ReasoningShown,
-    TerminalSettings, ToolOutputChoice, TuiSettings,
+    BackspaceChoice, ColorChoice, DensityChoice, GlyphChoice, KeySettings, PresenterChoice,
+    ReasoningShown, TerminalSettings, ToolOutputChoice, TuiSettings,
 };
 use cineris_config::{Dirs, Env, LoadOptions, Loaded, StateDir};
 use cineris_core::{ClientId, ClientInfo, Core, CoreOptions, EventQueue, Outgoing, TokioTimer};
@@ -534,6 +534,14 @@ pub(crate) fn overrides(terminal: &TerminalSettings) -> Overrides {
         }),
         hyperlinks: terminal.hyperlinks,
         unicode: terminal.unicode,
+        backspace_ctrl_h: match terminal.backspace {
+            BackspaceChoice::Auto => None,
+            BackspaceChoice::Del => Some(false),
+            BackspaceChoice::CtrlH => Some(true),
+        },
+        bracketed_paste: terminal.bracketed_paste,
+        paste_wait: Some(terminal.paste_wait),
+        clipboard: terminal.clipboard,
     }
 }
 
