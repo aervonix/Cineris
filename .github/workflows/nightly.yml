@@ -3,8 +3,9 @@
 # release target, the property tests with many more cases than a pull
 # request runs, the mutation driver's test against the real cargo, the
 # check of every break's `caught-by` against the tests that exist,
-# coverage-guided fuzzing of the stream decoders, and the sandbox's tests on
-# a kernel with the partial Landlock (ABI 4). Later
+# coverage-guided fuzzing of the stream decoders, the sandbox's tests on
+# a kernel with the partial Landlock (ABI 4), and a turn run by the
+# TypeScript client of the RPC protocol. Later
 # steps add the long-session memory test and the live smoke tests (tiers 5
 # and 6).
 #
@@ -242,13 +243,43 @@ jobs:
       - name: The sandbox's tests, with Landlock ABI 4
         run: cargo run --locked --quiet --package xtask -- partial-landlock
 
+  # The TypeScript client of the RPC protocol, as the `ts-client` job of
+  # ci.yml runs it on a pull request that reaches the protocol: its types
+  # checked against the generated declarations, and then a turn run with it
+  # against `cortex serve --stdio` (docs/testing-and-ci.md, "The TypeScript
+  # client"). Here every night, whatever changed. No cache.
+  ts-client:
+    if: ${{ !inputs.force_failure }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.151
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22.18.0
+      - name: Check the client's types against the declarations
+        run: |
+          npm install --prefix "$RUNNER_TEMP/tsc" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund typescript@6.0.3 @types/node@22.18.13
+          "$RUNNER_TEMP/tsc/node_modules/.bin/tsc" -p crates/cortex-cli/tests/system/ts_client --typeRoots "$RUNNER_TEMP/tsc/node_modules/@types"
+      - name: Run a turn with the client
+        if: ${{ !cancelled() }}
+        env:
+          CORTEX_TS_CLIENT: "1"
+        run: cargo run --locked --quiet --package xtask -- test --locked -p cortex-cli --cargo-profile ci --test system -E 'test(=ts_client::sys_a_typescript_client_runs_a_turn)'
+
   # The only job with a token that can write, and all it can write is issues.
   #
   # Only for a run on the main branch, scheduled or dispatched there: a
   # session's own nightly run on its branch must not add to the main
   # branch's issue.
   report:
-    needs: [dependencies, release, properties, break-names, fuzz, partial-landlock]
+    needs: [dependencies, release, properties, break-names, fuzz, partial-landlock, ts-client]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
