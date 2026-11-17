@@ -984,6 +984,8 @@ impl App {
             {
                 true
             }
+            // The full-screen search's, while it is open (step 25).
+            TermEvent::Paste(text) if self.screen_paste(text) => true,
             TermEvent::Paste(_) => {
                 self.not_taken(at);
                 self.last_key = Some(LastKey { typing: true });

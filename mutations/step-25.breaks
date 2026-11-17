@@ -174,7 +174,7 @@ caught-by:
 [break] the-end-is-missed-with-nothing-live
 rule: A window moved down to the last row follows the end again, even when nothing is live below it.
 file: crates/cortex-tui/src/app/scroll.rs
-in: Scroll::from
+in: Scroll::starting
 find: at_end = self.block(source, probe).is_empty();
 replace: at_end = probe > source.blocks;
 caught-by:
@@ -234,3 +234,67 @@ find: .filter(|_| !context.takes_gestures())
 replace: .filter(|_| false)
 caught-by:
     cortex-tui keys::tests::a_gesture_is_bound_only_where_the_mouse_is_reported
+
+[break] the-search-minds-case
+rule: The full-screen search ignores case.
+file: crates/cortex-tui/src/app/search.rs
+in: work
+find: .map(|(block, text)| (block, text.to_lowercase()))
+replace: .map(|(block, text)| (block, text))
+caught-by:
+    cortex-tui app::search::tests::it_counts_each_blocks_matches_ignoring_case_and_answers_the_latest_query
+    cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
+
+[break] the-search-starts-at-the-oldest-match
+rule: A search goes first to the newest match.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::found
+find: search.current = total.checked_sub(1);
+replace: search.current = (total > 0).then_some(0);
+caught-by:
+    cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
+
+[break] the-search-does-not-go-round
+rule: Past the newest match the search goes round to the oldest.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::step_match
+find: (Some(current), true) => (current + 1) % total,
+replace: (Some(current), true) => (current + 1).min(total - 1),
+caught-by:
+    cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
+
+[break] a-box-the-search-opened-stays-open
+rule: A box the search opened for a match closes again when the search moves on.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::ask_search
+find: self.close_search_box(view);
+replace: let _ = &view;
+caught-by:
+    cortex-tui app::tests::screen::a_match_inside_a_closed_box_opens_it_while_it_is_current
+
+[break] the-search-ends-and-closes-its-box
+rule: A search ended on a match inside a box it opened leaves the box open.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::search_key
+find: view.open.insert(round, true);
+replace: view.open.remove(&round);
+caught-by:
+    cortex-tui app::tests::screen::a_match_inside_a_closed_box_opens_it_while_it_is_current
+
+[break] a-match-in-a-closed-box-stays-hidden
+rule: A match inside a closed box opens the box while it is the current match.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::reveal_match
+find: if at.is_none()
+replace: if false && at.is_none()
+caught-by:
+    cortex-tui app::tests::screen::a_match_inside_a_closed_box_opens_it_while_it_is_current
+
+[break] the-current-match-is-not-told-apart
+rule: The current match is drawn bold as well as reversed.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: marked
+find: Some(nth) if Some(nth) == current => style.reverse().bold(),
+replace: Some(nth) if Some(nth) == current => style.reverse(),
+caught-by:
+    cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches

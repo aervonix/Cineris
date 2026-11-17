@@ -12,19 +12,45 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use cortex_term::{Button, Cursor, Key, Line, Mouse, MouseKind, Span, Wheel};
+use cortex_term::{Button, Cursor, Key, KeyCode, Line, Mods, Mouse, MouseKind, Span, Style, Wheel};
 
 use super::App;
 use super::viewer::WHEEL_ROWS;
 use crate::app::scroll::{Place, Scroll, Source, Window};
+use crate::app::search::TextSearch;
 use crate::keys::{Action, Context, Gesture};
 use crate::theme::Token;
 use crate::view::Placement;
 
+/// A search of the transcript (`Ctrl+F`), while it is open.
+#[derive(Debug, Default)]
+struct Searching {
+    /// What is typed.
+    query: String,
+    /// The worker's answer for the query: each kept block that holds it,
+    /// and how many times, in order. `None` until it comes.
+    found: Option<Vec<(usize, usize)>>,
+    /// The current match, by its place among all the matches, oldest
+    /// first.
+    current: Option<usize>,
+    /// Where the current match is drawn: its block, its row there, and
+    /// which match of that row it is.
+    at: Option<(usize, usize, usize)>,
+    /// The box the search opened for the current match, and how it was
+    /// drawn before (`None`: as it committed).
+    opened: Option<(usize, Option<bool>)>,
+}
+
 /// The full-screen presenter's view: where the window is, the boxes opened
 /// or closed here, and what the last frame drew, for the mouse.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct ScreenView {
+    /// The search, while it is open.
+    search: Option<Searching>,
+    /// The search's worker, started by the first search, and how many
+    /// kept blocks it has been given.
+    worker: Option<TextSearch>,
+    fed: usize,
     /// The window over the transcript.
     scroll: Scroll,
     /// The boxes a click opened (`true`) or closed, by their place among
@@ -47,19 +73,22 @@ impl ScreenView {
 }
 
 /// A block's rows in the full-screen view: a round as it committed, or as a
-/// click left it.
-fn block_rows(app: &App, open: &BTreeMap<usize, bool>, block: usize, width: usize) -> Vec<Line> {
+/// click or the search left it.
+fn block_rows(
+    app: &App,
+    open: &BTreeMap<usize, bool>,
+    searched: Option<usize>,
+    block: usize,
+    width: usize,
+) -> Vec<Line> {
     let Some(kept) = app.kept.get(block) else {
         return Vec::new();
     };
-    let placement = match app
-        .kept
-        .round_number(block)
-        .and_then(|round| open.get(&round))
-    {
-        Some(&open) => Placement::Viewer {
-            selected: false,
+    let round = app.kept.round_number(block);
+    let placement = match round.and_then(|round| open.get(&round)) {
+        Some(&open) => Placement::Screen {
             open,
+            searched: open && round.is_some() && round == searched,
         },
         None => Placement::Committed,
     };
@@ -92,7 +121,12 @@ impl App {
     ) -> T {
         let mut scroll = std::mem::take(&mut view.scroll);
         let open = &view.open;
-        let mut make = |block: usize| block_rows(self, open, block, width);
+        let searched = view
+            .search
+            .as_ref()
+            .and_then(|search| search.opened)
+            .map(|(round, _)| round);
+        let mut make = |block: usize| block_rows(self, open, searched, block, width);
         let mut source = Source {
             blocks: self.kept.len(),
             make: &mut make,
@@ -129,11 +163,22 @@ impl App {
             view.width = width;
         }
         let (_, boxes) = self.prepare(now);
+        self.feed_search(&mut view);
+        self.take_found(&mut view, width);
         let live = self.screen_live(width);
         // The live rows the panels may leave the transcript, as inline: the
         // full screen's transcript area scrolls, so they count no further.
         let live_len = live.len().min(4);
-        let bottom = self.bottom(now, width, &boxes, live_len);
+        let mut bottom = self.bottom(now, width, &boxes, live_len);
+        // The search's row in the hint row's place, the cursor after what
+        // is typed.
+        if let Some(search) = &view.search
+            && let Some(last) = bottom.lines.last_mut()
+        {
+            let (row, col) = self.search_row(search, width);
+            *last = row;
+            bottom.cursor = Some((bottom.lines.len() - 1, col));
+        }
         let rows = self.rows.max(1);
         let height = rows
             .saturating_sub(bottom.block.len() + bottom.lines.len())
@@ -141,6 +186,9 @@ impl App {
         let mut window = self.with_screen(&mut view, width, &live, |scroll, source| {
             scroll.window(source, height)
         });
+        if let Some(search) = &view.search {
+            self.mark_matches(search, &mut window);
+        }
         if !window.at_end {
             self.more_below(&mut window, width);
         }
@@ -181,12 +229,20 @@ impl App {
         }
     }
 
-    /// A key the full-screen view may take: one of its context's, bound to
-    /// nothing where the input has the keyboard (since step 25). Says
-    /// whether it took it.
+    /// A key the full-screen view may take: the search's while one is
+    /// open, or one of its context's bound to nothing where the input has
+    /// the keyboard (since step 25). Says whether it took it.
     pub(super) fn screen_key(&mut self, key: Key) -> bool {
         if self.screen.is_none() || self.viewer.is_some() || !self.dialogs.is_empty() {
             return false;
+        }
+        if self
+            .screen
+            .as_ref()
+            .is_some_and(|view| view.search.is_some())
+        {
+            self.search_key(key);
+            return true;
         }
         let keymap = self.input.keymap();
         let Some(action) = keymap
@@ -279,6 +335,13 @@ impl App {
                     scroll.down(source, WHEEL_ROWS);
                 });
             }
+            Action::ScreenSearch => {
+                if view.worker.is_none() {
+                    view.worker = TextSearch::start(self.waker.clone());
+                    view.fed = 0;
+                }
+                view.search = Some(Searching::default());
+            }
             Action::ScreenToggle => {
                 let clicked =
                     row.and_then(|row| view.shown.get(row))
@@ -308,10 +371,385 @@ impl App {
         self.screen = Some(view);
     }
 
+    /// A paste while the search is open: its query's, on one line. Says
+    /// whether the search took it.
+    pub(super) fn screen_paste(&mut self, text: &str) -> bool {
+        let Some(mut view) = self.screen.take() else {
+            return false;
+        };
+        let taken = if let Some(search) = view.search.as_mut() {
+            search
+                .query
+                .extend(text.chars().map(|c| if c.is_control() { ' ' } else { c }));
+            self.ask_search(&mut view);
+            true
+        } else {
+            false
+        };
+        self.screen = Some(view);
+        taken
+    }
+
+    /// Hands the search's worker the blocks kept since it was last given
+    /// any.
+    fn feed_search(&self, view: &mut ScreenView) {
+        let Some(worker) = view.worker.as_ref() else {
+            return;
+        };
+        if view.fed > self.kept.len() {
+            worker.clear();
+            view.fed = 0;
+        }
+        let blocks: Vec<(usize, String)> = (view.fed..self.kept.len())
+            .filter_map(|index| self.kept.get(index).map(|block| (index, block.text())))
+            .collect();
+        view.fed = self.kept.len();
+        worker.add(blocks);
+    }
+
+    /// Asks the worker for the query as it is now; the current match is
+    /// chosen again when the answer comes.
+    fn ask_search(&self, view: &mut ScreenView) {
+        self.close_search_box(view);
+        self.feed_search(view);
+        let Some(search) = view.search.as_mut() else {
+            return;
+        };
+        search.found = None;
+        search.current = None;
+        search.at = None;
+        if let Some(worker) = view.worker.as_mut() {
+            worker.ask(&search.query);
+        }
+    }
+
+    /// Takes the worker's answer, if one came, and goes to the newest match.
+    fn take_found(&self, view: &mut ScreenView, width: usize) {
+        let Some(found) = view.worker.as_ref().and_then(TextSearch::answer) else {
+            return;
+        };
+        self.found(view, found, width);
+    }
+
+    /// Waits at most `limit` for the search worker's answer to the latest
+    /// query, and takes it: for tests, which cannot wait for the loop's
+    /// wake.
+    #[cfg(test)]
+    pub(crate) fn settle_search(&mut self, limit: std::time::Duration) -> bool {
+        let width = self.width.max(1);
+        let Some(mut view) = self.screen.take() else {
+            return false;
+        };
+        let found = view.worker.as_ref().and_then(|worker| worker.wait(limit));
+        let settled = found.is_some();
+        if let Some(found) = found {
+            self.found(&mut view, found, width);
+        }
+        self.screen = Some(view);
+        settled
+    }
+
+    /// The worker's answer to the latest query: the newest match is the
+    /// current one.
+    fn found(&self, view: &mut ScreenView, found: crate::app::search::Found, width: usize) {
+        let Some(search) = view.search.as_mut() else {
+            return;
+        };
+        let total: usize = found.blocks.iter().map(|(_, count)| count).sum();
+        search.found = Some(found.blocks);
+        search.current = total.checked_sub(1);
+        self.reveal_match(view, width);
+    }
+
+    /// The search's keys, the history search's context's: older (`Up`,
+    /// `Enter`, `Ctrl+F` again), newer (`Down`), erase, and `Esc` to end.
+    fn search_key(&mut self, key: Key) {
+        let width = self.width.max(1);
+        let Some(mut view) = self.screen.take() else {
+            return;
+        };
+        let action = self.input.keymap().lookup(&[Context::Search], key);
+        let again =
+            self.input.keymap().lookup(&[Context::Screen], key) == Some(Action::ScreenSearch);
+        match action {
+            _ if again => self.step_match(&mut view, width, false),
+            Some(Action::SearchOlder | Action::SearchAccept) => {
+                self.step_match(&mut view, width, false);
+            }
+            Some(Action::SearchNewer) => self.step_match(&mut view, width, true),
+            Some(Action::SearchErase) => {
+                if let Some(search) = view.search.as_mut() {
+                    search.query.pop();
+                }
+                self.ask_search(&mut view);
+            }
+            Some(Action::SearchCancel | Action::Interrupt) => {
+                // Ended on a match inside a box it opened: the box stays
+                // open, as if clicked.
+                if let Some(search) = view.search.take()
+                    && let Some((round, _)) = search.opened
+                {
+                    view.open.insert(round, true);
+                    if let Some(block) = self.kept.round_block(round) {
+                        view.scroll.rows.forget(block);
+                    }
+                }
+            }
+            _ => {
+                if let KeyCode::Char(c) = key.code
+                    && !key.mods.contains(Mods::CTRL)
+                    && !key.mods.contains(Mods::ALT)
+                {
+                    let c = crate::keys::typed(key).unwrap_or(c);
+                    if let Some(search) = view.search.as_mut() {
+                        search.query.push(c);
+                    }
+                    self.ask_search(&mut view);
+                }
+            }
+        }
+        self.screen = Some(view);
+    }
+
+    /// Moves to the next match, newer or older, going round.
+    fn step_match(&self, view: &mut ScreenView, width: usize, newer: bool) {
+        let Some(search) = view.search.as_mut() else {
+            return;
+        };
+        let total: usize = search
+            .found
+            .as_ref()
+            .map_or(0, |found| found.iter().map(|(_, count)| count).sum());
+        if total == 0 {
+            return;
+        }
+        search.current = Some(match (search.current, newer) {
+            (Some(current), true) => (current + 1) % total,
+            (Some(current), false) => (current + total - 1) % total,
+            (None, _) => total - 1,
+        });
+        self.close_search_box(view);
+        self.reveal_match(view, width);
+    }
+
+    /// Closes the box the search opened for the match before, as it was.
+    fn close_search_box(&self, view: &mut ScreenView) {
+        let Some((round, before)) = view.search.as_mut().and_then(|search| search.opened.take())
+        else {
+            return;
+        };
+        match before {
+            Some(before) => view.open.insert(round, before),
+            None => view.open.remove(&round),
+        };
+        if let Some(block) = self.kept.round_block(round) {
+            view.scroll.rows.forget(block);
+        }
+    }
+
+    /// Brings the current match into view: its block, the row it is drawn
+    /// on, opening a closed box whose detail holds it.
+    fn reveal_match(&self, view: &mut ScreenView, width: usize) {
+        let Some(search) = view.search.as_ref() else {
+            return;
+        };
+        let (Some(found), Some(current)) = (search.found.as_ref(), search.current) else {
+            return;
+        };
+        // The block, and which of its matches.
+        let mut left = current;
+        let mut place = None;
+        for &(block, count) in found {
+            if left < count {
+                place = Some((block, left));
+                break;
+            }
+            left -= count;
+        }
+        let Some((block, nth)) = place else {
+            return;
+        };
+        let query = search.query.to_lowercase();
+        let find_row = |rows: &[Line]| {
+            let mut seen = 0;
+            for (row, line) in rows.iter().enumerate() {
+                let here = crate::app::search::count(&line.text().to_lowercase(), &query);
+                if nth < seen + here {
+                    return Some((row, nth - seen));
+                }
+                seen += here;
+            }
+            None
+        };
+        let live = self.screen_live(width);
+        let mut rows = self.with_screen(view, width, &live, |scroll, source| {
+            scroll.rows.of(block, width, source.make)
+        });
+        let mut at = find_row(&rows);
+        // Not drawn: a closed box's detail holds it. Open the box while the
+        // match is current.
+        if at.is_none()
+            && let Some(round) = self.kept.round_number(block)
+        {
+            let before = view.open.get(&round).copied();
+            view.open.insert(round, true);
+            view.scroll.rows.forget(block);
+            if let Some(search) = view.search.as_mut() {
+                search.opened = Some((round, before));
+            }
+            rows = self.with_screen(view, width, &live, |scroll, source| {
+                scroll.rows.of(block, width, source.make)
+            });
+            at = find_row(&rows);
+        }
+        // A match the markdown's marks split as drawn: its block's start.
+        let (row, in_row) = at.unwrap_or((0, usize::MAX));
+        if let Some(search) = view.search.as_mut() {
+            search.at = Some((block, row, in_row));
+        }
+        self.with_screen(view, width, &live, |scroll, source| {
+            scroll.reveal(source, block, row, row + 1);
+        });
+    }
+
+    /// The search's row: its key, what is typed, and where it is; and the
+    /// column the cursor goes to, after what is typed.
+    fn search_row(&self, search: &Searching, width: usize) -> (Line, usize) {
+        let key = self
+            .input
+            .keymap()
+            .keys_of(Action::ScreenSearch)
+            .first()
+            .map_or_else(|| "search".to_owned(), |key| crate::keys::name(*key));
+        let query = cortex_term::sanitize(&search.query).into_owned();
+        let indent = 2;
+        let col = indent
+            + crate::editor::cluster::width(&key)
+            + 1
+            + crate::editor::cluster::width(&query);
+        let total: usize = search
+            .found
+            .as_ref()
+            .map_or(0, |found| found.iter().map(|(_, count)| count).sum());
+        let place = match (&search.found, search.current) {
+            _ if search.query.is_empty() => String::new(),
+            (None, _) => "searching…".to_owned(),
+            (Some(_), None) => "no match".to_owned(),
+            (Some(_), Some(current)) => format!("{} of {total}", current + 1),
+        };
+        let separator = self.look.glyphs.separator;
+        let hint = self.look.theme.style(Token::Hint);
+        let line = Line::from(Span::plain(" ".repeat(indent)))
+            .with(Span::new(key, self.look.theme.style(Token::Key)))
+            .with(Span::plain(" "))
+            .with(Span::plain(query))
+            .with(Span::plain("   "))
+            .with(Span::new(
+                format!(
+                    "{place}{}up older {separator} down newer {separator} esc ends",
+                    if place.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {separator} ")
+                    }
+                ),
+                hint,
+            ));
+        (
+            crate::layout::cut(&line, width, self.look.glyphs.ellipsis),
+            col.min(width),
+        )
+    }
+
+    /// Draws every match on the window's rows reversed, and the current
+    /// one bold as well.
+    fn mark_matches(&self, search: &Searching, window: &mut Window) {
+        if search.query.is_empty() {
+            return;
+        }
+        for (line, place) in window.rows.iter_mut().zip(&window.places) {
+            let current = match (place, search.at) {
+                (Place::Kept { block, row }, Some((at_block, at_row, nth)))
+                    if *block == at_block && *row == at_row =>
+                {
+                    Some(nth)
+                }
+                _ => None,
+            };
+            *line = marked(line, &search.query, current);
+        }
+    }
+
     /// Follows the end again: a prompt was sent, or a dialog opened.
     pub(super) fn screen_follow(&mut self) {
         if let Some(view) = self.screen.as_mut() {
             view.scroll.follow();
         }
     }
+}
+
+/// `line` with every match of `query` (ignoring case) drawn reversed, and
+/// the `current`-th of them bold too. A character whose lower case is not
+/// one character is compared as it is.
+fn marked(line: &Line, query: &str, current: Option<usize>) -> Line {
+    let lower = |c: char| {
+        let mut chars = c.to_lowercase();
+        match (chars.next(), chars.next()) {
+            (Some(one), None) => one,
+            _ => c,
+        }
+    };
+    let text: Vec<char> = line.text().chars().map(lower).collect();
+    let wanted: Vec<char> = query.chars().map(lower).collect();
+    if wanted.is_empty() || text.len() < wanted.len() {
+        return line.clone();
+    }
+    // The matches, by characters, not overlapping.
+    let mut ranges = Vec::new();
+    let mut at = 0;
+    while at + wanted.len() <= text.len() {
+        if text[at..at + wanted.len()] == wanted[..] {
+            ranges.push(at..at + wanted.len());
+            at += wanted.len();
+        } else {
+            at += 1;
+        }
+    }
+    if ranges.is_empty() {
+        return line.clone();
+    }
+    let style_at = |index: usize, style: Style| -> Style {
+        match ranges.iter().position(|range| range.contains(&index)) {
+            Some(nth) if Some(nth) == current => style.reverse().bold(),
+            Some(_) => style.reverse(),
+            None => style,
+        }
+    };
+    let mut out = Line::new();
+    let mut index = 0;
+    for span in line.spans() {
+        let mut piece = String::new();
+        let mut piece_style = None;
+        for c in span.text().chars() {
+            let style = style_at(index, span.style());
+            if piece_style.is_some_and(|before| before != style) {
+                let mut part = Span::new(std::mem::take(&mut piece), piece_style.unwrap_or(style));
+                if let Some(url) = span.url() {
+                    part = part.link(url);
+                }
+                out.push(part);
+            }
+            piece_style = Some(style);
+            piece.push(c);
+            index += 1;
+        }
+        if let Some(style) = piece_style {
+            let mut part = Span::new(piece, style);
+            if let Some(url) = span.url() {
+                part = part.link(url);
+            }
+            out.push(part);
+        }
+    }
+    out
 }
