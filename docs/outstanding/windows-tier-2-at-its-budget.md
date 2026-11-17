@@ -1,0 +1,8 @@
+Windows' tier 2 is at its 40 s budget on the slower hosted runners: `main` alone reads 97% of it, and step 27's second pull request takes it past.
+
+- Area: tooling
+- Owner: the owner (the budget), then a tooling step
+
+| Item | Who | When |
+|---|---|---|
+| **Windows' tier 2 at its budget.** On a runner that starts a process in 8 ms, the one-runner A/B of step 27's second pull request against `main` (`try` run 43985112180, the median of 5 rounds each) read tier 2 at **40.9 s with the pull request and 38.8 s on `main`**, against a budget of 40 s (a warning past it, a failure at 60 s); Linux's tier 2 read 30.0 s and 29.1 s. The 2.2 s the pull request adds are its security and protocol tests, none over 0.17 s (`cortex-core` +1.58 s, `cortex-rpc` +0.46 s), which the coordinator chose to keep: the warning was accepted for that pull request ([steps/27/parts/pr2-socket.md](../steps/27/parts/pr2-socket.md)). On the faster runners (7 ms) the same tier reads 36 to 38 s. So every pull request that adds integration tests now meets the warning on Windows, and the room left is gone for the steps to come. **To choose:** raise the Windows budget for tier 2 (as tier 3's is already 90 s there against Linux's 60 s), run more of tier 2 at once on Windows (tooling 10 made tiers 1 and 2 run two at a time), or find what makes `cortex-core`'s integration tests slow on Windows (a core started per test, `World`'s set-up) and make it cheaper. | The owner (the budget), then a tooling step | Before the next step that adds integration tests |
