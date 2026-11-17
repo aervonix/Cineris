@@ -181,27 +181,27 @@ caught-by:
 [break] the-grant-takes-the-sessions-level
 rule: Who decides is the grant's: its level, not the session's under which the call was asked.
 file: crates/cortex-core/src/policy.rs
-in: within_grant
-find: let mut level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
-replace: let mut level = lease.grant.level.clone();
+in: grant_engine
+find: lease.grant.level = grant_level(grant, confined_here);
+replace: let _ = grant_level(grant, confined_here);
 caught-by:
     cortex-core policy::tests::a_grant_covers_what_its_rules_and_level_allow
 
 [break] unrestricted-is-handed-on
 rule: A grant's level is at most `autonomous`: `unrestricted` is never handed on.
 file: crates/cortex-core/src/policy.rs
-in: within_grant
-find: let mut level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
-replace: let mut level = grant.grant.level.clone();
+in: grant_level
+find: let level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
+replace: let level = grant.grant.level.clone();
 caught-by:
     cortex-core policy::tests::a_grant_never_widens_what_the_session_holds
 
 [break] the-grants-allow-rules-are-left-out
 rule: The grant's allow rules decide what it covers.
 file: crates/cortex-core/src/policy.rs
-in: within_grant
-find: if rule.action == RuleAction::Allow && !unused(rule) && !lease.grant.rules.contains(rule) {
-replace: if rule.action == RuleAction::Allow && !unused(rule) && lease.grant.rules.contains(rule) {
+in: grant_engine
+find: && !lease.grant.rules.contains(rule)
+replace: && lease.grant.rules.contains(rule)
 caught-by:
     cortex-core policy::tests::a_grant_covers_what_its_rules_and_level_allow
     cortex-core::it supervising::sys_a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
@@ -209,9 +209,9 @@ caught-by:
 [break] the-grant-is-not-narrowed-by-the-session
 rule: A grant never widens what the session holds: its scope is `standing.narrow(grant)`, with the session's `ask` and `deny` rules.
 file: crates/cortex-core/src/policy.rs
-in: within_grant
-find: let Ok(mut lease) = standing.narrow(grant, template.sandbox) else {
-replace: let Ok(mut lease) = Ok::<Lease, cortex_policy::NarrowError>(grant.clone()) else {
+in: grant_engine
+find: let mut lease = standing.narrow(grant, template.sandbox)
+replace: let mut lease = Ok::<Lease, cortex_policy::NarrowError>(grant.clone())
 caught-by:
     cortex-core policy::tests::a_grant_never_widens_what_the_session_holds
 
@@ -339,7 +339,7 @@ caught-by:
 [break] a-grants-path-allow-lifts-a-path-question
 rule: A grant never lifts a question about a path: its `read` and `write` allow rules are not used.
 file: crates/cortex-core/src/policy.rs
-in: within_grant
+in: left_out
 find: && (matches!(rule.effect, EffectKind::Read | EffectKind::Write)
 replace: && (false
 caught-by:
@@ -348,7 +348,7 @@ caught-by:
 [break] a-command-rests-on-a-sandbox-it-does-not-run-in
 rule: A command's leave to run rests on the sandbox only where the narrowed scope is the session's own and its commands are confined.
 file: crates/cortex-core/src/policy.rs
-in: within_grant
+in: grant_engine
 find: let confined_here = confined && same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
 replace: let confined_here = confined || same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
 caught-by:
@@ -392,7 +392,7 @@ caught-by:
 [break] an-expired-grant-covers-what-it-allows
 rule: A grant whose expiry has passed by the core's clock covers nothing, and says so.
 file: crates/cortex-core/src/policy.rs
-in: within_grant
+in: grant_engine
 find: if expired(grant, template.clock.now()) {
 replace: if expired(grant, template.clock.now()) && grant.id.as_str().is_empty() {
 caught-by:
@@ -449,9 +449,9 @@ caught-by:
 [break] a-grants-command-rule-applies-unconfined
 rule: A grant's `exec` allow rules apply only where the session's own scope confines the command.
 file: crates/cortex-core/src/policy.rs
-in: within_grant
+in: left_out
 find: || (rule.effect == EffectKind::Exec && !confined_here))
-replace: || (rule.effect == EffectKind::Exec && !confined))
+replace: || (rule.effect == EffectKind::Exec && false))
 caught-by:
     cortex-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
 
@@ -468,7 +468,46 @@ caught-by:
 rule: The notice of a grant's limits names its allow rules of commands where a command would not run confined in the session's own scope, and why.
 file: crates/cortex-core/src/policy.rs
 in: limits_in
-find: let confined_here = confined && same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
-replace: let confined_here = true || same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
+find: if !made.confined_here {
+replace: if made.confined_here && false {
 caught-by:
     cortex-core::it supervising::a_supervisor_is_told_what_of_its_grant_does_not_apply_in_the_session
+    cortex-core policy::tests::the_supervisor_is_told_what_of_its_grant_applies_unconfined
+
+# ------------------------------------------------- the third review of the fixes
+
+[break] a-grant-that-makes-no-engine-is-not-said
+rule: A grant whose engine cannot be made covers nothing, and the supervisor is told so, with why.
+file: crates/cortex-core/src/policy.rs
+in: grant_engine
+find: let engine = Engine::start(parts)
+replace: let engine = Engine::start(parts).or_else(|_| Engine::start(template.clone()))
+caught-by:
+    cortex-core policy::tests::a_grant_whose_engine_cannot_be_made_covers_nothing_and_says_why
+
+[break] a-guided-grant-is-taken-as-guided
+rule: A grant at `guided`, which is not there yet, is read as `supervised`.
+file: crates/cortex-core/src/policy.rs
+in: grant_level
+find: let level = if level == Level::Guided {
+replace: let level = if level == Level::Guided && false {
+caught-by:
+    cortex-core policy::tests::a_guided_grant_is_read_as_supervised
+
+[break] a-scope-is-compared-by-its-text
+rule: Two scopes are the same when each holds the other, however their roots are spelled or split.
+file: crates/cortex-core/src/policy.rs
+in: same_scope
+find: let same = |a: &PathSet, b: &PathSet| within(a, b) && within(b, a);
+replace: let same = |a: &PathSet, b: &PathSet| a.all == b.all && a.roots == b.roots;
+caught-by:
+    cortex-core policy::tests::a_scope_is_compared_by_what_it_holds
+
+[break] what-applies-unconfined-is-not-said
+rule: The notice of a grant's limits says which of its allow rules do apply where commands are not confined: those of tools and hosts.
+file: crates/cortex-core/src/policy.rs
+in: limits_in
+find: let others = allows(&[EffectKind::Ext, EffectKind::Network]);
+replace: let others: Vec<String> = Vec::new();
+caught-by:
+    cortex-core policy::tests::the_supervisor_is_told_what_of_its_grant_applies_unconfined
