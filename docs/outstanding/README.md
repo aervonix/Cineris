@@ -151,11 +151,11 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-tui
 
+- [a-kept-box-holds-only-the-end-of-its-output](a-kept-box-holds-only-the-end-of-its-output.md): The viewer and the full screen open a finished command's box on the last 64 KiB of its output, not the whole of it. Owner: step 25.
 - [a-signal-while-the-external-editor-runs](a-signal-while-the-external-editor-runs.md): A signal sent to the program alone while the external editor runs leaves the editor running, and the watchdog ends the program without its graceful end, leaving the prompt's folder. Owner: step 32.
 - [copy-where-the-clipboard-sequence-is-not-taken](copy-where-the-clipboard-sequence-is-not-taken.md): `/copy` cannot tell whether the terminal took OSC 52, and shows no text for copying by hand where it is known not to. Owner: step 25.
 - [editor-cost-on-very-large-text](editor-cost-on-very-large-text.md): The prompt editor lays out all its text on every key; a shortened `@` query refilters all paths. Owner: step 33.
 - [external-editor-test-gaps](external-editor-test-gaps.md): Parts of the external editor (umask, ConPTY modes, failed hand-over, `.cmd` editors, interrupt guard) are untested. Owner: step 32.
-- [highlighted-code-drawn-again](highlighted-code-drawn-again.md): `Markdown::render` draws code plain when a finished answer is redrawn at another width. Owner: step 25.
 - [one-character-wider-than-the-prompts-row](one-character-wider-than-the-prompts-row.md): A letter with a long run of tag characters is one cluster whose escape is wider than the prompt's row, cut with `…`. Owner: step 25.
 - [the-bincode-advisory-ignored-for-syntect](the-bincode-advisory-ignored-for-syntect.md): `deny.toml` ignores RUSTSEC-2025-0141, `bincode` unmaintained, reached only through `syntect`'s loading of its packed grammars; drop it when `syntect` moves off `bincode` or a flaw is named. Owner: the next step that touches highlighting, otherwise step 25.
 - [the-default-editor-on-windows-11](the-default-editor-on-windows-11.md): Windows 11's tabbed Notepad may exit at once, so `Ctrl+G` removes the prompt's folder while it is open; a folder left behind is not tried again. Owner: the owner, by hand; the folder half, step 32.
