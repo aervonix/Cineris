@@ -35,6 +35,12 @@ pub enum ViewerKeys {
         /// Whether the selected box is open.
         open: bool,
     },
+    /// A reasoning or a compaction is selected (since step 25): `Enter`
+    /// shows it whole; `label` says which.
+    Summary {
+        /// `reasoning` or `summary`.
+        label: &'static str,
+    },
     /// No tool box: the view only scrolls.
     Lines,
     /// A search being typed after `/`.
@@ -99,6 +105,15 @@ pub fn keys(keys: &ViewerKeys, width: usize, look: &Look) -> Vec<Line> {
                 "esc returns",
             ]),
             format!("box {selected} of {count} "),
+        ),
+        ViewerKeys::Summary { label } => (
+            join(&[
+                "up/down moves between boxes",
+                "enter shows it whole",
+                "/ searches",
+                "esc returns",
+            ]),
+            format!("{label} "),
         ),
         ViewerKeys::Lines => (
             join(&["up/down scrolls", "/ searches", "esc returns"]),

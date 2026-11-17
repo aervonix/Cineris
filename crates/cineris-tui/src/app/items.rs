@@ -555,11 +555,12 @@ impl Mapper {
                     "The repository map was given to the model ({lines} lines)."
                 )));
             }
-            Item::Summary(_) => {
-                transcript.push(Block::Notice(
-                    "The conversation was summarised, and a new context begins with the summary."
-                        .to_owned(),
-                ));
+            // The viewer reads the summary itself when it is asked to
+            // show it (since step 25).
+            Item::Summary(summary) => {
+                transcript.push(Block::Compaction {
+                    item: summary.id.as_str().to_owned(),
+                });
             }
             // The other notices are the model's; the events tell the person.
             _ => {}

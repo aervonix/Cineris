@@ -48,6 +48,13 @@ pub enum Block {
     Round(Round),
     /// A notice.
     Notice(String),
+    /// The conversation was compacted (since step 25): drawn as the notice
+    /// that says so, and the summary item `item`, which the viewer reads
+    /// and shows.
+    Compaction {
+        /// The summary item's id.
+        item: String,
+    },
     /// What a command shows (`/status`, `/config`, `/help`): a title, then
     /// its lines as they are, each cut to the width (since step 23).
     Listing {
@@ -128,6 +135,10 @@ pub struct Reasoning {
     /// without one.
     pub finished: bool,
 }
+
+/// What a compaction's notice says.
+pub const COMPACTED: &str =
+    "The conversation was summarised, and a new context begins with the summary.";
 
 /// A block's place in the transcript, for updating it while it is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -444,6 +455,7 @@ fn draw(block: &Block, placement: Placement, tick: usize, width: usize, look: &L
         Block::Answer(_) => Vec::new(),
         Block::Round(round) => view::round(round, placement, tick, width, look),
         Block::Notice(text) => view::notice(text, width, look),
+        Block::Compaction { .. } => view::notice(COMPACTED, width, look),
         Block::Listing { title, lines } => view::listing(title, lines, width, look),
         Block::Error { message, hint } => view::error(message, hint.as_deref(), width, look),
         Block::Summary { took, tokens, cost } => {
