@@ -351,6 +351,9 @@ The server's first part: `cortex serve --stdio` (`cortex-rpc`; `docs/steps/27/an
   - Leaving is a disconnect: the server keeps the session, for `attach --continue` or another client.
 - **Prompts at a turn's edges** are the application's, so both front ends have them: the prompts held while a session opens go one at a time, the first with `steer` when the open says a turn is running, and a prompt refused `turn_running` is sent again once with `queue` ([09-tui.md](09-tui.md)).
 - **A request's round trip through the server** (`models/list`, a release build on the desktop, 2,000 each): 177 µs at the median and 283 µs at the 99th percentile over the transport's in-memory ends, 186 µs and 310 µs over the local socket; nearly all of it is the core's own work (`cortex-rpc`'s `perf_a_requests_round_trip_through_the_server`).
+- **The server's decoder is fuzzed in the nightly workflow for 120 seconds a night** (the `rpc_decoder` target of `cargo xtask fuzz`; [testing-and-ci.md](../testing-and-ci.md), "Not blocking").
+  - Any bytes, as a client's stream, are read as the server reads them: into lines, each line's kind, a request's operation, and an answer to each kind of request the server puts.
+  - Nothing may panic, what cannot be read gets an error the server can write and a client can read, and an operation or an answer read is the same once written again and read.
 
 ## Network listening
 
