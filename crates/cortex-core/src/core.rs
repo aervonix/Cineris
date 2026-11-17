@@ -460,6 +460,9 @@ pub(crate) struct Inner {
     /// reports and the statistics read. A reload changes its `Now` keys
     /// (step 24).
     pub(crate) user_config: Mutex<crate::reload::CoreConfig>,
+    /// The aggregates the last usage report read, with the file they are
+    /// of (step 24).
+    pub(crate) aggregates_cache: Mutex<Option<crate::usage::AggregatesCache>>,
     /// The files that configuration was read from: locked only by its
     /// reload, across the reads it makes.
     pub(crate) user_watched: Mutex<crate::reload::CoreWatched>,
@@ -596,6 +599,7 @@ impl Core {
                 clients: Arc::new(Clients::default()),
                 providers,
                 user_config: Mutex::new(crate::reload::CoreConfig::new(user)),
+                aggregates_cache: Mutex::new(None),
                 user_watched: Mutex::new(crate::reload::CoreWatched::new(load, clock)),
                 core_reloading: tokio::sync::Mutex::new(()),
                 ids,

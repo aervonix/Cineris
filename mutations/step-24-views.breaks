@@ -198,3 +198,20 @@ find: cortex_term::sanitize(line).into_owned()
 replace: line.clone()
 caught-by:
     cortex-tui app::tests::panels::enter_on_a_check_opens_its_whole_output_in_the_viewer
+
+[break] the-kept-aggregates-are-used-whatever-the-file
+rule: The aggregates a usage report keeps are used only while the file is the same: its path, length, time and identity.
+file: crates/cortex-core/src/usage.rs
+in: kept
+find: (cache.path == path && Some(cache.identity) == now).then_some(cache.aggregates)
+replace: (cache.path == path).then_some(cache.aggregates)
+caught-by:
+    cortex-core usage::tests::the_aggregates_kept_are_used_only_for_the_same_file_unchanged
+
+[break] the-aggregates-are-never-kept
+rule: A usage report keeps the aggregates it read for the next. Only the time shows it (`cortex-stats`' `perf_a_years_report_for_the_usage_panel`, the kept reports' measurement): every report is as correct without it.
+file: crates/cortex-core/src/usage.rs
+in: report
+find: *cache = FileIdentity::of(&path).map(|identity| AggregatesCache {
+replace: *cache = None.map(|identity| AggregatesCache {
+expect: survives
