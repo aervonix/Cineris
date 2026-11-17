@@ -208,3 +208,13 @@ replace: .unwrap_or(0)
 os: windows
 caught-by:
     cortex-rpc::it pipe::a_pipe_is_reached_only_when_the_user_owns_it
+
+[break] pipe-identifier-read-past-its-bytes
+rule: An identifier from a token or a pipe's label is read only as far as it is shown to lie in the bytes it is in: its count of parts may not run past them.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: identifier_within
+find: at.checked_add(length).is_some_and(|after| after <= end)
+replace: at.checked_add(length).is_some()
+os: windows
+caught-by:
+    cortex-rpc socket::sys::tests::an_identifier_is_read_only_within_its_bytes

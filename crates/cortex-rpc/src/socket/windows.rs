@@ -121,11 +121,11 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, GetAce, GetAclInformation,
-    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, IsTokenRestricted,
-    IsValidSid, LABEL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
-    RevertToSelf, SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES,
-    SYSTEM_MANDATORY_LABEL_ACE, TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
-    TOKEN_USER, TokenIntegrityLevel, TokenIsAppContainer, TokenUser,
+    GetLengthSid, GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation,
+    IsTokenRestricted, IsValidSid, LABEL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR, PSID, RevertToSelf, SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE,
+    SID_AND_ATTRIBUTES, SYSTEM_MANDATORY_LABEL_ACE, TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL,
+    TOKEN_QUERY, TOKEN_USER, TokenIntegrityLevel, TokenIsAppContainer, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
@@ -389,12 +389,14 @@ fn token_user(token: BorrowedHandle<'_>) -> io::Result<String> {
     // after it for its identifier; any bytes are valid for it.
     unsafe { token_information(token, TokenUser, &mut buffer) }?;
     let identifier = buffer.user.User.Sid;
-    // SAFETY: a non-null identifier is checked to be valid before it is
-    // read; Windows wrote it inside `buffer`, which is alive and unmoved.
-    if identifier.is_null() || unsafe { IsValidSid(identifier) } == 0 {
+    let (start, end) = bytes_of(&buffer);
+    // SAFETY: the bytes from `start` to `end` are `buffer`'s, which is alive
+    // and unchanged until this function returns.
+    if !unsafe { identifier_within(identifier, start, end) } {
         return Err(io::Error::other("the token's user is not an identifier"));
     }
-    // SAFETY: just checked valid; it lies inside `buffer`, which is alive.
+    // SAFETY: just shown to be a valid identifier lying wholly inside
+    // `buffer`, which is alive and unchanged.
     unsafe { identifier_text(identifier) }
 }
 
@@ -422,31 +424,70 @@ fn integrity_level(token: BorrowedHandle<'_>) -> io::Result<u32> {
     // after it for its identifier; any bytes are valid for it.
     unsafe { token_information(token, TokenIntegrityLevel, &mut buffer) }?;
     let identifier = buffer.label.Label.Sid;
-    // SAFETY: a non-null identifier is checked to be valid before it is
-    // read; Windows wrote it inside `buffer`, which is alive and unmoved.
-    if identifier.is_null() || unsafe { IsValidSid(identifier) } == 0 {
+    let (start, end) = bytes_of(&buffer);
+    // SAFETY: the bytes from `start` to `end` are `buffer`'s, which is alive
+    // and unchanged until this function returns.
+    if !unsafe { identifier_within(identifier, start, end) } {
         return Err(io::Error::other("the token's label is not an identifier"));
     }
-    // SAFETY: just checked valid; it lies inside `buffer`, which is alive.
+    // SAFETY: just shown to be a valid identifier lying wholly inside
+    // `buffer`, which is alive and unchanged.
     unsafe { last_part(identifier) }
+}
+
+/// The addresses of the first byte of `value` and of the byte after it.
+fn bytes_of<T>(value: &T) -> (usize, usize) {
+    let start = ptr::from_ref(value).addr();
+    (start, start + size_of::<T>())
+}
+
+/// Whether `identifier` is a valid security identifier lying wholly
+/// between the addresses `start` and `end`: its first eight bytes, which
+/// hold its count of parts, and then the whole length that count gives.
+/// A pointer Windows wrote, or an identifier inside an access list, is
+/// read no further than shown.
+///
+/// # Safety
+///
+/// The bytes from `start` to `end` must be readable, and stay alive and
+/// unchanged for the duration of the call.
+unsafe fn identifier_within(identifier: PSID, start: usize, end: usize) -> bool {
+    /// An identifier's fixed part: revision, count of parts, authority.
+    const FIXED: usize = 8;
+    let at = identifier.addr();
+    if identifier.is_null() || at < start || at.checked_add(FIXED).is_none_or(|fixed| fixed > end) {
+        return false;
+    }
+    // SAFETY: the eight bytes at `identifier` are between `start` and `end`,
+    // which the caller holds readable; `IsValidSid` reads no more of them
+    // than its revision and its count of parts.
+    if unsafe { IsValidSid(identifier) } == 0 {
+        return false;
+    }
+    // SAFETY: just checked valid; `GetLengthSid` reads its count of parts,
+    // among the same eight bytes.
+    let length = usize::try_from(unsafe { GetLengthSid(identifier) }).unwrap_or(usize::MAX);
+    at.checked_add(length).is_some_and(|after| after <= end)
 }
 
 /// The last part of a label's identifier (`S-1-16-<level>`): its level.
 ///
 /// # Safety
 ///
-/// `identifier` must point to a valid security identifier that stays alive
-/// and unchanged for the duration of the call.
+/// `identifier` must be a valid security identifier whose whole length is
+/// readable, and stays alive and unchanged for the duration of the call:
+/// what [`identifier_within`] shows.
 unsafe fn last_part(identifier: PSID) -> io::Result<u32> {
-    // SAFETY: the caller guarantees the identifier is valid, so its count of
-    // parts is inside it.
+    // SAFETY: the caller guarantees the identifier is valid and wholly
+    // readable, so its count of parts is inside it.
     let parts = unsafe { GetSidSubAuthorityCount(identifier).read() };
     let Some(last) = u32::from(parts).checked_sub(1) else {
         return Err(io::Error::other("a label has no level"));
     };
-    // SAFETY: `last` is below the identifier's count of parts, so the part
-    // is inside it. Windows places an identifier where it likes, so the read
-    // makes no assumption of alignment.
+    // SAFETY: `last` is below the identifier's count of parts, and the
+    // caller guarantees the whole identifier, every part of it, readable.
+    // Windows places an identifier where it likes, so the read makes no
+    // assumption of alignment.
     Ok(unsafe { GetSidSubAuthority(identifier, last).read_unaligned() })
 }
 
@@ -922,6 +963,12 @@ unsafe fn label_level(list: *const ACL) -> io::Result<Option<u32>> {
     if list.is_null() {
         return Ok(None);
     }
+    let unreadable = || io::Error::other("the pipe's label cannot be read");
+    // SAFETY: the caller guarantees `list` is a valid access list, so its
+    // header is readable. The read is unaligned because a list is a byte
+    // layout, not a Rust value.
+    let whole = unsafe { list.read_unaligned() };
+    let list_end = list.addr() + usize::from(whole.AclSize);
     let mut size = ACL_SIZE_INFORMATION {
         AceCount: 0,
         AclBytesInUse: 0,
@@ -942,29 +989,35 @@ unsafe fn label_level(list: *const ACL) -> io::Result<Option<u32>> {
         if unsafe { GetAce(list, index, &raw mut entry) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: every entry begins with this header, and the entry is
-        // inside the list. The read is unaligned because a list is a byte
-        // layout, not a Rust value.
+        // Every entry is read no further than the list's own size says.
+        let at = entry.addr();
+        if at < list.addr()
+            || at
+                .checked_add(size_of::<ACE_HEADER>())
+                .is_none_or(|after| after > list_end)
+        {
+            return Err(unreadable());
+        }
+        // SAFETY: the entry's header was just shown to be inside the list,
+        // which the caller keeps alive. The read is unaligned because a list
+        // is a byte layout, not a Rust value.
         let header = unsafe { entry.cast::<ACE_HEADER>().read_unaligned() };
         if header.AceType != LABEL_ENTRY {
             continue;
         }
-        // An identifier is at least eight bytes: an entry too short to hold
-        // one is not a label that can be read.
-        let length = usize::from(header.AceSize);
-        if length < IDENTIFIER_AT + 8 {
-            return Err(io::Error::other("the pipe's label cannot be read"));
+        let entry_end = at + usize::from(header.AceSize);
+        if entry_end > list_end || at + IDENTIFIER_AT >= entry_end {
+            return Err(unreadable());
         }
-        // SAFETY: `IDENTIFIER_AT` is inside the entry's `length` bytes.
+        // SAFETY: `IDENTIFIER_AT` is inside the entry, just shown.
         let identifier: PSID = unsafe { entry.cast::<u8>().add(IDENTIFIER_AT) }.cast();
-        // SAFETY: `identifier` points to at least eight readable bytes inside
-        // the entry, all that `IsValidSid` reads before it has checked the
-        // identifier's own length.
-        if unsafe { IsValidSid(identifier) } == 0 {
-            return Err(io::Error::other("the pipe's label cannot be read"));
+        // SAFETY: the bytes from the entry to its end are inside the list,
+        // just shown, which the caller keeps alive and unchanged.
+        if !unsafe { identifier_within(identifier, at, entry_end) } {
+            return Err(unreadable());
         }
-        // SAFETY: just checked valid; it lies inside the list, which the
-        // caller keeps alive.
+        // SAFETY: just shown to be a valid identifier lying wholly inside the
+        // entry, which is inside the list.
         return unsafe { last_part(identifier) }.map(Some);
     }
     Ok(None)
@@ -1074,6 +1127,43 @@ mod tests {
             description(server, true),
             format!("O:{USER}D:P(A;;GA;;;{USER})(A;;GRGW;;;WD)S:(ML;;NWNR;;;LW)")
         );
+    }
+
+    /// An identifier is read only as far as it is shown to lie in the bytes
+    /// it is in: its fixed part, then the length its count of parts gives.
+    #[test]
+    fn an_identifier_is_read_only_within_its_bytes() {
+        // `S-1-16-8192`: revision 1, one part, authority 16, the part 8192.
+        let mut label = [1_u8, 1, 0, 0, 0, 0, 0, 16, 0, 0x20, 0, 0];
+        let identifier: PSID = label.as_mut_ptr().cast();
+        let start = identifier.addr();
+        // SAFETY: the twelve bytes of `label` are readable, and alive and
+        // unchanged for each call.
+        unsafe {
+            assert!(identifier_within(identifier, start, start + 12));
+            assert_eq!(last_part(identifier).unwrap(), 8192);
+            // Its part past the end.
+            assert!(!identifier_within(identifier, start, start + 11));
+            // Its fixed part past the end.
+            assert!(!identifier_within(identifier, start, start + 7));
+            // Before the bytes it is said to be in.
+            assert!(!identifier_within(identifier, start + 1, start + 12));
+            assert!(!identifier_within(ptr::null_mut(), start, start + 12));
+        }
+
+        // A count of parts that runs past the bytes.
+        let mut two_parts = [1_u8, 2, 0, 0, 0, 0, 0, 16, 0, 0x20, 0, 0];
+        let identifier: PSID = two_parts.as_mut_ptr().cast();
+        let start = identifier.addr();
+        // SAFETY: as above, for `two_parts`.
+        assert!(!unsafe { identifier_within(identifier, start, start + 12) });
+
+        // Not an identifier: a revision that is not one.
+        let mut not_one = [2_u8, 1, 0, 0, 0, 0, 0, 16, 0, 0x20, 0, 0];
+        let identifier: PSID = not_one.as_mut_ptr().cast();
+        let start = identifier.addr();
+        // SAFETY: as above, for `not_one`.
+        assert!(!unsafe { identifier_within(identifier, start, start + 12) });
     }
 
     #[test]
