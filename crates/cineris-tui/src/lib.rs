@@ -63,6 +63,9 @@ pub mod paste;
 // Step 23: the application.
 pub mod app;
 
+// Step 25: `/export`.
+pub mod export;
+
 // The ninth tooling step: the application's test kit, for tests only. The
 // crate's own unit tests have it with no feature.
 #[cfg(any(test, feature = "test-kit"))]
