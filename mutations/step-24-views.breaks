@@ -200,18 +200,53 @@ caught-by:
     cortex-tui app::tests::panels::enter_on_a_check_opens_its_whole_output_in_the_viewer
 
 [break] the-kept-aggregates-are-used-whatever-the-file
-rule: The aggregates a usage report keeps are used only while the file is the same: its path, length, time and identity.
+rule: The aggregates a usage report keeps are used only while the file is the one they were read from: its path, identity, length and time.
 file: crates/cortex-core/src/usage.rs
 in: kept
-find: (cache.path == path && Some(cache.identity) == now).then_some(cache.aggregates)
+find: (cache.path == path && Some(cache.state) == now).then_some(cache.aggregates)
 replace: (cache.path == path).then_some(cache.aggregates)
 caught-by:
     cortex-core usage::tests::the_aggregates_kept_are_used_only_for_the_same_file_unchanged
+
+[break] a-report-that-saved-keeps-its-aggregates
+rule: A report that saved the aggregates keeps nothing: the state of the file it wrote is not known for certain, and a file another process saved after it would be taken for it.
+file: crates/cortex-core/src/usage.rs
+in: to_keep
+find: !saved && matches!(found, Found::Read)
+replace: matches!(found, Found::Read)
+caught-by:
+    cortex-core usage::tests::the_aggregates_kept_are_used_only_for_the_same_file_unchanged
+
+[break] aggregates-not-read-whole-are-kept
+rule: Only aggregates read whole from the file are kept: a load that found none, or moved one aside, would stop the pruning until the file is read again.
+file: crates/cortex-core/src/usage.rs
+in: to_keep
+find: !saved && matches!(found, Found::Read)
+replace: !saved
+caught-by:
+    cortex-core usage::tests::the_aggregates_kept_are_used_only_for_the_same_file_unchanged
+
+[break] a-file-is-told-by-its-time-alone
+rule: A file's state holds the file itself, so that a save of the same length within the clock's granularity is another state.
+file: crates/cortex-core/src/usage.rs
+in: FileState::of
+find: let file = cortex_base::FileIdentity::at(path).ok()?;
+replace: let file = cortex_base::FileIdentity::at(Path::new(".")).ok()?;
+caught-by:
+    cortex-core usage::tests::a_file_saved_again_at_the_same_length_is_another
 
 [break] the-aggregates-are-never-kept
 rule: A usage report keeps the aggregates it read for the next. Only the time shows it (`cortex-stats`' `perf_a_years_report_for_the_usage_panel`, the kept reports' measurement): every report is as correct without it.
 file: crates/cortex-core/src/usage.rs
 in: report
-find: *cache = FileIdentity::of(&path).map(|identity| AggregatesCache {
-replace: *cache = None.map(|identity| AggregatesCache {
+find: Some(state) if to_keep(aggregates.found(), saved) => Some(AggregatesCache {
+replace: Some(state) if false && to_keep(aggregates.found(), saved) => Some(AggregatesCache {
+expect: survives
+
+[break] the-kept-aggregates-are-never-dropped
+rule: The aggregates kept are dropped after a quiet minute, so that an application left alone holds no year of statistics. Only the memory shows it: every report is as correct either way.
+file: crates/cortex-core/src/usage.rs
+in: report
+find: if cache.as_ref().is_some_and(|cache| cache.used == used) {
+replace: if false && cache.as_ref().is_some_and(|cache| cache.used == used) {
 expect: survives
