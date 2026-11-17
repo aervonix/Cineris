@@ -75,10 +75,12 @@ dependencies = [
 name = "cortex-fuzz"
 version = "0.0.0"
 dependencies = [
+ "cortex-base",
  "cortex-index",
  "cortex-llm",
  "cortex-protocol",
  "libfuzzer-sys",
+ "serde",
  "serde_json",
 ]
 

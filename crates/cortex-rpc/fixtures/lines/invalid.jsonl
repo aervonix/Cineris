@@ -1,0 +1,7 @@
+{not json
+{"jsonrpc":"1.0","id":7,"method":"shutdown"}
+{"jsonrpc":"2.0","id":null,"method":"models/list"}
+{"jsonrpc":"2.0","id":8,"method":"no/such/method","params":{}}
+{"jsonrpc":"2.0","id":9,"method":"session/open","params":{"session_id":42}}
+{"jsonrpc":"2.0","id":"srv-6","result":{},"error":{"code":1,"message":"both"}}
+{"jsonrpc":"2.0","id":10,"method":"turn/start","params":{"session_id":"s_1","input":[{"kind":"te

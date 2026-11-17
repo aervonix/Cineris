@@ -8,6 +8,9 @@
 //! two bytes decide where the rest is cut into the pieces a network would
 //! deliver, and the rest is the stream. So the fuzzer explores the cuts as
 //! well as the content. The extractors' target reads its input as a file.
+//! The RPC server's target reads its input as what a client sends, whole,
+//! so that a recorded line is an input as it is; where it is cut comes from
+//! a hash of it.
 //!
 //! | Target | The properties |
 //! |---|---|
@@ -15,9 +18,11 @@
 //! | [`anthropic_decoder`] | No input makes the decoder panic. The same bytes give the same events however they are cut. A response ends at most once, and nothing follows its end. A block ends only after it started. Every block the decoder stores is one JSON object, so it can be sent back. |
 //! | [`openai_chat_decoder`] | The same properties as the other decoder, for servers with each kind of flag: reasoning under a named member, reasoning in tags inside the text, a model that is asked for a speed tier and one that is not. |
 //! | [`extractors`] | No file makes an outline extractor panic, in any language, by the fallback, or as a C or C++ header or source file. Every outline keeps its caps: its entries, and each entry's name, head and doc. |
+//! | [`rpc_decoder`] | No bytes from a client make the RPC server's reading of them panic: the lines, each line's kind, an operation's parameters, an answer to each kind of request the server puts. The same bytes are read the same however they are cut. A line that is not a message, or is too long, gets an error the server can write, under the line's id when it has one, and a client reads that error back. An operation read is the same operation once a client writes it again and the server reads it, and so is an answer; a message read is the same message once written again. |
 
 use std::sync::Arc;
 
+use cortex_base::framing::{self, FrameDecoder};
 use cortex_index::outline::{DOC_CHARS, HEAD_CHARS, MAX_ENTRIES, NAME_CHARS};
 use cortex_index::{Language, extract};
 use cortex_llm::anthropic::{self, AnthropicMessages};
@@ -26,8 +31,26 @@ use cortex_llm::{
     Catalog, EventSink, FlagValue, ModelEntry, ModelEvent, ModelRequest, Protocol, ProviderInfo,
     SseParser,
 };
+use cortex_protocol::jsonrpc::{ErrorObject, Message, Request, RequestId, Response, code};
+use cortex_protocol::methods::{Op, ServerRequest, ServerResponse};
 use cortex_protocol::model::ModelRole;
 use cortex_protocol::{ModelId, ProviderId, Speed};
+
+/// The RPC server's reading of a client's line (`cortex-rpc`'s `wire`
+/// module), compiled here from the server's own file. This package does
+/// not depend on `cortex-rpc`: that would build the whole core into the
+/// fuzzer (the HTTP and TLS stack, the tools, the sandbox), where the file
+/// itself needs only `cortex-base`, `cortex-protocol`, `serde` and
+/// `serde_json`, which this package depends on too. `cortex-rpc` keeps the
+/// file that way, and says so at its head.
+#[allow(
+    dead_code,
+    reason = "the server's writing of events, requests and results is not what is fuzzed"
+)]
+#[path = "../../crates/cortex-rpc/src/wire.rs"]
+mod wire;
+
+use wire::Incoming;
 
 /// Splits an input into the offsets at which the stream is cut, and the
 /// stream. The first two bytes seed the sizes of the pieces, from one byte
@@ -37,17 +60,33 @@ fn cuts(data: &[u8]) -> (Vec<usize>, &[u8]) {
         [first, second, rest @ ..] => (u32::from(*first) << 8 | u32::from(*second), rest),
         _ => (0, data),
     };
+    (seeded_cuts(seed, stream.len()), stream)
+}
+
+/// The offsets at which a stream of `len` bytes is cut, from a seed of
+/// sixteen bits: the pieces are from one byte to a few hundred.
+fn seeded_cuts(seed: u32, len: usize) -> Vec<usize> {
     let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
     let mut cuts = Vec::new();
     let mut at = 0;
     // The top bits of the seed choose how large pieces may be.
     let largest = [1, 2, 7, 64, 400][(seed >> 13) as usize % 5];
-    while at < stream.len() {
+    while at < len {
         state = state.wrapping_mul(1_103_515_245).wrapping_add(12_345);
         at += 1 + (state >> 16) as usize % largest;
-        cuts.push(at.min(stream.len()));
+        cuts.push(at.min(len));
     }
-    (cuts, stream)
+    cuts
+}
+
+/// A seed of sixteen bits for the cuts of an input that is a stream as it
+/// is: a hash of its bytes (FNV-1a), so the same input is always cut the
+/// same way, and a change anywhere in it cuts it anew.
+fn hashed_seed(stream: &[u8]) -> u32 {
+    let hash = stream.iter().fold(0x811c_9dc5_u32, |hash, byte| {
+        (hash ^ u32::from(*byte)).wrapping_mul(0x0100_0193)
+    });
+    (hash ^ hash >> 16) & 0xffff
 }
 
 /// The pieces of `stream` that `cuts` make.
@@ -290,6 +329,200 @@ pub fn extractors(data: &[u8]) {
     }
 }
 
+/// The longest line the RPC target's server reads. The server's own limit
+/// is 32 MiB (`ServeOptions::max_line`); this one is below the fuzzer's
+/// longest input (8 KiB), so that a line too long is reached as well.
+const RPC_LINE_LIMIT: usize = 4096;
+
+/// What the server makes of one thing in a client's stream.
+#[derive(Debug, PartialEq)]
+enum Read {
+    /// A line too long, or a stream that ended within a line: the error the
+    /// server answers it with, under no id.
+    Frame(ErrorObject),
+    /// A whole line, as the server reads it.
+    Line(Incoming),
+}
+
+/// What the server reads from `stream` delivered in the pieces `cuts` make,
+/// as a connection reads it: every whole line taken after each piece, and
+/// the end of the stream told last.
+fn serve(stream: &[u8], cuts: &[usize]) -> Vec<Read> {
+    let mut decoder = FrameDecoder::with_max_line_len(RPC_LINE_LIMIT);
+    let mut read = Vec::new();
+    for piece in pieces(stream, cuts) {
+        decoder.push(piece);
+        while let Some(line) = decoder.next_line() {
+            read.push(match line {
+                Ok(line) => Read::Line(wire::read(line)),
+                Err(error) => Read::Frame(error.to_error_object()),
+            });
+        }
+    }
+    if let Err(error) = decoder.finish() {
+        read.push(Read::Frame(error.to_error_object()));
+    }
+    read
+}
+
+/// The RPC server's decoder: what `cortex-rpc` does with the bytes a client
+/// sends, before the core is asked anything.
+///
+/// The input is the stream as it is, read whole and read cut where a hash
+/// of it says, by the framing's decoder with a short line limit. Each line
+/// is read as the server reads it (`wire::read`). A request's operation is
+/// read from its method and parameters (`Op::from_wire`), as the server
+/// reads every request, `initialize` included. An answer's result is read
+/// as the answer to each kind of request the server puts
+/// (`ServerResponse::from_wire`), since the server reads it against the
+/// method of the request its id names.
+///
+/// # Panics
+///
+/// When a property does not hold: that is how a fuzz target reports.
+pub fn rpc_decoder(data: &[u8]) {
+    let cuts = seeded_cuts(hashed_seed(data), data.len());
+    let whole = serve(data, &[]);
+    let cut = serve(data, &cuts);
+    assert_eq!(whole, cut, "the cuts changed what the server read");
+
+    for read in whole {
+        match read {
+            Read::Frame(error) => answers_back(None, error),
+            Read::Line(Incoming::Bad { id, error }) => {
+                assert!(
+                    error.code == code::PARSE_ERROR || error.code == code::INVALID_REQUEST,
+                    "a line that is not a message is answered with the code {}",
+                    error.code
+                );
+                assert!(
+                    id.is_none() || error.code == code::INVALID_REQUEST,
+                    "an id was read from a line that is not JSON: {id:?}"
+                );
+                answers_back(id, error);
+            }
+            // None is defined from a client; the server ignores each.
+            Read::Line(Incoming::Notification) => {}
+            Read::Line(Incoming::Request(request)) => request_reads_back(request),
+            Read::Line(Incoming::Response(response)) => answer_reads_back(response),
+        }
+    }
+}
+
+/// `message` as the one line its writer makes, without the line's end.
+fn written(message: &Message) -> Vec<u8> {
+    let mut line = Vec::new();
+    framing::encode(message, &mut line).expect("a message that was read is written again");
+    assert_eq!(
+        line.pop(),
+        Some(b'\n'),
+        "a message is not written as a line"
+    );
+    line
+}
+
+/// The error the server answers what it could not read with, written as
+/// the server writes it (`wire::error`): one line, which a client reads
+/// back as a response under the same id, with the same error.
+fn answers_back(id: Option<RequestId>, error: ErrorObject) {
+    let mut line = Vec::new();
+    wire::error(id.clone(), error.clone(), &mut line).expect("the server writes its error");
+    assert_eq!(line.pop(), Some(b'\n'), "an error is not written as a line");
+    let back: Message = framing::decode(&line).expect("a client reads the server's error");
+    assert_eq!(
+        back,
+        Message::Response(Response {
+            id,
+            result: Err(error)
+        }),
+        "the server's error differs once read back"
+    );
+}
+
+/// A request: the operation the server reads from it, or the error it
+/// answers it with. An operation is the same once a client writes it again
+/// and the server reads it, and so is the request itself.
+fn request_reads_back(request: Request) {
+    let again = wire::read(&written(&Message::Request(request.clone())));
+    assert_eq!(
+        again,
+        Incoming::Request(request.clone()),
+        "a request differs once written again"
+    );
+    let Request { id, method, params } = request;
+    match Op::from_wire(&method, params) {
+        Ok(op) => {
+            assert_eq!(op.method(), method);
+            let sent = op
+                .to_request(id.clone())
+                .expect("an operation's parameters are written");
+            let Incoming::Request(read) = wire::read(&written(&Message::Request(sent))) else {
+                panic!("an operation written is not read as a request");
+            };
+            assert_eq!(read.id, id);
+            let again = Op::from_wire(&read.method, read.params)
+                .expect("an operation written is read again");
+            assert_eq!(
+                again, op,
+                "an operation differs once written and read again"
+            );
+        }
+        Err(error) => {
+            let expected = if Op::METHODS.contains(&method.as_str()) {
+                code::INVALID_PARAMS
+            } else {
+                code::METHOD_NOT_FOUND
+            };
+            let error = error.to_error_object();
+            assert_eq!(error.code, expected, "`{method}`: {}", error.message);
+            answers_back(Some(id), error);
+        }
+    }
+}
+
+/// An answer to a request the server put. The server reads it against the
+/// method of the request its id names; here it is read against each. An
+/// answer is the same once written again and read, and so is the response.
+fn answer_reads_back(response: Response) {
+    let again = wire::read(&written(&Message::Response(response.clone())));
+    assert_eq!(
+        again,
+        Incoming::Response(response.clone()),
+        "a response differs once written again"
+    );
+    // An error in its place declines the request.
+    let Response {
+        id,
+        result: Ok(value),
+    } = response
+    else {
+        return;
+    };
+    for method in ServerRequest::METHODS {
+        let Ok(answer) = ServerResponse::from_wire(method, value.clone()) else {
+            continue;
+        };
+        assert_eq!(answer.method(), *method);
+        let result = answer.result().expect("an answer is written");
+        let sent = Message::Response(Response {
+            id: id.clone(),
+            result: Ok(result),
+        });
+        let Incoming::Response(Response {
+            result: Ok(read), ..
+        }) = wire::read(&written(&sent))
+        else {
+            panic!("an answer written is not read as one");
+        };
+        let again =
+            ServerResponse::from_wire(method, read).expect("an answer written is read again");
+        assert_eq!(
+            again, answer,
+            "an answer to `{method}` differs once written and read again"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,5 +569,107 @@ mod tests {
             input.extend_from_slice(chat);
             openai_chat_decoder(&input);
         }
+    }
+
+    /// The seeds `cargo xtask fuzz` starts the RPC target from
+    /// (`crates/cortex-rpc/fixtures/lines`).
+    const RPC_SEEDS: [&[u8]; 7] = [
+        include_bytes!("../../crates/cortex-rpc/fixtures/lines/requests.jsonl"),
+        include_bytes!("../../crates/cortex-rpc/fixtures/lines/initialize.jsonl"),
+        include_bytes!("../../crates/cortex-rpc/fixtures/lines/turn-start.jsonl"),
+        include_bytes!("../../crates/cortex-rpc/fixtures/lines/answers.jsonl"),
+        include_bytes!("../../crates/cortex-rpc/fixtures/lines/notification.jsonl"),
+        include_bytes!("../../crates/cortex-rpc/fixtures/lines/batch.jsonl"),
+        include_bytes!("../../crates/cortex-rpc/fixtures/lines/invalid.jsonl"),
+    ];
+
+    #[test]
+    fn the_rpc_target_takes_its_seeds_and_nonsense() {
+        for seed in RPC_SEEDS {
+            rpc_decoder(seed);
+        }
+        let mut long = vec![b'x'; RPC_LINE_LIMIT + 2];
+        rpc_decoder(&long);
+        long.extend_from_slice(b"\r\n{\"jsonrpc\":\"2.0\",\"method\":\"x\"}\n");
+        rpc_decoder(&long);
+        let deep = format!("{}{}\n", "[".repeat(200), "]".repeat(200));
+        for nonsense in [
+            &b""[..],
+            b"\n\r\n",
+            b"\xff\xfe\n",
+            b"{\"jsonrpc\":\"2.0\",\"id\":1e999,\"method\":\"x\"}\n",
+            b"{\"jsonrpc\":\"2.0\",\"id\":18446744073709551615,\"result\":1}\n",
+            b"{\"jsonrpc\":\"2.0\",\"id\":[1],\"method\":\"shutdown\"}\n",
+            b"{\"jsonrpc\":\"2.0\",\"id\":\"a\",\"result\":{\"choice\":\"allow_once\",\"x\":2.5e-300}}\n",
+            deep.as_bytes(),
+        ] {
+            rpc_decoder(nonsense);
+        }
+    }
+
+    /// The requests seed is the golden transcript's client, so it holds
+    /// every operation of the protocol, each read as one.
+    #[test]
+    fn the_rpc_requests_seed_holds_every_operation() {
+        let mut methods = Vec::new();
+        for read in serve(RPC_SEEDS[0], &[]) {
+            let Read::Line(Incoming::Request(request)) = read else {
+                panic!("not a request: {read:?}");
+            };
+            let op = Op::from_wire(&request.method, request.params).expect("an operation");
+            methods.push(op.method());
+        }
+        methods.sort_unstable();
+        methods.dedup();
+        let mut all = Op::METHODS.to_vec();
+        all.sort_unstable();
+        assert_eq!(methods, all);
+    }
+
+    /// The invalid seed holds one line of each kind the server refuses.
+    #[test]
+    fn the_rpc_invalid_seed_is_refused_line_by_line() {
+        let read = serve(RPC_SEEDS[6], &[]);
+        let codes: Vec<(Option<RequestId>, i64)> = read
+            .into_iter()
+            .map(|read| match read {
+                Read::Frame(error) => (None, error.code),
+                Read::Line(Incoming::Bad { id, error }) => (id, error.code),
+                Read::Line(Incoming::Request(request)) => (
+                    Some(request.id),
+                    Op::from_wire(&request.method, request.params)
+                        .expect_err("an operation that is refused")
+                        .to_error_object()
+                        .code,
+                ),
+                other => panic!("not refused: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                (None, code::PARSE_ERROR),
+                (Some(RequestId::Number(7)), code::INVALID_REQUEST),
+                (None, code::INVALID_REQUEST),
+                (Some(RequestId::Number(8)), code::METHOD_NOT_FOUND),
+                (Some(RequestId::Number(9)), code::INVALID_PARAMS),
+                (Some(RequestId::from("srv-6")), code::INVALID_REQUEST),
+                // The last line, cut off by the end of the stream.
+                (None, code::PARSE_ERROR),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_rpc_input_is_cut_by_its_own_hash() {
+        let data = b"{\"jsonrpc\":\"2.0\",\"method\":\"x\"}\n";
+        let seed = hashed_seed(data);
+        assert!(seed <= 0xffff);
+        assert_eq!(hashed_seed(data), seed);
+        assert_ne!(hashed_seed(b"{}\n"), seed);
+        let cuts = seeded_cuts(seed, data.len());
+        assert_eq!(cuts.last(), Some(&data.len()));
+        let joined: Vec<u8> = pieces(data, &cuts).flatten().copied().collect();
+        assert_eq!(joined, data);
     }
 }

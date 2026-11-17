@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client":{"name":"example-editor","version":"0.3.0"},"role":"user","capabilities":{"approvals":true,"questions":true,"trust":true,"deltas":true}}}
