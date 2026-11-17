@@ -57,6 +57,17 @@ fn refused(link: &Scripted, ticket: Ticket, code: &str) {
     ));
 }
 
+fn turn_completed() -> Inbound {
+    event(Event::TurnCompleted(TurnCompleted {
+        outcome: TurnOutcome::Completed,
+        stop_reason: Some(StopReason::End),
+        error: None,
+        usage: Default::default(),
+        verification: None,
+        duration_ms: Some(1200),
+    }))
+}
+
 /// Every line committed so far and the live region now, as one text.
 fn shown(app: &mut App, now: Instant) -> String {
     let mut all = Vec::new();
@@ -195,6 +206,106 @@ fn stopping_while_held_prompts_are_on_their_way_gives_back_those_not_sent() {
     drain(&mut app, now);
     assert!(prompts(&link).is_empty(), "nothing more is sent");
     assert_eq!(app.input().editor().expanded(), "second\nthird");
+}
+
+// ---------------------------- (2) refused `turn_running`: queued, once
+
+/// `Enter` between one turn's end and the start of the next the core takes
+/// from its queue: sent with no delivery, it is refused `turn_running`, and
+/// is sent again once, queued behind the turn that took the gap, with
+/// nothing said and nothing given back.
+#[test]
+fn enter_between_two_turns_is_sent_again_once_queued() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    link.give(event(Event::TurnStarted(TurnStarted {})));
+    link.give(turn_completed());
+    drain(&mut app, now);
+    assert!(!app.running(), "the application sees no turn");
+    type_text(&mut app, "in the gap", now);
+    key(&mut app, "enter", now);
+    let (ticket, text, delivery) = one_prompt(&link);
+    assert_eq!((text.as_str(), delivery), ("in the gap", None));
+    refused(&link, ticket, code::TURN_RUNNING);
+    drain(&mut app, now);
+    let (ticket, text, delivery) = one_prompt(&link);
+    assert_eq!(
+        (text.as_str(), delivery),
+        ("in the gap", Some(ItemDelivery::Queue))
+    );
+    assert_eq!(app.input().editor().expanded(), "", "not given back");
+    accepted(&link, ticket, Disposition::Queued);
+    drain(&mut app, now);
+    assert!(prompts(&link).is_empty(), "sent again once");
+    assert_eq!(app.input().editor().expanded(), "");
+    assert!(!shown(&mut app, now).contains("Refused."), "nothing said");
+}
+
+/// Refused `turn_running` a second time: it comes back with why, as any
+/// refused prompt does, and is not sent a third time.
+#[test]
+fn a_second_turn_running_refusal_gives_the_prompt_back() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    type_text(&mut app, "keep me", now);
+    key(&mut app, "enter", now);
+    let (ticket, _, _) = one_prompt(&link);
+    refused(&link, ticket, code::TURN_RUNNING);
+    drain(&mut app, now);
+    let (ticket, _, delivery) = one_prompt(&link);
+    assert_eq!(delivery, Some(ItemDelivery::Queue));
+    refused(&link, ticket, code::TURN_RUNNING);
+    drain(&mut app, now);
+    assert!(prompts(&link).is_empty(), "sent again once only");
+    assert_eq!(app.input().editor().expanded(), "keep me");
+    let shown = shown(&mut app, now);
+    assert!(shown.contains("Refused."), "{shown}");
+    assert!(shown.contains("stop it with esc"), "{shown}");
+}
+
+/// A prompt refused `turn_running` after an interrupt was sent comes back:
+/// queued behind the turn the person stopped, it would run after the stop.
+#[test]
+fn a_prompt_refused_after_an_interrupt_comes_back_and_is_not_sent_again() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    type_text(&mut app, "keep me", now);
+    key(&mut app, "enter", now);
+    let (ticket, _, _) = one_prompt(&link);
+    key(&mut app, "esc", now);
+    refused(&link, ticket, code::TURN_RUNNING);
+    drain(&mut app, now);
+    assert!(prompts(&link).is_empty(), "not sent again after a stop");
+    assert_eq!(app.input().editor().expanded(), "keep me");
+}
+
+/// The first held prompt is refused `turn_running` (a turn began between
+/// the open and the prompt): it is sent again queued, and those behind it
+/// wait for that answer.
+#[test]
+fn a_held_prompt_refused_because_a_turn_runs_is_queued_and_those_behind_wait() {
+    let now = Instant::now();
+    let (mut app, link) = holding(now, "first", &["second"]);
+    opened(&mut app, &link, now);
+    let (ticket, _, _) = one_prompt(&link);
+    refused(&link, ticket, code::TURN_RUNNING);
+    drain(&mut app, now);
+    let (ticket, text, delivery) = one_prompt(&link);
+    assert_eq!(
+        (text.as_str(), delivery),
+        ("first", Some(ItemDelivery::Queue))
+    );
+    accepted(&link, ticket, Disposition::Queued);
+    drain(&mut app, now);
+    let (_, text, delivery) = one_prompt(&link);
+    assert_eq!(
+        (text.as_str(), delivery),
+        ("second", Some(ItemDelivery::Queue))
+    );
+    assert_eq!(app.input().editor().expanded(), "");
 }
 
 // ----------------------------------- (3) an open onto a running turn
