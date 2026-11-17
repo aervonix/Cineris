@@ -11,7 +11,7 @@
 //! what can be pressed is what was shown, and what is shown can be pressed
 //! (the owner's rule, after the review of step 23):
 //!
-//! - **The grace:** [`GRACE`] after its first frame was written.
+//! - **The grace:** [`GRACE`](super::ready::GRACE) after its first frame was written.
 //! - **The quiet:** [`QUIET`] with no input a dialog did not take: a key or
 //!   a paste that reached the editor or the viewer, while the dialog was up
 //!   or just before it came. Typing that goes on through the dialog keeps it
@@ -35,7 +35,7 @@
 //!   took, and none of them answers ([`super::App::burst`]).
 //!
 //! In the ordinary case (the dialog shows, the person reads it and presses
-//! one key) the answers come [`GRACE`] after the dialog, and one key
+//! one key) the answers come [`GRACE`](super::ready::GRACE) after the dialog, and one key
 //! answers. While it does not take keys, what types a character goes on to
 //! the editor, where it was going, and the dialog's own other keys (`Esc`)
 //! do nothing, so that a key meant to deny never interrupts the turn
@@ -78,10 +78,12 @@ use cortex_protocol::methods::{
 };
 use cortex_term::{Key, Line};
 
+#[cfg(any(test, feature = "test-kit"))]
+pub(crate) use super::ready::GRACE;
 use super::ready::Readiness;
 /// The dialog's times, which the panels share (step 24): kept here by name
 /// for what reads them as the dialog's.
-pub(crate) use super::ready::{GRACE, QUIET, REPEAT};
+pub(crate) use super::ready::{QUIET, REPEAT};
 use super::tools;
 use crate::keys::{Action, Context, KeyMap, name, typed};
 use crate::view::dialog::{self, Answer, ApprovalView, QuestionView, TrustView};
