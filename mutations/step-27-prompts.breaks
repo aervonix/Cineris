@@ -31,8 +31,8 @@ caught-by:
 rule: A refused held prompt comes back with those behind it, in order, and none of them is sent.
 file: crates/cortex-tui/src/app/state.rs
 in: App::prompt_answered
-find: if refused || sent.stopped
-replace: if sent.stopped
+find: if refused || !self.is_open(&sent.session) {
+replace: if !self.is_open(&sent.session) {
 caught-by:
     app::tests::prompts::a_refused_held_prompt_gives_back_those_behind_it_in_order
     app::tests::prompts::a_prompt_sent_while_held_ones_are_on_their_way_follows_them
@@ -41,38 +41,52 @@ caught-by:
 rule: A prompt sent once the session is open, while the held ones are still on their way, follows them.
 file: crates/cortex-tui/src/app/state.rs
 in: App::submit
-find: if self.held_going() {
+find: if self.held_sent.is_some() {
 replace: if false {
 caught-by:
     app::tests::prompts::a_prompt_sent_while_held_ones_are_on_their_way_follows_them
 
-[break] the-held-prompts-follow-an-interrupt
-rule: After an interrupt, the held prompts not sent come back once the one on its way is answered, rather than run after the stop.
+[break] an-interrupt-gives-back-the-held-prompts-not-sent
+rule: An interrupt sends the held prompts not sent yet queued behind the one on its way, so that the core holds them in order; given back, one sent again would run ahead of one the core holds.
 file: crates/cortex-tui/src/app/state.rs
-in: App::prompt_answered
-find: sent.stopped || !self.is_open(&sent.session)
-replace: !self.is_open(&sent.session)
+in: App::interrupt
+find: self.send_prompt(sent, Some(ItemDelivery::Queue));
+replace: self.give_back(&sent.text);
 caught-by:
-    app::tests::prompts::stopping_while_held_prompts_are_on_their_way_gives_back_those_not_sent
+    app::tests::prompts::stopping_while_held_prompts_are_on_their_way_queues_the_rest_ahead_of_the_interrupt
+    app::tests::prompts::stopping_while_a_queued_held_prompt_is_on_its_way_keeps_the_rest_behind_it
+    app::tests::prompts::stopping_while_a_held_steer_is_on_its_way_keeps_the_rest_behind_it
+
+[break] the-held-prompts-go-after-the-interrupt
+rule: The held prompts not sent yet go ahead of the interrupt, so that the core queues them behind the one on its way while its turn still runs.
+file: crates/cortex-tui/src/app/state.rs
+in: App::interrupt
+find: if self.held_sent.take().is_some() {
+replace:
+    let early = self.link.send(Op::TurnInterrupt(TurnInterruptParams { session_id: session.clone(), now }));
+    self.pending.insert(early, Pending::Interrupt);
+    if self.held_sent.take().is_some() {
+caught-by:
+    app::tests::prompts::stopping_while_a_queued_held_prompt_is_on_its_way_keeps_the_rest_behind_it
+    app::tests::prompts::stopping_while_a_held_steer_is_on_its_way_keeps_the_rest_behind_it
+
+[break] the-held-prompts-outlive-an-interrupt
+rule: After an interrupt no prompt is held here: one sent then goes at once, and the one on its way is answered as any prompt is.
+file: crates/cortex-tui/src/app/state.rs
+in: App::interrupt
+find: if self.held_sent.take().is_some() {
+replace: if self.held_sent.is_some() {
+caught-by:
+    app::tests::prompts::a_prompt_sent_after_stopping_the_held_ones_goes_at_once
 
 [break] an-interrupt-does-not-stop-what-is-on-its-way
-rule: An interrupt marks every prompt on its way: what was held behind one comes back, and a refusal is not sent again.
+rule: An interrupt marks every prompt on its way, so that a refusal of one is given back and not sent again.
 file: crates/cortex-tui/src/app/state.rs
 in: App::interrupt
 find: sent.stopped = true;
 replace: sent.stopped = false;
 caught-by:
-    app::tests::prompts::stopping_while_held_prompts_are_on_their_way_gives_back_those_not_sent
     app::tests::prompts::a_prompt_refused_after_an_interrupt_comes_back_and_is_not_sent_again
-
-[break] a-prompt-after-a-stop-waits-with-the-held-ones
-rule: A prompt sent after an interrupt stopped the held ones goes at once, rather than come back with them.
-file: crates/cortex-tui/src/app/state.rs
-in: App::held_going
-find: if !sent.stopped
-replace:
-caught-by:
-    app::tests::prompts::a_prompt_sent_after_stopping_the_held_ones_goes_at_once
 
 [break] held-prompts-given-back-leave-the-spinner-on
 rule: Held prompts given back after a refusal stop the spinner they started when no turn runs.
