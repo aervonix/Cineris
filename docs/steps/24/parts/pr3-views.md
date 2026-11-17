@@ -54,3 +54,39 @@ The breaks are `mutations/step-24-views.breaks`.
 
 - **Closes** `config-provenance-in-the-application` (its file deleted; the core's half was the first part's): `/config` shows each value's layer, file and line.
 - **Adds** [user-theme-files](../../../outstanding/user-theme-files.md) and [the-files-a-command-changed](../../../outstanding/the-files-a-command-changed.md).
+
+## CI times
+
+<!-- written by cargo xtask ci-times, section "CI times": it replaces this up to the end mark -->
+Pull request 91, on `main` at `fac4391`. "Main" is main's own run at `fac4391` (run 43987289460).
+The PR's run is 44001023367, at `2ea5142`.
+
+| Job | Main, `fac4391` | The PR at `2ea5142` |
+|---|---|---|
+| `lint-linux` | 62 s | 62 s |
+| `test-linux` | 144 s | 126 s |
+| `lint-windows` | 76 s | 101 s |
+| `test-windows` | 289 s | 290 s |
+| `pr-size-linux` (blocks nothing) | — | 329 s |
+| `pr-size-windows` (blocks nothing) | — | 355 s |
+
+| Time above process start, against the budget | Linux, main (6 ms) | Linux, `2ea5142` (3 ms) | Windows, main (8 ms) | Windows, `2ea5142` (9 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 19.0 s | 12.6 s | 18.0 s | 15.3 s |
+| Tier 2, integration (40 s) | 29.7 s | 17.1 s | 42.2 s | 37.5 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 26.8 s | 25.2 s | 82.5 s | 91.7 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "CI times" -->
+
+## Windows, both trees on one runner
+
+<!-- written by cargo xtask ci-times: it replaces this up to the end mark -->
+`try` with `-f against=main` (run 43995124400), the median of 5 runs each, on one runner at 6.0 ms a process start:
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 13.8 s (2,667 tests) | 12.3 s (2,597) | +1.6 s | 20 s |
+| 2, integration | 29.7 s (1,483 tests) | 27.7 s (1,480) | +2.0 s | 40 s |
+| 3, system | 58.5 s (187 tests) | 61.4 s (187) | −2.9 s | 90 s |
+
+<!-- end of what cargo xtask ci-times wrote -->
