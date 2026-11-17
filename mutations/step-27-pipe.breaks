@@ -176,3 +176,35 @@ replace: let joined = { let _ = AssignProcessToJobObject; 1 };
 os: windows
 caught-by:
     cortex-rpc::it pipe::sys_one_of_the_servers_own_commands_is_refused
+
+# -------------------------------------------------------- the pipe's client
+
+[break] pipe-client-reaches-another-owners-pipe
+rule: A client reaches a pipe only when the user owns it: another user's server, or a pipe someone else made at the name, is refused before anything is sent.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: check_server
+find: if owner != user {
+replace: if owner != user && false {
+os: windows
+caught-by:
+    cortex-rpc::it pipe::a_pipe_is_reached_only_when_the_user_owns_it
+
+[break] pipe-client-reaches-a-low-pipe
+rule: A client reaches a pipe only when it is labelled at least medium: a pipe a lower process of the user's made is refused.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: check_server
+find: if level < MEDIUM {
+replace: if level < MEDIUM && false {
+os: windows
+caught-by:
+    cortex-rpc::it pipe::a_pipe_labelled_low_is_not_reached
+
+[break] pipe-client-takes-no-label-as-below-medium
+rule: A pipe with no label is taken as medium, as Windows takes it: only a process at medium or above can make one.
+file: crates/cortex-rpc/src/socket/windows.rs
+in: check_server
+find: .unwrap_or(MEDIUM)
+replace: .unwrap_or(0)
+os: windows
+caught-by:
+    cortex-rpc::it pipe::a_pipe_is_reached_only_when_the_user_owns_it
