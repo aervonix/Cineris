@@ -1,12 +1,12 @@
 # Step 25, the design: the screens composed
 
-The screens of step 25 that no reference screen draws yet, composed as text in the look of [decision 0033](../../../decisions/0033-tui-look.md) and [tui-look/](../../../architecture/tui-look/README.md), for the coordinator to judge against Roomy 2 and the golden screens before they are built widely; the owner sees them afterwards, for information. They are drafts: once the coordinator has answered, the ones kept become golden screens in `tui-look/` (step 25's third pull request), drawn by the real views and compared cell by cell. Until then the layout they show is kept easy to change. A script wrote them, so that every row is the width the window allows, one column less than the window's.
+The screens of step 25 that no reference screen draws yet, composed as text in the look of [decision 0033](../../../decisions/0033-tui-look.md) and [tui-look/](../../../architecture/tui-look/README.md), for the coordinator to judge against Roomy 2 and the golden screens before they are built widely; the owner sees them afterwards, for information. They are drafts: once the coordinator has answered, the ones kept become golden screens in `tui-look/` (step 25's third pull request), drawn by the real views and compared cell by cell. Until then the layout they show is kept easy to change. A script wrote them, so that every row is the width the window allows, one column less than the window's. They were revised after the design's review ([answered.md](../answered.md), "What the review found").
 
-- **The first run** (F1a to F4) is drawn inline, as the rest of the application is: each step takes the input box's place, as a dialog does, and once it is answered one dim line saying what it did is committed to the scrollback, so the steps already taken stay above the one being asked. Step 3's trust question is the trust dialog of screen 2c, as any session asks it; F3 is the step after it.
-- **The full-screen presenter** (F5, F6) draws the same views. F5 is a window of 150 columns, where the panels sit in a column of their own beside the transcript; below the width at which they move there ([answered.md](../answered.md), design point 2), they are stacked above the input box as inline. F6 is search.
-- **What is illustration.** The providers, the files found, the servers and the commands are examples. The usage panel in F5 is open because a limit is near, as in screen 4.
+- **The first run** (F1a to F4) is drawn inline, as the rest of the application is: each step takes the input box's place, as a dialog does, and once it is answered one dim line saying what it did is committed to the scrollback, so the steps already taken stay above the one being asked. The order is the provider, the imports, the mode, then the project: the configuration file is written after the mode, before the session opens, so that the first session is made with what the person chose. Step 4 comes after the session opened, so the session's header card is above it, and after its trust question (screen 2c) when the project has something to trust.
+- **The full-screen presenter** (F5, F6) draws the same views. F5 is a window of 150 columns, where the panels sit in a column of their own beside the transcript; below the width at which they move there ([answered.md](../answered.md), design point 2), they are stacked above the input box as inline. As in step 24, a panel without the focus is drawn collapsed and the focused one whole. F6 is search.
+- **What is illustration.** The providers, the files found, the servers and the commands are examples. F1a is Linux's wording and F1b Windows'.
 
-### F1a. The first run, step 1: a key found in the environment
+### F1a. The first run, step 1: a key found in the environment (Linux)
 
 100 columns, 20 rows.
 
@@ -14,8 +14,8 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 ╭──────────────────────────────────────────────────────────────╮
 │ ◆ Cortex-Harness 0.1.0                                       │
 │                                                              │
-│   Setting up, in four short steps. Each one can be skipped.  │
-│   ~/src/parser                                               │
+│   Setting up, in four short steps. Each one can be skipped,  │
+│   and x skips them all.                                      │
 ╰──────────────────────────────────────────────────────────────╯
 
 ◇ Provider  1 of 4
@@ -30,10 +30,10 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
     deepseek     store a key
     venice       store a key
 
-  enter chooses · s skips this step · ctrl+c leaves, and asks again next time              1 of 4  
+  enter chooses · s skips this step · x skips the set-up
 ```
 
-### F1b. The first run, step 1: a key typed, nothing of it drawn
+### F1b. The first run, step 1: a key typed, nothing of it drawn (Windows)
 
 100 columns, 16 rows.
 
@@ -41,53 +41,88 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 ╭──────────────────────────────────────────────────────────────╮
 │ ◆ Cortex-Harness 0.1.0                                       │
 │                                                              │
-│   Setting up, in four short steps. Each one can be skipped.  │
-│   ~/src/parser                                               │
+│   Setting up, in four short steps. Each one can be skipped,  │
+│   and x skips them all.                                      │
 ╰──────────────────────────────────────────────────────────────╯
 
 ◇ Provider  1 of 4
   Paste or type the key for anthropic. Nothing of it is shown. It is stored in
-  ~/.config/cortex-harness/credentials.toml, which only you can read, and is
-  never written to a file of settings, the log or the prompt history.
+  Windows Credential Manager, for this machine only, and is never written to a
+  file of settings, the log or the prompt history.
 
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ ◆ key  108 characters, hidden                                                                   │
+│ ◆ 108 characters, hidden                                                                        │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
-  enter stores it · ctrl+u clears it · esc goes back                                       1 of 4  
+  enter stores it · ctrl+u clears it · esc goes back
 ```
 
-### F2a. The first run, step 2: what other tools left, nothing read yet
+### F2a. The first run, step 2: what other tools left, nothing read or picked yet
 
-100 columns, 24 rows.
+100 columns, 25 rows.
 
 ```text
 ╭──────────────────────────────────────────────────────────────╮
 │ ◆ Cortex-Harness 0.1.0                                       │
 │                                                              │
-│   Setting up, in four short steps. Each one can be skipped.  │
-│   ~/src/parser                                               │
+│   Setting up, in four short steps. Each one can be skipped,  │
+│   and x skips them all.                                      │
 ╰──────────────────────────────────────────────────────────────╯
 
 · Provider: anthropic, its key from ANTHROPIC_API_KEY.
 
 ◇ Imports  2 of 4
-  Other tools left these. Nothing is read, started or put in the prompt
-  unless you pick it here.
+  Other tools left these. None is read, started or put in the prompt unless
+  you pick it. What you pick holds in every project.
 
-    Instructions, this project's
-    ☑ AGENTS.md, CLAUDE.md          read as its instructions in every project
-    Skills, read from step 28 on
-    ☐ ~/.claude/skills              Claude Code, 4 skills
-    ☐ .agents/skills                this project's, 2 skills
-    MCP servers, started from step 30 on
-  ◆ ☐ ~/.claude.json                Claude Code: space reads it and lists its servers
-    ☐ ~/.cursor/mcp.json            Cursor: space reads it and lists its servers
-      .mcp.json                     this project's: offered in each session, after trust
+    Instructions
+  ◆ ☐ AGENTS.md, CLAUDE.md          read as each project's instructions
+    Skills
+    ☐ .claude/skills, .agents/skills  yours and each project's, once this
+                                     version reads skills
+    MCP servers
+    ▸ ~/.claude.json                Claude Code's: space reads it
+    ▸ ~/.cursor/mcp.json            Cursor's: space reads it
+      .mcp.json, .vscode/mcp.json   this project's: offered in its sessions,
+                                    after trust, never imported
 
-  space picks · enter brings in what is picked · s skips this step                         2 of 4  
+  space picks or reads · enter keeps what is picked · s skips this step
 ```
 
-### F2b. The first run, step 2: one MCP file read, each server's command whole
+### F2b. The first run, step 2: one MCP file read, each server's command whole, one holding a credential
+
+100 columns, 27 rows.
+
+```text
+╭──────────────────────────────────────────────────────────────╮
+│ ◆ Cortex-Harness 0.1.0                                       │
+│                                                              │
+│   Setting up, in four short steps. Each one can be skipped,  │
+│   and x skips them all.                                      │
+╰──────────────────────────────────────────────────────────────╯
+
+· Provider: anthropic, its key from ANTHROPIC_API_KEY.
+
+◇ Imports  2 of 4
+  ~/.claude.json holds 3 MCP servers. One picked is written to your settings
+  with its command as shown here, and starts only once this version runs MCP
+  servers, in the sandbox.
+
+    Instructions
+    ☑ AGENTS.md, CLAUDE.md          read as each project's instructions
+    MCP servers
+    ▾ ~/.claude.json                Claude Code's
+  ◆   ☑ docs       npx -y @example/docs-mcp --root ~/src/docs
+      ☐ tracker    https://tracker.example.com/mcp
+                   its Authorization header comes from TRACKER_AUTH, which you
+                   set
+        github     docker run -i --rm -e GITHUB_TOKEN=[masked]
+                   ghcr.io/example/github-mcp:1.4
+                   holds a credential in its command: not imported
+
+  space picks · enter keeps what is picked · s skips this step
+```
+
+### F3. The first run, step 3: the mode, before the session opens
 
 100 columns, 21 rows.
 
@@ -95,102 +130,85 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 ╭──────────────────────────────────────────────────────────────╮
 │ ◆ Cortex-Harness 0.1.0                                       │
 │                                                              │
-│   Setting up, in four short steps. Each one can be skipped.  │
-│   ~/src/parser                                               │
-╰──────────────────────────────────────────────────────────────╯
-
-· Provider: anthropic, its key from ANTHROPIC_API_KEY.
-
-◇ Imports  2 of 4
-  ~/.claude.json holds 3 MCP servers. Each is written to your settings only if
-  you pick it, with its command as it is here; none starts before step 30's
-  client, and then in the sandbox.
-
-  ◆ ☑ docs       npx -y @example/docs-mcp --root ~/src/docs
-    ☐ tracker    https://tracker.example.com/mcp
-    ☐ github     docker run -i --rm -e GITHUB_TOKEN ghcr.io/example/github-mcp:1.4
-                 its GITHUB_TOKEN is a value in the file: it is brought in as the
-                 variable's name, and the value is not copied
-
-  space picks · enter goes back to the list · esc drops these picks                        2 of 4  
-```
-
-### F3. The first run, step 3: the project's commands, after the trust question (screen 2c)
-
-100 columns, 21 rows.
-
-```text
-╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cortex-Harness 0.1.0                                       │
-│                                                              │
-│   Setting up, in four short steps. Each one can be skipped.  │
-│   ~/src/parser                                               │
+│   Setting up, in four short steps. Each one can be skipped,  │
+│   and x skips them all.                                      │
 ╰──────────────────────────────────────────────────────────────╯
 
 · Provider: anthropic, its key from ANTHROPIC_API_KEY.
 · Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
-· Project: ~/src/parser trusted.
 
-◇ Commands  3 of 4
-  Found in Cargo.toml. Each one picked joins the project profile as an entry you
-  wrote: it runs without asking, and the checks at a turn's end use it.
-
-  ◆ ☑ build    cargo build --workspace
-    ☑ test     cargo test --workspace
-    ☑ check    cargo clippy --workspace --all-targets -- -D warnings
-    ☐ format   cargo fmt --all -- --check
-
-  space picks · e edits · enter keeps what is picked · s skips this step                   3 of 4  
-```
-
-### F4. The first run, step 4: the mode, supervised chosen
-
-100 columns, 22 rows.
-
-```text
-╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cortex-Harness 0.1.0                                       │
-│                                                              │
-│   Setting up, in four short steps. Each one can be skipped.  │
-│   ~/src/parser                                               │
-╰──────────────────────────────────────────────────────────────╯
-
-· Provider: anthropic, its key from ANTHROPIC_API_KEY.
-· Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
-· Project: ~/src/parser trusted.
-· Commands: build, test and check, in the project profile.
-
-◇ Mode  4 of 4
+◇ Mode  3 of 4
   How much the agent does before it asks you. /mode changes it at any time.
 
+    read-only      reads, and runs only commands known to read; asks before
+                   any other, and never writes
   ◆ supervised     reads and edits files in this project without asking; asks
                    before a command that is not known to be safe
-    read-only      reads, and asks before every command; never writes
-    autonomous     runs commands in the sandbox without asking
-    unrestricted   never asks, and nothing is confined: your full rights
+    autonomous     runs commands in the sandbox without asking; asks before
+                   leaving it
 
-  enter chooses · s keeps supervised                                                       4 of 4  
+  enter chooses · s keeps supervised
 ```
 
-### F5. The full-screen presenter at 150 columns: panels beside the transcript
+### F4. The first run, step 4: the project's commands, after the session opened and trust was asked (screen 2c)
 
-150 columns, 35 rows.
+100 columns, 30 rows.
 
 ```text
-◆ 1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.                            ◇ Plan  1 of 4 done
-                                                                                                           ☑ allow _ between digits
-∴ Reasoned for 6s                                                                                          ◧ reject a trailing _
-  The loop breaks on any non-digit, so _ ends the literal. Check whether a                                 ☐ add a test for 1_000
-  trailing _ is meant to be an error first.                                                                ☐ run clippy
+╭──────────────────────────────────────────────────────────────╮
+│ ◆ Cortex-Harness 0.1.0                                       │
+│                                                              │
+│   Setting up, in four short steps. Each one can be skipped,  │
+│   and x skips them all.                                      │
+╰──────────────────────────────────────────────────────────────╯
 
-◇ scan_number stops at the first character that is not a digit, so 1_000 ends                            ◇ Changed 1 file  +5 −1
-  after the 1. I'll read the scanner and allow _ between digits.                                           crates/parser/src/lex.rs  +5 −1
+· Provider: anthropic, its key from ANTHROPIC_API_KEY.
+· Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
+· Mode: supervised. Written to ~/.config/cortex-harness/config.toml.
 
-╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮  ◇ Usage  this session
-│ ✓ Read lex.rs  lines 120–178                                                                        │    opus-5.5   in 41k  out 3.2k   $0.38
-│ ✓ Edit lex.rs  +5 −1                                                                                │    cache hit 92%
-│ ✗ Run cargo test -p parser  exit 101 · 3.4s                                                         │    anthropic fast tier: 18% of the output
-╰──────────────────────────────────────────────────────────────────────────── click or enter expands ─╯    token limit left, resets 15:00
+╭──────────────────────────────────────────────────────────────╮
+│ ◆ Cortex-Harness 0.1.0                                       │
+│                                                              │
+│   opus-5.5 high  ·  ~/src/parser on main                     │
+│   Knows nothing about this project yet.                      │
+╰──────────────────────────────────────────────────────────────╯
+
+· Project: ~/src/parser trusted.
+
+◇ Commands  4 of 4
+  Found in Cargo.toml. Each one picked joins the project profile as an entry
+  you wrote: it runs without asking, and the checks at a turn's end use it.
+
+  ◆ ☐ build    cargo build --workspace
+    ☐ test     cargo test --workspace
+    ☐ check    cargo clippy --workspace --all-targets -- -D warnings
+    ☐ format   cargo fmt --all -- --check
+
+  space picks · e edits · enter keeps what is picked · s skips this step
+```
+
+### F5. The full-screen presenter at 150 columns: panels beside the transcript, the plan focused
+
+150 columns, 38 rows.
+
+```text
+◆ 1_000 lexes as 1. Fix scan_number so digit separators work, and add a test.                                ◇ Plan  1 of 4 done
+                                                                                                               ☑ allow _ between digits
+∴ Reasoned for 6s                                                                                              ◧ reject a trailing _
+  The loop breaks on any non-digit, so _ ends the literal. Check whether a                                     ☐ add a test for 1_000
+  trailing _ is meant to be an error first.                                                                    ☐ run clippy
+
+◇ scan_number stops at the first character that is not a digit, so 1_000 ends
+  after the 1. I'll read the scanner and allow _ between digits.                                               anthropic fast tier: 18% of the output
+                                                                                                               token limit left, resets 15:00
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ✓ Read lex.rs  lines 120–178                                                                            │
+│ ✓ Edit lex.rs  +5 −1                                                                                    │
+│ ✗ Run cargo test -p parser  exit 101 · 3.4s                                                             │
+│   test lex::numbers::trailing_separator ... FAILED                                                      │
+│   assertion failed: lex("1_").is_err()                                                                  │
+│   test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s                                │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 ◇ One test fails: 1_ must be an error, but the scanner now stops before the _
   and returns 1. A separator has to be followed by a digit, so the other case
@@ -204,14 +222,14 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
       continue;
   }
 
-╭─────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ ⣾ Run cargo clippy -p parser -- -D warnings  6.2s                                                   │
-╰──────────────────────────────────────────────────────────────────────────────────── ctrl+t expands ─╯
+╭─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ⣾ Run cargo clippy -p parser -- -D warnings  6.2s                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────── ctrl+t expands ─╯
 
 ╭───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ ◆ also run clippy when that's done                                                                                                                │
+│ ◆                                                                                                                                                 │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
-  ⣾ 14s  esc stops · enter steers this turn · tab queues it instead                                                            opus-5.5 high · fast  
+  ⣾ 14s  space skips · e edits · a adds · esc back to the input                                                                opus-5.5 high · fast
 ```
 
 ### F6. Search in the full-screen presenter: a match inside a box it opened
@@ -229,7 +247,7 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 │   test lex::numbers::trailing_separator ... FAILED                                              │
 │   assertion failed: lex("1_").is_err()                                                          │
 │   test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s                        │
-╰──────────────────────────────────────────────────── opened by the search · enter keeps it open ─╯
+╰────────────────────────────────────────────────────────────────────────── opened by the search ─╯
 
 ◇ One test fails: 1_ must be an error, but the scanner now stops before the _
   and returns 1. A separator has to be followed by a digit, so the other case
@@ -238,5 +256,5 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 ╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ ◆ also run clippy when that's done                                                              │
 ╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
-  search  trailing_separator  2 of 3 · enter or up older · down newer · esc ends    opus-5.5 high  
+  ctrl+f trailing_separator   2 of 3 · up older · down newer · esc ends             opus-5.5 high
 ```
