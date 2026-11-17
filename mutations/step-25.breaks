@@ -812,3 +812,13 @@ find: Err(ExportError::Exists(_)) => {}
 replace: Err(ExportError::Exists(name)) => return Err(ExportError::Exists(name)),
 caught-by:
     cineris-cli::bin/cineris export::tests::an_export_is_a_new_private_file_never_one_that_exists
+
+[break] a-long-run-of-escapes-is-drawn-whole
+rule: In the prompt editor's row, a run of four or more of one escape is drawn once with its count, so a row holds the cluster.
+file: crates/cineris-tui/src/editor/cluster.rs
+in: counted
+find: if count >= RUN {
+replace: if false {
+caught-by:
+    cineris-tui editor::cluster::tests::a_long_run_of_one_unseen_character_is_drawn_once_with_its_count
+    cineris-tui app::tests::a_long_run_of_unseen_characters_fits_the_prompts_row
