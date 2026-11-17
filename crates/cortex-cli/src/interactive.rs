@@ -879,6 +879,7 @@ impl Link for InProcess {
             &self.queue,
             &mut self.order,
             &mut self.gone_said,
+            core_closed,
         )
     }
 }
@@ -893,29 +894,41 @@ pub(crate) fn take(
     queue: &EventQueue,
     order: &mut Order,
     gone_said: &mut bool,
+    gone: fn() -> ErrorData,
 ) -> Option<Inbound> {
     match order.next(queue, done) {
         Some(Next::Result(result)) => Some(result),
-        Some(Next::Core(next)) => inbound(Some(next), false, gone_said),
-        None => inbound(None, queue.is_closed(), gone_said),
+        Some(Next::Core(next)) => inbound(Some(next), false, gone_said, gone),
+        None => inbound(None, queue.is_closed(), gone_said, gone),
     }
+}
+
+/// What the in-process interface is told when the core closes its
+/// connection.
+fn core_closed() -> ErrorData {
+    ErrorData::new(
+        ErrorKind::Internal,
+        "client_closed",
+        "The core closed this interface's connection.",
+    )
 }
 
 /// What the link gives for what the client's queue gave: an event, a
 /// request, or, once the queue is closed and empty, the end of the
 /// connection, said once.
-fn inbound(next: Option<Outgoing>, closed: bool, gone_said: &mut bool) -> Option<Inbound> {
+fn inbound(
+    next: Option<Outgoing>,
+    closed: bool,
+    gone_said: &mut bool,
+    gone: fn() -> ErrorData,
+) -> Option<Inbound> {
     match next {
         Some(Outgoing::Event(event)) => Some(Inbound::Event(event)),
         Some(Outgoing::Request { id, request }) => Some(Inbound::Request(id, request)),
         // The core disconnected this client: nothing more will come.
         None if closed && !*gone_said => {
             *gone_said = true;
-            Some(Inbound::Gone(ErrorData::new(
-                ErrorKind::Internal,
-                "client_closed",
-                "The core closed this interface's connection.",
-            )))
+            Some(Inbound::Gone(gone()))
         }
         None => None,
     }
@@ -1039,7 +1052,7 @@ mod tests {
         queue.push(event(9, Event::TurnStarted(TurnStarted {})));
         push(&done, read_result());
         let mut order = Vec::new();
-        while let Some(seq) = seq_of(take(&done, &queue, &mut ahead, &mut said)) {
+        while let Some(seq) = seq_of(take(&done, &queue, &mut ahead, &mut said, core_closed)) {
             order.push(seq);
         }
         assert_eq!(order, [6, 7, 9, 1007]);
@@ -1058,7 +1071,13 @@ mod tests {
         push(&done, read_result());
         let mut order = Vec::new();
         for seq in 3..8 {
-            order.push(seq_of(take(&done, &queue, &mut ahead, &mut said)));
+            order.push(seq_of(take(
+                &done,
+                &queue,
+                &mut ahead,
+                &mut said,
+                core_closed,
+            )));
             queue.push(event(seq, Event::TurnStarted(TurnStarted {})));
         }
         assert_eq!(
@@ -1073,12 +1092,15 @@ mod tests {
     #[test]
     fn a_closed_queue_is_the_end_of_the_connection_said_once() {
         let mut said = false;
-        assert!(inbound(None, false, &mut said).is_none());
+        assert!(inbound(None, false, &mut said, core_closed).is_none());
         assert!(matches!(
-            inbound(None, true, &mut said),
+            inbound(None, true, &mut said, core_closed),
             Some(Inbound::Gone(error)) if error.code == "client_closed"
         ));
-        assert!(inbound(None, true, &mut said).is_none(), "said once");
+        assert!(
+            inbound(None, true, &mut said, core_closed).is_none(),
+            "said once"
+        );
     }
 
     #[test]

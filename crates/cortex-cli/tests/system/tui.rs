@@ -1798,3 +1798,27 @@ fn sys_typing_through_an_approval_over_attach_does_not_answer_it() {
     quit(&mut session, &phases);
     drop(server);
 }
+
+/// When the server goes, `attach` ends: it says the server's connection
+/// has ended, and the terminal is put back.
+#[test]
+fn sys_attach_ends_when_the_server_goes() {
+    let phases = Phases::new("sys_attach_ends_when_the_server_goes");
+    let machine = Machine::new("tui_attach_gone");
+    let server = machine.socket_server("gone");
+    let mut session = machine.tui(&["attach", "--socket", &server.socket]);
+    first_frame(&mut session, &phases);
+    phases.mark("the server ends");
+    drop(server);
+    session.wait_for(LIMIT, "attach to say the server has gone", |t| {
+        shows_ever(t, "connection has ended")
+    });
+    session.wait_for(LIMIT, "the shell's verdict", |t| {
+        t.shows(RESTORED) || t.shows(NOT_RESTORED)
+    });
+    assert!(
+        session.screen().shows(RESTORED),
+        "the modes were not put back:\n{}",
+        session.screen().dump()
+    );
+}

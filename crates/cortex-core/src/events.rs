@@ -263,6 +263,10 @@ impl EventQueue {
     }
 
     /// Queues a request to the client. Never dropped.
+    ///
+    /// For a queue the caller made (a link outside the core, such as
+    /// `cortex attach`'s): the core's own client queues are the core's to
+    /// fill, fence and close.
     pub fn push_request(&self, id: RequestId, request: ServerRequest) {
         let mut state = lock(&self.state);
         if state.closed {
@@ -276,6 +280,10 @@ impl EventQueue {
 
     /// The client read `session` at `seq`: from now on no delta is merged
     /// into one queued at or below it.
+    ///
+    /// For a queue the caller made: the core fences its own client queues
+    /// itself, and an `unfence` there would bring back the double draw the
+    /// fence keeps out.
     pub fn fence(&self, session: &SessionId, seq: u64) {
         let mut state = lock(&self.state);
         let fence = state.fences.entry(session.clone()).or_insert(seq);
@@ -284,6 +292,8 @@ impl EventQueue {
 
     /// Forgets the fence of `session`: the client opened it again, or
     /// closed it.
+    ///
+    /// For a queue the caller made, as [`fence`](Self::fence) says.
     pub fn unfence(&self, session: &SessionId) {
         lock(&self.state).fences.remove(session);
     }
@@ -339,6 +349,10 @@ impl EventQueue {
 
     /// The client is gone: what is queued can still be read, and nothing
     /// more is taken.
+    ///
+    /// For a queue the caller made: a closed queue drops what is pushed to
+    /// it, a request included, so the core's own client queues are closed
+    /// only by the core.
     pub fn close(&self) {
         lock(&self.state).closed = true;
         self.wake.notify_waiters();

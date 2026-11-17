@@ -295,22 +295,25 @@ impl Link for RpcLink {
             &self.queue,
             &mut self.order,
             &mut self.gone_said,
+            gone,
         )
     }
 }
 
 /// What the link's thread fills, and how it wakes the interface.
+#[derive(Clone)]
 struct Shared {
     queue: Arc<EventQueue>,
     done: Done,
     slot: Slot,
 }
 
+/// What the interface is told when the server's connection has ended.
 fn gone() -> ErrorData {
     ErrorData::new(
         ErrorKind::Internal,
         "server_gone",
-        "The server's connection has ended.",
+        "The server's connection has ended; its sessions go on there.",
     )
 }
 
@@ -391,15 +394,46 @@ async fn connection(
     let _ = started.send(Ok(()));
 
     let asked: AskedMap = Arc::default();
+    // The end, however the reader stops: a panic in it too, so that no
+    // operation is left without an answer and the interface is told.
+    let _ending = Ending {
+        asked: Arc::clone(&asked),
+        shared: shared.clone(),
+    };
     // The writer: what the interface sends, in order. Each request is
     // asked before it is written, so that its answer finds it.
-    let writer = tokio::spawn(writes(outgoing, output.clone(), Arc::clone(&asked)));
+    let writer = tokio::spawn(writes(
+        outgoing,
+        output.clone(),
+        Arc::clone(&asked),
+        shared.clone(),
+    ));
     // The reader, until the server's end.
     while let Some(message) = read(&mut input, &mut lines).await {
         take_in(message, &asked, &shared, &output).await;
     }
     writer.abort();
-    ended(&asked, &shared);
+}
+
+/// Runs [`ended`] when the reader stops, however it stops.
+struct Ending {
+    asked: AskedMap,
+    shared: Shared,
+}
+
+impl Drop for Ending {
+    fn drop(&mut self) {
+        ended(&self.asked, &self.shared);
+    }
+}
+
+/// Stops the merging of `session`'s deltas from the moment its history is
+/// asked for until the read's answer comes, which fences them at its `seq`:
+/// the server may send deltas after the read's `seq` before its answer, and
+/// one merged into a delta before it would be drawn twice (the review of
+/// step 27's third pull request).
+fn hold_merging(queue: &EventQueue, session: &SessionId) {
+    queue.fence(session, u64::MAX);
 }
 
 /// The connection's end: every operation still asked is answered, then the
@@ -423,6 +457,7 @@ async fn writes(
     mut outgoing: mpsc::UnboundedReceiver<Out>,
     output: mpsc::Sender<Vec<u8>>,
     asked: AskedMap,
+    shared: Shared,
 ) {
     let mut id = 0_i64;
     while let Some(out) = outgoing.recv().await {
@@ -439,9 +474,24 @@ async fn writes(
                     Ok(request) => request,
                     Err(error) => {
                         tracing::warn!(%error, method, "an operation could not be written");
+                        interactive::push(
+                            &shared.done,
+                            Inbound::Done(
+                                ticket,
+                                Err(ErrorData::new(
+                                    ErrorKind::Internal,
+                                    "unwritable",
+                                    format!("The operation could not be written: {error}"),
+                                )),
+                            ),
+                        );
+                        shared.slot.wake();
                         continue;
                     }
                 };
+                if let (Op::SessionRead(_), Some(session)) = (&op, &session) {
+                    hold_merging(&shared.queue, session);
+                }
                 asked.lock().unwrap_or_else(PoisonError::into_inner).insert(
                     id,
                     Asked {
@@ -466,10 +516,11 @@ async fn writes(
 /// Puts what the server sent where the interface takes it.
 async fn take_in(
     message: Message,
-    asked: &AskedMap,
+    asked_map: &AskedMap,
     shared: &Shared,
     output: &mpsc::Sender<Vec<u8>>,
 ) {
+    let asked = asked_map;
     match message {
         Message::Response(Response {
             id: Some(RequestId::Number(id)),
@@ -492,10 +543,26 @@ async fn take_in(
                 })),
             };
             // In the order the core keeps for the in-process queue: a read
-            // fences the session, an open or a close lifts the fence.
+            // fences the session at its `seq` (lifting the hold its asking
+            // set, unless another read of it is still asked), an open or a
+            // close lifts the fence.
+            let read_asked = |session: &SessionId| {
+                asked_map
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .values()
+                    .any(|other| {
+                        other.method == "session/read" && other.session.as_ref() == Some(session)
+                    })
+            };
             match (&result, &asked.session) {
+                (_, Some(session)) if asked.method == "session/read" && read_asked(session) => {}
                 (Ok(OpResult::SessionRead(read)), Some(session)) => {
+                    shared.queue.unfence(session);
                     shared.queue.fence(session, read.seq);
+                }
+                (_, Some(session)) if asked.method == "session/read" => {
+                    shared.queue.unfence(session);
                 }
                 (Ok(_), Some(session)) => shared.queue.unfence(session),
                 (
@@ -666,6 +733,52 @@ mod tests {
             .block_on(future)
     }
 
+    /// From a history read's asking to its answer no delta of the session is
+    /// merged, and the answer fences the queue at its `seq`: the server may
+    /// send a delta after the read's `seq` before the answer (it writes a
+    /// result after what was queued when it was ready), and one merged into
+    /// a delta the read already drew would be drawn twice (the review of
+    /// step 27's third pull request).
+    #[test]
+    fn a_delta_after_a_read_is_never_merged_into_one_it_drew() {
+        let shared = shared();
+        let asked: AskedMap = Arc::default();
+        let (output, mut written) = mpsc::channel(4);
+        // The read asked through the writer, as the interface asks it.
+        let (out, outgoing) = mpsc::unbounded_channel();
+        out.send(Out::Op(
+            Ticket(1),
+            Op::SessionRead(cortex_protocol::methods::SessionReadParams {
+                session_id: SessionId::from("s_1"),
+                item_id: None,
+                limit: None,
+                cursor: None,
+            }),
+        ))
+        .unwrap();
+        drop(out);
+        run(writes(
+            outgoing,
+            output.clone(),
+            Arc::clone(&asked),
+            shared.clone(),
+        ));
+        assert!(written.try_recv().is_ok(), "the read was not written");
+        let read = Message::Response(Response {
+            id: Some(RequestId::Number(1)),
+            result: Ok(serde_json::json!({"items": [], "incomplete": [], "seq": 1})),
+        });
+        run(async {
+            // The server's order: a delta the read drew, one after it, then
+            // the read's answer, then more.
+            take_in(delta(1, "a"), &asked, &shared, &output).await;
+            take_in(delta(2, "b"), &asked, &shared, &output).await;
+            take_in(read, &asked, &shared, &output).await;
+            take_in(delta(3, "c"), &asked, &shared, &output).await;
+        });
+        assert_eq!(texts(&shared.queue), ["a", "bc"]);
+    }
+
     /// A history read's result fences the link's queue at its `seq`, as the
     /// core fences the in-process queue: a delta after it is not merged into
     /// one before it, which the read already drew.
@@ -718,12 +831,19 @@ mod tests {
         );
         ended(&asked, &shared);
         let (mut order, mut gone_said) = (Order::default(), false);
-        let mut next =
-            || interactive::take(&shared.done, &shared.queue, &mut order, &mut gone_said);
+        let mut next = || {
+            interactive::take(
+                &shared.done,
+                &shared.queue,
+                &mut order,
+                &mut gone_said,
+                gone,
+            )
+        };
         assert!(
             matches!(next(), Some(Inbound::Done(Ticket(9), Err(error))) if error.code == "server_gone")
         );
-        assert!(matches!(next(), Some(Inbound::Gone(_))));
+        assert!(matches!(next(), Some(Inbound::Gone(error)) if error.code == "server_gone"));
         assert!(next().is_none(), "the end was told twice");
     }
 
