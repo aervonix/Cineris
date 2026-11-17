@@ -71,6 +71,18 @@
 //!   answering its session's approvals there is the person who approved
 //!   the command (`docs/security.md`, section 5).
 //!
+//! **The client** ([`connect`], for `cortex attach`) checks the server from
+//! the handle it opened, before it sends anything: the pipe's owner must be
+//! the user, and its label at least medium (`GetSecurityInfo`). Another user
+//! cannot make the user's SID the owner of a pipe of theirs, and a process
+//! of the user's below medium cannot give its pipe a medium label: the
+//! system labels what such a process makes at its own level. A pipe with no
+//! label at all is taken as medium, as Windows itself takes it: only a
+//! process at medium or above can make one, so refusing it would keep out
+//! nothing that the owner's check does not. The client lets the server
+//! identify it and no more (`SECURITY_IDENTIFICATION`): the server reads
+//! its token and cannot act as it.
+//!
 //! The instances are made here (`CreateNamedPipeW`) rather than by tokio's
 //! `ServerOptions`, which needs a runtime to make one: binding needs none,
 //! and the first `accept` takes the first instance into the runtime it runs
@@ -96,24 +108,28 @@ use std::sync::OnceLock;
 use std::task::Poll;
 
 use tokio::io::AsyncReadExt;
-use tokio::net::windows::named_pipe::NamedPipeServer;
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer};
 use tokio::sync::oneshot;
 use tokio::task::{AbortHandle, JoinError, JoinSet};
 use windows_sys::Win32::Foundation::{
-    ERROR_ACCESS_DENIED, ERROR_PIPE_BUSY, ERROR_SUCCESS, FALSE, HANDLE, INVALID_HANDLE_VALUE,
-    LocalFree, SetLastError, TRUE,
+    ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_SUCCESS, FALSE, HANDLE,
+    INVALID_HANDLE_VALUE, LocalFree, SetLastError, TRUE,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
+    SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
+    ACE_HEADER, ACL, ACL_SIZE_INFORMATION, AclSizeInformation, GetAce, GetAclInformation,
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, IsTokenRestricted,
-    IsValidSid, PSECURITY_DESCRIPTOR, PSID, RevertToSelf, SECURITY_ATTRIBUTES,
-    SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL,
-    TOKEN_QUERY, TOKEN_USER, TokenIntegrityLevel, TokenIsAppContainer, TokenUser,
+    IsValidSid, LABEL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    RevertToSelf, SECURITY_ATTRIBUTES, SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES,
+    SYSTEM_MANDATORY_LABEL_ACE, TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+    TOKEN_USER, TokenIntegrityLevel, TokenIsAppContainer, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
+    SECURITY_IDENTIFICATION,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
@@ -121,6 +137,7 @@ use windows_sys::Win32::System::JobObjects::{
 use windows_sys::Win32::System::Pipes::{
     CreateNamedPipeW, GetNamedPipeClientProcessId, ImpersonateNamedPipeClient, PIPE_READMODE_BYTE,
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    WaitNamedPipeW,
 };
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentThread, OpenProcess, OpenProcessToken, OpenThreadToken,
@@ -410,14 +427,26 @@ fn integrity_level(token: BorrowedHandle<'_>) -> io::Result<u32> {
     if identifier.is_null() || unsafe { IsValidSid(identifier) } == 0 {
         return Err(io::Error::other("the token's label is not an identifier"));
     }
-    // SAFETY: the identifier is valid, so its count of parts is inside it.
+    // SAFETY: just checked valid; it lies inside `buffer`, which is alive.
+    unsafe { last_part(identifier) }
+}
+
+/// The last part of a label's identifier (`S-1-16-<level>`): its level.
+///
+/// # Safety
+///
+/// `identifier` must point to a valid security identifier that stays alive
+/// and unchanged for the duration of the call.
+unsafe fn last_part(identifier: PSID) -> io::Result<u32> {
+    // SAFETY: the caller guarantees the identifier is valid, so its count of
+    // parts is inside it.
     let parts = unsafe { GetSidSubAuthorityCount(identifier).read() };
     let Some(last) = u32::from(parts).checked_sub(1) else {
-        return Err(io::Error::other("the token's label has no level"));
+        return Err(io::Error::other("a label has no level"));
     };
     // SAFETY: `last` is below the identifier's count of parts, so the part
-    // is inside it. Windows places the identifier in the buffer as it
-    // likes, so the read makes no assumption of alignment.
+    // is inside it. Windows places an identifier where it likes, so the read
+    // makes no assumption of alignment.
     Ok(unsafe { GetSidSubAuthority(identifier, last).read_unaligned() })
 }
 
@@ -822,14 +851,199 @@ impl Listener {
     }
 }
 
+/// Medium integrity: the least a server's pipe may be labelled at, and how
+/// a pipe with no label is taken.
+const MEDIUM: u32 = 8192;
+
+/// How many times a client waits for an instance of a pipe whose instances
+/// are all taken, and how long each wait may be, in milliseconds. A server
+/// makes its next instance as soon as a client connects, so a wait is short.
+const BUSY_TRIES: u32 = 5;
+const BUSY_WAIT_MS: u32 = 1_000;
+
+/// The type of a mandatory label's entry in a system access list. It is the
+/// value of the entry-type byte for one, and has been since Windows Vista.
+const LABEL_ENTRY: u8 = 0x11;
+
+fn not_reached(name: &str, why: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!("the server at {name} is not reached: {why}"),
+    )
+}
+
+/// Opens the pipe `name` as a client that lets the server identify it and
+/// no more, waiting a while for an instance when all of them are taken.
+async fn open_client(name: &str) -> io::Result<NamedPipeClient> {
+    let mut options = ClientOptions::new();
+    options.security_qos_flags(SECURITY_IDENTIFICATION);
+    let mut tries = 0;
+    loop {
+        let error = match options.open(name) {
+            Ok(client) => return Ok(client),
+            Err(error) => error,
+        };
+        match error.raw_os_error().map(i32::cast_unsigned) {
+            Some(ERROR_PIPE_BUSY) if tries < BUSY_TRIES => {
+                tries += 1;
+                let wide_name = wide(name);
+                // The wait blocks, so it is on the blocking pool; a wait that
+                // ends with no instance free is tried again, so many times.
+                let _ = tokio::task::spawn_blocking(move || {
+                    // SAFETY: `wide_name` is zero-terminated and alive for
+                    // the call.
+                    unsafe { WaitNamedPipeW(wide_name.as_ptr(), BUSY_WAIT_MS) }
+                })
+                .await;
+            }
+            Some(ERROR_FILE_NOT_FOUND) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("no server listens at {name}"),
+                ));
+            }
+            _ => return Err(io::Error::new(error.kind(), format!("{name}: {error}"))),
+        }
+    }
+}
+
+/// The level of the mandatory label in `list`, the system access list
+/// Windows gives for a label: `None` when it has none.
+///
+/// # Safety
+///
+/// `list` must be null, or point to a valid access list that stays alive
+/// and unchanged for the duration of the call.
+unsafe fn label_level(list: *const ACL) -> io::Result<Option<u32>> {
+    /// Where the label's identifier begins in its entry.
+    const IDENTIFIER_AT: usize = std::mem::offset_of!(SYSTEM_MANDATORY_LABEL_ACE, SidStart);
+    const SIZE_BYTES: u32 = size_of::<ACL_SIZE_INFORMATION>() as u32;
+
+    if list.is_null() {
+        return Ok(None);
+    }
+    let mut size = ACL_SIZE_INFORMATION {
+        AceCount: 0,
+        AclBytesInUse: 0,
+        AclBytesFree: 0,
+    };
+    // SAFETY: the caller guarantees `list` is a valid access list. `size` is
+    // writable for `SIZE_BYTES` bytes, its whole size, and is the structure
+    // this class fills.
+    if unsafe { GetAclInformation(list, (&raw mut size).cast(), SIZE_BYTES, AclSizeInformation) }
+        == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    for index in 0..size.AceCount {
+        let mut entry: *mut c_void = ptr::null_mut();
+        // SAFETY: `list` is valid, as above, and `entry` is a live location
+        // for the pointer the call returns.
+        if unsafe { GetAce(list, index, &raw mut entry) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: every entry begins with this header, and the entry is
+        // inside the list. The read is unaligned because a list is a byte
+        // layout, not a Rust value.
+        let header = unsafe { entry.cast::<ACE_HEADER>().read_unaligned() };
+        if header.AceType != LABEL_ENTRY {
+            continue;
+        }
+        // An identifier is at least eight bytes: an entry too short to hold
+        // one is not a label that can be read.
+        let length = usize::from(header.AceSize);
+        if length < IDENTIFIER_AT + 8 {
+            return Err(io::Error::other("the pipe's label cannot be read"));
+        }
+        // SAFETY: `IDENTIFIER_AT` is inside the entry's `length` bytes.
+        let identifier: PSID = unsafe { entry.cast::<u8>().add(IDENTIFIER_AT) }.cast();
+        // SAFETY: `identifier` points to at least eight readable bytes inside
+        // the entry, all that `IsValidSid` reads before it has checked the
+        // identifier's own length.
+        if unsafe { IsValidSid(identifier) } == 0 {
+            return Err(io::Error::other("the pipe's label cannot be read"));
+        }
+        // SAFETY: just checked valid; it lies inside the list, which the
+        // caller keeps alive.
+        return unsafe { last_part(identifier) }.map(Some);
+    }
+    Ok(None)
+}
+
+/// Whether the server at the other end of `pipe` is the user's: the pipe
+/// owned by `user`, and labelled at least medium. `Err` says why not.
+fn check_server(pipe: BorrowedHandle<'_>, user: &str) -> Result<(), String> {
+    let mut owner: PSID = ptr::null_mut();
+    let mut label: *mut ACL = ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // SAFETY: `pipe` is open with the right to read its security (a client
+    // that reads may), alive for the call. `owner`, `label` and `descriptor`
+    // are live, writable locations for the pointers the call returns; the
+    // group and the access list are not asked for, and their outputs are
+    // null.
+    let status = unsafe {
+        GetSecurityInfo(
+            pipe.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
+            &raw mut owner,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &raw mut label,
+            &raw mut descriptor,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        // This call returns its error; it does not set the thread's.
+        let error = io::Error::from_raw_os_error(status.cast_signed());
+        return Err(format!("its security could not be read ({error})"));
+    }
+    // `owner` and `label` point into this allocation, alive until the end.
+    let descriptor = LocalMemory(descriptor);
+    // SAFETY: a non-null owner from a successful `GetSecurityInfo` is a
+    // valid identifier inside `descriptor`, which is alive.
+    if owner.is_null() || unsafe { IsValidSid(owner) } == 0 {
+        return Err("it has no owner that can be read".to_owned());
+    }
+    // SAFETY: just checked valid, inside `descriptor`, which is alive.
+    let owner = unsafe { identifier_text(owner) }
+        .map_err(|error| format!("its owner could not be read ({error})"))?;
+    if owner != user {
+        return Err(format!(
+            "the pipe is owned by {owner}, not by you: another user's server, or a pipe someone \
+             else made at that name"
+        ));
+    }
+    // SAFETY: `label` is null or the system access list of the successful
+    // call above, inside `descriptor`, which is alive.
+    let level = unsafe { label_level(label) }
+        .map_err(|error| format!("its label could not be read ({error})"))?
+        .unwrap_or(MEDIUM);
+    if level < MEDIUM {
+        return Err(format!(
+            "the pipe is labelled at integrity level {level}, below medium ({MEDIUM}): a lower \
+             process of yours made it"
+        ));
+    }
+    drop(descriptor);
+    Ok(())
+}
+
 /// Connects to the server at `place` once it is shown to be the user's: the
-/// pipe's owner the user, and its label at least medium.
-pub(super) async fn connect(_place: &Place) -> io::Result<super::Transport> {
-    // Built with the rest of the pipe's client in step 27's third part.
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "attaching over a named pipe is not in this build yet",
-    ))
+/// pipe's owner the user, and its label at least medium (the module's point
+/// on the client). Nothing is sent before.
+pub(super) async fn connect(place: &Place) -> io::Result<super::Transport> {
+    let Place::Pipe(name) = place else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a Windows server is reached at a named pipe",
+        ));
+    };
+    let user = cortex_base::private::current_user_sid()?;
+    let pipe = open_client(name).await?;
+    check_server(pipe.as_handle(), user).map_err(|why| not_reached(name, &why))?;
+    let (read, write) = tokio::io::split(pipe);
+    Ok(super::transport_of(read, write))
 }
 
 #[cfg(test)]

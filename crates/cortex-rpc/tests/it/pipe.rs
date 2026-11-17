@@ -29,19 +29,20 @@ use cortex_base::CancelToken;
 use cortex_rpc::{Accepted, ListenOptions, Listener, Place, ServeOptions};
 use cortex_testkit::conformance::{self, Lines};
 use cortex_testkit::rerun::{self, Rerun};
-use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, HANDLE, LocalFree};
+use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_INVALID_OWNER, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
-    ConvertStringSidToSidW, GetSecurityInfo, SDDL_REVISION_1, SE_FILE_OBJECT,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW, GetSecurityInfo,
+    SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
     CreateRestrictedToken, DACL_SECURITY_INFORMATION, DuplicateTokenEx, GetLengthSid,
     GetTokenInformation, ImpersonateLoggedOnUser, LABEL_SECURITY_INFORMATION,
     LOGON32_LOGON_INTERACTIVE, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, LogonUserW,
-    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, RevertToSelf, SECURITY_MAX_SID_SIZE,
-    SID_AND_ATTRIBUTES, SecurityImpersonation, SetTokenInformation, TOKEN_ADJUST_DEFAULT,
-    TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenImpersonation,
-    TokenIntegrityLevel,
+    OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, RevertToSelf, SECURITY_ATTRIBUTES,
+    SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, SecurityImpersonation, SetTokenInformation,
+    TOKEN_ADJUST_DEFAULT, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+    TokenImpersonation, TokenIntegrityLevel,
 };
 use windows_sys::Win32::Storage::FileSystem::{READ_CONTROL, SECURITY_ANONYMOUS};
 use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
@@ -700,6 +701,156 @@ fn an_anonymous_client_is_refused() {
     let why = refused(runtime.block_on(listener.accept()).unwrap());
     assert!(why.contains("token"), "{why}");
     assert!(closed_unanswered(&runtime, &mut pipe));
+}
+
+// --------------------------------------------------------------- the client
+
+/// Connects as a client on `handle`'s runtime, where the transport's tasks
+/// are to run.
+fn connect_on(handle: &tokio::runtime::Handle, place: &Place) -> io::Result<cortex_rpc::Transport> {
+    let place = place.clone();
+    crate::on(
+        handle,
+        async move { cortex_rpc::socket::connect(&place).await },
+    )
+}
+
+/// A pipe of the test's making at `place`, with the security descriptor
+/// `description` in Windows's description language, as another program
+/// could make one. In the runtime the caller is in.
+fn pipe_with(
+    place: &Place,
+    description: &str,
+) -> io::Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    let text = wide(description);
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // SAFETY: `text` is zero-terminated and alive for the call; `descriptor`
+    // is a live location for the pointer it returns; the last output may be
+    // null.
+    let converted = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            text.as_ptr(),
+            SDDL_REVISION_1,
+            &raw mut descriptor,
+            ptr::null_mut(),
+        )
+    };
+    assert_ne!(converted, 0, "{}", io::Error::last_os_error());
+    let descriptor = Local(descriptor);
+    let mut attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: 0,
+    };
+    // SAFETY: `attributes` is a whole structure that points to the
+    // descriptor, and both are alive for the call.
+    unsafe {
+        tokio::net::windows::named_pipe::ServerOptions::new()
+            .create_with_security_attributes_raw(name(place), (&raw mut attributes).cast())
+    }
+}
+
+/// A client reaches the user's own server, and is answered `initialize`
+/// over the transport `connect` gives.
+#[test]
+fn a_client_reaches_the_users_own_server() {
+    let world = World::new("pipe-connect");
+    let core = world.core();
+    let place = pipe_of("connect");
+    let listener = bind(&place).unwrap();
+    let (stop, done) = serve(&core, listener, world.serve_options());
+    let mut transport = connect_on(&core.handle, &place).expect("the user's own server is reached");
+    transport.output.blocking_send(initialize_line()).unwrap();
+    let mut said = Vec::new();
+    while !said.contains(&b'\n') {
+        let chunk = transport
+            .input
+            .blocking_recv()
+            .expect("the server answers")
+            .unwrap();
+        said.extend(chunk);
+    }
+    let said = String::from_utf8_lossy(&said);
+    assert!(said.contains(r#""result""#), "{said}");
+    drop(transport);
+    stop.cancel();
+    done.recv().unwrap();
+}
+
+/// A pipe someone else owns is not reached, though its access list lets the
+/// user open it. A pipe the user owns with no label at all is reached:
+/// Windows takes it as medium, and only a process at medium or above can
+/// make one.
+#[test]
+fn a_pipe_is_reached_only_when_the_user_owns_it() {
+    let user = cortex_base::private::current_user_sid().unwrap();
+    let runtime = runtime();
+
+    let unlabelled = pipe_of("owned-unlabelled");
+    let description = format!("O:{user}D:P(A;;GA;;;{user})");
+    // Two instances: one to read the security back from, one to reach.
+    let _instances = runtime.block_on(async {
+        [
+            pipe_with(&unlabelled, &description).unwrap(),
+            pipe_with(&unlabelled, &description).unwrap(),
+        ]
+    });
+    let security = security_of(&unlabelled);
+    assert!(
+        !security.contains("(ML;"),
+        "the pipe has a label: {security}"
+    );
+    runtime
+        .block_on(cortex_rpc::socket::connect(&unlabelled))
+        .expect("a pipe of the user's with no label is reached");
+
+    // The administrators' group as the owner: a test that runs elevated, as
+    // a runner's does, may name it.
+    let theirs = pipe_of("owned-by-administrators");
+    let made = runtime.block_on(async {
+        pipe_with(
+            &theirs,
+            &format!("O:BAD:P(A;;GA;;;{user})(A;;GA;;;BA)S:(ML;;NW;;;ME)"),
+        )
+    });
+    let _theirs = match made {
+        Ok(pipe) => pipe,
+        Err(error)
+            if error.raw_os_error() == Some(ERROR_INVALID_OWNER.cast_signed())
+                && std::env::var_os("CI").is_none() =>
+        {
+            eprintln!("not run: a pipe owned by another cannot be made unelevated ({error})");
+            return;
+        }
+        Err(error) => panic!("a pipe the administrators own was not made: {error}"),
+    };
+    let refused = runtime
+        .block_on(cortex_rpc::socket::connect(&theirs))
+        .expect_err("a pipe another owns was reached");
+    assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
+    let message = refused.to_string();
+    assert!(
+        message.contains(name(&theirs)) && message.contains("owned by S-1-5-32-544"),
+        "{message}"
+    );
+}
+
+/// A pipe labelled below medium is not reached: a lower process of the
+/// user's made it. The widened pipe of the tests is labelled low.
+#[test]
+fn a_pipe_labelled_low_is_not_reached() {
+    let place = pipe_of("labelled-low");
+    let _listener = bind_widened(&place);
+    let runtime = runtime();
+    let refused = runtime
+        .block_on(cortex_rpc::socket::connect(&place))
+        .expect_err("a pipe labelled low was reached");
+    assert_eq!(refused.kind(), io::ErrorKind::PermissionDenied, "{refused}");
+    let message = refused.to_string();
+    assert!(
+        message.contains(name(&place)) && message.contains("integrity level 4096"),
+        "{message}"
+    );
 }
 
 // ----------------------------------------------------------- a second user
