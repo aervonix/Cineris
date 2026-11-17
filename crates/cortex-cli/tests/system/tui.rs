@@ -1672,38 +1672,50 @@ fn sys_a_look_and_a_binding_changed_in_the_file_reach_the_next_key() {
 
 // ------------------------------------------------------------------ attach
 
-/// A server for `attach` to reach: the binary's `serve --socket`, at a short
-/// path of the test's own (a socket's path has at most 107 bytes), with the
-/// machine's environment, ended when dropped.
-#[cfg(unix)]
+/// A server for `attach` to reach: the binary's `serve --socket`, at a
+/// place of the test's own (on Unix a short path, since a socket's path has
+/// at most 107 bytes; on Windows a pipe's name), with the machine's
+/// environment, ended when dropped.
 struct SocketServer {
     child: std::process::Child,
     socket: String,
-    folder: std::path::PathBuf,
+    /// The socket's folder, removed at the end (Unix).
+    folder: Option<std::path::PathBuf>,
     /// Held so that a line the server writes to it later still goes
     /// somewhere.
     _errors: std::io::BufReader<std::process::ChildStderr>,
 }
 
-#[cfg(unix)]
 impl Drop for SocketServer {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.folder);
+        if let Some(folder) = &self.folder {
+            let _ = std::fs::remove_dir_all(folder);
+        }
     }
 }
 
-#[cfg(unix)]
 impl Machine {
     /// `serve --socket` on this machine, once it says where it serves.
     fn socket_server(&self, name: &str) -> SocketServer {
         use std::io::BufRead as _;
-        use std::os::unix::fs::PermissionsExt as _;
-        let folder = std::path::PathBuf::from(format!("/tmp/cx-{name}-{}", std::process::id()));
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let socket = folder.join("rpc.sock").to_string_lossy().into_owned();
+        #[cfg(unix)]
+        let (socket, folder) = {
+            use std::os::unix::fs::PermissionsExt as _;
+            let folder = std::path::PathBuf::from(format!("/tmp/cx-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+            (
+                folder.join("rpc.sock").to_string_lossy().into_owned(),
+                Some(folder),
+            )
+        };
+        #[cfg(windows)]
+        let (socket, folder) = (
+            format!("cortex-harness-test-{name}-{}", std::process::id()),
+            None,
+        );
         let mut command = self.command(&["serve", "--socket", &socket]);
         command.stdout(std::process::Stdio::null());
         let mut child = command.spawn().expect("the server starts");
@@ -1726,7 +1738,6 @@ impl Machine {
 /// command line is answered, and the session goes on when `attach` ends, so
 /// that `attach --continue` opens it again with its history drawn
 /// (`docs/steps/27/answered.md`, point 5).
-#[cfg(unix)]
 #[test]
 fn sys_attach_runs_a_turn_on_the_server_and_its_session_outlives_it() {
     let phases = Phases::new("sys_attach_runs_a_turn_on_the_server_and_its_session_outlives_it");
@@ -1751,7 +1762,6 @@ fn sys_attach_runs_a_turn_on_the_server_and_its_session_outlives_it() {
 /// up does not answer it: the dialog's grace and quiet are the
 /// application's (`app::dialog`), whichever link it drives. Only a key
 /// pressed once its answers are drawn does.
-#[cfg(unix)]
 #[test]
 fn sys_typing_through_an_approval_over_attach_does_not_answer_it() {
     let phases = Phases::new("sys_typing_through_an_approval_over_attach_does_not_answer_it");
