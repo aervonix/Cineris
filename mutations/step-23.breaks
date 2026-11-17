@@ -737,8 +737,8 @@ caught-by:
 rule: The viewer opens with the latest tool box selected.
 file: crates/cineris-tui/src/app/state/viewer.rs
 in: App::open_viewer
-find: _ => boxes.checked_sub(1)
-replace: _ => boxes.checked_sub(boxes)
+find: asked.or_else(|| self.boxes_kept().checked_sub(1))
+replace: asked.or_else(|| self.boxes_kept().checked_sub(self.boxes_kept()))
 packages: cineris-tui
 caught-by:
     app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
@@ -757,8 +757,8 @@ caught-by:
 rule: The selected box is drawn as selected: its border in the accent, with what Enter does.
 file: crates/cineris-tui/src/app/state/viewer.rs
 in: block_rows
-find: selected: state.selected == Some(round)
-replace: selected: false
+find: let selected = stop.is_some() && state.selected == stop;
+replace: let selected = false;
 packages: cineris-tui
 caught-by:
     app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one

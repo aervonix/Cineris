@@ -21,6 +21,7 @@ use cineris_term::{Button, Key, KeyCode, Line, Mods, Mouse, MouseKind, Wheel};
 use super::App;
 use crate::app::scroll::{Anchor, Place, Scroll, Source};
 use crate::keys::{Action, Context, Gesture};
+use crate::transcript::kept::Summary;
 use crate::view::Placement;
 use crate::view::viewer::{self, ViewerKeys, ViewerTitle};
 
@@ -72,6 +73,11 @@ pub(super) struct Viewer {
     /// It shows text to select and copy by hand: the mouse is not reported,
     /// so a plain drag is the terminal's own selection (since step 25).
     to_copy: bool,
+    /// The transcript's view a summary was opened from: `Esc` goes back to
+    /// it, not out of the viewer (since step 25).
+    behind: Option<Box<Viewer>>,
+    /// A compaction's summary item to read and show (since step 25).
+    wants: Option<String>,
 }
 
 impl Viewer {
@@ -97,30 +103,42 @@ fn block_rows(app: &App, state: &Viewer, block: usize, width: usize) -> Vec<Line
     let Some(kept) = app.kept.get(block) else {
         return Vec::new();
     };
-    let placement = match app.kept.round_number(block) {
-        Some(round) => Placement::Viewer {
-            selected: state.selected == Some(round),
-            open: state.open.contains(&round),
+    let stop = app.kept.stop_number(block);
+    let selected = stop.is_some() && state.selected == stop;
+    let placement = match (app.kept.round_number(block), stop) {
+        (Some(_), Some(stop)) => Placement::Viewer {
+            selected,
+            open: state.open.contains(&stop),
         },
-        None => Placement::Committed,
+        _ => Placement::Committed,
     };
-    kept.rows(placement, width, &app.look)
+    let mut rows = kept.rows(placement, width, &app.look);
+    // A reasoning or a compaction selected (since step 25): its first row
+    // is drawn as a selected box's border is.
+    if selected
+        && app.kept.round_number(block).is_none()
+        && let Some(first) = rows.iter_mut().find(|row| row.width() > 0)
+    {
+        let style = app.look.theme.style(crate::theme::Token::BorderSelected);
+        *first = Line::from(cineris_term::Span::new(first.text().into_owned(), style));
+    }
+    rows
 }
 
 impl App {
     /// Opens the viewer at the latest tool box, or at the box `n`, counted
     /// from one, opened (`/view n`).
     pub(super) fn open_viewer(&mut self, n: Option<usize>) {
-        let boxes = self.boxes_kept();
-        let selected = match n {
-            Some(n) if (1..=boxes).contains(&n) => Some(n - 1),
-            _ => boxes.checked_sub(1),
-        };
+        // `n` counts boxes (rounds); the viewer selects among its stops
+        // (since step 25: rounds, reasoning, compactions).
+        let asked = n
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|round| self.kept.round_block(round))
+            .and_then(|block| self.kept.stop_number(block));
+        let selected = asked.or_else(|| self.boxes_kept().checked_sub(1));
         let mut open = BTreeSet::new();
-        if let (Some(n), Some(selected)) = (n, selected)
-            && n == selected + 1
-        {
-            open.insert(selected);
+        if let Some(asked) = asked {
+            open.insert(asked);
         }
         if self.zone.is_none() {
             // One small file, read once, when the viewer first opens.
@@ -226,9 +244,10 @@ impl App {
         }
     }
 
-    /// How many boxes the committed transcript holds.
+    /// How many stops the committed transcript holds: its boxes, and
+    /// since step 25 its reasoning and compactions.
     fn boxes_kept(&self) -> usize {
-        self.kept.rounds()
+        self.kept.stops()
     }
 
     /// What the viewer shows that is not a kept block: the request whole,
@@ -357,11 +376,22 @@ impl App {
                 .selected
                 .filter(|_| state.whole.is_none() && state.text.is_none())
             {
-                Some(selected) => ViewerKeys::Boxes {
-                    selected: selected + 1,
-                    count: self.kept.rounds(),
-                    open: state.open.contains(&selected),
-                },
+                Some(selected) => {
+                    let block = self.kept.stop_block(selected);
+                    match block.and_then(|block| self.kept.round_number(block)) {
+                        Some(round) => ViewerKeys::Boxes {
+                            selected: round + 1,
+                            count: self.kept.rounds(),
+                            open: state.open.contains(&selected),
+                        },
+                        None => ViewerKeys::Summary {
+                            label: match block.and_then(|block| self.kept.summary(block)) {
+                                Some(Summary::Compaction(_)) => "summary",
+                                _ => "reasoning",
+                            },
+                        },
+                    }
+                }
                 None => ViewerKeys::Lines,
             },
         };
@@ -432,8 +462,8 @@ impl App {
     }
 
     /// A box's selection or opening changed: its rows are drawn again.
-    fn forget_box(&self, state: &mut Viewer, round: Option<usize>) {
-        if let Some(block) = round.and_then(|round| self.kept.round_block(round)) {
+    fn forget_box(&self, state: &mut Viewer, stop: Option<usize>) {
+        if let Some(block) = stop.and_then(|stop| self.kept.stop_block(stop)) {
             state.scroll.rows.forget(block);
         }
     }
@@ -480,10 +510,61 @@ impl App {
         // 25); a key bound to none of them does nothing here.
         let action = self.input.keymap().lookup(&[Context::Viewer], key);
         let close = self.viewer_act(&mut state, action, boxes);
+        self.read_summary(&mut state);
         if !close {
             self.viewer = Some(state);
         }
         true
+    }
+
+    /// Shows `text` in the viewer under `label`, the transcript's view kept
+    /// behind it for `Esc` (since step 25).
+    fn show_summary(state: &mut Viewer, label: &str, text: &str) {
+        let lines = crate::view::round::output_lines(text);
+        let behind = std::mem::take(state);
+        let mut scroll = Scroll::default();
+        scroll.go_to_start();
+        *state = Viewer {
+            scroll,
+            text: Some((label.to_owned(), lines)),
+            behind: Some(Box::new(behind)),
+            ..Viewer::default()
+        };
+    }
+
+    /// Asks for the compaction's summary the viewer wants, through the link
+    /// (`session/read` with the item's id, since step 25).
+    fn read_summary(&mut self, state: &mut Viewer) {
+        let Some(item) = state.wants.take() else {
+            return;
+        };
+        let Some(session) = self.session.as_ref().map(|state| state.session_id.clone()) else {
+            return;
+        };
+        let ticket = self.link.send(cineris_protocol::methods::Op::SessionRead(
+            cineris_protocol::methods::SessionReadParams {
+                session_id: session.clone(),
+                item_id: Some(cineris_protocol::ItemId::from(item.as_str())),
+                limit: None,
+                cursor: None,
+                redacted: false,
+            },
+        ));
+        self.pending
+            .insert(ticket, super::Pending::Summary(session));
+    }
+
+    /// A compaction's summary read: shown in the viewer, the transcript's
+    /// view behind it, while the viewer is open on the session.
+    pub(super) fn summary_read(&mut self, page: &cineris_protocol::methods::SessionReadResult) {
+        let text = page.items.iter().find_map(|item| match item {
+            cineris_protocol::Item::Summary(summary) => Some(summary.text.clone()),
+            _ => None,
+        });
+        let (Some(text), Some(state)) = (text, self.viewer.as_mut()) else {
+            return;
+        };
+        Self::show_summary(state, "The summary the conversation goes on from", &text);
     }
 
     /// Does `action` in the viewer; says whether it closes it.
@@ -491,7 +572,11 @@ impl App {
         let width = state.width.max(1);
         let page = state.scroll.height.max(1);
         match action {
-            Some(Action::ViewerClose) => return true,
+            // From a summary, back to the transcript it was opened from.
+            Some(Action::ViewerClose) => match state.behind.take() {
+                Some(behind) => *state = *behind,
+                None => return true,
+            },
             Some(Action::ViewerUp) => match state.selected {
                 Some(selected) => {
                     let next = selected.saturating_sub(1);
@@ -511,12 +596,24 @@ impl App {
                 }),
             },
             Some(Action::ViewerToggle) => {
-                if let Some(selected) = state.selected {
-                    if !state.open.remove(&selected) {
-                        state.open.insert(selected);
+                let summary = state
+                    .selected
+                    .and_then(|selected| self.kept.stop_block(selected))
+                    .and_then(|block| self.kept.summary(block));
+                match summary {
+                    Some(Summary::Reasoning(text)) => {
+                        Self::show_summary(state, "The reasoning, whole", &text);
                     }
-                    self.forget_box(state, Some(selected));
-                    state.reveal = true;
+                    Some(Summary::Compaction(item)) => state.wants = Some(item),
+                    None => {
+                        if let Some(selected) = state.selected {
+                            if !state.open.remove(&selected) {
+                                state.open.insert(selected);
+                            }
+                            self.forget_box(state, Some(selected));
+                            state.reveal = true;
+                        }
+                    }
                 }
             }
             Some(Action::ViewerPageUp) => self.with_window(state, width, |scroll, source| {
@@ -578,7 +675,7 @@ impl App {
                 .checked_sub(state.body_top)
                 .and_then(|row| state.shown.get(row))
                 .and_then(|place| match place {
-                    Place::Kept { block, .. } => self.kept.round_number(*block),
+                    Place::Kept { block, .. } => self.kept.stop_number(*block),
                     _ => None,
                 });
             if let Some(round) = round.filter(|_| state.whole.is_none() && state.text.is_none()) {
@@ -588,6 +685,7 @@ impl App {
         } else {
             close = self.viewer_act(&mut state, action, boxes);
         }
+        self.read_summary(&mut state);
         if !close {
             self.viewer = Some(state);
         }

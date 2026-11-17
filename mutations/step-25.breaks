@@ -822,3 +822,39 @@ replace: if false {
 caught-by:
     cineris-tui editor::cluster::tests::a_long_run_of_one_unseen_character_is_drawn_once_with_its_count
     cineris-tui app::tests::a_long_run_of_unseen_characters_fits_the_prompts_row
+
+[break] the-viewer-skips-the-compaction
+rule: A compaction is one of the viewer's stops, as a box is.
+file: crates/cineris-tui/src/transcript/kept.rs
+in: Kept::extend
+find: Piece::Block(Block::Round(_) | Block::Compaction { .. }) => true
+replace: Piece::Block(Block::Round(_)) => true
+caught-by:
+    cineris-tui app::tests::screen::the_viewer_shows_a_reasoning_and_a_compactions_summary_whole
+
+[break] a-summary-closes-the-viewer
+rule: Esc from a summary goes back to the transcript it was opened from, not out of the viewer.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::viewer_act
+find: Some(behind) => *state = *behind
+replace: Some(_) => return true
+caught-by:
+    cineris-tui app::tests::screen::the_viewer_shows_a_reasoning_and_a_compactions_summary_whole
+
+[break] a-compactions-summary-is-not-read
+rule: Enter on a compaction reads its summary item through the link.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::viewer_act
+find: Some(Summary::Compaction(item)) => state.wants = Some(item)
+replace: Some(Summary::Compaction(_)) => {}
+caught-by:
+    cineris-tui app::tests::screen::the_viewer_shows_a_reasoning_and_a_compactions_summary_whole
+
+[break] a-reasoning-shows-its-first-line-only
+rule: Enter on a reasoning shows all of its text.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::viewer_act
+find: Self::show_summary(state, "The reasoning, whole", &text);
+replace: Self::show_summary(state, "The reasoning, whole", text.lines().next().unwrap_or_default());
+caught-by:
+    cineris-tui app::tests::screen::the_viewer_shows_a_reasoning_and_a_compactions_summary_whole

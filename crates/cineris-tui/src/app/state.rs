@@ -156,6 +156,8 @@ enum Pending {
     Restyle { keys: bool, theme: bool },
     /// A page of this session, read for `/export` (since step 25).
     Export(SessionId),
+    /// A compaction's summary, read for the viewer (since step 25).
+    Summary(SessionId),
 }
 
 /// A prompt on its way to the core, for its answer.
@@ -1576,6 +1578,9 @@ impl App {
             }
             (Pending::History(id), Ok(OpResult::SessionRead(page))) => {
                 self.history_read(id, page, now);
+            }
+            (Pending::Summary(id), Ok(OpResult::SessionRead(page))) if self.is_open(&id) => {
+                self.summary_read(&page);
             }
             (Pending::Export(id), Ok(OpResult::SessionRead(page))) => {
                 self.export_read(&id, page);

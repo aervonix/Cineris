@@ -701,6 +701,150 @@ fn the_query_is_bounded_and_the_more_below_row_follows_the_glyphs() {
     );
 }
 
+/// A turn that reasons, in three lines, then answers; then a compaction.
+fn reasoned_and_compacted(app: &mut super::App, link: &Scripted, now: Instant) {
+    let answer = ItemId::from("a1");
+    let steps = [
+        event(Event::TurnStarted(TurnStarted {})),
+        event(Event::ItemStarted(ItemStarted {
+            item_id: answer.clone(),
+            kind: ItemKind::AssistantMessage,
+            tool: None,
+            call_id: None,
+        })),
+        event(Event::ItemDelta(ItemDelta {
+            item_id: answer.clone(),
+            delta: Delta::Reasoning(TextDelta {
+                text: "First, the scanner.\nThen the \u{202e}parser.\nLast, the tests.".to_owned(),
+            }),
+        })),
+        event(Event::ItemDelta(ItemDelta {
+            item_id: answer.clone(),
+            delta: Delta::Text(TextDelta {
+                text: "Done.\n".to_owned(),
+            }),
+        })),
+        event(Event::ItemCompleted(ItemCompleted {
+            item: Item::AssistantMessage(AssistantMessageItem {
+                id: answer,
+                parts: vec![Part::text("Done.\n")],
+                stop_reason: Some(StopReason::End),
+                raw_stop: None,
+                stop_detail: None,
+                truncated: false,
+                origin: None,
+                usage: None,
+                error: None,
+                created_at: None,
+            }),
+        })),
+        event(Event::ItemCompleted(ItemCompleted {
+            item: Item::Summary(cineris_protocol::item::SummaryItem {
+                id: ItemId::from("sum1"),
+                text: "(the summary, as the event has it)".to_owned(),
+                covers_through: None,
+                usage: None,
+                created_at: None,
+            }),
+        })),
+        event(Event::TurnCompleted(TurnCompleted {
+            outcome: TurnOutcome::Completed,
+            stop_reason: Some(StopReason::End),
+            error: None,
+            usage: Default::default(),
+            verification: None,
+            duration_ms: Some(900),
+        })),
+    ];
+    for inbound in steps {
+        link.give(inbound);
+        drain(app, now);
+        let _ = app.frame(now);
+    }
+}
+
+/// The viewer moves between a reasoning and a compaction as between boxes
+/// (step 25): `Enter` on the reasoning shows its whole text, hostile text
+/// made safe, and `Esc` goes back to the transcript with it still
+/// selected; `Enter` on the compaction reads its summary item through the
+/// link and shows it.
+#[test]
+fn the_viewer_shows_a_reasoning_and_a_compactions_summary_whole() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Inline, 99, 30, now);
+    reasoned_and_compacted(&mut app, &link, now);
+    link.take_sent();
+    key(&mut app, "ctrl+o", now);
+    assert!(app.viewing());
+    // The last stop, the compaction, is selected.
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(rows[29].trim_end().ends_with("summary"), "{rows:#?}");
+    key(&mut app, "up", now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(rows[29].trim_end().ends_with("reasoning"), "{rows:#?}");
+    assert!(rows[29].contains("enter shows it whole"), "{rows:#?}");
+    key(&mut app, "enter", now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    for line in [
+        "First, the scanner.",
+        "Last, the tests.",
+        "\\u{202e}parser.",
+    ] {
+        assert!(
+            rows.iter().any(|row| row.contains(line)),
+            "{line:?}: {rows:#?}"
+        );
+    }
+    assert!(
+        crate::testing::unseen(&rows.concat()).is_empty(),
+        "{rows:#?}"
+    );
+    key(&mut app, "esc", now);
+    assert!(app.viewing(), "back to the transcript, not out");
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(rows[29].trim_end().ends_with("reasoning"), "{rows:#?}");
+    // The compaction: its summary read by its id.
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    let read = link
+        .take_sent()
+        .into_iter()
+        .find_map(|(ticket, op)| match op {
+            cineris_protocol::methods::Op::SessionRead(params) => Some((ticket, params)),
+            _ => None,
+        })
+        .expect("the summary read");
+    assert_eq!(read.1.item_id, Some(ItemId::from("sum1")));
+    link.give(Inbound::Done(
+        read.0,
+        Ok(cineris_protocol::methods::OpResult::SessionRead(
+            cineris_protocol::methods::SessionReadResult {
+                items: vec![Item::Summary(cineris_protocol::item::SummaryItem {
+                    id: ItemId::from("sum1"),
+                    text: "We fixed the lexer; the parser is next.".to_owned(),
+                    covers_through: None,
+                    usage: None,
+                    created_at: None,
+                })],
+                incomplete: Vec::new(),
+                next_cursor: None,
+                seq: 9,
+                masked: 0,
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("We fixed the lexer; the parser is next.")),
+        "{rows:#?}"
+    );
+    key(&mut app, "esc", now);
+    key(&mut app, "esc", now);
+    assert!(!app.viewing());
+}
+
 /// A match inside a closed box opens the box while it is the current
 /// match, its border saying the search opened it; a new query closes it,
 /// and ending the search on it leaves it open.

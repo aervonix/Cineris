@@ -121,6 +121,7 @@ impl KeptBlock {
                 text
             }
             Piece::Block(Block::User(text) | Block::Notice(text)) => text.clone(),
+            Piece::Block(Block::Compaction { .. }) => crate::transcript::COMPACTED.to_owned(),
             Piece::Block(Block::Reasoning(reasoning)) => reasoning
                 .summary
                 .clone()
@@ -170,7 +171,21 @@ pub struct Kept {
     blocks: Vec<KeptBlock>,
     /// Each round's place among the blocks, in order.
     rounds: Vec<usize>,
+    /// The places of the blocks the viewer moves between, in order: each
+    /// round, each reasoning that has words, each compaction (since step
+    /// 25).
+    stops: Vec<usize>,
     bytes: usize,
+}
+
+/// A stop of the viewer's that is not a round: what `Enter` shows of it
+/// (since step 25).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Summary {
+    /// A reasoning's whole text, however much the transcript shows.
+    Reasoning(String),
+    /// A compaction's summary, read by the item's id.
+    Compaction(String),
 }
 
 impl Kept {
@@ -198,6 +213,21 @@ impl Kept {
             };
             if matches!(piece, Piece::Block(Block::Round(_))) {
                 self.rounds.push(self.blocks.len());
+            }
+            let stop = match &piece {
+                Piece::Block(Block::Round(_) | Block::Compaction { .. }) => true,
+                Piece::Block(Block::Reasoning(reasoning)) => reasoning
+                    .summary
+                    .as_deref()
+                    .unwrap_or(&reasoning.text)
+                    .trim()
+                    .chars()
+                    .next()
+                    .is_some(),
+                _ => false,
+            };
+            if stop {
+                self.stops.push(self.blocks.len());
             }
             let kept = KeptBlock { piece, gap, after };
             self.bytes += kept.bytes();
@@ -239,6 +269,40 @@ impl Kept {
     #[must_use]
     pub fn rounds(&self) -> usize {
         self.rounds.len()
+    }
+
+    /// How many stops it holds: rounds, reasoning, compactions.
+    #[must_use]
+    pub fn stops(&self) -> usize {
+        self.stops.len()
+    }
+
+    /// The block index of stop `n`, counted from 0.
+    #[must_use]
+    pub fn stop_block(&self, n: usize) -> Option<usize> {
+        self.stops.get(n).copied()
+    }
+
+    /// Which stop, counted from 0, the block at `index` is, if it is one.
+    #[must_use]
+    pub fn stop_number(&self, index: usize) -> Option<usize> {
+        self.stops.binary_search(&index).ok()
+    }
+
+    /// What `Enter` shows of the block at `index`, when it is a stop that
+    /// is not a round.
+    #[must_use]
+    pub fn summary(&self, index: usize) -> Option<Summary> {
+        match &self.blocks.get(index)?.piece {
+            Piece::Block(Block::Reasoning(reasoning)) => Some(Summary::Reasoning(
+                reasoning
+                    .summary
+                    .clone()
+                    .unwrap_or_else(|| reasoning.text.clone()),
+            )),
+            Piece::Block(Block::Compaction { item }) => Some(Summary::Compaction(item.clone())),
+            _ => None,
+        }
     }
 
     /// The block index of round `n`, counted from 0.
@@ -297,6 +361,7 @@ fn block_bytes(block: &Block) -> usize {
     match block {
         Block::Header(_) | Block::Summary { .. } => 256,
         Block::User(text) | Block::Notice(text) => text.len(),
+        Block::Compaction { item } => item.len(),
         Block::Reasoning(reasoning) => {
             reasoning.text.len() + reasoning.summary.as_ref().map_or(0, String::len)
         }
