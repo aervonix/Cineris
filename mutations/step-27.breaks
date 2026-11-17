@@ -515,8 +515,17 @@ caught-by:
 rule: A line that fails is JSON of the wrong shape only when it reads as JSON at all; anything else is not JSON (-32700).
 file: crates/cortex-base/src/framing.rs
 in: decode
-find: if serde_json::from_slice::<serde::de::IgnoredAny>(line).is_ok() {
-replace: if error.classify() == serde_json::error::Category::Data {
+find: && serde_json::from_slice::<serde::de::IgnoredAny>(line).is_ok()
+replace: && error.classify() == serde_json::error::Category::Data
+caught-by:
+    cortex-base framing::tests::a_line_is_told_apart_as_not_json_or_not_a_message
+
+[break] a-line-that-is-not-text-reads-as-json
+rule: A line that is not UTF-8 is not JSON, though serde's reading that skips values passes over a string's bytes unchecked.
+file: crates/cortex-base/src/framing.rs
+in: decode
+find: if std::str::from_utf8(line).is_ok()
+replace: if true
 caught-by:
     cortex-base framing::tests::a_line_is_told_apart_as_not_json_or_not_a_message
 
