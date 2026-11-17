@@ -2,9 +2,17 @@
 
 Step 25 builds the full-screen presenter (scrolling, re-wrapping on resize, search, panels beside the transcript on wide windows), the mouse in the full-screen presenter and the viewer, rewind, undo and fork in the interface, `/export`, the first-run flow, and the terminal quirks found so far, each with an override. When it merges, the project reaches the interactive alpha. The coordinator's answers, and the owner's, are added here as they come. The screens composed for this step are in [design/](design/).
 
-| Question | The coordinator's answer | Recorded in |
+| Question | The coordinator's answer, 2026-11-17 | Recorded in |
 |---|---|---|
-| The design below, and the screens of [design/screens.md](design/screens.md) | To come. | |
+| **The design below, and the screens of [design/screens.md](design/screens.md).** | **Accepted,** with the answers below, each settled by the coordinator; the owner sees them afterwards and can overturn them. | This record |
+| **(a) The imports' rows start unpicked**, so a skip leaves other tools' instruction files and skills off, unlike a hand-written configuration. | **Yes**, as designed: a skip means the same as nothing picked, and MCP servers stay unpicked too. Each row says plainly that unpicked leaves them off, and names the setting that turns them on later (`compat.instructions`, `compat.skills`). | Point 5; [design/screens.md](design/screens.md), F2a |
+| **(b) The mode before the project** in the first run. | **Yes.** 08's "First run" changes to match, with one sentence saying why. | [08-configuration.md](../../architecture/08-configuration.md), "First run" (the third pull request) |
+| **(c) No `unrestricted` at the first run.** | **Yes.** | Point 5 |
+| **(d) The wide cluster closed in the prompt editor's row only.** | **Yes,** for the reason given. The open item stays open for the rest, with that reason. | The owed items' table |
+| **(e) No `cortex setup`.** | **Yes,** on two conditions: when the flow ends or is skipped, its last line names the commands that redo each step (`cortex auth login`, `/mode`, `/project`, and the configuration file's path), and the docs say the same. An item for a later `cortex setup` only if one is needed. | Point 5 |
+| **(f) The three protocol additions** (`session/rewind_plan`, `project/detect`, `session/read`'s `redacted`), with no new protocol version. | **Yes.** Step 27's third pull request is in `cortex-rpc` and `cortex-protocol` too: whoever merges second regenerates. Because the core does the masking for `/export`, a test holds that `redacted: true` masks the same set the log's writer masks: one shared list, not two. | Point 6 |
+| **(g) Panels beside the transcript from 140 columns, and the look of the screens.** | **Yes,** with one change: the set-up card stays in the live region while the flow runs and is never committed; only its dim one-line results go to the scrollback, so once the session opens there is one header card. F1a to F4 are revised to match before they become golden screens. | [design/screens.md](design/screens.md) |
+| **Smaller points.** | F1b's count of characters is fine. F1a's wording of where a key is kept must match what step 9's store does on Linux, the keychain included where one is used. F3's one-line descriptions of the levels must match 06's rules in meaning: the third pull request's review checks them. | Point 5 |
 
 ## The design, before building
 

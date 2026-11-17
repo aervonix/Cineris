@@ -2,7 +2,7 @@
 
 The screens of step 25 that no reference screen draws yet, composed as text in the look of [decision 0033](../../../decisions/0033-tui-look.md) and [tui-look/](../../../architecture/tui-look/README.md), for the coordinator to judge against Roomy 2 and the golden screens before they are built widely; the owner sees them afterwards, for information. They are drafts: once the coordinator has answered, the ones kept become golden screens in `tui-look/` (step 25's third pull request), drawn by the real views and compared cell by cell. Until then the layout they show is kept easy to change. A script wrote them, so that every row is the width the window allows, one column less than the window's. They were revised after the design's review ([answered.md](../answered.md), "What the review found").
 
-- **The first run** (F1a to F4) is drawn inline, as the rest of the application is: each step takes the input box's place, as a dialog does, and once it is answered one dim line saying what it did is committed to the scrollback, so the steps already taken stay above the one being asked. The order is the provider, the imports, the mode, then the project: the configuration file is written after the mode, before the session opens, so that the first session is made with what the person chose. Step 4 comes after the session opened, so the session's header card is above it, and after its trust question (screen 2c) when the project has something to trust.
+- **The first run** (F1a to F4) is drawn inline, as the rest of the application is: each step takes the input box's place, as a dialog does, under the set-up card, which stays in the live region while the steps before the session run and is never committed (the coordinator's answer, 2026-11-17). Once a step is answered, one dim line saying what it did is committed to the scrollback, so the steps already taken stay above the one being asked. The order is the provider, the imports, the mode, then the project: the configuration file is written after the mode, before the session opens, so that the first session is made with what the person chose. Step 4 comes after the session opened: the session's header card is committed above it, the only card then, and its trust question (screen 2c) came before it when the project has something to trust.
 - **The full-screen presenter** (F5, F6) draws the same views. F5 is a window of 150 columns, where the panels sit in a column of their own beside the transcript; below the width at which they move there ([answered.md](../answered.md), design point 2), they are stacked above the input box as inline. As in step 24, a panel without the focus is drawn collapsed and the focused one whole. F6 is search.
 - **What is illustration.** The providers, the files found, the servers and the commands are examples. F1a is Linux's wording and F1b Windows'.
 
@@ -58,9 +58,11 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 
 ### F2a. The first run, step 2: what other tools left, nothing read or picked yet
 
-100 columns, 25 rows.
+100 columns, 28 rows.
 
 ```text
+· Provider: anthropic, its key from ANTHROPIC_API_KEY.
+
 ╭──────────────────────────────────────────────────────────────╮
 │ ◆ Cortex-Harness 0.1.0                                       │
 │                                                              │
@@ -68,17 +70,18 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 │   and x skips them all.                                      │
 ╰──────────────────────────────────────────────────────────────╯
 
-· Provider: anthropic, its key from ANTHROPIC_API_KEY.
-
 ◇ Imports  2 of 4
   Other tools left these. None is read, started or put in the prompt unless
-  you pick it. What you pick holds in every project.
+  you pick it, and what is left unpicked stays off. What you pick holds in
+  every project.
 
     Instructions
-  ◆ ☐ AGENTS.md, CLAUDE.md          read as each project's instructions
+  ◆ ☐ AGENTS.md, CLAUDE.md          read as each project's instructions;
+                                    off unless picked (compat.instructions)
     Skills
     ☐ .claude/skills, .agents/skills  yours and each project's, once this
-                                     version reads skills
+                                     version reads skills; off unless picked
+                                     (compat.skills)
     MCP servers
     ▸ ~/.claude.json                Claude Code's: space reads it
     ▸ ~/.cursor/mcp.json            Cursor's: space reads it
@@ -90,17 +93,17 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 
 ### F2b. The first run, step 2: one MCP file read, each server's command whole, one holding a credential
 
-100 columns, 27 rows.
+100 columns, 29 rows.
 
 ```text
+· Provider: anthropic, its key from ANTHROPIC_API_KEY.
+
 ╭──────────────────────────────────────────────────────────────╮
 │ ◆ Cortex-Harness 0.1.0                                       │
 │                                                              │
 │   Setting up, in four short steps. Each one can be skipped,  │
 │   and x skips them all.                                      │
 ╰──────────────────────────────────────────────────────────────╯
-
-· Provider: anthropic, its key from ANTHROPIC_API_KEY.
 
 ◇ Imports  2 of 4
   ~/.claude.json holds 3 MCP servers. One picked is written to your settings
@@ -109,6 +112,8 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 
     Instructions
     ☑ AGENTS.md, CLAUDE.md          read as each project's instructions
+    Skills
+    ☐ .claude/skills, .agents/skills  off unless picked (compat.skills)
     MCP servers
     ▾ ~/.claude.json                Claude Code's
   ◆   ☑ docs       npx -y @example/docs-mcp --root ~/src/docs
@@ -127,15 +132,15 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 100 columns, 21 rows.
 
 ```text
+· Provider: anthropic, its key from ANTHROPIC_API_KEY.
+· Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
+
 ╭──────────────────────────────────────────────────────────────╮
 │ ◆ Cortex-Harness 0.1.0                                       │
 │                                                              │
 │   Setting up, in four short steps. Each one can be skipped,  │
 │   and x skips them all.                                      │
 ╰──────────────────────────────────────────────────────────────╯
-
-· Provider: anthropic, its key from ANTHROPIC_API_KEY.
-· Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
 
 ◇ Mode  3 of 4
   How much the agent does before it asks you. /mode changes it at any time.
@@ -152,16 +157,9 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 
 ### F4. The first run, step 4: the project's commands, after the session opened and trust was asked (screen 2c)
 
-100 columns, 30 rows.
+100 columns, 23 rows.
 
 ```text
-╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cortex-Harness 0.1.0                                       │
-│                                                              │
-│   Setting up, in four short steps. Each one can be skipped,  │
-│   and x skips them all.                                      │
-╰──────────────────────────────────────────────────────────────╯
-
 · Provider: anthropic, its key from ANTHROPIC_API_KEY.
 · Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
 · Mode: supervised. Written to ~/.config/cortex-harness/config.toml.
