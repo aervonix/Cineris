@@ -183,13 +183,24 @@ impl App {
                 if answer.trim().is_empty() {
                     self.say("There is no answer to copy yet.");
                 } else {
-                    self.effects.push(Effect::Copy(answer));
+                    self.effects.push(Effect::Copy(answer.clone()));
                     // A terminal does not answer the clipboard sequence:
-                    // whether it took the text cannot be told.
-                    self.say(
-                        "Sent the last answer to the terminal's clipboard (a terminal that does \
-                         not take the clipboard sequence ignores it).",
-                    );
+                    // whether it took the text cannot be told. Where it is
+                    // thought not to, the text is shown to copy by hand too
+                    // (since step 25), with the terminal's own selection.
+                    if self.caps.clipboard {
+                        self.say(
+                            "Sent the last answer to the terminal's clipboard (a terminal that \
+                             does not take the clipboard sequence ignores it).",
+                        );
+                    } else {
+                        self.open_to_copy(&answer);
+                        self.say(
+                            "Sent the last answer to the terminal's clipboard, which this \
+                             terminal may not take: it is open in the viewer too, to select \
+                             with the mouse and copy. terminal.clipboard says whether it does.",
+                        );
+                    }
                 }
             }
             "theme" => {

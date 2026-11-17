@@ -13,8 +13,8 @@ use cineris_protocol::lease::{NetworkAccess, Rule};
 use cineris_protocol::{Level, ModelRole, Speed};
 
 use super::types::{
-    Bindings, ColorChoice, DensityChoice, GlyphChoice, Headers, PresenterChoice, Profiles,
-    ReasoningShown, ReasoningVisibility, Reserved, SessionDurability, StoreChoice,
+    BackspaceChoice, Bindings, ColorChoice, DensityChoice, GlyphChoice, Headers, PresenterChoice,
+    Profiles, ReasoningShown, ReasoningVisibility, Reserved, SessionDurability, StoreChoice,
     ToolOutputChoice, UsageRanges, VerifyMode, Weekday,
 };
 use super::{CONFIG_VERSION, settings};
@@ -866,6 +866,29 @@ settings! {
         /// `false`.
         [UserOnly, Restart]
         pub mouse: Option<bool>,
+        /// What byte 0x08 is: `ctrl+h` reads it as Backspace, for a terminal
+        /// whose Backspace sends `^H`; `del` as `Ctrl+Backspace`, which most
+        /// terminals send it for; `auto` decides from the terminal's erase
+        /// character.
+        [UserOnly, Restart]
+        pub backspace: BackspaceChoice = BackspaceChoice::Auto,
+        /// Bracketed paste: `true` trusts the terminal's brackets; `false`
+        /// does not ask for them, and takes keys that come many at once with
+        /// a line break inside for a paste; unset, it asks, and takes such a
+        /// burst for a paste only where the terminal has not said it knows
+        /// the mode.
+        [UserOnly, Restart]
+        pub bracketed_paste: Option<bool>,
+        /// How long a bracketed paste may pause before what it holds is
+        /// given as a paste; what follows of it, to its end, is its rest.
+        [UserOnly, Restart, 100ms..=1m]
+        pub paste_wait: Duration = Duration::from_secs(2),
+        /// Whether the terminal takes the clipboard sequence `/copy` sends:
+        /// `false` also shows the text in the viewer, to select and copy by
+        /// hand. Unset, it is guessed from the terminal: not the old console
+        /// host, tmux or GNU screen.
+        [UserOnly, Restart]
+        pub clipboard: Option<bool>,
     }
 }
 

@@ -122,6 +122,10 @@ terminal.color                     user only
 terminal.hyperlinks                user only
 terminal.unicode                   user only
 terminal.mouse                     user only
+terminal.backspace                 user only
+terminal.bracketed_paste           user only
+terminal.paste_wait                user only
+terminal.clipboard                 user only
 rpc.approval_timeout               user only
 rpc.stalled_client                 user only
 hooks.*                            runs code

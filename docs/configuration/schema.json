@@ -1126,6 +1126,29 @@
       "additionalProperties": true,
       "description": "What the terminal can do, in place of detecting it. Each is detected when it is not set.",
       "properties": {
+        "backspace": {
+          "default": "auto",
+          "description": "What byte 0x08 is: `ctrl+h` reads it as Backspace, for a terminal whose Backspace sends `^H`; `del` as `Ctrl+Backspace`, which most terminals send it for; `auto` decides from the terminal's erase character.",
+          "enum": [
+            "auto",
+            "del",
+            "ctrl+h"
+          ],
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
+        },
+        "bracketed_paste": {
+          "description": "Bracketed paste: `true` trusts the terminal's brackets; `false` does not ask for them, and takes keys that come many at once with a line break inside for a paste; unset, it asks, and takes such a burst for a paste only where the terminal has not said it knows the mode.",
+          "type": "boolean",
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
+        },
+        "clipboard": {
+          "description": "Whether the terminal takes the clipboard sequence `/copy` sends: `false` also shows the text in the viewer, to select and copy by hand. Unset, it is guessed from the terminal: not the old console host, tmux or GNU screen.",
+          "type": "boolean",
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
+        },
         "color": {
           "description": "How many colours: `none`, `16`, `256` or `truecolor`.",
           "enum": [
@@ -1153,6 +1176,18 @@
           "description": "The mouse in the viewer and the full-screen presenter: a click opens or closes a box, and the wheel scrolls; `shift` and a drag still select text. Never in the inline screen. On unless set to `false`.",
           "type": "boolean",
           "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
+        },
+        "paste_wait": {
+          "default": "2s",
+          "description": "How long a bracketed paste may pause before what it holds is given as a paste; what follows of it, to its end, is its rest.",
+          "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+          "type": "string",
+          "x-cineris-effect": "restart",
+          "x-cineris-milliseconds": {
+            "maximum": 60000,
+            "minimum": 100
+          },
           "x-cineris-trust": "user only"
         },
         "sync": {

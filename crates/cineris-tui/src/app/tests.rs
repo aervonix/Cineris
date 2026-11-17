@@ -2658,6 +2658,57 @@ fn copy_puts_the_last_answer_on_the_clipboard() {
     );
 }
 
+/// Where the terminal is thought not to take the clipboard sequence, `/copy`
+/// still sends it, and shows the answer in the viewer too, with the mouse
+/// not reported, so that a plain drag selects it (step 25,
+/// `copy-where-the-clipboard-sequence-is-not-taken`). The viewer closed, the
+/// mouse is the application's again.
+#[test]
+fn copy_shows_the_answer_to_copy_by_hand_where_the_clipboard_may_not_be_taken() {
+    let now = Instant::now();
+    let (mut app, link) = with_models(now);
+    let mut caps = crate::testkit::caps();
+    caps.clipboard = false;
+    app.set_caps(&caps);
+    link.give(event(Event::ItemCompleted(ItemCompleted {
+        item: Item::AssistantMessage(AssistantMessageItem {
+            id: ItemId::from("i_9"),
+            parts: vec![Part::text("The answer, \x1b[31mred\x1b[0m.\n")],
+            stop_reason: Some(StopReason::End),
+            raw_stop: None,
+            stop_detail: None,
+            truncated: false,
+            origin: None,
+            usage: None,
+            error: None,
+            created_at: None,
+        }),
+    })));
+    drain(&mut app, now);
+    assert!(app.mouse());
+    run_command(&mut app, "/copy", now);
+    assert_eq!(app.take_effects().len(), 1, "the sequence is still sent");
+    assert!(app.viewing(), "and the answer shown");
+    assert!(!app.mouse(), "with the mouse not reported");
+    let rows: Vec<String> = app
+        .viewer_frame(20, 79, now)
+        .iter()
+        .map(|line| line.text().into_owned())
+        .collect();
+    assert!(
+        rows.iter().any(|row| row == "The answer, [31mred[0m."),
+        "the text as /copy sent it, its escape characters dropped: {rows:#?}"
+    );
+    key(&mut app, "esc", now);
+    assert!(!app.viewing());
+    assert!(app.mouse());
+    // A terminal thought to take it: no viewer.
+    caps.clipboard = true;
+    app.set_caps(&caps);
+    run_command(&mut app, "/copy", now);
+    assert!(!app.viewing());
+}
+
 #[test]
 fn theme_picks_a_theme_for_the_run() {
     let now = Instant::now();

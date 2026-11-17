@@ -292,6 +292,9 @@ pub struct Decoder {
     /// Whether the program asked for the mouse (since step 25): only then is
     /// `CSI M` the start of mode 1000's own report, three bytes long.
     mouse: bool,
+    /// Whether byte 0x08 is `Backspace`, in a terminal whose Backspace sends
+    /// `^H`, rather than `Ctrl+Backspace` (since step 25).
+    ctrl_h_backspace: bool,
 }
 
 /// A sequence too long to keep, being dropped until it ends.
@@ -360,6 +363,15 @@ impl Decoder {
     /// (mode 1006) is read either way: no key sends it.
     pub fn set_mouse(&mut self, on: bool) {
         self.mouse = on;
+    }
+
+    /// Reads byte 0x08 as `Backspace` while `on` (since step 25): in a
+    /// terminal set to send `^H` for Backspace (`stty erase ^H`, an option of
+    /// PuTTY and of macOS Terminal). Off, as at the start, it is
+    /// `Ctrl+Backspace`, which most terminals send it for. A win32 input
+    /// record says which key it was, either way.
+    pub fn set_ctrl_h_backspace(&mut self, on: bool) {
+        self.ctrl_h_backspace = on;
     }
 
     /// Whether bytes are kept that more input would complete: the reader
@@ -442,6 +454,11 @@ impl Decoder {
             }
             if !self.mouse && self.buffer[start..].starts_with(b"\x1b[M") {
                 start += 3;
+                continue;
+            }
+            if self.ctrl_h_backspace && self.buffer[start] == 0x08 {
+                events.push(Event::Key(Key::plain(KeyCode::Backspace)));
+                start += 1;
                 continue;
             }
             match step(&self.buffer[start..], flushing) {

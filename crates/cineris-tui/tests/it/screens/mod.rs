@@ -87,6 +87,7 @@ fn capabilities(spec: Spec) -> Capabilities {
             color: Some(spec.depth),
             hyperlinks: Some(false),
             unicode: Some(!spec.ascii),
+            ..Overrides::default()
         },
     )
 }

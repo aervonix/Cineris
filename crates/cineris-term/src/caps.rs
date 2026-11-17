@@ -25,6 +25,22 @@ pub struct Overrides {
     pub hyperlinks: Option<bool>,
     /// Unicode glyphs, or ASCII ones.
     pub unicode: Option<bool>,
+    /// Byte 0x08 is `Backspace` (`true`) or `Ctrl+Backspace` (`false`);
+    /// unset, it is `Backspace` where the terminal's erase character is
+    /// `^H` (since step 25).
+    pub backspace_ctrl_h: Option<bool>,
+    /// Bracketed paste: `true` trusts the terminal's brackets and never
+    /// takes keys for a paste; `false` does not ask for brackets, and takes
+    /// a burst of keys for a paste in every terminal; unset, it asks, and
+    /// takes a burst for a paste only where the terminal has not said it
+    /// knows the mode (since step 25).
+    pub bracketed_paste: Option<bool>,
+    /// How long a bracketed paste may pause before it is given up on and
+    /// what it holds given as a paste; unset, two seconds (since step 25).
+    pub paste_wait: Option<std::time::Duration>,
+    /// The terminal takes the clipboard sequence (OSC 52); unset, guessed
+    /// (since step 25).
+    pub clipboard: Option<bool>,
 }
 
 /// The system the terminal runs on, which changes what the environment
@@ -87,6 +103,18 @@ pub struct Capabilities {
     /// Escape sequences are of no use at all (`TERM=dumb`): the interactive
     /// interface should not start.
     pub dumb: bool,
+    /// Byte 0x08 is `Backspace` (since step 25): the override, or the
+    /// terminal's erase character, which the terminal layer reads as it
+    /// enters the terminal.
+    pub backspace_ctrl_h: bool,
+    /// The terminal said it knows bracketed paste (DECRQM 2004), so its
+    /// pastes come bracketed and no burst of keys is taken for one (since
+    /// step 25). Known only from its reply; until then, `false`.
+    pub paste_confirmed: bool,
+    /// The terminal is thought to take the clipboard sequence (OSC 52),
+    /// which it never answers (since step 25): not the old console host,
+    /// tmux (whose default passes no program's sequence on) or GNU screen.
+    pub clipboard: bool,
     overrides: Overrides,
 }
 
@@ -105,7 +133,8 @@ impl Capabilities {
     /// 9001), the enhanced keyboard protocol's flags,
     /// the background colour, and last the device attributes, which every
     /// terminal answers.
-    pub const QUERIES: &'static [u8] = b"\x1b[?2026$p\x1b[?9001$p\x1b[?u\x1b]11;?\x1b\\\x1b[c";
+    pub const QUERIES: &'static [u8] =
+        b"\x1b[?2026$p\x1b[?9001$p\x1b[?2004$p\x1b[?u\x1b]11;?\x1b\\\x1b[c";
 
     /// Decides from the environment, then applies `overrides`. `env` reads
     /// one environment variable.
@@ -173,6 +202,12 @@ impl Capabilities {
             background: None,
             dumb,
             vt_mouse: platform == Platform::Unix,
+            backspace_ctrl_h: overrides.backspace_ctrl_h.unwrap_or(false),
+            paste_confirmed: false,
+            clipboard: !dumb
+                && !legacy_console
+                && var("TMUX").is_none()
+                && !term.starts_with("screen"),
             overrides,
         };
         caps.enforce();
@@ -192,6 +227,8 @@ impl Capabilities {
                 _ => {}
             },
             Reply::Mode { mode: 9001, state } => self.win32_input = matches!(state, 1..=3),
+            // Known, set or not: the terminal brackets its pastes (step 25).
+            Reply::Mode { mode: 2004, state } => self.paste_confirmed = matches!(state, 1..=4),
             Reply::Keyboard(_) => self.keyboard = true,
             Reply::Background(r, g, b) => self.background = Some((r, g, b)),
             Reply::Mode { .. } | Reply::DeviceAttributes => {}
@@ -204,6 +241,19 @@ impl Capabilities {
     #[must_use]
     pub fn overrides(&self) -> Overrides {
         self.overrides
+    }
+
+    /// Whether a burst of keys in one read is taken for a paste (since step
+    /// 25): unless the override trusts the brackets, where the terminal has
+    /// not said it knows them, or everywhere when the override says not to
+    /// ask for them.
+    #[must_use]
+    pub fn rates_pastes(&self) -> bool {
+        match self.overrides.bracketed_paste {
+            Some(true) => false,
+            Some(false) => true,
+            None => !self.paste_confirmed,
+        }
     }
 
     fn enforce(&mut self) {
@@ -224,6 +274,9 @@ impl Capabilities {
         if let Some(unicode) = o.unicode {
             self.unicode = unicode;
         }
+        if let Some(clipboard) = o.clipboard {
+            self.clipboard = clipboard;
+        }
     }
 }
 
@@ -233,6 +286,59 @@ mod tests {
 
     fn detect(vars: &[(&str, &str)], platform: Platform) -> Capabilities {
         detect_with(vars, platform, Overrides::default())
+    }
+
+    /// The clipboard sequence is thought taken except by the old console
+    /// host, tmux and GNU screen; the override has the last word (step 25).
+    #[test]
+    fn the_clipboard_is_guessed_from_the_terminal_and_overridden() {
+        let xterm = [("TERM", "xterm-256color")];
+        assert!(detect(&xterm, Platform::Unix).clipboard);
+        assert!(
+            !detect(
+                &[("TERM", "xterm-256color"), ("TMUX", "/tmp/t,1,0")],
+                Platform::Unix
+            )
+            .clipboard
+        );
+        assert!(!detect(&[("TERM", "screen-256color")], Platform::Unix).clipboard);
+        assert!(
+            !detect(&[], Platform::Windows).clipboard,
+            "the old console host"
+        );
+        assert!(detect(&[("WT_SESSION", "1")], Platform::Windows).clipboard);
+        let told = |clipboard| Overrides {
+            clipboard: Some(clipboard),
+            ..Overrides::default()
+        };
+        assert!(detect_with(&[("TMUX", "/tmp/t,1,0")], Platform::Unix, told(true)).clipboard);
+        assert!(!detect_with(&xterm, Platform::Unix, told(false)).clipboard);
+    }
+
+    /// A terminal that says it knows bracketed paste, set or not, has no
+    /// burst of keys taken for a paste; one that does not know it, or does
+    /// not say, has. The override trusts the brackets, or asks for none
+    /// (step 25).
+    #[test]
+    fn bursts_are_taken_for_pastes_only_where_brackets_are_not_known() {
+        let xterm = [("TERM", "xterm-256color")];
+        for (state, rates) in [(1, false), (2, false), (3, false), (4, false), (0, true)] {
+            let mut caps = detect(&xterm, Platform::Unix);
+            assert!(caps.rates_pastes(), "not known until it says");
+            caps.apply(&Reply::Mode { mode: 2004, state });
+            assert_eq!(caps.rates_pastes(), rates, "state {state}");
+        }
+        let told = |bracketed_paste| Overrides {
+            bracketed_paste: Some(bracketed_paste),
+            ..Overrides::default()
+        };
+        assert!(!detect_with(&xterm, Platform::Unix, told(true)).rates_pastes());
+        let mut caps = detect_with(&xterm, Platform::Unix, told(false));
+        caps.apply(&Reply::Mode {
+            mode: 2004,
+            state: 1,
+        });
+        assert!(caps.rates_pastes(), "not asked for: every burst is weighed");
     }
 
     fn detect_with(
@@ -337,6 +443,7 @@ mod tests {
             color: Some(ColorDepth::Indexed256),
             hyperlinks: Some(true),
             unicode: Some(true),
+            ..Overrides::default()
         };
         let mut caps = detect_with(&[("TERM", "dumb")], Platform::Unix, overrides);
         assert!(caps.sync && caps.hyperlinks && caps.unicode);

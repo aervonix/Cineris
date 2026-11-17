@@ -118,6 +118,12 @@ fn our_input_mode(found: u32) -> u32 {
         & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_MOUSE_INPUT)
 }
 
+/// A console's Backspace sends DEL, and `Ctrl+Backspace` 0x08; the win32
+/// input mode says which key it was, either way (since step 25).
+pub(crate) fn erase_is_ctrl_h() -> bool {
+    false
+}
+
 /// The buttons the last mouse record said were down, to tell a press from
 /// a release.
 static BUTTONS: AtomicU32 = AtomicU32::new(0);
