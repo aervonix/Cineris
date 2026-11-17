@@ -29,9 +29,12 @@ pub struct Restyled {
     pub settings: Settings,
     /// The key map.
     pub keymap: KeyMap,
-    /// What could not be used, said once: a theme not known, a binding the
-    /// map cannot take.
-    pub notices: Vec<String>,
+    /// What of the look could not be used (a theme not known): said when
+    /// the theme changed.
+    pub look_notices: Vec<String>,
+    /// What of the key map could not be used (a binding the map cannot
+    /// take): said when the key map is replaced.
+    pub key_notices: Vec<String>,
 }
 
 /// Builds [`Restyled`] from `config/get`'s answer for the `tui` and `keys`
@@ -94,17 +97,24 @@ impl App {
         if !(tui || keys) || self.restyle.is_none() {
             return;
         }
-        if self
+        let theme = applied.iter().any(|key| key == "tui.theme");
+        // One already asked for takes what this one changed too: its
+        // answer is read after both.
+        if let Some(Pending::Restyle {
+            keys: asked_keys,
+            theme: asked_theme,
+        }) = self
             .pending
-            .values()
-            .any(|pending| matches!(pending, Pending::Restyle { .. }))
+            .values_mut()
+            .find(|pending| matches!(pending, Pending::Restyle { .. }))
         {
+            *asked_keys |= keys;
+            *asked_theme |= theme;
             return;
         }
         let Some(session) = self.session.as_ref().map(|s| s.session_id.clone()) else {
             return;
         };
-        let theme = applied.iter().any(|key| key == "tui.theme");
         let ticket = self.link.send(Op::ConfigGet(ConfigGetParams {
             session_id: Some(session),
             keys: vec!["tui".to_owned(), "keys".to_owned()],
@@ -124,7 +134,8 @@ impl App {
         let Restyled {
             mut settings,
             keymap,
-            notices,
+            look_notices,
+            key_notices,
         } = match restyle(config) {
             Ok(restyled) => restyled,
             Err(why) => {
@@ -145,7 +156,13 @@ impl App {
         if keys {
             self.set_keymap(keymap);
         }
-        for notice in notices {
+        // Each said only with the change it is about: an entry that could
+        // not be used is not said again for a change of something else.
+        let said = if theme { look_notices } else { Vec::new() };
+        for notice in said
+            .into_iter()
+            .chain(if keys { key_notices } else { Vec::new() })
+        {
             self.say(&notice);
         }
     }

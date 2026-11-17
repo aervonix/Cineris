@@ -49,8 +49,13 @@ pub(super) struct Viewer {
     /// transcript, while its dialog is the one open.
     whole: Option<RequestId>,
     /// It shows this text (a check's whole output, step 24), not the
-    /// transcript: its label, then its lines.
+    /// transcript: its label, then its lines, as a command's output is
+    /// shown (sanitised, a carriage return taking the line back, tabs
+    /// expanded).
     text: Option<(String, Vec<String>)>,
+    /// The text's rows at the width they were last made for: made again
+    /// only when the width changes, not at every frame or scroll.
+    text_rows: Option<(usize, Vec<Line>)>,
 }
 
 /// The rows of the transcript in the viewer, and where each box's rows are.
@@ -117,7 +122,7 @@ impl App {
         if self.zone.is_none() {
             self.zone = Some(Zone::system());
         }
-        let mut lines: Vec<String> = artifact.text.lines().map(str::to_owned).collect();
+        let mut lines = crate::view::round::output_lines(&artifact.text);
         if artifact.cut {
             lines.push(String::new());
             lines.push(format!(
@@ -172,6 +177,30 @@ impl App {
             return Vec::new();
         };
         let width = width.max(1);
+        // A text's rows, made once for the width (`output_lines` has made
+        // it safe to show): a scroll draws them, it does not make them.
+        if let Some((label, lines)) = &state.text
+            && state
+                .text_rows
+                .as_ref()
+                .is_none_or(|(made_for, _)| *made_for != width)
+        {
+            let mut rows = crate::layout::wrap(
+                &[cortex_term::Span::new(
+                    cortex_term::sanitize(label).into_owned(),
+                    self.look.theme.style(crate::theme::Token::Muted),
+                )],
+                width,
+            );
+            rows.push(Line::new());
+            for line in lines {
+                rows.extend(crate::layout::wrap(
+                    &[cortex_term::Span::plain(line.clone())],
+                    width,
+                ));
+            }
+            state.text_rows = Some((width, rows));
+        }
         let drawn = self.viewer_rows(&state, width);
         let body = rows.saturating_sub(FRAME_ROWS).max(1);
         state.body = body;
@@ -249,25 +278,13 @@ impl App {
             }
             return Drawn { rows, boxes };
         }
-        if let Some((label, lines)) = &state.text {
-            // What acts unseen is shown as its escape, and each line wraps
-            // to the width: the output of a command the repository holds.
-            rows.extend(crate::layout::wrap(
-                &[cortex_term::Span::new(
-                    cortex_term::sanitize(label).into_owned(),
-                    self.look.theme.style(crate::theme::Token::Muted),
-                )],
-                width,
-            ));
-            rows.push(Line::new());
-            for line in lines {
-                rows.extend(crate::layout::wrap(
-                    &[cortex_term::Span::plain(
-                        cortex_term::sanitize(line).into_owned(),
-                    )],
-                    width,
-                ));
-            }
+        if state.text.is_some() {
+            rows = state
+                .text_rows
+                .as_ref()
+                .filter(|(made_for, _)| *made_for == width)
+                .map(|(_, rows)| rows.clone())
+                .unwrap_or_default();
             return Drawn { rows, boxes };
         }
         for part in &self.kept {

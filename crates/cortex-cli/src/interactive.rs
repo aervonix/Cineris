@@ -442,14 +442,14 @@ fn restyle(config: &serde_json::Map<String, serde_json::Value>) -> Result<app::R
     let tui = cortex_config::schema::read_section::<TuiSettings>(config, "tui").map_err(unread)?;
     let keys =
         cortex_config::schema::read_section::<KeySettings>(config, "keys").map_err(unread)?;
-    let mut notices = Vec::new();
-    let settings = tui_settings(&tui, &mut notices);
-    let (keymap, errors) = keymap(&keys);
-    notices.extend(errors);
+    let mut look_notices = Vec::new();
+    let settings = tui_settings(&tui, &mut look_notices);
+    let (keymap, key_notices) = keymap(&keys);
     Ok(app::Restyled {
         settings,
         keymap,
-        notices,
+        look_notices,
+        key_notices,
     })
 }
 
@@ -1162,18 +1162,18 @@ mod tests {
             submit.contains(&cortex_tui::keys::parse("ctrl+j").unwrap()),
             "{submit:?}"
         );
-        assert_eq!(restyled.notices.len(), 1, "{:?}", restyled.notices);
+        assert_eq!(restyled.key_notices.len(), 1, "{:?}", restyled.key_notices);
 
         answer.insert("tui.theme".to_owned(), "dusk".into());
         let restyled = restyle(&answer).unwrap();
         assert_eq!(restyled.settings.theme, app::ThemeChoice::Auto);
         assert!(
             restyled
-                .notices
+                .look_notices
                 .iter()
                 .any(|notice| notice.contains("dusk")),
             "{:?}",
-            restyled.notices
+            restyled.look_notices
         );
 
         answer.insert("tui.prose_width".to_owned(), "wide".into());
