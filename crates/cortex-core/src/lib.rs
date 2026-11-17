@@ -63,6 +63,7 @@ pub use crate::provider::{ANTHROPIC_KEY_ENV, Connector, EFFORT_ALIASES, KeyFound
 pub use crate::reload::{CHOICE_BEING_KEPT, TRUST_JUDGED};
 pub use crate::repo_map::Probe;
 pub use crate::rules::parse_rule;
+pub use crate::usage::AGGREGATES_READ;
 pub use crate::usage::StatsSummary;
 /// The runtime's timer, which the core's options take: the provider layer's
 /// and the process runner's waits are on it.

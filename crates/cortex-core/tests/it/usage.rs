@@ -671,3 +671,86 @@ fn the_report_and_cortex_stats_say_what_the_aggregates_file_was() {
     let report = world.run(core.handle(client.id, Op::UsageReport(today)));
     assert!(report.is_ok(), "{report:?}");
 }
+
+/// The aggregates a report read are kept for the next: a report with
+/// nothing new opens the aggregates' file no more; one after the file was
+/// put in place by another process reads it again, even when the other
+/// process put it there while a report was reading the one before, and
+/// what was kept is given back after a quiet minute (step 24's third part,
+/// the usage panel's year within one frame).
+#[test]
+fn the_aggregates_are_read_again_only_when_they_are_not_the_files() {
+    let world = World::new("usage_kept", [says("Done.")]);
+    let core = world.core_with(|options| options.zone = Some(cortex_base::Zone::utc()));
+    let stats = cortex_stats::StatsDir::new(world.dirs().state.unwrap().join("stats"));
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("go").await;
+        front.close().await;
+    });
+    // The first report brings the aggregates up to date and saves them; it
+    // keeps nothing, so the second reads them, and keeps them.
+    let _ = world.run(report(&core, UsageRange::Today));
+    let before = cortex_stats::reads(&stats);
+    let _ = world.run(report(&core, UsageRange::Today));
+    let reading = cortex_stats::reads(&stats) - before;
+    let before = cortex_stats::reads(&stats);
+    let kept = world.run(report(&core, UsageRange::Today));
+    assert_eq!(kept.totals.requests, 1);
+    assert_eq!(
+        cortex_stats::reads(&stats) - before,
+        reading - 1,
+        "the aggregates kept were read again"
+    );
+
+    // Another process puts a file of its own in place, at the same length.
+    let replace = || {
+        let path = stats.aggregates_file();
+        let copy = stats.root().join("aggregates.json.other");
+        std::fs::copy(&path, &copy).unwrap();
+        std::fs::rename(&copy, &path).unwrap();
+    };
+    replace();
+    let before = cortex_stats::reads(&stats);
+    let _ = world.run(report(&core, UsageRange::Today));
+    assert_eq!(
+        cortex_stats::reads(&stats) - before,
+        reading,
+        "another's file was not read"
+    );
+
+    // A file put in place while a report reads the one before: the next
+    // report reads it, since what was kept is of the file read, not of the
+    // one there when the report ended.
+    replace();
+    let read = cortex_testkit::Hold::new(cortex_core::AGGREGATES_READ);
+    std::thread::scope(|scope| {
+        let replacing = scope.spawn(|| {
+            read.reach();
+            replace();
+            read.release();
+        });
+        let _ = world.run(report(&core, UsageRange::Today));
+        replacing.join().unwrap();
+    });
+    let before = cortex_stats::reads(&stats);
+    let _ = world.run(report(&core, UsageRange::Today));
+    assert_eq!(
+        cortex_stats::reads(&stats) - before,
+        reading,
+        "the file put in place during the read was taken for the one read"
+    );
+
+    // Kept again; and given back after a quiet minute.
+    let _ = world.run(report(&core, UsageRange::Today));
+    world.timer.advance(std::time::Duration::from_secs(61));
+    world.run(crate::settle());
+    let before = cortex_stats::reads(&stats);
+    let _ = world.run(report(&core, UsageRange::Today));
+    assert_eq!(
+        cortex_stats::reads(&stats) - before,
+        reading,
+        "the aggregates were still kept after a quiet minute"
+    );
+    world.run(core.shutdown());
+}

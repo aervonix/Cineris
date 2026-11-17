@@ -225,26 +225,28 @@ caught-by:
 rule: A file's state holds the file itself, so that a save of the same length within the clock's granularity is another state.
 file: crates/cortex-core/src/usage.rs
 in: FileState::of
-find: let file = cortex_base::FileIdentity::at(path).ok()?;
-replace: let file = cortex_base::FileIdentity::at(Path::new(".")).ok()?;
+find: file: cortex_base::FileIdentity::of(&file).ok()?
+replace: file: cortex_base::FileIdentity::at(Path::new(".")).ok()?
 caught-by:
     cortex-core usage::tests::a_file_saved_again_at_the_same_length_is_another
 
 [break] the-aggregates-are-never-kept
-rule: A usage report keeps the aggregates it read for the next. Only the time shows it (`cortex-stats`' `perf_a_years_report_for_the_usage_panel`, the kept reports' measurement): every report is as correct without it.
+rule: A usage report keeps the aggregates it read for the next, which then opens the aggregates' file no more.
 file: crates/cortex-core/src/usage.rs
 in: report
 find: Some(state) if to_keep(aggregates.found(), saved) => Some(AggregatesCache {
 replace: Some(state) if false && to_keep(aggregates.found(), saved) => Some(AggregatesCache {
-expect: survives
+caught-by:
+    cortex-core::it usage::the_aggregates_are_read_again_only_when_they_are_not_the_files
 
 [break] the-kept-aggregates-are-never-dropped
-rule: The aggregates kept are dropped after a quiet minute, so that an application left alone holds no year of statistics. Only the memory shows it: every report is as correct either way.
+rule: The aggregates kept are given back after a quiet minute, so that an application left alone holds no year of statistics.
 file: crates/cortex-core/src/usage.rs
 in: report
-find: if cache.as_ref().is_some_and(|cache| cache.used == used) {
-replace: if false && cache.as_ref().is_some_and(|cache| cache.used == used) {
-expect: survives
+find: Ok(mut cache) if cache.as_ref().is_some_and(|cache| cache.used == used) => {
+replace: Ok(mut cache) if false && cache.as_ref().is_some_and(|cache| cache.used == used) => {
+caught-by:
+    cortex-core::it usage::the_aggregates_are_read_again_only_when_they_are_not_the_files
 
 [break] an-untrusted-projects-profile-is-loaded
 rule: A profile only a project not trusted defines is not loaded for the session.
@@ -303,3 +305,18 @@ find: let mut lines = crate::view::round::output_lines(&artifact.text);
 replace: let mut lines: Vec<String> = artifact.text.lines().map(|line| cortex_term::sanitize(line).into_owned()).collect();
 caught-by:
     cortex-tui app::tests::panels::enter_on_a_check_opens_its_whole_output_in_the_viewer
+
+[break] the-state-kept-is-the-files-at-the-end
+rule: The aggregates are kept with the state of the file they were read from, taken before the read: a file another process put in place meanwhile is read by the next report, never taken for the one read.
+file: crates/cortex-core/src/usage.rs
+in: report
+find:
+                        path,
+                        state,
+                        aggregates
+replace:
+                        state: FileState::of(&path).unwrap_or(state),
+                        path,
+                        aggregates
+caught-by:
+    cortex-core::it usage::the_aggregates_are_read_again_only_when_they_are_not_the_files
