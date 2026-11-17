@@ -213,10 +213,33 @@ pub(crate) enum Which {
     Resume { id: SessionId },
 }
 
+/// A session to write as a fork of another, as it is put together: once
+/// its configuration has passed the gate of its level, so that a fork that
+/// is refused leaves no stored session, and the configuration is read once
+/// (the reviews of step 27's second pull request).
+#[derive(Clone)]
+pub(crate) struct ForkFrom {
+    /// The log of the session forked.
+    pub(crate) log: SharedLog,
+    /// The entry the fork goes back to: the end of the branch with none.
+    pub(crate) at: Option<cortex_session::entry::EntryId>,
+}
+
+impl std::fmt::Debug for ForkFrom {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ForkFrom")
+            .field("at", &self.at)
+            .finish_non_exhaustive()
+    }
+}
+
 /// What a session is asked to be.
 #[derive(Debug, Clone)]
 pub(crate) struct Wanted {
     pub(crate) which: Which,
+    /// For `session/fork`: the session to write it from, before it is
+    /// opened as a stored one (`which` is then [`Which::Resume`]).
+    pub(crate) fork: Option<ForkFrom>,
     pub(crate) workspace: PathBuf,
     pub(crate) settings: SessionSettings,
     /// Overrides for this session, over the core's own.
@@ -589,18 +612,6 @@ fn place(inner: &Inner, wanted: &Wanted) -> Result<Place, Box<ErrorData>> {
         load,
         state,
     })
-}
-
-/// The level a session put together for `wanted` would start at, read
-/// from the configuration as [`assemble`] reads it: for a check made before
-/// anything of the session is written (a fork's log). Blocks.
-pub(crate) fn starting_level(
-    inner: &Inner,
-    wanted: &Wanted,
-) -> Result<cortex_protocol::lease::Level, Box<ErrorData>> {
-    let place = place(inner, wanted)?;
-    let trust = trust(inner, place.state.as_ref(), &place.root, &place.load)?;
-    Ok(trust.loaded.settings.permissions.mode.clone())
 }
 
 /// The project's trust as a session would be put together with it, and
@@ -2092,6 +2103,30 @@ pub(crate) fn assemble(
             redactor: Arc::new(LogRedactor(Arc::clone(&filter))),
             harness: options.harness_version.clone(),
         };
+        // A fork is written now, its level having passed the gate above.
+        if let Some(fork) = &wanted.fork {
+            let mut kept = fork
+                .log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let Some(disk) = kept.disk() else {
+                return Err(error(
+                    ErrorKind::Usage,
+                    "session_not_stored",
+                    "A session with no log cannot be forked.",
+                ));
+            };
+            let (forked, _) = disk
+                .session
+                .fork(
+                    fork.at.as_ref(),
+                    id.clone(),
+                    SessionOptions::new(Arc::clone(&clock), options.harness_version.clone()),
+                )
+                .map_err(|failure| session_error(&failure))?;
+            // Its lock is let go: it is opened below, as any stored session.
+            drop(forked);
+        }
         let session = if resume {
             let (session, report) =
                 cortex_session::Session::resume(&sessions, &id, session_options)
