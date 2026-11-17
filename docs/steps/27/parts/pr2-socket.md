@@ -69,5 +69,47 @@ The second review read the fixes alone, and confirmed two defects with probes of
 | A refused `session/fork` left its stored log behind | The fork's level is judged before the fork is written |
 | Two of the core's new tests failed on Windows, and one ran `make` through PowerShell in tier 2 | The tests use the system's own paths; the one that runs a command is `sys_`, on Linux, where a command can be within a grant |
 
+The third review read the second round's fixes alone. It found no path to a level past the gate and no command a grant covers where it should not; it found these, each now a test and a break:
+
+| Finding | Fix |
+|---|---|
+| While the user's file asked for `unrestricted`, a reload changed nothing for the session, a new `deny` included | The level is left out of what is applied, and said in the reload's `errors` with the restart it needs; the rest is applied |
+| A profile whose level was refused was half chosen when the same reload took trust away, and every reload after it failed | A profile whose level is refused is not chosen at all; only trust's part is applied |
+| The notice said nothing of a grant that covers nothing because its engine cannot be made; scopes were compared by their text | One engine for the judge and the notice, whose failure the notice gives; `guided` read as `supervised`; scopes compared by what they hold |
+| A read of a parent that failed for want of descriptors admitted the peer; a parent of the user's own that `/proc` hides passes as another user's | Only a parent `/proc` does not show ends the line; any other failure refuses; the hidden parent is a residual risk in security.md |
+| A fork's level was judged on one read of the configuration and the fork opened on another | The fork is written in the assembly that judges it, from its one load |
+
 A race the first round of the core work found, a client that opened the session while an approval was being put, has a test that stops the turn between the two with an awaited point (`approvals::a_client_that_opens_the_session_while_an_approval_is_being_put_is_put_it`), as the coordinator asked.
+
+## Open items
+
+- **Opened:** [sessions-kept-with-no-client](../../../outstanding/sessions-kept-with-no-client.md) (what a kept session costs, and what ends one), and [windows-tier-2-at-its-budget](../../../outstanding/windows-tier-2-at-its-budget.md) (the A/B below; `main` alone at 97% on the slower runners).
+- **Settled:** `session-list-paging-by-index` and `a-history-reads-pages-can-move-an-item` (the cursors), `an-observer-that-ends-a-session` and `a-closed-view-can-still-answer` (the close rules, approved by the owner), and `secret-filter-on-what-clients-are-sent` (left unfiltered, the owner's answer).
+- **Left as they are:** a grant's stop conditions other than `time` are not judged (said in `within_grant`'s comment); the notice of a grant's limits reaches every client of the session (accepted by the coordinator); the judge of a supervisor's answer builds an engine on the thread that answers.
+
+## Breaks, stress and the tiers
+
+- **Breaks:** `cargo xtask mutate step-27 step-27-core` on the final code: 92 of 92 did what the lists expect. `mutate step-27-pipe` on a Windows runner (`try` run 43969694525): 16 of 16, the AppContainer's surviving as its list expects (no test can make such a token, and the integrity check refuses one first).
+- **Stress:** `stress -p cortex-rpc -p cortex-core`, 469 tests, 50 times plain and 30 times with `--cores 2 --load 6`: every test passed every time.
+- **The tiers,** one runner each, the pull request against `main`, the median of 5 rounds (`try` runs 43995212251, Linux, and 43993769569, Windows, at a 5 ms process start):
+
+| OS | Tier | The PR | `main` | Change | Budget |
+|---|---|---|---|---|---|
+| Linux | 1, unit | 12.6 s | 12.6 s | +0.0 s | 20 s |
+| Linux | 2, integration | 22.1 s | 21.8 s | +0.4 s | 40 s |
+| Linux | 3, system | 22.7 s | 22.5 s | +0.2 s | 60 s |
+| Windows | 1, unit | 9.1 s | 9.1 s | +0.0 s | 20 s |
+| Windows | 2, integration | 22.6 s | 21.1 s | +1.5 s | 40 s |
+| Windows | 3, system | 51.1 s | 51.3 s | −0.3 s | 90 s |
+
+On a slower Windows runner (8 ms a process start; `try` run 43985112180) tier 2 read 40.9 s against `main`'s 38.8 s, past its warning: the coordinator accepted it for this pull request, and [windows-tier-2-at-its-budget](../../../outstanding/windows-tier-2-at-its-budget.md) leaves the budget to the owner. The first Linux run of the final A/B failed on `cortex-index`'s memory-peak test, a known item ([a-memory-peak-test-near-its-limit](../../../outstanding/a-memory-peak-test-near-its-limit.md)), and passed again.
+
+## Public API
+
+Added, nothing removed or changed (`cargo xtask api-diff --against origin/main`):
+
+- **`cortex-core`** (7): `Core::connect_with_grant`, `CoreOptions::keep_sessions` and `allow_unrestricted`, `events::DELTA_BYTES_PER_PLACE`, `QUEUE_DELTA_BYTES` and `EventQueue::delta_bytes`, and the awaited point `BEFORE_THE_APPROVAL_IS_OPEN`.
+- **`cortex-protocol`** (2): `error::code::INVALID_CURSOR` and `UNRESTRICTED_NOT_ALLOWED`.
+- **`cortex-rpc`** (27): the `socket` module (`Place`, `ListenOptions`, `Listener`, `Accepted`, the point `BEFORE_A_PEERS_PARENTS_ARE_READ`), `serve_socket`, `Ended::Silent`, `Connection::set_server_ending`, and `ServeOptions::initialize_within` and `supervisor_grant`; behind `test-hooks`, `ListenOptions::widen_access_for_tests` and `failing_accepts`.
+- **`cortex-base`** (Windows only, which the Linux listing cannot show): `private::current_user_sid`.
 
