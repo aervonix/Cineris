@@ -503,6 +503,7 @@ fn sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back()
                     session_id: front.session.clone(),
                     to: keep,
                     restore_files: true,
+                    plan: None,
                 },
             ))
             .await
@@ -783,6 +784,7 @@ fn sys_undo_does_not_write_through_a_link_a_command_planted() {
                     session_id: front.session.clone(),
                     to: keep,
                     restore_files: true,
+                    plan: None,
                 },
             ))
             .await

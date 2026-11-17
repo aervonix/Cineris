@@ -656,6 +656,7 @@ fn sys_a_check_that_changes_a_protected_path_stops_the_turn_and_undo_puts_it_bac
                     session_id: front.session.clone(),
                     to: keep,
                     restore_files: true,
+                    plan: None,
                 },
             ))
             .await

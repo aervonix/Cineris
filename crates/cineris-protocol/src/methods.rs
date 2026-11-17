@@ -313,6 +313,107 @@ pub struct SessionRewindParams {
     /// snapshots of the turns that are undone.
     #[serde(default)]
     pub restore_files: bool,
+    /// The `mark` of the plan `session/rewind_plan` gave, which the person
+    /// was shown (since step 25). The plan is made again, and the rewind is
+    /// refused (`plan_changed`), changing nothing, when it is not that one:
+    /// with `restore_files`, when its turns or what it would do to any file
+    /// differ; without, when its turns do. Absent: no plan is checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+}
+
+/// `session/rewind_plan`: what `session/rewind` to the same item would do
+/// now, changing nothing (since step 25). A front end shows it before it
+/// asks whether to put files back: the turns it would undo, and each file
+/// they changed with what it would go back to. Refused as `session/rewind`
+/// would be: `session_not_stored` for a session with no log, `unknown_item`,
+/// `turn_running` while a turn runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SessionRewindPlanParams {
+    /// The session.
+    pub session_id: SessionId,
+    /// The last item the rewind would keep on the active branch.
+    pub to: ItemId,
+}
+
+/// The result of `session/rewind_plan`: the plan the core would carry out
+/// (`docs/architecture/07-sessions-and-context.md`, "Snapshots and undo").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SessionRewindPlanResult {
+    /// The turns it would undo, wholly or in part, oldest first.
+    pub turns: Vec<TurnId>,
+    /// The files those turns changed, in the order they were first changed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<RewindFile>,
+    /// A checkpoint of those turns cannot be read: what they changed is not
+    /// wholly known, and no file would be put back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unreadable: bool,
+    /// The plan in a few characters: given back as `session/rewind`'s
+    /// `plan`, it has that rewind refused when the plan has changed since.
+    pub mark: String,
+}
+
+/// One file of a rewind's plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RewindFile {
+    /// The file as the session's checkpoints name it: relative to the
+    /// workspace's root, or absolute outside it.
+    pub path: String,
+    /// What it would go back to.
+    pub to: RewindTarget,
+    /// Whether it can be put back now.
+    pub status: RewindFileStatus,
+    /// Why it cannot be put back, when `status` is `cannot`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why_not: Option<RewindWhyNot>,
+}
+
+open_enum! {
+    /// What a rewind would put a file back to.
+    pub enum RewindTarget {
+        /// Its content before the turns undone.
+        Content => "content",
+        /// No file: it did not exist then, and would be removed.
+        Removed => "removed",
+        /// Not known: a command changed it, and what it held before was
+        /// not recorded. It is never removed or overwritten.
+        NotRecorded => "not_recorded",
+    }
+}
+
+open_enum! {
+    /// Whether a file of a rewind's plan can be put back now.
+    pub enum RewindFileStatus {
+        /// It is as the harness left it: putting it back is safe.
+        AsLeft => "as_left",
+        /// It is already as it would be put back.
+        Already => "already",
+        /// It was changed after the harness left it: the rewind asks before
+        /// it puts it back, and keeps it unless told otherwise.
+        EditedSince => "edited_since",
+        /// It cannot be put back, and is left as it is: `why_not` says why.
+        Cannot => "cannot",
+    }
+}
+
+open_enum! {
+    /// Why a file of a rewind's plan cannot be put back.
+    pub enum RewindWhyNot {
+        /// What it held before is not known.
+        NotRecorded => "not_recorded",
+        /// Its earlier content was too large to keep.
+        TooLarge => "too_large",
+        /// Its earlier content is no longer in the session's store.
+        Missing => "missing",
+        /// A checkpoint of the turns undone cannot be read.
+        Unreadable => "unreadable",
+        /// A directory on its way, or the file itself, is now a link.
+        ThroughALink => "through_a_link",
+    }
 }
 
 /// `session/undo`: steps back before the session's last turn, its first
@@ -1343,6 +1444,8 @@ methods! {
     SessionFork(SessionForkParams) -> SessionResult => "session/fork",
     /// Moves the active branch back to an earlier item.
     SessionRewind(SessionRewindParams) -> SessionResult => "session/rewind",
+    /// What `session/rewind` to an item would do now, changing nothing.
+    SessionRewindPlan(SessionRewindPlanParams) -> SessionRewindPlanResult => "session/rewind_plan",
     /// Steps back before the last turn, putting its files back if asked.
     SessionUndo(SessionUndoParams) -> SessionResult => "session/undo",
     /// Stops using a session on this connection. The session is kept.

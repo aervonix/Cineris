@@ -331,6 +331,7 @@ fn a_rewind_puts_the_files_and_the_conversation_back() {
                 session_id: front.session.clone(),
                 to: keep,
                 restore_files: true,
+                plan: None,
             }))
             .await
             .unwrap();
@@ -547,6 +548,7 @@ fn a_read_after_a_rewind_gives_the_content_the_rewind_took_away() {
                 session_id: front.session.clone(),
                 to: keep,
                 restore_files: false,
+                plan: None,
             }))
             .await
             .unwrap();
@@ -610,6 +612,7 @@ fn a_file_a_rewind_put_back_is_read_again_before_it_is_changed() {
                 session_id: front.session.clone(),
                 to: keep,
                 restore_files: true,
+                plan: None,
             }))
             .await
             .unwrap();
@@ -665,6 +668,7 @@ fn a_file_read_only_in_a_rewound_turn_is_read_again_before_it_is_overwritten() {
                 session_id: front.session.clone(),
                 to: keep,
                 restore_files: false,
+                plan: None,
             }))
             .await
             .unwrap();
@@ -715,6 +719,7 @@ fn no_turn_starts_while_a_rewind_is_under_way() {
             session_id: front.session.clone(),
             to: keep,
             restore_files: false,
+            plan: None,
         })));
         assert!(
             crate::poll_once(rewind.as_mut()).await.is_pending(),
@@ -737,6 +742,7 @@ fn no_turn_starts_while_a_rewind_is_under_way() {
                 session_id: front.session.clone(),
                 to: cineris_protocol::ItemId::new("i_0"),
                 restore_files: false,
+                plan: None,
             }))
             .await
             .expect_err("two rewinds at once");

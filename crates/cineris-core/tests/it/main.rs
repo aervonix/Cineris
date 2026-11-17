@@ -41,6 +41,7 @@ mod plan;
 mod provider;
 mod redecide;
 mod reload;
+mod rewind_plan;
 mod sandbox;
 mod secrets;
 mod settings;

@@ -318,6 +318,37 @@ pub struct FileRestore {
     pub why_not: Option<&'static str>,
 }
 
+/// Why a file cannot be put back, by name: what [`FileRestore::why_not`]
+/// says, for a front end that says it in its own words (since step 25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CannotRestore {
+    /// What it held before was not recorded.
+    NotRecorded,
+    /// Its earlier content was too large to keep.
+    TooLarge,
+    /// Its earlier content is no longer in the session's store.
+    Missing,
+    /// A checkpoint of the undone turns cannot be read.
+    Unreadable,
+    /// A directory on its way, or the file itself, is now a link.
+    ThroughALink,
+}
+
+impl FileRestore {
+    /// Why it cannot be put back, by name: `None` for a file that can be.
+    #[must_use]
+    pub fn cannot(&self) -> Option<CannotRestore> {
+        match self.why_not? {
+            why_not::NOT_RECORDED => Some(CannotRestore::NotRecorded),
+            why_not::TOO_LARGE => Some(CannotRestore::TooLarge),
+            why_not::MISSING => Some(CannotRestore::Missing),
+            why_not::UNREADABLE => Some(CannotRestore::Unreadable),
+            why_not::THROUGH_A_LINK => Some(CannotRestore::ThroughALink),
+            _ => None,
+        }
+    }
+}
+
 /// Why a file cannot be put back.
 mod why_not {
     pub(super) const NOT_RECORDED: &str = "what it held before was not recorded (it was changed \

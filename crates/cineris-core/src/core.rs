@@ -1473,16 +1473,61 @@ impl Core {
             Op::SessionRewind(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
-                self.rewind(&live, Back::To(params.to), params.restore_files)
-                    .await?;
+                self.rewind(
+                    &live,
+                    Back::To(params.to),
+                    params.restore_files,
+                    params.plan,
+                )
+                .await?;
                 Ok(OpResult::SessionRewind(SessionResult {
                     session: live.handle.state(),
                 }))
             }
+            Op::SessionRewindPlan(params) => {
+                let live = self.open_for(client, &params.session_id)?;
+                // Refused as the rewind would be: it is not planned under a
+                // turn, which may yet add to what it would undo.
+                if live.handle.state().running_turn.is_some() {
+                    return Err(error(
+                        ErrorKind::Usage,
+                        code::TURN_RUNNING,
+                        "A turn is running. Interrupt it, or wait for it, before planning a \
+                         rewind.",
+                    ));
+                }
+                let log = Arc::clone(&live.log);
+                let to = params.to;
+                // Planned as `session/rewind` plans it, and nothing changed:
+                // the files are looked at, never touched.
+                let plan = Self::blocking(move || {
+                    let mut kept = lock(&log);
+                    let Some(disk) = kept.disk() else {
+                        return Err(error(
+                            ErrorKind::Usage,
+                            "session_not_stored",
+                            "A session with no log cannot be rewound.",
+                        ));
+                    };
+                    let entry = disk.session.entry_of_item(&to).cloned().ok_or_else(|| {
+                        error(
+                            ErrorKind::Usage,
+                            "unknown_item",
+                            format!("The session has no item `{to}`."),
+                        )
+                    })?;
+                    disk.session
+                        .plan_rewind(&entry)
+                        .map_err(|failure| session_error(&failure))
+                })
+                .await?;
+                Ok(OpResult::SessionRewindPlan(crate::rewind::shown(&plan)))
+            }
             Op::SessionUndo(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
-                self.rewind(&live, Back::Undo, params.restore_files).await?;
+                self.rewind(&live, Back::Undo, params.restore_files, None)
+                    .await?;
                 Ok(OpResult::SessionUndo(SessionResult {
                     session: live.handle.state(),
                 }))
@@ -1789,11 +1834,17 @@ impl Core {
     /// are put to it in one `question/ask`, and only "put them back"
     /// overwrites them; no answer keeps them. No turn starts meanwhile: the
     /// history change is held from the plan to the rewind.
+    ///
+    /// With the `mark` of a plan a client showed (`session/rewind_plan`,
+    /// since step 25), the plan made here must be that one, or nothing is
+    /// changed (`plan_changed`): with files put back, its turns and what it
+    /// does to each file; without, its turns.
     async fn rewind(
         &self,
         live: &Arc<Live>,
         back: Back,
         restore_files: bool,
+        mark: Option<String>,
     ) -> Result<(), OpError> {
         // History is not changed under a turn, and no turn starts while it
         // is being changed: both are decided under the session's own lock.
@@ -1833,6 +1884,16 @@ impl Core {
                         )
                     })?,
             };
+            if let Some(mark) = &mark
+                && !crate::rewind::still(&plan, mark, restore_files)
+            {
+                return Err(error(
+                    ErrorKind::Usage,
+                    code::PLAN_CHANGED,
+                    "The rewind's plan changed after it was shown: a turn or a file it names is \
+                     not as it was. Nothing was changed; plan it again.",
+                ));
+            }
             Ok((change, plan))
         })
         .await?;

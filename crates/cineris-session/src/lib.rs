@@ -72,6 +72,7 @@ pub use redact::{NoRedaction, Redactor};
 pub use scan::CutTail;
 pub use session::{Session, SessionOptions};
 pub use snapshot::{
-    FileRestore, FileStatus, Repaired, Restore, RewindDone, RewindPlan, RoundCheckpoint, SwitchDone,
+    CannotRestore, FileRestore, FileStatus, Repaired, Restore, RewindDone, RewindPlan,
+    RoundCheckpoint, SwitchDone,
 };
 pub use store::{ArtifactFile, DiskStore, KEEP_LIMIT};

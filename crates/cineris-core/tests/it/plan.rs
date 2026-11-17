@@ -279,6 +279,7 @@ fn a_rewind_goes_back_to_the_plan_of_that_point() {
                 session_id: front.session.clone(),
                 to: keep,
                 restore_files: false,
+                plan: None,
             }))
             .await
             .unwrap();
@@ -361,6 +362,7 @@ fn a_rewind_or_a_fork_at_a_plan_calls_result_keeps_the_plan_that_call_made() {
                 session_id: front.session.clone(),
                 to: result_of("c2"),
                 restore_files: false,
+                plan: None,
             }))
             .await
             .unwrap();
@@ -375,6 +377,7 @@ fn a_rewind_or_a_fork_at_a_plan_calls_result_keeps_the_plan_that_call_made() {
                 session_id: front.session.clone(),
                 to: result_of("c1"),
                 restore_files: false,
+                plan: None,
             }))
             .await
             .unwrap();

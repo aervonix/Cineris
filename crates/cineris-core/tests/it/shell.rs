@@ -427,6 +427,7 @@ fn sys_undo_puts_back_what_a_command_changed_where_git_still_has_it() {
                 session_id: front.session.clone(),
                 to: keep,
                 restore_files: true,
+                plan: None,
             }))
             .await
             .unwrap();

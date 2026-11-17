@@ -64,6 +64,7 @@ pub fn reads(op: &Op) -> bool {
             | Op::UsageRefresh(_)
             | Op::ProjectList(_)
             | Op::SessionArtifact(_)
+            | Op::SessionRewindPlan(_)
             | Op::WorkspaceWarm(_)
             | Op::McpStatus(_)
             | Op::ExtensionsStatus(_)

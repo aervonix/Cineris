@@ -110,6 +110,11 @@ pub mod code {
     /// history was being changed (`session/rewind`). It is sent again when
     /// that is over.
     pub const HISTORY_CHANGING: &str = "history_changing";
+    /// `session/rewind` was given the `mark` of a plan (`session/rewind_plan`)
+    /// and the plan made again is not that one: the turns it undoes, or what
+    /// it would do to a file, changed since the plan was read. Nothing was
+    /// changed (since step 25).
+    pub const PLAN_CHANGED: &str = "plan_changed";
     /// The server is shutting down and starts no session.
     pub const SHUTTING_DOWN: &str = "shutting_down";
     /// `verify/run` found no check it could run, and says why: none known,

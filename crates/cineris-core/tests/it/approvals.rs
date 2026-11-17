@@ -612,6 +612,7 @@ fn an_observer_starts_nothing_changes_no_history_and_ends_nothing() {
                         session_id: front.session.clone(),
                         to: first,
                         restore_files: true,
+                        plan: None,
                     },
                 ))
                 .await,
