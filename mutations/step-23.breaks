@@ -746,7 +746,7 @@ caught-by:
 [break] the-viewer-enter-does-not-open
 rule: Enter opens the selected box with all its detail, and closes it again.
 file: crates/cortex-tui/src/app/state/viewer.rs
-in: App::viewer_key
+in: App::viewer_act
 find: if !state.open.remove(&selected) {
 replace: if state.open.remove(&selected) {
 packages: cortex-tui
@@ -756,8 +756,8 @@ caught-by:
 [break] the-viewer-draws-no-box-selected
 rule: The selected box is drawn as selected: its border in the accent, with what Enter does.
 file: crates/cortex-tui/src/app/state/viewer.rs
-in: App::viewer_rows
-find: selected: state.selected == Some(place)
+in: block_rows
+find: selected: state.selected == Some(round)
 replace: selected: false
 packages: cortex-tui
 caught-by:
@@ -766,9 +766,9 @@ caught-by:
 [break] the-viewer-search-does-not-move
 rule: A search scrolls to the next row that holds what was typed.
 file: crates/cortex-tui/src/app/state/viewer.rs
-in: App::viewer_frame
-find: state.top = row;
-replace: state.top = from;
+in: App::viewer_search
+find: state.scroll.anchor = Anchor::At { block, row };
+replace: let _ = (block, row);
 packages: cortex-tui
 caught-by:
     app::tests::the_viewer_searches_and_says_when_nothing_is_found

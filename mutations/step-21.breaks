@@ -387,7 +387,7 @@ caught-by:
 rule: A key bound to a global action in [keys] is taken from every context.
 file: crates/cortex-tui/src/keys/mod.rs
 in: KeyMap::with_table
-find: if context == Context::Global { keymap.map.retain(|(_, key), _| !parsed.contains(key)); }
+find: if context == Context::Global { keymap.map.retain(|(_, key), _| !keys.contains(key)); }
 replace:
 caught-by:
     keys::tests::a_key_bound_to_a_global_action_is_taken_from_every_context

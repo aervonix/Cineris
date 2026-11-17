@@ -289,9 +289,34 @@ pub fn app(now: Instant) -> (App, Scripted) {
     )
 }
 
+/// As [`app`], with `settings` in place of the defaults (since step 25:
+/// the full-screen presenter's tests give `presenter`).
+#[must_use]
+pub fn app_with_settings(now: Instant, settings: Settings) -> (App, Scripted) {
+    app_built(
+        now,
+        None,
+        Open::New {
+            workspace: WORKSPACE.to_owned(),
+            settings: SessionSettings::default(),
+            ephemeral: false,
+        },
+        settings,
+    )
+}
+
 /// As [`app`], opening `open`, with `prompt` given on the command line.
 #[must_use]
 pub fn app_opening(now: Instant, prompt: Option<&str>, open: Open) -> (App, Scripted) {
+    app_built(now, prompt, open, Settings::default())
+}
+
+fn app_built(
+    now: Instant,
+    prompt: Option<&str>,
+    open: Open,
+    settings: Settings,
+) -> (App, Scripted) {
     let link = Scripted::default();
     let start = Start {
         version: "0.1.0".to_owned(),
@@ -300,7 +325,7 @@ pub fn app_opening(now: Instant, prompt: Option<&str>, open: Open) -> (App, Scri
         workspace: WORKSPACE.to_owned(),
         open,
         prompt: prompt.map(str::to_owned),
-        settings: Settings::default(),
+        settings,
         keymap: KeyMap::defaults(),
         notices: Vec::new(),
         history: Box::new(MemoryHistory::new()),

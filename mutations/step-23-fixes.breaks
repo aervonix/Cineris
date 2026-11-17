@@ -303,7 +303,7 @@ caught-by:
 [break] the-armed-quit-is-not-said-over-a-dialog
 rule: A first Ctrl+C over a dialog says, in the hint row, that a second quits.
 file: crates/cortex-tui/src/app/state.rs
-in: App::frame
+in: App::bottom
 find: let hint = if self.input.quit_armed() {
 replace: let hint = if false {
 caught-by:
@@ -320,9 +320,18 @@ caught-by:
 
 [break] the-viewer-overflows-after-end
 rule: End then PageDown in the viewer stays at the end, with no overflow.
-file: crates/cortex-tui/src/app/state/viewer.rs
-find: state.top = state.top.saturating_add(page)
-replace: state.top += page
+file: crates/cortex-tui/src/app/scroll.rs
+in: Scroll::window
+find:
+    if window.at_end {
+        // Moved down to the end: following it again.
+        self.anchor = Anchor::End;
+        self.from_end(source, height)
+    } else {
+replace:
+    if false {
+        self.from_end(source, height)
+    } else {
 caught-by:
     app::tests::dialogs::end_then_page_down_in_the_viewer_stays_at_the_end
 
@@ -516,7 +525,7 @@ caught-by:
 [break] no-blank-row-above-the-hint
 rule: A dialog has a blank row between its answers and the hint row when the window has six rows or more.
 file: crates/cortex-tui/src/app/state.rs
-in: App::frame
+in: App::bottom
 find:
     if chrome {
         bottom.push(Line::new());
@@ -528,7 +537,7 @@ caught-by:
 [break] the-chrome-takes-a-row-more
 rule: A dialog may take every row of the window but the blank row and the hint row: one that fits that exactly is drawn whole (screen 2c).
 file: crates/cortex-tui/src/app/state.rs
-in: App::frame
+in: App::bottom
 find: self.rows - 2
 replace: self.rows - 3
 caught-by:
@@ -911,8 +920,8 @@ caught-by:
 rule: A key reaches the screen of the real binary within the coarse limit: an interface thread that waits on something before taking a key fails a blocking test (review of step 23, finding 12d).
 file: crates/cortex-tui/src/app.rs
 in: run_with
-find: input |= take(terminal, presenter, &mut scheduler, app, &event)?;
-replace: input |= { std::thread::sleep(std::time::Duration::from_millis(600)); take(terminal, presenter, &mut scheduler, app, &event)? };
+find: input |= take(terminal, presenter, full, &mut scheduler, app, &event)?;
+replace: input |= { std::thread::sleep(std::time::Duration::from_millis(600)); take(terminal, presenter, full, &mut scheduler, app, &event)? };
 packages: cortex-cli
 caught-by:
     cortex-cli::system tui::sys_a_turn_with_tools_runs_in_the_interface_and_the_terminal_is_put_back

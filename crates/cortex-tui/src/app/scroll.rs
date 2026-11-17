@@ -240,8 +240,14 @@ impl Scroll {
         }
         let mut window = gather(&pieces, row, height, source.blocks);
         // The end is in view when nothing is left below the window's last
-        // row.
-        window.at_end = next > source.blocks && have <= height;
+        // row: no block after it has a row (the live rows may be none).
+        let mut at_end = have <= height;
+        let mut probe = next;
+        while at_end && probe <= source.blocks {
+            at_end = self.block(source, probe).is_empty();
+            probe += 1;
+        }
+        window.at_end = at_end;
         self.top = Some((block, row));
         window
     }
@@ -508,6 +514,19 @@ mod tests {
         rig.with(|scroll, source| scroll.down(source, 100));
         assert!(rig.scroll.following());
         assert_eq!(rig.window(4), ["2.2", "2.3", "live.0", "live.1"]);
+    }
+
+    /// With no live rows, a window moved up and back down to the last kept
+    /// row follows the end again: nothing below it has a row.
+    #[test]
+    fn down_to_the_last_row_follows_again_when_nothing_is_live() {
+        let mut rig = Rig::new(&[3, 2, 4], 0);
+        let end = rig.window(4);
+        rig.with(|scroll, source| scroll.up(source, 3));
+        assert!(!rig.scroll.following());
+        rig.with(|scroll, source| scroll.down(source, 3));
+        assert!(rig.scroll.following());
+        assert_eq!(rig.window(4), end);
     }
 
     #[test]
