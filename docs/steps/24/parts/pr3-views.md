@@ -44,7 +44,8 @@ The commands that need no panel, the hot reload of the look and the keys, the fi
 | A file chosen with `@` is read ahead, at most 16 a prompt, a folder not, a refusal not said | `files::a_file_chosen_with_at_is_read_ahead_and_a_refusal_is_not_said` |
 | `space` on a skipped item restores it | `panels::space_on_a_skipped_item_restores_it_and_says_so` |
 | `Enter` on a check opens its whole output, escaped, the cut said | `panels::enter_on_a_check_opens_its_whole_output_in_the_viewer` |
-| The aggregates kept are used only for the same file, unchanged, and only those read whole by a report that did not save them are kept; a file saved again at the same length is another | `cortex-core usage::tests::the_aggregates_kept_are_used_only_for_the_same_file_unchanged`, `a_file_saved_again_at_the_same_length_is_another` |
+| A report opens the aggregates' file no more while it is the one read; one put in place by another process, even during a report's read, is read again; what was kept is given back after a quiet minute | `cortex-core::it usage::the_aggregates_are_read_again_only_when_they_are_not_the_files` (the read counter of `cortex-stats`, and a hold at `AGGREGATES_READ`) |
+| The aggregates kept are used only for the same file, unchanged, and only those read whole by a report that did not save them are kept; a file saved again at the same length and time is another | `cortex-core usage::tests::the_aggregates_kept_are_used_only_for_the_same_file_unchanged`, `a_file_saved_again_at_the_same_length_is_another` |
 | Screens 2a and 2b in their real states | `cortex-tui::it screens::the_views_draw_the_reference_screens` |
 
 The breaks are `mutations/step-24-views.breaks`.

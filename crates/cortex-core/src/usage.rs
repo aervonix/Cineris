@@ -59,7 +59,6 @@ pub(crate) fn recorder(user: &Loaded, options: &CoreOptions) -> Option<Recorder>
     Some(Recorder::new(recorder_options, Arc::clone(&options.clock)))
 }
 
-/// `usage/report`.
 /// What tells one `aggregates.json` from another without reading it: the
 /// file itself (`cortex_base::FileIdentity`: its device and inode on Unix,
 /// its volume and file index on Windows, where a save is a new file put in
@@ -75,15 +74,17 @@ pub(crate) struct FileState {
 impl FileState {
     /// The state of the file at `path`, or `None` when there is none or it
     /// cannot be told. Blocks: called on the blocking pool, with the report.
+    /// One open file, so that its identity, length and time are of one
+    /// file.
     #[expect(
-        clippy::disallowed_methods,
+        clippy::disallowed_types,
         reason = "a file's metadata, read on the blocking pool beside the report's own reads"
     )]
     fn of(path: &Path) -> Option<Self> {
-        let file = cortex_base::FileIdentity::at(path).ok()?;
-        let meta = std::fs::metadata(path).ok()?;
+        let file = std::fs::File::open(path).ok()?;
+        let meta = file.metadata().ok()?;
         Some(Self {
-            file,
+            file: cortex_base::FileIdentity::of(&file).ok()?,
             len: meta.len(),
             modified: meta.modified().ok(),
         })
@@ -111,10 +112,14 @@ pub(crate) struct AggregatesCache {
     path: PathBuf,
     state: FileState,
     aggregates: Aggregates,
-    /// When it was last used, which the drop after [`KEEP_AGGREGATES`]
+    /// Which report kept it last, which the drop after [`KEEP_AGGREGATES`]
     /// checks.
-    used: std::time::Instant,
+    used: u64,
 }
+
+/// The reports that kept aggregates, counted: each keeps them under a
+/// number of its own.
+static KEPT_BY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The aggregates kept, when they were read from the file at `path` as it
 /// is now.
@@ -129,6 +134,12 @@ fn to_keep(found: &Found, saved: bool) -> bool {
     !saved && matches!(found, Found::Read)
 }
 
+/// Where a usage report has read the aggregates from the file and not yet
+/// kept them: a point a test holds the report at, to replace the file in
+/// between (`cortex_base::hook`).
+pub const AGGREGATES_READ: &str = "usage: the aggregates read, not yet kept";
+
+/// `usage/report`.
 pub(crate) async fn report(
     core: &Core,
     client: ClientId,
@@ -195,12 +206,16 @@ pub(crate) async fn report(
                     // With statistics on, what is read is saved: a file
                     // that cannot be read is moved aside first. With them
                     // off, nothing on the disk is changed.
-                    None => if recording {
-                        Aggregates::load_for_saving(dir, clock.as_ref())
-                    } else {
-                        Aggregates::load(dir)
+                    None => {
+                        let read = if recording {
+                            Aggregates::load_for_saving(dir, clock.as_ref())
+                        } else {
+                            Aggregates::load(dir)
+                        }
+                        .map_err(read_failed)?;
+                        cortex_base::hook::point(AGGREGATES_READ);
+                        read
                     }
-                    .map_err(read_failed)?,
                 };
                 refuse_unread(aggregates.found(), dir)?;
                 let changed = aggregates
@@ -245,7 +260,7 @@ pub(crate) async fn report(
                         path,
                         state,
                         aggregates,
-                        used: std::time::Instant::now(),
+                        used: KEPT_BY.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                     }),
                     _ => None,
                 };
@@ -273,12 +288,23 @@ pub(crate) async fn report(
             let Some(inner) = weak.upgrade() else {
                 return;
             };
-            let mut cache = inner
-                .aggregates_cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if cache.as_ref().is_some_and(|cache| cache.used == used) {
-                *cache = None;
+            // Never waited for on the core's thread: a report that holds
+            // the lock is reading or saving a file, and puts a cache of its
+            // own in place when it ends.
+            let old = match inner.aggregates_cache.try_lock() {
+                Ok(mut cache) if cache.as_ref().is_some_and(|cache| cache.used == used) => {
+                    cache.take()
+                }
+                _ => None,
+            };
+            drop(inner);
+            // A year of tables, given back off the core's thread too.
+            if old.is_some() {
+                let _ = Core::blocking(move || {
+                    drop(old);
+                    Ok(())
+                })
+                .await;
             }
         });
     }
@@ -782,7 +808,7 @@ mod tests {
                 path: path.clone(),
                 state,
                 aggregates: Aggregates::default(),
-                used: std::time::Instant::now(),
+                used: 0,
             })
         };
         assert!(kept(cache(state), &path, Some(state)).is_some());
@@ -821,6 +847,7 @@ mod tests {
     #[test]
     #[expect(
         clippy::disallowed_methods,
+        clippy::disallowed_types,
         reason = "a test that writes and replaces a file of its own directory"
     )]
     fn a_file_saved_again_at_the_same_length_is_another() {
@@ -829,8 +856,17 @@ mod tests {
         std::fs::write(&path, b"{\"a\":1}").unwrap();
         let first = FileState::of(&path).unwrap();
         assert_eq!(FileState::of(&path), Some(first));
+        // The same length and the same time: only the file itself tells
+        // them apart.
         let next = scratch.path().join("aggregates.json.new");
         std::fs::write(&next, b"{\"a\":2}").unwrap();
+        let written = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&next)
+            .unwrap()
+            .set_modified(written)
+            .unwrap();
         std::fs::rename(&next, &path).unwrap();
         assert_ne!(FileState::of(&path), Some(first));
     }
