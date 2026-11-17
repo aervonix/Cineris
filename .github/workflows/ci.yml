@@ -1,7 +1,7 @@
 # The blocking checks. They run on every pull request, on Linux and Windows,
 # and each job must finish in under 5 minutes. After them, on a pull request,
-# one job that blocks nothing: the shipped binary's size (`pr-size`, at the
-# end).
+# two jobs that block nothing: the shipped binary's size (`pr-size`) and the
+# TypeScript client of the RPC protocol (`ts-client`), at the end.
 #
 # What a job runs is defined in the xtask crate, so `cargo xtask ci` runs the
 # same thing at a desk. The layout, the reasons and the measured times are in
@@ -236,3 +236,84 @@ jobs:
         # a variable of its own, empty, not the environment's.
         shell: bash
         run: cargo run --locked --quiet --package xtask -- size --check --target ${{ matrix.target }} --against-main --base "$BASE"
+
+  # Not a required check, and not one of the blocking jobs: a client written
+  # in TypeScript, which knows the protocol only from the generated
+  # declarations, runs a turn against `cortex serve --stdio`
+  # (docs/testing-and-ci.md, "The TypeScript client"). It needs Node, which
+  # the blocking jobs do not have to have: there the test says it was not
+  # run, and here `CORTEX_TS_CLIENT` makes it run or fail.
+  #
+  # On a pull request that changes the protocol, the server, the client or
+  # this workflow, and when the workflow is started by hand. Like `pr-size`,
+  # it starts only after the four required jobs have passed. It reads the
+  # Linux test job's build cache (`shared-key: test`), so it builds only the
+  # workspace's crates.
+  ts-client:
+    needs: [lint, test]
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      # On a pull request the checkout is a merge commit, whose first parent
+      # is the base branch, as in .github/actions/changes. A list that
+      # cannot be made runs the job.
+      - name: Does the change reach the protocol or the client?
+        id: reaches
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          reaches=true
+          if [ "$EVENT" = "pull_request" ] && files=$(git diff --name-only --no-renames HEAD^1 HEAD); then
+            reaches=false
+            while IFS= read -r file; do
+              case "$file" in
+                crates/cortex-protocol/* | crates/cortex-rpc/* | docs/protocol/* | \
+                crates/cortex-cli/tests/system/ts_client* | .github/workflows/ci.yml) reaches=true ;;
+              esac
+            done <<< "$files"
+          fi
+          echo "reaches=$reaches" >> "$GITHUB_OUTPUT"
+          if [ "$reaches" = true ]; then
+            echo "This run builds the binary and runs the TypeScript client."
+          else
+            echo "Nothing here reaches the protocol, the server or the client: the job's steps are skipped."
+          fi
+      - name: Install the toolchain from rust-toolchain.toml
+        if: steps.reaches.outputs.reaches == 'true'
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: steps.reaches.outputs.reaches == 'true'
+        with:
+          shared-key: test
+          save-if: "false"
+          cache-bin: "false"
+      - name: Install cargo-nextest
+        if: steps.reaches.outputs.reaches == 'true'
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-nextest@0.9.151
+      # The oldest Node that runs a `.ts` file as it is.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.reaches.outputs.reaches == 'true'
+        with:
+          node-version: 22.18.0
+      # Node strips the types and checks none: the compiler checks the
+      # client against the declarations as they are, so that a change to the
+      # protocol the client no longer fits fails here. The compiler and
+      # Node's types come from npm at the versions docs/dependencies.md pins,
+      # into the runner's temporary folder, and nothing of them is kept.
+      - name: Check the client's types against the declarations
+        if: steps.reaches.outputs.reaches == 'true'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/tsc" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund typescript@6.0.3 @types/node@22.18.13
+          "$RUNNER_TEMP/tsc/node_modules/.bin/tsc" -p crates/cortex-cli/tests/system/ts_client --typeRoots "$RUNNER_TEMP/tsc/node_modules/@types"
+      - name: Run a turn with the client
+        if: ${{ !cancelled() && steps.reaches.outputs.reaches == 'true' }}
+        env:
+          CORTEX_TS_CLIENT: "1"
+        run: cargo run --locked --quiet --package xtask -- test --locked -p cortex-cli --cargo-profile ci --test system -E 'test(=ts_client::sys_a_typescript_client_runs_a_turn)'
