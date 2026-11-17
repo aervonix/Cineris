@@ -907,12 +907,11 @@ rule: Never is in force in the session it was said in, as at a later start.
 file: crates/cortex-core/src/assemble.rs
 in: answer_trust
 find: self::trust(inner, place.state.as_ref(), &place.root, &place.load)
-occurrence: 2
+occurrence: 4
 replace: Ok(trust)
 packages: cortex-core
 caught-by:
     trusting::never_is_kept_across_starts_until_the_project_is_trusted
-    trusting::never_of_a_trusted_project_is_in_force_at_once
 
 [break] a-questions-choices-drawn-as-they-are
 rule: A question's choices are drawn with every character that acts unseen escaped, as all outside text is.
