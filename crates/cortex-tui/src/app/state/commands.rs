@@ -686,6 +686,7 @@ impl App {
                 self.settings.theme = choice;
                 self.theme_picked = Some(choice);
                 self.look = crate::app::look(&self.settings, &self.caps);
+                self.look_changed();
                 for dialog in &mut self.dialogs {
                     dialog.restyled();
                 }

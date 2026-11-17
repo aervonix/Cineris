@@ -64,6 +64,7 @@ stats.enabled = true
 stats.retention = 3
 tui.density = "comfortable"
 tui.glyphs = "auto"
+tui.presenter = "inline"
 tui.prose_width = 80
 tui.reasoning = "summary"
 tui.reduced_motion = false

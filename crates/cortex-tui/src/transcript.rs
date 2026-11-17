@@ -193,6 +193,10 @@ pub struct Transcript {
     ///
     /// [`take_finished`]: Self::take_finished
     finished: Option<Vec<kept::Finished>>,
+    /// While blocks are kept: the rows committed of the block still open
+    /// (an answer streaming), its blank row before it included, which no
+    /// kept block holds yet (since step 25).
+    open_rows: Vec<Line>,
 }
 
 impl Transcript {
@@ -223,11 +227,49 @@ impl Transcript {
         self.finished.get_or_insert_with(Vec::new);
     }
 
+    /// The rows committed so far of the block still open, while blocks are
+    /// kept: what the full-screen presenter draws between the kept blocks
+    /// and the live rows (since step 25).
+    #[must_use]
+    pub fn open_rows(&self) -> &[Line] {
+        &self.open_rows
+    }
+
+    /// Lays the block still open out again at `width` (since step 25), for
+    /// the full-screen presenter after a change of width: an answer still
+    /// streaming is made again from its text, and what it commits at the new
+    /// width replaces the rows it had committed. The inline presenter never
+    /// calls it: its scrollback cannot be taken back.
+    pub fn rewrap_open(&mut self, width: usize, look: &Look) {
+        let now = self.now;
+        let Some(entry) = self.queue.front_mut().filter(|entry| entry.started) else {
+            return;
+        };
+        let Block::Answer(answer) = &mut entry.block else {
+            return;
+        };
+        let mut fresh = answer.restarted();
+        fresh.set_now(now);
+        let lines = fresh.commit(width, look);
+        *answer = fresh;
+        self.open_rows.clear();
+        if entry.gap {
+            self.open_rows.push(Line::new());
+        }
+        self.open_rows.extend(lines);
+        if let Some(last) = self.open_rows.last() {
+            self.last_blank = last.width() == 0;
+        }
+    }
+
     /// The blocks wholly committed since the last call, in order, each with
     /// the blank rows around it, while they are kept
     /// ([`keep_finished`](Self::keep_finished)).
     pub fn take_finished(&mut self) -> Vec<kept::Finished> {
-        self.finished.as_mut().map(std::mem::take).unwrap_or_default()
+        self.finished
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     /// The block `id`, to stream into or update, while any of it is still
@@ -287,6 +329,9 @@ impl Transcript {
                 if gap {
                     push_lines(&mut out, vec![Line::new()]);
                     self.last_blank = true;
+                    if self.finished.is_some() {
+                        self.open_rows.push(Line::new());
+                    }
                 }
                 entry.started = true;
                 entry.gap = gap;
@@ -309,6 +354,9 @@ impl Transcript {
             if !lines.is_empty() {
                 self.last = Some(kind);
                 self.last_blank = lines.last().is_some_and(|line| line.width() == 0);
+                if self.finished.is_some() && open {
+                    self.open_rows.extend(lines.iter().cloned());
+                }
                 match round {
                     Some(round) => out.push(Committed::Round(round, lines)),
                     None => push_lines(&mut out, lines),
@@ -322,6 +370,7 @@ impl Transcript {
                 push_lines(&mut out, vec![Line::new()]);
                 self.last_blank = true;
             }
+            self.open_rows.clear();
             if let Some(entry) = self.queue.pop_front()
                 && let Some(finished) = self.finished.as_mut()
             {

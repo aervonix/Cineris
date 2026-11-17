@@ -55,6 +55,12 @@ pub enum Context {
     /// A dialog in place of the input box: an approval, a question, trust
     /// (step 23). Its keys answer it.
     Dialog,
+    /// The viewer (`Ctrl+O`): moving between boxes, opening one, scrolling,
+    /// searching, and the mouse's gestures (since step 25).
+    Viewer,
+    /// The full-screen presenter's own keys, looked up after the editor's:
+    /// scrolling, searching, and the mouse's gestures (since step 25).
+    Screen,
 }
 
 impl Context {
@@ -70,6 +76,8 @@ impl Context {
             Self::Search => "search",
             Self::Focus => "focus",
             Self::Dialog => "dialog",
+            Self::Viewer => "viewer",
+            Self::Screen => "screen",
         }
     }
 }
@@ -241,6 +249,119 @@ pub enum Action {
     Never,
     /// Show the request's detail whole, in the viewer (`Ctrl+O`).
     ShowWhole,
+
+    // ------------------------------------------------------------ viewer
+    /// Select the box before (`Up`, `k`), or scroll a row up when there is
+    /// none.
+    ViewerUp,
+    /// Select the box after (`Down`, `j`), or scroll a row down.
+    ViewerDown,
+    /// Open or close the selected box (`Enter`), or the box clicked.
+    ViewerToggle,
+    /// Scroll a page up (`PageUp`).
+    ViewerPageUp,
+    /// Scroll a page down (`PageDown`).
+    ViewerPageDown,
+    /// To the first row (`Home`, `g`).
+    ViewerTop,
+    /// To the last row (`End`, `G`).
+    ViewerBottom,
+    /// Search (`/`).
+    ViewerSearch,
+    /// Find the last search again (`n`).
+    ViewerNext,
+    /// Return to the session (`Esc`, `q`, `Ctrl+O`).
+    ViewerClose,
+    /// Scroll up a little: the wheel.
+    ViewerScrollUp,
+    /// Scroll down a little: the wheel.
+    ViewerScrollDown,
+
+    // ------------------------------------------------------------ screen
+    /// Scroll the transcript a page up (`PageUp`), which stops following
+    /// the end.
+    ScreenPageUp,
+    /// Scroll a page down (`PageDown`); at the end, follow it again.
+    ScreenPageDown,
+    /// Scroll a row up (`Shift+Up`).
+    ScreenLineUp,
+    /// Scroll a row down (`Shift+Down`).
+    ScreenLineDown,
+    /// Search the transcript (`Ctrl+F`).
+    ScreenSearch,
+    /// Open or close the box clicked.
+    ScreenToggle,
+    /// Scroll up a little: the wheel.
+    ScreenScrollUp,
+    /// Scroll down a little: the wheel.
+    ScreenScrollDown,
+}
+
+/// A mouse gesture a binding can name (since step 25), in the contexts of
+/// the viewer and the full-screen presenter only, where the mouse is
+/// reported: `click`, `wheel_up` and `wheel_down`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Gesture {
+    /// The left button pressed and released on the same cell.
+    Click,
+    /// The wheel turned up, a notch.
+    WheelUp,
+    /// The wheel turned down, a notch.
+    WheelDown,
+}
+
+impl Gesture {
+    /// Its name in a binding.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Click => "click",
+            Self::WheelUp => "wheel_up",
+            Self::WheelDown => "wheel_down",
+        }
+    }
+
+    /// The gesture a binding's text names, if it names one.
+    #[must_use]
+    pub fn from_name(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "click" => Some(Self::Click),
+            "wheel_up" => Some(Self::WheelUp),
+            "wheel_down" => Some(Self::WheelDown),
+            _ => None,
+        }
+    }
+}
+
+/// What a binding's text names: a key, or a mouse gesture (since step 25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Binding {
+    /// A key with its modifiers.
+    Key(Key),
+    /// A mouse gesture.
+    Gesture(Gesture),
+}
+
+/// Reads a binding's text: a mouse gesture's name (`click`, `wheel_up`,
+/// `wheel_down`), or a key as [`parse`] reads it.
+///
+/// # Errors
+///
+/// When it is neither.
+pub fn parse_binding(text: &str) -> Result<Binding, BindingError> {
+    match Gesture::from_name(text) {
+        Some(gesture) => Ok(Binding::Gesture(gesture)),
+        None => parse(text).map(Binding::Key),
+    }
+}
+
+impl Context {
+    /// Whether the mouse is reported where this context applies, so that a
+    /// gesture may be bound in it.
+    #[must_use]
+    pub fn takes_gestures(self) -> bool {
+        matches!(self, Self::Viewer | Self::Screen)
+    }
 }
 
 /// One action: what it is, where it applies, its name in `[keys]`, and the
@@ -498,6 +619,91 @@ pub const ACTIONS: &[Entry] = &[
         "show_whole",
         &["ctrl+o"],
     ),
+    entry(Action::ViewerUp, Context::Viewer, "up", &["up", "k"]),
+    entry(Action::ViewerDown, Context::Viewer, "down", &["down", "j"]),
+    entry(
+        Action::ViewerToggle,
+        Context::Viewer,
+        "toggle",
+        &["enter", "click"],
+    ),
+    entry(
+        Action::ViewerPageUp,
+        Context::Viewer,
+        "page_up",
+        &["pageup"],
+    ),
+    entry(
+        Action::ViewerPageDown,
+        Context::Viewer,
+        "page_down",
+        &["pagedown"],
+    ),
+    entry(Action::ViewerTop, Context::Viewer, "top", &["home", "g"]),
+    entry(
+        Action::ViewerBottom,
+        Context::Viewer,
+        "bottom",
+        &["end", "shift+g"],
+    ),
+    entry(Action::ViewerSearch, Context::Viewer, "search", &["/"]),
+    entry(Action::ViewerNext, Context::Viewer, "next", &["n"]),
+    entry(
+        Action::ViewerClose,
+        Context::Viewer,
+        "close",
+        &["esc", "q", "ctrl+o"],
+    ),
+    entry(
+        Action::ViewerScrollUp,
+        Context::Viewer,
+        "scroll_up",
+        &["wheel_up"],
+    ),
+    entry(
+        Action::ViewerScrollDown,
+        Context::Viewer,
+        "scroll_down",
+        &["wheel_down"],
+    ),
+    entry(
+        Action::ScreenPageUp,
+        Context::Screen,
+        "page_up",
+        &["pageup"],
+    ),
+    entry(
+        Action::ScreenPageDown,
+        Context::Screen,
+        "page_down",
+        &["pagedown"],
+    ),
+    entry(
+        Action::ScreenLineUp,
+        Context::Screen,
+        "line_up",
+        &["shift+up"],
+    ),
+    entry(
+        Action::ScreenLineDown,
+        Context::Screen,
+        "line_down",
+        &["shift+down"],
+    ),
+    entry(Action::ScreenSearch, Context::Screen, "search", &["ctrl+f"]),
+    entry(Action::ScreenToggle, Context::Screen, "toggle", &["click"]),
+    entry(
+        Action::ScreenScrollUp,
+        Context::Screen,
+        "scroll_up",
+        &["wheel_up"],
+    ),
+    entry(
+        Action::ScreenScrollDown,
+        Context::Screen,
+        "scroll_down",
+        &["wheel_down"],
+    ),
 ];
 
 impl Action {
@@ -565,21 +771,18 @@ impl fmt::Display for Action {
     }
 }
 
-/// A key as the map compares it: Ctrl or Alt with an upper-case letter is
-/// Shift with the lower-case one, as terminals that report Shift that way
-/// mean.
+/// A key as the map compares it: an upper-case letter is Shift with the
+/// lower-case one, as terminals that report Shift that way mean (with Ctrl
+/// or Alt since step 21; alone since step 25, so that the viewer's `G` is
+/// `shift+g` whichever way a terminal sends it). Typing is not affected:
+/// a key bound to nothing types what it is.
 #[must_use]
 pub fn normalize(key: Key) -> Key {
     match key.code {
-        KeyCode::Char(c)
-            if c.is_ascii_uppercase()
-                && (key.mods.contains(Mods::CTRL) || key.mods.contains(Mods::ALT)) =>
-        {
-            Key::with(
-                KeyCode::Char(c.to_ascii_lowercase()),
-                key.mods | Mods::SHIFT,
-            )
-        }
+        KeyCode::Char(c) if c.is_ascii_uppercase() && !key.mods.contains(Mods::SUPER) => Key::with(
+            KeyCode::Char(c.to_ascii_lowercase()),
+            key.mods | Mods::SHIFT,
+        ),
         _ => key,
     }
 }
@@ -619,10 +822,12 @@ impl fmt::Display for TableError {
     }
 }
 
-/// Keys to actions, by context.
+/// Keys to actions, by context, and the mouse's gestures in the contexts
+/// that take them (since step 25).
 #[derive(Debug, Clone)]
 pub struct KeyMap {
     map: HashMap<(Context, Key), Action>,
+    gestures: HashMap<(Context, Gesture), Action>,
 }
 
 impl Default for KeyMap {
@@ -636,18 +841,22 @@ impl KeyMap {
     #[must_use]
     pub fn defaults() -> Self {
         let mut map = HashMap::new();
+        let mut gestures = HashMap::new();
         for entry in ACTIONS {
             for text in entry.keys {
-                match parse(text) {
-                    Ok(key) => {
+                match parse_binding(text) {
+                    Ok(Binding::Key(key)) => {
                         map.insert((entry.context, normalize(key)), entry.action);
+                    }
+                    Ok(Binding::Gesture(gesture)) => {
+                        gestures.insert((entry.context, gesture), entry.action);
                     }
                     // The table is ours; its own tests parse every key.
                     Err(_) => continue,
                 }
             }
         }
-        Self { map }
+        Self { map, gestures }
     }
 
     /// The defaults with `table` over them: each entry names an action
@@ -674,8 +883,8 @@ impl KeyMap {
                 });
                 continue;
             };
-            let parsed: Result<Vec<Key>, BindingError> =
-                keys.iter().map(|text| parse(text).map(normalize)).collect();
+            let parsed: Result<Vec<Binding>, BindingError> =
+                keys.iter().map(|text| parse_binding(text)).collect();
             let parsed = match parsed {
                 Ok(parsed) => parsed,
                 Err(error) => {
@@ -687,14 +896,43 @@ impl KeyMap {
                 }
             };
             let context = action.context();
+            // A gesture where the mouse is not reported can never come.
+            if let Some(Binding::Gesture(gesture)) = parsed
+                .iter()
+                .find(|binding| matches!(binding, Binding::Gesture(_)))
+                .filter(|_| !context.takes_gestures())
+            {
+                errors.push(TableError {
+                    action: name.to_owned(),
+                    reason: format!(
+                        "`{}` is the mouse's, which only the viewer's and the full screen's \
+                         actions take",
+                        gesture.name()
+                    ),
+                });
+                continue;
+            }
+            let keys: Vec<Key> = parsed
+                .iter()
+                .filter_map(|binding| match binding {
+                    Binding::Key(key) => Some(normalize(*key)),
+                    Binding::Gesture(_) => None,
+                })
+                .collect();
             keymap.map.retain(|_, bound| *bound != action);
+            keymap.gestures.retain(|_, bound| *bound != action);
             // A key bound to a global action is taken from every context:
             // `global.suspend = ["ctrl+z"]` must not stay `editor.undo`.
             if context == Context::Global {
-                keymap.map.retain(|(_, key), _| !parsed.contains(key));
+                keymap.map.retain(|(_, key), _| !keys.contains(key));
             }
-            for key in parsed {
+            for key in keys {
                 keymap.map.insert((context, key), action);
+            }
+            for binding in parsed {
+                if let Binding::Gesture(gesture) = binding {
+                    keymap.gestures.insert((context, gesture), action);
+                }
             }
         }
         (keymap, errors)
@@ -709,6 +947,28 @@ impl KeyMap {
             .iter()
             .chain(std::iter::once(&Context::Global))
             .find_map(|context| self.map.get(&(*context, key)).copied())
+    }
+
+    /// The action a mouse gesture stands for, looked up in `contexts` in
+    /// order (since step 25). No global action takes a gesture.
+    #[must_use]
+    pub fn lookup_gesture(&self, contexts: &[Context], gesture: Gesture) -> Option<Action> {
+        contexts
+            .iter()
+            .find_map(|context| self.gestures.get(&(*context, gesture)).copied())
+    }
+
+    /// The gestures bound to `action`, in a stable order.
+    #[must_use]
+    pub fn gestures_of(&self, action: Action) -> Vec<Gesture> {
+        let mut gestures: Vec<Gesture> = self
+            .gestures
+            .iter()
+            .filter(|(_, bound)| **bound == action)
+            .map(|((_, gesture), _)| *gesture)
+            .collect();
+        gestures.sort();
+        gestures
     }
 
     /// The keys bound to `action`, in a stable order: for help and hints.
@@ -731,15 +991,105 @@ mod tests {
 
     #[test]
     fn every_default_key_parses_and_no_context_binds_a_key_twice() {
-        let mut seen: HashMap<(Context, Key), Action> = HashMap::new();
+        let mut seen: HashMap<(Context, Binding), Action> = HashMap::new();
         for entry in ACTIONS {
             for text in entry.keys {
-                let key = normalize(parse(text).unwrap_or_else(|e| panic!("{e}")));
-                if let Some(other) = seen.insert((entry.context, key), entry.action) {
+                let binding = match parse_binding(text).unwrap_or_else(|e| panic!("{e}")) {
+                    Binding::Key(key) => Binding::Key(normalize(key)),
+                    gesture @ Binding::Gesture(_) => {
+                        assert!(entry.context.takes_gestures(), "{text} in {}", entry.action);
+                        gesture
+                    }
+                };
+                if let Some(other) = seen.insert((entry.context, binding), entry.action) {
                     panic!("{text} is bound to both {other} and {}", entry.action);
                 }
             }
         }
+    }
+
+    /// The viewer's keys are as step 23 had them, now in the map, with the
+    /// mouse's gestures beside them (step 25); the full screen's are looked
+    /// up in their own context.
+    #[test]
+    fn the_viewer_and_the_full_screen_have_their_keys_and_the_mouse() {
+        let map = KeyMap::defaults();
+        let viewer = [Context::Viewer];
+        for (key, action) in [
+            (Key::plain(KeyCode::Up), Action::ViewerUp),
+            (Key::plain(KeyCode::Char('k')), Action::ViewerUp),
+            (Key::plain(KeyCode::Char('j')), Action::ViewerDown),
+            (Key::plain(KeyCode::Enter), Action::ViewerToggle),
+            (Key::plain(KeyCode::Char('g')), Action::ViewerTop),
+            // `G`, however the terminal sends it.
+            (Key::plain(KeyCode::Char('G')), Action::ViewerBottom),
+            (
+                Key::with(KeyCode::Char('g'), Mods::SHIFT),
+                Action::ViewerBottom,
+            ),
+            (Key::plain(KeyCode::Char('/')), Action::ViewerSearch),
+            (Key::plain(KeyCode::Char('q')), Action::ViewerClose),
+            (
+                Key::with(KeyCode::Char('o'), Mods::CTRL),
+                Action::ViewerClose,
+            ),
+        ] {
+            assert_eq!(map.lookup(&viewer, key), Some(action), "{key:?}");
+        }
+        assert_eq!(
+            map.lookup_gesture(&viewer, Gesture::Click),
+            Some(Action::ViewerToggle)
+        );
+        assert_eq!(
+            map.lookup_gesture(&viewer, Gesture::WheelDown),
+            Some(Action::ViewerScrollDown)
+        );
+        let screen = [Context::Editor, Context::Screen];
+        assert_eq!(
+            map.lookup(&screen, Key::plain(KeyCode::PageUp)),
+            Some(Action::ScreenPageUp)
+        );
+        assert_eq!(
+            map.lookup(&screen, Key::with(KeyCode::Char('f'), Mods::CTRL)),
+            Some(Action::ScreenSearch)
+        );
+        // The editor's own keys come first: `Home` is the line's start.
+        assert_eq!(
+            map.lookup(&screen, Key::plain(KeyCode::Home)),
+            Some(Action::LineStart)
+        );
+        assert_eq!(map.lookup_gesture(&[Context::Editor], Gesture::Click), None);
+        // An upper-case letter alone is still typed where nothing binds it.
+        assert_eq!(
+            map.lookup(&[Context::Editor], Key::plain(KeyCode::Char('G'))),
+            None
+        );
+    }
+
+    /// A gesture can be bound in the viewer's and the full screen's
+    /// contexts, and is refused anywhere else, where the mouse is never
+    /// reported.
+    #[test]
+    fn a_gesture_is_bound_only_where_the_mouse_is_reported() {
+        let wheel = vec!["wheel_up".to_owned(), "k".to_owned()];
+        let click = vec!["click".to_owned()];
+        let (map, errors) = KeyMap::with_table([
+            ("viewer.up", wheel.as_slice()),
+            ("editor.submit", click.as_slice()),
+        ]);
+        assert_eq!(
+            map.lookup_gesture(&[Context::Viewer], Gesture::WheelUp),
+            Some(Action::ViewerUp)
+        );
+        // The wheel up was the scroll's: rebinding takes it from that action
+        // only in the map's lookup order, and both stay listed.
+        assert_eq!(map.gestures_of(Action::ViewerUp), vec![Gesture::WheelUp]);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].reason.contains("click"), "{errors:?}");
+        assert_eq!(
+            map.lookup(&[Context::Editor], Key::plain(KeyCode::Enter)),
+            Some(Action::Submit)
+        );
     }
 
     #[test]

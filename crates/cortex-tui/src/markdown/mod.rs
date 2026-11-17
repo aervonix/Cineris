@@ -498,6 +498,32 @@ impl Markdown {
         scratch.commit(width, look)
     }
 
+    /// The same stream made again from the text it has kept (since step
+    /// 25): fed that text afresh, so that what it commits from now on is
+    /// laid out at whatever width the next commit gives, as if it had
+    /// streamed at that width all along. What it committed before is to be
+    /// committed again by the new one. A stream that keeps no text is made
+    /// again empty. The code blocks the highlighter holds for this one are
+    /// let go.
+    #[must_use]
+    pub fn restarted(&self) -> Self {
+        for (block, _, _) in &self.blocks {
+            self.highlighter.close(*block);
+        }
+        let mut fresh = Self::new(self.flavor);
+        fresh.early = self.early;
+        fresh.highlighter = self.highlighter.clone();
+        fresh.now = self.now;
+        if let Some(keep) = &self.keep {
+            fresh.keep = Some(Box::default());
+            fresh.push(&keep.text);
+        }
+        if self.finished {
+            fresh.finish();
+        }
+        fresh
+    }
+
     /// Colours code blocks with `highlighter` (an answer's only).
     #[must_use]
     pub fn with_highlighter(mut self, highlighter: Highlighter) -> Self {
@@ -1183,7 +1209,10 @@ impl Markdown {
             return;
         }
         let Some((Some(block), ordinal, index)) = place.filter(|_| !self.scratch) else {
-            self.kept_colours(place.map(|(_, ordinal, index)| (ordinal, index)), Some(Vec::new()));
+            self.kept_colours(
+                place.map(|(_, ordinal, index)| (ordinal, index)),
+                Some(Vec::new()),
+            );
             let line = cut(&Line::styled(text, base), room, frame.look.glyphs.ellipsis);
             self.emit(line, frame);
             return;

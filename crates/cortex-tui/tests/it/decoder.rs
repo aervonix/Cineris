@@ -11,7 +11,7 @@
 //! action (`Alt+Enter`, `Ctrl+J`; `Alt+Z`) arrive as themselves.
 
 use cortex_term::{Decoder, Event, Key, KeyCode, Mods};
-use cortex_tui::keys::{ACTIONS, Action, Context, KeyMap, parse};
+use cortex_tui::keys::{ACTIONS, Action, Context, Gesture, KeyMap, parse};
 
 /// The contexts a key of `context` is looked up in when that context has
 /// the keyboard.
@@ -24,6 +24,8 @@ fn chain(context: Context) -> Vec<Context> {
         Context::Search => vec![Context::Search],
         Context::Focus => vec![Context::Focus],
         Context::Dialog => vec![Context::Dialog],
+        Context::Viewer => vec![Context::Viewer],
+        Context::Screen => vec![Context::Editor, Context::Screen],
     }
 }
 
@@ -98,7 +100,9 @@ fn plain(key: Key) -> Vec<u8> {
             };
             prefix(vec![code])
         }
+        // Shift with a letter is the upper-case letter.
         KeyCode::Char(c) => {
+            let c = if shift { c.to_ascii_uppercase() } else { c };
             let mut text = [0; 4];
             prefix(c.encode_utf8(&mut text).as_bytes().to_vec())
         }
@@ -140,6 +144,8 @@ fn win32(key: Key) -> Option<Vec<u8>> {
         // record carries a control code or nothing: not a key the map can
         // be given in this mode. Ctrl+Z is undo there.
         KeyCode::Char('/' | '_') if ctrl => return None,
+        // The viewer's search (step 25): the key of `/` on a US layout.
+        KeyCode::Char('/') => (0xbf, u32::from('/')),
         other => panic!("no record for {other:?}"),
     };
     let mut state = 0;
@@ -189,7 +195,12 @@ fn found(map: &KeyMap, context: Context, bytes: &[u8]) -> Option<Action> {
 fn every_default_binding_as_plain_input() {
     let map = KeyMap::defaults();
     for entry in ACTIONS {
-        for text in entry.keys {
+        // The mouse's gestures are not keys (step 25).
+        for text in entry
+            .keys
+            .iter()
+            .filter(|text| Gesture::from_name(text).is_none())
+        {
             let key = parse(text).unwrap();
             let action = found(&map, entry.context, &plain(key));
             match MERGED.iter().find(|(binding, _)| binding == text) {
@@ -209,7 +220,12 @@ fn every_default_binding_as_win32_input_records() {
     let map = KeyMap::defaults();
     let mut skipped = Vec::new();
     for entry in ACTIONS {
-        for text in entry.keys {
+        // The mouse's gestures are not keys (step 25).
+        for text in entry
+            .keys
+            .iter()
+            .filter(|text| Gesture::from_name(text).is_none())
+        {
             let key = parse(text).unwrap();
             match win32(key) {
                 Some(bytes) => {
@@ -247,7 +263,12 @@ fn the_merged_keys_arrive_whole_under_the_enhanced_protocol() {
     }
     // And every binding with a modifier, as the protocol reports it.
     for entry in ACTIONS {
-        for text in entry.keys {
+        // The mouse's gestures are not keys (step 25).
+        for text in entry
+            .keys
+            .iter()
+            .filter(|text| Gesture::from_name(text).is_none())
+        {
             let key = parse(text).unwrap();
             if key.mods.is_empty() || matches!(key.code, KeyCode::Char('_' | '/')) {
                 continue;

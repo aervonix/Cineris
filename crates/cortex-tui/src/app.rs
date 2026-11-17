@@ -53,7 +53,7 @@ use cortex_protocol::{ErrorData, SessionId};
 /// `[terminal]` overrides, the colour depth they name, the waker a link
 /// calls, and what the terminal can do.
 pub use cortex_term::{Capabilities, ColorDepth, Overrides, Waker, signal_ended, signalled};
-use cortex_term::{Device, Event, Frame, Inline, Scheduler, Terminal, Wake};
+use cortex_term::{Device, Event, Frame, Full, Inline, Scheduler, Screen, Terminal, Wake};
 
 pub use link::{Inbound, Link, Ticket};
 pub use state::{App, Drained, Effect, Restyle, Restyled, SECOND_INTERRUPT};
@@ -121,6 +121,22 @@ pub struct Settings {
     pub glyphs: GlyphSet,
     /// `tui.theme`.
     pub theme: ThemeChoice,
+    /// `tui.presenter`, or `--fullscreen` (since step 25).
+    pub presenter: Presenter,
+    /// Whether the viewer and the full-screen presenter report the mouse
+    /// (`terminal.mouse`, since step 25). Never the inline screen.
+    pub mouse: bool,
+}
+
+/// Which presenter the application draws with (`tui.presenter`; since step
+/// 25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Presenter {
+    /// The transcript in the terminal's scrollback, and a live region.
+    #[default]
+    Inline,
+    /// The whole window, on the alternate screen.
+    Fullscreen,
 }
 
 impl Default for Settings {
@@ -135,6 +151,8 @@ impl Default for Settings {
             reduced_motion: false,
             glyphs: GlyphSet::Auto,
             theme: ThemeChoice::Auto,
+            presenter: Presenter::Inline,
+            mouse: true,
         }
     }
 }
@@ -307,11 +325,12 @@ pub fn interactive(
     );
     app.set_waker(waker.clone());
     let mut presenter = Inline::new(cols, rows);
+    let mut full = Full::new(cols, rows);
     let ran = loop {
         let Some(entered) = terminal.as_mut() else {
             break Ok(());
         };
-        match run_with(entered, &mut presenter, &mut app) {
+        match run_with(entered, &mut presenter, &mut full, &mut app) {
             Ok(Ran::Ended) => break Ok(()),
             Err(error) => break Err(error),
             // `Ctrl+G`: the terminal is handed to the editor, and taken
@@ -375,9 +394,10 @@ enum Ran {
 pub fn run<D: Device>(terminal: &mut Terminal<D>, app: &mut App) -> io::Result<()> {
     let (cols, rows) = terminal.size()?;
     let mut presenter = Inline::new(cols, rows);
+    let mut full = Full::new(cols, rows);
     // A terminal of the caller's own has no editor to hand over to: the
     // prompt stays as it was.
-    while let Ran::Editor = run_with(terminal, &mut presenter, app)? {
+    while let Ran::Editor = run_with(terminal, &mut presenter, &mut full, app)? {
         app.edited(Err(crate::external::EditorError::File(io::Error::other(
             "this terminal cannot be handed to an editor",
         ))));
@@ -390,10 +410,16 @@ pub fn run<D: Device>(terminal: &mut Terminal<D>, app: &mut App) -> io::Result<(
 fn run_with<D: Device>(
     terminal: &mut Terminal<D>,
     presenter: &mut Inline,
+    full: &mut Full,
     app: &mut App,
 ) -> io::Result<Ran> {
     let (cols, rows) = terminal.size()?;
     presenter.resize(cols, rows);
+    full.resize(cols, rows);
+    // The terminal may be a new one (after the external editor): it reports
+    // the mouse on the alternate screen when the application wants it.
+    terminal.set_mouse(app.mouse())?;
+    full.redraw();
     app.resize(usize::from(presenter.width()), usize::from(rows));
     let mut scheduler = Scheduler::new();
     scheduler.input();
@@ -406,7 +432,7 @@ fn run_with<D: Device>(
         }
         let now = terminal.now();
         if scheduler.wake(now) == Wake::Now {
-            draw(terminal, presenter, app, now)?;
+            draw(terminal, presenter, full, app, now)?;
             scheduler.drawn(now);
             app.drawn(terminal.now());
         }
@@ -435,7 +461,7 @@ fn run_with<D: Device>(
         }
         let mut input = false;
         while let Some(event) = next.take() {
-            input |= take(terminal, presenter, &mut scheduler, app, &event)?;
+            input |= take(terminal, presenter, full, &mut scheduler, app, &event)?;
             // After the last key the application takes, what is typed is
             // the shell's: nothing more is read.
             if app.exit().is_some() {
@@ -453,7 +479,7 @@ fn run_with<D: Device>(
         }
         if input {
             let now = terminal.now();
-            draw(terminal, presenter, app, now)?;
+            draw(terminal, presenter, full, app, now)?;
             scheduler.drawn(now);
             app.drawn(terminal.now());
             if app.exit().is_some() {
@@ -480,7 +506,7 @@ fn run_with<D: Device>(
             }
             // Keys first, between batches.
             if let Some(event) = terminal.next(Some(Duration::ZERO))?
-                && take(terminal, presenter, &mut scheduler, app, &event)?
+                && take(terminal, presenter, full, &mut scheduler, app, &event)?
             {
                 scheduler.input();
                 scheduler.stream();
@@ -489,13 +515,14 @@ fn run_with<D: Device>(
         }
         if app.exit().is_some() {
             let now = terminal.now();
-            draw(terminal, presenter, app, now)?;
+            draw(terminal, presenter, full, app, now)?;
             break;
         }
     }
-    // The main screen first, if the viewer has the screen: the live region
-    // is erased there, so that the shell finds the screen as a plain quit
-    // leaves it (the review of step 23).
+    // The main screen first, if the viewer or the full-screen presenter has
+    // the screen (the mouse off with it): the live region is erased there,
+    // so that the shell finds the screen as a plain quit leaves it (the
+    // review of step 23).
     terminal.alternate(false)?;
     let caps = *terminal.caps();
     presenter.finish(&caps, terminal)?;
@@ -507,6 +534,7 @@ fn run_with<D: Device>(
 fn take<D: Device>(
     terminal: &mut Terminal<D>,
     presenter: &mut Inline,
+    full: &mut Full,
     scheduler: &mut Scheduler,
     app: &mut App,
     event: &Event,
@@ -514,11 +542,13 @@ fn take<D: Device>(
     match event {
         Event::Resize { cols, rows } => {
             presenter.resize(*cols, *rows);
+            full.resize(*cols, *rows);
             app.resize(usize::from(presenter.width()), usize::from(*rows));
             scheduler.input();
         }
         Event::Resumed => {
             presenter.restart();
+            full.redraw();
             scheduler.input();
         }
         Event::Reply(_) => {
@@ -535,7 +565,10 @@ fn take<D: Device>(
     let input = app.terminal(event, terminal.now());
     for effect in app.take_effects() {
         match effect {
-            Effect::Redraw => presenter.redraw(),
+            Effect::Redraw => {
+                presenter.redraw();
+                full.redraw();
+            }
             Effect::Copy(text) => terminal.copy(&text)?,
             Effect::Suspend => {
                 // As at the end: the live region is on the main screen. The
@@ -557,17 +590,34 @@ fn take<D: Device>(
 fn draw<D: Device>(
     terminal: &mut Terminal<D>,
     presenter: &mut Inline,
+    full: &mut Full,
     app: &mut App,
     now: Instant,
 ) -> io::Result<()> {
-    // The viewer is a full screen of its own, on the alternate screen: the
-    // main screen, its scrollback and the live region wait as they were.
-    if app.viewing() {
+    // The viewer and the full-screen presenter own the alternate screen:
+    // the main screen, its scrollback and the live region wait as they
+    // were. A screen entered again is drawn whole.
+    if app.viewing() || app.full_screen() {
+        if !terminal.is_alternate() {
+            full.redraw();
+        }
         terminal.alternate(true)?;
-        let (cols, rows) = terminal.size()?;
-        let width = usize::from(cols).saturating_sub(1);
-        let lines = app.viewer_frame(usize::from(rows), width, now);
-        return terminal.draw_screen(&lines, width);
+        let caps = *terminal.caps();
+        let (lines, cursor) = if app.viewing() {
+            let width = usize::from(full.width());
+            (app.viewer_frame(usize::from(full.rows()), width, now), None)
+        } else {
+            app.screen_frame(now)
+        };
+        full.draw(
+            &Screen {
+                lines: &lines,
+                cursor,
+            },
+            &caps,
+            terminal,
+        )?;
+        return Ok(());
     }
     if terminal.is_alternate() {
         terminal.alternate(false)?;

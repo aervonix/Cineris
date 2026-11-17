@@ -37,8 +37,8 @@ use std::time::{Duration, Instant};
 use cortex_base::log::{self, FileOptions, Filter, LogHandle, LogOptions};
 use cortex_base::{CancelToken, SecretFilter, SystemClock};
 use cortex_config::schema::{
-    ColorChoice, DensityChoice, GlyphChoice, KeySettings, ReasoningShown, TerminalSettings,
-    ToolOutputChoice, TuiSettings,
+    ColorChoice, DensityChoice, GlyphChoice, KeySettings, PresenterChoice, ReasoningShown,
+    TerminalSettings, ToolOutputChoice, TuiSettings,
 };
 use cortex_config::{Dirs, Env, LoadOptions, Loaded, StateDir};
 use cortex_core::{ClientId, ClientInfo, Core, CoreOptions, EventQueue, Outgoing, TokioTimer};
@@ -152,7 +152,8 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     };
 
     let mut notices = Vec::new();
-    let settings = tui_settings(&loaded.settings.tui, &mut notices);
+    let mut settings = tui_settings(&loaded.settings.tui, &mut notices);
+    settings.mouse = loaded.settings.terminal.mouse.unwrap_or(true);
     let (keymap, errors) = keymap(&loaded.settings.keys);
     notices.extend(errors);
     notices.extend(here.passed_over_said());
@@ -427,6 +428,12 @@ pub(crate) fn tui_settings(tui: &TuiSettings, notices: &mut Vec<String>) -> app:
             GlyphChoice::Ascii => app::GlyphSet::Ascii,
         },
         theme,
+        presenter: match tui.presenter {
+            PresenterChoice::Inline => app::Presenter::Inline,
+            PresenterChoice::Fullscreen => app::Presenter::Fullscreen,
+        },
+        // `[terminal]`'s, set by the caller.
+        mouse: true,
     }
 }
 
