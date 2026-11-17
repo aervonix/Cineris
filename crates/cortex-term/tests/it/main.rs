@@ -26,6 +26,7 @@
     reason = "the demo is the example's, and this binary uses part of it"
 )]
 mod demo;
+mod full;
 mod handoff;
 mod perf;
 mod presenter;
