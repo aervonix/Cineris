@@ -18,8 +18,9 @@
 //! | [`anthropic_decoder`] | No input makes the decoder panic. The same bytes give the same events however they are cut. A response ends at most once, and nothing follows its end. A block ends only after it started. Every block the decoder stores is one JSON object, so it can be sent back. |
 //! | [`openai_chat_decoder`] | The same properties as the other decoder, for servers with each kind of flag: reasoning under a named member, reasoning in tags inside the text, a model that is asked for a speed tier and one that is not. |
 //! | [`extractors`] | No file makes an outline extractor panic, in any language, by the fallback, or as a C or C++ header or source file. Every outline keeps its caps: its entries, and each entry's name, head and doc. |
-//! | [`rpc_decoder`] | No bytes from a client make the RPC server's reading of them panic: the lines, each line's kind, an operation's parameters, an answer to each kind of request the server puts. The same bytes are read the same however they are cut. A line that is not a message, or is too long, gets an error the server can write, under the line's id when it has one, and a client reads that error back. An operation read is the same operation once a client writes it again and the server reads it, and so is an answer; a message read is the same message once written again. |
+//! | [`rpc_decoder`] | No bytes from a client make the RPC server's reading of them panic: the lines, each line's kind, an operation's parameters, an answer to each kind of request the server puts. The same bytes are read the same however they are cut. A line that is not a message, or is too long, gets an error the server can write, and a client reads that error back; a JSON object with an id the server can read gets it under that id. An operation read is the same operation once a client writes it again and the server reads it, and so is an answer, a request and a response; a float may come back a unit or two in the last place off, as serde_json reads one ([`FLOAT_ULPS`]). |
 
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use cortex_base::framing::{self, FrameDecoder};
@@ -35,6 +36,8 @@ use cortex_protocol::jsonrpc::{ErrorObject, Message, Request, RequestId, Respons
 use cortex_protocol::methods::{Op, ServerRequest, ServerResponse};
 use cortex_protocol::model::ModelRole;
 use cortex_protocol::{ModelId, ProviderId, Speed};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// The RPC server's reading of a client's line (`cortex-rpc`'s `wire`
 /// module), compiled here from the server's own file. This package does
@@ -330,8 +333,9 @@ pub fn extractors(data: &[u8]) {
 }
 
 /// The longest line the RPC target's server reads. The server's own limit
-/// is 32 MiB (`ServeOptions::max_line`); this one is below the fuzzer's
-/// longest input (8 KiB), so that a line too long is reached as well.
+/// is 32 MiB (`ServeOptions::max_line`); this one must stay below the
+/// longest input `cargo xtask fuzz` lets the fuzzer make (`-max_len`, 8 KiB),
+/// so that a line too long is reached as well.
 const RPC_LINE_LIMIT: usize = 4096;
 
 /// What the server makes of one thing in a client's stream.
@@ -340,8 +344,8 @@ enum Read {
     /// A line too long, or a stream that ended within a line: the error the
     /// server answers it with, under no id.
     Frame(ErrorObject),
-    /// A whole line, as the server reads it.
-    Line(Incoming),
+    /// A whole line, without its end, and what the server reads it as.
+    Line(Vec<u8>, Incoming),
 }
 
 /// What the server reads from `stream` delivered in the pieces `cuts` make,
@@ -354,7 +358,7 @@ fn serve(stream: &[u8], cuts: &[usize]) -> Vec<Read> {
         decoder.push(piece);
         while let Some(line) = decoder.next_line() {
             read.push(match line {
-                Ok(line) => Read::Line(wire::read(line)),
+                Ok(line) => Read::Line(line.to_vec(), wire::read(line)),
                 Err(error) => Read::Frame(error.to_error_object()),
             });
         }
@@ -389,22 +393,26 @@ pub fn rpc_decoder(data: &[u8]) {
     for read in whole {
         match read {
             Read::Frame(error) => answers_back(None, error),
-            Read::Line(Incoming::Bad { id, error }) => {
+            Read::Line(line, Incoming::Bad { id, error }) => {
                 assert!(
                     error.code == code::PARSE_ERROR || error.code == code::INVALID_REQUEST,
                     "a line that is not a message is answered with the code {}",
                     error.code
                 );
-                assert!(
-                    id.is_none() || error.code == code::INVALID_REQUEST,
-                    "an id was read from a line that is not JSON: {id:?}"
-                );
+                // A JSON object with an id the server can read is answered
+                // under that id, so that its client can match the error.
+                if let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(&line) {
+                    let readable = object
+                        .get("id")
+                        .and_then(|id| RequestId::deserialize(id).ok());
+                    assert_eq!(id, readable, "a line is not answered under its id");
+                }
                 answers_back(id, error);
             }
             // None is defined from a client; the server ignores each.
-            Read::Line(Incoming::Notification) => {}
-            Read::Line(Incoming::Request(request)) => request_reads_back(request),
-            Read::Line(Incoming::Response(response)) => answer_reads_back(response),
+            Read::Line(_, Incoming::Notification) => {}
+            Read::Line(_, Incoming::Request(request)) => request_reads_back(request),
+            Read::Line(_, Incoming::Response(response)) => answer_reads_back(response),
         }
     }
 }
@@ -419,6 +427,65 @@ fn written(message: &Message) -> Vec<u8> {
         "a message is not written as a line"
     );
     line
+}
+
+/// `value` as JSON.
+fn json<T: Serialize>(value: &T) -> Value {
+    serde_json::to_value(value).expect("what was read is written")
+}
+
+/// The most two floats may be apart, in units in the last place, and be
+/// taken for the same float read back. serde_json, as the harness builds it
+/// (without its `float_roundtrip` feature), reads a float only to within a
+/// unit or two of the nearest, so a float written and read again may come
+/// back that far off: `1.0715660391465826e-75` is read as `…825e-75`, which
+/// is written so and read again as `…823e-75`. Over 20 million random
+/// floats, normal and subnormal, none came back more than two units off.
+const FLOAT_ULPS: u64 = 4;
+
+/// That `again`, which `first` was written as and read back from, is the
+/// same as `first`, but for floats [`FLOAT_ULPS`] apart at most. When the
+/// two differ, their JSON (`as_json`) must differ, and in such floats
+/// alone: two values that differ where their JSON is the same differ in
+/// something the writing left out.
+fn read_back_the_same<T: PartialEq + Debug>(
+    first: &T,
+    again: &T,
+    as_json: impl Fn(&T) -> Value,
+    what: &str,
+) {
+    if first == again {
+        return;
+    }
+    let (first_json, again_json) = (as_json(first), as_json(again));
+    assert!(
+        first_json != again_json && same_but_floats(&first_json, &again_json),
+        "{what} differs once written and read again:\n  first: {first:?}\n  again: {again:?}"
+    );
+}
+
+/// Whether `a` and `b` are the same JSON, but for floats [`FLOAT_ULPS`]
+/// apart at most.
+fn same_but_floats(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) if x.is_f64() && y.is_f64() => {
+            let (Some(x), Some(y)) = (x.as_f64(), y.as_f64()) else {
+                return false;
+            };
+            x == y
+                || (x.is_sign_negative() == y.is_sign_negative()
+                    && x.to_bits().abs_diff(y.to_bits()) <= FLOAT_ULPS)
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_but_floats(a, b))
+        }
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, a)| b.get(key).is_some_and(|b| same_but_floats(a, b)))
+        }
+        _ => a == b,
+    }
 }
 
 /// The error the server answers what it could not read with, written as
@@ -443,12 +510,10 @@ fn answers_back(id: Option<RequestId>, error: ErrorObject) {
 /// answers it with. An operation is the same once a client writes it again
 /// and the server reads it, and so is the request itself.
 fn request_reads_back(request: Request) {
-    let again = wire::read(&written(&Message::Request(request.clone())));
-    assert_eq!(
-        again,
-        Incoming::Request(request.clone()),
-        "a request differs once written again"
-    );
+    let Incoming::Request(again) = wire::read(&written(&Message::Request(request.clone()))) else {
+        panic!("a request written again is not read as one");
+    };
+    read_back_the_same(&request, &again, json, "a request");
     let Request { id, method, params } = request;
     match Op::from_wire(&method, params) {
         Ok(op) => {
@@ -462,9 +527,12 @@ fn request_reads_back(request: Request) {
             assert_eq!(read.id, id);
             let again = Op::from_wire(&read.method, read.params)
                 .expect("an operation written is read again");
-            assert_eq!(
-                again, op,
-                "an operation differs once written and read again"
+            assert_eq!(again.method(), op.method());
+            read_back_the_same(
+                &op,
+                &again,
+                |op| op.params().expect("an operation's parameters are written"),
+                "an operation",
             );
         }
         Err(error) => {
@@ -484,12 +552,11 @@ fn request_reads_back(request: Request) {
 /// method of the request its id names; here it is read against each. An
 /// answer is the same once written again and read, and so is the response.
 fn answer_reads_back(response: Response) {
-    let again = wire::read(&written(&Message::Response(response.clone())));
-    assert_eq!(
-        again,
-        Incoming::Response(response.clone()),
-        "a response differs once written again"
-    );
+    let Incoming::Response(again) = wire::read(&written(&Message::Response(response.clone())))
+    else {
+        panic!("a response written again is not read as one");
+    };
+    read_back_the_same(&response, &again, json, "a response");
     // An error in its place declines the request.
     let Response {
         id,
@@ -516,9 +583,11 @@ fn answer_reads_back(response: Response) {
         };
         let again =
             ServerResponse::from_wire(method, read).expect("an answer written is read again");
-        assert_eq!(
-            again, answer,
-            "an answer to `{method}` differs once written and read again"
+        read_back_the_same(
+            &answer,
+            &again,
+            |answer| answer.result().expect("an answer is written"),
+            &format!("an answer to `{method}`"),
         );
     }
 }
@@ -573,7 +642,7 @@ mod tests {
 
     /// The seeds `cargo xtask fuzz` starts the RPC target from
     /// (`crates/cortex-rpc/fixtures/lines`).
-    const RPC_SEEDS: [&[u8]; 7] = [
+    const RPC_SEEDS: [&[u8]; 8] = [
         include_bytes!("../../crates/cortex-rpc/fixtures/lines/requests.jsonl"),
         include_bytes!("../../crates/cortex-rpc/fixtures/lines/initialize.jsonl"),
         include_bytes!("../../crates/cortex-rpc/fixtures/lines/turn-start.jsonl"),
@@ -581,6 +650,7 @@ mod tests {
         include_bytes!("../../crates/cortex-rpc/fixtures/lines/notification.jsonl"),
         include_bytes!("../../crates/cortex-rpc/fixtures/lines/batch.jsonl"),
         include_bytes!("../../crates/cortex-rpc/fixtures/lines/invalid.jsonl"),
+        include_bytes!("../../crates/cortex-rpc/fixtures/lines/too-long.jsonl"),
     ];
 
     #[test]
@@ -600,11 +670,71 @@ mod tests {
             b"{\"jsonrpc\":\"2.0\",\"id\":1e999,\"method\":\"x\"}\n",
             b"{\"jsonrpc\":\"2.0\",\"id\":18446744073709551615,\"result\":1}\n",
             b"{\"jsonrpc\":\"2.0\",\"id\":[1],\"method\":\"shutdown\"}\n",
+            b"{\"jsonrpc\":\"1.0\",\"id\":\"a\",\"method\":\"shutdown\"}\n",
             b"{\"jsonrpc\":\"2.0\",\"id\":\"a\",\"result\":{\"choice\":\"allow_once\",\"x\":2.5e-300}}\n",
             deep.as_bytes(),
         ] {
             rpc_decoder(nonsense);
         }
+    }
+
+    /// A float that serde_json reads back a unit or two off, in each place
+    /// the target writes and reads again: a request's parameters, an
+    /// operation's, a response's result and an error's data. Each of these
+    /// failed the target before it took that (found by its review).
+    #[test]
+    fn a_float_read_back_a_unit_off_is_taken_for_the_same() {
+        let float = "1.0715660391465826e-75";
+        for line in [
+            format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"x\",\"params\":{float}}}\n"),
+            format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/new\",\"params\":{{\"workspace\":\"/w\",\"config\":{{\"x\":{float}}}}}}}\n"
+            ),
+            format!("{{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{float}}}\n"),
+            format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":4,\"error\":{{\"code\":1,\"message\":\"m\",\"data\":[{float}]}}}}\n"
+            ),
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":1111111111111111111111111111111111}\n"
+                .to_owned(),
+        ] {
+            rpc_decoder(line.as_bytes());
+        }
+    }
+
+    #[test]
+    fn same_but_floats_takes_a_few_units_and_nothing_else() {
+        let value = |text: &str| -> Value { serde_json::from_str(text).unwrap() };
+        let at = |bits: u64| Value::from(f64::from_bits(bits));
+        let bits = 1.0715660391465826e-75_f64.to_bits();
+        assert!(same_but_floats(&at(bits), &at(bits + FLOAT_ULPS)));
+        assert!(same_but_floats(
+            &Value::Array(vec![at(bits)]),
+            &Value::Array(vec![at(bits - 1)])
+        ));
+        assert!(!same_but_floats(&at(bits), &at(bits + FLOAT_ULPS + 1)));
+        assert!(same_but_floats(&value("[0.0]"), &value("[-0.0]")));
+        assert!(!same_but_floats(&value("1.0"), &value("-1.0")));
+        assert!(!same_but_floats(&value("1.0"), &value("1")));
+        assert!(!same_but_floats(
+            &value("{\"a\":1.5}"),
+            &value("{\"b\":1.5}")
+        ));
+        assert!(!same_but_floats(&value("[1.5]"), &value("[1.5,1.5]")));
+        assert!(!same_but_floats(&value("\"a\""), &value("\"b\"")));
+    }
+
+    /// Two values that differ where their JSON is the same differ in
+    /// something the writing left out: not a float a unit off.
+    #[test]
+    #[should_panic(expected = "a value differs once written and read again")]
+    fn a_difference_the_json_does_not_show_fails() {
+        read_back_the_same(&1_u8, &2_u8, |_| Value::Null, "a value");
+    }
+
+    #[test]
+    #[should_panic(expected = "a value differs once written and read again")]
+    fn a_difference_other_than_a_float_fails() {
+        read_back_the_same(&1_u8, &2_u8, |n| Value::from(*n), "a value");
     }
 
     /// The requests seed is the golden transcript's client, so it holds
@@ -613,7 +743,7 @@ mod tests {
     fn the_rpc_requests_seed_holds_every_operation() {
         let mut methods = Vec::new();
         for read in serve(RPC_SEEDS[0], &[]) {
-            let Read::Line(Incoming::Request(request)) = read else {
+            let Read::Line(_, Incoming::Request(request)) = read else {
                 panic!("not a request: {read:?}");
             };
             let op = Op::from_wire(&request.method, request.params).expect("an operation");
@@ -626,27 +756,27 @@ mod tests {
         assert_eq!(methods, all);
     }
 
-    /// The invalid seed holds one line of each kind the server refuses.
+    /// The invalid seed holds one line of each kind the server refuses, and
+    /// the too-long seed a line past the target's limit.
     #[test]
-    fn the_rpc_invalid_seed_is_refused_line_by_line() {
-        let read = serve(RPC_SEEDS[6], &[]);
-        let codes: Vec<(Option<RequestId>, i64)> = read
-            .into_iter()
-            .map(|read| match read {
-                Read::Frame(error) => (None, error.code),
-                Read::Line(Incoming::Bad { id, error }) => (id, error.code),
-                Read::Line(Incoming::Request(request)) => (
-                    Some(request.id),
-                    Op::from_wire(&request.method, request.params)
-                        .expect_err("an operation that is refused")
-                        .to_error_object()
-                        .code,
-                ),
-                other => panic!("not refused: {other:?}"),
-            })
-            .collect();
+    fn the_rpc_refused_seeds_are_refused_line_by_line() {
+        let codes = |seed: &[u8]| -> Vec<(Option<RequestId>, i64)> {
+            serve(seed, &[])
+                .into_iter()
+                .map(|read| match read {
+                    Read::Frame(error) => (None, error.code),
+                    Read::Line(_, Incoming::Bad { id, error }) => (id, error.code),
+                    Read::Line(_, Incoming::Request(request)) => (
+                        Some(request.id),
+                        Op::from_wire(&request.method, request.params)
+                            .map_or_else(|error| error.to_error_object().code, |_| 0),
+                    ),
+                    other => panic!("not refused: {other:?}"),
+                })
+                .collect()
+        };
         assert_eq!(
-            codes,
+            codes(RPC_SEEDS[6]),
             [
                 (None, code::PARSE_ERROR),
                 (Some(RequestId::Number(7)), code::INVALID_REQUEST),
@@ -656,6 +786,14 @@ mod tests {
                 (Some(RequestId::from("srv-6")), code::INVALID_REQUEST),
                 // The last line, cut off by the end of the stream.
                 (None, code::PARSE_ERROR),
+            ]
+        );
+        // The line too long, and a `shutdown` read after it (0: taken).
+        assert_eq!(
+            codes(RPC_SEEDS[7]),
+            [
+                (None, code::INVALID_REQUEST),
+                (Some(RequestId::Number(6)), 0)
             ]
         );
     }
