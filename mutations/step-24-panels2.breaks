@@ -47,7 +47,7 @@ in: ProjectPanel::act
 find: Action::FocusAccept if !acceptable(entry, now) => Act::Taken,
 replace: Action::FocusAccept if false => Act::Taken,
 caught-by:
-    app::tests::project::slash_project_lists_again_and_opens_it_focused_with_every_entry
+    app::tests::project::y_on_an_entry_in_use_and_accepted_sends_nothing
 
 [break] an-expired-entry-cannot-be-accepted-again
 rule: An accepted entry that expired is offered `y`: accepting brings it back.
@@ -383,4 +383,3 @@ replace: .map(str::to_owned)
 occurrence: 1
 caught-by:
     view::usage::tests::hostile_names_labels_currencies_notes_and_errors_are_drawn_visible
-    app::tests::usage::hostile_usage_is_drawn_visible_in_the_frame
