@@ -667,6 +667,13 @@ impl App {
         }
         self.with_screen(view, width, &live, |scroll, source| {
             scroll.reveal(source, block, row, row + 1);
+            // The last row of a window that does not follow the end is
+            // covered by the row that says there is more below: a match
+            // revealed there goes up one.
+            let window = scroll.window(source, scroll.height.max(1));
+            if !window.at_end && window.places.last() == Some(&Place::Kept { block, row }) {
+                scroll.down(source, 1);
+            }
         });
     }
 

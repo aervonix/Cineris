@@ -59,3 +59,5 @@ The first of step 25's three pull requests: the full-screen presenter, the mouse
 | Streaming, a piece before each frame | 0.120 ms | 0.203 ms | 122 | 4,063 |
 
 The frame budget (performance-budgets.md) holds with room to spare.
+
+**200 turns in each presenter** (`perf_two_hundred_turns_in_each_presenter`, the musl `dist` build, a workspace of 20,000 files of real code, the desktop; the table is in [performance-budgets.md](../../../performance-budgets.md), "Memory"): inline 30.4 MB resident after the turns, 38.2 MB at the peak, against 40; full screen 30.5 MB, 33.2 MB after scrolling, resizing and searching, 39.0 MB at the peak, against 80. The inline peak is near its budget, but it is the index's first pass, before any turn (34.2 MB), not the session.

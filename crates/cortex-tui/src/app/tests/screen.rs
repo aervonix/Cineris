@@ -471,11 +471,11 @@ fn the_viewer_scrolls_with_the_wheel_and_a_click_opens_a_box() {
         .iter()
         .position(|row| row.contains("Run cargo test"))
         .expect("a box on the screen");
-    let selected_before = rows[29].clone();
+    // The second box: not the one selected, the last.
     click(&mut app, 4, u16::try_from(call).unwrap(), now);
     let rows = text(&app.viewer_frame(30, 99, now));
-    assert_ne!(
-        rows[29], selected_before,
+    assert!(
+        rows[29].ends_with("box 2 of 3"),
         "the clicked box is selected: {rows:#?}"
     );
     assert!(rows[29].contains("enter collapses"), "and open: {rows:#?}");
@@ -547,6 +547,28 @@ fn ctrl_f_searches_the_transcript_and_goes_between_matches() {
         rows.iter().any(|row| row.contains("Turn 1.")),
         "the view stays: {rows:#?}"
     );
+    // In text that is not bold, the current match is told apart from the
+    // others: bold as well as reversed. It is shown, though its row is the
+    // window's last, which the row saying there is more below covers.
+    key(&mut app, "esc", now);
+    key(&mut app, "ctrl+f", now);
+    super::type_text(&mut app, "digit", now);
+    assert!(app.settle_search(BOUND));
+    let (lines, _) = app.screen_frame(now);
+    // The transcript's rows: the search row holds the query too.
+    let styles: Vec<_> = lines[..19]
+        .iter()
+        .flat_map(|line| line.spans().iter())
+        .filter(|span| span.text() == "digit")
+        .map(|span| span.style())
+        .collect();
+    assert!(styles.len() >= 3, "{:#?}", text(&lines));
+    let apart = styles
+        .iter()
+        .filter(|style| styles.iter().filter(|other| other == style).count() == 1)
+        .count();
+    assert_eq!(apart, 1, "one match is drawn apart: {styles:#?}");
+    key(&mut app, "esc", now);
     // Nothing found says so.
     key(&mut app, "ctrl+f", now);
     super::type_text(&mut app, "nowhere at all", now);

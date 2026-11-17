@@ -343,3 +343,12 @@ find: view.forget_block(block);
 replace: let _ = block;
 caught-by:
     cortex-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
+
+[break] a-match-under-the-more-below-row
+rule: A match revealed on the window's last row, which the row saying there is more below covers, goes up one so that it is shown.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::reveal_match
+find: if !window.at_end && window.places.last() == Some(&Place::Kept { block, row })
+replace: if false
+caught-by:
+    cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
