@@ -260,7 +260,7 @@ Not blocking (the `main` and `nightly` workflows run these)
                     `try` runs it, and advisories and unused, as named jobs.
   advisories        Check the lockfile against the advisory database.
   fuzz [--seconds N] [TARGET...]
-                    Fuzz the stream decoders, each target for N seconds
+                    Fuzz the decoders, each target for N seconds
                     (60 when not given). Needs a nightly toolchain and
                     cargo-fuzz.
 
