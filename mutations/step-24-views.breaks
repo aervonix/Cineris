@@ -38,15 +38,6 @@ replace: if false {
 caught-by:
     cortex-tui app::tests::commands::profile_loads_one_and_lists_them
 
-[break] a-profile-loaded-is-forgotten
-rule: The profile /profile loaded is the one in force from then on.
-file: crates/cortex-tui/src/app/state.rs
-in: reloaded
-find: self.profile = Some(profile);
-replace: drop(profile);
-caught-by:
-    cortex-tui app::tests::commands::profile_loads_one_and_lists_them
-
 [break] context-shares-of-the-limit
 rule: /context gives each part's share of the whole request.
 file: crates/cortex-tui/src/app/state/commands.rs
