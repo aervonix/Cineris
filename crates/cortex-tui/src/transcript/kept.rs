@@ -88,6 +88,60 @@ impl KeptBlock {
         }
     }
 
+    /// Its text as it reads, for a search (since step 25): an answer's
+    /// markdown, a round's calls and their whole kept detail, every other
+    /// block's words.
+    #[must_use]
+    pub fn text(&self) -> String {
+        match &self.piece {
+            Piece::Answer(source) => source.text.clone(),
+            Piece::Block(Block::Round(round)) => {
+                let mut text = String::new();
+                for call in &round.calls {
+                    text.push_str(&call.verb);
+                    text.push(' ');
+                    match &call.target {
+                        crate::view::round::Target::Path(target)
+                        | crate::view::round::Target::Text(target) => text.push_str(target),
+                        crate::view::round::Target::None => {}
+                    }
+                    text.push('\n');
+                    match &call.detail {
+                        Detail::None => {}
+                        Detail::Output(output) => text.push_str(output),
+                        Detail::Diff(lines) => {
+                            for line in lines {
+                                text.push_str(&line.text);
+                                text.push('\n');
+                            }
+                        }
+                    }
+                    text.push('\n');
+                }
+                text
+            }
+            Piece::Block(Block::User(text) | Block::Notice(text)) => text.clone(),
+            Piece::Block(Block::Reasoning(reasoning)) => reasoning
+                .summary
+                .clone()
+                .unwrap_or_else(|| reasoning.text.clone()),
+            Piece::Block(Block::Listing { title, lines }) => {
+                let mut text = title.clone();
+                for line in lines {
+                    text.push('\n');
+                    text.push_str(line);
+                }
+                text
+            }
+            Piece::Block(Block::Error { message, hint }) => {
+                format!("{message}\n{}", hint.as_deref().unwrap_or_default())
+            }
+            Piece::Block(Block::Header(_) | Block::Summary { .. } | Block::Answer(_)) => {
+                String::new()
+            }
+        }
+    }
+
     /// The bytes of text it holds, roughly: what the tests of the bound
     /// count.
     #[must_use]

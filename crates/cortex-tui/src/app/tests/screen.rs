@@ -488,6 +488,140 @@ fn the_viewer_scrolls_with_the_wheel_and_a_click_opens_a_box() {
     assert_eq!(text(&app.viewer_frame(30, 99, now)), rows);
 }
 
+/// How long a test waits for the search's worker; never reached when all
+/// is well.
+const BOUND: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// `Ctrl+F` searches the kept transcript off the key's path: the newest
+/// match is brought into view and drawn reversed and bold, `Up` goes to the
+/// older one and `Down` back, going round, the row in the hint row's place
+/// says where the search is, and `Esc` ends it where it is.
+#[test]
+fn ctrl_f_searches_the_transcript_and_goes_between_matches() {
+    let now = Instant::now();
+    let (mut app, _link) = long_session(Presenter::Fullscreen, 3, now);
+    key(&mut app, "ctrl+f", now);
+    super::type_text(&mut app, "TURN", now);
+    let rows = rows_text(&mut app, now);
+    assert!(rows[19].starts_with("  ctrl+f TURN"), "{rows:#?}");
+    assert!(app.settle_search(BOUND), "the worker answered");
+    let (lines, cursor) = app.screen_frame(now);
+    let rows = text(&lines);
+    assert!(rows[19].contains("3 of 3"), "{rows:#?}");
+    // The cursor is after what is typed.
+    assert_eq!(
+        cursor.map(|cursor| (cursor.row, cursor.col)),
+        Some((19, 13))
+    );
+    // The newest match is shown, reversed and bold, the rest of its row as
+    // it was.
+    let row = rows
+        .iter()
+        .position(|row| row.contains("Turn 3."))
+        .expect("turn 3");
+    let spans = lines[row].spans();
+    let marked = spans
+        .iter()
+        .find(|span| span.text() == "Turn")
+        .expect("the match is a span of its own");
+    let rest = spans
+        .iter()
+        .find(|span| span.text() == " 3.")
+        .expect("the rest of the prompt");
+    assert_eq!(marked.style(), rest.style().reverse().bold());
+    key(&mut app, "up", now);
+    let rows = rows_text(&mut app, now);
+    assert!(rows[19].contains("2 of 3"), "{rows:#?}");
+    assert!(rows.iter().any(|row| row.contains("Turn 2.")), "{rows:#?}");
+    key(&mut app, "down", now);
+    assert!(rows_text(&mut app, now)[19].contains("3 of 3"));
+    // Going round: newer than the newest is the oldest.
+    key(&mut app, "down", now);
+    let rows = rows_text(&mut app, now);
+    assert!(rows[19].contains("1 of 3"), "{rows:#?}");
+    assert!(rows.iter().any(|row| row.contains("Turn 1.")), "{rows:#?}");
+    key(&mut app, "esc", now);
+    let rows = rows_text(&mut app, now);
+    assert!(!rows[19].contains("ctrl+f"), "{rows:#?}");
+    assert!(
+        rows.iter().any(|row| row.contains("Turn 1.")),
+        "the view stays: {rows:#?}"
+    );
+    // Nothing found says so.
+    key(&mut app, "ctrl+f", now);
+    super::type_text(&mut app, "nowhere at all", now);
+    assert!(app.settle_search(BOUND));
+    assert!(rows_text(&mut app, now)[19].contains("no match"));
+}
+
+/// A match inside a closed box opens the box while it is the current
+/// match, its border saying the search opened it; a new query closes it,
+/// and ending the search on it leaves it open.
+#[test]
+fn a_match_inside_a_closed_box_opens_it_while_it_is_current() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Fullscreen, 79, 24, now);
+    // A command that succeeded: its box starts closed.
+    let mut steps = turn(1, "Build it.", &["Built.\n"], "compiled findme\nall fine");
+    for step in &mut steps {
+        for inbound in step.iter_mut() {
+            if let Inbound::Event(event) = inbound
+                && let Event::ItemCompleted(ItemCompleted {
+                    item: Item::ToolResult(result),
+                }) = &mut event.event
+            {
+                result.outcome = cortex_protocol::item::ToolOutcome::Success;
+                result.payload = Some(serde_json::json!({"exit_code": 0}));
+            }
+        }
+    }
+    for step in steps {
+        for inbound in step {
+            link.give(inbound);
+        }
+        drain(&mut app, now);
+        let _ = app.screen_frame(now);
+    }
+    let rows = rows_text(&mut app, now);
+    assert!(
+        !rows.iter().any(|row| row.contains("findme")),
+        "closed: {rows:#?}"
+    );
+    key(&mut app, "ctrl+f", now);
+    super::type_text(&mut app, "findme", now);
+    assert!(app.settle_search(BOUND));
+    let rows = rows_text(&mut app, now);
+    assert!(
+        rows.iter().any(|row| row.contains("compiled findme")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("opened by the search")),
+        "{rows:#?}"
+    );
+    // A query that no longer matches closes it again.
+    super::type_text(&mut app, "x", now);
+    assert!(app.settle_search(BOUND));
+    let rows = rows_text(&mut app, now);
+    assert!(rows[23].contains("no match"), "{rows:#?}");
+    assert!(
+        !rows.iter().any(|row| row.contains("compiled findme")),
+        "{rows:#?}"
+    );
+    key(&mut app, "backspace", now);
+    assert!(app.settle_search(BOUND));
+    key(&mut app, "esc", now);
+    let rows = rows_text(&mut app, now);
+    assert!(
+        rows.iter().any(|row| row.contains("compiled findme")),
+        "left open: {rows:#?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("opened by the search")),
+        "{rows:#?}"
+    );
+}
+
 /// What a played terminal reads, in turn.
 type Steps = Vec<(cortex_term::Ready, Vec<u8>)>;
 

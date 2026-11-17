@@ -148,6 +148,16 @@ pub enum Placement {
         /// The user opened it.
         open: bool,
     },
+    /// In the full-screen presenter, a committed box a click or a search
+    /// turned over (since step 25): open with all its detail, as in the
+    /// viewer, or closed.
+    Screen {
+        /// It is open.
+        open: bool,
+        /// The search opened it, for the match it shows: its border says
+        /// so.
+        searched: bool,
+    },
 }
 
 impl Round {
@@ -213,6 +223,8 @@ pub fn round(
         Placement::Committed if hidden => Some("ctrl+o expands"),
         Placement::Viewer { selected: true, .. } if shown => Some("enter collapses"),
         Placement::Viewer { selected: true, .. } if hidden => Some("enter expands"),
+        Placement::Screen { searched: true, .. } => Some("opened by the search"),
+        Placement::Screen { .. } if hidden => Some("ctrl+o expands"),
         _ => None,
     }
     .map(|label| Line::styled(label, theme.style(Token::Hint)));
@@ -231,7 +243,7 @@ pub fn shows_detail(round: &Round, look: &Look) -> bool {
 
 /// Whether a call's detail is open in this box.
 fn is_open(round: &Round, call: &Call, placement: Placement, look: &Look) -> bool {
-    if let Placement::Viewer { open, .. } = placement {
+    if let Placement::Viewer { open, .. } | Placement::Screen { open, .. } = placement {
         return open;
     }
     if let Some(open) = round.open {
@@ -370,7 +382,7 @@ fn detail_rows(call: &Call, placement: Placement, room: usize, look: &Look) -> V
         Detail::Output(text) => {
             let lines = output_lines(text);
             let keep = match (placement, call.state) {
-                (Placement::Viewer { .. }, _) => lines.len(),
+                (Placement::Viewer { .. } | Placement::Screen { .. }, _) => lines.len(),
                 (_, CallState::Running(_)) => RUNNING_TAIL,
                 _ => FAILURE_TAIL,
             };

@@ -40,6 +40,7 @@ pub mod link;
 mod panels;
 mod ready;
 mod scroll;
+mod search;
 mod state;
 mod tools;
 mod wording;
