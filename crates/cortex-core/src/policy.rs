@@ -661,7 +661,8 @@ pub(crate) struct Session<'a> {
 ///   `deny` and `ask` rule are the session's or narrower, and a grant never
 ///   widens what the session holds. A narrow that fails covers nothing.
 /// - **who decides, from the grant:** its level, at most `autonomous`
-///   (`unrestricted` is never handed on), and its allow rules. Narrowed
+///   (`unrestricted` is never handed on; `guided`, not there yet, is read
+///   as `supervised`), and its allow rules. Narrowed
 ///   alone, both would be the session's, under which the call was asked
 ///   about, and no grant could cover any call the session asks about.
 /// - **no allow of a path:** a grant never lifts a question about a path (one
@@ -692,36 +693,105 @@ pub(crate) fn within_grant(
     default: RuleAction,
     accesses: &[Access],
 ) -> Judged {
+    let engine = match grant_engine(session, grant) {
+        Ok(made) => made.engine,
+        Err(Unmade::Expired) => return Judged::Expired,
+        Err(Unmade::Not(_)) => return Judged::Beyond,
+    };
+    match engine.decide(&Request {
+        tool,
+        default,
+        accesses,
+    }) {
+        Outcome::Allow { .. } => Judged::Within,
+        _ => Judged::Beyond,
+    }
+}
+
+/// The engine a supervisor's grant is judged with in a session
+/// ([`within_grant`]), with what of the grant it leaves out and why: made
+/// in one place, so that what judges an answer and what the supervisor is
+/// told of its grant ([`limits_in`]) never differ.
+struct GrantEngine {
+    engine: Engine,
+    /// Whether a command runs confined in the session's own scope.
+    confined_here: bool,
+    /// Whether the session's commands are confined at all.
+    confined: bool,
+}
+
+/// Why a grant covers nothing in a session.
+enum Unmade {
+    /// It has expired.
+    Expired,
+    /// Its lease cannot be narrowed to the session's, or its engine cannot
+    /// be made: why, in words.
+    Not(String),
+}
+
+/// The level who decides by under a grant: the grant's own, at most
+/// `autonomous` (`unrestricted` is never handed on) and never `guided`,
+/// which is not there yet (it is read as `supervised`); and at most
+/// `supervised` where a command would not run confined in the session's own
+/// scope.
+fn grant_level(grant: &Lease, confined_here: bool) -> Level {
+    let level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
+    let level = if level == Level::Guided {
+        Level::Supervised
+    } else {
+        level
+    };
+    if confined_here {
+        level
+    } else {
+        cortex_policy::level::lower(&level, &Level::Supervised)
+    }
+}
+
+/// Whether an allow rule of a grant is left out where the session's
+/// commands run as `confined_here` says: an allow of a path always, and an
+/// allow of a command where a command would not run confined in the
+/// session's own scope.
+fn left_out(rule: &cortex_protocol::lease::Rule, confined_here: bool) -> bool {
+    rule.action == RuleAction::Allow
+        && (matches!(rule.effect, EffectKind::Read | EffectKind::Write)
+            || (rule.effect == EffectKind::Exec && !confined_here))
+}
+
+/// Makes the engine a supervisor's `grant` is judged with in `session`
+/// ([`within_grant`] says how), or says why there is none.
+fn grant_engine(session: &Session<'_>, grant: &Lease) -> Result<GrantEngine, Unmade> {
     let Session {
         template,
         standing,
         confined,
     } = *session;
     if expired(grant, template.clock.now()) {
-        return Judged::Expired;
+        return Err(Unmade::Expired);
     }
-    let Ok(mut lease) = standing.narrow(grant, template.sandbox) else {
-        return Judged::Beyond;
-    };
+    let mut lease = standing
+        .narrow(grant, template.sandbox)
+        .map_err(|failure| {
+            Unmade::Not(format!(
+                "it cannot be narrowed to this session's lease ({failure})"
+            ))
+        })?;
     // Whether a command the grant lets run runs in the sandbox it was
     // judged in: the session's own scope, confined.
     let confined_here = confined && same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
-    let mut level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
-    if !confined_here {
-        level = cortex_policy::level::lower(&level, &Level::Supervised);
-    }
-    lease.grant.level = level;
+    lease.grant.level = grant_level(grant, confined_here);
     // No allow of a path; and no allow of a command where it would not run
     // confined in the session's own scope, since the engine leaves a
     // command's writes beyond the roots to the sandbox.
-    let unused = |rule: &cortex_protocol::lease::Rule| {
-        rule.action == RuleAction::Allow
-            && (matches!(rule.effect, EffectKind::Read | EffectKind::Write)
-                || (rule.effect == EffectKind::Exec && !confined_here))
-    };
-    lease.grant.rules.retain(|rule| !unused(rule));
+    lease
+        .grant
+        .rules
+        .retain(|rule| !left_out(rule, confined_here));
     for rule in &grant.grant.rules {
-        if rule.action == RuleAction::Allow && !unused(rule) && !lease.grant.rules.contains(rule) {
+        if rule.action == RuleAction::Allow
+            && !left_out(rule, confined_here)
+            && !lease.grant.rules.contains(rule)
+        {
             lease.grant.rules.push(rule.clone());
         }
     }
@@ -739,45 +809,43 @@ pub(crate) fn within_grant(
     parts.budget = lease.grant.budget;
     parts.limits = lease.grant.limits;
     parts.store = None;
-    let Ok(engine) = Engine::start(parts) else {
-        return Judged::Beyond;
-    };
-    match engine.decide(&Request {
-        tool,
-        default,
-        accesses,
-    }) {
-        Outcome::Allow { .. } => Judged::Within,
-        _ => Judged::Beyond,
-    }
+    let engine = Engine::start(parts)
+        .map_err(|failure| Unmade::Not(format!("its engine cannot be made from it ({failure})")))?;
+    Ok(GrantEngine {
+        engine,
+        confined_here,
+        confined,
+    })
 }
 
 /// What of a supervisor's `grant` does not apply in `session`, and why, as
 /// a sentence: so that the supervisor is not left to find out by its
-/// answers being refused. `None` when all of it applies. Said: a grant that
-/// has expired or cannot be narrowed to the session (it covers nothing);
-/// its `read` and `write` allow rules (they never apply); its `exec` allow
-/// rules, and a level that would let a command run unasked, where a
-/// command would not run confined in the session's own scope (no enforcing
-/// sandbox, `unrestricted`, or a narrower scope).
+/// answers being refused. `None` when all of it applies. Said, from the
+/// engine that judges its answers ([`grant_engine`]): a grant that has
+/// expired, cannot be narrowed to the session or whose engine cannot be
+/// made, with why (it covers nothing); its `read` and `write` allow rules
+/// (they never apply); its `exec` allow rules, and a level that would let a
+/// command run unasked, where a command would not run confined in the
+/// session's own scope (no enforcing sandbox, `unrestricted`, or a
+/// narrower scope); a `guided` level, read as `supervised`; and then what
+/// does apply of its allow rules of tools and hosts, which are not
+/// commands.
 pub(crate) fn limits_in(session: &Session<'_>, grant: &Lease) -> Option<String> {
-    let Session {
-        template,
-        standing,
-        confined,
-    } = *session;
     let id = &grant.id;
-    if expired(grant, template.clock.now()) {
-        return Some(format!(
-            "The supervisor's grant `{id}` has expired: it covers nothing, and every approval \
-             stays with the session's users."
-        ));
-    }
-    let Ok(lease) = standing.narrow(grant, template.sandbox) else {
-        return Some(format!(
-            "The supervisor's grant `{id}` cannot be narrowed to this session's lease: it covers \
-             nothing, and every approval stays with the session's users."
-        ));
+    let made = match grant_engine(session, grant) {
+        Ok(made) => made,
+        Err(Unmade::Expired) => {
+            return Some(format!(
+                "The supervisor's grant `{id}` has expired: it covers nothing, and every \
+                 approval stays with the session's users."
+            ));
+        }
+        Err(Unmade::Not(why)) => {
+            return Some(format!(
+                "The supervisor's grant `{id}` covers nothing in this session: {why}. Every \
+                 approval stays with the session's users."
+            ));
+        }
     };
     let allows = |effects: &[EffectKind]| -> Vec<String> {
         grant
@@ -797,9 +865,13 @@ pub(crate) fn limits_in(session: &Session<'_>, grant: &Lease) -> Option<String> 
             paths.join(", ")
         ));
     }
-    let confined_here = confined && same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
-    if !confined_here {
-        let why = if confined {
+    if grant.grant.level == Level::Guided {
+        said.push(
+            "its level `guided` is read as `supervised`, since it is not there yet".to_owned(),
+        );
+    }
+    if !made.confined_here {
+        let why = if made.confined {
             "its scope is narrower than the session's, and an approved command runs in the \
              session's sandbox"
         } else {
@@ -812,20 +884,29 @@ pub(crate) fn limits_in(session: &Session<'_>, grant: &Lease) -> Option<String> 
                 commands.join(", ")
             ));
         }
-        if cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous) == Level::Autonomous
-        {
+        if grant_level(grant, true) == Level::Autonomous {
             said.push(format!(
                 "its level lets no command run unasked, since {why}"
             ));
         }
     }
-    (!said.is_empty()).then(|| {
+    if said.is_empty() {
+        return None;
+    }
+    let others = allows(&[EffectKind::Ext, EffectKind::Network]);
+    let applies = if others.is_empty() {
+        String::new()
+    } else {
         format!(
-            "The supervisor's grant `{id}` is limited in this session: {}. What it does not cover \
-             stays with the session's users.",
-            said.join("; ")
+            " Its allow rules of tools and hosts ({}) apply: they are not commands.",
+            others.join(", ")
         )
-    })
+    };
+    Some(format!(
+        "The supervisor's grant `{id}` is limited in this session: {}.{applies} What it does not \
+         cover stays with the session's users.",
+        said.join("; ")
+    ))
 }
 
 /// Whether a grant has expired by `now`: its expiry `at` has passed, or a
@@ -844,17 +925,38 @@ fn expired(grant: &Lease, now: cortex_base::UtcTime) -> bool {
 }
 
 /// Whether two sandbox policies give a command the same scope: the same
-/// paths to read and write, the same protected, and the same network.
+/// paths to read and write, the same protected, and the same network. Path
+/// sets are compared by what they hold, each within the other, not by the
+/// text of their roots: a root and one inside it hold what the first alone
+/// does.
 fn same_scope(
     first: &cortex_protocol::lease::SandboxPolicy,
     second: &cortex_protocol::lease::SandboxPolicy,
 ) -> bool {
-    fn roots(set: &cortex_protocol::lease::PathSet) -> std::collections::BTreeSet<&str> {
-        set.roots.iter().map(String::as_str).collect()
+    use cortex_protocol::lease::PathSet;
+    fn roots(set: &PathSet) -> Option<Vec<AbsPath>> {
+        set.roots
+            .iter()
+            .map(|root| AbsPath::parse(root, cortex_base::PathStyle::NATIVE).ok())
+            .collect()
     }
-    let same = |a: &cortex_protocol::lease::PathSet, b: &cortex_protocol::lease::PathSet| {
-        a.all == b.all && (a.all || roots(a) == roots(b))
-    };
+    // Whether every path of `inner` is in `outer`. A root that cannot be
+    // read as a path is held by nothing.
+    fn within(inner: &PathSet, outer: &PathSet) -> bool {
+        if outer.all {
+            return true;
+        }
+        if inner.all {
+            return false;
+        }
+        let (Some(inner), Some(outer)) = (roots(inner), roots(outer)) else {
+            return false;
+        };
+        inner
+            .iter()
+            .all(|root| outer.iter().any(|holds| root.starts_with_exactly(holds)))
+    }
+    let same = |a: &PathSet, b: &PathSet| within(a, b) && within(b, a);
     same(&first.read, &second.read)
         && same(&first.write, &second.write)
         && same(&first.protect, &second.protect)
@@ -1517,6 +1619,155 @@ mod tests {
         assert_eq!(
             judged(&parts, false, &anything, &command("ninja")),
             Judged::Beyond
+        );
+    }
+
+    /// What the supervisor is told of `grant` in a session made from
+    /// `parts`, whose commands are `confined` or not.
+    fn told(parts: &cortex_policy::Parts, confined: bool, grant: &Lease) -> Option<String> {
+        let standing = Engine::start(parts.clone())
+            .expect("the session's engine")
+            .lease()
+            .clone();
+        limits_in(
+            &Session {
+                template: parts,
+                standing: &standing,
+                confined,
+            },
+            grant,
+        )
+    }
+
+    /// A grant whose engine cannot be made covers nothing, and the
+    /// supervisor is told so, with why: a rule of an effect this build does
+    /// not know, a pattern that cannot be read (the review of step 27's
+    /// second pull request found such a grant covering nothing while the
+    /// notice said nothing, or named only its commands).
+    #[test]
+    fn a_grant_whose_engine_cannot_be_made_covers_nothing_and_says_why() {
+        use cortex_protocol::lease::Effect;
+        let parts = session_parts(Vec::new());
+        let make = rule(Effect::Exec, "make", RuleAction::Allow);
+        for (case, rules) in [
+            (
+                "an unknown effect",
+                vec![
+                    make.clone(),
+                    rule(
+                        Effect::Unknown("teleport".to_owned()),
+                        "*",
+                        RuleAction::Deny,
+                    ),
+                ],
+            ),
+            (
+                "an empty command",
+                vec![rule(Effect::Exec, "", RuleAction::Allow)],
+            ),
+            (
+                "a path pattern that cannot be read",
+                vec![
+                    make.clone(),
+                    rule(Effect::Write, "a/**b/[", RuleAction::Deny),
+                ],
+            ),
+        ] {
+            let grant = grant(Level::Supervised, rules);
+            assert_eq!(
+                judged(&parts, true, &grant, &command("make")),
+                Judged::Beyond,
+                "{case}"
+            );
+            let told = told(&parts, true, &grant).unwrap_or_default();
+            assert!(
+                told.contains("covers nothing") && told.contains("cannot be made"),
+                "{case}: {told}"
+            );
+        }
+    }
+
+    /// `guided` is not there yet: a grant at it is read as `supervised`,
+    /// in what it covers and in what it is told.
+    #[test]
+    fn a_guided_grant_is_read_as_supervised() {
+        use cortex_protocol::lease::Effect;
+        let parts = session_parts(Vec::new());
+        let guided = grant(
+            Level::Guided,
+            vec![rule(Effect::Exec, "make", RuleAction::Allow)],
+        );
+        assert!(covers(&parts, &guided, &command("make")));
+        assert!(!covers(&parts, &guided, &command("ninja")));
+        let told = told(&parts, true, &guided).expect("told");
+        assert!(told.contains("`guided` is read as `supervised`"), "{told}");
+    }
+
+    /// Scopes are compared by what they hold, each within the other, not by
+    /// the text of their roots: a root beside one inside it is the session's
+    /// own scope, and so is the same root spelled another way.
+    #[test]
+    fn a_scope_is_compared_by_what_it_holds() {
+        let parts = session_parts(Vec::new());
+        let mut nested = grant(Level::Autonomous, Vec::new());
+        nested.grant.sandbox.write.all = false;
+        nested.grant.sandbox.write.roots = parts
+            .sandbox_policy
+            .write
+            .roots
+            .iter()
+            .cloned()
+            .chain([native("/work/app/src").as_str().to_owned()])
+            .collect();
+        assert!(covers(&parts, &nested, &command("ninja")));
+        let mut spelled = grant(Level::Autonomous, Vec::new());
+        spelled.grant.sandbox.write.all = false;
+        spelled.grant.sandbox.write.roots = parts
+            .sandbox_policy
+            .write
+            .roots
+            .iter()
+            .map(|root| format!("{root}/./"))
+            .collect();
+        assert!(covers(&parts, &spelled, &command("ninja")));
+        assert_eq!(told(&parts, true, &spelled), None);
+    }
+
+    /// Where a command would not run confined, the supervisor is told what
+    /// of its grant does not apply, and what does: its allow rules of tools
+    /// and hosts, which are not commands.
+    #[test]
+    fn the_supervisor_is_told_what_of_its_grant_applies_unconfined() {
+        use cortex_protocol::lease::Effect;
+        let parts = session_parts(Vec::new());
+        let grant = grant(
+            Level::Supervised,
+            vec![
+                rule(Effect::Exec, "make", RuleAction::Allow),
+                rule(Effect::Ext, "fs_*", RuleAction::Allow),
+                rule(Effect::Network, "example.com", RuleAction::Allow),
+            ],
+        );
+        let told = told(&parts, false, &grant).expect("told");
+        for part in [
+            "`exec make`",
+            "not confined",
+            "`ext fs_*`",
+            "`network example.com`",
+            "apply",
+        ] {
+            assert!(told.contains(part), "{part} in {told}");
+        }
+        assert_eq!(
+            judged(
+                &parts,
+                false,
+                &grant,
+                &[Access::Ext {
+                    tool: "fs_write".to_owned()
+                }]
+            ),
+            Judged::Within
         );
     }
 
