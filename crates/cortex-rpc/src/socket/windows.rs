@@ -822,6 +822,16 @@ impl Listener {
     }
 }
 
+/// Connects to the server at `place` once it is shown to be the user's: the
+/// pipe's owner the user, and its label at least medium.
+pub(super) async fn connect(_place: &Place) -> io::Result<super::Transport> {
+    // Built with the rest of the pipe's client in step 27's third part.
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "attaching over a named pipe is not in this build yet",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

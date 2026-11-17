@@ -200,6 +200,28 @@ impl Listener {
     }
 }
 
+/// Connects to a server listening at `place`, as a client (`cortex
+/// attach`), once the server is shown to be the user's own: a client sends
+/// its prompts, and answers its approvals, to whatever answers there.
+///
+/// - **Unix:** the socket must be the user's, with no write for group or
+///   others, in a folder that is the user's with no write for others, or
+///   root's with the sticky bit; and the credentials of the process at the
+///   other end of the connection (`SO_PEERCRED`) must name the user.
+/// - **Windows:** the pipe's owner must be the user, and its integrity
+///   label at least medium (asked of the open handle); a pipe whose
+///   security cannot be read is refused.
+///
+/// Runs in the runtime the transport's tasks are to run in.
+///
+/// # Errors
+///
+/// When nothing listens there, the server is not shown to be the user's,
+/// or the system refuses. The message says which.
+pub async fn connect(place: &Place) -> io::Result<Transport> {
+    sys::connect(place).await
+}
+
 /// A connection's two halves as a [`Transport`], each served by a task of
 /// the runtime it is made in: what is read goes to the connection in
 /// chunks, and its lines are written in turn. Reading stops when the

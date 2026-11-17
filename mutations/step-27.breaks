@@ -455,3 +455,21 @@ replace: Parent::Failed => return Line::Elsewhere
 caught-by:
     cortex-rpc socket::sys::tests::a_line_of_parents_is_the_servers_elsewhere_or_unknown
 
+[break] a-client-reaches-a-socket-others-write-to
+rule: A client reaches only a socket that is the user's, with no write for group or others.
+file: crates/cortex-rpc/src/socket/unix.rs
+in: connect
+find: if found.uid() != uid || found.mode() & 0o022 != 0 {
+replace: if found.uid() != uid {
+caught-by:
+    cortex-rpc::it socket::a_client_reaches_only_a_server_of_the_users_own
+
+[break] a-client-reaches-a-socket-where-others-write
+rule: A client reaches only a socket in a folder that is the user's with no write for others, or root's with the sticky bit.
+file: crates/cortex-rpc/src/socket/unix.rs
+in: connect
+find: check_named_folder(folder, uid).map_err
+replace: Ok::<(), io::Error>(()).map_err
+caught-by:
+    cortex-rpc::it socket::a_client_reaches_only_a_server_of_the_users_own
+
