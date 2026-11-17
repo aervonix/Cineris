@@ -79,36 +79,59 @@ const FREE_FORM: [&str; 6] = [
 /// Inside JSON that is somebody's own ([`FREE_FORM`]) the name means
 /// nothing, and what is under it is redacted like the rest.
 pub(crate) fn value(value: &mut Value, redactor: &dyn Redactor) -> bool {
-    walk(value, redactor, false)
+    walk(value, redactor, false, Raw::Keep) > 0
 }
 
-fn walk(value: &mut Value, redactor: &dyn Redactor, free_form: bool) -> bool {
+/// What an export reads (since step 25): every string the log's writer
+/// masks, masked by the same walk and the same rule of [`FREE_FORM`], and
+/// every provider block (`raw`) dropped, which the log keeps unmasked
+/// because a changed byte makes the provider refuse it on replay, and which
+/// an export never replays. Returns how many strings it masked.
+///
+/// The core calls it on each item of `session/read` with `redacted`, with
+/// the filter the log's writer has, so the two can never mask different
+/// sets: one walk, one list of free-form fields.
+pub fn for_export(value: &mut Value, redactor: &dyn Redactor) -> usize {
+    walk(value, redactor, false, Raw::Drop)
+}
+
+/// What the walk does with a provider's block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Raw {
+    /// Leaves it as it is, unmasked: the log, which replays it.
+    Keep,
+    /// Takes it out: an export.
+    Drop,
+}
+
+/// Masks the strings of `value`, and returns how many it changed.
+fn walk(value: &mut Value, redactor: &dyn Redactor, free_form: bool, raw: Raw) -> usize {
     match value {
         Value::String(text) => {
             if let Cow::Owned(masked) = redactor.redact(text) {
                 *text = masked;
-                return true;
+                return 1;
             }
-            false
+            0
         }
-        Value::Array(items) => {
-            let mut changed = false;
-            for item in items {
-                changed |= walk(item, redactor, free_form);
-            }
-            changed
-        }
+        Value::Array(items) => items
+            .iter_mut()
+            .map(|item| walk(item, redactor, free_form, raw))
+            .sum(),
         Value::Object(fields) => {
-            let mut changed = false;
+            if !free_form && raw == Raw::Drop {
+                fields.remove("raw");
+            }
+            let mut changed = 0;
             for (key, item) in fields.iter_mut() {
                 if free_form || key != "raw" {
                     let free_form = free_form || FREE_FORM.contains(&key.as_str());
-                    changed |= walk(item, redactor, free_form);
+                    changed += walk(item, redactor, free_form, raw);
                 }
             }
             changed
         }
-        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+        Value::Null | Value::Bool(_) | Value::Number(_) => 0,
     }
 }
 
@@ -130,6 +153,42 @@ pub(crate) mod tests {
                 Cow::Borrowed(text)
             }
         }
+    }
+
+    /// An export's walk masks every string the log's writer masks, in the
+    /// same places, and drops the provider's blocks the log keeps (step
+    /// 25): one walk, so the two never part.
+    #[test]
+    fn an_export_masks_what_the_log_masks_and_drops_the_providers_blocks() {
+        let entry = json!({
+            "item": {"parts": [
+                {"kind": "text", "text": "the password is hunter2", "raw": "{\"text\":\"hunter2\"}"},
+                {"kind": "tool_call", "arguments": {"raw": "hunter2", "cmd": "echo hunter2"}},
+                {"kind": "tool_result", "payload": {"raw": {"out": "hunter2"}}}
+            ],
+            "usage": {"input": 3, "raw": {"key": "hunter2"}}},
+        });
+        let mut logged = entry.clone();
+        assert!(value(&mut logged, &MaskHunter));
+        let mut exported = entry;
+        assert_eq!(for_export(&mut exported, &MaskHunter), 4);
+        // What the log masked, the export masked the same.
+        let mut without_raw = logged.clone();
+        without_raw["item"]["parts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("raw");
+        without_raw["item"]["usage"]
+            .as_object_mut()
+            .unwrap()
+            .remove("raw");
+        assert_eq!(exported, without_raw);
+        // A field named `raw` that is somebody's own is kept, masked.
+        assert_eq!(
+            exported["item"]["parts"][1]["arguments"]["raw"],
+            json!("[redacted]")
+        );
+        assert!(!exported.to_string().contains("hunter2"));
     }
 
     #[test]

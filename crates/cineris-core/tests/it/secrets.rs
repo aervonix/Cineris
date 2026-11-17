@@ -418,6 +418,122 @@ max_output = 8000
 input = [\"text\"]
 ";
 
+/// A private key, made up: what the filter takes for one.
+const PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n-----END PRIVATE KEY-----\n";
+
+/// The items of `front`'s session, read for an export or not.
+async fn read_items(front: &Front, redacted: bool) -> cineris_protocol::methods::SessionReadResult {
+    let result = front
+        .op(Op::SessionRead(
+            cineris_protocol::methods::SessionReadParams {
+                session_id: front.session.clone(),
+                item_id: None,
+                limit: None,
+                cursor: None,
+                redacted,
+            },
+        ))
+        .await
+        .expect("the session reads");
+    let OpResult::SessionRead(result) = result else {
+        panic!("not items");
+    };
+    result
+}
+
+/// A session, logged or kept in memory only, whose prompt holds the
+/// harness's key and whose tool read a private key and a token: what an
+/// export reads of it (`session/read` with `redacted`, step 25) holds none
+/// of them and no provider block, and says how many it masked; a plain
+/// read is as it was.
+fn an_export_read_of(ephemeral: bool) {
+    let world = World::new(
+        if ephemeral {
+            "export_kept"
+        } else {
+            "export_logged"
+        },
+        [
+            calls(&[("c1", "read", json!({"path": "secrets.txt"}))]),
+            Response::new()
+                .reasoning("Thinking it over.")
+                .text("Done.")
+                .end(StopReason::End),
+        ],
+    );
+    world.put("secrets.txt", format!("{PEM}token {TOKEN}\n"));
+    let core = with_key(&world);
+    world.run(async {
+        let front = if ephemeral {
+            start_kept_in_memory(&world, &core).await
+        } else {
+            Front::start(&world, &core).await
+        };
+        front.turn_allowing(&format!("my key is {KEY}")).await;
+        let plain = read_items(&front, false).await;
+        let plain_text = serde_json::to_string(&plain.items).unwrap();
+        assert!(
+            plain_text.contains("\"raw\""),
+            "the session's items keep the provider's blocks"
+        );
+        // A logged session reads back from its log, masked; one kept in
+        // memory was never masked.
+        assert_eq!(plain_text.contains(KEY), ephemeral);
+        assert_eq!(plain.masked, 0);
+
+        let export = read_items(&front, true).await;
+        let text = serde_json::to_string(&export.items).unwrap();
+        for secret in [KEY, TOKEN, "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+        assert!(!text.contains("\"raw\""), "{text}");
+        assert!(text.contains("my key is [redacted]"), "{text}");
+        assert_eq!(export.items.len(), plain.items.len());
+        // The key, the private key and the token.
+        assert_eq!(export.masked, 3);
+        front.close().await;
+    });
+}
+
+#[test]
+fn an_export_read_of_a_logged_session_holds_no_secret_and_no_provider_block() {
+    an_export_read_of(false);
+}
+
+#[test]
+fn an_export_read_of_a_session_kept_in_memory_is_masked_the_same() {
+    an_export_read_of(true);
+}
+
+/// A session kept in memory only (`--no-session`).
+async fn start_kept_in_memory(world: &World, core: &Core) -> Front {
+    let client = core.connect(ClientInfo::user());
+    let open = core.handle(
+        client.id,
+        Op::SessionNew(cineris_protocol::methods::SessionNewParams {
+            cwd: None,
+            workspace: world.workspace.to_str().unwrap().to_owned(),
+            settings: cineris_protocol::session::SessionSettings::default(),
+            title: None,
+            config: serde_json::Map::new(),
+            ephemeral: true,
+        }),
+    );
+    let (result, read) = crate::not_now(core, &client, open).await;
+    let OpResult::SessionNew(result) = result.expect("the session starts") else {
+        panic!("not the result of session/new");
+    };
+    Front {
+        core: core.clone(),
+        client,
+        session: result.session.session_id.clone(),
+        state: result.session,
+        seen: std::cell::RefCell::new(read),
+        answered: std::cell::RefCell::new(Vec::new()),
+        answering: std::cell::RefCell::new(crate::Answering::default()),
+    }
+}
+
 /// A session that comes to use another provider while it runs masks that
 /// provider's key from then on, in its own log, and the log's filter is
 /// told too.
@@ -450,7 +566,7 @@ fn a_key_found_while_a_session_runs_is_masked_in_that_session() {
     });
     world.run(async {
         let front = Front::start(&world, &core).await;
-        front.turn("one").await;
+        front.turn(&format!("one, and {OTHER_KEY}")).await;
         assert!(told.lock().unwrap().is_empty(), "no key was found yet");
 
         front
@@ -487,10 +603,19 @@ fn a_key_found_while_a_session_runs_is_masked_in_that_session() {
                 .iter()
                 .any(|m| text_of(m).contains(OTHER_KEY))
         );
+        // An export masks the key by its value in the prompt written before
+        // it was known (step 25).
+        let export = read_items(&front, true).await;
+        let text = serde_json::to_string(&export.items).unwrap();
+        assert!(!text.contains(OTHER_KEY), "{text}");
+        assert!(text.contains("one, and [redacted]"), "{text}");
         front.close().await;
     });
     let log = world.log();
-    assert!(!log.contains(OTHER_KEY), "the key is in the log");
+    // The prompt was written before the key was known: the log holds it
+    // there, and only there.
+    assert_eq!(log.matches(OTHER_KEY).count(), 1, "{log}");
+    assert!(log.contains("one, and other-provider-key"), "{log}");
     assert!(!log.contains(GATEWAY), "the header's secret is in the log");
     assert!(log.contains("key [redacted]"), "{log}");
     assert!(log.contains("pass [redacted]"), "{log}");

@@ -1405,11 +1405,18 @@ impl Core {
                     params.cursor.as_deref(),
                     params.limit,
                 )?;
+                let (items, masked) = if params.redacted {
+                    let filter = Arc::clone(&self.inner.providers.filter);
+                    crate::redact::for_export(page.items, &page.incomplete, filter)
+                } else {
+                    (page.items, 0)
+                };
                 Ok(OpResult::SessionRead(SessionReadResult {
-                    items: page.items,
+                    items,
                     incomplete: page.incomplete,
                     next_cursor: page.next_cursor,
                     seq,
+                    masked,
                 }))
             }
             Op::SessionFork(params) => {

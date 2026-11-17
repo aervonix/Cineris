@@ -2995,6 +2995,7 @@ fn a_resumed_session_draws_its_history_then_what_came_after() {
                 incomplete: Vec::new(),
                 next_cursor: None,
                 seq: 5,
+                masked: 0,
             },
         )),
     ));

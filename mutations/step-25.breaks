@@ -596,3 +596,151 @@ find: false if self.caps.vt_mouse => MOUSE_OFF
 replace: false if self.asks_vt_mouse() => MOUSE_OFF
 caught-by:
     cineris-term terminal::tests::the_win32_input_mode_takes_the_mouse_off_and_keeps_it_off
+
+[break] byte-eight-is-always-ctrl-backspace
+rule: Byte 0x08 is Backspace where the terminal erases with ^H.
+file: crates/cineris-term/src/input.rs
+in: Decoder::decode
+find: if self.ctrl_h_backspace && self.buffer[start] == 0x08
+replace: if false
+caught-by:
+    cineris-term terminal::tests::byte_eight_is_backspace_where_the_terminal_erases_with_it
+
+[break] a-burst-with-a-line-break-is-keys
+rule: Where pastes are not known to come bracketed, keys that come many in one read with a line break inside are a paste.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::pastes
+find: (found.len() >= BURST && enter_inside)
+replace: (found.len() >= BURST && enter_inside && false)
+caught-by:
+    cineris-term terminal::tests::a_burst_of_keys_with_a_line_break_inside_is_a_paste
+
+[break] a-bursts-rest-is-keys
+rule: The keys that come just after a burst taken for a paste are its rest.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::pastes
+find: let in_tail = self.paste_tail.is_some_and(|until| now <= until);
+replace: let in_tail = false;
+caught-by:
+    cineris-term terminal::tests::a_burst_of_keys_with_a_line_break_inside_is_a_paste
+
+[break] a-final-enter-counts-as-inside
+rule: A line typed and ended by Enter in one read is keys: only an Enter that is not the last makes a burst a paste.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::pastes
+find: .skip(1)
+replace: .skip(0)
+caught-by:
+    cineris-term terminal::tests::a_burst_of_keys_with_a_line_break_inside_is_a_paste
+
+[break] a-control-key-in-a-burst-is-pasted
+rule: A burst with a control key in it is keys, never a paste.
+file: crates/cineris-term/src/terminal.rs
+in: paste_text
+find: KeyCode::Char(c) if plain => text.push(c),
+replace: KeyCode::Char(c) => text.push(c),
+caught-by:
+    cineris-term terminal::tests::a_burst_of_keys_with_a_line_break_inside_is_a_paste
+
+[break] a-known-bracketed-paste-is-still-weighed
+rule: A terminal that says it knows bracketed paste has no burst of keys taken for a paste.
+file: crates/cineris-term/src/caps.rs
+in: Capabilities::apply
+find: Reply::Mode { mode: 2004, state } => self.paste_confirmed = matches!(state, 1..=4),
+replace: Reply::Mode { mode: 2004, state } => self.paste_confirmed = matches!(state, 1..=2),
+caught-by:
+    cineris-term caps::tests::bursts_are_taken_for_pastes_only_where_brackets_are_not_known
+
+[break] brackets-asked-for-when-told-not-to
+rule: terminal.bracketed_paste = false asks the terminal for no brackets.
+file: crates/cineris-term/src/terminal.rs
+in: start_sequence
+find: if caps.overrides().bracketed_paste == Some(false)
+replace: if false
+caught-by:
+    cineris-term terminal::tests::a_terminal_that_knows_bracketed_paste_has_no_burst_taken_for_one
+
+[break] a-stalled-pastes-rest-is-keys
+rule: What follows a bracketed paste given up on, to its end marker, is still the paste.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::next
+find: self.stalled = Some(self.device.now());
+replace: let _ = self.device.now();
+caught-by:
+    cineris-term terminal::tests::the_rest_of_a_paste_that_stalled_is_still_the_paste
+
+[break] a-stalled-paste-never-ends
+rule: The end marker ends a stalled paste's rest: the key after it is a key.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::pastes
+find: self.stalled = (!ended).then_some(now);
+replace: self.stalled = Some(now);
+caught-by:
+    cineris-term terminal::tests::the_rest_of_a_paste_that_stalled_is_still_the_paste
+
+[break] the-clipboard-trusted-in-tmux
+rule: tmux is thought not to take the clipboard sequence.
+file: crates/cineris-term/src/caps.rs
+in: Capabilities::detect
+find: && var("TMUX").is_none()
+replace: && true
+occurrence: 2
+caught-by:
+    cineris-term caps::tests::the_clipboard_is_guessed_from_the_terminal_and_overridden
+
+[break] copy-shows-nothing-to-copy-by-hand
+rule: /copy opens the answer in the viewer where the terminal is thought not to take the clipboard sequence.
+file: crates/cineris-tui/src/app/state/commands.rs
+in: App::command
+find: if self.caps.clipboard {
+replace: if true {
+caught-by:
+    cineris-tui app::tests::copy_shows_the_answer_to_copy_by_hand_where_the_clipboard_may_not_be_taken
+
+[break] the-mouse-reported-over-text-to-copy
+rule: The mouse is not reported while the viewer shows text to copy by hand, so a plain drag selects it.
+file: crates/cineris-tui/src/app/state/screen.rs
+in: App::mouse
+find: self.settings.mouse && !self.viewing_to_copy()
+replace: self.settings.mouse
+caught-by:
+    cineris-tui app::tests::copy_shows_the_answer_to_copy_by_hand_where_the_clipboard_may_not_be_taken
+
+[break] an-export-read-is-not-masked
+rule: session/read with `redacted` masks every item by the log's walk and filter.
+file: crates/cineris-core/src/core.rs
+in: Core::handle
+find: let (items, masked) = if params.redacted {
+replace: let (items, masked) = if false {
+caught-by:
+    cineris-core::it secrets::an_export_read_of_a_logged_session_holds_no_secret_and_no_provider_block
+    cineris-core::it secrets::an_export_read_of_a_session_kept_in_memory_is_masked_the_same
+    cineris-core::it secrets::a_key_found_while_a_session_runs_is_masked_in_that_session
+
+[break] an-export-keeps-the-providers-blocks
+rule: An export's walk drops every provider block (`raw`), which the log keeps unmasked.
+file: crates/cineris-session/src/redact.rs
+in: for_export
+find: walk(value, redactor, false, Raw::Drop)
+replace: walk(value, redactor, false, Raw::Keep)
+caught-by:
+    cineris-session redact::tests::an_export_masks_what_the_log_masks_and_drops_the_providers_blocks
+
+[break] an-export-holds-what-is-still-running
+rule: An export leaves out the items still in progress.
+file: crates/cineris-core/src/redact.rs
+in: for_export
+find: .is_some_and(|id| incomplete.iter().any(|open| open.as_str() == id))
+replace: .is_some_and(|_| false)
+caught-by:
+    cineris-core redact::tests::an_export_leaves_out_what_runs_masks_the_rest_and_drops_every_raw_block
+
+[break] an-export-counts-only-its-own-masks
+rule: The export's count is of every value masked in what it returns, the log's masks included.
+file: crates/cineris-core/src/redact.rs
+in: for_export
+find: masked += masks(&value);
+replace: masked += 0;
+caught-by:
+    cineris-core::it secrets::an_export_read_of_a_logged_session_holds_no_secret_and_no_provider_block
+    cineris-core::it secrets::an_export_read_of_a_session_kept_in_memory_is_masked_the_same

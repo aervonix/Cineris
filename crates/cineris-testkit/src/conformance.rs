@@ -338,6 +338,7 @@ fn read() -> Step {
             item_id: None,
             limit: None,
             cursor: None,
+            redacted: false,
         })
     })
 }

@@ -1210,7 +1210,7 @@ mod tests {
             (Ready::Input, b"first line\rsecond li"),
             (Ready::Input, b"ne\r"),
             (Ready::Timeout, b""),
-            (Ready::Input, b"typed\r"),
+            (Ready::Input, b"a line typed\r"),
             (Ready::Input, b"abc\x03def\rgh"),
         ]);
         let mut terminal = Terminal::with_device(device, caps()).unwrap();
@@ -1223,13 +1223,14 @@ mod tests {
             terminal.next(None).unwrap(),
             Some(Event::Paste("ne\n".to_owned()))
         );
-        // A moment later: typing, its `Enter` a key.
+        // A moment later: a line typed, many keys in one read as over a slow
+        // connection, its `Enter` the last: keys, the `Enter` sends.
         assert_eq!(
             terminal.next(Some(Duration::from_millis(200))).unwrap(),
             None
         );
         let mut keys = Vec::new();
-        for _ in 0..6 {
+        for _ in 0..13 {
             keys.push(terminal.next(None).unwrap());
         }
         assert_eq!(
@@ -1292,7 +1293,7 @@ mod tests {
             (Ready::Input, b"\x1b[200~first part\r"),
             (Ready::Timeout, b""),
             (Ready::Input, b"second\rpart\x1b[201~"),
-            (Ready::Input, b"\r"),
+            (Ready::Input, b"ok\r"),
         ]);
         let mut terminal = Terminal::with_device(device, caps()).unwrap();
         assert_eq!(
@@ -1303,7 +1304,16 @@ mod tests {
             terminal.next(None).unwrap(),
             Some(Event::Paste("second\npart".to_owned()))
         );
-        // The end marker ended it: the next `Enter` sends.
+        // The end marker ended it: what is typed next is keys, and its
+        // `Enter` sends.
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(Key::plain(KeyCode::Char('o'))))
+        );
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(Key::plain(KeyCode::Char('k'))))
+        );
         assert_eq!(
             terminal.next(None).unwrap(),
             Some(Event::Key(Key::plain(KeyCode::Enter)))

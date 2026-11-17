@@ -136,6 +136,7 @@ fn read_result(items: Vec<Item>, incomplete: &[&str], seq: u64) -> OpResult {
         incomplete: incomplete.iter().map(|id| ItemId::from(*id)).collect(),
         next_cursor: None,
         seq,
+        masked: 0,
     })
 }
 
@@ -402,6 +403,7 @@ fn a_switch_while_a_history_is_read_is_refused_and_the_read_goes_on() {
             incomplete: Vec::new(),
             next_cursor: Some("500".to_owned()),
             seq: 40,
+            masked: 0,
         })),
     ));
     drain(&mut app, now);
@@ -837,6 +839,7 @@ fn a_history_whose_page_fails_part_way_draws_nothing_twice() {
             incomplete: vec![ItemId::from("i_3")],
             next_cursor: Some("500".to_owned()),
             seq: 9,
+            masked: 0,
         })),
     ));
     drain(&mut app, now);
@@ -884,6 +887,7 @@ fn a_history_whose_page_fails_part_way_shows_what_it_does_not_hold_and_cuts_noth
             incomplete: Vec::new(),
             next_cursor: Some("500".to_owned()),
             seq: 9,
+            masked: 0,
         })),
     ));
     drain(&mut app, now);
@@ -1031,6 +1035,7 @@ fn a_long_historys_read_keeps_only_the_last_pages_worth_of_ids() {
             incomplete: Vec::new(),
             next_cursor: Some("700".to_owned()),
             seq: 9,
+            masked: 0,
         })),
     ));
     drain(&mut app, now);

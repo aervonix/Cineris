@@ -1636,6 +1636,8 @@ export interface SessionReadParams {
   item_id?: ItemId | null;
   /** The most items to return. */
   limit?: number | null;
+  /** For an export (since step 25): every item's text masked by the core's own secret filter, as the session log's writer masks it, the provider's blocks (`raw`) left out, and the items still in progress left out (named in `incomplete`). A session kept only in memory is masked the same. */
+  redacted?: boolean;
   /** The session. */
   session_id: SessionId;
 }
@@ -1646,6 +1648,8 @@ export interface SessionReadResult {
   incomplete?: Array<ItemId>;
   /** The items. */
   items: Array<Item>;
+  /** With `redacted`: how many values are masked in `items`, by the log as it was written or as they were read (since step 25). */
+  masked?: number;
   /** Present when there are more. */
   next_cursor?: string | null;
   /** The `seq` of the last event sent for the session when the items were read. Events after it are not in this result. */

@@ -764,6 +764,7 @@ mod tests {
                 item_id: None,
                 limit: None,
                 cursor: None,
+                redacted: false,
             }),
         ))
         .unwrap();

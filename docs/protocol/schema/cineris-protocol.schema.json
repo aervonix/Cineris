@@ -5882,6 +5882,10 @@
             "null"
           ]
         },
+        "redacted": {
+          "description": "For an export (since step 25): every item's text masked by the\ncore's own secret filter, as the session log's writer masks it, the\nprovider's blocks (`raw`) left out, and the items still in progress\nleft out (named in `incomplete`). A session kept only in memory is\nmasked the same.",
+          "type": "boolean"
+        },
         "session_id": {
           "$ref": "#/$defs/SessionId",
           "description": "The session."
@@ -5908,6 +5912,12 @@
             "$ref": "#/$defs/Item"
           },
           "type": "array"
+        },
+        "masked": {
+          "description": "With `redacted`: how many values are masked in `items`, by the log\nas it was written or as they were read (since step 25).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         },
         "next_cursor": {
           "description": "Present when there are more.",

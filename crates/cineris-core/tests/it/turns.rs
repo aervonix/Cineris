@@ -435,6 +435,7 @@ fn a_session_with_no_log_runs_the_same_and_leaves_nothing_behind() {
                 item_id: None,
                 limit: None,
                 cursor: None,
+                redacted: false,
             }))
             .await
             .unwrap();
