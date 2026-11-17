@@ -520,3 +520,29 @@ replace: if error.classify() == serde_json::error::Category::Data {
 caught-by:
     cortex-base framing::tests::a_line_is_told_apart_as_not_json_or_not_a_message
 
+[break] attach-merges-before-a-reads-answer
+rule: From a history read's asking to its answer attach merges no delta of the session, since the server may send a delta after the read's seq before the answer.
+file: crates/cortex-cli/src/attach.rs
+in: writes
+find: hold_merging(&shared.queue, session);
+replace: let _ = session;
+caught-by:
+    cortex-cli::bin/cortex attach::tests::a_delta_after_a_read_is_never_merged_into_one_it_drew
+
+[break] attach-is-not-told-the-server-went
+rule: When the server's connection ends, however attach's reader stops, every operation asked is answered and the application is told, so that attach ends.
+file: crates/cortex-cli/src/attach.rs
+in: Ending::drop
+find: ended(&self.asked, &self.shared);
+replace: let _ = (&self.asked, &self.shared);
+caught-by:
+    cortex-cli::system tui::sys_attach_ends_when_the_server_goes
+
+[break] attach-reaches-a-server-of-another-user
+rule: attach reaches a socket's server only when the process at the other end is the user's (SO_PEERCRED). No test sees this break alone: the socket must be the user's, in a folder of the user's or a sticky one, which only a process of the user's can bind, so another user's server there needs root to set up.
+file: crates/cortex-rpc/src/socket/unix.rs
+in: connect
+find: if server.uid() != uid {
+replace: if server.uid() == u32::MAX {
+expect: survives
+

@@ -94,7 +94,11 @@ impl FrameError {
 /// by the fuzzing of step 27's server).
 pub fn decode<T: DeserializeOwned>(line: &[u8]) -> Result<T, FrameError> {
     serde_json::from_slice(line).map_err(|error| {
-        if serde_json::from_slice::<serde::de::IgnoredAny>(line).is_ok() {
+        // `IgnoredAny` reads more than a real reading does (a string's
+        // bytes are not checked to be UTF-8): the line must be text too.
+        if std::str::from_utf8(line).is_ok()
+            && serde_json::from_slice::<serde::de::IgnoredAny>(line).is_ok()
+        {
             FrameError::InvalidMessage(error)
         } else {
             FrameError::InvalidJson(error)
@@ -425,18 +429,18 @@ mod tests {
     #[test]
     fn a_line_is_told_apart_as_not_json_or_not_a_message() {
         for not_json in [
-            r#"[1"#,
-            r#"{"jsonrpc":["#,
-            r#"{"jsonrpc":5 x"#,
-            r#"{"jsonrpc":"1.0","id":7} x"#,
-            "not json",
+            &br#"[1"#[..],
+            br#"{"jsonrpc":["#,
+            br#"{"jsonrpc":5 x"#,
+            br#"{"jsonrpc":"1.0","id":7} x"#,
+            b"not json",
+            // Not text: a byte that is not UTF-8 inside a string.
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"\xff\"}",
         ] {
             assert!(
-                matches!(
-                    decode::<Message>(not_json.as_bytes()),
-                    Err(FrameError::InvalidJson(_))
-                ),
-                "{not_json}"
+                matches!(decode::<Message>(not_json), Err(FrameError::InvalidJson(_))),
+                "{}",
+                String::from_utf8_lossy(not_json)
             );
         }
         for not_a_message in [
