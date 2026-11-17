@@ -326,11 +326,11 @@ find:
     if window.at_end {
         // Moved down to the end: following it again.
         self.anchor = Anchor::End;
-        self.from_end(source, height)
+        self.ending(source, height)
     } else {
 replace:
     if false {
-        self.from_end(source, height)
+        self.ending(source, height)
     } else {
 caught-by:
     app::tests::dialogs::end_then_page_down_in_the_viewer_stays_at_the_end
