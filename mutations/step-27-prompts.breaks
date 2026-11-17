@@ -41,7 +41,7 @@ caught-by:
 rule: A prompt sent once the session is open, while the held ones are still on their way, follows them.
 file: crates/cortex-tui/src/app/state.rs
 in: App::submit
-find: if self.held_sent.is_some() {
+find: if self.held_going() {
 replace: if false {
 caught-by:
     app::tests::prompts::a_prompt_sent_while_held_ones_are_on_their_way_follows_them
@@ -55,12 +55,58 @@ replace: !self.is_open(&sent.session)
 caught-by:
     app::tests::prompts::stopping_while_held_prompts_are_on_their_way_gives_back_those_not_sent
 
+[break] an-interrupt-does-not-stop-what-is-on-its-way
+rule: An interrupt marks every prompt on its way: what was held behind one comes back, and a refusal is not sent again.
+file: crates/cortex-tui/src/app/state.rs
+in: App::interrupt
+find: sent.stopped = true;
+replace: sent.stopped = false;
+caught-by:
+    app::tests::prompts::stopping_while_held_prompts_are_on_their_way_gives_back_those_not_sent
+    app::tests::prompts::a_prompt_refused_after_an_interrupt_comes_back_and_is_not_sent_again
+
+[break] a-prompt-after-a-stop-waits-with-the-held-ones
+rule: A prompt sent after an interrupt stopped the held ones goes at once, rather than come back with them.
+file: crates/cortex-tui/src/app/state.rs
+in: App::held_going
+find: if !sent.stopped
+replace:
+caught-by:
+    app::tests::prompts::a_prompt_sent_after_stopping_the_held_ones_goes_at_once
+
+[break] held-prompts-given-back-leave-the-spinner-on
+rule: Held prompts given back after a refusal stop the spinner they started when no turn runs.
+file: crates/cortex-tui/src/app/state.rs
+in: App::prompt_answered
+find: (sent.started || (held && !self.turn_runs))
+replace: sent.started
+caught-by:
+    app::tests::prompts::held_prompts_given_back_stop_the_spinner_when_no_turn_runs
+
+[break] held-prompts-given-back-stop-a-running-turns-spinner
+rule: Held prompts given back leave the spinner on while the core says a turn runs.
+file: crates/cortex-tui/src/app/state.rs
+in: App::prompt_answered
+find: (held && !self.turn_runs)
+replace: held
+caught-by:
+    app::tests::prompts::held_prompts_given_back_leave_the_spinner_of_a_turn_that_runs
+
+[break] a-turns-end-is-not-noted
+rule: `turn.completed` says no turn runs, so held prompts given back after it stop the spinner.
+file: crates/cortex-tui/src/app/state.rs
+in: App::event
+find: self.turn_runs = false;
+replace:
+caught-by:
+    app::tests::prompts::held_prompts_given_back_stop_the_spinner_when_no_turn_runs
+
 [break] new-leaves-the-session-while-held-prompts-are-on-their-way
 rule: `/new` does not leave the session while a held prompt is on its way: what follows it is that session's.
 file: crates/cortex-tui/src/app/state.rs
 in: App::new_session
-find: if self.running.is_some() || self.held_sent.is_some() {
-replace: if self.running.is_some() {
+find: if self.held_sent.is_some() {
+replace: if false {
 caught-by:
     app::tests::prompts::new_does_not_leave_the_session_while_held_prompts_are_on_their_way
 
@@ -68,8 +114,8 @@ caught-by:
 rule: A switch in `/sessions` does not leave the session while a held prompt is on its way.
 file: crates/cortex-tui/src/app/state/commands.rs
 in: App::switch_to
-find: if self.running.is_some() || self.held_sent.is_some() {
-replace: if self.running.is_some() {
+find: if self.held_sent.is_some() {
+replace: if false {
 caught-by:
     app::tests::prompts::a_switch_does_not_leave_the_session_while_held_prompts_are_on_their_way
 
@@ -122,6 +168,15 @@ find: && !sent.stopped
 replace:
 caught-by:
     app::tests::prompts::a_prompt_refused_after_an_interrupt_comes_back_and_is_not_sent_again
+
+[break] a-prompt-is-sent-again-to-a-session-left
+rule: A prompt refused `turn_running` after its session was left comes back, and is not sent again to the session closed.
+file: crates/cortex-tui/src/app/state.rs
+in: App::prompt_answered
+find: && self.is_open(&sent.session) =>
+replace: =>
+caught-by:
+    app::tests::prompts::a_prompt_refused_after_its_session_was_left_comes_back
 
 [break] a-held-prompt-sent-again-lets-the-next-go-at-once
 rule: The held prompts behind one sent again after `turn_running` wait for the answer to it.
