@@ -29,7 +29,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [diff-emphasis-on-a-line-with-a-tab](diff-emphasis-on-a-line-with-a-tab.md): A diff's line with a tab or an escaped character loses the bold of its changed words. Owner: step 32.
 - [edits-held-behind-calls-not-yet-started](edits-held-behind-calls-not-yet-started.md): Where an answer may be a stop, a later call with side effects waits behind every earlier call not started while a changing call runs, so edits of different files run less in parallel. Owner: the owner, with a measurement; step 32.
 - [stopping-at-a-task-lease-edge](stopping-at-a-task-lease-edge.md): At a task lease's edge the loop should stop and report, then fall back to the standing lease. Owner: step 37.
-- [the-export-command-has-no-step](the-export-command-has-no-step.md): `/export`, in 09-tui's commands, is built by no step. Owner: the owner.
 - [the-maps-share-of-the-context-record](the-maps-share-of-the-context-record.md): The repository map is counted among the notices in the context record, so the profiler cannot say what it costs. Owner: step 44, or step 16.
 - [the-token-counting-endpoint-near-the-limit](the-token-counting-endpoint-near-the-limit.md): The provider's token-counting endpoint is never asked near the limit; needs a `Protocol` method and loop call. Owner: a later step that touches the budget, or step 33.
 
