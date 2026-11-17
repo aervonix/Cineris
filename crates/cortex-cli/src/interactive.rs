@@ -222,7 +222,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
 /// panic of the interface (`ended` is `Err`) is exit code 1 with a pointer
 /// to its report, when one was written; `terminal` says whether standard
 /// input and output are a terminal, asked only when the terminal failed.
-fn ending(
+pub(crate) fn ending(
     ended: std::thread::Result<io::Result<Exit>>,
     crash: Option<&Path>,
     name: &str,
@@ -266,7 +266,10 @@ fn ending(
 
 /// The editor's history: the state directory's, for this project, read on
 /// a thread of its own; in memory when there is no state directory.
-fn history_for(env: &Env, workspace: &Path) -> Box<dyn cortex_tui::history::HistoryStore + Send> {
+pub(crate) fn history_for(
+    env: &Env,
+    workspace: &Path,
+) -> Box<dyn cortex_tui::history::HistoryStore + Send> {
     let state = StateDir::from_dirs(&Dirs::from_env(env));
     let project = cortex_base::PathResolver::new(workspace, cortex_base::PathOptions::new())
         .map(|resolver| resolver.root().project_key().into_string());
@@ -281,7 +284,7 @@ fn history_for(env: &Env, workspace: &Path) -> Box<dyn cortex_tui::history::Hist
 
 /// Whether standard input and output are a terminal: the interface needs
 /// both.
-fn cortex_tui_terminal() -> bool {
+pub(crate) fn cortex_tui_terminal() -> bool {
     use std::io::IsTerminal as _;
     io::stdin().is_terminal() && io::stdout().is_terminal()
 }
@@ -322,7 +325,7 @@ fn open(run: &Run, workspace: &Path) -> Open {
 
 /// The workspace as the person writes it: `~/src/app` under the home
 /// directory.
-fn shown_folder(workspace: &Path, home: Option<&Path>) -> String {
+pub(crate) fn shown_folder(workspace: &Path, home: Option<&Path>) -> String {
     if let Some(home) = home
         && let Some(rest) = cortex_base::strip_location_prefix(workspace, home)
     {
@@ -386,7 +389,7 @@ pub(crate) fn core_options(
 
 /// The `[tui]` settings in the application's terms; a theme it does not
 /// know is said.
-fn tui_settings(tui: &TuiSettings, notices: &mut Vec<String>) -> app::Settings {
+pub(crate) fn tui_settings(tui: &TuiSettings, notices: &mut Vec<String>) -> app::Settings {
     let theme = match tui.theme.as_str() {
         "auto" => app::ThemeChoice::Auto,
         "dark" => app::ThemeChoice::Dark,
@@ -454,7 +457,7 @@ fn restyle(config: &serde_json::Map<String, serde_json::Value>) -> Result<app::R
 }
 
 /// The key map from `[keys]`, and each entry it could not use, as a notice.
-fn keymap(keys: &KeySettings) -> (KeyMap, Vec<String>) {
+pub(crate) fn keymap(keys: &KeySettings) -> (KeyMap, Vec<String>) {
     let mut table: Vec<(String, Vec<String>)> = Vec::new();
     for (context, bindings) in [
         ("editor", &keys.editor),
@@ -488,7 +491,7 @@ fn keymap(keys: &KeySettings) -> (KeyMap, Vec<String>) {
 }
 
 /// The `[terminal]` overrides.
-fn overrides(terminal: &TerminalSettings) -> Overrides {
+pub(crate) fn overrides(terminal: &TerminalSettings) -> Overrides {
     Overrides {
         sync: terminal.sync,
         keyboard: terminal.keyboard,
@@ -505,7 +508,7 @@ fn overrides(terminal: &TerminalSettings) -> Overrides {
 
 /// Starts the log: the file alone, since standard error is the terminal.
 /// Its level is `--log-level`, then `CORTEX_LOG`, then `log.level`.
-fn start_log(
+pub(crate) fn start_log(
     run: &Run,
     env: &Env,
     loaded: &Loaded,
@@ -538,7 +541,7 @@ fn start_log(
 /// (the terminal layer's hook) and ends the program.
 static INTERFACE: OnceLock<std::thread::ThreadId> = OnceLock::new();
 /// Where the report of the interface's panic was written.
-static CRASH: OnceLock<PathBuf> = OnceLock::new();
+pub(crate) static CRASH: OnceLock<PathBuf> = OnceLock::new();
 
 /// The panic hook of interactive mode (`docs/architecture/02-runtime.md`,
 /// "Panics"): a report with a backtrace in the log directory, and the
@@ -548,7 +551,7 @@ static CRASH: OnceLock<PathBuf> = OnceLock::new();
 /// printed when the program ends; any other thread's panic, which the core
 /// may have caught and gone on from, leaves the terminal the interface's,
 /// so the default hook's message would land in the middle of a frame.
-fn install_panic_hook(logs: Option<PathBuf>, secrets: Arc<SecretFilter>) {
+pub(crate) fn install_panic_hook(logs: Option<PathBuf>, secrets: Arc<SecretFilter>) {
     let _ = INTERFACE.set(std::thread::current().id());
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
@@ -599,14 +602,14 @@ fn crash_report(
 /// Where the link's waker goes once the terminal has one: what arrives
 /// before then is drained on the interface's first wake.
 #[derive(Clone, Default)]
-struct Slot(Arc<Mutex<Option<Waker>>>);
+pub(crate) struct Slot(Arc<Mutex<Option<Waker>>>);
 
 impl Slot {
-    fn set(&self, waker: Waker) {
+    pub(crate) fn set(&self, waker: Waker) {
         *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(waker);
     }
 
-    fn wake(&self) {
+    pub(crate) fn wake(&self) {
         let waker = self
             .0
             .lock()
@@ -619,9 +622,9 @@ impl Slot {
 }
 
 /// The results waiting for the interface.
-type Done = Arc<Mutex<VecDeque<Inbound>>>;
+pub(crate) type Done = Arc<Mutex<VecDeque<Inbound>>>;
 
-fn push(done: &Done, inbound: Inbound) {
+pub(crate) fn push(done: &Done, inbound: Inbound) {
     done.lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push_back(inbound);
@@ -883,7 +886,7 @@ impl Link for InProcess {
 /// (the review of step 23's fixes), so that a history read's result never
 /// overtakes the events it holds; and once the queue is closed and empty,
 /// the end of the connection, said once.
-fn take(
+pub(crate) fn take(
     done: &Done,
     queue: &EventQueue,
     order: &mut Order,

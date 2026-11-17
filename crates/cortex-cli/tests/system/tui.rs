@@ -1669,3 +1669,122 @@ fn sys_a_look_and_a_binding_changed_in_the_file_reach_the_next_key() {
 
     quit(&mut session, &phases);
 }
+
+// ------------------------------------------------------------------ attach
+
+/// A server for `attach` to reach: the binary's `serve --socket`, at a short
+/// path of the test's own (a socket's path has at most 107 bytes), with the
+/// machine's environment, ended when dropped.
+#[cfg(unix)]
+struct SocketServer {
+    child: std::process::Child,
+    socket: String,
+    folder: std::path::PathBuf,
+    /// Held so that a line the server writes to it later still goes
+    /// somewhere.
+    _errors: std::io::BufReader<std::process::ChildStderr>,
+}
+
+#[cfg(unix)]
+impl Drop for SocketServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.folder);
+    }
+}
+
+#[cfg(unix)]
+impl Machine {
+    /// `serve --socket` on this machine, once it says where it serves.
+    fn socket_server(&self, name: &str) -> SocketServer {
+        use std::io::BufRead as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        let folder = std::path::PathBuf::from(format!("/tmp/cx-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = folder.join("rpc.sock").to_string_lossy().into_owned();
+        let mut command = self.command(&["serve", "--socket", &socket]);
+        command.stdout(std::process::Stdio::null());
+        let mut child = command.spawn().expect("the server starts");
+        let mut errors = std::io::BufReader::new(child.stderr.take().expect("its standard error"));
+        let mut said = String::new();
+        errors
+            .read_line(&mut said)
+            .expect("the server says where it serves");
+        assert!(said.contains("serving at"), "{said}");
+        SocketServer {
+            child,
+            socket,
+            folder,
+            _errors: errors,
+        }
+    }
+}
+
+/// `attach` runs the application on a server's session: a prompt from its
+/// command line is answered, and the session goes on when `attach` ends, so
+/// that `attach --continue` opens it again with its history drawn
+/// (`docs/steps/27/answered.md`, point 5).
+#[cfg(unix)]
+#[test]
+fn sys_attach_runs_a_turn_on_the_server_and_its_session_outlives_it() {
+    let phases = Phases::new("sys_attach_runs_a_turn_on_the_server_and_its_session_outlives_it");
+    let machine = Machine::new("tui_attach");
+    machine.reply_text("Hello over the socket.");
+    let server = machine.socket_server("attach");
+    let mut session = machine.tui(&["attach", "--socket", &server.socket, "say hello"]);
+    first_frame(&mut session, &phases);
+    phases.mark("the turn");
+    wait_shows(&mut session, "Hello over the socket.");
+    turn_ended(&mut session);
+    quit(&mut session, &phases);
+
+    phases.mark("attached again");
+    let mut again = machine.tui(&["attach", "--socket", &server.socket, "--continue"]);
+    first_frame(&mut again, &phases);
+    wait_shows(&mut again, "Hello over the socket.");
+    quit(&mut again, &phases);
+}
+
+/// Over `attach` as in process, a key typed as an approval's dialog comes
+/// up does not answer it: the dialog's grace and quiet are the
+/// application's (`app::dialog`), whichever link it drives. Only a key
+/// pressed once its answers are drawn does.
+#[cfg(unix)]
+#[test]
+fn sys_typing_through_an_approval_over_attach_does_not_answer_it() {
+    let phases = Phases::new("sys_typing_through_an_approval_over_attach_does_not_answer_it");
+    let machine = Machine::new("tui_attach_approval");
+    let target = ".cortex/notes.md";
+    machine.reply_tool(
+        "toolu_1",
+        "write",
+        &json!({"path": target, "content": "remember the feature\n"}),
+    );
+    machine.reply_text("Noted.");
+    let server = machine.socket_server("approval");
+    let mut session = machine.tui(&["attach", "--socket", &server.socket, "note the feature"]);
+    first_frame(&mut session, &phases);
+
+    phases.mark("the dialog");
+    session.wait_for(LIMIT, "the dialog", |t| shows_ever(t, "notes.md"));
+    // As a person typing on: at the dialog's first sight, or just before it.
+    type_text(&mut session, "y");
+    wait_shows(&mut session, "Allow once");
+    assert!(
+        !machine.workspace.join(target).exists(),
+        "a key typed through the dialog answered it"
+    );
+    session.answer_dialog(LIMIT, "Allow once", b"y", |t| shows_ever(t, "Noted."));
+    assert_eq!(
+        std::fs::read_to_string(machine.workspace.join(target)).unwrap(),
+        "remember the feature\n"
+    );
+    // The key typed through went to the editor, if anywhere: taken out,
+    // so that `Ctrl+D` on an empty prompt quits.
+    session.send(b"\x7f");
+    session.wait_for(LIMIT, "the editor empty", |t| t.shows(READY[0]));
+    quit(&mut session, &phases);
+    drop(server);
+}
