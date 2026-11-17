@@ -395,14 +395,13 @@ caught-by:
     cortex-cli::bin/cortex history::tests::the_prompts_sent_in_a_run_are_held_within_the_bounds
 
 [break] a-start-through-a-link-out-taken
-rule: A working directory that leads out of the workspace through a link is not where commands start.
+rule: A working directory that leads out of the workspace through a link (a junction on Windows) is not where commands start. Caught on Linux by `a_start_through_a_link_out_starts_at_the_root_and_says_why`, and on Windows by `sys_a_start_through_a_junction_out_starts_at_the_root_and_says_why`.
 file: crates/cortex-cli/src/workspace.rs
 in: leads_inside
 find: (Ok(cwd), Ok(root)) => cortex_base::location_within(&cwd, &root)
 replace: (Ok(_), Ok(_)) => true
-os: linux
 caught-by:
-    cortex-cli::bin/cortex workspace::tests::a_start_through_a_link_out_starts_at_the_root_and_says_why
+    cortex-cli::bin/cortex workspace::tests::*
 
 [break] a-command-runs-at-the-root
 rule: A command that names no `cwd` runs where the session started.
