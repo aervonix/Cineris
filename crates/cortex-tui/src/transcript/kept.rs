@@ -13,9 +13,8 @@
 //! ([`Source`]), not its stream.
 //!
 //! **What a round keeps is bounded:** a finished command's output is kept to
-//! its last [`OUTPUT_KEPT`] bytes, with a mark that more was cut, so that a
-//! long session of commands that print a lot does not hold all of it twice
-//! (the core keeps it whole as an artifact).
+//! its last [`OUTPUT_KEPT`] bytes, from a line's start, as a running
+//! command's is (the core keeps it whole as an artifact).
 
 use std::ops::Range;
 
@@ -27,9 +26,10 @@ use crate::view::round::Detail;
 use crate::view::{Look, Placement, Round};
 
 /// The most of a finished command's output a kept round holds, from its
-/// end. **To confirm by measurement** against the 200-turn budgets
-/// (`docs/steps/25/answered.md`, point 2).
-pub const OUTPUT_KEPT: usize = 16 * 1024;
+/// end: what a running command keeps (`app::items`), so the viewer shows
+/// what it showed before step 25. Reading the whole of a cut output when its
+/// box is opened is not built: `docs/outstanding/a-kept-box-holds-only-the-end-of-its-output.md`.
+pub const OUTPUT_KEPT: usize = 64 * 1024;
 
 /// A finished block, as kept.
 #[derive(Debug, Clone)]
