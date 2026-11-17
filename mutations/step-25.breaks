@@ -352,3 +352,138 @@ find: if !window.at_end && window.places.last() == Some(&Place::Kept { block, ro
 replace: if false
 caught-by:
     cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
+
+[break] the-consoles-wheel-turned-the-wrong-way
+rule: A console's wheel record turned away from the person is the wheel up, as a terminal's report says it.
+os: windows
+file: crates/cortex-term/src/sys/windows.rs
+in: push_mouse
+find: report(if turn > 0 { 64 } else { 65 }, false);
+replace: report(if turn > 0 { 65 } else { 64 }, false);
+caught-by:
+    cortex-term sys::windows::tests::mouse_records_become_the_reports_a_terminal_sends
+
+[break] a-consoles-release-is-a-press
+rule: A console's record with a button no longer held is that button's release.
+os: windows
+file: crates/cortex-term/src/sys/windows.rs
+in: push_mouse
+find: (true, false) => report(code, true),
+replace: (true, false) => report(code, false),
+caught-by:
+    cortex-term sys::windows::tests::mouse_records_become_the_reports_a_terminal_sends
+
+# What the independent review of the first pull request found, each fix
+# broken on purpose.
+
+[break] an-idle-search-answer-is-not-drawn
+rule: The search worker's answer that comes while nothing else happens is a change the loop draws.
+file: crates/cortex-tui/src/app/state.rs
+in: App::drain
+find: if self.take_search_answer() {
+replace: if false && self.take_search_answer() {
+caught-by:
+    cortex-tui app::tests::screen::a_search_answer_that_comes_while_idle_schedules_a_frame
+
+[break] late-colours-are-not-drawn-while-idle
+rule: Colours for late code that come while nothing else happens are a change the loop draws.
+file: crates/cortex-tui/src/app/state.rs
+in: App::drain
+find: if self.take_colours() {
+replace: if false && self.take_colours() {
+caught-by:
+    cortex-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
+
+[break] typing-into-the-search-is-not-typing
+rule: Keys the full screen's search takes are typing: a dialog that comes next waits for them to pause.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: if searching {
+replace: if false {
+caught-by:
+    cortex-tui app::tests::dialogs::typing_into_the_full_screen_search_does_not_answer_a_dialog
+
+[break] a-paste-into-the-search-is-not-typing
+rule: A paste the full screen's search takes is typing too.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find:
+    TermEvent::Paste(text) if self.screen_paste(text) => {
+        self.not_taken(at);
+replace:
+    TermEvent::Paste(text) if self.screen_paste(text) => {
+        let _ = at;
+caught-by:
+    cortex-tui app::tests::dialogs::a_paste_into_the_full_screen_search_holds_a_dialog_that_comes
+
+[break] the-mouse-is-typing
+rule: The mouse answers no dialog, so it is not typing: it never hides a dialog's answers.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: TermEvent::Mouse(mouse) if self.screen.is_some() => self.screen_mouse(*mouse),
+replace: TermEvent::Mouse(mouse) if self.screen.is_some() => { self.not_taken(at); self.screen_mouse(*mouse) }
+caught-by:
+    cortex-tui app::tests::dialogs::the_wheel_does_not_hide_a_dialogs_answers
+
+[break] the-search-row-over-a-dialog
+rule: The search's row is not drawn over a dialog's own last row.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::screen_frame
+find: view.search.as_ref().filter(|_| self.dialogs.is_empty())
+replace: view.search.as_ref()
+caught-by:
+    cortex-tui app::tests::dialogs::typing_into_the_full_screen_search_does_not_answer_a_dialog
+
+[break] a-dialog-that-fills-the-window-loses-its-keys
+rule: A dialog that fills the full screen leaves the transcript no row, and its keys' row is drawn.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::screen_frame
+find: let mut window = if height == 0 {
+replace: let mut window = if false {
+caught-by:
+    cortex-tui app::tests::dialogs::a_dialog_that_fills_the_full_screen_keeps_its_keys_row
+
+[break] the-viewer-misses-the-open-answers-rows
+rule: The viewer opened while an answer streams shows the rows that answer has committed.
+file: crates/cortex-tui/src/app/state/viewer.rs
+in: App::viewer_rest
+find: (self.kept.len(), self.screen_live(width))
+replace: (self.kept.len(), std::sync::Arc::new(self.transcript.live(width, &self.look, self.tick)))
+caught-by:
+    cortex-tui app::tests::screen::the_viewer_opened_mid_stream_shows_what_the_answer_committed
+
+[break] a-keys-table-is-dropped
+rule: Every table of [keys] is read into the key map, the full screen's and the viewer's included.
+file: crates/cortex-cli/src/interactive.rs
+in: key_tables
+find: ("screen", &keys.screen)
+replace: ("screen", &keys.global)
+caught-by:
+    cortex-cli::bin/cortex interactive::tests::every_table_of_keys_is_read
+
+[break] a-wait-to-a-deadline-rounds-down
+rule: A wait to a deadline waits for what is left of it, rounded up: never a spin of waits of nothing.
+file: crates/cortex-term/src/sys/mod.rs
+in: millis_left
+find: left.as_nanos().div_ceil(1_000_000)
+replace: left.as_nanos() / 1_000_000
+caught-by:
+    cortex-term sys::tests::a_wait_to_a_deadline_takes_what_is_left_of_it
+
+[break] the-query-is-not-bounded
+rule: A search's query holds at most 256 characters, however much is pasted.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::screen_paste
+find: let room = QUERY_MOST.saturating_sub(search.query.chars().count());
+replace: let room = usize::MAX;
+caught-by:
+    cortex-tui app::tests::screen::the_query_is_bounded_and_the_more_below_row_follows_the_glyphs
+
+[break] the-more-below-row-ignores-the-glyphs
+rule: The row that says there is more below uses the glyph set's separator.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::more_below
+find: self.look.glyphs.separator
+replace: "·"
+caught-by:
+    cortex-tui app::tests::screen::the_query_is_bounded_and_the_more_below_row_follows_the_glyphs

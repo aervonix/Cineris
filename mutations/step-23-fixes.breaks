@@ -318,22 +318,12 @@ replace: let _ = text;
 caught-by:
     app::tests::dialogs::a_paste_in_the_viewer_goes_to_its_search_and_not_the_editor
 
-[break] the-viewer-overflows-after-end
-rule: End then PageDown in the viewer stays at the end, with no overflow.
-file: crates/cortex-tui/src/app/scroll.rs
-in: Scroll::window
-find:
-    if window.at_end {
-        // Moved down to the end: following it again.
-        self.anchor = Anchor::End;
-        self.ending(source, height)
-    } else {
-replace:
-    if false {
-        self.ending(source, height)
-    } else {
-caught-by:
-    app::tests::dialogs::end_then_page_down_in_the_viewer_stays_at_the_end
+# `the-viewer-overflows-after-end` is gone (the review of step 25): the
+# viewer's window is `Scroll`'s since step 25, which counts no row past
+# the end, and two guards keep it at the end (`Scroll::down` and
+# `Scroll::window` each follow the end again when they reach it), so no
+# one break can let the window pass the end. The test now holds the
+# rows: `app::tests::screen::end_then_page_down_in_the_viewer_stays_at_the_end`.
 
 # What the independent review of these fixes found untested.
 

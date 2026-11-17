@@ -306,6 +306,12 @@ fn sys_the_full_screen_runs_a_turn_scrolls_and_leaves_the_terminal_as_it_was() {
     let answer: String = (1..=60)
         .map(|n| format!("Line {n} of a long answer.\n\n"))
         .collect();
+    // A file written first: its box holds the diff a click closes.
+    machine.reply_tool(
+        "toolu_1",
+        "write",
+        &json!({"path": "notes.txt", "content": "kept in the box\n"}),
+    );
     machine.reply_text(&answer);
     let mut session = machine.tui(&["--fullscreen"]);
     first_frame(&mut session, &phases);
@@ -337,8 +343,23 @@ fn sys_the_full_screen_runs_a_turn_scrolls_and_leaves_the_terminal_as_it_was() {
             && t.shows("more below")
     });
 
+    phases.mark("the click");
+    // Up to the read's box, and a click on its row opens it.
+    session.send(&b"\x1b[5~".repeat(12));
+    session.wait_for(LIMIT, "the read's box", |t| t.shows("notes.txt"));
+    // A file's diff is shown open; a click on the box's row closes it.
+    assert!(session.screen().shows("kept in the box"), "open at first");
+    let row = session
+        .screen()
+        .screen()
+        .iter()
+        .position(|row| row.contains("notes.txt"))
+        .expect("the box's row");
+    session.send(format!("\x1b[<0;5;{0}M\x1b[<0;5;{0}m", row + 1).as_bytes());
+    session.wait_for(LIMIT, "the box closed", |t| !t.shows("kept in the box"));
+
     phases.mark("back to the end");
-    session.send(b"\x1b[6~\x1b[6~\x1b[6~\x1b[6~\x1b[6~\x1b[6~\x1b[6~\x1b[6~");
+    session.send(&b"\x1b[6~".repeat(24));
     session.wait_for(LIMIT, "the end again", |t| {
         t.shows("Line 60 of a long answer.") && !t.shows("more below")
     });

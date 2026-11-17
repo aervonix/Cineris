@@ -136,6 +136,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [backspace-sent-as-ctrl-h](backspace-sent-as-ctrl-h.md): The decoder reads byte 0x08 as `Ctrl+Backspace`, so a terminal whose Backspace sends `^H` deletes a word. Owner: step 25.
 - [function-keys-through-conpty](function-keys-through-conpty.md): A function key sent to the application through the test kit's pseudo-console on a hosted Windows runner never reached it as that key; whether a real Windows Terminal is affected is not known. Owner: step 25.
 - [input-decoder-corners](input-decoder-corners.md): `sys::unix::wait` and `sys::windows::wait` restart their timeout after an interrupted call, stale wake or key release. Owner: step 32.
+- [mouse-reports-in-flight-when-the-mouse-goes-off](mouse-reports-in-flight-when-the-mouse-goes-off.md): A mouse report the terminal sent just before the mouse was turned off can arrive afterwards and be read as text. Owner: step 33.
 - [pastes-without-bracketed-paste](pastes-without-bracketed-paste.md): Pastes in terminals without bracketed paste are not detected, so a pasted line break sends the prompt. Owner: step 25.
 - [terminal-test-gaps](terminal-test-gaps.md): Terminal-layer tests lack styled, emoji and zero-width scripts, resize re-wrap, per-signal handlers, real SIGTSTP and nested-child cleanup. Owner: steps 22 and 23.
 
@@ -151,14 +152,19 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cortex-tui
 
+- [a-full-screen-frame-copies-the-open-answer](a-full-screen-frame-copies-the-open-answer.md): Each full-screen frame copies the rows an answer still streaming has committed, so a very long open answer costs more per frame. Owner: step 33.
 - [a-kept-box-holds-only-the-end-of-its-output](a-kept-box-holds-only-the-end-of-its-output.md): The viewer and the full screen open a finished command's box on the last 64 KiB of its output, not the whole of it. Owner: step 25.
 - [a-signal-while-the-external-editor-runs](a-signal-while-the-external-editor-runs.md): A signal sent to the program alone while the external editor runs leaves the editor running, and the watchdog ends the program without its graceful end, leaving the prompt's folder. Owner: step 32.
+- [a-view-in-the-live-rows-moves](a-view-in-the-live-rows-moves.md): A full-screen view scrolled up into the live rows moves when a block above it is kept. Owner: step 33.
 - [copy-where-the-clipboard-sequence-is-not-taken](copy-where-the-clipboard-sequence-is-not-taken.md): `/copy` cannot tell whether the terminal took OSC 52, and shows no text for copying by hand where it is known not to. Owner: step 25.
 - [editor-cost-on-very-large-text](editor-cost-on-very-large-text.md): The prompt editor lays out all its text on every key; a shortened `@` query refilters all paths. Owner: step 33.
 - [external-editor-test-gaps](external-editor-test-gaps.md): Parts of the external editor (umask, ConPTY modes, failed hand-over, `.cmd` editors, interrupt guard) are untested. Owner: step 32.
 - [one-character-wider-than-the-prompts-row](one-character-wider-than-the-prompts-row.md): A letter with a long run of tag characters is one cluster whose escape is wider than the prompt's row, cut with `…`. Owner: step 25.
 - [the-bincode-advisory-ignored-for-syntect](the-bincode-advisory-ignored-for-syntect.md): `deny.toml` ignores RUSTSEC-2025-0141, `bincode` unmaintained, reached only through `syntect`'s loading of its packed grammars; drop it when `syntect` moves off `bincode` or a flaw is named. Owner: the next step that touches highlighting, otherwise step 25.
 - [the-default-editor-on-windows-11](the-default-editor-on-windows-11.md): Windows 11's tabbed Notepad may exit at once, so `Ctrl+G` removes the prompt's folder while it is open; a folder left behind is not tried again. Owner: the owner, by hand; the folder half, step 32.
+- [the-full-screen-under-a-dialog](the-full-screen-under-a-dialog.md): In the full screen, the transcript cannot be scrolled by its keys while a dialog is up. Owner: step 33.
+- [the-search-counts-text-but-marks-drawn-rows](the-search-counts-text-but-marks-drawn-rows.md): The full screen's search counts its matches in each block's text but marks them in the drawn rows, so a match in a box's own words can take the current mark. Owner: step 33.
+- [the-search-worker-keeps-a-copy-of-the-transcript](the-search-worker-keeps-a-copy-of-the-transcript.md): The full screen's search keeps a lower-cased copy of the whole kept transcript for as long as the program runs, and builds it on the interface's thread the first time. Owner: step 33.
 - [user-theme-files](user-theme-files.md): 09-tui describes themes as TOML tables that assign a colour to each token; no step builds a user's theme file, and step 24's hot reload reloads `tui.theme`, the name of a built-in theme. Owner: none yet.
 
 ### The tooling and CI

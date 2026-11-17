@@ -208,9 +208,9 @@ impl App {
     }
 
     /// What the viewer shows that is not a kept block: the request whole,
-    /// the text, or the transcript's live rows. With a request or a text,
+    /// the text, or the open answer's committed rows and the live rows. With a request or a text,
     /// no kept block is shown.
-    fn viewer_rest(&self, state: &Viewer, width: usize) -> (usize, Vec<Line>) {
+    fn viewer_rest(&self, state: &Viewer, width: usize) -> (usize, std::sync::Arc<Vec<Line>>) {
         if let Some(id) = &state.whole {
             let rows = self
                 .dialogs
@@ -218,7 +218,7 @@ impl App {
                 .filter(|dialog| &dialog.id == id)
                 .map(|dialog| dialog.whole(width, &self.look))
                 .unwrap_or_default();
-            return (0, rows);
+            return (0, std::sync::Arc::new(rows));
         }
         if state.text.is_some() {
             let rows = state
@@ -227,12 +227,12 @@ impl App {
                 .filter(|(made_for, _)| *made_for == width)
                 .map(|(_, rows)| rows.clone())
                 .unwrap_or_default();
-            return (0, rows);
+            return (0, std::sync::Arc::new(rows));
         }
-        (
-            self.kept.len(),
-            self.transcript.live(width, &self.look, self.tick),
-        )
+        // The answer still open: the rows it has committed, then its live
+        // ones, as the scrollback and the live region hold them (the review
+        // of step 25).
+        (self.kept.len(), self.screen_live(width))
     }
 
     /// Runs `act` on the viewer's window, with what it is drawn from at
@@ -361,7 +361,7 @@ impl App {
             for step in 0..=count {
                 let block = (first + step) % count;
                 let rows = if block >= source.blocks {
-                    std::sync::Arc::new(source.live.to_vec())
+                    std::sync::Arc::clone(source.live)
                 } else {
                     scroll.rows.of(block, source.width, source.make)
                 };

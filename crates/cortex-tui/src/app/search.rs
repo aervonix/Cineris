@@ -41,6 +41,9 @@ pub(crate) struct TextSearch {
     answers: Receiver<Found>,
     /// The generation of the last query asked.
     generation: u64,
+    /// An answer a test waited for and left to be taken (`wait_ready`).
+    #[cfg(test)]
+    held: std::cell::RefCell<Option<Found>>,
 }
 
 impl std::fmt::Debug for TextSearch {
@@ -67,6 +70,8 @@ impl TextSearch {
             asked,
             answers,
             generation: 0,
+            #[cfg(test)]
+            held: std::cell::RefCell::default(),
         })
     }
 
@@ -106,10 +111,28 @@ impl TextSearch {
     /// The answer to the latest query, if it has come: older ones are
     /// dropped.
     pub(crate) fn answer(&self) -> Option<Found> {
-        self.answers
+        let newest = self
+            .answers
             .try_iter()
             .filter(|found| found.generation == self.generation)
-            .last()
+            .last();
+        #[cfg(test)]
+        let newest = newest.or_else(|| {
+            self.held
+                .take()
+                .filter(|found| found.generation == self.generation)
+        });
+        newest
+    }
+
+    /// Waits at most `limit` for the latest query's answer and leaves it to
+    /// be taken, as the worker's own would be: for tests of what takes it.
+    #[cfg(test)]
+    pub(crate) fn wait_ready(&self, limit: std::time::Duration) -> bool {
+        let found = self.wait(limit);
+        let ready = found.is_some();
+        *self.held.borrow_mut() = found;
+        ready
     }
 
     /// Waits at most `limit` for the latest query's answer: for tests,

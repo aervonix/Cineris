@@ -643,19 +643,6 @@ fn typing_through_a_question_does_not_pick_a_choice() {
     );
 }
 
-/// `End` then `PageDown` (or `j`) in the viewer does not overflow.
-#[test]
-fn end_then_page_down_in_the_viewer_stays_at_the_end() {
-    let now = Instant::now();
-    let (mut app, link) = app(now);
-    opened(&mut app, &link, now);
-    press(&mut app, "ctrl+o", now);
-    for binding in ["end", "pagedown", "end", "j", "down"] {
-        key(&mut app, binding, ms(now, 10));
-    }
-    let _ = app.viewer_frame(40, 98, ms(now, 20));
-}
-
 // The independent review of these fixes, with the loop's wakes the first
 // tests left out.
 
@@ -695,6 +682,132 @@ fn typing_just_before_the_dialog_counts_as_typing() {
         "typing before the dialog answered it"
     );
     assert_eq!(app.input().editor().expanded(), "please say yes");
+}
+
+/// Typing into the full screen's search is typing, as into the editor
+/// (the review of step 25): a dialog that comes in the middle of it, typed
+/// slowly, waits for it to pause, and the search row is not drawn over the
+/// dialog's own row.
+#[test]
+fn typing_into_the_full_screen_search_does_not_answer_a_dialog() {
+    let now = Instant::now();
+    let long_before = now - Duration::from_secs(10);
+    let settings = Settings {
+        presenter: Presenter::Fullscreen,
+        ..Settings::default()
+    };
+    let (mut app, link) = crate::testkit::app_with_settings(long_before, settings);
+    opened(&mut app, &link, long_before);
+    type_text(&mut app, "hi", long_before);
+    key(&mut app, "enter", long_before);
+    link.take_sent();
+    press(&mut app, "ctrl+f", now - Duration::from_secs(4));
+    // `t`, then the dialog, then `y`, which is an answer of its own.
+    let last = typing(&mut app, "t", now - Duration::from_secs(1), 450);
+    ask(
+        &mut app,
+        &link,
+        7,
+        approval("c_7"),
+        last + Duration::from_millis(100),
+    );
+    typing(&mut app, "ype", last + Duration::from_millis(450), 450);
+    assert!(
+        answers(&link).is_empty(),
+        "typing into the search answered the dialog"
+    );
+    let (lines, _) = app.screen_frame(now + Duration::from_secs(20));
+    let rows = text(&lines);
+    assert!(
+        !rows.last().is_some_and(|row| row.contains("ctrl+f")),
+        "the search row over the dialog's: {rows:#?}"
+    );
+}
+
+/// A paste into the full screen's search is typing too: a dialog that comes
+/// just after it waits for a pause before `y` answers it (the review of step
+/// 25).
+#[test]
+fn a_paste_into_the_full_screen_search_holds_a_dialog_that_comes() {
+    let now = Instant::now();
+    let long_before = now - Duration::from_secs(10);
+    let settings = Settings {
+        presenter: Presenter::Fullscreen,
+        ..Settings::default()
+    };
+    let (mut app, link) = crate::testkit::app_with_settings(long_before, settings);
+    opened(&mut app, &link, long_before);
+    type_text(&mut app, "hi", long_before);
+    key(&mut app, "enter", long_before);
+    link.take_sent();
+    press(&mut app, "ctrl+f", now - Duration::from_secs(4));
+    let pasted = now - Duration::from_secs(1);
+    app.terminal(&TermEvent::Paste("lexer".to_owned()), pasted);
+    ask(
+        &mut app,
+        &link,
+        7,
+        approval("c_7"),
+        pasted + Duration::from_millis(100),
+    );
+    press(&mut app, "y", pasted + Duration::from_millis(450));
+    assert!(
+        answers(&link).is_empty(),
+        "a key just after the paste answered the dialog"
+    );
+}
+
+/// A dialog that fills a short window in the full screen leaves the
+/// transcript no row, and its own last row, its keys, is drawn: the frame
+/// is the window's height, no more (the review of step 25).
+#[test]
+fn a_dialog_that_fills_the_full_screen_keeps_its_keys_row() {
+    let now = Instant::now();
+    let settings = Settings {
+        presenter: Presenter::Fullscreen,
+        ..Settings::default()
+    };
+    let (mut app, link) = crate::testkit::app_with_settings(now, settings);
+    opened(&mut app, &link, now);
+    app.resize(79, 8);
+    ask(&mut app, &link, 7, approval("c_7"), now);
+    let (lines, _) = app.screen_frame(now + Duration::from_secs(2));
+    let rows = text(&lines);
+    assert_eq!(rows.len(), 8, "{rows:#?}");
+    assert!(
+        rows.last().is_some_and(|row| row.contains("esc denies")),
+        "{rows:#?}"
+    );
+}
+
+/// The mouse answers no dialog, so it is not typing: the wheel turned over
+/// the full screen while a dialog's answers are shown leaves them shown,
+/// and the next key answers (the review of step 25).
+#[test]
+fn the_wheel_does_not_hide_a_dialogs_answers() {
+    let now = Instant::now();
+    let settings = Settings {
+        presenter: Presenter::Fullscreen,
+        ..Settings::default()
+    };
+    let (mut app, link) = crate::testkit::app_with_settings(now, settings);
+    opened(&mut app, &link, now);
+    ask(&mut app, &link, 7, approval("c_7"), now);
+    let ready = wake(&mut app).expect("the answers' frame");
+    assert!(answers_shown(&mut app, ready));
+    let turned = ready + Duration::from_millis(100);
+    app.terminal(
+        &TermEvent::Mouse(cortex_term::Mouse {
+            kind: cortex_term::MouseKind::Wheel(cortex_term::Wheel::Up),
+            col: 5,
+            row: 5,
+            mods: cortex_term::Mods::NONE,
+        }),
+        turned,
+    );
+    assert!(answers_shown(&mut app, turned), "the wheel hid the answers");
+    press(&mut app, "y", turned + Duration::from_millis(100));
+    assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
 /// Two approvals at once; `y` answers the first and is held a little long:
