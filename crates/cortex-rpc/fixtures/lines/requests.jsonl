@@ -1,0 +1,40 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"client":{"name":"example-editor","version":"0.3.0"},"role":"user","capabilities":{"approvals":true,"questions":true,"trust":true,"deltas":true}}}
+{"jsonrpc":"2.0","id":2,"method":"models/list","params":{}}
+{"jsonrpc":"2.0","id":3,"method":"session/new","params":{"workspace":"/work/example","settings":{"level":"supervised","speed":"fast","roles":{"main":{"provider":"anthropic","model":"claude-opus-5-5","effort":"high"},"fast":{"model":"claude-haiku-5-5","speed":"standard"}}},"title":"Fix the build","config":{"retry":{"max_attempts":3}},"ephemeral":false}}
+{"jsonrpc":"2.0","id":4,"method":"turn/start","params":{"session_id":"s_01JCX4T9Q2","input":[{"kind":"text","text":"Why does the build fail?"},{"kind":"image","media_type":"image/png","data":"iVBORw0KGgo="},{"kind":"image","media_type":"image/png","artifact":"a_shot1"}]}}
+{"jsonrpc":"2.0","id":5,"method":"turn/start","params":{"session_id":"s_01JCX4T9Q2","input":[{"kind":"text","text":"Also run the tests."}],"delivery":"queue"}}
+{"jsonrpc":"2.0","id":6,"method":"turn/start","params":{"session_id":"s_01JCX4T9Q2","input":[{"kind":"text","text":"Use the full feature set."}]}}
+{"jsonrpc":"2.0","id":7,"method":"turn/start","params":{"session_id":"s_01JCX4T9Q2","input":[{"kind":"text","text":"Use the full feature set."}],"delivery":"steer"}}
+{"jsonrpc":"2.0","id":8,"method":"turn/interrupt","params":{"session_id":"s_01JCX4T9Q2"}}
+{"jsonrpc":"2.0","id":9,"method":"plan/get","params":{"session_id":"s_01JCX4T9Q2"}}
+{"jsonrpc":"2.0","id":10,"method":"plan/update","params":{"session_id":"s_01JCX4T9Q2","edits":[{"kind":"reorder","order":["p2","p1"]},{"kind":"skip","id":"p1"},{"kind":"reword","id":"p2","text":"Add the serde feature"},{"kind":"add","text":"Run the tests","after":"p2"},{"kind":"add","text":"Tidy up"},{"kind":"remove","id":"p4"}]}}
+{"jsonrpc":"2.0","id":11,"method":"usage/get","params":{"session_id":"s_01JCX4T9Q2"}}
+{"jsonrpc":"2.0","id":12,"method":"usage/report","params":{"range":"month","group_by":["provider","model","speed"],"project":"pk_example"}}
+{"jsonrpc":"2.0","id":13,"method":"usage/report","params":{"range":"session","session_id":"s_01JCX4T9Q2"}}
+{"jsonrpc":"2.0","id":14,"method":"project/list","params":{"session_id":"s_01JCX4T9Q2"}}
+{"jsonrpc":"2.0","id":15,"method":"project/update","params":{"workspace":"/work/example","changes":[{"id":"k_1","action":"accept"},{"id":"k_2","action":"edit","text":"Every public item is documented."},{"id":"k_3","action":"disable"},{"id":"k_4","action":"delete"},{"id":"k_1","action":"promote"}]}}
+{"jsonrpc":"2.0","id":16,"method":"verify/run","params":{"session_id":"s_01JCX4T9Q2"}}
+{"jsonrpc":"2.0","id":17,"method":"config/get","params":{"session_id":"s_01JCX4T9Q2","keys":["model.main","usage.refresh"]}}
+{"jsonrpc":"2.0","id":18,"method":"config/reload","params":{}}
+{"jsonrpc":"2.0","id":19,"method":"permissions/list","params":{"session_id":"s_01JCX4T9Q2"}}
+{"jsonrpc":"2.0","id":20,"method":"permissions/revoke","params":{"session_id":"s_01JCX4T9Q2","ids":["ap_1"]}}
+{"jsonrpc":"2.0","id":21,"method":"mcp/status","params":{}}
+{"jsonrpc":"2.0","id":22,"method":"extensions/status","params":{}}
+{"jsonrpc":"2.0","id":23,"method":"session/set","params":{"session_id":"s_01JCX4T9Q2","settings":{"level":"read-only","speed":"standard","roles":{"main":{"effort":"max","speed":"fast"}}}}}
+{"jsonrpc":"2.0","id":24,"method":"session/list","params":{"workspace":"/work/example","limit":20,"cursor":"c_1"}}
+{"jsonrpc":"2.0","id":25,"method":"session/read","params":{"session_id":"s_01JCX4T9Q2","item_id":"i_3","limit":50,"cursor":"c_1"}}
+{"jsonrpc":"2.0","id":26,"method":"session/fork","params":{"session_id":"s_01JCX4T9Q2","at":"i_3"}}
+{"jsonrpc":"2.0","id":27,"method":"session/rewind","params":{"session_id":"s_01JCX4T9Q2","to":"i_1","restore_files":true}}
+{"jsonrpc":"2.0","id":28,"method":"session/compact","params":{"session_id":"s_01JCX4T9Q2","focus":"Keep the failing test names."}}
+{"jsonrpc":"2.0","id":29,"method":"session/open","params":{"session_id":"s_01JCX4T9Q2"}}
+{"jsonrpc":"2.0","id":30,"method":"session/close","params":{"session_id":"s_01JCX4T9Q2"}}
+{"jsonrpc":"2.0","id":32,"method":"usage/refresh","params":{"providers":["openrouter"]}}
+{"jsonrpc":"2.0","id":33,"method":"usage/report","params":{"range":"week","group_by":["project"]}}
+{"jsonrpc":"2.0","id":34,"method":"workspace/files","params":{"session_id":"s_01JCX4T9Q2","limit":3}}
+{"jsonrpc":"2.0","id":35,"method":"session/undo","params":{"session_id":"s_01JCX4T9Q2","restore_files":true}}
+{"jsonrpc":"2.0","id":36,"method":"workspace/warm","params":{"session_id":"s_01JCX4T9Q2","paths":["src/lib.rs","crates/app/src/main.rs"]}}
+{"jsonrpc":"2.0","id":37,"method":"session/artifact","params":{"session_id":"s_01JCX4T9Q2","artifact":"a_7"}}
+{"jsonrpc":"2.0","id":38,"method":"plan/update","params":{"session_id":"s_01JCX4T9Q2","edits":[{"kind":"restore","id":"p1"}]}}
+{"jsonrpc":"2.0","id":39,"method":"config/reload","params":{"session_id":"s_01JCX4T9Q2","profile":"review","changed_only":true}}
+{"jsonrpc":"2.0","id":40,"method":"config/get","params":{"session_id":"s_01JCX4T9Q2","keys":["model.main"]}}
+{"jsonrpc":"2.0","id":31,"method":"shutdown","params":{}}

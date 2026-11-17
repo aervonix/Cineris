@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","id":"srv-1","result":{"choice":"allow_session","note":"Builds are fine."}}
+{"jsonrpc":"2.0","id":"srv-2","result":{}}
+{"jsonrpc":"2.0","id":"srv-3","result":{"trusted":true}}
+{"jsonrpc":"2.0","id":"srv-4","result":{"trusted":false,"never":true}}
+{"jsonrpc":"2.0","id":"srv-5","error":{"code":-32000,"message":"Not now."}}

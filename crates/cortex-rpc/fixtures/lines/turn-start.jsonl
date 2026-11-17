@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":4,"method":"turn/start","params":{"session_id":"s_01JCX4T9Q2","input":[{"kind":"text","text":"Why does the build fail?"},{"kind":"image","media_type":"image/png","data":"iVBORw0KGgo="},{"kind":"image","media_type":"image/png","artifact":"a_shot1"}]}}

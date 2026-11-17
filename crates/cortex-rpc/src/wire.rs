@@ -9,6 +9,12 @@
 //!
 //! The method tables are `cortex-protocol`'s (`Op::from_wire`,
 //! `ServerResponse::from_wire`), so the server adds no mapping of its own.
+//!
+//! **The fuzz package compiles this file too** (`fuzz/src/lib.rs`, by
+//! `#[path]`), so that the nightly fuzz job reads lines with the server's
+//! own code without building the core into the fuzzer. The file uses
+//! `cortex-base`, `cortex-protocol`, `serde` and `serde_json` alone, and
+//! nothing of this crate's: kept so, or that job no longer builds.
 
 use cortex_base::framing::{self, FrameError};
 use cortex_protocol::jsonrpc::{self, ErrorObject, Message, Request, RequestId, Response};
