@@ -148,8 +148,13 @@ impl App {
         } else if let Some(picked) = self.theme_picked {
             settings.theme = picked;
         }
+        // What takes effect at the next start stays as the start had it
+        // (step 25): the presenter, and whether the mouse is reported.
+        settings.presenter = self.settings.presenter;
+        settings.mouse = self.settings.mouse;
         self.settings = settings;
         self.look = crate::app::look(&self.settings, &self.caps);
+        self.look_changed();
         for dialog in &mut self.dialogs {
             dialog.restyled();
         }

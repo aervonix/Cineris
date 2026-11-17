@@ -263,7 +263,9 @@ fn block_bytes(block: &Block) -> usize {
                     }
             })
             .sum(),
-        Block::Listing { title, lines } => title.len() + lines.iter().map(String::len).sum::<usize>(),
+        Block::Listing { title, lines } => {
+            title.len() + lines.iter().map(String::len).sum::<usize>()
+        }
         Block::Error { message, hint } => message.len() + hint.as_ref().map_or(0, String::len),
     }
 }

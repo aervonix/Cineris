@@ -399,7 +399,9 @@ impl Mapper {
                     Some(answer) => answer,
                     None => {
                         let answer = transcript.push(Block::Answer(
-                            Markdown::answer().with_highlighter(self.highlighter.clone()),
+                            Markdown::answer()
+                                .with_highlighter(self.highlighter.clone())
+                                .keeping(),
                         ));
                         response.answer = Some(answer);
                         self.last_answer.clear();
@@ -587,7 +589,9 @@ impl Mapper {
                         self.last_answer.clear();
                     }
                     let answer = transcript.push(Block::Answer(
-                        Markdown::answer().with_highlighter(self.highlighter.clone()),
+                        Markdown::answer()
+                            .with_highlighter(self.highlighter.clone())
+                            .keeping(),
                     ));
                     response.answer = Some(answer);
                     answer

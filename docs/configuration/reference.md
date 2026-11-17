@@ -214,6 +214,7 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | `tui.reduced_motion` | `true` or `false` | `false` | user only | at once | A still mark in place of the spinner. |
 | `tui.glyphs` | `"auto"`, `"unicode"`, `"ascii"` | `"auto"` | user only | at once | The glyph set: `auto` (Unicode where the terminal can show it), `unicode` or `ascii`. `ascii` suits a terminal that draws the box's edges and the marks of East Asian ambiguous width wide. |
 | `tui.theme` | text | `"auto"` | user only | at once | The theme: `auto` (dark or light, from the terminal's background), `dark` or `light`. A name the interface does not know is said, and `auto` is used. |
+| `tui.presenter` | `"inline"`, `"fullscreen"` | `"inline"` | user only | restart | How the interface draws: `inline` (the transcript in the terminal's own scrollback) or `fullscreen` (the whole window, on the alternate screen, scrolled and searched there). `--fullscreen` chooses the second for one run. |
 
 ## `[keys]`
 
@@ -226,6 +227,8 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | `keys.search` | table of list of text | not set | user only | at once | The history search's. |
 | `keys.focus` | table of list of text | not set | user only | at once | A focused tool box's or panel's. |
 | `keys.dialog` | table of list of text | not set | user only | at once | A dialog's: the answers to an approval, a question or trust. |
+| `keys.viewer` | table of list of text | not set | user only | at once | The viewer's (`Ctrl+O`): moving between boxes, opening one, scrolling, searching, and the mouse's `click`, `wheel_up` and `wheel_down`. |
+| `keys.screen` | table of list of text | not set | user only | at once | The full-screen presenter's: scrolling, searching, and the mouse's `click`, `wheel_up` and `wheel_down`. |
 | `keys.global` | table of list of text | not set | user only | at once | Those looked up last, whatever has the keyboard: `interrupt`, `redraw`, `suspend`, and the rest. |
 
 ## `[terminal]`
@@ -237,6 +240,7 @@ Every key a Cortex-Harness configuration file may hold. The design is in [archit
 | `terminal.color` | `"none"`, `"16"`, `"256"`, `"truecolor"` | not set | user only | restart | How many colours: `none`, `16`, `256` or `truecolor`. |
 | `terminal.hyperlinks` | `true` or `false` | not set | user only | restart | Links in text. |
 | `terminal.unicode` | `true` or `false` | not set | user only | restart | Unicode, or ASCII only. |
+| `terminal.mouse` | `true` or `false` | not set | user only | restart | The mouse in the viewer and the full-screen presenter: a click opens or closes a box, and the wheel scrolls; `shift` and a drag still select text. Never in the inline screen. On unless set to `false`. |
 
 ## `[rpc]`
 

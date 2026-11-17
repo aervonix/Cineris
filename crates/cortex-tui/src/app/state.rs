@@ -52,6 +52,7 @@ use cortex_term::{Capabilities, Cursor, Event as TermEvent, Key, Line};
 mod commands;
 mod panel;
 mod restyle;
+mod screen;
 mod viewer;
 
 pub use restyle::{Restyle, Restyled};
@@ -67,6 +68,7 @@ use crate::complete::Command;
 use crate::editor::Fragment;
 use crate::focus::Target;
 use crate::input::{Delivery, Input, Outcome, SendMode};
+use crate::transcript::kept::Kept;
 use crate::transcript::{Block, Committed, Transcript};
 use crate::view::{self, Header, Hint, HintRow, Look, RunningKeys};
 
@@ -250,6 +252,14 @@ const COMMANDS: &[(&str, &str)] = &[
 /// said to be missing, not sent to the model as a prompt.
 const NOT_YET: &[&str] = &["rewind", "lease", "extend", "mcp", "extensions", "export"];
 
+/// The panels' block and the bottom of a frame, and where the cursor goes
+/// in the bottom: a row of it and a column, or none for a dialog.
+struct Bottom {
+    block: Vec<Line>,
+    lines: Vec<Line>,
+    cursor: Option<(usize, usize)>,
+}
+
 /// The application. See the [module documentation](self).
 pub struct App {
     link: Box<dyn Link>,
@@ -270,9 +280,10 @@ pub struct App {
     caps: Capabilities,
     /// The picker the application opened, and what its rows stand for.
     picker: Option<(String, Picker)>,
-    /// Everything committed to the scrollback so far, for the viewer: each
-    /// finished round kept as a round, which it draws again as a box.
-    kept: Vec<Committed>,
+    /// Every block committed so far, for the viewer and the full-screen
+    /// presenter, which draw them again at the width they have (since step
+    /// 25; until then their lines, at the width they committed at).
+    kept: Kept,
     /// The time zone the viewer's title says the session's start in,
     /// read when the viewer first opens.
     zone: Option<cortex_base::Zone>,
@@ -292,6 +303,9 @@ pub struct App {
     read_mark: Option<ReadMark>,
     /// The viewer, while it is open.
     viewer: Option<viewer::Viewer>,
+    /// The full-screen presenter's view, when the application draws with
+    /// it (`tui.presenter`, `--fullscreen`; since step 25).
+    screen: Option<screen::ScreenView>,
     /// The worker that filters `@` completion off the key's path, once the
     /// workspace's paths have come.
     file_search: Option<super::files::FileSearch>,
@@ -429,6 +443,7 @@ impl App {
     ) -> Self {
         let highlighter = start.highlighter.clone();
         let look = super::look(&start.settings, caps);
+        let full_screen = start.settings.presenter == super::Presenter::Fullscreen;
         let clock: cortex_base::SharedClock = std::sync::Arc::new(cortex_base::SystemClock::new());
         let mut input = Input::new(start.keymap, start.history);
         input.set_width(view::input::text_width(width));
@@ -442,6 +457,9 @@ impl App {
                 .collect(),
         );
         let mut transcript = Transcript::new();
+        // Every finished block is kept, for the viewer and the full-screen
+        // presenter (step 25).
+        transcript.keep_finished();
         for notice in start.notices {
             transcript.push(Block::Notice(notice));
         }
@@ -472,7 +490,8 @@ impl App {
             cwd: start.cwd,
             caps: *caps,
             picker: None,
-            kept: Vec::new(),
+            kept: Kept::new(),
+            screen: full_screen.then(screen::ScreenView::default),
             zone: None,
             turns: None,
             viewer: None,
@@ -539,8 +558,21 @@ impl App {
     pub fn set_caps(&mut self, caps: &Capabilities) {
         self.caps = *caps;
         self.look = super::look(&self.settings, caps);
+        self.look_changed();
         for dialog in &mut self.dialogs {
             dialog.restyled();
+        }
+    }
+
+    /// The look changed (the terminal's capabilities, a theme, a reload):
+    /// the rows the viewer and the full-screen view made with the old one
+    /// are dropped (since step 25).
+    pub(super) fn look_changed(&mut self) {
+        if let Some(viewer) = self.viewer.as_mut() {
+            viewer.forget_rows();
+        }
+        if let Some(screen) = self.screen.as_mut() {
+            screen.forget_rows();
         }
     }
 
@@ -839,8 +871,24 @@ impl App {
                     self.not_taken(at);
                     return self.viewer_paste(text);
                 }
+                // The mouse (since step 25): input as a key is, for a dialog
+                // waiting under the viewer.
+                TermEvent::Mouse(mouse) => {
+                    if self.dialogs.is_empty() {
+                        self.not_taken(at);
+                    }
+                    return self.viewer_mouse(*mouse);
+                }
                 _ => {}
             }
+        }
+        // The full-screen presenter's own keys (step 25): scrolling and its
+        // search, where neither the input nor a dialog has a use for them.
+        // Moving the view is not typing at anything.
+        if let TermEvent::Key(key) | TermEvent::Repeat(key) = event
+            && self.screen_key(*key)
+        {
+            return true;
         }
         match event {
             TermEvent::Key(key) | TermEvent::Repeat(key) => {
@@ -956,6 +1004,12 @@ impl App {
                 false
             }
             TermEvent::Resize { .. } | TermEvent::Reply(_) => false,
+            // The mouse in the full-screen view (step 25): input as a key
+            // is, for a dialog's and a panel's readiness.
+            TermEvent::Mouse(mouse) if self.screen.is_some() => {
+                self.not_taken(at);
+                self.screen_mouse(*mouse)
+            }
             TermEvent::Focus(_) | TermEvent::Mouse(_) => false,
         }
     }
@@ -1058,6 +1112,9 @@ impl App {
             return;
         }
         self.last_cost = None;
+        // The full-screen view follows the end again: what the prompt brings
+        // is what the person wants to see.
+        self.screen_follow();
         let Some(session) = self.session.as_ref().map(|s| s.session_id.clone()) else {
             if self.opening || self.open.is_some() {
                 // The session is being opened: the prompt goes when it is.
@@ -1285,6 +1342,8 @@ impl App {
     }
 
     fn request(&mut self, id: RequestId, request: ServerRequest) {
+        // A dialog asks about what just happened, at the end.
+        self.screen_follow();
         let dialog = match request {
             ServerRequest::Approval(approval) => {
                 self.mapper.waiting(&mut self.transcript, &approval.call_id);
@@ -2016,6 +2075,56 @@ impl App {
     /// The frame for `now`: the lines that became final, the live region,
     /// and where the cursor goes in it.
     pub fn frame(&mut self, now: Instant) -> (Vec<Line>, Vec<Line>, Cursor) {
+        let width = self.width.max(1);
+        let (commit, boxes) = self.prepare(now);
+        let mut live = self.transcript.live(width, &self.look, self.tick);
+        let Bottom {
+            block,
+            lines: bottom,
+            cursor,
+        } = self.bottom(now, width, &boxes, live.len());
+        let half = (self.rows / 2).max(1);
+
+        // The live region is at most half the window, and at least the
+        // bottom: what streams is cut from its top, with a mark.
+        let room = half
+            .max(bottom.len())
+            .saturating_sub(bottom.len() + block.len());
+        if live.len() > room {
+            let cut = live.len() - room + 1;
+            live.drain(..cut.min(live.len()));
+            if room > 0 {
+                live.insert(
+                    0,
+                    Line::styled(
+                        format!("  {}", self.look.glyphs.ellipsis),
+                        self.look.theme.style(crate::theme::Token::Muted),
+                    ),
+                );
+            }
+        }
+        let offset = live.len() + block.len();
+        live.extend(block);
+        live.extend(bottom);
+        let cursor = match cursor {
+            Some((row, col)) => Cursor {
+                row: offset + row,
+                col,
+            },
+            // A dialog has no text cursor: it rests at the region's end.
+            None => Cursor {
+                row: live.len().saturating_sub(1),
+                col: 0,
+            },
+        };
+        (commit, live, cursor)
+    }
+
+    /// What every frame does first, in both presenters (since step 25):
+    /// the clock, the `@` worker's query, the live rounds, and the lines
+    /// that became final, the blocks they finish kept. Gives the lines and
+    /// the live boxes' ids.
+    fn prepare(&mut self, now: Instant) -> (Vec<Line>, Vec<u64>) {
         // What the text asks of `@` goes to the worker before the frame:
         // the frame shows the rows it has, and the worker's come after.
         self.ask_files();
@@ -2028,15 +2137,16 @@ impl App {
             .set_now(now.saturating_duration_since(self.began));
         let boxes = self.mapper.live_rounds(&mut self.transcript);
         let parts = self.transcript.commit_parts(width, &self.look);
-        let commit: Vec<Line> = parts
-            .iter()
-            .flat_map(|part| part.lines().iter().cloned())
-            .collect();
-        self.kept.extend(parts);
-        let mut live = self.transcript.live(width, &self.look, self.tick);
+        let commit: Vec<Line> = parts.into_iter().flat_map(Committed::into_lines).collect();
+        self.kept.extend(self.transcript.take_finished());
+        (commit, boxes)
+    }
 
-        // The bottom: a dialog in the input box's place, or the input box
-        // with the menu or the hint row under it.
+    /// The panels' block and the bottom under the transcript's `live` rows,
+    /// in both presenters (since step 25): a dialog in the input box's place,
+    /// or the input box with the menu or the hint row under it, and the
+    /// panels above it.
+    fn bottom(&mut self, now: Instant, width: usize, boxes: &[u64], live: usize) -> Bottom {
         let mut bottom = Vec::new();
         let cursor_row;
         let mut cursor_col = 0;
@@ -2046,7 +2156,7 @@ impl App {
         self.panel_drawn = None;
         if !self.dialogs.is_empty() {
             // No panel is drawn while a dialog is up.
-            self.input.focus_mut().update(&boxes, &[]);
+            self.input.focus_mut().update(boxes, &[]);
             // The dialog fits the window whole, with a blank row and the hint
             // row under it while there is room for them: its detail is what
             // gives way, and says so.
@@ -2089,8 +2199,8 @@ impl App {
             // What the panels would have with the hint row, not a menu:
             // what `/plan`, typed with its menu open, is measured against.
             let plain = drawn.lines.len() + 1;
-            self.panel_room = self.panel_rows(half.max(plain) - plain, live.len());
-            block = self.panel_block(room, live.len(), menu.is_some(), width, &boxes);
+            self.panel_room = self.panel_rows(half.max(plain) - plain, live);
+            block = self.panel_block(room, live, menu.is_some(), width, boxes);
             if self.input.focus().on_input() != on_input {
                 drawn = view::input::input(&self.input, &self.look, width);
             }
@@ -2106,40 +2216,11 @@ impl App {
                 }
             }
         }
-
-        // The live region is at most half the window, and at least the
-        // bottom: what streams is cut from its top, with a mark.
-        let room = half
-            .max(bottom.len())
-            .saturating_sub(bottom.len() + block.len());
-        if live.len() > room {
-            let cut = live.len() - room + 1;
-            live.drain(..cut.min(live.len()));
-            if room > 0 {
-                live.insert(
-                    0,
-                    Line::styled(
-                        format!("  {}", self.look.glyphs.ellipsis),
-                        self.look.theme.style(crate::theme::Token::Muted),
-                    ),
-                );
-            }
+        Bottom {
+            block,
+            lines: bottom,
+            cursor: cursor_row.map(|row| (row, cursor_col)),
         }
-        let offset = live.len() + block.len();
-        live.extend(block);
-        live.extend(bottom);
-        let cursor = match cursor_row {
-            Some(row) => Cursor {
-                row: offset + row,
-                col: cursor_col,
-            },
-            // A dialog has no text cursor: it rests at the region's end.
-            None => Cursor {
-                row: live.len().saturating_sub(1),
-                col: 0,
-            },
-        };
-        (commit, live, cursor)
     }
 
     fn hint_left(&self, now: Instant) -> Hint {

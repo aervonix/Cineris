@@ -105,6 +105,7 @@ tui.turn_summary                   user only
 tui.reduced_motion                 user only
 tui.glyphs                         user only
 tui.theme                          user only
+tui.presenter                      user only
 keys.editor                        user only
 keys.menu                          user only
 keys.picker                        user only
@@ -112,12 +113,15 @@ keys.toggle                        user only
 keys.search                        user only
 keys.focus                         user only
 keys.dialog                        user only
+keys.viewer                        user only
+keys.screen                        user only
 keys.global                        user only
 terminal.sync                      user only
 terminal.keyboard                  user only
 terminal.color                     user only
 terminal.hyperlinks                user only
 terminal.unicode                   user only
+terminal.mouse                     user only
 rpc.approval_timeout               user only
 rpc.stalled_client                 user only
 hooks.*                            runs code

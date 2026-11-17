@@ -70,6 +70,11 @@ pub(crate) const FLAGS: &[Flag] = &[
         "Start a new session from a copy of the session ID",
     ),
     flag("--no-session", None, "Keep the session in memory: no log"),
+    flag(
+        "--fullscreen",
+        None,
+        "Draw the interface on the whole window, for this run",
+    ),
     flag("--model", Some("MODEL"), "The main model, for this run"),
     flag(
         "--effort",
@@ -686,6 +691,12 @@ fn run_flag(
             run.choice = Choice::Fork(text(parser)?);
         }
         Arg::Long("no-session") => run.no_session = true,
+        Arg::Long("fullscreen") => set(
+            run,
+            "tui.presenter",
+            "fullscreen".to_owned(),
+            "--fullscreen",
+        ),
         Arg::Long("model") => set(run, "model.main", text(parser)?, "--model"),
         Arg::Long("effort") => set(run, "model.effort", text(parser)?, "--effort"),
         Arg::Long("speed") => set(run, "model.speed", text(parser)?, "--speed"),

@@ -905,6 +905,30 @@ impl Input {
             | Action::DenyWithNote
             | Action::Never
             | Action::ShowWhole => Outcome::Ignored(action),
+
+            // ---------------------------------------- viewer and screen
+            // The viewer's and the full screen's keys are the
+            // application's (step 25): the input never has them.
+            Action::ViewerUp
+            | Action::ViewerDown
+            | Action::ViewerToggle
+            | Action::ViewerPageUp
+            | Action::ViewerPageDown
+            | Action::ViewerTop
+            | Action::ViewerBottom
+            | Action::ViewerSearch
+            | Action::ViewerNext
+            | Action::ViewerClose
+            | Action::ViewerScrollUp
+            | Action::ViewerScrollDown
+            | Action::ScreenPageUp
+            | Action::ScreenPageDown
+            | Action::ScreenLineUp
+            | Action::ScreenLineDown
+            | Action::ScreenSearch
+            | Action::ScreenToggle
+            | Action::ScreenScrollUp
+            | Action::ScreenScrollDown => Outcome::Ignored(action),
         }
     }
 

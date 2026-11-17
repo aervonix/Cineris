@@ -7,7 +7,7 @@ use cortex_tui::complete::{Menu, Row, Toggle};
 use cortex_tui::editor::Fragment;
 use cortex_tui::focus::Target;
 use cortex_tui::input::{Delivery, Input, Outcome, SendMode};
-use cortex_tui::keys::{ACTIONS, Action, parse};
+use cortex_tui::keys::{ACTIONS, Action, Binding, Context, KeyMap, parse, parse_binding};
 
 use crate::{HISTORY, input, input_with, press, type_text};
 
@@ -430,6 +430,24 @@ fn check(action: Action, key: &str) {
                 input().act(action),
                 Outcome::Ignored(action),
                 "{context}: the input never answers a dialog"
+            );
+        }
+        // The viewer's and the full screen's keys and gestures are the
+        // application's (step 25), whose tests check what each does: here,
+        // that the map has them in their context and the input has no use
+        // for them.
+        action if matches!(action.context(), Context::Viewer | Context::Screen) => {
+            let map = KeyMap::defaults();
+            let contexts = [action.context()];
+            let found = match parse_binding(key).unwrap() {
+                Binding::Key(bound) => map.lookup(&contexts, bound),
+                Binding::Gesture(gesture) => map.lookup_gesture(&contexts, gesture),
+            };
+            assert_eq!(found, Some(action), "{context}");
+            assert_eq!(
+                input().act(action),
+                Outcome::Ignored(action),
+                "{context}: the input has no use for it"
             );
         }
         other => panic!("{other} has a default key and no check here"),

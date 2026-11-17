@@ -64,6 +64,7 @@ stats.enabled = true                        # default
 stats.retention = 3                         # default
 tui.density = "comfortable"                 # default
 tui.glyphs = "auto"                         # default
+tui.presenter = "inline"                    # default
 tui.prose_width = 80                        # default
 tui.reasoning = "summary"                   # default
 tui.reduced_motion = false                  # default

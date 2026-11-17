@@ -314,3 +314,109 @@ fn a_kept_round_holds_the_end_of_a_long_output() {
     assert!(output.starts_with("line ") && long.ends_with(&output));
     assert!(kept.bytes() < kept::OUTPUT_KEPT + 1_024);
 }
+
+/// What the full-screen presenter draws of a transcript: its kept blocks,
+/// the rows committed of the block still open, and the live rows.
+fn full_screen_rows(
+    transcript: &mut Transcript,
+    kept: &mut kept::Kept,
+    width: usize,
+    look: &Look,
+) -> Vec<Line> {
+    let _ = transcript.commit(width, look);
+    kept.extend(transcript.take_finished());
+    let mut rows: Vec<Line> = kept
+        .iter()
+        .flat_map(|block| block.rows(Placement::Committed, width, look))
+        .collect();
+    rows.extend(transcript.open_rows().iter().cloned());
+    rows.extend(transcript.live(width, look, 0));
+    rows
+}
+
+/// At every token of an answer that streams, the full-screen presenter's
+/// rows are the inline presenter's scrollback and live rows (step 25): the
+/// rows an answer commits while it is still open are kept beside it until
+/// it finishes.
+#[test]
+fn every_frame_of_a_stream_is_drawn_the_same_by_both_presenters() {
+    let look = look();
+    let width = 50;
+    let text = "It stops at the first character that is not a digit, so `1_000` ends \
+                after the `1`.\n\n~~~rust\nif c == '_' { continue; }\n~~~\n\n- one\n- two \
+                and a long item that wraps over the row's end\n\nThe end.\n";
+    let mut inline = Transcript::new();
+    let mut full = Transcript::new();
+    full.keep_finished();
+    let mut kept = kept::Kept::new();
+    let mut scrollback = Vec::new();
+    for transcript in [&mut inline, &mut full] {
+        transcript.push(Block::User("Fix it.".to_owned()));
+        transcript.push(Block::Answer(Markdown::answer().keeping()));
+    }
+    let mut pieces: Vec<&str> = text.split_inclusive(' ').collect();
+    pieces.push("");
+    for (index, piece) in pieces.iter().enumerate() {
+        for transcript in [&mut inline, &mut full] {
+            if let Some(Block::Answer(answer)) = transcript.last_mut() {
+                answer.push(piece);
+                if index == pieces.len() - 1 {
+                    answer.finish();
+                }
+            }
+        }
+        scrollback.extend(inline.commit(width, &look));
+        let mut shown = scrollback.clone();
+        shown.extend(inline.live(width, &look, 0));
+        let drawn = full_screen_rows(&mut full, &mut kept, width, &look);
+        assert_eq!(texts(&drawn), texts(&shown), "after {index} pieces");
+        assert_eq!(drawn, shown, "the styles after {index} pieces");
+    }
+    assert!(full.open_rows().is_empty());
+    assert_eq!(kept.len(), 2);
+}
+
+/// A change of width in the middle of an answer lays its committed rows out
+/// again at the new width, as if it had streamed at that width all along.
+#[test]
+fn an_answer_resized_while_it_streams_is_laid_out_again() {
+    let look = look();
+    let text = "A paragraph that is long enough to wrap over several rows at forty \
+                columns, and then some more words after it.\n\nAnd a second one.\n";
+    let half = text.len() / 2;
+    let mut full = Transcript::new();
+    full.keep_finished();
+    full.push(Block::Answer(Markdown::answer().keeping()));
+    if let Some(Block::Answer(answer)) = full.last_mut() {
+        answer.push(&text[..half]);
+    }
+    let _ = full.commit(40, &look);
+    assert!(!full.open_rows().is_empty());
+    full.rewrap_open(70, &look);
+    // What a stream at seventy columns all along committed of the same text.
+    let mut wide = Transcript::new();
+    wide.keep_finished();
+    wide.push(Block::Answer(Markdown::answer().keeping()));
+    if let Some(Block::Answer(answer)) = wide.last_mut() {
+        answer.push(&text[..half]);
+    }
+    let _ = wide.commit(70, &look);
+    assert_eq!(full.open_rows(), wide.open_rows());
+    assert_eq!(full.live(70, &look, 0), wide.live(70, &look, 0));
+    // The rest streams on at the new width, and the answer is kept whole.
+    for transcript in [&mut full, &mut wide] {
+        if let Some(Block::Answer(answer)) = transcript.last_mut() {
+            answer.push(&text[half..]);
+            answer.finish();
+        }
+        let _ = transcript.commit(70, &look);
+    }
+    let rows = |transcript: &mut Transcript| {
+        let mut kept = kept::Kept::new();
+        kept.extend(transcript.take_finished());
+        kept.iter()
+            .flat_map(|block| block.rows(Placement::Committed, 70, &look))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(rows(&mut full), rows(&mut wide));
+}

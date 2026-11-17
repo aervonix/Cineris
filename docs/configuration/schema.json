@@ -320,6 +320,18 @@
           "x-cortex-effect": "at once",
           "x-cortex-trust": "user only"
         },
+        "screen": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "The full-screen presenter's: scrolling, searching, and the mouse's `click`, `wheel_up` and `wheel_down`.",
+          "type": "object",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
         "search": {
           "additionalProperties": {
             "items": {
@@ -340,6 +352,18 @@
             "type": "array"
           },
           "description": "The `/effort` picker's fast-mode toggle.",
+          "type": "object",
+          "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "viewer": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "The viewer's (`Ctrl+O`): moving between boxes, opening one, scrolling, searching, and the mouse's `click`, `wheel_up` and `wheel_down`.",
           "type": "object",
           "x-cortex-effect": "at once",
           "x-cortex-trust": "user only"
@@ -1125,6 +1149,12 @@
           "x-cortex-effect": "restart",
           "x-cortex-trust": "user only"
         },
+        "mouse": {
+          "description": "The mouse in the viewer and the full-screen presenter: a click opens or closes a box, and the wheel scrolls; `shift` and a drag still select text. Never in the inline screen. On unless set to `false`.",
+          "type": "boolean",
+          "x-cortex-effect": "restart",
+          "x-cortex-trust": "user only"
+        },
         "sync": {
           "description": "Synchronized updates: each frame shown at once.",
           "type": "boolean",
@@ -1169,6 +1199,16 @@
             "ascii"
           ],
           "x-cortex-effect": "at once",
+          "x-cortex-trust": "user only"
+        },
+        "presenter": {
+          "default": "inline",
+          "description": "How the interface draws: `inline` (the transcript in the terminal's own scrollback) or `fullscreen` (the whole window, on the alternate screen, scrolled and searched there). `--fullscreen` chooses the second for one run.",
+          "enum": [
+            "inline",
+            "fullscreen"
+          ],
+          "x-cortex-effect": "restart",
           "x-cortex-trust": "user only"
         },
         "prose_width": {

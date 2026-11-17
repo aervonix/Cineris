@@ -16,7 +16,7 @@
 //! window on its own row as near as it can.
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use cortex_term::Line;
 
@@ -64,10 +64,10 @@ pub(crate) struct Window {
 }
 
 /// The rows made for the kept blocks near the window, at one width.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Rows {
     width: usize,
-    made: HashMap<usize, Rc<Vec<Line>>>,
+    made: HashMap<usize, Arc<Vec<Line>>>,
 }
 
 impl Rows {
@@ -78,15 +78,15 @@ impl Rows {
         block: usize,
         width: usize,
         make: &mut dyn FnMut(usize) -> Vec<Line>,
-    ) -> Rc<Vec<Line>> {
+    ) -> Arc<Vec<Line>> {
         if width != self.width {
             self.made.clear();
             self.width = width;
         }
-        Rc::clone(
+        Arc::clone(
             self.made
                 .entry(block)
-                .or_insert_with(|| Rc::new(make(block))),
+                .or_insert_with(|| Arc::new(make(block))),
         )
     }
 
@@ -115,7 +115,7 @@ impl Rows {
 
 /// A scrolled view of the kept transcript. See the [module
 /// documentation](self).
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct Scroll {
     /// Where the window is.
     pub(crate) anchor: Anchor,
@@ -153,9 +153,9 @@ impl Scroll {
     }
 
     /// A block's rows, from the cache.
-    fn block(&mut self, source: &mut Source<'_>, block: usize) -> Rc<Vec<Line>> {
+    fn block(&mut self, source: &mut Source<'_>, block: usize) -> Arc<Vec<Line>> {
         if block >= source.blocks {
-            return Rc::new(source.live.to_vec());
+            return Arc::new(source.live.to_vec());
         }
         self.rows.of(block, source.width, source.make)
     }
@@ -189,7 +189,10 @@ impl Scroll {
             .collect();
         let (first, last) = match (shown.first(), shown.last()) {
             (Some(first), Some(last)) => (*first, *last),
-            _ => (source.blocks.saturating_sub(1), source.blocks.saturating_sub(1)),
+            _ => (
+                source.blocks.saturating_sub(1),
+                source.blocks.saturating_sub(1),
+            ),
         };
         let spread = (last - first + 1) * 2 + 8;
         self.rows
@@ -199,7 +202,7 @@ impl Scroll {
 
     /// The window that ends with the last row.
     fn from_end(&mut self, source: &mut Source<'_>, height: usize) -> Window {
-        let mut pieces: Vec<(usize, Rc<Vec<Line>>)> = Vec::new();
+        let mut pieces: Vec<(usize, Arc<Vec<Line>>)> = Vec::new();
         let mut have = 0;
         let mut block = source.blocks + 1;
         while have < height && block > 0 {
@@ -223,7 +226,7 @@ impl Scroll {
     /// The window whose top is row `row` of block `block`.
     fn from(&mut self, source: &mut Source<'_>, block: usize, row: usize, height: usize) -> Window {
         let block = block.min(source.blocks);
-        let mut pieces: Vec<(usize, Rc<Vec<Line>>)> = Vec::new();
+        let mut pieces: Vec<(usize, Arc<Vec<Line>>)> = Vec::new();
         let first = self.block(source, block);
         let row = row.min(first.len().saturating_sub(1));
         let mut have = first.len().saturating_sub(row);
@@ -302,8 +305,63 @@ impl Scroll {
     }
 
     /// Moves the window to the first row.
-    pub(crate) fn top(&mut self) {
+    pub(crate) fn to_start(&mut self) {
         self.anchor = Anchor::At { block: 0, row: 0 };
+    }
+
+    /// Moves the window so that rows `start` to `end` (not included) of
+    /// block `block` are in it: not at all when they are, their start at
+    /// the window's top when they were above it or are taller than it, and
+    /// their end at its bottom when they were below it. What the viewer's
+    /// selected box does.
+    pub(crate) fn reveal(
+        &mut self,
+        source: &mut Source<'_>,
+        block: usize,
+        start: usize,
+        end: usize,
+    ) {
+        let height = self.height.max(1);
+        let window = self.window(source, height);
+        let at = |row: usize| {
+            window
+                .places
+                .iter()
+                .position(|place| *place == Place::Kept { block, row })
+        };
+        let last = end.saturating_sub(1).max(start);
+        match (at(start), at(last)) {
+            (Some(_), Some(_)) => {}
+            (first, _)
+                if end - start > height || first.is_none() && self.above(&window, block, start) =>
+            {
+                self.anchor = Anchor::At { block, row: start };
+            }
+            _ => {
+                // Its last row at the window's bottom: from the row after
+                // it, a window's height up.
+                self.anchor = Anchor::At { block, row: end };
+                self.top = Some((block, end));
+                self.up(source, height);
+            }
+        }
+    }
+
+    /// Whether row `row` of block `block` is above `window`'s first row.
+    fn above(&self, window: &Window, block: usize, row: usize) -> bool {
+        match window.places.first() {
+            Some(Place::Kept {
+                block: first,
+                row: first_row,
+            }) => (block, row) < (*first, *first_row),
+            Some(Place::Live(_)) => true,
+            _ => false,
+        }
+    }
+
+    /// The window's top now, as a block and a row.
+    pub(crate) fn top_of(&mut self, source: &mut Source<'_>) -> Option<(usize, usize)> {
+        self.top_now(source)
     }
 
     /// Moves the window so that row `row` of block `block` is in it, at its
@@ -335,7 +393,7 @@ impl Scroll {
 
 /// The window's rows from `pieces`, skipping `skip` rows of the first, up
 /// to `height`, padded with blank rows.
-fn gather(pieces: &[(usize, Rc<Vec<Line>>)], skip: usize, height: usize, blocks: usize) -> Window {
+fn gather(pieces: &[(usize, Arc<Vec<Line>>)], skip: usize, height: usize, blocks: usize) -> Window {
     let mut window = Window::default();
     let mut skip = skip;
     'pieces: for (block, rows) in pieces {
@@ -398,7 +456,9 @@ mod tests {
         fn new(heights: &[usize], live: usize) -> Self {
             Self {
                 blocks: blocks(heights),
-                live: (0..live).map(|row| Line::plain(format!("live.{row}"))).collect(),
+                live: (0..live)
+                    .map(|row| Line::plain(format!("live.{row}")))
+                    .collect(),
                 made: 0,
                 scroll: Scroll::default(),
             }
@@ -470,7 +530,7 @@ mod tests {
         // Two or three blocks are shown; those near them are made, not the
         // thousand.
         assert!(rig.made <= 4, "{} blocks made", rig.made);
-        rig.with(|scroll, _| scroll.top());
+        rig.with(|scroll, _| scroll.to_start());
         assert_eq!(rig.window(10)[0], "0.0");
         assert!(rig.scroll.rows.len() <= 30, "{}", rig.scroll.rows.len());
         // The window moved away from the end: the blocks there were let go.
