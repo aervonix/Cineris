@@ -288,8 +288,8 @@ caught-by:
 rule: A peer whose line of parents reaches the server's process is one of its own commands, and is closed unanswered.
 file: crates/cortex-rpc/src/socket/unix.rs
 in: line_of
-find: Some(parent) if parent == server => return Line::Server,
-replace: Some(parent) if parent == server => return Line::Elsewhere,
+find: Parent::Of(parent) if parent == server => return Line::Server,
+replace: Parent::Of(parent) if parent == server => return Line::Elsewhere,
 caught-by:
     cortex-rpc::it socket::sys_one_of_the_servers_own_commands_is_refused
 
