@@ -12,7 +12,8 @@ use std::process::Command;
 // that ignores the first: Unix only.
 #[cfg(unix)]
 use cineris_protocol::event::{Delta, Event, TurnOutcome};
-use cineris_protocol::methods::{Op, SessionRewindParams};
+use cineris_protocol::item::ToolResultItem;
+use cineris_protocol::methods::{Op, OpResult, SessionArtifactParams, SessionRewindParams};
 use cineris_protocol::{Item, Part};
 use serde_json::json;
 
@@ -26,26 +27,66 @@ fn print_env() -> &'static str {
     if cfg!(windows) { "cmd /c set" } else { "env" }
 }
 
-fn shell_text(front: &Front) -> String {
+/// The result of the turn's shell call.
+fn shell_result(front: &Front) -> ToolResultItem {
     front
         .items()
         .into_iter()
         .find_map(|item| match item {
-            Item::ToolResult(result) if result.tool == "shell" => Some(
-                result
-                    .content
-                    .iter()
-                    .filter_map(|part| match part {
-                        Part::Text(text) => Some(text.text.clone()),
-                        _ => None,
-                    })
-                    .collect::<String>(),
-            ),
+            Item::ToolResult(result) if result.tool == "shell" => Some(result),
             _ => None,
         })
         .expect("a shell result")
 }
 
+/// What the model is shown of a result.
+fn text_of(result: &ToolResultItem) -> String {
+    result
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            Part::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Everything a command printed, as a front end shows it: the artifact the
+/// tool kept the whole output in. The model's copy is not that when it was
+/// cut: a line longer than the line limit ends with a marker (`… [+1,201
+/// characters]`) where the rest of it was.
+async fn whole_output(front: &Front, result: &ToolResultItem) -> String {
+    let artifact = result.artifacts.first().unwrap_or_else(|| {
+        panic!(
+            "the output was not cut, so no whole output was kept: {}",
+            text_of(result)
+        )
+    });
+    let read = Op::SessionArtifact(SessionArtifactParams {
+        session_id: front.session.clone(),
+        artifact: artifact.id.clone(),
+    });
+    let OpResult::SessionArtifact(whole) = front.op(read).await.expect("the whole output is read")
+    else {
+        panic!("not the result of session/artifact");
+    };
+    assert!(
+        !whole.cut,
+        "the whole output is more than a front end is given"
+    );
+    whole.text
+}
+
+/// The environment is read from everything the command printed, never
+/// from the model's copy of it. The line that holds `PATH` is longer than
+/// the model is shown a line, on every machine: the test puts directories
+/// of its own at its end until it is. In the model's copy the line is cut,
+/// and what follows its last separator is a piece of an entry and the
+/// cut's marker. Read from there (until step 25), that piece was taken for
+/// an entry, which was absolute or not by where the runner's `PATH` put the
+/// cut: after the rename shortened the checkout's path, the cut kept one
+/// character of an entry, `C… [+1,201 characters]`, and the test failed on
+/// every hosted Windows runner.
 #[test]
 fn sys_a_command_is_given_the_environment_the_command_analysis_relies_on() {
     let world = World::new(
@@ -62,9 +103,23 @@ fn sys_a_command_is_given_the_environment_the_command_analysis_relies_on() {
     );
     let separator = if cfg!(windows) { ';' } else { ':' };
     let real_path = std::env::var("PATH").unwrap();
+    // Absolute directories of the test's own, more characters of them than
+    // a line the model is shown: they end the `PATH` the command is given,
+    // whole and in order, or something of it was lost.
+    let line_limit = cineris_tools::OutputLimits::default().max_line_chars();
+    let mut padding: Vec<String> = Vec::new();
+    while padding.iter().map(|entry| entry.len() + 1).sum::<usize>() <= line_limit {
+        let entry = world
+            .dir
+            .join(format!("not-a-directory-{:03}", padding.len()));
+        padding.push(entry.to_str().unwrap().to_owned());
+    }
     // The user's own `PATH`, with the two kinds of entry that name the
-    // directory a command runs in.
-    let path = format!(".{separator}{real_path}{separator}{separator}bin");
+    // directory a command runs in, and the test's own directories.
+    let path = format!(
+        ".{separator}{real_path}{separator}{separator}bin{separator}{}",
+        padding.join(&separator.to_string())
+    );
     let core = world.core_with(|options| {
         let mut env = world.shell_env(&[
             ("CDPATH", "/somewhere/else"),
@@ -93,7 +148,9 @@ fn sys_a_command_is_given_the_environment_the_command_analysis_relies_on() {
     world.run(async {
         let front = Front::start(&world, &core).await;
         front.turn_allowing("show the environment").await;
-        let text = shell_text(&front);
+        let result = shell_result(&front);
+        assert!(!text_of(&result).contains(KEY), "{}", text_of(&result));
+        let text = whole_output(&front, &result).await;
         let env: BTreeMap<String, String> = text
             .lines()
             .filter_map(|line| line.trim_end().split_once('='))
@@ -136,15 +193,27 @@ fn sys_a_command_is_given_the_environment_the_command_analysis_relies_on() {
         assert_eq!(env.get("PREFIXED_ONE"), None);
         assert!(!text.contains(KEY), "{text}");
 
-        // `PATH` names only absolute directories.
+        // `PATH` names only absolute directories, and every one it was
+        // given: the test's own end it, whole and in order.
         let given = env.get("PATH").expect("a PATH");
-        for entry in given.split(separator) {
-            assert!(
-                Path::new(entry.trim_matches('"')).is_absolute(),
-                "`{entry}` in the PATH a command was given: {given}"
-            );
-        }
-        assert!(given.split(separator).count() >= 1);
+        let entries: Vec<&str> = given.split(separator).collect();
+        let relative: Vec<(usize, &str)> = entries
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, entry)| !Path::new(entry.trim_matches('"')).is_absolute())
+            .collect();
+        assert!(
+            relative.is_empty(),
+            "entries of the PATH a command was given that are not absolute, by their place: \
+             {relative:?}\nthe PATH: {given}"
+        );
+        let own: Vec<&str> = padding.iter().map(String::as_str).collect();
+        assert!(
+            entries.ends_with(&own),
+            "the PATH a command was given does not end with the test's own directories, whole \
+             and in order: {given}"
+        );
         front.close().await;
     });
 }
@@ -366,7 +435,7 @@ fn sys_a_command_in_a_workspace_behind_a_link_starts_where_it_really_is() {
     world.run(async {
         let front = Front::start(&world, &core).await;
         front.turn_allowing("where is the parent").await;
-        let text = shell_text(&front);
+        let text = text_of(&shell_result(&front));
         assert_eq!(
             text.lines().next().map(str::trim),
             real_parent.to_str(),
