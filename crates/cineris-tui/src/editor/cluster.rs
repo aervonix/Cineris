@@ -16,6 +16,8 @@ use std::borrow::Cow;
 
 use cineris_base::text;
 
+use crate::glyphs::Glyphs;
+
 /// The character that stands for a chip in the text: U+FFFC, the Object
 /// Replacement Character, which Unicode keeps for exactly this.
 pub(crate) const CHIP: char = '\u{FFFC}';
@@ -195,45 +197,59 @@ pub(crate) fn word_end(text: &str, at: usize) -> usize {
 /// A cluster as the input box draws it, made safe to show
 /// (`cineris_term::sanitize`) on its own: a control character as its
 /// symbol, and what acts unseen (a character of no width, a bidirectional
-/// control) as its escape, `\u{200b}`. A run of [`RUN`] or more of one
-/// escape is written once with its count, `\u{e0041}×12`, so that a row
-/// always holds a cluster (since step 25: a letter followed by a long run
-/// of tag characters is one cluster, and was wider than the row). Only the
-/// prompt editor's row counts: everywhere else `sanitize` shows every
-/// escape. A tab is the caller's to draw.
-pub(crate) fn drawn(cluster: &str) -> Cow<'_, str> {
+/// control) as its escape, `\u{200b}`. A run of [`RUN`] or more escapes is
+/// written as one mark with its count, so that a row always holds a
+/// cluster (since step 25: a letter followed by a long run of tag
+/// characters is one cluster, and was wider than the row): a run of one
+/// character as its escape, the glyph set's `×` and the count,
+/// `\u{e0041}×12`; a run of several (text hidden in tag characters,
+/// `\u{e0068}\u{e0065}…`) as the first's escape, `+` and how many more
+/// follow, `\u{e0068}+11` (since the review of step 25's second pull
+/// request). Only the prompt editor's row counts: everywhere else
+/// `sanitize` shows every escape. A tab is the caller's to draw.
+pub(crate) fn drawn<'a>(cluster: &'a str, glyphs: &Glyphs) -> Cow<'a, str> {
     match cineris_term::sanitize(cluster) {
         Cow::Borrowed(text) => Cow::Borrowed(text),
-        Cow::Owned(shown) => Cow::Owned(counted(&shown)),
+        Cow::Owned(shown) => Cow::Owned(counted(&shown, glyphs)),
     }
 }
 
-/// How many of one escape in a row are written once with their count.
+/// How many escapes in a row are written as one mark with their count.
 pub(crate) const RUN: usize = 4;
 
-/// `shown` with each run of [`RUN`] or more of one escape written once,
-/// followed by `×` and the count.
-fn counted(shown: &str) -> String {
+/// `shown` with each run of [`RUN`] or more escapes written as one mark:
+/// of one character, its escape, `×` and the count; of several, the
+/// first's escape, `+` and how many more follow.
+fn counted(shown: &str, glyphs: &Glyphs) -> String {
     let mut out = String::with_capacity(shown.len());
     let mut rest = shown;
     while let Some(c) = rest.chars().next() {
-        let Some(escape) = escape_at(rest) else {
+        let Some(first) = escape_at(rest) else {
             out.push(c);
             rest = &rest[c.len_utf8()..];
             continue;
         };
+        // The run of escapes from here, whatever their characters.
+        let mut run = rest;
         let mut count = 0;
-        while rest.starts_with(escape) {
+        let mut one = true;
+        while let Some(escape) = escape_at(run) {
             count += 1;
-            rest = &rest[escape.len()..];
+            one &= escape == first;
+            run = &run[escape.len()..];
         }
-        if count >= RUN {
-            out.push_str(escape);
-            out.push('×');
+        if count < RUN {
+            out.push_str(&rest[..rest.len() - run.len()]);
+        } else if one {
+            out.push_str(first);
+            out.push_str(glyphs.times);
             out.push_str(&count.to_string());
         } else {
-            out.push_str(&escape.repeat(count));
+            out.push_str(first);
+            out.push('+');
+            out.push_str(&(count - 1).to_string());
         }
+        rest = run;
     }
     out
 }
@@ -252,12 +268,13 @@ fn escape_at(text: &str) -> Option<&str> {
 /// a chip its label's width (the caller knows it), anything else the width
 /// of what is [`drawn`] (since the review of step 23, which found a
 /// zero-width space counted as no columns and drawn as eight, the cursor
-/// left inside the escape and the row cut).
+/// left inside the escape and the row cut). The same in either glyph set:
+/// a count's `×` is one column in both (a test holds it).
 pub(crate) fn width(cluster: &str) -> usize {
     if cluster == "\t" {
         return TAB_WIDTH;
     }
-    match drawn(cluster) {
+    match drawn(cluster, &Glyphs::UNICODE) {
         Cow::Borrowed(cluster) => text::grapheme_width(cluster),
         Cow::Owned(shown) => text::width(&shown),
     }
@@ -280,22 +297,54 @@ mod tests {
 
     /// A letter followed by twelve tag characters is one cluster, drawn as
     /// the letter, one escape and its count, so that a row holds it; three
-    /// are each written; a run of another escape stands apart (step 25,
-    /// `one-character-wider-than-the-prompts-row`).
+    /// are each written (step 25, `one-character-wider-than-the-prompts-row`).
+    /// A run of several characters (text hidden in tags) is one mark too,
+    /// the first's escape and how many more follow; the count's `×` is the
+    /// ASCII set's `x` where that set is chosen, as wide, so that the width
+    /// is what is drawn in either (the review of step 25's second pull
+    /// request).
     #[test]
     fn a_long_run_of_one_unseen_character_is_drawn_once_with_its_count() {
+        let unicode = &Glyphs::UNICODE;
         let tags: String = std::iter::repeat_n('\u{e0041}', 12).collect();
         let cluster = format!("a{tags}");
         assert_eq!(clusters(&cluster).count(), 1, "one cluster");
-        assert_eq!(drawn(&cluster), "a\\u{e0041}×12");
+        assert_eq!(drawn(&cluster, unicode), "a\\u{e0041}×12");
         assert_eq!(width(&cluster), "a\\u{e0041}×12".chars().count());
         let three = "a\u{e0041}\u{e0041}\u{e0041}";
-        assert_eq!(drawn(three), "a\\u{e0041}\\u{e0041}\\u{e0041}");
-        let mixed: String = format!("a{}{}", "\u{e0041}".repeat(5), "\u{e0042}".repeat(4));
-        assert_eq!(drawn(&mixed), "a\\u{e0041}×5\\u{e0042}×4");
+        assert_eq!(drawn(three, unicode), "a\\u{e0041}\\u{e0041}\\u{e0041}");
         // Plain text, and a text that only looks like an escape, as they are.
-        assert_eq!(drawn("é"), "é");
-        assert!(matches!(drawn("x"), Cow::Borrowed("x")));
+        assert_eq!(drawn("é", unicode), "é");
+        assert!(matches!(drawn("x", unicode), Cow::Borrowed("x")));
+    }
+
+    #[test]
+    fn a_run_of_several_unseen_characters_is_one_mark_and_ascii_counts_with_x() {
+        let (unicode, ascii) = (&Glyphs::UNICODE, &Glyphs::ASCII);
+        // `hello` in tag characters, after a letter: one cluster.
+        let hidden: String = "hello"
+            .chars()
+            .map(|c| char::from_u32(0xe0000 + u32::from(c)).unwrap())
+            .collect();
+        let cluster = format!("a{hidden}");
+        assert_eq!(clusters(&cluster).count(), 1, "one cluster");
+        assert_eq!(drawn(&cluster, unicode), "a\\u{e0068}+4");
+        assert_eq!(width(&cluster), "a\\u{e0068}+4".chars().count());
+        let mixed: String = format!("a{}{}", "\u{e0041}".repeat(5), "\u{e0042}".repeat(4));
+        assert_eq!(drawn(&mixed, unicode), "a\\u{e0041}+8");
+        // A long run of tags in a cluster, of any kind, fits a narrow row.
+        let long: String = (0..200)
+            .map(|n| char::from_u32(0xe0020 + n % 0x5f).unwrap())
+            .collect();
+        assert!(width(&format!("a{long}")) < 20);
+        // The ASCII set's count, as wide as the Unicode set's.
+        let tags = format!("a{}", "\u{e0041}".repeat(12));
+        assert_eq!(drawn(&tags, ascii), "a\\u{e0041}x12");
+        assert_eq!(
+            text::width(&drawn(&tags, ascii)),
+            text::width(&drawn(&tags, unicode))
+        );
+        assert_eq!(text::width(ascii.times), text::width(unicode.times));
     }
 
     #[test]

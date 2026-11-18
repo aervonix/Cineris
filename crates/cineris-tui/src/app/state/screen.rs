@@ -537,20 +537,14 @@ impl App {
     /// dialog's transcript key or `Esc` (pressed, not repeated) goes back to
     /// the dialog, whose quiet starts again, and nothing else does
     /// anything: no key pressed while reading reaches the dialog or the
-    /// hidden editor, and each holds the dialog as typing does. `Ctrl+C`
-    /// and `Ctrl+L` keep their meaning.
+    /// hidden editor, and each holds the dialog as typing does. `Ctrl+C`,
+    /// `Ctrl+L` and the suspension keep their meaning.
     pub(super) fn reading_key(&mut self, key: Key, at: Instant, repeat: bool) -> bool {
         self.not_taken(at);
-        let keymap = self.input.keymap();
-        if let Some(action @ (Action::Interrupt | Action::Redraw)) = keymap.lookup(&[], key) {
-            let outcome = if action == Action::Interrupt {
-                self.input.interrupt_hidden()
-            } else {
-                self.input.act(action)
-            };
-            self.outcome(outcome, at);
+        if self.reading_global(key, at) {
             return true;
         }
+        let keymap = self.input.keymap();
         let back = keymap.lookup(&[Context::Dialog], key) == Some(Action::DialogTranscript)
             || (key.code == KeyCode::Esc && key.mods.is_empty());
         if back {
@@ -582,6 +576,25 @@ impl App {
         if let Some(action) = action {
             self.screen_act(action, None);
         }
+        true
+    }
+
+    /// A global key while the transcript is read from under a dialog, or
+    /// just back from it: `Ctrl+C` (the editor hidden, its text left
+    /// alone), `Ctrl+L` and the suspension do what they do anywhere (the
+    /// review of step 25's second pull request). Says whether `key` was one.
+    pub(super) fn reading_global(&mut self, key: Key, at: Instant) -> bool {
+        let Some(action @ (Action::Interrupt | Action::Redraw | Action::Suspend)) =
+            self.input.keymap().lookup(&[], key)
+        else {
+            return false;
+        };
+        let outcome = if action == Action::Interrupt {
+            self.input.interrupt_hidden()
+        } else {
+            self.input.act(action)
+        };
+        self.outcome(outcome, at);
         true
     }
 

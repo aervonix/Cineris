@@ -170,7 +170,7 @@ fn text_spans(
         } else if piece == "\t" {
             plain.push_str(&" ".repeat(TAB_WIDTH));
         } else {
-            plain.push_str(&cluster::drawn(piece));
+            plain.push_str(&cluster::drawn(piece, look.glyphs));
         }
     }
     if !plain.is_empty() {

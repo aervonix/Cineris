@@ -68,6 +68,9 @@ pub struct Glyphs {
     pub arrow: &'static str,
     /// A range of numbers, as in `lines 120–178`: `–`.
     pub range: &'static str,
+    /// How many of one thing, as in the prompt's `\u{e0041}×12`: `×`
+    /// (since the review of step 25's second pull request).
+    pub times: &'static str,
 }
 
 /// The spinner of the Unicode set: an eight-frame braille cycle.
@@ -105,6 +108,7 @@ impl Glyphs {
         ellipsis: "…",
         arrow: "→",
         range: "–",
+        times: "×",
     };
 
     /// The ASCII set, for a terminal without Unicode (and the old console
@@ -136,6 +140,7 @@ impl Glyphs {
         ellipsis: "...",
         arrow: "->",
         range: "-",
+        times: "x",
     };
 
     /// The set for a terminal: Unicode where it shows Unicode, ASCII
@@ -191,6 +196,7 @@ impl Glyphs {
             self.ellipsis,
             self.arrow,
             self.range,
+            self.times,
         ];
         all.extend_from_slice(self.spinner);
         all
@@ -212,7 +218,7 @@ mod tests {
                 "{glyph:?} is not printable ASCII"
             );
         }
-        // Each Unicode glyph is one column as counted. Fourteen of them are
+        // Each Unicode glyph is one column as counted. Fifteen of them are
         // of East Asian ambiguous width (the box's edges among them), which a
         // terminal in a CJK locale may draw wide: the ASCII set is the answer
         // there (09-tui, "Colour and glyphs").

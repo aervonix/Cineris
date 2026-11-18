@@ -325,6 +325,12 @@ impl Dialog {
         }
     }
 
+    /// Whether the window was too small for its answers when they were
+    /// due: it takes no key until a frame in a larger one draws them.
+    pub(crate) fn unreadable(&self) -> bool {
+        self.unreadable
+    }
+
     /// When a frame is due for the dialog's answers: the moment it is
     /// ready, until a frame with them has been drawn. The time may have
     /// passed: a frame is then due at once.
