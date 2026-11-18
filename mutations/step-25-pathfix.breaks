@@ -1,0 +1,15 @@
+# Step 25, a follow-up to the rename: the core's test of a command's
+# environment read `PATH` from the model's copy of the output, whose long
+# line is cut, and now reads the whole output
+# (docs/steps/25/parts/pr1c-windows-path.md). The break shows that the test
+# now sees the end of a `PATH` longer than a line, which no other test does.
+
+[break] path-loses-what-follows-its-first-entries
+rule: `PATH` keeps every absolute directory it was given, in order, however long it is: only the empty and relative entries are dropped.
+file: crates/cineris-tools/src/shell/env.rs
+in: absolute_entries
+find: .collect();
+replace: .take(32).collect();
+packages: cineris-core
+caught-by:
+    cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
