@@ -10,7 +10,7 @@ This is not a numbered step of the build plan. It renamed the project from Corte
 
 ## The inventory
 
-Counted on `main` at `88e98f85`, before the rename: the `main` this pull request renames (it was made first on `1e733de5`, and made again when step 25's first pull request merged).
+Counted on `main` at `88e98f85`, before the rename. The tool's output was made first on `1e733de5`, again on `88e98f85` when step 25's first pull request merged, and last on `e2f1941d`, after step 25's mouse fix. Each time it was made fresh, never fixed by hand in a conflict. On `e2f1941d`, `apply` renamed 1,026 files' text and 1,313 paths, the same as on `88e98f85`.
 
 **In the files' text:** 1,026 files hold the name or the alias, and 1,313 paths hold the name.
 
@@ -94,6 +94,12 @@ Every branch was copied locally and rewritten with `cargo xtask rename branch BA
 - **The rebase onto this pull request's head** (`git rebase --onto <head> <R(BASE)> <copy>-renamed`, in a second checkout under `target/`) goes through with **no conflict**.
 - **The result,** at the branch's tip: `cargo xtask rename --check`, `cargo xtask outstanding --check`, `cargo xtask links` and `cargo fmt --all --check` pass, and all 4,691 of its tests pass at the desk (`cargo xtask test`), before any `regen`.
 - **What step 25 still runs after its rebase:** `cargo xtask regen`, as after any rebase. Its new golden screens were renamed as text, and a screen whose header holds the brand is laid out again by its command.
+
+**After the last rebase, onto `e2f1941d`** (step 25's mouse fix, #96): the session branch, by then 27 commits on `88e98f85`, was rewritten again. Its rebase onto this head was compared with a rebase of the branch, not renamed, onto `e2f1941d`, by `git merge-tree`, commit after commit, with no checkout. Both stop at the same 11 commits, on the same files:
+- first at "Read ^H, pastes without brackets…", on `crates/cineris-term/src/sys/unix.rs` and `windows.rs`, which #96 changed;
+- then at ten commits that add to `mutations/step-25.breaks`, a file #96 changed too. The comparison keeps each conflict's markers and goes on, so one conflict there carries into the next.
+
+None of them is the rename's. They are step 25's own rebase over its own fix.
 
 **Before #94 merged,** the same was done with `worktree-step-25` (PR 1) and `worktree-step-25-session` as they were then, 25 and 36 commits on `1e733de5`: both rebased onto this pull request's head as it was then with no conflict.
 
