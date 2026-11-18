@@ -51,6 +51,7 @@ use cineris_term::{Capabilities, Cursor, Event as TermEvent, Key, Line};
 
 mod commands;
 mod export;
+mod first_run;
 mod panel;
 mod recolour;
 mod restyle;
@@ -173,6 +174,8 @@ enum Pending {
     Reread(SessionId, u64),
     /// A fork of the session open here, to be opened in its place.
     Fork(Box<rewind::Forking>),
+    /// What the first run sent (since step 25).
+    FirstRun(first_run::Sent),
 }
 
 /// A prompt on its way to the core, for its answer.
@@ -438,6 +441,8 @@ pub struct App {
     /// is ready again, keys and pastes hold it and go nowhere, never to the
     /// hidden editor (the focused review of step 25).
     back_from_reading: Option<DialogId>,
+    /// The first run, while it runs (since step 25).
+    first_run: Option<first_run::FirstRun>,
     /// A look at the configuration's files is due after this frame.
     look_due: bool,
     /// When the last look was asked for.
@@ -623,6 +628,7 @@ impl App {
             exporting: None,
             reading_transcript: None,
             back_from_reading: None,
+            first_run: start.setup.and_then(first_run::FirstRun::start),
             look_due: false,
             last_look: None,
             theme_picked: None,
@@ -710,9 +716,14 @@ impl App {
     /// "Start-up": after the first frame), and a dialog's first starts its
     /// guard.
     pub fn drawn(&mut self, at: Instant) {
-        if let Some(open) = self.open.take() {
+        // The first run holds the session until the configuration file is
+        // written and read again (since step 25).
+        if !self.first_run_holds_open()
+            && let Some(open) = self.open.take()
+        {
             self.send_open(open);
         }
+        self.first_run_drawn(at);
         self.look_now(at);
         // A dialog is shown by the inline screen's frame alone: under the
         // viewer it waits, its grace not begun (the review of the second
@@ -822,6 +833,7 @@ impl App {
 
     /// The terminal's waker: the `@` worker wakes the loop with it.
     pub fn set_waker(&mut self, waker: cineris_term::Waker) {
+        self.first_run_waker(&waker);
         self.waker = Some(waker);
     }
 
@@ -952,6 +964,11 @@ impl App {
     /// paste), whose frame is drawn at once.
     pub fn terminal(&mut self, event: &TermEvent, at: Instant) -> bool {
         self.drop_stale_viewer();
+        // A step of the first run takes the input box's place, and its keys
+        // (since step 25).
+        if let Some(taken) = self.first_run_event(event, at) {
+            return taken;
+        }
         // A key, a paste, or the focus regained: the configuration's files
         // are looked at after this frame (step 24's hot reload).
         if matches!(
@@ -1252,6 +1269,7 @@ impl App {
     /// Input no dialog took was read at `at`: the dialog shown, if any,
     /// waits a quiet second after it, and hides answers it showed.
     fn not_taken(&mut self, at: Instant) {
+        self.first_run_typed(at);
         self.untaken = Some(at);
         self.panel_untaken = Some(at);
         self.panels.typed(at);
@@ -1659,6 +1677,7 @@ impl App {
             return;
         };
         match (pending, result) {
+            (Pending::FirstRun(sent), result) => self.first_run_done(sent, result),
             (Pending::Open, Ok(OpResult::SessionNew(result))) => {
                 self.opened(result.session, false, now);
             }
@@ -2502,6 +2521,8 @@ impl App {
         self.ask_files();
         // An export's writer that has answered.
         self.take_export();
+        // What the first run's worker answered, and what follows (step 25).
+        self.first_run_answers();
         // The spinner's frame follows the clock, one every `SPIN`.
         let since = now.saturating_duration_since(self.began).as_millis();
         self.tick = usize::try_from(since / super::SPIN.as_millis()).unwrap_or(0);
@@ -2544,7 +2565,14 @@ impl App {
         // The panels' block (step 24), between the live rows and the bottom.
         let mut block = Vec::new();
         self.panel_drawn = None;
-        if !self.dialogs.is_empty() {
+        if self.dialogs.is_empty()
+            && let Some(lines) = self.first_run_bottom(now, width)
+        {
+            // A step of the first run, in the input box's place (step 25).
+            self.input.focus_mut().update(boxes, &[]);
+            bottom.extend(lines);
+            cursor_row = None;
+        } else if !self.dialogs.is_empty() {
             // No panel is drawn while a dialog is up.
             self.input.focus_mut().update(boxes, &[]);
             // The dialog fits the window whole, with a blank row and the hint

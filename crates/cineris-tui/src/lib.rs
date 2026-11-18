@@ -35,6 +35,7 @@
 //! | [`app`] | The application: the loop, the state, the link to the core, the dialogs; since step 24 the panels | 23 |
 //! | `view::dialog` | The dialogs in the input box's place | 23 |
 //! | `view::panel`, `view::plan`, `view::review` | The panels' rows: what they share, the plan's and the review's | 24 |
+//! | [`secret`] | A key read at the terminal without echo: the first run's and `cineris auth login`'s | 25 |
 //! | `testkit` | The application driven by tests, with a scripted link in the core's place (the `test-kit` feature, dev-dependencies only) | tooling 9 |
 //!
 //! Each module's code is in its own files, so that the steps that build
@@ -65,6 +66,10 @@ pub mod app;
 
 // Step 25: `/export`.
 pub mod export;
+
+// Step 25: a key read without echo, for the first run and `cineris auth
+// login`.
+pub mod secret;
 
 // The ninth tooling step: the application's test kit, for tests only. The
 // crate's own unit tests have it with no feature.

@@ -190,6 +190,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
                 highlighter: Highlighter::new(move || wake.wake()),
                 restyle: Some(Box::new(restyle)),
                 export: Some(crate::export::writer(started_in)),
+                setup: None,
             };
             (Box::new(link) as Box<dyn Link>, start)
         })

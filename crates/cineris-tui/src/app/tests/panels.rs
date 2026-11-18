@@ -1104,6 +1104,7 @@ fn the_turn_summary_says_the_checks_verdict() {
         highlighter: crate::highlight::Highlighter::off(),
         restyle: None,
         export: None,
+        setup: None,
     };
     let mut app = App::new(Box::new(link.clone()), start, &caps(), 99, 40, now);
     opened(&mut app, &link, now);
