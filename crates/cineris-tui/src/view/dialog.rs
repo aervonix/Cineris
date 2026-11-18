@@ -23,7 +23,8 @@
 
 use cineris_protocol::lease::Effect;
 use cineris_protocol::methods::{
-    ApprovalDetail, ApprovalRequest, QuestionRequest, TrustRequest, TrustResourceKind,
+    ApprovalDetail, ApprovalRequest, QuestionRequest, RewindFile, RewindFileStatus, RewindTarget,
+    RewindWhyNot, SessionRewindPlanResult, TrustRequest, TrustResourceKind,
 };
 use cineris_term::{Line, Span, Style, sanitize};
 
@@ -585,6 +586,176 @@ pub fn question(
         detail: 0,
         answer_rows,
         whole,
+    }
+}
+
+/// The rewind's question (since step 25; `docs/steps/25/answered.md`,
+/// point 4): the point, its prompt, and the core's own plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RewindAsk {
+    /// The turn rewound to before, counted from one along the active
+    /// branch.
+    pub turn: u64,
+    /// The last turn of the branch: the turns from `turn` to it are undone.
+    pub last: u64,
+    /// The prompt of `turn`, whose first line is shown.
+    pub prompt: String,
+    /// What the core would do (`session/rewind_plan`).
+    pub plan: SessionRewindPlanResult,
+}
+
+/// What the rewind's question shows beside its plan.
+#[derive(Debug, Clone, Default)]
+pub struct RewindView {
+    /// The answers on offer, by their digits.
+    pub answers: Vec<Answer>,
+    /// The answers cannot be pressed yet: their rows are left blank.
+    pub answers_hidden: bool,
+    /// The most rows the plan's files may take; the rest is said, not
+    /// shown.
+    pub detail_rows: usize,
+}
+
+/// The rewind's question, `width` columns wide at most: the point, the
+/// prompt's first line, how many turns go, each file of the plan with what
+/// happens to it, and the answers by their digits.
+///
+/// ```text
+/// ? Rewind to before turn 12?
+///   fix the lexer so digit separators…
+///   Turns 12 to 14 are undone. Their files:
+///     src/lexer.rs  goes back to what it was before
+///     src/new.rs  is removed: it did not exist then
+///     notes.txt  was changed since: you are asked before it is put back
+///
+///   1 Rewind it and put back the files listed
+///   2 Rewind the conversation only; the files stay as they are
+/// ```
+///
+/// A file list taller than its room is cut, with a line that says so, and
+/// the drawing says it was clipped: the caller then offers `1` only once
+/// the plan has been seen whole in the viewer.
+#[must_use]
+pub fn rewind(ask: &RewindAsk, view: &RewindView, width: usize, look: &Look) -> Drawn {
+    let theme = &look.theme;
+    let muted = theme.style(Token::Muted);
+    let prose = look.prose_width.min(width);
+    let mut lines = title(&format!("Rewind to before turn {}?", ask.turn), width, look);
+    let question = lines.len();
+    // The prompt's first line, cut at the row: it says which point this is.
+    let first = ask.prompt.lines().next().unwrap_or_default();
+    let more = ask.prompt.trim_end().contains('\n');
+    let prompt = format!(
+        "{}{}",
+        sanitize(first).replace('\t', " "),
+        if more { look.glyphs.ellipsis } else { "" }
+    );
+    lines.push(cut(
+        &Line::plain("  ").with(Span::new(prompt, theme.style(Token::AccentText))),
+        width,
+        look.glyphs.ellipsis,
+    ));
+    let turns = if ask.last > ask.turn {
+        format!("Turns {} to {} are undone.", ask.turn, ask.last)
+    } else {
+        format!("Turn {} is undone.", ask.turn)
+    };
+    let files = if ask.plan.files.is_empty() {
+        " They changed no file the harness recorded."
+    } else if ask.last > ask.turn {
+        " The files they changed:"
+    } else {
+        " The files it changed:"
+    };
+    lines.extend(indented(&format!("{turns}{files}"), muted, 2, prose));
+    if ask.plan.unreadable {
+        lines.extend(indented(
+            "A checkpoint of those turns cannot be read, so no file is put back.",
+            theme.style(Token::Warning),
+            2,
+            prose,
+        ));
+    }
+    let mut detail: Vec<Line> = Vec::new();
+    for file in &ask.plan.files {
+        // The name from outside, on one line, wrapped and never cut; then
+        // what happens to it.
+        let name = sanitize(&file.path).replace(['\n', '\t'], " ");
+        let rows = wrap(
+            &[
+                Span::new(name, theme.style(Token::Code)),
+                Span::plain("  "),
+                Span::new(what_happens(file), muted),
+            ],
+            width.saturating_sub(4).max(1),
+        );
+        for row in rows {
+            let mut line = Line::plain("    ");
+            for span in row.spans() {
+                line.push(span.clone());
+            }
+            detail.push(line);
+        }
+    }
+    let room = view.detail_rows.max(2);
+    let mut clipped = false;
+    if detail.len() > room {
+        clipped = true;
+        let hidden = detail.len() - (room - 1);
+        detail.truncate(room - 1);
+        detail.extend(indented(
+            &format!(
+                "{} {hidden} more lines are not shown, so the files are not put back from here \
+                 until the plan is seen whole",
+                look.glyphs.ellipsis
+            ),
+            muted,
+            4,
+            prose,
+        ));
+    }
+    let detail_rows = detail.len();
+    lines.extend(detail);
+    lines.push(Line::new());
+    let (answer_lines, whole) = answer_rows(&view.answers, view.answers_hidden, width, look);
+    let answer_rows = answer_lines.len();
+    lines.extend(answer_lines);
+    Drawn {
+        lines,
+        clipped,
+        question,
+        detail: detail_rows,
+        answer_rows,
+        whole,
+    }
+}
+
+/// What a rewind does to one file of its plan, in words.
+fn what_happens(file: &RewindFile) -> String {
+    let why = |why: Option<&RewindWhyNot>| match why {
+        Some(RewindWhyNot::NotRecorded) => "what it held before was not recorded",
+        Some(RewindWhyNot::TooLarge) => "its earlier content was too large to keep",
+        Some(RewindWhyNot::Missing) => "its earlier content is no longer kept",
+        Some(RewindWhyNot::Unreadable) => "a checkpoint of the turns cannot be read",
+        Some(RewindWhyNot::ThroughALink) => "it is now reached through a link",
+        _ => "it cannot be put back",
+    };
+    match (&file.status, &file.to) {
+        (RewindFileStatus::Cannot, _) | (_, RewindTarget::NotRecorded) => {
+            format!("stays as it is: {}", why(file.why_not.as_ref()))
+        }
+        (RewindFileStatus::Already, _) => "is already as it was".to_owned(),
+        (RewindFileStatus::EditedSince, RewindTarget::Removed) => {
+            "was changed since, and would be removed: you are asked first".to_owned()
+        }
+        (RewindFileStatus::EditedSince, _) => {
+            "was changed since: you are asked before it is put back".to_owned()
+        }
+        (RewindFileStatus::AsLeft, RewindTarget::Removed) => {
+            "is removed: it did not exist then".to_owned()
+        }
+        (RewindFileStatus::AsLeft, _) => "goes back to what it was before".to_owned(),
+        _ => "cannot be told: this build does not know what the plan says".to_owned(),
     }
 }
 

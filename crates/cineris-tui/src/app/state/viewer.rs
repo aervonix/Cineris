@@ -15,7 +15,6 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use cineris_base::{UtcTime, Zone};
-use cineris_protocol::jsonrpc::RequestId;
 use cineris_term::{Button, Key, KeyCode, Line, Mods, Mouse, MouseKind, Wheel};
 
 use super::App;
@@ -52,7 +51,7 @@ pub(super) struct Viewer {
     find: bool,
     /// It shows this request whole (`Ctrl+O` in its dialog), not the
     /// transcript, while its dialog is the one open.
-    whole: Option<RequestId>,
+    whole: Option<crate::app::dialog::DialogId>,
     /// It shows this text (a check's whole output, step 24), not the
     /// transcript: its label, then its lines, as a command's output is
     /// shown (sanitised, a carriage return taking the line back, tabs
@@ -78,6 +77,9 @@ pub(super) struct Viewer {
     behind: Option<Box<Viewer>>,
     /// A compaction's summary item to read and show (since step 25).
     wants: Option<String>,
+    /// The request shown whole: the width its rows were counted at, and
+    /// which of them a frame has shown (since step 25).
+    whole_seen: (usize, Vec<bool>),
 }
 
 impl Viewer {
@@ -94,6 +96,38 @@ impl Viewer {
     /// Whether a search is being typed.
     pub(super) fn searching(&self) -> bool {
         self.typing.is_some()
+    }
+
+    /// The kept transcript was replaced, read again after a rewind or an
+    /// undo (since step 25): its rows are made again, no box is open, and
+    /// the selection is kept among the `stops` there are now.
+    pub(super) fn kept_replaced(&mut self, stops: usize) {
+        self.scroll.rows.clear();
+        self.open.clear();
+        self.selected = self
+            .selected
+            .map(|selected| selected.min(stops.saturating_sub(1)))
+            .filter(|_| stops > 0);
+        self.reveal = true;
+        if let Some(behind) = self.behind.as_mut() {
+            behind.kept_replaced(stops);
+        }
+    }
+
+    /// The rows of the request shown whole that a frame showed: once every
+    /// one of them has been, it was seen whole (since step 25).
+    fn saw(&mut self, places: &[Place], rows: usize, width: usize) -> bool {
+        if self.whole_seen.0 != width || self.whole_seen.1.len() != rows {
+            self.whole_seen = (width, vec![false; rows]);
+        }
+        for place in places {
+            if let Place::Live(row) = place
+                && let Some(seen) = self.whole_seen.1.get_mut(*row)
+            {
+                *seen = true;
+            }
+        }
+        self.whole_seen.1.iter().all(|seen| *seen)
     }
 }
 
@@ -355,6 +389,17 @@ impl App {
         let window = self.with_window(&mut state, width, |scroll, source| {
             scroll.window(source, body)
         });
+        // A request shown whole whose every row a frame has shown was seen
+        // whole: what its dialog offers only then is offered (since step
+        // 25, the rewind's `1`).
+        if let Some(id) = state.whole.clone()
+            && let Some(dialog) = self.dialogs.front_mut().filter(|dialog| dialog.id == id)
+        {
+            let rows = dialog.whole(width, &self.look).len();
+            if state.saw(&window.places, rows, width) {
+                dialog.seen_whole();
+            }
+        }
 
         let mut lines = viewer::title(&self.viewer_title(), width, &self.look);
         state.body_top = lines.len();

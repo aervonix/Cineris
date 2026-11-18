@@ -43,6 +43,7 @@ mod panels;
 mod project;
 mod prompts;
 mod restyle;
+mod rewind;
 mod screen;
 mod sessions;
 mod trust_standing;
@@ -1168,17 +1169,17 @@ fn a_command_not_in_this_build_is_said_and_not_sent() {
     let (mut app, link) = app(now);
     opened(&mut app, &link, now);
     let _ = link.take_sent();
-    type_text(&mut app, "/rewind 3", now);
+    type_text(&mut app, "/lease 3", now);
     key(&mut app, "esc", now);
     key(&mut app, "enter", now);
     assert!(turn_start(&link.take_sent()).is_empty());
-    assert_eq!(app.input().editor().expanded(), "/rewind 3");
+    assert_eq!(app.input().editor().expanded(), "/lease 3");
     let mut scrollback = Vec::new();
     let _ = screen(&mut app, now, &mut scrollback);
     assert!(
         scrollback
             .iter()
-            .any(|line| line.contains("/rewind is not in this build yet")),
+            .any(|line| line.contains("/lease is not in this build yet")),
         "{scrollback:#?}"
     );
 }

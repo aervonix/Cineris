@@ -44,6 +44,12 @@ pub(crate) enum Picker {
     Permissions(Vec<StoredApproval>),
     /// `/theme`: the built-in themes.
     Theme(Vec<ThemeChoice>),
+    /// `/rewind`: the earlier prompts, newest first, and the branch's last
+    /// turn (since step 25).
+    Rewind {
+        points: Vec<super::rewind::Point>,
+        last: u64,
+    },
 }
 
 /// What `config/get` is asked for.
@@ -65,14 +71,14 @@ const LEVELS: [Level; 5] = [
 ];
 
 impl App {
-    fn session_id(&self) -> Option<SessionId> {
+    pub(super) fn session_id(&self) -> Option<SessionId> {
         self.session
             .as_ref()
             .map(|session| session.session_id.clone())
     }
 
     /// The session's id, or a line that says there is none yet.
-    fn needs_session(&mut self, what: &str) -> Option<SessionId> {
+    pub(super) fn needs_session(&mut self, what: &str) -> Option<SessionId> {
         let session = self.session_id();
         if session.is_none() {
             self.say(&format!("There is no session to {what} yet."));
@@ -92,7 +98,7 @@ impl App {
         self.pending.insert(ticket, Pending::Set(session));
     }
 
-    fn open_picker(&mut self, name: &str, picker: Picker, menu: Menu) {
+    pub(super) fn open_picker(&mut self, name: &str, picker: Picker, menu: Menu) {
         self.picker = Some((name.to_owned(), picker));
         self.input.open_picker(menu);
     }
@@ -127,9 +133,14 @@ impl App {
                 }));
                 self.pending.insert(ticket, Pending::Sessions);
             }
+            "rewind" => self.rewind_command(),
             "undo" => {
                 if self.running.is_some() {
                     self.say("A turn is running: stop it with esc, then undo.");
+                    return;
+                }
+                if self.rewind_under_way() {
+                    self.say("A rewind is under way: /undo can undo once it is done.");
                     return;
                 }
                 let Some(session) = self.needs_session("undo") else {
@@ -588,22 +599,41 @@ impl App {
             .iter()
             .position(|summary| Some(&summary.session_id) == current.as_ref())
             .unwrap_or(0);
+        let ellipsis = self.look.glyphs.ellipsis;
         let rows = sessions
             .iter()
             .map(|summary| {
+                let mut detail = summary.updated_at.as_str().to_owned();
+                // A fork says whose (since step 25): the parent's title
+                // when it is listed, its id cut short when it is not.
+                if let Some(parent) = &summary.parent {
+                    let listed = sessions.iter().find(|other| other.session_id == *parent);
+                    match listed.and_then(|other| other.title.as_deref()) {
+                        Some(title) => {
+                            detail.push_str(&format!(
+                                " · fork of \"{}\"",
+                                super::one_line_cut(title, 24, ellipsis)
+                            ));
+                        }
+                        None => detail.push_str(&format!(
+                            " · fork of {}",
+                            super::one_line_cut(parent.as_str(), 6, ellipsis)
+                        )),
+                    }
+                }
                 Row::new(
                     summary
                         .title
                         .clone()
                         .unwrap_or_else(|| summary.session_id.as_str().to_owned()),
-                    summary.updated_at.as_str(),
+                    detail,
                 )
             })
             .collect();
         self.open_picker(
             "sessions",
             Picker::Sessions(sessions),
-            Menu::picker("sessions", rows, at, None),
+            Menu::picker("sessions", rows, at, None).forking("fork it"),
         );
     }
 
@@ -691,6 +721,11 @@ impl App {
                 self.switch_to(summary.session_id.clone());
             }
             Picker::Permissions(_) => {}
+            Picker::Rewind { points, last } => {
+                if let Some(point) = points.get(index).cloned() {
+                    self.rewind_to(point, last);
+                }
+            }
             Picker::Theme(choices) => {
                 let Some(choice) = choices.get(index).copied() else {
                     return;
@@ -750,20 +785,27 @@ impl App {
     /// Leaves this session for another of the workspace's: the one open is
     /// closed, and the other opened with its history drawn.
     fn switch_to(&mut self, session: SessionId) {
+        self.leave_for(Open::Resume(session));
+    }
+
+    /// Leaves this session for `open` (another of the workspace's, or a
+    /// fork of one: since step 25): the one open is closed, and the other
+    /// opened with its history drawn. Says whether it left.
+    pub(super) fn leave_for(&mut self, open: Open) -> bool {
         if self.running.is_some() {
             self.say("A turn is running: wait for it to end, or stop it with esc.");
-            return;
+            return false;
         }
         // What follows a held prompt on its way is this session's.
         if self.held_sent.is_some() {
             self.say("Your prompts are still being sent: /sessions can switch once they are.");
-            return;
+            return false;
         }
         // Until the one under way is open and drawn, what comes back is
         // its: another is switched to after.
-        if self.opening || self.reading {
+        if self.opening || self.reading || self.rewind_under_way() {
             self.say("A session is being opened: /sessions can switch once it is.");
-            return;
+            return false;
         }
         if let Some(open) = self.session.take() {
             let ticket = self.link.send(Op::SessionClose(SessionRef {
@@ -775,7 +817,8 @@ impl App {
         self.had_turn = false;
         self.last_cost = None;
         self.usage = None;
-        self.send_open(Open::Resume(session));
+        self.send_open(open);
+        true
     }
 }
 
