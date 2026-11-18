@@ -344,9 +344,18 @@ fn sys_the_full_screen_runs_a_turn_scrolls_and_leaves_the_terminal_as_it_was() {
     });
 
     phases.mark("the click");
-    // Up to the read's box, and a click on its row opens it.
+    // Up to the top, where the write's box is. The box's row is read only
+    // once every `PageUp` has been taken: through ConPTY each comes as a
+    // record of its own with frames between, and a row read from a frame
+    // before the top would be moved by the next (the second review of step
+    // 25). At the top the header card's model row is the window's fourth.
     session.send(&b"\x1b[5~".repeat(12));
-    session.wait_for(LIMIT, "the read's box", |t| t.shows("notes.txt"));
+    session.wait_for(LIMIT, "the top, and the write's box", |t| {
+        t.screen()
+            .get(3)
+            .is_some_and(|row| row.contains(crate::MODEL))
+            && t.shows("notes.txt")
+    });
     // A file's diff is shown open; a click on the box's row closes it.
     assert!(session.screen().shows("kept in the box"), "open at first");
     let row = session
