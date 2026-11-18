@@ -211,8 +211,10 @@ impl App {
     /// and an item edit of one of them ends, the draft back.
     pub(super) fn left_session(&mut self) {
         self.warmed = 0;
-        // A rewind of the session left is not this one's (since step 25).
+        // A rewind of the session left is not this one's (since step 25),
+        // and nor is an export still being read.
         self.forget_rewind();
+        self.forget_export();
         if self.item_edit.take().is_some() {
             self.input.cancel_item_edit();
         }

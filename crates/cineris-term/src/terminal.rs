@@ -124,6 +124,9 @@ struct Typed {
     text: String,
     /// How many characters it holds: none when the read had no key.
     keys: usize,
+    /// Whether its last key is an `Enter` no line feed has followed yet:
+    /// a line feed that opens the next read of the paste is that `Enter`'s.
+    enter_last: bool,
 }
 
 impl Typed {
@@ -163,7 +166,20 @@ fn typed(found: &[Event]) -> Option<Typed> {
             Part::Keys => return None,
         }
     }
+    typed.enter_last = after_enter;
     Some(typed)
+}
+
+/// Takes out of `found` its first key when that is a line feed (read as
+/// `Ctrl+J`): the second half of a `\r\n` whose `Enter` ended the read
+/// before.
+fn drop_joined_line_feed(found: &mut Vec<Event>) {
+    let first_key = found.iter().position(|event| part(event) != Part::Beside);
+    if let Some(at) = first_key
+        && part(&found[at]) == Part::LineFeed
+    {
+        found.remove(at);
+    }
 }
 
 /// `found` with its keys made one paste of `text`, where its first key
@@ -439,6 +455,11 @@ pub struct Terminal<D: Device = System> {
     /// waited for input since: keys that come within [`PASTE_TAIL`] of
     /// waiting are its rest (since step 25).
     paste_tail: Option<Duration>,
+    /// The last read taken for a paste ended with an `Enter`: a line feed
+    /// that opens its rest is the same line break, a `\r\n` cut between
+    /// two reads (the review of the fixes of step 25's second pull
+    /// request).
+    paste_enter: bool,
     /// A bracketed paste was given up on: when its tail last had input.
     /// What follows of it, to its end marker, is still the paste's (since
     /// step 25).
@@ -520,6 +541,7 @@ impl<D: Device> Terminal<D> {
             mouse: false,
             open_wait,
             paste_tail: None,
+            paste_enter: false,
             stalled: None,
         })
     }
@@ -804,14 +826,24 @@ impl<D: Device> Terminal<D> {
     /// (since step 25): the rest of a bracketed paste given up on, up to
     /// its end marker; and, where pastes are not known to come bracketed,
     /// a burst of keys no one types.
-    fn pastes(&mut self, found: Vec<Event>) -> Vec<Event> {
+    fn pastes(&mut self, mut found: Vec<Event>) -> Vec<Event> {
         let ended = self
             .bytes
             .windows(PASTE_END.len())
             .any(|window| window == PASTE_END);
+        let now = self.device.now();
+        let in_tail = self.paste_tail.is_some_and(|waited| waited <= PASTE_TAIL);
+        let in_stall = self
+            .stalled
+            .is_some_and(|since| now.saturating_duration_since(since) <= self.open_wait);
+        // A paste's `\r\n` cut between two reads is one line break, as it
+        // is inside one: the line feed that opens the rest is dropped. Each
+        // read takes the flag; one taken for a paste sets it again.
+        if std::mem::take(&mut self.paste_enter) && (in_tail || in_stall) {
+            drop_joined_line_feed(&mut found);
+        }
         let typed = typed(&found);
         if let Some(since) = self.stalled {
-            let now = self.device.now();
             let tail = now.saturating_duration_since(since) <= self.open_wait;
             match &typed {
                 // Nothing typed (a focus report, a reply): the tail goes
@@ -825,6 +857,7 @@ impl<D: Device> Terminal<D> {
                 Some(typed) if typed.keys == 1 && !ended => self.stalled = None,
                 Some(typed) if tail => {
                     self.stalled = (!ended).then_some(now);
+                    self.paste_enter = typed.enter_last;
                     return as_paste(found, typed.text.clone());
                 }
                 // The end marker alone ends it; anything else does too.
@@ -842,11 +875,11 @@ impl<D: Device> Terminal<D> {
         if typed.keys == 0 {
             return found;
         }
-        let in_tail = self.paste_tail.is_some_and(|waited| waited <= PASTE_TAIL);
         let burst = typed.keys >= BURST && typed.break_inside();
         let long = typed.keys > LONG_BURST && !typed.breaks();
         if in_tail || burst || long {
             self.paste_tail = Some(Duration::ZERO);
+            self.paste_enter = typed.enter_last;
             return as_paste(found, typed.text);
         }
         self.paste_tail = None;
@@ -1467,6 +1500,56 @@ mod tests {
             terminal.next(None).unwrap(),
             Some(Event::Paste("second\npart\nend".to_owned()))
         );
+    }
+
+    /// A paste's `\r\n` cut between two reads, at the `\r`, is one line
+    /// break, as inside one read: in a burst's tail, a read of the line
+    /// feed alone, and the rest of a bracketed paste that stalled (the
+    /// review of the fixes of step 25's second pull request: the line feed
+    /// was a second line break, a blank line in the prompt).
+    #[test]
+    fn a_crlf_cut_between_two_reads_of_a_paste_is_one_line_break() {
+        let device = script(&[
+            (Ready::Input, b"first line\r\nsecond line\r"),
+            (Ready::Input, b"\nthird\r"),
+            (Ready::Input, b"\n"),
+            (Ready::Input, b"fourth"),
+        ]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        for piece in ["first line\nsecond line\n", "third\n", "fourth"] {
+            assert_eq!(
+                terminal.next(None).unwrap(),
+                Some(Event::Paste(piece.to_owned()))
+            );
+        }
+        assert_eq!(terminal.next(None).unwrap(), None, "nothing more");
+        // A line feed the read before did not end with `Enter` for is a
+        // line break of its own.
+        let device = script(&[
+            (Ready::Input, b"first line\r\nsecond line"),
+            (Ready::Input, b"\nthird"),
+        ]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        for piece in ["first line\nsecond line", "\nthird"] {
+            assert_eq!(
+                terminal.next(None).unwrap(),
+                Some(Event::Paste(piece.to_owned()))
+            );
+        }
+        // The rest of a stalled bracketed paste.
+        let device = script(&[
+            (Ready::Input, b"\x1b[200~first part\r\n"),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"second\r"),
+            (Ready::Input, b"\npart\x1b[201~"),
+        ]);
+        let mut terminal = Terminal::with_device(device, trusted()).unwrap();
+        for piece in ["first part\n", "second\n", "part"] {
+            assert_eq!(
+                terminal.next(None).unwrap(),
+                Some(Event::Paste(piece.to_owned()))
+            );
+        }
     }
 
     /// A focus report or a reply that comes in the same read as a burst's

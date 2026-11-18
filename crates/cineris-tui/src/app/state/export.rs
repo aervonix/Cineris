@@ -27,6 +27,10 @@ pub(super) struct Exporting {
     format: Format,
     /// The path the person gave.
     path: Option<String>,
+    /// The session's title when `/export` was asked for: the open session
+    /// may be another, or none, when the last page comes (a fork asked
+    /// for meanwhile).
+    title: Option<String>,
     /// The items read so far, masked by the core.
     items: Vec<Item>,
     /// A turn was running while the session was read: what it had not
@@ -58,10 +62,12 @@ impl App {
                 return;
             }
         };
+        let title = self.session.as_ref().and_then(|state| state.title.clone());
         self.exporting = Some(Exporting {
             session: session.clone(),
             format,
             path,
+            title,
             items: Vec::new(),
             running: false,
             writing: None,
@@ -111,7 +117,7 @@ impl App {
             self.read_for_export(session.clone(), Some(cursor));
             return;
         }
-        let title = self.session.as_ref().and_then(|state| state.title.clone());
+        let title = exporting.title.clone();
         let items = std::mem::take(&mut exporting.items);
         let (format, path, running) = (exporting.format, exporting.path.clone(), exporting.running);
         let id = session.as_str().to_owned();
@@ -145,6 +151,25 @@ impl App {
                 self.exporting = None;
                 self.say(&format!("The export could not be started: {error}."));
             }
+        }
+    }
+
+    /// The session was left: an export still being read ends, and that is
+    /// said. Its pages would come after, to be written with the title and
+    /// the turn of the session open then (the review of the fixes of step
+    /// 25's second pull request). One being written goes on: it has all it
+    /// needs.
+    pub(super) fn forget_export(&mut self) {
+        if self
+            .exporting
+            .as_ref()
+            .is_some_and(|exporting| exporting.writing.is_none())
+        {
+            self.exporting = None;
+            self.say(
+                "The export was stopped: the session was left before it was read whole, so \
+                 nothing was written.",
+            );
         }
     }
 

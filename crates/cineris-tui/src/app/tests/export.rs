@@ -162,6 +162,101 @@ fn an_export_over_a_file_that_is_there_writes_nothing_and_says_so() {
     assert_eq!(reads(&link).len(), 1, "a new export starts");
 }
 
+/// An export still being read when the session is left ends, says so,
+/// and writes nothing when its last page comes; the title written is the
+/// one the session had when `/export` was asked for, though a fork asked
+/// for meanwhile leaves no session open (the review of the fixes of step
+/// 25's second pull request: the last page took the title and the turn of
+/// whatever was open when it came).
+#[test]
+fn an_export_ends_when_the_session_is_left_and_keeps_its_title() {
+    let now = Instant::now();
+    {
+        let (mut app, link) = app(now);
+        opened_with(
+            &mut app,
+            &link,
+            now,
+            session().title("Fix the lexer").build(),
+        );
+        let (writer, written) = writer(Ok("/work/app/cineris-session.md".to_owned()));
+        app.set_export_writer(writer);
+        run_command(&mut app, "/export", now);
+        let sent = reads(&link);
+        run_command(&mut app, "/new", now);
+        assert!(
+            notices(&mut app, now).contains("The export was stopped"),
+            "not said"
+        );
+        link.give(Inbound::Done(
+            sent[0].0,
+            Ok(OpResult::SessionRead(page(vec![user("u1", "hi")], 0, None))),
+        ));
+        drain(&mut app, now);
+        app.wait_for_export();
+        assert!(written.lock().unwrap().is_empty(), "written after all");
+    }
+
+    // A fork asked for while the last page is on its way.
+    let (mut app, link) = app(now);
+    opened_with(
+        &mut app,
+        &link,
+        now,
+        session().title("Fix the lexer").build(),
+    );
+    let (writer, written) = writer(Ok("/work/app/cineris-session.md".to_owned()));
+    app.set_export_writer(writer);
+    run_command(&mut app, "/export", now);
+    let sent = reads(&link);
+    run_command(&mut app, "/sessions", now);
+    let listed = link
+        .take_sent()
+        .into_iter()
+        .find_map(|(ticket, op)| matches!(op, Op::SessionList(_)).then_some(ticket))
+        .expect("the sessions listed");
+    link.give(Inbound::Done(
+        listed,
+        Ok(OpResult::SessionList(
+            cineris_protocol::methods::SessionListResult {
+                sessions: vec![cineris_protocol::session::SessionSummary {
+                    session_id: SessionId::from(SESSION),
+                    workspace: WORKSPACE.to_owned(),
+                    title: Some("Fix the lexer".to_owned()),
+                    created_at: Timestamp::from("2026-11-15T09:00:00Z"),
+                    updated_at: Timestamp::from("2026-11-15T09:30:00Z"),
+                    parent: None,
+                    model: None,
+                    turns: 1,
+                }],
+                next_cursor: None,
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    key(&mut app, "tab", now);
+    assert!(
+        link.take_sent()
+            .iter()
+            .any(|(_, op)| matches!(op, Op::SessionFork(_))),
+        "the fork asked for"
+    );
+    assert!(app.session().is_none(), "none open while the fork is asked");
+    link.give(Inbound::Done(
+        sent[0].0,
+        Ok(OpResult::SessionRead(page(vec![user("u1", "hi")], 0, None))),
+    ));
+    drain(&mut app, now);
+    app.wait_for_export();
+    let written = written.lock().unwrap().clone();
+    assert_eq!(written.len(), 1);
+    assert!(
+        written[0].text.contains("Fix the lexer"),
+        "{}",
+        written[0].text
+    );
+}
+
 /// Where the program gives no writer, `/export` says it is not available
 /// and reads nothing; a path that is neither Markdown nor JSON is refused
 /// before anything is read.
