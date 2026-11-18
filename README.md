@@ -12,7 +12,40 @@
 
 A terminal agent harness that learns your project, your models and your habits, and stays fast while it does. It is an LLM agent loop that reads and edits code, runs commands and talks to several model providers, written from scratch in Rust for Linux and Windows.
 
-> **Status: early development.** The design is written down and the repository skeleton is in place. The harness itself is not built yet, and there is nothing to install. The [build plan](docs/build-plan.md) lists the steps from here to a first usable release.
+## Status
+
+Cineris is under active development, built in the ordered steps of the [build plan](docs/build-plan.md). **There is no release and no installer yet.** The only way to try it is to [build it from source](#building-from-source).
+
+The milestones so far:
+
+- **Reached:** the headless alpha (after step 15) and the adaptive core (after step 19).
+- **Being built now:** the interactive alpha (after step 25), the full terminal interface. Its full-screen presenter has landed; the first-run flow and rewind in the interface have not.
+- **Next:** the first usable release (after step 34): extensions the harness can write, MCP, a hardening and a performance pass, and release binaries. Some steps on the way are built already: the Linux sandbox, the RPC server and the second provider protocol.
+
+### What works today
+
+- **Providers.** Anthropic, and any server that speaks the OpenAI chat protocol (OpenRouter, DeepSeek, Venice.ai, Ollama, llama.cpp, vLLM, LM Studio).
+- **Tools.** Reading, searching, listing and outlining files; writing and editing them with snapshots and undo; a shell tool; a plan the agent keeps; and `remember`.
+- **Permissions.** Permission levels from read-only to unrestricted, rules you can add per run, and project trust.
+- **Sandbox.** Linux only, with Landlock and seccomp. Windows has process-tree and resource limits but no sandbox yet.
+- **Sessions.** Stored, listed, continued, resumed and forked, with context compaction.
+- **Adapting.** A project profile and memory you can review (`cineris project`), a repository map, local usage and cost statistics (`cineris usage`), and verification of a turn against the project's own checks.
+- **Headless mode.** `cineris -p`, with text, JSON or JSON-lines output and exit codes.
+- **RPC server.** `cineris serve` speaks JSON-RPC over standard input or a local socket, and `cineris attach` runs the terminal interface on a running server.
+- **Terminal interface.** Inline and full-screen, with panels, the mouse, `/usage`, `/plan`, `/project`, `/verify`, `/undo` and hot-reloaded settings.
+
+Still to come: extensions, MCP, the Windows sandbox, and everything after the first release in the build plan.
+
+### Trying it from source
+
+After [building](#building-from-source), a one-shot run needs a provider key. Store it, and name a model:
+
+```sh
+target/debug/cineris auth login anthropic < ~/anthropic-key.txt
+target/debug/cineris -p "explain this repository" --model claude-sonnet-5-5
+```
+
+The key can also come from `ANTHROPIC_API_KEY`. Where the key and the model go is in [the configuration page](docs/architecture/08-configuration.md) and [its reference](docs/configuration/reference.md); the flags are in [headless mode](docs/architecture/10-headless.md). Without `-p`, `cineris` opens the terminal interface.
 
 ## What it is meant to be
 
