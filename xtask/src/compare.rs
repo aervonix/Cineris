@@ -516,9 +516,9 @@ start, and its time above the start too low.
   3, system              2.0 s (   1)        2.0 s (   1)     +0.0 s    60 s
 
   change by crate, above start      unit  integration  system
-    cineris-llm                      +0.0         +2.0    +0.0
-    cineris-base                     +0.2         +0.0    +0.0
-    cineris-cli                      +0.0         +0.0    +0.0
+    cineris-llm                     +0.0         +2.0    +0.0
+    cineris-base                    +0.2         +0.0    +0.0
+    cineris-cli                     +0.0         +0.0    +0.0
 
   moved most in tier 1, unit (time above start, old -> new)
       +0.600 s  cineris-base  text::tests::new_one  (new test)
@@ -538,7 +538,7 @@ start, and its time above the start too low.
             "
   tier 1, unit (time above start)
     crates that moved, in seconds (main -> PR, and the change)
-    cineris-base                    1.00 s ->    1.25 s    +0.25 s
+    cineris-base                   1.00 s ->    1.25 s    +0.25 s
     tests that moved most, in seconds (main -> PR)
       +0.610 s  cineris-base  text::tests::new_one  (new test)
       -0.400 s  cineris-base  text::tests::old_one  (gone)
@@ -548,7 +548,7 @@ start, and its time above the start too low.
 
   tier 2, integration (time above start)
     crates that moved, in seconds (main -> PR, and the change)
-    cineris-llm                     1.50 s ->    3.52 s    +2.02 s
+    cineris-llm                    1.50 s ->    3.52 s    +2.02 s
     tests that moved most, in seconds (main -> PR)
       +2.010 s  cineris-llm::it  replay::every_cut  (1.000 -> 3.010 s)
       +0.010 s  cineris-llm::it  replay::quick  (0.500 -> 0.510 s)

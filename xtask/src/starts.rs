@@ -239,7 +239,7 @@ mod tests {
              cineris-core::it\ttrust::sys_a\tgit\n\
              cineris-core::it\ttrust::sys_b\tpowershell\n\
              cineris-cli::system\truns::sys_c\tcineris\n\
-             cineris-cli::system\truns::sys_c\tcx\n\
+             cineris-cli::system\truns::sys_c\tcin\n\
              cineris-cli::system\truns::sys_c\tsystem-0123abcd\n\
              a line cut short\n",
         );

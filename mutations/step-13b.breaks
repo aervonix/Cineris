@@ -110,7 +110,7 @@ caught-by:
     cineris-cli::system signals::sys_a_killed_harness_leaves_no_command_running
 
 [break] invoked-name-ignored-in-help
-rule: Help prints the name the program was started with, cineris or cx.
+rule: Help prints the name the program was started with, cineris or cin.
 file: crates/cineris-cli/src/main.rs
 in: dispatch
 find: print_out(&help::help(topic, name));

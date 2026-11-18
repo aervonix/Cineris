@@ -1392,7 +1392,7 @@ fn a_pattern_names_every_path_it_could_match() {
         "cp evil .git/*",
         "cp evil -t.gi?/hooks",
         "cp x .github/work*/ci.yml",
-        "cp x .cort?x/config.toml",
+        "cp x .cin?ris/config.toml",
         "cp x .ca*/config.toml",
         "cp x crates/a/.cargo/conf*",
         "cp x web/.np?rc",
