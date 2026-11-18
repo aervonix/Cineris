@@ -288,6 +288,7 @@ file: crates/cineris-tui/src/app/state.rs
 in: App::interrupt
 find: self.give_back_held();
 replace: self.held_prompts.clear();
+occurrence: 1
 caught-by:
     app::tests::stopping_before_the_session_is_open_gives_the_held_prompts_back
 

@@ -24,7 +24,7 @@ caught-by:
 rule: A file whose earlier content is not known is never put back, removed or overwritten: the plan says it cannot be restored.
 file: crates/cineris-session/src/snapshot.rs
 in: file_status
-find: Before::Unknown => cannot(why_not::NOT_RECORDED)
+find: Before::Unknown => cannot(CannotRestore::NotRecorded)
 replace: Before::Unknown => (FileStatus::AsLeft, None)
 caught-by:
     snapshot::undo_never_removes_a_file_whose_earlier_content_is_unknown
