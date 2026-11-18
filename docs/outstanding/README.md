@@ -139,7 +139,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [mouse-reports-in-flight-when-the-mouse-goes-off](mouse-reports-in-flight-when-the-mouse-goes-off.md): A mouse report the terminal sent just before the mouse was turned off can arrive afterwards and be read as text. Owner: step 33.
 - [pastes-without-bracketed-paste](pastes-without-bracketed-paste.md): Pastes in terminals without bracketed paste are not detected, so a pasted line break sends the prompt. Owner: step 25.
 - [terminal-test-gaps](terminal-test-gaps.md): Terminal-layer tests lack styled, emoji and zero-width scripts, resize re-wrap, per-signal handlers, real SIGTSTP and nested-child cleanup. Owner: steps 22 and 23.
-- [the-mouse-under-windows-terminal](the-mouse-under-windows-terminal.md): Under Windows Terminal the viewer and the full screen have no mouse: the terminal is not asked for it, because a pseudo-console would give its reports to the program as typed keys. Owner: step 33.
+- [the-mouse-under-windows-terminal](the-mouse-under-windows-terminal.md): Under Windows Terminal, and wherever the win32 input mode is on, the viewer and the full screen have no mouse: through a pseudo-console the terminal's mouse reports reach the program as typed keys, however they were asked for. Owner: step 33.
 
 ### cortex-testkit
 

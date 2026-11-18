@@ -437,7 +437,6 @@ impl<D: Device> Terminal<D> {
             if self.mouse {
                 bytes.extend_from_slice(self.mouse_sequence(true));
                 self.decoder.set_mouse(true);
-                sys::set_mouse_input(true);
             }
             self.device.write(&bytes)
         } else {
@@ -445,7 +444,6 @@ impl<D: Device> Terminal<D> {
             if self.mouse {
                 bytes.extend_from_slice(self.mouse_sequence(false));
                 self.decoder.set_mouse(false);
-                sys::set_mouse_input(false);
             }
             bytes.extend_from_slice(ALTERNATE_OFF);
             let written = self.device.write(&bytes);
@@ -455,9 +453,11 @@ impl<D: Device> Terminal<D> {
     }
 
     /// Whether the alternate screen reports the mouse (since step 25): modes
-    /// 1000 and 1006, and on Windows the console's mouse input, while the
-    /// alternate screen is on, and never on the main screen, where the
-    /// terminal's own wheel and selection must stay the person's. `Shift`
+    /// 1000 and 1006 while the alternate screen is on, where the terminal is
+    /// asked for the mouse by its sequences (not on Windows, nor while the
+    /// win32 input mode is on: [`Capabilities::vt_mouse`]), and never on the
+    /// main screen, where the terminal's own wheel and selection must stay
+    /// the person's. `Shift`
     /// and a drag stay the terminal's selection in the terminals that
     /// report the mouse. Off at the start. Taking effect at once when the
     /// alternate screen is on.
@@ -474,7 +474,6 @@ impl<D: Device> Terminal<D> {
             return Ok(());
         }
         self.decoder.set_mouse(on);
-        sys::set_mouse_input(on);
         let sequence = self.mouse_sequence(on);
         if sequence.is_empty() {
             return Ok(());
@@ -482,19 +481,32 @@ impl<D: Device> Terminal<D> {
         self.device.write(sequence)
     }
 
-    /// The sequence that turns the terminal's mouse reports on or off: none
-    /// where the terminal is not asked for them by sequences (Windows, where
-    /// the console's mouse input is used instead, `Capabilities::vt_mouse`).
+    /// The mouse's sequence, on or off (since step 25): on only where the
+    /// terminal is asked for the mouse by its sequences
+    /// ([`Self::asks_vt_mouse`]); off wherever it might have been
+    /// ([`Capabilities::vt_mouse`]), harmless if it was not, so that a
+    /// failed write can never leave it on.
     fn mouse_sequence(&self, on: bool) -> &'static [u8] {
-        match (self.caps.vt_mouse, on) {
-            (false, _) => b"",
-            (true, true) => MOUSE_ON,
-            (true, false) => MOUSE_OFF,
+        match on {
+            true if self.asks_vt_mouse() => MOUSE_ON,
+            false if self.caps.vt_mouse => MOUSE_OFF,
+            _ => b"",
         }
     }
 
-    /// Whether the mouse is reported now: the alternate screen is on, and
-    /// the program asked for the mouse.
+    /// Whether the terminal is asked for the mouse by its sequences: where
+    /// it can be ([`Capabilities::vt_mouse`]: not on Windows), and not while
+    /// the win32 input mode is on, whatever the system: through a
+    /// pseudo-console in that mode the terminal's reports come as typed keys
+    /// (measured in step 25), as they would for a Linux build under WSL or
+    /// over ssh in Windows Terminal.
+    fn asks_vt_mouse(&self) -> bool {
+        self.caps.vt_mouse && !self.win32
+    }
+
+    /// Whether the mouse is wanted now: the alternate screen is on, and
+    /// the program asked for the mouse. Whether the terminal is asked for
+    /// its reports depends on the terminal as well ([`Self::set_mouse`]).
     #[must_use]
     pub fn mouse(&self) -> bool {
         self.mouse && self.alternate
@@ -636,7 +648,6 @@ impl<D: Device> Terminal<D> {
             again.extend_from_slice(ALTERNATE_ON);
             if self.mouse {
                 again.extend_from_slice(self.mouse_sequence(true));
-                sys::set_mouse_input(true);
             }
         }
         if self.keyboard {
@@ -659,9 +670,18 @@ impl<D: Device> Terminal<D> {
             self.device.write(KEYBOARD_ON)?;
         }
         if self.caps.win32_input && !self.win32 {
+            // A mouse asked for by its sequences goes off first: through a
+            // pseudo-console in the win32 input mode its reports come as
+            // typed keys (step 25), so it is not asked for while the mode is
+            // on.
+            let mut bytes = Vec::new();
+            if self.alternate && self.mouse {
+                bytes.extend_from_slice(self.mouse_sequence(false));
+            }
             self.win32 = true;
             sys::set_win32(true);
-            self.device.write(WIN32_ON)?;
+            bytes.extend_from_slice(WIN32_ON);
+            self.device.write(&bytes)?;
         }
         Ok(())
     }
@@ -702,7 +722,6 @@ impl<D: Device> Terminal<D> {
         if alternate {
             if self.mouse {
                 end.extend_from_slice(self.mouse_sequence(false));
-                sys::set_mouse_input(false);
             }
             end.extend_from_slice(ALTERNATE_OFF);
         }
@@ -991,8 +1010,63 @@ mod tests {
                 ..
             }))
         ));
+        // Every way the mouse could be asked for or let go, the end too
+        // (the review of step 25's follow-up).
+        terminal.set_mouse(false).unwrap();
+        terminal.set_mouse(true).unwrap();
         terminal.alternate(false).unwrap();
-        assert!(!holds(&written.lock().unwrap(), b"\x1b[?1000l"));
+        terminal.alternate(true).unwrap();
+        terminal.leave().unwrap();
+        let out = written.lock().unwrap().clone();
+        assert!(holds(&out, ALTERNATE_OFF));
+        assert!(!holds(&out, b"\x1b[?1000") && !holds(&out, b"\x1b[?1006"));
+    }
+
+    /// While the win32 input mode is on the terminal is not asked for the
+    /// mouse, whatever the system: through a pseudo-console in that mode
+    /// its reports come as typed keys (a Linux build under WSL or over ssh
+    /// in Windows Terminal). The mode's reply after the mouse was asked for
+    /// turns it off first (step 25's follow-up).
+    #[test]
+    fn the_win32_input_mode_takes_the_mouse_off_and_keeps_it_off() {
+        let device = script(&[(Ready::Input, b"\x1b[?9001;2$y"), (Ready::Resumed, b"")]);
+        let written = device.written.clone();
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        terminal.set_mouse(true).unwrap();
+        terminal.alternate(true).unwrap();
+        assert!(holds(&written.lock().unwrap(), MOUSE_ON));
+        assert!(matches!(
+            terminal.next(None).unwrap(),
+            Some(Event::Reply(Reply::Mode { mode: 9001, .. }))
+        ));
+        assert!(
+            written
+                .lock()
+                .unwrap()
+                .ends_with(&[MOUSE_OFF, WIN32_ON].concat()),
+            "the mouse off before the mode on"
+        );
+        let mark = written.lock().unwrap().len();
+        // Continued after a stop (a Linux build under WSL, `fg`), and every
+        // other way the mouse could be asked for: never on again. Turning
+        // it off stays harmless, so only a mode set is looked for.
+        assert_eq!(terminal.next(None).unwrap(), Some(Event::Resumed));
+        terminal.set_mouse(false).unwrap();
+        terminal.set_mouse(true).unwrap();
+        terminal.alternate(false).unwrap();
+        terminal.alternate(true).unwrap();
+        terminal.leave().unwrap();
+        let after = written.lock().unwrap()[mark..].to_vec();
+        assert!(
+            holds(&after, WIN32_ON),
+            "the resumption turns the mode on again"
+        );
+        assert!(holds(&after, WIN32_OFF));
+        assert!(
+            holds(&after, MOUSE_OFF),
+            "off is still written, as harmless"
+        );
+        assert!(!holds(&after, b"\x1b[?1000h") && !holds(&after, b"\x1b[?1006h"));
     }
 
     fn holds(bytes: &[u8], part: &[u8]) -> bool {

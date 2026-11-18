@@ -387,8 +387,6 @@ pub(crate) fn core_options(
     Ok(options)
 }
 
-/// The `[tui]` settings in the application's terms; a theme it does not
-/// know is said.
 /// The interface's settings from the configuration: `[tui]`, and the
 /// mouse from `[terminal]` (since step 25). Both interfaces, the in-process
 /// one and `cortex attach`, take theirs from here, so neither can miss a
@@ -403,6 +401,8 @@ pub(crate) fn app_settings(
     app
 }
 
+/// The `[tui]` settings in the application's terms; a theme it does not
+/// know is said.
 pub(crate) fn tui_settings(tui: &TuiSettings, notices: &mut Vec<String>) -> app::Settings {
     let theme = match tui.theme.as_str() {
         "auto" => app::ThemeChoice::Auto,

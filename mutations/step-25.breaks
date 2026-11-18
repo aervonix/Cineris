@@ -555,3 +555,44 @@ find: vt_mouse: platform == Platform::Unix
 replace: vt_mouse: true
 caught-by:
     cortex-term terminal::tests::on_windows_the_terminal_is_asked_for_no_mouse_reports
+
+# Step 25's follow-up on the mouse under a pseudo-console: no mode asked
+# while the win32 input mode is on, and a probe that reads every parameter.
+
+[break] the-win32-input-mode-keeps-the-vt-mouse
+rule: While the win32 input mode is on, the terminal is not asked for the mouse by its sequences, whatever the system.
+file: crates/cortex-term/src/terminal.rs
+in: Terminal::asks_vt_mouse
+find: self.caps.vt_mouse && !self.win32
+replace: self.caps.vt_mouse
+caught-by:
+    cortex-term terminal::tests::the_win32_input_mode_takes_the_mouse_off_and_keeps_it_off
+
+[break] the-win32-reply-leaves-the-mouse-on
+rule: When the win32 input mode is turned on with the mouse asked for, the mouse goes off first.
+file: crates/cortex-term/src/terminal.rs
+in: Terminal::reply
+find: bytes.extend_from_slice(self.mouse_sequence(false));
+replace: bytes.extend_from_slice(b"");
+caught-by:
+    cortex-term terminal::tests::the_win32_input_mode_takes_the_mouse_off_and_keeps_it_off
+    cortex-term::it system::sys_a_terminal_in_the_win32_input_mode_is_not_left_asked_for_the_mouse
+
+[break] the-mouse-probe-reads-one-parameter
+rule: The mouse test reads every parameter of a mode set: a combined ESC [ ? 1003 ; 1006 h is a mouse request.
+file: crates/cortex-testkit/src/vterm.rs
+in: modes_set
+find: .split(|b| *b == b';')
+replace: .split(|b| *b == b'\0')
+packages: cortex-term
+caught-by:
+    cortex-term::it system::every_parameter_of_a_mode_set_is_read
+
+[break] the-mouse-off-only-where-asked
+rule: The mouse's off sequence is written wherever the terminal might have been asked for the mouse, so that a failed write can never leave it on.
+file: crates/cortex-term/src/terminal.rs
+in: Terminal::mouse_sequence
+find: false if self.caps.vt_mouse => MOUSE_OFF
+replace: false if self.asks_vt_mouse() => MOUSE_OFF
+caught-by:
+    cortex-term terminal::tests::the_win32_input_mode_takes_the_mouse_off_and_keeps_it_off

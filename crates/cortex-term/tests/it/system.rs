@@ -301,20 +301,34 @@ fn sys_keys_arrive_with_their_modifiers() {
 /// keeps its own wheel and selection there.
 #[test]
 fn sys_the_mouse_reaches_the_program_on_the_alternate_screen() {
+    use cortex_testkit::vterm::{MOUSE_MODES, modes_set};
     let mut session = Session::start(&this_binary(), &DEMO.arguments("mouse"), 100, 30).answering();
+    // On Unix, a terminal that does not know the win32 input mode, which is
+    // asked for the mouse; one that knows it is not (the unit tests).
+    if cfg!(unix) {
+        session = session.without_win32_input();
+    }
     session.wait_for(LIMIT, "the first frame", |t| t.shows(STATUS_MARK));
     if cfg!(windows) {
-        let mut out = Vec::new();
-        for chunk in session.recording() {
-            out.extend_from_slice(&chunk.bytes);
-        }
-        for mode in ["?1000h", "?1002h", "?1003h", "?1006h"] {
-            assert!(
-                !String::from_utf8_lossy(&out).contains(mode),
-                "the terminal was asked for the mouse ({mode})"
-            );
-        }
+        let out = session_bytes(&session);
+        // Parameter by parameter: a pseudo-console asks for several modes
+        // in one sequence (`ESC [ ? 1003 ; 1006 h`).
+        let set = modes_set(&out);
+        assert!(
+            !set.iter().any(|mode| MOUSE_MODES.contains(mode)),
+            "the terminal was asked for the mouse: every mode set was {set:?}"
+        );
+        assert!(!session.screen().modes().mouse);
     } else {
+        // Asked for, and still on (the terminal's state, not only what was
+        // ever written).
+        let set = modes_set(&session_bytes(&session));
+        assert!(
+            set.contains(&1000) && set.contains(&1006),
+            "the mouse was not asked for: every mode set was {set:?}"
+        );
+        let modes = session.screen().modes();
+        assert!(modes.mouse && modes.mouse_sgr && !modes.win32_input);
         session.send(b"\x1b[<64;10;5M");
         last_key(&mut session, "Wheel up");
         session.send(b"\x1b[<0;4;3M");
@@ -322,6 +336,39 @@ fn sys_the_mouse_reaches_the_program_on_the_alternate_screen() {
         session.send(b"\x1b[<0;4;3m");
         last_key(&mut session, "Release Left");
     }
+    session.send(b"\x03");
+    session.wait_exit(LIMIT);
+}
+
+/// Everything the program (and the pseudo-console between) has written.
+fn session_bytes(session: &Session) -> Vec<u8> {
+    session
+        .recording()
+        .iter()
+        .flat_map(|chunk| chunk.bytes.iter().copied())
+        .collect()
+}
+
+/// A sequence that sets several modes counts each, and a mode reset is not
+/// a mode set.
+#[test]
+fn every_parameter_of_a_mode_set_is_read() {
+    use cortex_testkit::vterm::modes_set;
+    let bytes = b"\x1b[?1049h\x1b[?1003;1006h\x1b[?1000l\x1b[?25h\x1b[?9001;h";
+    assert_eq!(modes_set(bytes), [1049, 1003, 1006, 25, 9001]);
+}
+
+/// In a terminal that knows the win32 input mode, as Windows Terminal (and
+/// a Linux build under WSL behind it) has it, the demo turns the mode on
+/// and the mouse ends off: through a pseudo-console its reports would be
+/// typed (step 25's follow-up).
+#[cfg(unix)]
+#[test]
+fn sys_a_terminal_in_the_win32_input_mode_is_not_left_asked_for_the_mouse() {
+    let mut session = Session::start(&this_binary(), &DEMO.arguments("mouse"), 100, 30).answering();
+    session.wait_for(LIMIT, "the mode on and the mouse off", |t| {
+        t.shows(STATUS_MARK) && t.modes().win32_input && !t.modes().mouse
+    });
     session.send(b"\x03");
     session.wait_exit(LIMIT);
 }
