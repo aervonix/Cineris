@@ -132,12 +132,9 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cineris-term
 
-- [a-paste-that-stalls](a-paste-that-stalls.md): A bracketed paste with no end marker for 2 seconds is split, and the remainder arrives as keys. Owner: step 25.
-- [backspace-sent-as-ctrl-h](backspace-sent-as-ctrl-h.md): The decoder reads byte 0x08 as `Ctrl+Backspace`, so a terminal whose Backspace sends `^H` deletes a word. Owner: step 25.
 - [function-keys-through-conpty](function-keys-through-conpty.md): A function key sent to the application through the test kit's pseudo-console on a hosted Windows runner never reached it as that key; whether a real Windows Terminal is affected is not known. Owner: step 25.
 - [input-decoder-corners](input-decoder-corners.md): `sys::unix::wait` and `sys::windows::wait` restart their timeout after an interrupted call, stale wake or key release. Owner: step 32.
 - [mouse-reports-in-flight-when-the-mouse-goes-off](mouse-reports-in-flight-when-the-mouse-goes-off.md): A mouse report the terminal sent just before the mouse was turned off can arrive afterwards and be read as text. Owner: step 33.
-- [pastes-without-bracketed-paste](pastes-without-bracketed-paste.md): Pastes in terminals without bracketed paste are not detected, so a pasted line break sends the prompt. Owner: step 25.
 - [terminal-test-gaps](terminal-test-gaps.md): Terminal-layer tests lack styled, emoji and zero-width scripts, resize re-wrap, per-signal handlers, real SIGTSTP and nested-child cleanup. Owner: steps 22 and 23.
 - [the-mouse-under-windows-terminal](the-mouse-under-windows-terminal.md): Under Windows Terminal, and wherever the win32 input mode is on, the viewer and the full screen have no mouse: through a pseudo-console the terminal's mouse reports reach the program as typed keys, however they were asked for. Owner: step 33.
 
@@ -158,7 +155,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-kept-box-holds-only-the-end-of-its-output](a-kept-box-holds-only-the-end-of-its-output.md): The viewer and the full screen open a finished command's box on the last 64 KiB of its output, not the whole of it. Owner: step 25.
 - [a-signal-while-the-external-editor-runs](a-signal-while-the-external-editor-runs.md): A signal sent to the program alone while the external editor runs leaves the editor running, and the watchdog ends the program without its graceful end, leaving the prompt's folder. Owner: step 32.
 - [a-view-in-the-live-rows-moves](a-view-in-the-live-rows-moves.md): A full-screen view scrolled up into the live rows moves when a block above it is kept. Owner: step 33.
-- [copy-where-the-clipboard-sequence-is-not-taken](copy-where-the-clipboard-sequence-is-not-taken.md): `/copy` cannot tell whether the terminal took OSC 52, and shows no text for copying by hand where it is known not to. Owner: step 25.
 - [editor-cost-on-very-large-text](editor-cost-on-very-large-text.md): The prompt editor lays out all its text on every key; a shortened `@` query refilters all paths. Owner: step 33.
 - [external-editor-test-gaps](external-editor-test-gaps.md): Parts of the external editor (umask, ConPTY modes, failed hand-over, `.cmd` editors, interrupt guard) are untested. Owner: step 32.
 - [one-character-wider-than-the-prompts-row](one-character-wider-than-the-prompts-row.md): One character can be drawn wider than a row where every escape of what acts unseen is shown: an approval's detail, the trust question, the transcript. Owner: step 33.
