@@ -590,10 +590,15 @@ impl App {
     }
 
     /// Shows `text` in the viewer under `label`, the transcript's view kept
-    /// behind it for `Esc` (since step 25).
+    /// behind it for `Esc` (since step 25). A summary's read the view behind
+    /// was waiting for is given up: its answer goes to the view on top
+    /// only, so the view behind would say `reading the summary…` for good
+    /// (the review of the fixes of step 25's second pull request); `Enter`
+    /// there asks again.
     fn show_summary(state: &mut Viewer, label: &str, text: &str) {
         let lines = crate::view::round::whole_lines(text);
-        let behind = std::mem::take(state);
+        let mut behind = std::mem::take(state);
+        behind.asked = None;
         let mut scroll = Scroll::default();
         scroll.go_to_start();
         *state = Viewer {

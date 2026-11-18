@@ -189,10 +189,13 @@ fn create(path: &Path, text: &str) -> Result<String, ExportError> {
 }
 
 /// Why `path` names no ordinary file on Windows, if it does not: its file
-/// name is a device's (`CON`, `PRN`, `AUX`, `NUL`, `COM1` to `COM9`,
-/// `LPT1` to `LPT9`, in any case and with any ending, spaces before the
-/// ending ignored as Windows ignores them), or a name on the way holds a
-/// `:` after the drive, which names a stream of a file.
+/// name is a device's (`CON`, `PRN`, `AUX`, `NUL`, `COM0` to `COM9`,
+/// `LPT0` to `LPT9`, and `COM` or `LPT` with the superscript `¹`, `²` or
+/// `³`, which Windows takes for those digits: in any case and with any
+/// ending, spaces before the ending ignored as Windows ignores them), or a
+/// name on the way holds a `:` after the drive, which names a stream of a
+/// file. The zeros and the superscripts since the review of the fixes of
+/// step 25's second pull request.
 #[cfg(windows)]
 fn not_a_file(path: &Path) -> Option<String> {
     use std::path::Component;
@@ -212,8 +215,13 @@ fn not_a_file(path: &Path) -> Option<String> {
         .unwrap_or_default()
         .trim_end_matches(' ');
     let numbered = |prefix: &str| {
-        stem.strip_prefix(prefix)
-            .is_some_and(|digit| matches!(digit.as_bytes(), [b'1'..=b'9']))
+        stem.strip_prefix(prefix).is_some_and(|digit| {
+            let mut chars = digit.chars();
+            matches!(
+                (chars.next(), chars.next()),
+                (Some('0'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}'), None)
+            )
+        })
     };
     let device =
         matches!(stem, "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT");
@@ -353,6 +361,11 @@ mod tests {
             "Aux .md",
             "com1.md",
             "lpt9.backup.md",
+            "com0.md",
+            "LPT0.json",
+            "com\u{b9}.md",
+            "Com\u{b2}.json",
+            "lpt\u{b3}.md",
             "notes.txt:x.md",
             "sub:dir\\out.md",
         ] {

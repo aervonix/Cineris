@@ -1023,6 +1023,62 @@ fn a_late_summary_lands_only_where_it_was_asked_for() {
     assert!(rows[29].trim_end().ends_with("reasoning"), "{rows:#?}");
 }
 
+/// A compaction's summary asked for, then a reasoning shown whole before
+/// the read answered: back from the reasoning, the compaction does not say
+/// `reading the summary…` for good, whether the answer came before `Esc` or
+/// after it, and `Enter` there asks again (the review of the fixes of step
+/// 25's second pull request: the read's answer went to the view on top,
+/// and the view behind it kept waiting).
+#[test]
+fn a_summary_read_left_behind_a_reasoning_is_not_waited_for() {
+    let now = Instant::now();
+    for answered_on_top in [true, false] {
+        let (mut app, link) = opened_app(Presenter::Inline, 99, 30, now);
+        reasoned_and_compacted(&mut app, &link, now);
+        link.take_sent();
+        key(&mut app, "ctrl+o", now);
+        key(&mut app, "enter", now);
+        let late = summary_read(&link);
+        key(&mut app, "up", now);
+        key(&mut app, "enter", now);
+        let answer = || {
+            link.give(Inbound::Done(
+                late,
+                Ok(summary_page(Some("The late summary."))),
+            ));
+        };
+        if answered_on_top {
+            answer();
+            drain(&mut app, now);
+        }
+        key(&mut app, "esc", now);
+        if !answered_on_top {
+            answer();
+            drain(&mut app, now);
+        }
+        key(&mut app, "down", now);
+        let rows = text(&app.viewer_frame(30, 99, now));
+        assert!(
+            !rows[29].contains("reading the summary…"),
+            "{answered_on_top}: {rows:#?}"
+        );
+        assert!(rows[29].contains("summary"), "{answered_on_top}: {rows:#?}");
+        key(&mut app, "enter", now);
+        let again = summary_read(&link);
+        link.give(Inbound::Done(
+            again,
+            Ok(summary_page(Some("The summary asked again."))),
+        ));
+        drain(&mut app, now);
+        let rows = text(&app.viewer_frame(30, 99, now));
+        assert!(
+            rows.iter()
+                .any(|row| row.contains("The summary asked again.")),
+            "{answered_on_top}: {rows:#?}"
+        );
+    }
+}
+
 /// The look changed while a summary is shown: the transcript's view behind
 /// it draws its rows again too, so that `Esc` shows it in the new look (the
 /// review of step 25's second pull request).
