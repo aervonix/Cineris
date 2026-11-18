@@ -189,7 +189,7 @@ fn hide_url_users(value: &Value) -> Value {
 
 /// `text` with the user part of each address in it (`scheme://user:pass@`)
 /// replaced by `[redacted]`. `None` when there is none.
-fn without_url_users(text: &str) -> Option<String> {
+pub(crate) fn without_url_users(text: &str) -> Option<String> {
     let mut shown = String::with_capacity(text.len());
     let mut rest = text;
     let mut changed = false;
