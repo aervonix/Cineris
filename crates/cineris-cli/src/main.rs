@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(name_for("target/debug/cineris"), "cineris");
         assert_eq!(name_for("cineris.exe"), "cineris");
         assert_eq!(name_for("renamed-by-the-user"), "cineris");
-        assert_eq!(name_for("cxx"), "cineris");
+        assert_eq!(name_for("cinx"), "cineris");
         assert_eq!(name_for(""), "cineris");
         assert_eq!(invoked_name(None), "cineris");
     }
