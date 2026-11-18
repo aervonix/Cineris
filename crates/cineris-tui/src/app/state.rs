@@ -1658,7 +1658,10 @@ impl App {
             (Pending::Open, Ok(OpResult::SessionNew(result))) => {
                 self.opened(result.session, false, now);
             }
-            (Pending::Open, Ok(OpResult::SessionOpen(result) | OpResult::SessionFork(result))) => {
+            (Pending::Open, Ok(OpResult::SessionOpen(result))) => {
+                self.opened(result.session, true, now);
+            }
+            (Pending::Open, Ok(OpResult::SessionFork(result))) => {
                 self.opened(result.session, true, now);
             }
             (Pending::Open, Err(error)) => self.open_failed(Some(&error), now),
@@ -1786,7 +1789,7 @@ impl App {
                 self.reread_failed(&id, number, &result.err().unwrap_or_else(unexpected), now);
             }
             (Pending::Fork(forking), Ok(OpResult::SessionFork(result))) => {
-                self.fork_opened(*forking, result.session, now);
+                self.fork_opened(*forking, result, now);
             }
             (Pending::Fork(forking), result) => {
                 self.fork_failed(*forking, &result.err().unwrap_or_else(unexpected), now);

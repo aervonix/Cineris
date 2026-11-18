@@ -45,7 +45,7 @@ export interface ClientMethods {
   /** Compacts now, with optional focus instructions. */
   "session/compact": { params: SessionCompactParams; result: Empty };
   /** Makes a new session from a point in this one. */
-  "session/fork": { params: SessionForkParams; result: SessionResult };
+  "session/fork": { params: SessionForkParams; result: SessionForkResult };
   /** Lists stored sessions. */
   "session/list": { params: SessionListParams; result: SessionListResult };
   /** Creates a session: workspace, models, level, overrides. */
@@ -1605,10 +1605,18 @@ export type SessionEvent = {
 export interface SessionForkParams {
   /** The last item the new session keeps. */
   at?: ItemId | null;
-  /** The item the new session ends just before (since step 25): it keeps what the session's log holds before that item's entry, and nothing of the item or after it. A prompt's id forks from before its turn, with whatever the log holds between the turn before and it (that turn's last checkpoint, a plan the person edited). A core from before step 25 ignores it, and forks all of the session. */
+  /** The item the new session ends just before (since step 25): it keeps what the session's log holds before that item's entry, and nothing of the item or after it. The id of a prompt that began a turn forks from before the turn's first entry: what the turn recorded before its prompt (the notices that waited for it, the epoch's map) is left out with it, and whatever the log holds between the turn before and the turn (that turn's last checkpoint, a plan the person edited) is kept. A core from before step 25 ignores it, and forks all of the session: its result's `before` is then absent. */
   before?: ItemId | null;
   /** The session to fork. */
   session_id: SessionId;
+}
+
+/** The result of `session/fork`: the new session's state, and where it ends when it was asked to end before an item (since the review of the fixes of step 25's second pull request). */
+export interface SessionForkResult {
+  /** The `before` of the request, given back when the new session ends just before that item. A client that asked for `before` takes a result without it for a fork of all of the session: a core that does not know the field ignores it, and forks all of the session, as `session/read`'s `redacted` is given back for the same reason. */
+  before?: ItemId | null;
+  /** The new session's state. */
+  session: SessionState;
 }
 
 /** A stored session. */
@@ -1697,7 +1705,7 @@ export interface SessionResult {
 
 /** `session/rewind`: moves the active branch back to an item, or to just before one, putting files back if asked. The point is named by exactly one of `to` and `before`: both, or neither, are refused (`invalid_params`). **It may ask a question** (since step 23). With `restore_files`, a file edited since the harness left it is put back only if the person says so: the session's `user` clients that answer questions are put one `question/ask` naming those files, with the choices "Put them back" and "Keep them as they are". No client to ask, no answer, a client that goes away, the session's close and the core's end all keep the files. The result comes once the question is settled; a session closed meanwhile is not moved back (`session_not_open`). */
 export interface SessionRewindParams {
-  /** The item of the active branch to go back to just before (since step 25): the active position becomes the entry the item's own follows, and everything from the item on is undone, nothing before it. A prompt's id undoes its turn and every later one, and keeps what the log holds between the turn before and it (that turn's last checkpoint, a plan the person edited), as `session/undo` does. A core from before step 25 refuses a rewind with `before` alone, for want of `to`. */
+  /** The item of the active branch to go back to just before (since step 25): the active position becomes the entry the item's own follows, and everything from the item on is undone, nothing before it. The id of a prompt that began a turn goes back to before the turn's first entry, where `session/undo` goes back to when that turn is the last: the turn and every later one are undone, what the turn recorded before its prompt (the notices that waited for it, the epoch's map) with them, and what the log holds between the turn before and the turn (that turn's last checkpoint, a plan the person edited) is kept. A core from before step 25 refuses a rewind with `before` alone, for want of `to`. */
   before?: ItemId | null;
   /** The `mark` of the plan `session/rewind_plan` gave, which the person was shown (since step 25). The plan is made again, and the rewind is refused (`plan_changed`), changing nothing, when it is not that one: when the point it goes back to, the active position it goes back from or its turns differ, and with `restore_files` also when what it would do to any file does. Absent: no plan is checked. */
   plan?: string | null;

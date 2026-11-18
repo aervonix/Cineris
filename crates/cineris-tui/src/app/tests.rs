@@ -15,7 +15,8 @@ use cineris_protocol::lease::Level;
 use cineris_protocol::message::Part;
 use cineris_protocol::methods::{
     ApprovalChoice, ApprovalDetail, ApprovalResponse, CommandDetail, Disposition, Op, OpResult,
-    ServerRequest, ServerResponse, SessionResult, TurnInterruptResult, TurnStartResult,
+    ServerRequest, ServerResponse, SessionForkResult, SessionResult, TurnInterruptResult,
+    TurnStartResult,
 };
 use cineris_protocol::model::{ModelInfo, ModelRole};
 use cineris_protocol::session::{SandboxStatus, SessionSettings, SessionSummary};
@@ -1109,8 +1110,9 @@ fn a_fork_opens_its_session_forks_it_and_closes_the_original() {
         .unwrap_or_else(|| panic!("the fork follows: {sent:#?}"));
     link.give(Inbound::Done(
         fork,
-        Ok(OpResult::SessionFork(SessionResult {
+        Ok(OpResult::SessionFork(SessionForkResult {
             session: session().build(),
+            before: None,
         })),
     ));
     drain(&mut app, now);

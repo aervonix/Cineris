@@ -13,7 +13,7 @@
 //! 2. **The plan.** A point chosen asks the core what a rewind to just
 //!    before its prompt would do (`session/rewind_plan` with `before` the
 //!    prompt's item: since the review of step 25's second pull request, the
-//!    state before the prompt's own entry, not after the item before it),
+//!    state before the prompt's turn, not after the item before it),
 //!    and reads the prompt whole (`session/read` of its item), for the
 //!    editor afterwards.
 //! 3. **The question,** in the input box's place: the plan's files, then
@@ -47,8 +47,8 @@ use cineris_protocol::event::{Event, ItemCompleted};
 use cineris_protocol::item::{Delivery as ItemDelivery, UserMessageItem};
 use cineris_protocol::message::Part;
 use cineris_protocol::methods::{
-    Op, SessionForkParams, SessionReadParams, SessionReadResult, SessionRewindParams,
-    SessionRewindPlanParams, SessionRewindPlanResult,
+    Op, SessionForkParams, SessionForkResult, SessionReadParams, SessionReadResult,
+    SessionRewindParams, SessionRewindPlanParams, SessionRewindPlanResult,
 };
 use cineris_protocol::session::{SessionState, SessionSummary};
 use cineris_protocol::{ErrorData, Item, ItemId, SessionId, Timestamp};
@@ -130,6 +130,9 @@ pub(super) struct Rereading {
 pub(super) struct Forking {
     /// The session forked, open here until the fork is.
     from: SessionState,
+    /// The item the fork was asked to end just before: the result must
+    /// give it back, or the fork holds all of the session.
+    before: Option<ItemId>,
     /// What is said once the fork is open.
     said: String,
 }
@@ -725,23 +728,43 @@ impl App {
         let ticket = self.link.send(Op::SessionFork(SessionForkParams {
             session_id: state.session_id.clone(),
             at: None,
-            before,
+            before: before.clone(),
         }));
         self.pending.insert(
             ticket,
-            Pending::Fork(Box::new(Forking { from: state, said })),
+            Pending::Fork(Box::new(Forking {
+                from: state,
+                before,
+                said,
+            })),
         );
     }
 
     /// The fork is open: the session it came from is closed here, and the
-    /// fork drawn in its place.
-    pub(super) fn fork_opened(&mut self, forking: Forking, state: SessionState, now: Instant) {
+    /// fork drawn in its place. A fork asked to end before a prompt whose
+    /// result does not say it does holds all of the session: a core that
+    /// does not know `before` forks it all, and what is said says so (the
+    /// review of the fixes of step 25's second pull request).
+    pub(super) fn fork_opened(
+        &mut self,
+        forking: Forking,
+        forked: SessionForkResult,
+        now: Instant,
+    ) {
         self.forked_from = Some(forking.from.session_id);
-        self.say(&forking.said);
+        if forking.before.is_some() && forked.before != forking.before {
+            self.say(
+                "Forked with all of the session's history: the core did not end the fork before \
+                 that turn, and may be older than this client. This is a new session, and the \
+                 one it came from is kept as it was.",
+            );
+        } else {
+            self.say(&forking.said);
+        }
         self.had_turn = false;
         self.last_cost = None;
         self.usage = None;
-        self.opened(state, true, now);
+        self.opened(forked.session, true, now);
     }
 
     /// The fork failed: the session forked is the one open again, what was

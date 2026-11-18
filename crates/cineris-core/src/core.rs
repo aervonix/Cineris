@@ -44,8 +44,8 @@ use cineris_protocol::methods::{
     McpStatusResult, ModelsListResult, Op, OpResult, PROTOCOL_VERSION, PeerInfo,
     PermissionsListResult, PlanResult, QuestionRequest, QuestionResponse,
     SUPPORTED_PROTOCOL_VERSIONS, ServerCapabilities, ServerRequest, ServerResponse,
-    SessionListResult, SessionReadResult, SessionResult, TrustRequest, TrustResponse,
-    UsageGetResult, WorkspaceFilesResult, negotiate_version,
+    SessionForkResult, SessionListResult, SessionReadResult, SessionResult, TrustRequest,
+    TrustResponse, UsageGetResult, WorkspaceFilesResult, negotiate_version,
 };
 use cineris_protocol::model::ModelRole;
 use cineris_protocol::session::{SandboxStatus, SessionSettings, SessionSummary};
@@ -1423,6 +1423,9 @@ impl Core {
             Op::SessionFork(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
+                // Given back, so that a client can tell this fork from one
+                // of all of the session by a core that does not know it.
+                let before = params.before.clone();
                 let point = crate::rewind::Point::at_most_one(params.at, params.before)?;
                 let id = self.inner.ids.session_id();
                 let log = Arc::clone(&live.log);
@@ -1462,8 +1465,9 @@ impl Core {
                         },
                     )
                     .await?;
-                Ok(OpResult::SessionFork(SessionResult {
+                Ok(OpResult::SessionFork(SessionForkResult {
                     session: forked.handle.state(),
+                    before,
                 }))
             }
             Op::SessionRewind(params) => {

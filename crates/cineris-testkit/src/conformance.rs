@@ -791,7 +791,8 @@ pub struct Transcript(pub Vec<Value>);
 /// # Panics
 ///
 /// When a step cannot be taken: the connection ended, or an event's `seq`
-/// did not increase; or when a read for an export does not say it masked.
+/// did not increase; when a read for an export does not say it masked;
+/// or when a fork asked to end before an item does not give it back.
 pub fn run(
     scenario: &Scenario,
     carrier: &mut dyn Carrier,
@@ -841,14 +842,16 @@ pub fn run(
                 kept: &mut Vec<Value>,
                 method: &str,
                 result: Result<OpResult, ErrorData>| {
-        if let Ok(
-            OpResult::SessionNew(opened)
-            | OpResult::SessionOpen(opened)
-            | OpResult::SessionFork(opened),
-        ) = &result
-        {
-            ctx.session = Some(opened.session.session_id.clone());
-            ctx.opened.push(opened.session.session_id.clone());
+        let opened = match &result {
+            Ok(OpResult::SessionNew(opened) | OpResult::SessionOpen(opened)) => {
+                Some(&opened.session.session_id)
+            }
+            Ok(OpResult::SessionFork(forked)) => Some(&forked.session.session_id),
+            _ => None,
+        };
+        if let Some(opened) = opened {
+            ctx.session = Some(opened.clone());
+            ctx.opened.push(opened.clone());
         }
         kept.push(match result {
             Ok(result) => json!({"method": method, "result": result.result().unwrap_or(Value::Null)}),
@@ -861,11 +864,25 @@ pub fn run(
                 let op = make(&ctx);
                 let method = op.method();
                 let for_export = matches!(&op, Op::SessionRead(params) if params.redacted);
+                let fork_before = match &op {
+                    Op::SessionFork(params) => params.before.clone(),
+                    _ => None,
+                };
                 let result = carrier.call(op);
                 if for_export && let Ok(OpResult::SessionRead(read)) = &result {
                     assert!(
                         read.redacted,
                         "{}: a read for an export does not say it masked the items",
+                        scenario.name
+                    );
+                }
+                if let Some(before) = fork_before
+                    && let Ok(OpResult::SessionFork(forked)) = &result
+                {
+                    assert_eq!(
+                        forked.before.as_ref(),
+                        Some(&before),
+                        "{}: a fork asked to end before an item does not say it does",
                         scenario.name
                     );
                 }
