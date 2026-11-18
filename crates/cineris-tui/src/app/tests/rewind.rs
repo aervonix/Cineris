@@ -285,8 +285,9 @@ fn one_rewinds_and_puts_the_files_back_by_the_plan_shown() {
     let shown = text(&live).join("\n");
     for words in [
         "Rewind to before turn 2?",
-        "fix the lexer so digit separators work",
-        "Turns 2 to 3 are undone",
+        // The prompt's first line, and that there is more.
+        "fix the lexer…",
+        "The plan undoes 2 turns. They changed these files:",
         "src/lexer.rs  goes back to what it was before",
         "src/new.rs  is removed: it did not exist then",
         "1 Rewind it and put back the files listed",
@@ -377,9 +378,151 @@ fn a_digit_before_the_question_is_ready_answers_nothing() {
     key(&mut app, "1", ms(shown, 50));
     assert_eq!(rewind_sent(&link), None, "answered in its grace");
     key(&mut app, "esc", ms(shown, 60));
+    let (_, live, _) = app.frame(ms(shown, 70));
     assert!(
-        app.deadline().is_some(),
+        text(&live).join("\n").contains("Rewind to before turn 2?"),
         "esc in its grace closed the question"
+    );
+}
+
+/// The question says the turns the core's plan undoes, which its mark
+/// holds: a turn run since the points were read is counted (the review of
+/// this part).
+#[test]
+fn the_question_counts_the_turns_of_the_plan_not_of_the_picker() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    let mut moved = plan(two_files());
+    moved.turns.push(TurnId::from("t_4"));
+    for (ticket, op) in link.take_sent() {
+        match op {
+            Op::SessionRewindPlan(_) => {
+                give(
+                    &link,
+                    ticket,
+                    Ok(OpResult::SessionRewindPlan(moved.clone())),
+                );
+            }
+            Op::SessionRead(_) => give(&link, ticket, Ok(page(vec![history()[2].clone()], None))),
+            _ => {}
+        }
+    }
+    drain(&mut app, now);
+    let (_, live, _) = app.frame(now);
+    let shown = text(&live).join("\n");
+    assert!(shown.contains("The plan undoes 3 turns."), "{shown}");
+}
+
+/// A turn that ends under the question (another client's) closes it:
+/// nothing is rewound, it is said, and `/rewind` asks afresh.
+#[test]
+fn a_turn_ending_under_the_question_closes_it_and_rewinds_nothing() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    let ready = asked(&mut app, &link, two_files(), now);
+    link.give(event(Event::TurnStarted(TurnStarted {})));
+    link.give(event(Event::TurnCompleted(TurnCompleted {
+        outcome: TurnOutcome::Completed,
+        stop_reason: Some(StopReason::End),
+        error: None,
+        usage: Default::default(),
+        verification: None,
+        duration_ms: Some(1200),
+    })));
+    drain(&mut app, ready);
+    let mut scrollback = Vec::new();
+    let live = screen(&mut app, ms(ready, 10), &mut scrollback).join("\n");
+    assert!(!live.contains("Rewind to before"), "the question stayed");
+    assert_eq!(rewind_sent(&link), None, "rewound after the turn");
+    let words = [scrollback.join(" "), live]
+        .concat()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(words.contains("so nothing was rewound"), "{words}");
+    run_command(&mut app, "/rewind", ms(ready, 30));
+    assert!(
+        link.take_sent()
+            .iter()
+            .any(|(_, op)| matches!(op, Op::SessionRead(_))),
+        "the rewind closed from outside held /rewind up"
+    );
+}
+
+/// While the transcript is read again, `/new`, a switch, a second `/undo`
+/// and `/rewind` wait and say so: a prompt held for the read is this
+/// session's.
+#[test]
+fn new_a_switch_and_another_undo_wait_for_the_read_again() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    run_command(&mut app, "/undo", now);
+    // A second undo while the first is on its way.
+    run_command(&mut app, "/undo", now);
+    let sent = link.take_sent();
+    let undos: Vec<Ticket> = sent
+        .iter()
+        .filter(|(_, op)| matches!(op, Op::SessionUndo(_)))
+        .map(|(ticket, _)| *ticket)
+        .collect();
+    assert_eq!(undos.len(), 1, "{sent:#?}");
+    give(
+        &link,
+        undos[0],
+        Ok(OpResult::SessionUndo(SessionResult {
+            session: session().build(),
+        })),
+    );
+    drain(&mut app, now);
+    let _ = link.take_sent();
+    run_command(&mut app, "/new", now);
+    run_command(&mut app, "/rewind", now);
+    let sent = link.take_sent();
+    assert!(
+        !sent.iter().any(|(_, op)| matches!(
+            op,
+            Op::SessionNew(_) | Op::SessionClose(_) | Op::SessionRead(_)
+        )),
+        "{sent:#?}"
+    );
+    let all = notices(&mut app, now);
+    assert!(
+        all.contains("/new can start another session once it is done"),
+        "{all}"
+    );
+    assert!(
+        all.contains("/rewind can go back again once it is done"),
+        "{all}"
+    );
+}
+
+/// An answer of another kind than the plan ends the rewind as an error
+/// does: nothing waits for it after (the review of this part).
+#[test]
+fn an_answer_of_another_kind_ends_the_rewind() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    key(&mut app, "enter", now);
+    let (ticket, _) = sent_one(&link, |op| {
+        matches!(op, Op::SessionRewindPlan(_)).then_some(())
+    });
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionClose(cineris_protocol::methods::Empty {})),
+    );
+    drain(&mut app, now);
+    run_command(&mut app, "/rewind", now);
+    assert!(
+        link.take_sent()
+            .iter()
+            .any(|(_, op)| matches!(op, Op::SessionRead(read) if read.item_id.is_none())),
+        "the rewind still waited"
     );
 }
 
@@ -408,12 +551,29 @@ fn one_is_refused_until_every_file_of_the_plan_was_drawn_whole() {
     key(&mut app, "1", ready);
     assert_eq!(rewind_sent(&link), None, "files put back unseen");
 
-    // The plan whole in the viewer, every row of it drawn.
+    // A part of the plan in the viewer is not the whole of it.
     let at = ms(ready, 2000);
     key(&mut app, "ctrl+o", at);
     assert!(app.viewing());
     let first = text(&app.viewer_frame(40, 98, at)).join("\n");
     assert!(first.contains("src/file_0.rs"), "{first}");
+    key(&mut app, "esc", ms(at, 1));
+    let back = ms(at, 2);
+    let _ = app.frame(back);
+    app.drawn(back);
+    let ready = app.deadline().expect("ready again");
+    let (_, live, _) = app.frame(ready);
+    app.drawn(ready);
+    assert!(
+        !text(&live).join("\n").contains("1 Rewind it"),
+        "offered after a part was seen"
+    );
+
+    // The plan whole in the viewer, every row of it drawn.
+    let at = ms(ready, 2000);
+    key(&mut app, "ctrl+o", at);
+    assert!(app.viewing());
+    let _ = app.viewer_frame(40, 98, at);
     for step in 0..6 {
         key(&mut app, "pagedown", ms(at, step));
         let _ = app.viewer_frame(40, 98, ms(at, step));

@@ -268,3 +268,51 @@ find: code::PLAN_CHANGED => Some("/rewind shows the plan as it is now."),
 replace: code::PLAN_CHANGED => None,
 caught-by:
     cineris-tui app::tests::rewind::a_plan_the_core_refuses_as_moved_is_said
+
+# ----------------------------- what the independent review of this part found
+
+[break] the-question-counts-the-turns-the-picker-read
+rule: The question says the turns the core's plan undoes, which its mark holds, not those the picker counted.
+file: crates/cineris-tui/src/view/dialog.rs
+in: rewind
+find: let undone = ask.plan.turns.len();
+replace: let undone = 2;
+caught-by:
+    cineris-tui app::tests::rewind::the_question_counts_the_turns_of_the_plan_not_of_the_picker
+
+[break] an-answer-of-another-kind-leaves-the-rewind-waiting
+rule: An answer of another kind than the plan or the rewind ends the rewind as an error does.
+file: crates/cineris-tui/src/app/state.rs
+in: App::done
+find: self.rewind_failed(&id, &result.err().unwrap_or_else(unexpected));
+replace: let _ = (id, result);
+caught-by:
+    cineris-tui app::tests::rewind::an_answer_of_another_kind_ends_the_rewind
+    cineris-tui app::tests::rewind::a_plan_the_core_refuses_as_moved_is_said
+
+[break] a-second-undo-while-one-is-on-its-way
+rule: A second /undo waits for the one on its way, whose result is read again.
+file: crates/cineris-tui/src/app/state/commands.rs
+in: App::command
+find: if self.rewind_under_way() || self.undoing() {
+replace: if self.rewind_under_way() {
+caught-by:
+    cineris-tui app::tests::rewind::new_a_switch_and_another_undo_wait_for_the_read_again
+
+[break] new-leaves-while-a-rewind-is-read-again
+rule: /new waits for a rewind under way, whose held prompts are this session's.
+file: crates/cineris-tui/src/app/state.rs
+in: App::new_session
+find: if self.rewind_under_way() {
+replace: if false {
+caught-by:
+    cineris-tui app::tests::rewind::new_a_switch_and_another_undo_wait_for_the_read_again
+
+[break] a-turn-ending-under-the-question-leaves-the-rewind-waiting
+rule: A turn that ends under the rewind's question closes it, says nothing was rewound, and lets /rewind ask afresh.
+file: crates/cineris-tui/src/app/state.rs
+in: App::closed_from_outside
+find: self.rewind_question_closed();
+replace: let _ = &dialog;
+caught-by:
+    cineris-tui app::tests::rewind::a_turn_ending_under_the_question_closes_it_and_rewinds_nothing

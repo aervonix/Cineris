@@ -596,8 +596,6 @@ pub struct RewindAsk {
     /// The turn rewound to before, counted from one along the active
     /// branch.
     pub turn: u64,
-    /// The last turn of the branch: the turns from `turn` to it are undone.
-    pub last: u64,
     /// The prompt of `turn`, whose first line is shown.
     pub prompt: String,
     /// What the core would do (`session/rewind_plan`).
@@ -623,7 +621,7 @@ pub struct RewindView {
 /// ```text
 /// ? Rewind to before turn 12?
 ///   fix the lexer so digit separators…
-///   Turns 12 to 14 are undone. Their files:
+///   The plan undoes 3 turns. They changed these files:
 ///     src/lexer.rs  goes back to what it was before
 ///     src/new.rs  is removed: it did not exist then
 ///     notes.txt  was changed since: you are asked before it is put back
@@ -655,17 +653,19 @@ pub fn rewind(ask: &RewindAsk, view: &RewindView, width: usize, look: &Look) -> 
         width,
         look.glyphs.ellipsis,
     ));
-    let turns = if ask.last > ask.turn {
-        format!("Turns {} to {} are undone.", ask.turn, ask.last)
+    // The core's own count, which its mark holds: a turn run since the
+    // points were read is in it.
+    let undone = ask.plan.turns.len();
+    let turns = if undone == 1 {
+        "The plan undoes one turn.".to_owned()
     } else {
-        format!("Turn {} is undone.", ask.turn)
+        format!("The plan undoes {undone} turns.")
     };
-    let files = if ask.plan.files.is_empty() {
-        " They changed no file the harness recorded."
-    } else if ask.last > ask.turn {
-        " The files they changed:"
-    } else {
-        " The files it changed:"
+    let files = match (ask.plan.files.is_empty(), undone == 1) {
+        (true, true) => " It changed no file the harness recorded.",
+        (true, false) => " They changed no file the harness recorded.",
+        (false, true) => " It changed these files:",
+        (false, false) => " They changed these files:",
     };
     lines.extend(indented(&format!("{turns}{files}"), muted, 2, prose));
     if ask.plan.unreadable {
