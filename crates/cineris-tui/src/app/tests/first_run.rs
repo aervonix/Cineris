@@ -717,6 +717,47 @@ fn every_listing_holds_hostile_text() {
     }
 }
 
+/// `autonomous` is offered only where the sandbox enforces, and
+/// `unrestricted` never.
+#[test]
+fn autonomous_is_offered_only_where_the_sandbox_enforces() {
+    for sandbox in [true, false] {
+        let mut setup = fake();
+        setup.providers.sandbox = sandbox;
+        let mut run = Run::new(setup);
+        let _ = run.ready();
+        run.key("s");
+        run.answer();
+        let _ = run.ready();
+        run.key("s");
+        let live = run.ready();
+        let levels: Vec<String> = live
+            .iter()
+            .map(|row| squash(row))
+            .filter_map(|row| {
+                let row = row.trim_start_matches("◆ ");
+                ["read-only", "supervised", "autonomous", "unrestricted"]
+                    .iter()
+                    .find(|level| row.starts_with(*level))
+                    .map(|level| (*level).to_owned())
+            })
+            .collect();
+        let mut expected = vec!["read-only", "supervised"];
+        if sandbox {
+            expected.push("autonomous");
+        }
+        assert_eq!(levels, expected, "{live:#?}");
+        // The last offered, chosen.
+        run.key("down");
+        run.key("enter");
+        run.answer();
+        assert_eq!(
+            run.written()[0].mode.as_deref(),
+            Some(*expected.last().unwrap())
+        );
+    }
+}
+
 /// `Ctrl+C` twice leaves the program during the first run, nothing
 /// written.
 #[test]

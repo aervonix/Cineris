@@ -320,20 +320,23 @@ impl App {
         any
     }
 
-    /// Waits at most `limit` for the worker's next answer and takes it, for
-    /// tests, which have no loop to wake. Says whether one came.
+    /// Waits at most `limit` for each answer the worker owes, taking each
+    /// as the loop would, for tests, which have no loop to wake. Says
+    /// whether it owes none now: an answer a frame took already is owed no
+    /// more.
     #[cfg(any(test, feature = "test-kit"))]
     pub fn wait_for_setup(&mut self, limit: std::time::Duration) -> bool {
-        let Some(answer) = self
+        while let Some(answer) = self
             .first_run
             .as_ref()
             .and_then(|run| run.worker.wait(limit))
-        else {
-            return false;
-        };
-        self.first_run_answer(answer);
-        self.first_run_next();
-        true
+        {
+            self.first_run_answer(answer);
+            self.first_run_next();
+        }
+        self.first_run
+            .as_ref()
+            .is_none_or(|run| run.worker.settled())
     }
 
     /// Whether the first run is still running, for tests.
@@ -816,9 +819,9 @@ impl App {
                                 let picked: Vec<(String, String)> = match &file.servers {
                                     Some(Ok(servers)) => servers
                                         .iter()
-                                        .filter(|(server, picked)| {
-                                            *picked && server.refused.is_none()
-                                        })
+                                        // A server refused is never picked
+                                        // (`space` passes it over).
+                                        .filter(|(_, picked)| *picked)
                                         .map(|(server, _)| (file.path.clone(), server.name.clone()))
                                         .collect(),
                                     _ => Vec::new(),
