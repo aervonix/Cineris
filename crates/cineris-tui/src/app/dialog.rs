@@ -191,6 +191,9 @@ pub(crate) struct Dialog {
     /// Every row of it was drawn in the viewer (`Ctrl+O`): what the
     /// dialog had to cut has been seen (since step 25, the rewind's).
     seen_whole: bool,
+    /// It took keys once: what is typed after that, at a pace, is typing
+    /// that goes on where it was going.
+    was_ready: bool,
 }
 
 /// What a key did to a dialog.
@@ -225,6 +228,7 @@ impl Dialog {
             note: None,
             cache: None,
             seen_whole: false,
+            was_ready: false,
         }
     }
 
@@ -304,6 +308,7 @@ impl Dialog {
     /// just before it came: it is ready only [`QUIET`] after, and answers it
     /// showed are hidden.
     pub(crate) fn typed(&mut self, at: Instant) {
+        self.was_ready |= self.takes_keys(at);
         if self.ready.typed(at) {
             self.cache = None;
         }
@@ -345,6 +350,18 @@ impl Dialog {
     /// drawn its answers.
     pub(crate) fn takes_keys(&self, at: Instant) -> bool {
         self.ready.takes_keys(at)
+    }
+
+    /// Whether what is typed at `at` is the dialog's, to answer nothing:
+    /// the application's own question (the rewind's), until it first takes
+    /// keys. It was asked for a moment ago, from the picker, so nothing
+    /// typed is on its way to the editor it hides, and what reached the
+    /// editor would come back in front of the prompt the rewind gives back,
+    /// for an `Enter` to send (the review of step 25's second pull
+    /// request). Once it was ready, a draft typed at it goes to the editor
+    /// as at any dialog.
+    pub(crate) fn swallows(&self, at: Instant) -> bool {
+        matches!(self.asks, Asks::Rewind { .. }) && !self.was_ready && !self.takes_keys(at)
     }
 
     /// What `Esc` (and the other keys of `deny`) gives: deny, not now, or no
@@ -447,6 +464,11 @@ impl Dialog {
                 )
             {
                 return Keyed::ShowWhole;
+            }
+            // The rewind's question: every key waits for it, and holds its
+            // quiet as typing does.
+            if self.swallows(at) {
+                return Keyed::Nothing;
             }
             // Typing goes on where it was going; the dialog's own keys that
             // type nothing (`Esc`) do nothing yet, and nor do its answer keys

@@ -21,18 +21,24 @@
 //!    (nothing sent). It is a dialog, with the dialogs' rules of keys
 //!    (`super::super::dialog`). `1` and `2` send `session/rewind` with the
 //!    plan's mark: a plan that moved since is the core's to refuse
-//!    (`plan_changed`), and the refusal is said.
+//!    (`plan_changed`), and the refusal is said, and the prompts sent
+//!    meanwhile come back into the editor. Keys typed before the question
+//!    is ready are the question's, and answer nothing: they would land in
+//!    the hidden editor, in front of the prompt given back.
 //! 4. **After it,** the prompt goes back into the editor, after what is
 //!    being written there; inline a notice says the scrollback above it is
 //!    no longer the conversation; and the transcript the viewer and the
 //!    full screen draw is read again from the active branch (an undo's too),
-//!    so that the turns undone are gone there. A prompt sent while it is
-//!    read again waits for it, so that its turn is not read twice.
+//!    so that the turns undone are gone there, and `/copy` copies the last
+//!    answer of the branch. A prompt sent from the answer to the end of the
+//!    read waits for it, so that its turn is not read twice; `Ctrl+C` gives
+//!    such prompts back.
 //!
 //! **Fork:** `Tab` in the `/rewind` picker forks from before the point
 //! (`session/fork` with `before` the prompt's item); in `/sessions` it
 //! forks the selected session at its end. The fork is opened in this
-//! one's place, and the session it came from is left as it was.
+//! one's place, and the session it came from is left as it was. A fork
+//! that fails gives the prompts sent meanwhile back into the editor.
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -94,6 +100,10 @@ pub(super) struct Rewinding {
     prompt: Option<String>,
     /// The mark of the plan shown, once the plan has come.
     mark: Option<String>,
+    /// Whether the rewind was sent: from then on a prompt waits for it,
+    /// and for the transcript read again after it (the review of step 25's
+    /// second pull request).
+    sent: bool,
 }
 
 /// The transcript the viewer and the full screen draw, being read again
@@ -159,6 +169,18 @@ impl App {
     /// Whether a rewind is being chosen, asked about, done, or drawn again.
     pub(super) fn rewind_under_way(&self) -> bool {
         self.points.is_some() || self.rewinding.is_some() || self.rereading.is_some()
+    }
+
+    /// Whether a prompt sent now waits: a rewind was sent and its result
+    /// is not in, or the transcript is being read again after it. A prompt
+    /// whose events came before the rewind's result would be drawn from
+    /// them and again from the read.
+    pub(super) fn holds_prompts_for_rewind(&self) -> bool {
+        self.rereading.is_some()
+            || self
+                .rewinding
+                .as_ref()
+                .is_some_and(|rewinding| rewinding.sent)
     }
 
     /// Whether an undo is on its way: its result is drawn again too, so a
@@ -292,16 +314,19 @@ impl App {
             point,
             prompt: None,
             mark: None,
+            sent: false,
         });
     }
 
-    /// The chosen prompt, read whole.
+    /// The chosen prompt, read whole: the point's own item, and no other.
     pub(super) fn rewind_prompt_read(&mut self, session: &SessionId, page: &SessionReadResult) {
         let Some(rewinding) = self.rewinding_of(session) else {
             return;
         };
         let text = page.items.iter().find_map(|item| match item {
-            Item::UserMessage(message) => Some(prompt_text(message)),
+            Item::UserMessage(message) if message.id == rewinding.point.item => {
+                Some(prompt_text(message))
+            }
             _ => None,
         });
         rewinding.prompt = text;
@@ -333,11 +358,16 @@ impl App {
     }
 
     /// The plan could not be made, or the rewind was refused: why is said,
-    /// and nothing more is done.
+    /// and nothing more is done. The prompts sent after the answer were
+    /// meant for the conversation rewound: they come back into the editor.
     pub(super) fn rewind_failed(&mut self, session: &SessionId, error: &ErrorData) {
         if self.rewinding_of(session).is_some() {
             self.rewinding = None;
             self.error(error);
+            if !self.held_prompts.is_empty() && self.held_sent.is_none() {
+                self.give_back_held();
+                self.stop_running();
+            }
         }
     }
 
@@ -349,9 +379,10 @@ impl App {
             self.rewinding = None;
             return;
         };
-        let Some(rewinding) = self.rewinding.as_ref() else {
+        let Some(rewinding) = self.rewinding.as_mut() else {
             return;
         };
+        rewinding.sent = true;
         let ticket = self.link.send(Op::SessionRewind(SessionRewindParams {
             session_id: rewinding.session.clone(),
             to: None,
@@ -508,6 +539,12 @@ impl App {
             .commit_parts(self.width.max(1), &self.look);
         let head = rereading.transcript.take_finished();
         self.kept.replace_before(rereading.from, head);
+        // `/copy` copies the branch's last answer, not one undone, unless
+        // an answer came from its events while the branch was read.
+        if rereading.seen.is_empty() {
+            self.mapper
+                .set_last_answer(rereading.mapper.last_answer().to_owned());
+        }
         self.turns = (rereading.turns > 0).then_some((1, rereading.turns));
         self.kept_replaced();
         self.send_held_after_reread(now);
@@ -717,13 +754,12 @@ impl App {
             self.event(event, now);
         }
         self.error(error);
-        // Prompts sent while the fork was asked for go to the session
-        // that stays, the first as a new turn, as an open sends them.
-        let prompts = !self.held_prompts.is_empty();
-        self.send_held(true, now);
-        if prompts && self.held_sent.is_none() {
-            self.stop_running();
-        }
+        // Prompts sent while the fork was asked for were meant for the
+        // fork: they come back into the editor, as an open that failed
+        // gives them back, and do not run at the end of the session that
+        // stays (the review of step 25's second pull request).
+        self.give_back_held();
+        self.stop_running();
     }
 }
 

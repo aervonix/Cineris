@@ -132,6 +132,13 @@ impl Mapper {
         &self.last_answer
     }
 
+    /// Makes `text` the last answer: the one of a branch read again after
+    /// a rewind or an undo (since the review of step 25's second pull
+    /// request), which `/copy` copies.
+    pub(crate) fn set_last_answer(&mut self, text: String) {
+        self.last_answer = text;
+    }
+
     /// The round that holds `call`, by the number the viewer counts boxes
     /// with (since step 24): rounds are numbered from 1 in the order their
     /// boxes were pushed, which is the order they commit in. Known until

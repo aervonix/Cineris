@@ -1192,6 +1192,18 @@ impl App {
             {
                 true
             }
+            // Nor does it reach the editor under the rewind's question
+            // before that is ready (`Dialog::swallows`): it holds the
+            // question's quiet.
+            TermEvent::Paste(_)
+                if self
+                    .dialogs
+                    .front()
+                    .is_some_and(|dialog| dialog.swallows(at)) =>
+            {
+                self.not_taken(at);
+                true
+            }
             // The full-screen search's, while it is open (step 25): typing,
             // as a paste into the editor is.
             TermEvent::Paste(text) if self.screen_paste(text) => {
@@ -1359,10 +1371,11 @@ impl App {
             return;
         };
         // The prompts held while the session opened are still on their way:
-        // this one follows them, never ahead of one of them. While the
-        // transcript is read again after a rewind, it waits for the read, so
-        // that its turn is not read twice (since step 25).
-        if self.held_sent.is_some() || self.rereading.is_some() {
+        // this one follows them, never ahead of one of them. From a rewind's
+        // answer to the end of the transcript's read after it, it waits, so
+        // that its turn is not drawn twice (since step 25; from the answer
+        // since the review of its second pull request).
+        if self.held_sent.is_some() || self.holds_prompts_for_rewind() {
             self.held_prompts.push_back(text);
             self.start_running(at);
             return;
@@ -1444,6 +1457,22 @@ impl App {
             self.stop_running();
             return;
         };
+        // The prompts that wait for a rewind, or for the transcript read
+        // again after it, were not sent either: they come back, and there
+        // is nothing to interrupt (the review of step 25's second pull
+        // request: they went as a new turn when the read ended).
+        if self.held_sent.is_none()
+            && !self.held_prompts.is_empty()
+            && self.holds_prompts_for_rewind()
+        {
+            self.give_back_held();
+            self.stop_running();
+            self.say(
+                "The prompts that waited for the rewind were not sent: they are back in the \
+                 input box.",
+            );
+            return;
+        }
         // The held prompts not sent yet go now, queued behind the one on
         // its way and ahead of the interrupt: the core holds them with it,
         // in order, as it holds any queued prompt at an interrupt, and they
@@ -1741,16 +1770,14 @@ impl App {
             (Pending::RewindPlan(id), Ok(OpResult::SessionRewindPlan(plan))) => {
                 self.rewind_planned(&id, plan);
             }
-            (Pending::RewindPlan(id) | Pending::Rewind(id), result)
-                if !matches!(
-                    result,
-                    Ok(OpResult::SessionRewindPlan(_) | OpResult::SessionRewind(_))
-                ) =>
-            {
-                self.rewind_failed(&id, &result.err().unwrap_or_else(unexpected));
-            }
             (Pending::Rewind(id), Ok(OpResult::SessionRewind(result))) => {
                 self.rewound(&id, result.session);
+            }
+            // Each awaits its own kind of answer: any other, a rewind's
+            // plan for the rewind included, ends it as an error does (the
+            // reviews of this part).
+            (Pending::RewindPlan(id) | Pending::Rewind(id), result) => {
+                self.rewind_failed(&id, &result.err().unwrap_or_else(unexpected));
             }
             (Pending::Reread(id, number), Ok(OpResult::SessionRead(page))) => {
                 self.reread_page(&id, number, page, now);
