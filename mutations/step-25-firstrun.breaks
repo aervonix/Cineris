@@ -1,0 +1,210 @@
+# Step 25, its third pull request: the first run and `cineris auth login` at
+# a terminal. Its rules, broken one at a time, with the tests that must
+# fail (docs/steps/25/answered.md, point 5; docs/steps/25/parts/pr3-first-run.md).
+
+[break] a-key-emptied-is-not-written-over
+rule: Emptying the key's buffer writes zeros over what it held.
+file: crates/cineris-base/src/secret_buf.rs
+in: SecretBuf::clear
+find: wipe(&mut self.bytes[..self.len]);
+replace: let _ = &self.bytes;
+caught-by:
+    cineris-base secret_buf::tests::what_is_taken_away_or_emptied_is_zero
+
+[break] a-key-takes-a-line-break
+rule: A key is one line: text with a line break is refused whole.
+file: crates/cineris-base/src/secret_buf.rs
+packages: cineris-base,cineris-tui
+in: SecretBuf::push_str
+find: if text.contains(['\n', '\r']) {
+replace: if false {
+caught-by:
+    cineris-base secret_buf::tests::a_line_break_or_too_much_is_refused_whole
+    cineris-tui secret::tests::a_paste_with_a_line_break_or_past_the_capacity_is_refused_whole
+
+[break] a-key-taken-is-left-in-its-buffer
+rule: The key handed to the store leaves nothing of it in the input.
+file: crates/cineris-tui/src/secret.rs
+in: KeyInput::take
+find: self.buffer.clear();
+replace: let _ = &self.buffer;
+caught-by:
+    cineris-tui secret::tests::a_paste_with_a_line_break_or_past_the_capacity_is_refused_whole
+    cineris-tui secret::tests::the_key_is_trimmed_and_a_store_of_ascii_refuses_other_text
+
+[break] the-key-input-types-control-keys
+rule: The key's input answers typing and its own keys only: Ctrl+G, Ctrl+Y and the rest do nothing there.
+file: crates/cineris-tui/src/secret.rs
+in: KeyInput::key
+find: KeyCode::Char(character) if !ctrl && !alt && !character.is_control() => {
+replace: KeyCode::Char(character) if !character.is_control() => {
+caught-by:
+    cineris-tui secret::tests::typing_backspace_and_ctrl_u_change_what_it_holds_and_nothing_else_does
+
+[break] a-step-takes-keys-before-it-is-ready
+rule: A step of the first run takes no key before its grace, nor until a quiet second after input it did not take.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_event
+find: if !run.takes_keys(at) {
+replace: if false {
+caught-by:
+    cineris-tui app::tests::first_run::a_prompt_typed_at_the_first_frame_chooses_nothing
+    cineris-tui app::tests::first_run::a_steps_keys_are_drawn_at_the_end_of_its_grace_and_taken_only_then
+
+[break] a-steps-keys-shown-before-it-is-ready
+rule: A step shows its keys only once it takes them, as a dialog shows its answers.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_bottom
+find: } else if ready {
+replace: } else if true {
+caught-by:
+    cineris-tui app::tests::first_run::a_steps_keys_are_drawn_at_the_end_of_its_grace_and_taken_only_then
+
+[break] the-session-opens-before-the-file-is-written
+rule: The first run holds the session until the configuration file is written and read again, so that the session is made with what was chosen.
+file: crates/cineris-tui/src/app/state.rs
+in: App::drawn
+find: if !self.first_run_holds_open()
+replace: if true
+caught-by:
+    cineris-tui app::tests::first_run::the_first_run_reaches_a_session_made_with_what_was_chosen
+    cineris-tui app::tests::first_run::ctrl_c_twice_leaves_with_nothing_written
+
+[break] the-instructions-start-picked
+rule: Nothing other tools left is read unless the person picks it: the instructions' row starts unpicked.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: instructions: imports.instructions
+replace: instructions: true
+caught-by:
+    cineris-tui app::tests::first_run::nothing_unpicked_is_imported
+    cineris-tui app::tests::first_run::the_first_run_reaches_a_session_made_with_what_was_chosen
+
+[break] a-server-holding-a-credential-can-be-picked
+rule: A server whose command holds a credential cannot be imported.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: && server.refused.is_none()
+replace: && true
+caught-by:
+    cineris-tui app::tests::first_run::the_first_run_reaches_a_session_made_with_what_was_chosen
+
+[break] autonomous-offered-without-a-sandbox
+rule: The first run offers autonomous only where the sandbox enforces.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: FirstRun::levels
+find: .filter(|(level, _)| *level != "autonomous" || sandbox)
+replace: .filter(|(level, _)| *level != "autonomous" || true)
+caught-by:
+    cineris-tui app::tests::first_run::autonomous_is_offered_only_where_the_sandbox_enforces
+
+[break] the-commands-start-picked
+rule: The commands found start unpicked: none joins the profile without a yes.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_done
+find: .map(|command| (command, false))
+replace: .map(|command| (command, true))
+caught-by:
+    cineris-tui app::tests::first_run::the_first_run_reaches_a_session_made_with_what_was_chosen
+
+[break] a-workers-answer-wakes-no-frame
+rule: The setup worker's answer, which wakes the loop, is a change to draw.
+file: crates/cineris-tui/src/app/state.rs
+packages: cineris-tui,cineris-cli
+in: App::drain
+find: if self.first_run_answers() {
+replace: if self.first_run_answers() && false {
+caught-by:
+    cineris-cli::system first_run::sys_the_first_run_in_an_empty_home_reaches_a_working_session
+
+[break] an-mcp-argument-is-not-masked
+rule: Every argument of another client's server goes through the secret filter's formats before it leaves the reader.
+file: crates/cineris-config/src/import.rs
+in: server
+find: let shown = filter.redact(part);
+replace: let shown = std::borrow::Cow::Borrowed(part);
+caught-by:
+    cineris-config import::tests::a_credential_in_a_command_or_an_address_is_masked_and_refused
+    cineris-config import::tests::values_are_dropped_and_names_kept
+
+[break] an-mcp-address-keeps-its-user-part
+rule: The user part of a server's address is masked before it leaves the reader.
+file: crates/cineris-config/src/import.rs
+in: server
+find: crate::schema::redact::without_url_users(&shown).unwrap_or_else(|| shown.into_owned());
+replace: shown.into_owned();
+caught-by:
+    cineris-config import::tests::a_credential_in_a_command_or_an_address_is_masked_and_refused
+    cineris-config import::tests::values_are_dropped_and_names_kept
+
+[break] the-writer-writes-over-a-file
+rule: The first run's writer makes only a file that does not exist.
+file: crates/cineris-config/src/write.rs
+in: write_user_config
+find: let mut file = match cineris_base::private::create_new(path) {
+replace: let mut file = match std::fs::File::create(path) {
+caught-by:
+    cineris-config write::tests::the_file_is_made_new_and_never_over_one_that_is_there
+
+[break] a-refused-server-is-written
+rule: A server that cannot be imported is never written to the user's file.
+file: crates/cineris-config/src/write.rs
+in: table
+find: if server.refused.is_some() {
+replace: if false {
+caught-by:
+    cineris-config write::tests::a_server_that_cannot_be_imported_is_never_written
+
+[break] a-script-name-not-plain-words-is-offered
+rule: A command is offered only as plain words, so a name from a file never reaches the screen as a command.
+file: crates/cineris-knowledge/src/detect.rs
+in: Found::offer
+find: let Some(line) = normal_line(command).filter(|line| line == command) else {
+replace: let Some(line) = Some(command.to_owned()) else {
+caught-by:
+    cineris-knowledge detect::tests::scripts_are_offered_by_their_names_with_what_they_run
+
+[break] detection-reads-past-the-read-rules
+rule: The project's files are read for its commands only where the session's read rules let them.
+file: crates/cineris-core/src/reads.rs
+in: detect_in
+find: if !resolved.is_inside_workspace() || !gate.may_read(resolved.abs()) {
+replace: if !resolved.is_inside_workspace() {
+caught-by:
+    cineris-core reads::tests::detection_reads_only_what_the_gate_lets_through_inside_the_workspace
+
+[break] detection-waits-in-the-lane
+rule: Detecting a project's commands is a read, beside the lane.
+file: crates/cineris-rpc/src/lane.rs
+in: reads
+find: | Op::ProjectDetect(_)
+replace: | Op::Shutdown(_)
+caught-by:
+    cineris-rpc lane::tests::detecting_a_projects_commands_is_a_read
+
+[break] auth-login-refuses-a-terminal
+rule: cineris auth login at a terminal reads the key there without echo.
+file: crates/cineris-cli/src/commands.rs
+in: auth
+find: if stdin.is_terminal() && io::stdout().is_terminal() {
+replace: if false {
+caught-by:
+    cineris-cli::system first_run::sys_auth_login_at_a_terminal_reads_the_key_without_echo
+
+[break] the-first-run-over-a-file-that-is-there
+rule: The first run is due only where the user's configuration file does not exist.
+file: crates/cineris-cli/src/setup.rs
+in: first_run_due
+find: Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(file),
+replace: _ => Some(file),
+caught-by:
+    cineris-cli::bin/cineris setup::tests::the_first_run_is_due_only_where_no_file_is
+
+[break] the-program-writes-a-refused-server
+rule: The program writes only a server it showed as importable.
+file: crates/cineris-cli/src/setup.rs
+in: choices
+find: .find(|server| &server.name == name && server.refused.is_none())
+replace: .find(|server| &server.name == name)
+caught-by:
+    cineris-cli::bin/cineris setup::tests::only_a_server_shown_and_importable_is_written

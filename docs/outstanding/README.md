@@ -40,7 +40,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cineris-cli
 
 - [headless-details-left-open](headless-details-left-open.md): Six small gaps in headless mode: dropped early notices, error records, `files_changed` matching, Windows close, untested signals. Owner: step 27 or step 32.
-- [reading-a-key-at-a-terminal](reading-a-key-at-a-terminal.md): `cineris auth login` refuses a terminal because reading a key without echo needs the terminal layer. Owner: step 25.
 - [rewind-and-fork-have-no-test-of-the-real-binary](rewind-and-fork-have-no-test-of-the-real-binary.md): `/rewind` and fork are tested through the application's scripted link and the core's own tests, not by the real binary under a pseudo-terminal, in process or under `cineris attach`. Owner: step 25.
 - [shell-completions](shell-completions.md): Completions should come from an `xtask` command over the `FLAGS` table; the table exists, the command does not. Owner: step 34.
 - [the-binary-near-its-size-budget](the-binary-near-its-size-budget.md): After step 33's size fix the binary has about 5 MB left on each system (Windows 13.19 of 18 MiB, Linux 11.33 of 16), with extensions and MCP to come; each pull request shows its size. Open until a step-34 build passes on both. Owner: step 34.
