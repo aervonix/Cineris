@@ -329,8 +329,14 @@ fn sys_the_full_screen_runs_a_turn_scrolls_and_leaves_the_terminal_as_it_was() {
     });
 
     phases.mark("the wheel");
-    // Three notches of the wheel up, over the transcript.
-    session.send(b"\x1b[<64;10;5M\x1b[<64;10;5M\x1b[<64;10;5M");
+    // Three notches of the wheel up, over the transcript. Under a
+    // pseudo-console the terminal is not asked for the mouse (cortex-term's
+    // `Capabilities::vt_mouse`): there `PageUp` moves the view.
+    if cfg!(windows) {
+        session.send(b"\x1b[5~");
+    } else {
+        session.send(b"\x1b[<64;10;5M\x1b[<64;10;5M\x1b[<64;10;5M");
+    }
     session.wait_for(LIMIT, "the view moved up", |t| t.shows("more below"));
     assert!(!session.screen().shows("Line 60 of a long answer."));
 
@@ -364,8 +370,12 @@ fn sys_the_full_screen_runs_a_turn_scrolls_and_leaves_the_terminal_as_it_was() {
         .iter()
         .position(|row| row.contains("notes.txt"))
         .expect("the box's row");
-    session.send(format!("\x1b[<0;5;{0}M\x1b[<0;5;{0}m", row + 1).as_bytes());
-    session.wait_for(LIMIT, "the box closed", |t| !t.shows("kept in the box"));
+    // A click, where the terminal reports the mouse: not under a
+    // pseudo-console, where a kept box is opened from the viewer.
+    if cfg!(unix) {
+        session.send(format!("\x1b[<0;5;{0}M\x1b[<0;5;{0}m", row + 1).as_bytes());
+        session.wait_for(LIMIT, "the box closed", |t| !t.shows("kept in the box"));
+    }
 
     phases.mark("back to the end");
     session.send(&b"\x1b[6~".repeat(24));

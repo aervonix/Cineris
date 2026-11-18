@@ -75,6 +75,13 @@ pub struct Capabilities {
     pub unicode: bool,
     /// Its background colour, from its reply. Used to tint the accent.
     pub background: Option<(u8, u8, u8)>,
+    /// The terminal is asked for the mouse by its sequences (modes 1000 and
+    /// 1006): on Unix. On Windows the console's own mouse input is used
+    /// instead: a pseudo-console (Windows Terminal) passes the sequences on
+    /// to the terminal and then gives its reports to the program as typed
+    /// keys, which would type them into the prompt (measured in step 25);
+    /// asked for nothing, the terminal keeps its own wheel and selection.
+    pub vt_mouse: bool,
     /// Escape sequences are of no use at all (`TERM=dumb`): the interactive
     /// interface should not start.
     pub dumb: bool,
@@ -163,6 +170,7 @@ impl Capabilities {
             unicode,
             background: None,
             dumb,
+            vt_mouse: platform == Platform::Unix,
             overrides,
         };
         caps.enforce();
