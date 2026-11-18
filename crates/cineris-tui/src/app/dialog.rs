@@ -458,6 +458,12 @@ impl Dialog {
         true
     }
 
+    /// Whether a note is being written in it: its keys are then the
+    /// note's.
+    pub(crate) fn writing_note(&self) -> bool {
+        self.note.is_some()
+    }
+
     /// The keys the hint row shows while the dialog is open.
     pub(crate) fn hint_keys(&self, keymap: &KeyMap) -> Vec<String> {
         if self.note.is_some() {

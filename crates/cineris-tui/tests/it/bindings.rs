@@ -419,7 +419,8 @@ fn check(action: Action, key: &str) {
         | Action::Deny
         | Action::DenyWithNote
         | Action::Never
-        | Action::ShowWhole => {
+        | Action::ShowWhole
+        | Action::DialogTranscript => {
             let map = cineris_tui::keys::KeyMap::defaults();
             assert_eq!(
                 map.lookup(&[cineris_tui::keys::Context::Dialog], parse(key).unwrap()),

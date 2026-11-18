@@ -203,6 +203,19 @@ fn reload_lines(applied: &[String], errors: &[String], notes: &[String]) -> Vec<
     lines
 }
 
+/// The keys row while the transcript is read from under a dialog.
+fn reading_keys(keymap: &crate::keys::KeyMap) -> Vec<String> {
+    let back = keymap
+        .keys_of(crate::keys::Action::DialogTranscript)
+        .first()
+        .map_or_else(|| "esc".to_owned(), |key| crate::keys::name(*key));
+    vec![
+        "reading the transcript".to_owned(),
+        "pgup/pgdn scroll".to_owned(),
+        format!("{back} goes back"),
+    ]
+}
+
 /// The most files read ahead for one prompt: the core reads no more of one
 /// `workspace/warm`.
 const WARM_FILES: usize = 16;
@@ -369,6 +382,10 @@ pub struct App {
     writer: Option<crate::export::Writer>,
     /// An export under way.
     exporting: Option<export::Exporting>,
+    /// The full screen's transcript is being read from under the dialog
+    /// with this request's id, which stays up (since step 25). Reading ends
+    /// with that dialog however it goes: another one never opens read.
+    reading_transcript: Option<RequestId>,
     /// A look at the configuration's files is due after this frame.
     look_due: bool,
     /// When the last look was asked for.
@@ -545,6 +562,7 @@ impl App {
             restyle: start.restyle,
             writer: start.export,
             exporting: None,
+            reading_transcript: None,
             look_due: false,
             last_look: None,
             theme_picked: None,
@@ -936,6 +954,27 @@ impl App {
         // The full-screen presenter's own keys (step 25): scrolling and its
         // search, where neither the input nor a dialog has a use for them.
         // Moving the view is not typing at anything.
+        // The full screen's transcript read from under a dialog (since step
+        // 25): its keys never reach the dialog.
+        if let TermEvent::Key(key) | TermEvent::Repeat(key) = event
+            && self.full_screen()
+            && self.viewer.is_none()
+            && let Some(dialog) = self.dialogs.front()
+        {
+            if self.reading_transcript.as_ref() == Some(&dialog.id) {
+                return self.reading_key(*key, at);
+            }
+            if !dialog.writing_note()
+                && self
+                    .input
+                    .keymap()
+                    .lookup(&[crate::keys::Context::Dialog], *key)
+                    == Some(crate::keys::Action::DialogTranscript)
+            {
+                self.reading_transcript = Some(dialog.id.clone());
+                return true;
+            }
+        }
         if let TermEvent::Key(key) | TermEvent::Repeat(key) = event {
             let searching = self.screen_searching();
             if self.screen_key(*key) {
@@ -2278,11 +2317,37 @@ impl App {
                 self.rows.max(1)
             };
             let keymap = self.input.keymap();
+            // The presenter, not the view, which a full-screen frame has
+            // taken out while it draws.
+            let full_screen = self.settings.presenter == super::Presenter::Fullscreen;
+            let reading = full_screen
+                && self.reading_transcript.is_some()
+                && self.dialogs.front().map(|dialog| &dialog.id)
+                    == self.reading_transcript.as_ref();
             let (lines, keys) = match self.dialogs.front_mut() {
-                Some(dialog) => (
-                    dialog.view(keymap, rows, width, &self.look, now),
-                    dialog.hint_keys(keymap),
+                // Reading the transcript (since step 25): the dialog stays up
+                // as its first line, and its row says how to read and how to
+                // go back.
+                Some(dialog) if reading => (
+                    dialog
+                        .view(keymap, rows, width, &self.look, now)
+                        .into_iter()
+                        .take(1)
+                        .collect(),
+                    reading_keys(keymap),
                 ),
+                Some(dialog) => {
+                    let mut keys = dialog.hint_keys(keymap);
+                    if full_screen
+                        && !dialog.writing_note()
+                        && let Some(key) = keymap
+                            .keys_of(crate::keys::Action::DialogTranscript)
+                            .first()
+                    {
+                        keys.push(format!("{} reads above", crate::keys::name(*key)));
+                    }
+                    (dialog.view(keymap, rows, width, &self.look, now), keys)
+                }
                 None => (Vec::new(), Vec::new()),
             };
             bottom.extend(lines);
