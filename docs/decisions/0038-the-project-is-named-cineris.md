@@ -23,7 +23,7 @@ The owner chose the name. The options recorded here are about how to switch.
 
 ## Decision
 
-**The project is Cineris.** It is Latin for "of ash": the genitive of *cinis*, ash, for a harness rebuilt from scratch. English readers say it "SIN-er-is". The brand is "Cineris", never "Cineris CLI".
+**The project is Cineris.** It is Latin for "of ash": the genitive of *cinis*, ash, for a harness built from scratch. English readers say it "SIN-er-is". The brand is "Cineris", never "Cineris CLI".
 
 ### The names
 

@@ -82,7 +82,7 @@ The owner renamed the project, and changed the rule for a command name another p
 
 | Question | The owner's answer, 2026-11-18 | Recorded in |
 |---|---|---|
-| **The name.** | **Cineris**: Latin for "of ash", for a harness rebuilt from scratch, said "SIN-er-is". The command is `cineris`, the alias `cin`, the crates `cineris-*`, the variables `CINERIS_*`, the folders `cineris` and `.cineris/`. A clean switch: nothing reads the old names, nothing migrates, history is not rewritten. | [Decision 0038](decisions/0038-the-project-is-named-cineris.md) |
+| **The name.** | **Cineris**: Latin for "of ash", for a harness built from scratch, said "SIN-er-is". The command is `cineris`, the alias `cin`, the crates `cineris-*`, the variables `CINERIS_*`, the folders `cineris` and `.cineris/`. A clean switch: nothing reads the old names, nothing migrates, history is not rewritten. | [Decision 0038](decisions/0038-the-project-is-named-cineris.md) |
 | **A command name another program already provides.** | **Taken only on a yes.** The installer asks a yes/no question that names the other program and its path, with no as the default. With no terminal to ask on it never takes the name. A yes makes our command the one that runs and leaves the other program's file as it was. | [Decision 0038](decisions/0038-the-project-is-named-cineris.md), rule 5 below, step 34 |
 | **The domain.** | **`cineris.dev`**, bought by the owner. No links to it until a site exists. | [Decision 0038](decisions/0038-the-project-is-named-cineris.md) |
 
