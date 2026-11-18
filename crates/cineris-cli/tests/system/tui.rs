@@ -36,7 +36,7 @@ const GLYPHS: GlyphSets<'static, Glyphs> = GlyphSets::new(&[Glyphs::UNICODE, Gly
 
 /// The role of the shell the binary runs under: its options are the path
 /// of the file that says how.
-pub const SHELL: Role = Role::new("cxcli-tui=");
+pub const SHELL: Role = Role::new("cincli-tui=");
 
 /// A bound on every wait, which only a broken test reaches.
 const LIMIT: Duration = Duration::from_secs(30);
