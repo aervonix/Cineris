@@ -70,8 +70,10 @@ apply       Rewrites the working tree (the files git tracks, and new files it
             files again from the renamed sources.
 
 --check     Fails on any old name left in a tracked file's text or path,
-            outside the kept lines. `cargo xtask rules` runs the same check,
-            so the lint job does too.
+            outside the kept lines, and in a file that is not text. `cargo
+            xtask rules` runs the same check, so the lint job does too. It
+            knows the alias in the forms `apply` renames, not every word
+            built on it.
 
 --kept      Lists the kept files and lines, each with its reason.
 
