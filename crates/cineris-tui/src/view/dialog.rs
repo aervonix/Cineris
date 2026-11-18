@@ -744,17 +744,24 @@ fn what_happens(file: &RewindFile) -> String {
         (RewindFileStatus::Cannot, _) | (_, RewindTarget::NotRecorded) => {
             format!("stays as it is: {}", why(file.why_not.as_ref()))
         }
-        (RewindFileStatus::Already, _) => "is already as it was".to_owned(),
+        (RewindFileStatus::Already, RewindTarget::Content | RewindTarget::Removed) => {
+            "is already as it was".to_owned()
+        }
         (RewindFileStatus::EditedSince, RewindTarget::Removed) => {
             "was changed since, and would be removed: you are asked first".to_owned()
         }
-        (RewindFileStatus::EditedSince, _) => {
+        (RewindFileStatus::EditedSince, RewindTarget::Content) => {
             "was changed since: you are asked before it is put back".to_owned()
         }
         (RewindFileStatus::AsLeft, RewindTarget::Removed) => {
             "is removed: it did not exist then".to_owned()
         }
-        (RewindFileStatus::AsLeft, _) => "goes back to what it was before".to_owned(),
+        (RewindFileStatus::AsLeft, RewindTarget::Content) => {
+            "goes back to what it was before".to_owned()
+        }
+        // A status or a target this build does not know: what happens to
+        // the file is not promised (a target had taken a known status's
+        // words: the review of step 25's second pull request).
         _ => "cannot be told: this build does not know what the plan says".to_owned(),
     }
 }

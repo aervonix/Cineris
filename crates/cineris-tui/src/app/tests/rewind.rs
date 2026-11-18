@@ -388,6 +388,11 @@ fn a_digit_before_the_question_is_ready_answers_nothing() {
     app.drawn(shown);
     key(&mut app, "1", ms(shown, 50));
     assert_eq!(rewind_sent(&link), None, "answered in its grace");
+    assert_eq!(
+        app.input().editor().expanded(),
+        "",
+        "typed into the editor under the question"
+    );
     key(&mut app, "esc", ms(shown, 60));
     let (_, live, _) = app.frame(ms(shown, 70));
     assert!(
@@ -982,6 +987,509 @@ fn tab_in_sessions_forks_another_session_at_its_end() {
     });
     assert_eq!(fork.session_id, SessionId::from("s_other"));
     assert_eq!((fork.at, fork.before), (None, None));
+}
+
+/// A fork of another session from `/sessions` closes the one open here
+/// first, as a switch does: one that fails leaves no session open, says
+/// why, and closes the other, opened for it (the review of step 25's
+/// second pull request found the guide said the session stayed open).
+#[test]
+fn a_failed_fork_of_another_session_leaves_none_open_and_says_why() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    sessions_picker(
+        &mut app,
+        &link,
+        vec![summary(SESSION, None, None), summary("s_other", None, None)],
+        now,
+    );
+    key(&mut app, "down", now);
+    key(&mut app, "tab", now);
+    let (open, _) = sent_one(&link, |op| {
+        matches!(op, Op::SessionOpen(open) if open.session_id.as_str() == "s_other").then_some(())
+    });
+    give(
+        &link,
+        open,
+        Ok(OpResult::SessionOpen(SessionResult {
+            session: session().id("s_other").build(),
+        })),
+    );
+    drain(&mut app, now);
+    let (fork, _) = sent_one(&link, |op| matches!(op, Op::SessionFork(_)).then_some(()));
+    give(
+        &link,
+        fork,
+        Err(ErrorData::new(
+            ErrorKind::Usage,
+            "session_not_stored",
+            "A session with no log cannot be forked.",
+        )),
+    );
+    drain(&mut app, now);
+    assert_eq!(app.session(), None, "no session is open here");
+    let sent = link.take_sent();
+    assert!(
+        sent.iter().any(
+            |(_, op)| matches!(op, Op::SessionClose(close) if close.session_id.as_str() == "s_other")
+        ),
+        "the other, opened for the fork, is closed: {sent:#?}"
+    );
+    assert!(notices(&mut app, now).contains("cannot be forked"));
+}
+
+/// Prompts typed while a fork from `/rewind` is on its way were meant for
+/// the fork: when it fails they come back into the editor, and do not run
+/// at the end of the session that stays (the review of step 25's second
+/// pull request).
+#[test]
+fn prompts_held_through_a_failed_fork_come_back_into_the_editor() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    key(&mut app, "tab", now);
+    let (ticket, _) = sent_one(&link, |op| matches!(op, Op::SessionFork(_)).then_some(()));
+    type_text(&mut app, "typed ahead", now);
+    key(&mut app, "enter", now);
+    assert!(
+        turn_start(&link.take_sent()).is_empty(),
+        "sent before the fork"
+    );
+    give(
+        &link,
+        ticket,
+        Err(ErrorData::new(
+            ErrorKind::Usage,
+            "session_not_stored",
+            "A session with no log cannot be forked.",
+        )),
+    );
+    drain(&mut app, now);
+    assert!(
+        turn_start(&link.take_sent()).is_empty(),
+        "sent to the session that stays"
+    );
+    assert_eq!(app.input().editor().expanded(), "typed ahead");
+    assert!(notices(&mut app, now).contains("cannot be forked"));
+}
+
+/// While a rewind is under way (its plan asked for), neither a switch nor
+/// a fork from `/sessions` leaves: what comes back is this session's.
+#[test]
+fn a_switch_and_a_fork_wait_for_a_rewind_under_way() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    key(&mut app, "enter", now);
+    let _ = link.take_sent();
+    // A switch.
+    sessions_picker(
+        &mut app,
+        &link,
+        vec![summary(SESSION, None, None), summary("s_other", None, None)],
+        now,
+    );
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    // A fork of this one.
+    sessions_picker(&mut app, &link, vec![summary(SESSION, None, None)], now);
+    key(&mut app, "tab", now);
+    let sent = link.take_sent();
+    assert!(
+        !sent.iter().any(|(_, op)| matches!(
+            op,
+            Op::SessionClose(_) | Op::SessionOpen(_) | Op::SessionFork(_)
+        )),
+        "{sent:#?}"
+    );
+    let all = notices(&mut app, now);
+    assert!(
+        all.contains("A rewind is under way: /sessions can switch once it is done."),
+        "{all}"
+    );
+    assert!(
+        all.contains("The session is being read: a fork can be made once it is."),
+        "{all}"
+    );
+}
+
+/// Keys and a paste that come before the question is ready answer nothing,
+/// and reach nothing: they would wait in the hidden editor and come back in
+/// front of the prompt the rewind gives back, for an `Enter` to send. They
+/// hold the question's quiet, as typing does (the review of step 25's
+/// second pull request).
+#[test]
+fn what_is_typed_before_the_question_is_ready_reaches_nothing() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    for (ticket, op) in link.take_sent() {
+        match op {
+            Op::SessionRewindPlan(_) => give(
+                &link,
+                ticket,
+                Ok(OpResult::SessionRewindPlan(plan(two_files()))),
+            ),
+            Op::SessionRead(_) => give(&link, ticket, Ok(page(vec![history()[2].clone()], None))),
+            _ => {}
+        }
+    }
+    drain(&mut app, now);
+    let _ = app.frame(now);
+    app.drawn(now);
+    let first_due = app.deadline().expect("the answers' moment");
+    let typed = ms(now, 100);
+    type_text(&mut app, "12x", typed);
+    app.terminal(&TermEvent::Paste("pasted".to_owned()), typed);
+    key(&mut app, "enter", typed);
+    assert_eq!(rewind_sent(&link), None, "answered before it was ready");
+    assert!(turn_start(&link.take_sent()).is_empty(), "sent as a prompt");
+    assert_eq!(app.input().editor().expanded(), "");
+    let _ = app.frame(typed);
+    app.drawn(typed);
+    let ready = app.deadline().expect("the answers' moment");
+    assert!(ready > first_due, "the quiet was not held");
+    let _ = app.frame(ready);
+    app.drawn(ready);
+    key(&mut app, "2", ready);
+    let (ticket, _) = rewind_sent(&link).expect("the rewind");
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionRewind(SessionResult {
+            session: session().build(),
+        })),
+    );
+    drain(&mut app, ready);
+    assert_eq!(
+        app.input().editor().expanded(),
+        "fix the lexer\nso digit separators work",
+        "the prompt alone comes back"
+    );
+}
+
+/// Each awaits its own kind of answer: a plan answered to the rewind ends
+/// the rewind as an error does, and nothing waits for it (the review of
+/// step 25's second pull request found it left `/rewind`, `/new` and the
+/// rest refused for good).
+#[test]
+fn a_plan_given_as_the_rewinds_answer_ends_the_rewind() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    let ready = asked(&mut app, &link, two_files(), now);
+    key(&mut app, "2", ready);
+    let (ticket, _) = rewind_sent(&link).expect("the rewind");
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionRewindPlan(plan(two_files()))),
+    );
+    drain(&mut app, ready);
+    run_command(&mut app, "/rewind", ready);
+    assert!(
+        link.take_sent()
+            .iter()
+            .any(|(_, op)| matches!(op, Op::SessionRead(read) if read.item_id.is_none())),
+        "the rewind still waited"
+    );
+}
+
+/// A prompt sent after the answer waits for the rewind and for the read
+/// after it, so that its events are not drawn and then read again (the
+/// review of step 25's second pull request); a rewind refused gives it
+/// back, as it was meant for the conversation rewound.
+#[test]
+fn a_prompt_sent_after_the_answer_waits_for_the_rewind() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    let ready = asked(&mut app, &link, two_files(), now);
+    key(&mut app, "2", ready);
+    let (ticket, _) = rewind_sent(&link).expect("the rewind");
+    type_text(&mut app, "next", ready);
+    key(&mut app, "enter", ready);
+    assert!(
+        turn_start(&link.take_sent()).is_empty(),
+        "sent under the rewind"
+    );
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionRewind(SessionResult {
+            session: session().build(),
+        })),
+    );
+    drain(&mut app, ready);
+    let (read, _) = sent_one(&link, |op| matches!(op, Op::SessionRead(_)).then_some(()));
+    give(&link, read, Ok(page(history()[..2].to_vec(), None)));
+    drain(&mut app, ready);
+    let sent = link.take_sent();
+    let prompts = turn_start(&sent);
+    assert_eq!(prompts.len(), 1, "{sent:#?}");
+    assert_eq!(prompts[0].input, vec![Part::text("next")]);
+
+    // Refused: the prompt comes back, and nothing is sent.
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    let ready = asked(&mut app, &link, two_files(), now);
+    key(&mut app, "2", ready);
+    let (ticket, _) = rewind_sent(&link).expect("the rewind");
+    type_text(&mut app, "next", ready);
+    key(&mut app, "enter", ready);
+    give(
+        &link,
+        ticket,
+        Err(ErrorData::new(
+            ErrorKind::Usage,
+            cineris_protocol::error::code::PLAN_CHANGED,
+            "The rewind's plan changed after it was shown.",
+        )),
+    );
+    drain(&mut app, ready);
+    assert!(
+        turn_start(&link.take_sent()).is_empty(),
+        "sent after a refusal"
+    );
+    assert_eq!(app.input().editor().expanded(), "next");
+}
+
+/// `Ctrl+C` while prompts wait for the transcript read again gives them
+/// back and says so: they had not been sent (the review of step 25's
+/// second pull request found them sent when the read ended).
+#[test]
+fn ctrl_c_gives_back_the_prompts_waiting_for_the_read_again() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    run_command(&mut app, "/undo", now);
+    let (ticket, _) = sent_one(&link, |op| matches!(op, Op::SessionUndo(_)).then_some(()));
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionUndo(SessionResult {
+            session: session().build(),
+        })),
+    );
+    drain(&mut app, now);
+    let (read, _) = sent_one(&link, |op| matches!(op, Op::SessionRead(_)).then_some(()));
+    type_text(&mut app, "next", now);
+    key(&mut app, "enter", now);
+    key(&mut app, "ctrl+c", now);
+    assert_eq!(app.input().editor().expanded(), "next");
+    assert!(
+        notices(&mut app, now).contains("waited for the rewind were not sent"),
+        "not said"
+    );
+    give(&link, read, Ok(page(history()[..4].to_vec(), None)));
+    drain(&mut app, now);
+    let sent = link.take_sent();
+    assert!(turn_start(&sent).is_empty(), "sent after all: {sent:#?}");
+    assert!(
+        !sent
+            .iter()
+            .any(|(_, op)| matches!(op, Op::TurnInterrupt(_))),
+        "nothing ran to interrupt: {sent:#?}"
+    );
+}
+
+/// The transcript's read again failing is said, and the prompts that
+/// waited for it go: the history did change.
+#[test]
+fn a_read_again_that_fails_is_said_and_the_prompts_waiting_go() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    run_command(&mut app, "/undo", now);
+    let (ticket, _) = sent_one(&link, |op| matches!(op, Op::SessionUndo(_)).then_some(()));
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionUndo(SessionResult {
+            session: session().build(),
+        })),
+    );
+    drain(&mut app, now);
+    let (read, _) = sent_one(&link, |op| matches!(op, Op::SessionRead(_)).then_some(()));
+    type_text(&mut app, "next", now);
+    key(&mut app, "enter", now);
+    give(
+        &link,
+        read,
+        Err(ErrorData::new(
+            ErrorKind::Internal,
+            "store_failed",
+            "The session's log could not be read.",
+        )),
+    );
+    drain(&mut app, now);
+    let sent = link.take_sent();
+    let prompts = turn_start(&sent);
+    assert_eq!(prompts.len(), 1, "{sent:#?}");
+    assert_eq!(prompts[0].delivery, None, "a new turn");
+    assert!(notices(&mut app, now).contains("could not be read"));
+}
+
+/// An item whose events came while the branch is read again is drawn from
+/// them, and not again from the read; one the read says is still in
+/// progress is left to its events.
+#[test]
+fn what_came_while_the_branch_was_read_is_drawn_once() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    run_command(&mut app, "/undo", now);
+    let (ticket, _) = sent_one(&link, |op| matches!(op, Op::SessionUndo(_)).then_some(()));
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionUndo(SessionResult {
+            session: session().build(),
+        })),
+    );
+    drain(&mut app, now);
+    let (read, _) = sent_one(&link, |op| matches!(op, Op::SessionRead(_)).then_some(()));
+    // Another client's turn, whose prompt and answer come meanwhile.
+    link.give(event(Event::ItemCompleted(ItemCompleted {
+        item: user("i_7", "elsewhere prompt"),
+    })));
+    link.give(event(Event::ItemCompleted(ItemCompleted {
+        item: answer("i_8", "Elsewhere answer."),
+    })));
+    drain(&mut app, now);
+    let mut items = history()[..4].to_vec();
+    items.push(user("i_7", "elsewhere prompt"));
+    items.push(answer("i_8", "Elsewhere answer."));
+    items.push(answer("i_9", "Still streaming."));
+    give(
+        &link,
+        read,
+        Ok(OpResult::SessionRead(SessionReadResult {
+            items,
+            incomplete: vec![ItemId::from("i_9")],
+            next_cursor: None,
+            seq: 9,
+            masked: 0,
+            redacted: false,
+        })),
+    );
+    drain(&mut app, now);
+    let _ = app.frame(now);
+    key(&mut app, "ctrl+o", now);
+    let viewed = text(&app.viewer_frame(80, 98, now)).join("\n");
+    assert_eq!(viewed.matches("Elsewhere answer.").count(), 1, "{viewed}");
+    assert_eq!(viewed.matches("elsewhere prompt").count(), 1, "{viewed}");
+    assert!(!viewed.contains("Still streaming."), "{viewed}");
+    assert!(viewed.contains("Second answer."), "{viewed}");
+}
+
+/// `/copy` after an undo or a rewind copies the branch's last answer, not
+/// the one undone (the review of step 25's second pull request).
+#[test]
+fn copy_after_an_undo_copies_the_branchs_last_answer() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    assert_eq!(app.last_answer().trim(), "Third answer.");
+    run_command(&mut app, "/undo", now);
+    let (ticket, _) = sent_one(&link, |op| matches!(op, Op::SessionUndo(_)).then_some(()));
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionUndo(SessionResult {
+            session: session().build(),
+        })),
+    );
+    drain(&mut app, now);
+    let (read, _) = sent_one(&link, |op| matches!(op, Op::SessionRead(_)).then_some(()));
+    give(&link, read, Ok(page(history()[..4].to_vec(), None)));
+    drain(&mut app, now);
+    assert_eq!(app.last_answer().trim(), "Second answer.");
+}
+
+/// The points' read failing is said, opens nothing, and leaves `/rewind`
+/// free to ask again.
+#[test]
+fn a_points_read_that_fails_is_said_and_holds_nothing_up() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    run_command(&mut app, "/rewind", now);
+    let (ticket, _) = sent_one(&link, |op| matches!(op, Op::SessionRead(_)).then_some(()));
+    give(
+        &link,
+        ticket,
+        Err(ErrorData::new(
+            ErrorKind::Internal,
+            "store_failed",
+            "The session's log could not be read.",
+        )),
+    );
+    drain(&mut app, now);
+    assert!(rows(&app).is_empty(), "a picker opened");
+    assert!(notices(&mut app, now).contains("could not be read"));
+    run_command(&mut app, "/rewind", now);
+    assert!(
+        link.take_sent()
+            .iter()
+            .any(|(_, op)| matches!(op, Op::SessionRead(_))),
+        "the failed read held /rewind up"
+    );
+}
+
+/// The prompt read whole failing, or giving another item than the point's,
+/// leaves the rewind to go on: the editor gets nothing, and that is said
+/// after the rewind.
+#[test]
+fn a_prompt_that_cannot_be_read_is_not_given_back_and_that_is_said() {
+    let now = Instant::now();
+    for prompt in [
+        Err(ErrorData::new(
+            ErrorKind::Internal,
+            "store_failed",
+            "The session's log could not be read.",
+        )),
+        // Another prompt than the point's.
+        Ok(page(vec![history()[4].clone()], None)),
+    ] {
+        let (mut app, link) = with_history(now);
+        rewind_picker(&mut app, &link, history(), now);
+        key(&mut app, "down", now);
+        key(&mut app, "enter", now);
+        for (ticket, op) in link.take_sent() {
+            match op {
+                Op::SessionRewindPlan(_) => give(
+                    &link,
+                    ticket,
+                    Ok(OpResult::SessionRewindPlan(plan(two_files()))),
+                ),
+                Op::SessionRead(_) => give(&link, ticket, prompt.clone()),
+                _ => {}
+            }
+        }
+        drain(&mut app, now);
+        let _ = app.frame(now);
+        app.drawn(now);
+        let ready = app.deadline().expect("the answers' moment");
+        let _ = app.frame(ready);
+        app.drawn(ready);
+        key(&mut app, "2", ready);
+        let (ticket, _) = rewind_sent(&link).expect("the rewind");
+        give(
+            &link,
+            ticket,
+            Ok(OpResult::SessionRewind(SessionResult {
+                session: session().build(),
+            })),
+        );
+        drain(&mut app, ready);
+        assert_eq!(app.input().editor().expanded(), "", "{prompt:?}");
+        let words = notices(&mut app, ready)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            words.contains("The prompt of that turn could not be read"),
+            "{prompt:?}: {words}"
+        );
+    }
 }
 
 // --------------------------------------------------------- hostile text

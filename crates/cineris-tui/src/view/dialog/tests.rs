@@ -436,6 +436,43 @@ fn every_field_of_the_trust_question_escapes_what_acts_unseen() {
 }
 
 /// A question of the core's is drawn with what acts unseen escaped.
+/// What a rewind does to a file is said in words only where this build
+/// knows both what the file goes back to and whether it can: a target or a
+/// status it does not know is said to be unknown, whatever the other is
+/// (the review of step 25's second pull request found an unknown target
+/// worded as going back).
+#[test]
+fn a_rewinds_file_this_build_cannot_read_is_not_promised_anything() {
+    use cineris_protocol::methods::{RewindFile, RewindFileStatus, RewindTarget};
+    let file = |to: RewindTarget, status: RewindFileStatus| RewindFile {
+        path: "a.txt".to_owned(),
+        to,
+        status,
+        why_not: None,
+    };
+    let unknown = RewindTarget::Unknown("moved".to_owned());
+    for status in [
+        RewindFileStatus::AsLeft,
+        RewindFileStatus::Already,
+        RewindFileStatus::EditedSince,
+        RewindFileStatus::Unknown("held".to_owned()),
+    ] {
+        assert_eq!(
+            what_happens(&file(unknown.clone(), status.clone())),
+            "cannot be told: this build does not know what the plan says",
+            "{status:?}"
+        );
+    }
+    assert_eq!(
+        what_happens(&file(RewindTarget::Content, RewindFileStatus::AsLeft)),
+        "goes back to what it was before"
+    );
+    assert!(
+        what_happens(&file(unknown, RewindFileStatus::Cannot)).starts_with("stays as it is"),
+        "a file that stays, stays"
+    );
+}
+
 #[test]
 fn a_question_escapes_what_acts_unseen() {
     let request = QuestionRequest {
