@@ -1,0 +1,150 @@
+# The rename to Cineris (decision 0038): `cargo xtask rename`, its table,
+# its check and its branch rewrite, broken one rule at a time.
+
+# The table.
+
+[break] developer-folders-stay-in-the-products
+rule: The owner-terms file and the corpus cache go to the developer's own folder, not the product's.
+file: xtask/src/rename.rs
+in: names_dev_item
+find: DEV_ITEMS.iter().any(|item| {
+replace: DEV_ITEMS.iter().all(|item| {
+caught-by:
+    rename::tests::the_developers_folders_leave_the_products_folder
+
+[break] an-unknown-spelling-is-renamed-in-part
+rule: The brand in a spelling the table does not know is left whole, for the check to find.
+file: xtask/src/rename.rs
+in: rename_names
+find: .filter(|(old, _)| brand.is_none_or(|length| old.len() == length));
+replace: .filter(|_| true);
+caught-by:
+    rename::tests::a_spelling_the_table_does_not_know_is_left_for_the_check
+
+[break] the-alias-after-an-equals-sign-stays
+rule: The alias is renamed where a nextest filter names it after an equals sign, as where it is quoted.
+file: xtask/src/rename.rs
+in: is_alias
+find: b'/' | b'\\' | b'='));
+replace: b'/' | b'\\'));
+caught-by:
+    rename::tests::the_alias_is_renamed_where_it_is_the_alias
+
+[break] a-name-made-from-the-alias-stays
+rule: A name made from the alias (the sandbox guard's process name, the test kit's markers) is renamed with it.
+file: xtask/src/rename.rs
+in: is_alias
+find: if rest.starts_with('-')
+replace: if rest.starts_with('#')
+caught-by:
+    rename::tests::the_alias_is_renamed_where_it_is_the_alias
+
+[break] a-path-into-the-alias-is-renamed
+rule: `cx::it`, a path into something, is not the alias.
+file: xtask/src/rename.rs
+in: is_alias
+find: || (after == Some(b':') && !rest.starts_with("::"));
+replace: || after == Some(b':');
+caught-by:
+    rename::tests::cx_that_is_not_the_alias_stays
+
+# The kept lines.
+
+[break] a-kept-line-is-renamed
+rule: A kept line keeps its text: the build plan's row about the clash, the tools' context in a comment.
+file: xtask/src/rename.rs
+in: kept_line
+find: kept_entries(path).any(|kept| kept.line.is_none_or(|text| line.contains(text)))
+replace: kept_entries(path).any(|kept| kept.line.is_none())
+caught-by:
+    rename::tests::kept_files_and_lines_keep_their_text
+    rename::tests::the_repo_rules_find_a_planted_old_name
+
+# What a renamed text is put back into.
+
+[break] a-lock-is-left-out-of-order
+rule: A Cargo.lock's packages go back into cargo's order, by name.
+file: xtask/src/rename.rs
+in: sort_lock
+find: packages.sort_by(|a, b| package_name(a).cmp(package_name(b)));
+replace:
+caught-by:
+    rename::tests::a_lock_is_put_in_cargos_order
+
+[break] a-locks-versions-are-sorted-as-text
+rule: Dependencies of one name keep cargo's order, by version, which text order is not (0.10 before 0.9).
+file: xtask/src/rename.rs
+in: sort_dependencies
+find: entries.sort_by(|a, b| dependency_name(a).cmp(dependency_name(b)));
+replace: entries.sort();
+caught-by:
+    rename::tests::a_lock_is_put_in_cargos_order
+
+[break] every-rust-file-is-formatted
+rule: A Rust file that rustfmt would change as it stands (a sample of odd code) is not formatted.
+file: xtask/src/rename.rs
+in: format_rust
+find: if formatter.format(original).as_deref() != Some(original) {
+replace: if false {
+caught-by:
+    rename::tests::sys_a_rust_file_is_formatted_again_only_when_it_was_formatted
+
+# The check, and the rules that run it.
+
+[break] the-check-does-not-see-the-alias
+rule: The check finds the old alias, not only the old name.
+file: xtask/src/rename.rs
+in: violations
+find: for at in alias_positions(text) {
+replace: for at in alias_positions("") {
+caught-by:
+    rename::tests::the_check_finds_a_planted_old_name_and_says_where
+    rename::tests::the_repo_rules_find_a_planted_old_name
+
+[break] the-rules-do-not-run-the-check
+rule: The repo rules, and so the lint job, run the rename's check on every file.
+file: xtask/src/rules/mod.rs
+in: file_rules
+find: violations.extend(crate::rename::violations(file, bytes));
+replace:
+caught-by:
+    rename::tests::the_repo_rules_find_a_planted_old_name
+
+[break] two-paths-become-one
+rule: Two paths that would become one are refused before anything is written.
+file: xtask/src/rename.rs
+in: check_moves
+find: if let Some(other) = targets.insert(new, old) {
+replace: if let Some(other) = targets.insert(new, old).filter(|_| false) {
+caught-by:
+    rename::tests::two_paths_that_would_become_one_are_refused
+
+# The branch rewrite.
+
+[break] a-commits-identity-keeps-the-old-name
+rule: A commit made again is renamed in its identities, as in its tree and message.
+file: xtask/src/rename/branch.rs
+in: CommitText::renamed
+find: author: rename_text("", &self.author).into_owned()
+replace: author: self.author.clone()
+caught-by:
+    rename::tests::the_pieces_of_a_branch_rewrite_read_and_write_gits_formats
+    rename::tests::sys_a_branch_made_before_the_rename_rebases_onto_the_renamed_main
+
+[break] every-commit-is-made-on-the-base
+rule: The commits are made again in a line, each on the one before, so that the branch keeps its history.
+file: xtask/src/rename/branch.rs
+in: rewrite
+find: let parent = format!(":{}", made[made.len() - 1]);
+replace: let parent = format!(":{}", made[0]);
+caught-by:
+    rename::tests::sys_a_branch_made_before_the_rename_rebases_onto_the_renamed_main
+
+[break] a-merge-is-made-again
+rule: A range with a merge in it is refused: the rewrite makes a line of commits.
+file: xtask/src/rename/branch.rs
+in: rewrite
+find: if parents.len() != 1 {
+replace: if parents.len() > 2 {
+caught-by:
+    rename::tests::sys_a_branch_made_before_the_rename_rebases_onto_the_renamed_main
