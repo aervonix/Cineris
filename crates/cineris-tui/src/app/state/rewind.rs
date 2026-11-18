@@ -205,7 +205,7 @@ impl App {
                         item: message.id.clone(),
                         before,
                         time,
-                        text: row_text(message),
+                        text: row_text(message, self.look.glyphs.ellipsis),
                     });
                 }
             }
@@ -687,8 +687,10 @@ impl App {
             self.event(event, now);
         }
         self.error(error);
+        // Prompts sent while the fork was asked for go to the session
+        // that stays, the first as a new turn, as an open sends them.
         let prompts = !self.held_prompts.is_empty();
-        self.send_held(false, now);
+        self.send_held(true, now);
         if prompts && self.held_sent.is_none() {
             self.stop_running();
         }
@@ -708,8 +710,9 @@ fn prompt_text(message: &UserMessageItem) -> String {
     parts.join("\n")
 }
 
-/// A prompt as a picker's row holds it: on one line, cut to a row's worth.
-fn row_text(message: &UserMessageItem) -> String {
+/// A prompt as a picker's row holds it: on one line, cut to a row's worth
+/// with `ellipsis`.
+fn row_text(message: &UserMessageItem, ellipsis: &str) -> String {
     let text = prompt_text(message);
     let mut end = text.len().min(ROW_TEXT);
     while !text.is_char_boundary(end) {
@@ -717,7 +720,7 @@ fn row_text(message: &UserMessageItem) -> String {
     }
     let mut row: String = text[..end].split_whitespace().collect::<Vec<_>>().join(" ");
     if end < text.len() {
-        row.push('…');
+        row.push_str(ellipsis);
     }
     row
 }
