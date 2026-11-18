@@ -2101,3 +2101,63 @@ fn sys_attach_ends_when_the_server_goes() {
         session.screen().dump()
     );
 }
+
+/// The text of a row of the prompt's box: its borders and its marker off.
+fn in_the_box(row: &str) -> &str {
+    row.trim_end()
+        .trim_end_matches(['│', '|'])
+        .trim_end()
+        .trim_start_matches(['│', '|'])
+        .trim_start()
+        .trim_start_matches('◆')
+        .trim_start()
+}
+
+/// F1 to F12 and the arrows reach the application as themselves, through
+/// ConPTY on Windows as win32 input records, as Windows Terminal sends them
+/// (step 25, `function-keys-through-conpty`): each function key, bound to
+/// the editor's new line, ends the line typed before it, and the arrows move
+/// in the prompt.
+#[test]
+fn sys_function_keys_and_the_arrows_reach_the_application() {
+    let phases = Phases::new("sys_function_keys_and_the_arrows_reach_the_application");
+    let machine = Machine::new("tui_function_keys");
+    let keys: Vec<String> = (1..=12).map(|n| format!("\"f{n}\"")).collect();
+    machine.user_config(&format!("keys.editor.new_line = [{}]\n", keys.join(", ")));
+    let mut session = machine.tui(&[]);
+    first_frame(&mut session, &phases);
+
+    phases.mark("the function keys");
+    for n in 1..=12 {
+        type_text(&mut session, &format!("a{n}"));
+        session.send_key(&format!("f{n}"));
+        type_text(&mut session, &format!("b{n}"));
+        let (before, after) = (format!("a{n}"), format!("b{n}"));
+        session.wait_for(LIMIT, &format!("F{n} ended the line"), |t| {
+            let rows = t.screen();
+            rows.iter().any(|row| in_the_box(row).ends_with(&before))
+                && rows.iter().any(|row| in_the_box(row).starts_with(&after))
+        });
+    }
+
+    phases.mark("the arrows");
+    session.send_key("f1");
+    type_text(&mut session, "pq");
+    session.send_key("left");
+    type_text(&mut session, "M");
+    session.send_key("right");
+    type_text(&mut session, "N");
+    session.send_key("up");
+    type_text(&mut session, "U");
+    session.send_key("down");
+    type_text(&mut session, "D");
+    session.wait_for(LIMIT, "the arrows moved in the prompt", |t| {
+        let rows = t.screen();
+        rows.iter().any(|row| in_the_box(row).ends_with("b12U"))
+            && rows.iter().any(|row| in_the_box(row) == "pMqND")
+    });
+    // Ctrl+C empties the prompt, so that Ctrl+D quits.
+    session.send(b"\x03");
+    wait_shows(&mut session, "Describe a task");
+    quit(&mut session, &phases);
+}

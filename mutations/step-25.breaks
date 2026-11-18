@@ -858,3 +858,12 @@ find: Self::show_summary(state, "The reasoning, whole", &text);
 replace: Self::show_summary(state, "The reasoning, whole", text.lines().next().unwrap_or_default());
 caught-by:
     cineris-tui app::tests::screen::the_viewer_shows_a_reasoning_and_a_compactions_summary_whole
+
+[break] an-arrow-sent-as-an-ordinary-key
+rule: The test kit sends an arrow as Windows Terminal does, marked as an enhanced key in its win32 record.
+file: crates/cineris-testkit/src/pty.rs
+in: key_bytes
+find: let state = if enhanced { ENHANCED } else { 0 };
+replace: let state = 0;
+caught-by:
+    cineris-testkit pty::tests::a_named_key_is_sent_as_its_win32_records_or_its_sequence
