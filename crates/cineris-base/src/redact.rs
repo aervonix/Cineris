@@ -475,6 +475,9 @@ fn pem(rest: &[u8]) -> Option<usize> {
 /// colon. This is called for the `:` that begins `://`, finds nothing
 /// there, and is called again for the `:` between the user and the
 /// password, which is the one it answers for. Only the password is masked.
+/// A password that is the mask already is no credential: masking it again
+/// would hand back the same text as a change, which a log takes for an
+/// entry altered and an export counts.
 fn userinfo(bytes: &[u8], at: usize) -> Option<Range<usize>> {
     // Is this the colon between a user and a password? Look back for the
     // `://` that the user part follows.
@@ -489,7 +492,8 @@ fn userinfo(bytes: &[u8], at: usize) -> Option<Range<usize>> {
     }
     let after = &bytes[at + 1..];
     let password = after.iter().take_while(|byte| is(**byte, USERINFO)).count();
-    if password == 0 || after.get(password) != Some(&b'@') {
+    if password == 0 || after.get(password) != Some(&b'@') || &after[..password] == MASK.as_bytes()
+    {
         return None;
     }
     Some(at + 1..at + 1 + password)
@@ -714,6 +718,27 @@ mod tests {
         assert_eq!(
             filter.redact("git clone https://x-access-token:s3cr3t@github.com/a/b.git"),
             "git clone https://x-access-token:[redacted]@github.com/a/b.git"
+        );
+    }
+
+    /// An address whose password is the mask already is left as it is,
+    /// borrowed: masking it again would be a change of nothing, which the
+    /// log would take for an altered entry and an export would count (the
+    /// full review of step 25's second pull request).
+    #[test]
+    fn an_address_whose_password_is_masked_already_is_left_alone() {
+        let filter = SecretFilter::new();
+        for text in [
+            "proxy = http://alice:[redacted]@proxy.example:3128/",
+            "git clone https://x-access-token:[redacted]@github.com/a/b.git",
+        ] {
+            assert!(matches!(filter.redact(text), Cow::Borrowed(_)), "{text}");
+            assert!(!filter.finds(text), "{text}");
+        }
+        // A password that only begins as the mask does is one.
+        assert_eq!(
+            filter.redact("http://alice:[redacted]x@proxy.example/"),
+            "http://alice:[redacted]@proxy.example/"
         );
     }
 
